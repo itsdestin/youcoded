@@ -255,6 +255,13 @@ export function costDisagreement(
 // whole session.
 // ---------------------------------------------------------------------------
 
+/** One model's share of the session pair — same three numbers, same rules. */
+export interface ModelCostTotals {
+  ourUsd: number;
+  theirUsd: number;
+  turns: number;
+}
+
 export interface SessionCostTotals {
   /** Our figure, summed over ONLY the turns the provider also reported one for. */
   ourUsd: number;
@@ -263,13 +270,24 @@ export interface SessionCostTotals {
   /** How many turns are in the pair. 0 means nothing has been comparable yet,
    *  which is NOT the same fact as two totals of zero that happened to agree. */
   turns: number;
+  /** The same pair, split by the model that ran each turn.
+   *
+   *  WHY (2026-09-16, closing docs/active/investigations/2026-09-01-cost-self-check-dilutes-across-model-swap.md):
+   *  the session sum alone is silent on a mis-priced CHEAP model whenever the
+   *  same session also ran a correctly-priced model for most of its turns —
+   *  100 matching turns on model A plus 2 double-priced turns on model B keep
+   *  the whole-session ratio under the threshold, so the fault on B is never
+   *  reported. Keyed by model id so each rate card is checked on its own once
+   *  ITS turns cross the floor. The session sum stays, because on a single
+   *  cheap model it is still the thing that crosses the floor first. */
+  byModel: Readonly<Record<string, ModelCostTotals>>;
 }
 
 /** A session that has compared nothing yet. Frozen: every session starts from
  *  this one shared object, so an accidental mutation would leak across all of
  *  them. */
 export const NO_SESSION_COST_TOTALS: SessionCostTotals =
-  Object.freeze({ ourUsd: 0, theirUsd: 0, turns: 0 });
+  Object.freeze({ ourUsd: 0, theirUsd: 0, turns: 0, byModel: Object.freeze({}) });
 
 /** Folds one finished turn into the running pair — or returns the pair
  *  untouched when the turn is not comparable (the provider reported nothing, or
@@ -278,18 +296,44 @@ export const NO_SESSION_COST_TOTALS: SessionCostTotals =
  *
  *  A reported 0 on either side IS a reading and counts: a `:free` model that
  *  genuinely billed nothing told us something. Only `undefined`/`null` is
- *  silence. */
+ *  silence.
+ *
+ *  `modelId` is the model that RAN the turn; when given, the turn is also
+ *  folded into that model's own pair (see `byModel`). */
 export function addComparableTurn(
   totals: SessionCostTotals,
   ours: number | null | undefined,
   theirs: number | undefined,
+  modelId?: string,
 ): SessionCostTotals {
   if (ours == null || theirs === undefined) return totals;
+  let byModel = totals.byModel;
+  if (modelId) {
+    const prev = byModel[modelId] ?? { ourUsd: 0, theirUsd: 0, turns: 0 };
+    byModel = { ...byModel, [modelId]: { ourUsd: prev.ourUsd + ours, theirUsd: prev.theirUsd + theirs, turns: prev.turns + 1 } };
+  }
   return {
     ourUsd: totals.ourUsd + ours,
     theirUsd: totals.theirUsd + theirs,
     turns: totals.turns + 1,
+    byModel,
   };
+}
+
+/** Every model whose OWN pair has crossed the floor and disagrees — the
+ *  per-model twin of `sessionCostDisagreement`, and the check that survives a
+ *  model swap. Empty when nothing is comparable per model yet; a model whose
+ *  pair agrees is simply absent, never present with 0. */
+export function modelCostDisagreements(
+  totals: SessionCostTotals,
+): Array<{ modelId: string; gap: number; totals: ModelCostTotals }> {
+  const out: Array<{ modelId: string; gap: number; totals: ModelCostTotals }> = [];
+  for (const [modelId, t] of Object.entries(totals.byModel)) {
+    if (t.turns === 0) continue;
+    const gap = costDisagreement(t.ourUsd, t.theirUsd);
+    if (gap !== null && gap > COST_DISAGREEMENT_THRESHOLD) out.push({ modelId, gap, totals: t });
+  }
+  return out;
 }
 
 /** How much WORSE the session gap must get before it is worth saying again.
