@@ -193,7 +193,7 @@ export default function AssistantSettingsRow({
         // the panel rather than the current default model ("Claude Code · Opus"),
         // which undersold everything else the panel holds. The live default is
         // still shown on the panel's own General page.
-        description="Models, permissions, defaults, and more"
+        description="Models, permissions, defaults"
         accessory={attention.size > 0 ? <AttentionDot label="A provider needs attention" /> : undefined}
         onClick={() => setOpen(true)}
       />
