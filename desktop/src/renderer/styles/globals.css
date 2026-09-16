@@ -1237,6 +1237,17 @@ body[data-mode="buddy-chat"] #theme-bg {
 [data-wallpaper] .bg-inset {
   background-color: color-mix(in srgb, var(--inset) calc(var(--bubble-opacity, 1) * 100%), transparent);
 }
+
+/* The surface a previewed past conversation sits on (Resume browser, side
+   drawer, Projects page). The chat's own canvas with a touch of the theme's
+   accent, so a preview reads as themed rather than bare white. Deliberately a
+   SOLID colour on wallpaper themes too: Destin (2026-09-16) tried the
+   wallpaper behind previews and wanted "slightly more themed and less pure
+   white" instead. Not --inset: that is the assistant bubble's own colour, and
+   a bubble on its own colour disappears. */
+.preview-backdrop {
+  background-color: color-mix(in srgb, var(--canvas) 95%, var(--accent));
+}
 [data-wallpaper] .bg-accent {
   background-color: color-mix(in srgb, var(--accent) calc(var(--bubble-opacity, 1) * 100%), transparent);
 }

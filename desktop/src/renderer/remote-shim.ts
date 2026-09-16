@@ -2528,8 +2528,6 @@ export function installShim(): void {
     project: {
       listConversations: (projectPath: string) =>
         invoke('project:list-conversations', { projectPath }),
-      conversationHistory: (projectPath: string, sessionId: string, count: number, all: boolean) =>
-        invoke('project:conversation-history', { projectPath, sessionId, count, all }),
       repoInfo: (projectPath: string) =>
         invoke('project:repo-info', { projectPath }),
       listContext: (projectPath: string) =>
@@ -2543,7 +2541,7 @@ export function installShim(): void {
     // server reads named fields off `payload`, never positional arguments.
     chatsearch: {
       resolve: (shortIds: string[]) => invoke('chatsearch:resolve', { shortIds }),
-      read: (req: { provider: string; id: string; tail: number; before?: number; projectSlug?: string }) =>
+      read: (req: { provider: string; id: string; before?: number; projectSlug?: string }) =>
         invoke('chatsearch:read', req),
     },
     // Voice typing — the PHONE's half of window.claude.voice.

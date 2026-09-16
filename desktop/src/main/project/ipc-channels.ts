@@ -4,7 +4,6 @@
 // (No apostrophes in comments — the ipc parity test scans single-quoted strings.)
 export const PROJECT_IPC = {
   LIST_CONVERSATIONS: 'project:list-conversations',
-  CONVERSATION_HISTORY: 'project:conversation-history',
   REPO_INFO: 'project:repo-info',
   LIST_CONTEXT: 'project:list-context',
   READ_CONTEXT_FILE: 'project:read-context-file',

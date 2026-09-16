@@ -88,7 +88,6 @@ const FILE_WRITES_NOT_OVER_REMOTE = [
   'artifacts:delete-project',
   'artifacts:rename',
   'artifacts:remove-record',
-  'project:conversation-history',
   'project:write-context-file',
 ];
 

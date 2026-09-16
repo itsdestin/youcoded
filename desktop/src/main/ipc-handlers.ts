@@ -157,7 +157,6 @@ import {
 import { initGitWatchers, watchGit, unwatchGit, dropGitSubscriber } from './git/git-watcher';
 import { resolveRepoRoot, invalidateRepoRootCache } from './git/git-exec';
 import { PROJECT_IPC } from './project/ipc-channels';
-import { projectConversationHistory } from './project-conversations';
 // The artifact and Project View READ bodies, shared with remote-server.ts
 // (remote access batch 3) so a phone gets the desktop's own answers.
 import {
@@ -4649,15 +4648,13 @@ export function registerIpcHandlers(
   ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, sessionId: string, projectRoot: string) =>
     listSessionFiles(sessionId, projectRoot));
 
-  // Project View IPC — list project-scoped conversations, their history, git
-  // repo info, and the discovered context files (CLAUDE.md, rules, etc.).
-  // The four reads go through project-read-service.ts (shared with the remote
-  // host); history and the context WRITE stay desktop-only.
+  // Project View IPC — list project-scoped conversations, git repo info, and
+  // the discovered context files (CLAUDE.md, rules, etc.). The reads go
+  // through project-read-service.ts (shared with the remote host); the context
+  // WRITE stays desktop-only. A conversation's messages are read through
+  // chatsearch:read (below), the one preview reader.
   ipcMain.handle(PROJECT_IPC.LIST_CONVERSATIONS, (_e, projectPath: string) =>
     listConversations(projectPath));
-  ipcMain.handle(PROJECT_IPC.CONVERSATION_HISTORY, async (_e, projectPath: string, sessionId: string, count: number, all: boolean) => {
-    return { ok: true, messages: await projectConversationHistory(projectPath, sessionId, count ?? 20, !!all) };
-  });
   ipcMain.handle(PROJECT_IPC.REPO_INFO, (_e, projectPath: string) => repoInfo(projectPath));
   ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, (_e, projectPath: string) => listContextFiles(projectPath));
   ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, (_e, projectPath: string, absolutePath: string) =>

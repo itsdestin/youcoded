@@ -68,7 +68,7 @@ function closestBubble(el: Element): Element | null {
   return el.closest('.assistant-bubble, .user-bubble');
 }
 
-// A previewed past conversation (SessionPreviewPane, via ConversationTranscript)
+// A previewed past conversation (SessionPreviewPane)
 // stamps its container with data-conversation-id/-title instead of carrying
 // .chat-scroll — see the guard in buildContextMenu for why. Reused here so
 // textMenu/codeMenu can name the conversation in their "Ask about this"
@@ -376,7 +376,7 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   // :614, plus bottom-chrome offsets sized for the live composer) that has no
   // meaning inside a drawer, so adopting the class would import layout
   // assumptions along with the behaviour it was really needed for here.
-  // data-conversation-id is the transcript's OWN marker (ConversationTranscript,
+  // data-conversation-id is the transcript's OWN marker (SessionPreviewPane,
   // set only when a caller names a conversation) — accepting either gets the
   // preview the whole menu without borrowing chat-composer CSS.
   if (!target.closest('.chat-scroll') && !target.closest('[data-conversation-id]')) return null;
