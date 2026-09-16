@@ -30,6 +30,11 @@ export interface SyncStatusData {
   // `contacted` (2026-09-16) rides 'synced' events: false is an offline cycle
   // that completed without reaching GitHub, which must not read as "synced".
   recentEvents: Array<{ type: string; spaceId: string; at?: number; message?: string; errorCode?: string; contacted?: boolean }>;
+  // Files currently over the sync size limit, per space (paths relative to the
+  // space root). Optional: older hosts don't send it.
+  oversize?: Array<{ spaceId: string; files: string[] }>;
+  /** The limit those files exceed, in MB, as the sync layer enforces it. */
+  oversizeLimitMb?: number;
 }
 
 export interface SyncDot { color: 'green' | 'red' | 'gray'; label: string }
@@ -144,7 +149,11 @@ export function deriveSyncBoxState(i: {
     if (i.pendingEnable) return 'setup';
     return i.hasError && i.githubUnauthed ? 'waiting-github' : 'off';
   }
-  if (i.hasError) return 'error';
+  // A retry the user just pressed outranks the error it is retrying: the old
+  // error stays unresolved until a sync succeeds, so letting it win showed
+  // "Couldn't sync" throughout the retry and "Try again" looked dead
+  // (2026-09-16). If the retry fails, its fresh error returns the box to red.
+  if (i.hasError && !i.syncing) return 'error';
   const active = i.spaces.filter((s) => s.state !== 'stopped');
   // No spaces yet = the enable round-trip hasn't populated status — still setup.
   if (active.length === 0 || !active.every((s) => !!s.remote)) return 'setup';
@@ -174,4 +183,28 @@ export function lastSyncedLabel(spaceId: string, status: SyncStatusData | null, 
   if (mins < 60) return `${mins} minutes ago`;
   const hours = Math.floor(mins / 60);
   return hours === 1 ? '1 hour ago' : `${hours} hours ago`;
+}
+
+/**
+ * The Sync box's warning about files too big to sync, or null when there are
+ * none: a one-line `header` (the collapsed card) and the `body` it opens to.
+ * WHY it exists (2026-09-16): over-limit files used to be skipped with no word
+ * anywhere, so a user's longest conversations quietly stopped reaching their
+ * other devices. Transcripts live under `Conversations/`, so a list of only
+ * those is worded as conversations. The limit comes from the host so the copy
+ * can never disagree with the number the sync layer enforces.
+ */
+export function oversizeNotice(status: SyncStatusData | null): { header: string; body: string } | null {
+  const files = (status?.oversize ?? []).flatMap((o) => o.files);
+  const n = files.length;
+  if (n === 0) return null;
+  const allConversations = files.every((f) => f.replace(/\\/g, '/').startsWith('Conversations/'));
+  const one = n === 1;
+  const noun = allConversations ? (one ? 'conversation' : 'conversations') : (one ? 'file' : 'files');
+  const limit = status?.oversizeLimitMb ? ` ${status.oversizeLimitMb} MB` : '';
+  return {
+    header: `${n} ${noun} too big to sync`,
+    body: `${one ? 'It is' : 'They are'} over the${limit} sync size limit, so your other devices won't get new changes. `
+      + `${one ? 'It stays' : 'They stay'} safe on this device.`,
+  };
 }

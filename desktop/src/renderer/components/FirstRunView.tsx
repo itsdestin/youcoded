@@ -170,9 +170,10 @@ function AuthScreen({
         Create backups for anything you cannot replace.
       </p>
 
-      {/* Documented pill exception: first-run hero CTAs keep rounded-full and
-          their own larger padding. Only the hover and the focus ring normalize —
-          hover:opacity-90 faded the label along with the fill.
+      {/* Documented pill exception: first-run hero CTAs are the Button's xl size
+          (rounded-full, larger padding, semibold) — a shared size since 2026-09-16
+          instead of the same five hand-set className overrides. Only the hover and
+          the focus ring normalize — hover:opacity-90 faded the label along with the fill.
           WHY every way in is the same outlined button (Destin, review of the
           first-run local models mockups, 2026-09-14): "log in with claude should
           not be a unique button" — no way in is presented as the default, and
@@ -180,24 +181,24 @@ function AuthScreen({
       {/* Full-width pills, one per way in. Side by side the outlined labels
           wrapped onto two lines at the card's width. */}
       <div className="flex flex-col items-stretch gap-3 w-full">
-        <Button variant="secondary" onClick={onOAuth} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+        <Button variant="secondary" onClick={onOAuth} size="xl" className="w-full">
           Log in with Claude
         </Button>
         {isChatGptSupported() && (
-          <Button variant="secondary" onClick={onChatGpt} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+          <Button variant="secondary" onClick={onChatGpt} size="xl" className="w-full">
             Log in with ChatGPT
           </Button>
         )}
-        <Button variant="secondary" onClick={onOpenRouter} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+        <Button variant="secondary" onClick={onOpenRouter} size="xl" className="w-full">
           Log in with OpenRouter
         </Button>
-        <Button variant="secondary" onClick={() => setLocalOpen(true)} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+        <Button variant="secondary" onClick={() => setLocalOpen(true)} size="xl" className="w-full">
           Use a local model
         </Button>
         {/* WHY a button, not an underlined link (Destin, 2026-09-14): "use an api
             key should be the same as the other buttons, not a link thing". It
             opens its own page (ApiKeySetup), like Use a local model (A-7). */}
-        <Button variant="secondary" onClick={() => setKeyOpen(true)} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+        <Button variant="secondary" onClick={() => setKeyOpen(true)} size="xl" className="w-full">
           Use an API key
         </Button>
       </div>

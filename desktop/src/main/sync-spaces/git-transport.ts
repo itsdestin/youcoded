@@ -156,6 +156,12 @@ const isCommitBenign = (r: ExecResult) => isLockContended(r) || isNothingToCommi
 // already-handled ahead-count===0 case (which requires origin/main to exist).
 const NOTHING_TO_PUSH_YET = /src refspec .* does not match any/i;
 
+// info/exclude lines for over-cap files, anchored with a leading "/". Glob and
+// comment characters are escaped so a file named "a[1].jsonl" or "#notes"
+// matches only itself; pathFromExcludeLine reverses it.
+const excludeLineFor = (rel: string) => '/' + rel.replace(/[\\*?[\]!#]/g, '\\$&').replace(/ $/, '\\ ');
+const pathFromExcludeLine = (line: string) => line.slice(1).replace(/\\(.)/g, '$1');
+
 export class GitTransport implements SyncTransport {
   private deviceName: string;
   private maxFileBytes: number;
@@ -241,7 +247,11 @@ export class GitTransport implements SyncTransport {
   }
 
   private async git(space: SyncSpace, args: string[]): Promise<ExecResult> {
-    const baseEnv = { ...process.env, GIT_DIR: this.gitDir(space), GIT_WORK_TREE: space.root };
+    // GIT_LITERAL_PATHSPECS: every path we pass is a real file name, never a
+    // pattern. Without it a file named ":x" or "f[1].md" is read as pathspec
+    // magic — the size-cap reset then missed ":big" and it was pushed
+    // (2026-09-16 review F3).
+    const baseEnv = { ...process.env, GIT_DIR: this.gitDir(space), GIT_WORK_TREE: space.root, GIT_LITERAL_PATHSPECS: '1' };
     // App token first, system helper otherwise (credentialedGitInvocation is a
     // no-op passthrough on null). getToken is cached upstream, so this does
     // not re-read disk / re-exec gh per git call.
@@ -369,6 +379,10 @@ export class GitTransport implements SyncTransport {
     // this into an early return — that would strand already-committed work
     // behind a transient lock that has nothing to do with it.
     const oversize = await this.unstageOversize(space);
+    // Files already excluded (by this cycle's pull, or an earlier one) are no
+    // longer staged, so unstageOversize alone never reports them — a NEW big
+    // file was never shown to the user (2026-09-16 review F1).
+    for (const f of this.excludedOversize(space)) if (!oversize.includes(f)) oversize.push(f);
     const staged = await this.git(space, ['diff', '--cached', '--name-only']);
     this.assertLocalOk(space, 'diff', staged);
     let commit: string | undefined;
@@ -401,6 +415,11 @@ export class GitTransport implements SyncTransport {
     // push anyway. Corruption must not ride that fallthrough.
     this.throwIfCorrupt(space, 'rev-list', ahead);
     if (ahead.code === 0 && ahead.stdout.trim() === '0' && !commit) return { pushed: false, contacted: false, oversize };
+    // Last line of defence for the size cap — see dropOversizeFromOutgoing.
+    const drop = await this.dropOversizeFromOutgoing(space);
+    for (const f of drop.held) if (!oversize.includes(f)) oversize.push(f);
+    if (drop.commit) commit = drop.commit;
+    if (!drop.send) return { pushed: false, contacted: false, commit: drop.commit, oversize };
     const p = await this.git(space, ['push', '-u', 'origin', 'main']);
     if (p.code !== 0) {
       // Non-fast-forward: another device pushed first. Merge, then push again.
@@ -410,6 +429,11 @@ export class GitTransport implements SyncTransport {
       // no conflict notice) until some unrelated later pull — a stale-resume /
       // forked-transcript hazard on conversations (2026-07-15 review finding).
       const recovery = await this.pull(space);
+      // The recovery pull made its own snapshot commit, so re-check before resending.
+      const again = await this.dropOversizeFromOutgoing(space);
+      for (const f of again.held) if (!oversize.includes(f)) oversize.push(f);
+      if (again.commit) commit = again.commit;
+      if (!again.send) return { pushed: false, contacted: recovery.contacted === true, commit, oversize, updated: recovery.updated, conflictCopies: recovery.conflictCopies };
       const retry = await this.git(space, ['push', '-u', 'origin', 'main']);
       if (retry.code !== 0) {
         // An auth-refused push must SURFACE (engine error event → red dot +
@@ -445,7 +469,12 @@ export class GitTransport implements SyncTransport {
       } catch { /* deleted while staging — fine */ }
     }
     if (oversize.length) {
-      await this.git(space, ['reset', '--', ...oversize]);
+      // Checked since 2026-09-16: this result used to be ignored, so a reset
+      // that lost an index.lock race let the oversize files ride into the
+      // commit. A lock race is still benign here — dropOversizeFromOutgoing
+      // strips anything that slips through before it can be pushed.
+      const reset = await this.git(space, ['reset', '-q', '--', ...oversize]);
+      this.assertLocalOk(space, 'reset', reset, isLockContended);
       // Persist the exclusion so the watcher doesn't re-stage it every cycle —
       // DEDUPED, because exclude only silences UNTRACKED files: a TRACKED file
       // that grew past the cap is re-staged by `git add -A` on every sync, and
@@ -453,10 +482,110 @@ export class GitTransport implements SyncTransport {
       const excludePath = path.join(this.gitDir(space), 'info', 'exclude');
       let have = new Set<string>();
       try { have = new Set(fs.readFileSync(excludePath, 'utf8').split('\n')); } catch { /* fresh file */ }
-      const fresh = oversize.map(o => `/${o}`).filter(line => !have.has(line));
+      const fresh = oversize.map(excludeLineFor).filter(line => !have.has(line));
       if (fresh.length) fs.appendFileSync(excludePath, fresh.join('\n') + '\n');
     }
     return oversize;
+  }
+
+  /** Over-cap files this device keeps out through info/exclude and that are
+   *  still over the cap on disk. Our lines are the only ones starting with "/"
+   *  (init rewrites the file to DEFAULT_IGNORES on every launch). */
+  private excludedOversize(space: SyncSpace): string[] {
+    let lines: string[] = [];
+    try { lines = fs.readFileSync(path.join(this.gitDir(space), 'info', 'exclude'), 'utf8').split('\n'); } catch { return []; }
+    return lines.filter(l => l.startsWith('/')).map(pathFromExcludeLine).filter(rel => {
+      try { return fs.statSync(path.join(space.root, rel)).size > this.maxFileBytes; } catch { return false; }
+    });
+  }
+
+  /** The size cap's LAST line of defence, run right before every push: if any
+   *  unpublished commit carries a file over the cap, fold all unpublished
+   *  commits into one whose over-cap files keep their last published version
+   *  (or stay out, if never published). Returns the over-cap paths it held
+   *  back that the push would have changed (`held`), the folded commit, and
+   *  whether anything is left to `send` — false when the over-cap files were
+   *  the whole change, or a live writer holds a lock (the state left behind
+   *  heals on the next cycle).
+   *
+   *  WHY (2026-09-16): unstageOversize is not enough on its own — a second app
+   *  copy syncing the same folder could re-stage a file between its reset and
+   *  the commit. Six 54–107 MB transcripts were committed that way, and since a
+   *  push sends every unpublished commit, the one GitHub refuses (>100 MiB)
+   *  stopped this device uploading anything for 9 days. Checking what is about
+   *  to be SENT, not what was staged, closes every such path at once.
+   *
+   *  Safe because it only rewrites commits that never left this device (the
+   *  published tip is always the new parent, so peers never see a rewrite),
+   *  the files on disk are never touched, and the folded commits stay in the
+   *  reflog. */
+  private async dropOversizeFromOutgoing(space: SyncSpace): Promise<{ held: string[]; send: boolean; commit?: string }> {
+    const hasMain = await this.git(space, ['rev-parse', '--verify', '--quiet', 'refs/heads/main']);
+    if (hasMain.code !== 0 || !hasMain.stdout.trim()) return { held: [], send: true }; // nothing committed yet
+    const tip = await this.git(space, ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main']);
+    const hasTip = tip.code === 0 && !!tip.stdout.trim();
+    // --filter=blob:limit=N omits blobs of N bytes or more; --filter-print-omitted
+    // lists those with a leading "~". Only objects not already on GitHub are
+    // scanned. (No --no-object-names: older git lacks it and the "~" lines
+    // carry no name anyway.)
+    const scan = await this.git(space, ['rev-list', '--objects',
+      `--filter=blob:limit=${this.maxFileBytes + 1}`, '--filter-print-omitted',
+      hasTip ? 'origin/main..main' : 'main']);
+    this.assertLocalOk(space, 'rev-list', scan);
+    if (!scan.stdout.split('\n').some(l => l.startsWith('~'))) return { held: [], send: true };
+
+    // Over-cap files this push would change: over the cap in main's tree
+    // ("<mode> blob <oid> <size>\t<path>") AND different from the published
+    // tip — a big file already on GitHub and untouched is not being held back.
+    const tree = await this.git(space, ['ls-tree', '-r', '-l', '-z', 'main']);
+    this.assertLocalOk(space, 'ls-tree', tree);
+    let changed: Set<string> | null = null;
+    if (hasTip) {
+      const d = await this.git(space, ['diff', '--name-only', '-z', 'origin/main', 'main']);
+      this.assertLocalOk(space, 'diff', d);
+      changed = new Set(d.stdout.split('\0').filter(Boolean));
+    }
+    const held = tree.stdout.split('\0').filter(Boolean).flatMap(entry => {
+      const tab = entry.indexOf('\t');
+      const rel = entry.slice(tab + 1);
+      const size = Number(entry.slice(0, tab).trim().split(/\s+/)[3]);
+      return size > this.maxFileBytes && (!changed || changed.has(rel)) ? [rel] : [];
+    });
+    // A live writer holding a lock is the very race this guards against:
+    // benign, skip this cycle (same rule as every other lock-taking op).
+    const ok = (op: string, r: ExecResult) => { this.assertLocalOk(space, op, r, isLockContended); return r.code === 0; };
+
+    if (hasTip) {
+      // pull() merges before every push, so the published tip is always
+      // contained. If it somehow isn't, folding would silently undo a peer's
+      // changes — refuse loudly instead.
+      const contained = await this.git(space, ['merge-base', '--is-ancestor', 'origin/main', 'main']);
+      if (contained.code !== 0) {
+        throw new Error(`Sync push failed for ${space.id}: a file over the ${Math.round(this.maxFileBytes / (1024 * 1024))} MB limit is waiting to upload, and this device has not merged the latest changes from your other devices yet.`);
+      }
+      // Soft reset: HEAD moves to the published tip, index and files stay.
+      if (!ok('reset', await this.git(space, ['reset', '-q', '--soft', 'origin/main']))) return { held, send: false };
+      if (held.length && !ok('reset', await this.git(space, ['reset', '-q', 'origin/main', '--', ...held]))) return { held, send: false };
+    } else {
+      // Never published: make main unborn again (index and files stay) and
+      // leave the over-cap files out of the first commit entirely.
+      if (!ok('update-ref', await this.git(space, ['update-ref', '-d', 'refs/heads/main']))) return { held, send: false };
+      if (held.length && !ok('rm', await this.git(space, ['rm', '-q', '--cached', '--', ...held]))) return { held, send: false };
+    }
+    // Nothing left once the over-cap files are out? Then there is nothing to
+    // commit or push. Checked explicitly: git words this several ways ("no
+    // changes added to commit", "nothing added to commit but untracked files
+    // present"), and treating those as failures showed a false "Couldn't
+    // sync" (review F2); pushing anyway sent a hub signal for nothing (F11).
+    const pending = await this.git(space, ['diff', '--cached', '--quiet']);
+    if (pending.code !== 0 && pending.code !== 1) this.assertLocalOk(space, 'diff', pending);
+    this.log(`sync-spaces: ${space.id}: combined unpublished commits to hold back ${held.length} file(s) over the size limit: ${held.join(', ')}`);
+    if (pending.code === 0) return { held, send: false };
+    const c = await this.git(space, ['commit', '-q', '-m', `sync from ${space.id} (unpublished changes combined; files over the size limit kept on this device)`]);
+    if (!ok('commit', c)) return { held, send: false }; // staged; the next cycle commits and pushes it
+    const head = await this.git(space, ['rev-parse', 'HEAD']);
+    this.assertLocalOk(space, 'rev-parse', head);
+    return { held, send: true, commit: head.stdout.trim() };
   }
 
   /** Commit local pending, fetch, merge. Convergent conflict rule (spec §8):

@@ -356,7 +356,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
             {installState.kind === 'error' && installState.code !== 'verify-failed' && (
               <div className="text-xs mt-2">
                 {installState.code === 'signature-invalid' ? (
-                  <p className="text-amber-400">{updateErrorMessage('signature-invalid')}</p>
+                  <p className="text-amber-700">{updateErrorMessage('signature-invalid')}</p>
                 ) : (
                   <button
                     onClick={handleFallbackBrowser}

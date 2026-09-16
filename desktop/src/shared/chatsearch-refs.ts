@@ -7,7 +7,7 @@
 // expanded default) and ToolBody (card body) both need the same answer, and a
 // unit test must run it without React. One function, two consumers — they can
 // never disagree about what a call is.
-import type { ToolCallState } from './types';
+import type { ToolCallState, TranscriptPageResult } from './types';
 
 export type ChatsearchProvider = 'claude' | 'native';
 
@@ -41,13 +41,6 @@ export const COPY = {
   paneSubtitle: (p: string) => `${providerLabel(p)} · read-only`,
   untitled: 'Untitled conversation',
   noProject: '(no project)',
-  // Reads like a real tool group's own header ("4 tools (Bash ×2) — all
-  // complete") because Destin asked for it to LOOK like one (2026-08-27 gate,
-  // M-toolgap). We don't know which tools ran — the reader dropped them — so
-  // the parenthetical every real group carries is honestly absent here.
-  toolsNotShown: (n: number) => `${n} tool${n === 1 ? '' : 's'} — not shown`,
-  startOfConversation: 'start of conversation',
-  loadOlder: 'Load older',
   // SessionPreviewPane's first-load spinner text. Deliberately terse (unlike
   // states.tsx's LoadingState, which names what's loading) — the pane's header
   // already shows the conversation title, so "Loading…" isn't ambiguous here.
@@ -182,26 +175,11 @@ export type ChatsearchResolveResponse =
   | { ok: true; results: ResolvedConversation[] }
   | { ok: false; error: string };
 
-/** One transcript message as the preview renders it. */
-export interface TranscriptMessage {
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: number;
-  /** Byte offset of this message's line in its transcript: increasing through
-   *  the conversation and unique within it, so it keys a bubble and
-   *  `before: seq` pages backwards. Not a message count — reading only the end
-   *  of a large file (transcript-reader.ts) means nobody counted from the top. */
-  seq: number;
-  /** Tool calls that ran between the previous kept message and this one. */
-  droppedToolCalls: number;
-}
-
 export interface ChatsearchReadRequest {
   provider: ChatsearchProvider;
   id: string;
-  /** Messages to return, counted back from the end (or from `before`). 1..200. */
-  tail: number;
-  /** Return messages with seq < before. Omit for the newest slice. */
+  /** Return the page that ends before this byte — the `offset` of the cursor
+   *  the previous page returned. Omit for the newest page. */
   before?: number;
   /** The project folder's slug when the caller already knows it (a Resume
    *  list row does). Lets main open the file directly instead of looking the id
@@ -210,12 +188,24 @@ export interface ChatsearchReadRequest {
   projectSlug?: string;
 }
 
+/** One page of a past conversation, in the SAME shape a live chat pages its
+ *  history (transcript-page.ts): real transcript events, which the preview
+ *  replays through the chat reducer. WHY events and not flattened messages
+ *  (2026-09-16): the old flat reader had its own idea of which lines were
+ *  "real" messages and dropped every tool, so a preview showed background
+ *  notes as the user's bubbles and "3 tools — not shown" where the chat would
+ *  show a tool group. Destin: previews should look like the conversation will
+ *  look after it resumes. */
 export type ChatsearchReadResponse =
-  | { ok: true; messages: TranscriptMessage[]; hasMore: boolean }
+  | ({ ok: true } & TranscriptPageResult)
   | { ok: false; error: string };
 
-export const READ_TAIL_MAX = 200;
-export const READ_TAIL_DEFAULT = 40;
+/** The reducer key a previewed conversation's events carry. Prefixed so it can
+ *  never collide with a live desktop session id, and so nothing that looks a
+ *  session up by id (file chips, specialist runs) mistakes a preview for one. */
+export function previewSessionKey(id: string): string {
+  return `preview:${id}`;
+}
 
 /**
  * Output that reached us may be partial. Three producers, three markers:

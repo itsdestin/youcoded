@@ -22,6 +22,7 @@ vi.mock('../src/renderer/components/provider-brand', async (importOriginal) => {
 });
 
 import ResumeBrowser from '../src/renderer/components/ResumeBrowser';
+import { previewPage } from './helpers/preview-page';
 
 beforeAll(() => {
   // Wide viewport, declared (narrow-viewport rule): the panel only exists there.
@@ -44,11 +45,7 @@ const rows = (n: number) => Array.from({ length: n }, (_, i) => ({
 }));
 
 function mockClaude(sessions: any[]) {
-  const read = vi.fn(async (req: { id: string }) => ({
-    ok: true,
-    messages: [{ role: 'user', content: `text of ${req.id}`, timestamp: 1, seq: 0, droppedToolCalls: 0 }],
-    hasMore: false,
-  }));
+  const read = vi.fn(async (req: { id: string }) => previewPage(req.id, [`text of ${req.id}`]));
   (window as any).claude = {
     session: {
       browse: vi.fn().mockResolvedValue(sessions),

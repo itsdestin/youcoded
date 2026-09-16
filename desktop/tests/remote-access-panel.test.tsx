@@ -99,7 +99,7 @@ it('keeps offline devices, marks them, and confirms unpairing before acting', ()
   expect(screen.getByText('Offline')).toBeTruthy();
   // WHY: the shipped row hardcodes a green dot for every connected client. Only the online
   // device and the panel's own ready dot may be green — never the remembered offline device.
-  expect(document.querySelectorAll('.bg-green-500').length).toBe(2);
+  expect(document.querySelectorAll('.bg-green-400').length).toBe(2);
   fireEvent.click(screen.getByRole('button', { name: 'Unpair My tablet' }));
   expect(action).not.toHaveBeenCalled();
   expect(screen.getByText(/pair again/)).toBeTruthy();

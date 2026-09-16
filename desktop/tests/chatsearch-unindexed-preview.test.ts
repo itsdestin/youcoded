@@ -36,22 +36,22 @@ beforeAll(() => {
     [
       JSON.stringify({ type: 'user', uuid: 'u1', promptId: 'p1', timestamp: '2026-09-01T00:00:00Z', message: { role: 'user', content: 'why is the build slow' } }),
       JSON.stringify({ type: 'assistant', uuid: 'a1', timestamp: '2026-09-01T00:01:00Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Two of the three test files re-parse the same fixture.' }] } }),
-    ].join('\n'),
+    ].join('\n') + '\n',
   );
 });
 
 describe('previewing a conversation the index has not reached', () => {
   it('reads it off disk instead of refusing', async () => {
     const { readConversation } = await import('../src/main/chatsearch-index/refs-service');
-    const res = await readConversation({ provider: 'claude', id: ID, tail: 10 } as never);
-    expect(res.ok).toBe(true);
-    expect((res as { messages: { content: string }[] }).messages.map((m) => m.content))
+    const res = await readConversation({ provider: 'claude', id: ID });
+    if (!res.ok) throw new Error(res.error);
+    expect(res.events.filter((e) => e.type === 'user-message' || e.type === 'assistant-text').map((e) => e.data.text))
       .toEqual(['why is the build slow', 'Two of the three test files re-parse the same fixture.']);
   });
 
   it('still refuses an id with no transcript anywhere', async () => {
     const { readConversation } = await import('../src/main/chatsearch-index/refs-service');
-    const res = await readConversation({ provider: 'claude', id: '9c14bbbb-2222-4222-8222-222222222222', tail: 10 } as never);
+    const res = await readConversation({ provider: 'claude', id: '9c14bbbb-2222-4222-8222-222222222222' });
     expect(res.ok).toBe(false);
   });
 });

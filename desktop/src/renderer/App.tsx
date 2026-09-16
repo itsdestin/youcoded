@@ -50,6 +50,7 @@ import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType 
 import { hasPendingInteraction, canPtySend } from './state/pty-input-gate';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
+import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
 import { usePromptDetector } from './hooks/usePromptDetector';
 import { useVisualViewport } from './hooks/useVisualViewport';
 import { usePresence } from './hooks/usePresence';
@@ -2376,11 +2377,34 @@ function AppInner() {
       .catch(() => {});
   }, []);
 
-  // Red dot on the gear icon so the user can't miss a push failure —
-  // derived from the pushed warnings, no dedicated poll.
+  // Is GitHub sync (sync-spaces) failing right now? The gear used to read only
+  // the legacy backup warnings, so a sync-spaces failure showed red inside the
+  // Sync panel while the gear stayed calm (2026-09-16). Same derivation the
+  // panel uses; refreshed by the engine's own event push, no poll.
+  const [spacesFailing, setSpacesFailing] = useState(false);
+  useEffect(() => {
+    const api = (window as any).claude?.syncSpaces;
+    if (typeof api?.status !== 'function') return;
+    let cancelled = false;
+    // Only the newest request may set the dot — answers can arrive out of order.
+    let seq = 0;
+    const load = () => {
+      const mine = ++seq;
+      api.status()
+        .then((s: SyncStatusData | null) => { if (!cancelled && mine === seq) setSpacesFailing(!!s?.enabled && !!latestUnresolvedError(s)); })
+        .catch(() => { /* no sync-spaces host (e.g. the phone) — no dot */ });
+    };
+    load();
+    // Any event: turning sync off arrives as 'projects-changed', not error/synced.
+    const off = api.onEvent?.(() => load());
+    return () => { cancelled = true; if (typeof off === 'function') off(); };
+  }, []);
+
+  // Red dot on the gear icon so the user can't miss a sync failure — from
+  // either sync system.
   const settingsDangerBadge = useMemo(
-    () => (statusData.syncWarnings ?? []).some((w) => w?.level === 'danger'),
-    [statusData.syncWarnings],
+    () => spacesFailing || (statusData.syncWarnings ?? []).some((w) => w?.level === 'danger'),
+    [spacesFailing, statusData.syncWarnings],
   );
 
   const handleOpenDrawer = useCallback((searchMode: boolean) => {
@@ -4409,13 +4433,18 @@ function AppInner() {
       />
       {/* ProjectView — full-screen artifact browser across all projects.
           Renders null when projectViewOpen === false so no DOM overhead when closed.
-          z-[8000]: sits below the SessionStrip dropdown (9000) but above all
-          L1–L4 overlays, the same tier used by similar full-screen views. */}
+          z-40, the SCREEN layer: BELOW every L1–L4 overlay, so a dialog opened
+          from inside it (rename, a first-time warning) shows on top. This said
+          z-[8000] long after ProjectView.tsx moved it down (see its header). */}
       <ProjectView
         // Project view homes to the focused conversation's folder on every open.
         activeSessionCwd={currentSession?.cwd}
         onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
-        onResumeConversation={(sid, slug, path, provider) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); handleResumeSession(sid, slug, path, undefined, undefined, undefined, provider); }}
+        // Project View closes first, as it always has, so whatever the resume
+        // shows (the chat, a take-over prompt) is not under it.
+        onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}
+        defaultModel={sessionDefaults.model}
+        defaultSkipPermissions={sessionDefaults.skipPermissions}
       />
     </div>
     </ArtifactProvider>

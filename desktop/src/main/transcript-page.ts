@@ -31,6 +31,14 @@ export interface PageArgs {
   /** `<transcriptDir>/<claudeSessionId>/subagents`. Omit for a session that has
    *  none (or in tests that do not care). */
   subagentsDir?: string;
+  /** What the lines are. `claude` (default): Claude Code JSONL, parsed by the
+   *  live tailer's parseTranscriptLine. `native`: a YouCoded assistant session
+   *  file — a header line, then one TranscriptEvent per line, already in the
+   *  shape the renderer takes. WHY here and not a second pager: the
+   *  conversation preview (chatsearch-index/transcript-reader.ts) pages BOTH
+   *  kinds from disk, and a second copy of the turn-boundary/byte-cap logic is
+   *  exactly the kind of fork that made the old preview drift from the chat. */
+  format?: 'claude' | 'native';
 }
 
 /**
@@ -40,11 +48,24 @@ export interface PageArgs {
  * a tool call away from its result. A line is a boundary exactly when the
  * parser would render it as the user's own message.
  */
-function isTurnBoundary(line: string, sessionId: string): boolean {
+function isTurnBoundary(line: string, sessionId: string, format: 'claude' | 'native'): boolean {
+  if (format === 'native') return nativeLineEvents(line, sessionId)[0]?.type === 'user-message';
   // Cheap prefilter — the vast majority of lines are assistant lines.
   if (!line.includes('"type":"user"') && !line.includes('"type": "user"')) return false;
   const parsed = parseTranscriptLine(line, sessionId);
   return parsed.length > 0 && parsed[0].type === 'user-message';
+}
+
+/** A native session line → its one event, re-keyed to `sessionId`, or nothing
+ *  for the header (it has no `type`) and for junk. The same filter
+ *  SessionStore.readEvents applies when a live native session replays. */
+function nativeLineEvents(line: string, sessionId: string): TranscriptEvent[] {
+  // Cheap prefilter, as above: only event lines carry a `type`.
+  if (!line.includes('"type"')) return [];
+  let e: any;
+  try { e = JSON.parse(line); } catch { return []; }
+  if (!e || typeof e !== 'object' || typeof e.type !== 'string' || !e.data || typeof e.data !== 'object') return [];
+  return [{ ...e, sessionId } as TranscriptEvent];
 }
 
 interface ScannedLine { offset: number; text: string }
@@ -85,6 +106,7 @@ function readLines(fd: number, readFrom: number, end: number): ScannedLine[] {
  */
 export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPageResult> {
   const { jsonlPath, sessionId } = args;
+  const format = args.format ?? 'claude';
   const empty: TranscriptPageResult = { events: [], cursor: null, hasMore: false };
 
   let fd: number;
@@ -111,7 +133,7 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
     const boundaries: number[] = []; // ascending absolute offsets
     for (const { offset, text } of lines) {
       if (!text.trim()) continue;
-      if (isTurnBoundary(text, sessionId)) boundaries.push(offset);
+      if (isTurnBoundary(text, sessionId, format)) boundaries.push(offset);
     }
 
     let startByte: number;
@@ -143,10 +165,13 @@ export async function readTranscriptPage(args: PageArgs): Promise<TranscriptPage
       if (offset < startByte) continue;
       const line = text.trim();
       if (!line) continue;
-      const parsed = parseTranscriptLine(line, sessionId, pageUsage);
+      const parsed = format === 'native' ? nativeLineEvents(line, sessionId) : parseTranscriptLine(line, sessionId, pageUsage);
       if (parsed.length === 0) continue;
       const lineUuid = parsed[0].uuid;
       const isRepeat = !!lineUuid && seenUuids.has(lineUuid);
+      // A native line is one event with its own uuid; a repeat is a duplicate
+      // write and is skipped whole — SessionStore.readEvents' rule.
+      if (isRepeat && format === 'native') continue;
       if (lineUuid) seenUuids.add(lineUuid);
       for (const ev of parsed) {
         if (isRepeat && ev.type === 'assistant-text') continue;

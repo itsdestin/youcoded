@@ -239,7 +239,7 @@ function TruncationDiff({ fullText, supplied, label }: {
 
   if (!diffable) {
     return (
-      <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+      <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
         {supplied}
       </pre>
     );
@@ -268,7 +268,7 @@ function TruncationDiff({ fullText, supplied, label }: {
       {showDiff ? (
         <UnifiedDiff oldStr={fullText} newStr={supplied} />
       ) : (
-        <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+        <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
           {supplied}
         </pre>
       )}
@@ -5947,7 +5947,7 @@ function SfxTabbed({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: boo
         )}
 
         {tab === 'prompt' && (
-          <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+          <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
             {c.systemPrompt}
           </pre>
         )}
@@ -5965,7 +5965,7 @@ function SfxTabbed({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: boo
                 label="project-instruction"
               />
             ) : (
-              <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+              <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
                 {c.projectInstructions.text}
               </pre>
             )}
@@ -6055,7 +6055,7 @@ function SfxCutDiff({ fullText, supplied, what }: { fullText?: string | null; su
   const [showDiff, setShowDiff] = React.useState(false);
   const diffable = !!fullText && fullText !== supplied;
   const pre = (
-    <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+    <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
       {supplied}
     </pre>
   );
@@ -6191,7 +6191,7 @@ function SfxTabbedClear({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed
           {tab === 'builtin' && (
             <>
               <SfxPaneNote>YouCoded’s standing instructions. The same in every chat, whatever the project.</SfxPaneNote>
-              <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+              <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
                 {c.systemPrompt}
               </pre>
             </>
@@ -6207,7 +6207,7 @@ function SfxTabbedClear({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed
               {c.projectInstructions.truncated ? (
                 <SfxCutDiff fullText={c.projectInstructions.fullText} supplied={c.projectInstructions.text} what="Project rules" />
               ) : (
-                <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+                <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
                   {c.projectInstructions.text}
                 </pre>
               )}
