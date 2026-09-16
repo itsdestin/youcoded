@@ -2256,9 +2256,13 @@ export function registerIpcHandlers(
   const appearancePrefPath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
   const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
 
-  function readJsonFile(filePath: string): any {
+  // WHY async (2026-09-16 smoothness sweep, C5): these three readers feed the
+  // 10 s status push, which read 6 files plus 3 per open session synchronously
+  // on the main thread every tick (and again on every attention change) — a
+  // rhythmic micro-stutter that grew with the number of sessions opened.
+  async function readJsonFile(filePath: string): Promise<any> {
     try {
-      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
     } catch {
       return null;
     }
@@ -2270,18 +2274,18 @@ export function registerIpcHandlers(
   // Legacy .sync-warnings text file is no longer read; typed warnings come from .sync-warnings.json.
   const syncWarningsJsonPath = path.join(os.homedir(), '.claude', '.sync-warnings.json');
 
-  function readTextFile(filePath: string): string | null {
+  async function readTextFile(filePath: string): Promise<string | null> {
     try {
-      return fs.readFileSync(filePath, 'utf8').trim() || null;
+      return (await fs.promises.readFile(filePath, 'utf8')).trim() || null;
     } catch {
       return null;
     }
   }
 
-  /** Read typed sync warnings synchronously — returns [] if missing or unparseable. */
-  function readSyncWarningsSync(): SyncWarning[] {
+  /** Read typed sync warnings — returns [] if missing or unparseable. */
+  async function readSyncWarnings(): Promise<SyncWarning[]> {
     try {
-      const text = fs.readFileSync(syncWarningsJsonPath, 'utf8');
+      const text = await fs.promises.readFile(syncWarningsJsonPath, 'utf8');
       const parsed = JSON.parse(text);
       return Array.isArray(parsed) ? parsed : [];
     } catch {
@@ -2315,11 +2319,27 @@ export function registerIpcHandlers(
   // serves desktop AND remote. The old native:usage-report → status:data cache
   // was dead — nothing read it — and was removed in the whole-branch review.)
 
-  function buildStatusData() {
-    const usage = readJsonFile(usageCachePath);
-    const announcement = readJsonFile(announcementCachePath);
+  async function buildStatusData() {
+    const home = os.homedir();
+    // Every file read for one push is issued at once and awaited together;
+    // the per-session trio below likewise. Nothing here blocks the loop.
+    const [usage, announcement, syncWarnings, syncMarkerRaw, backupMeta, syncLockIsDir, perSession] = await Promise.all([
+      readJsonFile(usageCachePath),
+      readJsonFile(announcementCachePath),
+      readSyncWarnings(),
+      readTextFile(path.join(home, '.claude', 'toolkit-state', '.sync-marker')),
+      readJsonFile(path.join(home, '.claude', 'backup-meta.json')),
+      fs.promises.stat(path.join(home, '.claude', 'toolkit-state', '.sync-lock')).then((s) => s.isDirectory(), () => false),
+      Promise.all([...sessionIdMap].map(async ([desktopId, claudeId]) => {
+        const [context, branch, stats] = await Promise.all([
+          readTextFile(path.join(home, '.claude', `.context-${claudeId}`)),
+          readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
+          readJsonFile(path.join(home, '.claude', `.session-stats-${claudeId}.json`)),
+        ]);
+        return { desktopId, context, branch, stats };
+      })),
+    ]);
     const updateStatus = getUpdateStatus();
-    const syncWarnings = readSyncWarningsSync();
 
     // Sync state for live updates — SyncPanel also fetches via IPC,
     // but these fields let the compact section row update in real-time.
@@ -2328,12 +2348,9 @@ export function registerIpcHandlers(
     // Drive/iCloud-only installs. WHY: the marker is absent on GitHub-era
     // installs, so reading only it showed "last seen 22 hours ago" on a
     // machine that was (supposedly) syncing every 90 seconds (2026-07-30 spec §4).
-    const syncMarkerRaw = readTextFile(path.join(os.homedir(), '.claude', 'toolkit-state', '.sync-marker'));
     const lastSyncEpoch = deriveSelfLastSyncEpochSec(getSelfLastSyncEpochMs(), syncMarkerRaw);
     // Live spaces syncing OR the legacy lock dir (extra-backups pushes).
-    let syncInProgress = isSyncSpacesSyncing();
-    try { syncInProgress = syncInProgress || fs.statSync(path.join(os.homedir(), '.claude', 'toolkit-state', '.sync-lock')).isDirectory(); } catch {}
-    const backupMeta = readJsonFile(path.join(os.homedir(), '.claude', 'backup-meta.json'));
+    const syncInProgress = isSyncSpacesSyncing() || syncLockIsDir;
     // Per-device sync recency (machineId → epoch-ms), carried over the SyncHub.
     // Rides the live push so the "Your devices" rows update in real-time without
     // waiting for a full getSyncStatus() refetch. Forwarded verbatim to remote
@@ -2342,8 +2359,7 @@ export function registerIpcHandlers(
 
     // Read per-session context remaining % (written by statusline.sh)
     const contextMap: Record<string, number> = {};
-    for (const [desktopId, claudeId] of sessionIdMap) {
-      const raw = readTextFile(path.join(os.homedir(), '.claude', `.context-${claudeId}`));
+    for (const { desktopId, context: raw } of perSession) {
       if (raw != null) {
         const num = parseInt(raw, 10);
         if (!isNaN(num)) {
@@ -2357,8 +2373,7 @@ export function registerIpcHandlers(
 
     // Read per-session git branch (written by statusline.sh, same pattern as context %)
     const gitBranchMap: Record<string, string> = {};
-    for (const [desktopId, claudeId] of sessionIdMap) {
-      const raw = readTextFile(path.join(os.homedir(), '.claude', `.gitbranch-${claudeId}`));
+    for (const { desktopId, branch: raw } of perSession) {
       if (raw) {
         gitBranchMap[desktopId] = raw;
         lastGitBranchByDesktopId[desktopId] = raw;
@@ -2369,8 +2384,7 @@ export function registerIpcHandlers(
 
     // Read per-session stats (cost, tokens, code changes — written by statusline.sh)
     const sessionStatsMap: Record<string, any> = {};
-    for (const [desktopId, claudeId] of sessionIdMap) {
-      const stats = readJsonFile(path.join(os.homedir(), '.claude', `.session-stats-${claudeId}.json`));
+    for (const { desktopId, stats } of perSession) {
       if (stats) {
         sessionStatsMap[desktopId] = stats;
         lastSessionStatsByDesktopId[desktopId] = stats;
@@ -2401,13 +2415,26 @@ export function registerIpcHandlers(
     return { usage, announcement, updateStatus, syncWarnings, lastSyncEpoch, syncInProgress, lastSyncByDevice, backupMeta, contextMap, gitBranchMap, sessionStatsMap, attentionMap, chatgptUsage };
   }
 
+  // Single-flight: an attention change that lands while the 10 s build is in
+  // progress joins it instead of racing a second build that could send an
+  // older payload after a newer one.
+  let statusBuildInFlight: ReturnType<typeof buildStatusData> | null = null;
+  function buildStatusDataShared(): ReturnType<typeof buildStatusData> {
+    if (!statusBuildInFlight) {
+      statusBuildInFlight = buildStatusData().finally(() => { statusBuildInFlight = null; });
+    }
+    return statusBuildInFlight;
+  }
+  function pushStatusData(): void {
+    void buildStatusDataShared().then((data) => {
+      send(IPC.STATUS_DATA, data);
+      // Feed full status data to remote server for browser clients (single polling source)
+      if (remoteServer) remoteServer.broadcastStatusData(data);
+    });
+  }
+
   // Push status data every 10s — store handle so it can be cleared on shutdown
-  const statusInterval = setInterval(() => {
-    const data = buildStatusData();
-    send(IPC.STATUS_DATA, data);
-    // Feed full status data to remote server for browser clients (single polling source)
-    if (remoteServer) remoteServer.broadcastStatusData(data);
-  }, 10000);
+  const statusInterval = setInterval(pushStatusData, 10000);
 
   // Also push immediately on first hook event (session is active)
   let sentInitialStatus = false;
@@ -2415,9 +2442,7 @@ export function registerIpcHandlers(
     hookRelay.on('hook-event', () => {
       if (!sentInitialStatus) {
         sentInitialStatus = true;
-        const data = buildStatusData();
-        send(IPC.STATUS_DATA, data);
-        if (remoteServer) remoteServer.broadcastStatusData(data);
+        pushStatusData();
       }
     });
   }
@@ -2501,10 +2526,9 @@ export function registerIpcHandlers(
     if (!payload?.sessionId) return;
     lastAttentionBySession.set(payload.sessionId, payload.state);
     // Broadcast immediately so remote clients see the change without waiting
-    // for the 10s status:data timer. Payload rebuild is cheap.
+    // for the 10s status:data timer. The rebuild is async and shared (C5).
     if (remoteServer) {
-      const data = buildStatusData();
-      remoteServer.broadcastStatusData(data);
+      void buildStatusDataShared().then((data) => remoteServer?.broadcastStatusData(data));
     }
   });
 
@@ -3662,9 +3686,12 @@ export function registerIpcHandlers(
     windowRegistry?.emit('changed');
   }
 
-  function readTopicFile(claudeSessionId: string): string | null {
+  // Async (2026-09-16 C5): the polling fallback below read this synchronously
+  // every 2 s for every session that fell into it — which was every session,
+  // because the topic file rarely exists when the session starts.
+  async function readTopicFile(claudeSessionId: string): Promise<string | null> {
     try {
-      const content = fs.readFileSync(path.join(topicDir, `topic-${claudeSessionId}`), 'utf8').trim();
+      const content = (await fs.promises.readFile(path.join(topicDir, `topic-${claudeSessionId}`), 'utf8')).trim();
       return content || null;
     } catch {
       return null;
@@ -3703,28 +3730,36 @@ export function registerIpcHandlers(
     pendingWatchers.add(desktopId);
 
     // Read initial value
-    const initial = readTopicFile(claudeId);
-    if (initial && initial !== 'New Session') {
-      // lastTopics is set only if the title was actually APPLIED. A topic
-      // refused because the user owns the name must stay un-recorded, or a
-      // later Use-automatic-name would find it "unchanged" and never repaint.
-      void applyTopic(desktopId, claudeId, initial);
-    }
+    void readTopicFile(claudeId).then((initial) => {
+      if (initial && initial !== 'New Session') {
+        // lastTopics is set only if the title was actually APPLIED. A topic
+        // refused because the user owns the name must stay un-recorded, or a
+        // later Use-automatic-name would find it "unchanged" and never repaint.
+        void applyTopic(desktopId, claudeId, initial);
+      }
+    });
 
+    attachTopicWatch(desktopId, claudeId);
+  }
+
+  /** Prefer fs.watch for efficiency; fall back to polling if watch fails
+   *  (e.g., on network filesystems or platforms with limited inotify), or when
+   *  the file does not exist yet — the poll upgrades back to a watch once it does. */
+  function attachTopicWatch(desktopId: string, claudeId: string) {
     const topicFilePath = path.join(topicDir, `topic-${claudeId}`);
-
-    // Prefer fs.watch for efficiency; fall back to polling if watch fails
-    // (e.g., on network filesystems or platforms with limited inotify)
-    try {
-      const watcher = fs.watch(topicFilePath, { persistent: false }, () => {
-        const topic = readTopicFile(claudeId);
+    const onTopicMaybeChanged = () => {
+      void readTopicFile(claudeId).then((topic) => {
         if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
           void applyTopic(desktopId, claudeId, topic);
         }
       });
+    };
+    try {
+      const watcher = fs.watch(topicFilePath, { persistent: false }, onTopicMaybeChanged);
       watcher.on('error', () => {
         // File may not exist yet — fall back to polling
         watcher.close();
+        if (topicWatchers.get(desktopId) === watcher) topicWatchers.delete(desktopId);
         startPolling(desktopId, claudeId);
       });
       topicWatchers.set(desktopId, watcher);
@@ -3739,10 +3774,20 @@ export function registerIpcHandlers(
   function startPolling(desktopId: string, claudeId: string) {
     if (topicWatchers.has(desktopId)) return;
     const interval = setInterval(() => {
-      const topic = readTopicFile(claudeId);
-      if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
-        void applyTopic(desktopId, claudeId, topic);
-      }
+      void readTopicFile(claudeId).then((topic) => {
+        if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
+          void applyTopic(desktopId, claudeId, topic);
+        }
+        // WHY upgrade (2026-09-16 C5): the poll used to run for the session's
+        // whole life once it started, because nothing re-tried fs.watch after
+        // the file appeared. Once a read succeeds the file exists, so hand the
+        // session back to the watcher; if that attach fails it falls back here.
+        if (topic !== null && topicWatchers.get(desktopId) === interval) {
+          clearInterval(interval);
+          topicWatchers.delete(desktopId);
+          attachTopicWatch(desktopId, claudeId);
+        }
+      });
     }, 2000);
     topicWatchers.set(desktopId, interval);
   }

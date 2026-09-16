@@ -60,6 +60,16 @@ describe('hot main-process paths use fs.promises', () => {
     expect(methodBody(host, 'isLive(')).not.toMatch(/readEvents|getHistory/);
   });
 
+  it('the three per-session polls: status push (10 s), topic name (2 s), transcript safety poll (2 s)', () => {
+    const ipc = read('ipc-handlers.ts');
+    expect(methodBody(ipc, 'async function buildStatusData(')).not.toMatch(SYNC_FS);
+    expect(methodBody(ipc, 'async function readTopicFile(')).not.toMatch(SYNC_FS);
+    expect(methodBody(ipc, 'function startPolling(')).not.toMatch(SYNC_FS);
+    expect(methodBody(ipc, 'function attachTopicWatch(')).not.toMatch(SYNC_FS);
+    const watcher = read('transcript-watcher.ts');
+    expect(methodBody(watcher, 'private ensureGlobalPoll(')).not.toMatch(SYNC_FS);
+  });
+
   it("the model's file tools — Glob's walk, Read, Edit, Write (several times per turn)", () => {
     const glob = read('harness/tools/glob.ts');
     const walk = glob.indexOf('const walk = async (');
