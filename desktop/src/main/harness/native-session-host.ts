@@ -46,6 +46,7 @@ import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION,
 import { DelegationLedger, OWNER, RAW_REPORT_CAP_CHARS, isOwnerAlive, toRunView, type DelegationRecord } from './specialists/delegation-ledger';
 import { DelegatedModels, delegatedModelsView, type DelegatedTier } from './specialists/delegated-models';
 import type { NativeHome } from '../native-home';
+import { PermissionModeStore } from './permission-mode-store';
 import { computeReportBudget } from './specialists/report-budget';
 import { truncateOutput, composeNotice } from './tools/truncate';
 import { APPROX_CHARS_PER_TOKEN } from './message-size';
@@ -353,11 +354,13 @@ export class NativeSessionHost extends EventEmitter {
   // as native transcript events (which is the SAME channel CC hook events ride).
   private broker = new PermissionBroker();
 
-  // Per-session permission mode (spec §2.4 layer 2). In-memory, per session,
-  // default 'ask' — NOT persisted (a fresh app session starts back at 'ask').
-  // decide() reads this fresh on every tool, so setPermissionMode() takes effect
-  // on the NEXT gated call without disturbing an in-flight ask.
+  // Per-session permission mode (spec §2.4 layer 2). decide() reads this fresh
+  // on every tool, so setPermissionMode() takes effect on the NEXT gated call
+  // without disturbing an in-flight ask. Seeded by create()/resume() through
+  // seedMode(); a user's explicit choice is also saved to modeStore so a resume
+  // restores it instead of silently falling back to the preset default.
   private modeFor = new Map<string, NativePermissionMode>();
+  private modeStore?: PermissionModeStore;
 
   // Per-session in-memory copy of "Always allow" rules remembered THIS session.
   // WHY memory is the source of session-truth: the disk persist (PermissionStore)
@@ -2267,6 +2270,7 @@ export class NativeSessionHost extends EventEmitter {
       : undefined;
     this.nativeHome = nativeHome;
     this.delegatedModels = nativeHome ? new DelegatedModels(nativeHome) : undefined;
+    this.modeStore = nativeHome ? new PermissionModeStore(nativeHome) : undefined;
   }
 
   /** Route a renderer/remote permission response to the broker. Returns false
@@ -2327,7 +2331,31 @@ export class NativeSessionHost extends EventEmitter {
       throw new Error(`Unknown native permission mode: ${String(mode)} (expected one of ${VALID.join(', ')}).`);
     }
     this.modeFor.set(sessionId, mode);
+    this.emitMode(sessionId);
+    // Remember the choice so a resume restores it (see seedMode). Best-effort:
+    // the mode is already live in memory, so a failed save only means a later
+    // resume starts from the preset default — which the chip will show.
+    this.modeStore?.set(sessionId, () => this.modeFor.get(sessionId) ?? mode).catch((err) => {
+      log('WARN', 'NativeSessionHost', 'could not save the permission mode; a resume will start from the preset default', { sessionId, error: String(err) });
+    });
     return mode;
+  }
+
+  /** Give a starting session its mode, then tell every window and the phone.
+   *  An explicit setPermissionMode that landed first always wins.
+   *  WHY the push: the renderer's chip used to only PULL the mode when
+   *  session:created arrived, which is sent at this handler's first await —
+   *  before create()/resume() got here — so it read the 'ask' fallback and
+   *  kept it (a fresh Coder session showed ASK FIRST while running auto-edit).
+   *  The push lands after the real value exists and always overwrites. */
+  private seedMode(sessionId: string, fallback: NativePermissionMode): void {
+    if (!this.modeFor.has(sessionId)) this.modeFor.set(sessionId, fallback);
+    this.emitMode(sessionId);
+  }
+
+  private emitMode(sessionId: string): void {
+    const mode = this.modeFor.get(sessionId);
+    if (mode) this.emit('permission-mode', { sessionId, mode });
   }
 
   /** Revoke ONE remembered "Always allow": disk first, then every live session's
@@ -3099,7 +3127,7 @@ export class NativeSessionHost extends EventEmitter {
     });
     // The preset seeds the STARTING mode; an explicit setPermissionMode always
     // wins — modeFor is never overwritten here (plan decision 3).
-    if (!this.modeFor.has(opts.sessionId)) this.modeFor.set(opts.sessionId, preset.defaultMode);
+    this.seedMode(opts.sessionId, preset.defaultMode);
     // Task 4 (plan 1c) — read this project folder's specialist catalog BEFORE
     // toolWiring() ever calls this.specialistCatalog.roster(cwd) below: that
     // call reads live in-memory state, and roster()'s own contract says it
@@ -3564,9 +3592,11 @@ export class NativeSessionHost extends EventEmitter {
     // tool posture for the wrong model on every overridden resume.
     const binding = bindingOverride ?? header.binding;
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
-    // Seed the STARTING mode from the resolved preset unless the caller already
-    // set one for this id (an explicit setPermissionMode always wins).
-    if (!this.modeFor.has(sessionId)) this.modeFor.set(sessionId, preset.defaultMode);
+    // Seed the STARTING mode: the user's saved choice for this conversation,
+    // else the preset default (an explicit setPermissionMode always wins).
+    // WHY the saved choice: without it, "Ask first" on a Coder conversation
+    // silently became Auto-edit again after every resume.
+    this.seedMode(sessionId, this.modeStore?.get(sessionId) ?? preset.defaultMode);
     // Task 4 (plan 1c) — same reasoning as create()'s own call: awaited BEFORE
     // toolWiring() reads this.specialistCatalog.roster(cwd) below, so a
     // resumed session's first turn never ships an empty roster either.
@@ -4588,10 +4618,14 @@ export class NativeSessionHost extends EventEmitter {
     // is tearing down that parent, nothing is ever coming back to read it.
     this.pendingHostNotices.delete(sessionId);
     // Drop per-session runtime state so it can't leak and so a destroy→resume of
-    // the SAME sessionId within one app run starts clean: mode resets to the
-    // default 'ask', and the in-memory remembered rules fall back to the disk
-    // record (never carried across a teardown).
-    this.modeFor.delete(sessionId);
+    // the SAME sessionId within one app run starts clean: the in-memory
+    // remembered rules fall back to the disk record (never carried across a
+    // teardown).
+    // modeFor is deliberately KEPT (one short string per conversation): the
+    // user's chosen mode must survive a close/resume, and the saved copy
+    // (modeStore) is written in the background, so a resume right after a
+    // change could otherwise read the old value. After an app restart,
+    // resume() reads the saved copy instead.
     this.rememberedFor.delete(sessionId);
     this.presetIdFor.delete(sessionId);
     // Task 6 — drop this parent's specialist bookkeeping too, so a slot/writer
