@@ -116,6 +116,12 @@ export class WindowRegistry extends EventEmitter {
     // again, so a transfer gap left behind would degrade the remote snapshot for good.
     this.inheritedByTransfer.delete(sessionId);
     this.transferMarkedAt.delete(sessionId);
+    // WHY (2026-09-16, per-session-maps investigation): a dead session's
+    // subscriber set used to survive until the subscribing window closed —
+    // the buddy window subscribes without owning, so every session it ever
+    // mirrored left an entry behind. Nothing routes events to a session that
+    // no longer exists, so the set is dead weight the moment it is released.
+    this.subscriptions.delete(sessionId);
     this.emit('changed');
   }
 

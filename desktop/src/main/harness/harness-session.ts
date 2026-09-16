@@ -185,7 +185,7 @@ import { mcpToolsFor, estimateToolSchemaTokens } from './mcp/mcp-tools';
 import type { ReadyServer } from './mcp/mcp-manager';
 import {
   costForUsage, providerCostFromMetadata, costDisagreement,
-  COST_DISAGREEMENT_THRESHOLD, addComparableTurn, sessionCostDisagreement,
+  COST_DISAGREEMENT_THRESHOLD, addComparableTurn, sessionCostDisagreement, modelCostDisagreements,
   NO_SESSION_COST_TOTALS, COST_GAP_RELOG_FACTOR,
   type ModelPricing, type SessionCostTotals,
 } from './pricing';
@@ -697,6 +697,9 @@ export class HarnessSession extends EventEmitter {
    *  materially WORSE (COST_GAP_RELOG_FACTOR), which is a different fault
    *  rather than a repeat of the reported one. */
   private lastLoggedSessionCostGap: number | null = null;
+  /** The same relog ladder, per model — see `SessionCostTotals.byModel` for
+   *  why the session line alone goes deaf across a model swap (2026-09-16). */
+  private lastLoggedModelCostGap = new Map<string, number>();
   binding: ModelBinding;
   /** Identity stamped by the provider factory (provider/model/non-secret account).
    * A refreshed account can change this without a host setBinding call. */
@@ -718,7 +721,7 @@ export class HarnessSession extends EventEmitter {
   // Tool runtime state (Task 9). readRegistry + todos are per-SESSION runtime
   // state — NOT persisted transcript. seedHistory() clears both on resume.
   private toolByName: Map<string, NativeTool>;
-  private readRegistry = new Map<string, number>();  // canonical path → mtimeMs at last Read
+  private readRegistry = new Map<string, string>();  // canonical path → content fingerprint at last Read (tools/file-fingerprint.ts)
   /** G-11 (2026-08-26 tools investigation) — what Read has already served this
    *  session (`path|offset|limit` → mtime + which call). Read answers a repeat
    *  of an unchanged slice with "the content you already have is current"
@@ -2803,7 +2806,7 @@ export class HarnessSession extends EventEmitter {
       // provider with a silent one never puts part of a bill next to all of
       // our arithmetic. Same rules as above: diagnostic only, no UI, and the
       // message states what was observed without naming a cause.
-      this.sessionCostTotals = addComparableTurn(this.sessionCostTotals, costUsd, providerCostUsd);
+      this.sessionCostTotals = addComparableTurn(this.sessionCostTotals, costUsd, providerCostUsd, turnModelId);
       const sessionCostGap = sessionCostDisagreement(this.sessionCostTotals);
       // Logged the first time the sums cross the threshold, and again only once
       // the gap has multiplied since the last line — see the field and
@@ -2822,6 +2825,27 @@ export class HarnessSession extends EventEmitter {
           ourCostUsd: this.sessionCostTotals.ourUsd,
           providerCostUsd: this.sessionCostTotals.theirUsd,
           relativeGap: Number(sessionCostGap.toFixed(4)),
+        });
+      }
+      // ...and once more PER MODEL, so a mis-priced cheap model is not hidden
+      // behind a correctly-priced one that ran most of the session (the
+      // dilution the session sum cannot see — `SessionCostTotals.byModel`).
+      // Only once a SECOND model has entered the pair: on a single-model
+      // session the per-model figures ARE the session figures, and the line
+      // above already said it. Same ladder, kept per model, same
+      // diagnostic-only posture.
+      const multiModel = Object.keys(this.sessionCostTotals.byModel).length > 1;
+      for (const { modelId, gap, totals } of multiModel ? modelCostDisagreements(this.sessionCostTotals) : []) {
+        const last = this.lastLoggedModelCostGap.get(modelId);
+        if (last !== undefined && gap < last * COST_GAP_RELOG_FACTOR) continue;
+        this.lastLoggedModelCostGap.set(modelId, gap);
+        log('WARN', 'HarnessSession', 'our cost figures and the provider’s own disagree for one of this session’s models', {
+          sessionId: this.opts.sessionId,
+          model: modelId,
+          comparableTurns: totals.turns,
+          ourCostUsd: totals.ourUsd,
+          providerCostUsd: totals.theirUsd,
+          relativeGap: Number(gap.toFixed(4)),
         });
       }
       usageReported = true;   // whatever happens after this, these tokens are reported

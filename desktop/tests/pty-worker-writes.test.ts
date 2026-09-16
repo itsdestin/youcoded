@@ -120,6 +120,27 @@ describe('pty-worker writes', () => {
     expect(writes).toEqual(['hello\r']);
   });
 
+  // 2026-09-16 (claude-code-integration.md): the thresholds are BYTES on the pipe,
+  // and the checks counted UTF-16 units. 30 CJK characters is 90 bytes — over the
+  // 64-byte paste threshold — so the atomic path would have turned its Enter into
+  // a literal newline. It must take the echo-driven path: the body goes first
+  // (chunked under 56 bytes apiece), and the `\r` waits for the echo.
+  it('a short-looking non-ASCII submit that is over 56 BYTES is not written atomically', async () => {
+    const body = '你好世界'.repeat(8);        // 32 chars, 96 bytes
+    deliver({ type: 'input', data: body + '\r' });
+    await drain(300);
+    expect(writes.length).toBeGreaterThan(1);
+    expect(writes.join('')).toBe(body);      // the \r is held for the echo, which never comes here
+    for (const w of writes) expect(Buffer.byteLength(w, 'utf8')).toBeLessThanOrEqual(56);
+  });
+
+  it('a submit that is short in BYTES stays atomic even with non-ASCII in it', async () => {
+    const text = 'héllo wörld\r';          // 14 bytes
+    deliver({ type: 'input', data: text });
+    await drain(50);
+    expect(writes).toEqual([text]);
+  });
+
   describe('the chunked channel, which only a shell session\'s initial command uses', () => {
     it('splits a long command so ConPTY cannot truncate it', async () => {
       const command = 'sudo install '.repeat(40);   // ~520 chars

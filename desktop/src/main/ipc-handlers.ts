@@ -15,7 +15,7 @@ import { HookRelay } from './hook-relay';
 import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { hasRealTitle } from '../shared/session-title';
-import { setPermissionOverrides } from './main';
+import { setPermissionOverrides, forgetSessionAttention } from './main';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { IntegrationInstaller, listWithState } from './integration-installer';
@@ -3924,9 +3924,21 @@ export function registerIpcHandlers(
       // 2b Task 8: drop our lease so another device can acquire. Idempotent +
       // best-effort; release() never rejects, .catch guards a future change.
       void leaseWiring?.client.release(claudeId).catch(() => { /* best-effort */ });
+      // WHY (2026-09-16, per-session-maps investigation): the last-model
+      // dedupe is keyed by CLAUDE id and was never cleared, so every
+      // conversation opened this run left a string behind for the life of the
+      // process. Resolved here, while the claude id is still known.
+      lastModelSeen.delete(claudeId);
     }
     sessionIdMap.delete(sessionId);
     lastAttentionBySession.delete(sessionId);
+    // Same investigation: the per-session model-state signature (native
+    // sessions) had no removal path either.
+    lastSessionModelState.delete(sessionId);
+    // And the attention aggregate in main.ts only ever forgot a session when
+    // its renderer volunteered `{ clear: true }` — a session that died
+    // without one kept reporting its last state in every window's summary.
+    forgetSessionAttention(sessionId);
     // Drop the last-known status values so buildStatusData doesn't keep
     // broadcasting chips for a session that's gone.
     delete lastContextByDesktopId[sessionId];
@@ -3977,6 +3989,10 @@ export function registerIpcHandlers(
   remoteServer?.setSessionMetaWiring({
     resolve: (sessionId: string) => sessionIdMap.get(sessionId) || sessionId,
     canWrite: canWriteStoreRecord,
+    // The desktop half of a phone-originated tag/note: the same push the ipcMain
+    // handlers make after their own write (2026-09-16, sync.md).
+    notify: (sessionId: string, payload: Record<string, unknown>) =>
+      sendForSession(sessionId, IPC.SESSION_META_CHANGED, sessionId, payload),
   });
 
   // Provider bucket to READ a resolved session's meta from. 'native' when

@@ -442,9 +442,10 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
                   <div className="text-xs text-fg font-medium">Create a new private repository</div>
                   {repoMode === 'create' && (
                     <div className="mt-1.5">
-                      {/* Shared FIELD surface (spec change 20). This input sits inside
-                          the radio's <label>, so without an explicit aria-label a screen
-                          reader would announce the radio's whole sentence as its name. */}
+                      {/* Shared FIELD surface (spec change 20). The box is a sibling of the
+                          radio, not inside its label (so clicking into it no longer flips
+                          the radio — sync.md, closed 2026-09-16); the explicit aria-label
+                          stays so a screen reader names it rather than the radio's sentence. */}
                       <TextInput
                         value={repoName}
                         onChange={(e) => setRepoName(e.target.value)}

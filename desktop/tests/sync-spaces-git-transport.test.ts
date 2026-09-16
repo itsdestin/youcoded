@@ -641,6 +641,24 @@ describe('GitTransport auth-failure surfacing', () => {
     return t;
   }
 
+  // 2026-09-16 (sync.md): a repo too damaged for git to open answered the remote
+  // probe with "no remote", so the engine went to provision one — which offline or
+  // signed-out throws before any corruption-guarded op runs — and the network-free
+  // repair never fired. The probe now classifies corruption where it first shows.
+  it('hasRemote(): a corrupt repo THROWS coded repo-corrupt instead of reading as "no remote"', async () => {
+    const t = scripted({
+      remote: { code: 128, stderr: 'fatal: not a git repository: /nowhere/.youcoded/sync.git' },
+    });
+    await expect(t.hasRemote(space)).rejects.toMatchObject({ syncErrorCode: 'repo-corrupt' });
+  });
+
+  it('hasRemote(): a healthy repo with no origin still answers false, quietly', async () => {
+    const t = scripted({
+      remote: { code: 2, stderr: "error: No such remote 'origin'" },
+    });
+    await expect(t.hasRemote(space)).resolves.toBe(false);
+  });
+
   it('pull(): an auth-refused fetch THROWS the coded plain-language error (never mistaken for offline)', async () => {
     const t = scripted({
       remote: { code: 0, stdout: 'https://github.com/u/r.git' }, // hasRemote → true
