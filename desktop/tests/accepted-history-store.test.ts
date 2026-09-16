@@ -96,8 +96,13 @@ describe('AcceptedHistoryStore', () => {
     expect(sidecar()).toContain('PRIVATE_SENTINEL');
     expect(sidecar()).not.toContain('"text":"hello"');
     expect(sidecar()).not.toContain('"text":"answer"');
-    expect((fs.statSync(path.dirname(store.manifestPath(sessionId))).mode & 0o077)).toBe(0);
-    expect((fs.statSync(store.manifestPath(sessionId)).mode & 0o077)).toBe(0);
+    // WHY the platform guard: POSIX mode bits do not exist on Windows — stat() there reports
+    // 0o666 for every file, so `& 0o077` is never 0 and this assertion failed on every Windows
+    // CI run. Owner-only access on Windows would be an ACL, which the store does not set.
+    if (process.platform !== 'win32') {
+      expect((fs.statSync(path.dirname(store.manifestPath(sessionId))).mode & 0o077)).toBe(0);
+      expect((fs.statSync(store.manifestPath(sessionId)).mode & 0o077)).toBe(0);
+    }
 
     expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }))
       .toEqual({ ok: true, messages: proposal().messages, eventUuids: ['u1', 'r1', 'a1'], revision });

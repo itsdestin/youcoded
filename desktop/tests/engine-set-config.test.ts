@@ -378,7 +378,13 @@ describe('engine:set-config — one action per wait, however many changes (R3-5 
     let stream: ((url: string) => Response | undefined) | undefined;
     const fetchImpl: any = makeFetch((url) => stream?.(url));
     stream = (url) => (fetchImpl.streamFor ? fetchImpl.streamFor(url) : undefined);
-    mgr = makeManager(fetchImpl, { configApplyMaxWaitMs: 60 });
+    // WHY 1 s and not 60 ms: the 20 ms pause below has to land INSIDE the first
+    // change's wait for the second change to join it. Under a full parallel run
+    // a 20 ms sleep can take longer than 60 ms, the first wait expires alone,
+    // the second gets its own — three spawns, and this failed on Windows CI
+    // (2026-09-16). The stream never finishes, so the test pays the whole
+    // bound either way; 1 s buys a 50× margin for one second of runtime.
+    mgr = makeManager(fetchImpl, { configApplyMaxWaitMs: 1_000 });
     await startStreamingReply(mgr, fetchImpl);    // never finished
 
     await mgr.setConfig({ speed: { speculative: false } });

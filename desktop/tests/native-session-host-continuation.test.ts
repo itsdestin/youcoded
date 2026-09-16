@@ -556,7 +556,10 @@ describe('NativeSessionHost durable continuation', () => {
     await fx.host.drain('pictured');
     // The manifest points at the file; it never copies the pixels.
     const manifest = fs.readFileSync(fx.acceptedHistory.manifestPath('pictured'), 'utf8');
-    expect(manifest).toContain(shot);
+    // WHY the JSON spelling: the manifest is JSON, so a Windows path sits in it with
+    // every backslash doubled — the raw path can never be a substring there, and this
+    // failed on every Windows CI run while passing on POSIX, where paths have none.
+    expect(manifest).toContain(JSON.stringify(shot).slice(1, -1));
     expect(manifest).not.toContain(png.toString('base64'));
     await fx.host.destroy('pictured');
 

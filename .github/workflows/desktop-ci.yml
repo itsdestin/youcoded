@@ -26,15 +26,58 @@ on:
   # will sit unmergeable forever waiting for a run that never starts. Turning
   # protection on means dropping this filter, or making the required check a
   # tiny always-runs job. Master is unprotected as of 2026-09-04.
+  #
+  # 2026-09-16 (CI/test health review, Destin's deck answers Q-1 and Q-2): the
+  # `paths-ignore` filters are GONE, replaced by the `changes` job below, so a
+  # docs-only change still produces a COMPLETED check (skipped counts as passing
+  # for a required status check; a filtered-out workflow reports nothing and
+  # blocks forever). That is what lets master be protected. And every PR runs
+  # Linux only; Windows and macOS run on every push to master and once a night —
+  # they are the slow, machine-flaky legs, nobody on the project has either
+  # machine, and a Windows-only break is still caught the same day it lands.
   push:
     branches: [master]
-    paths-ignore: ['docs/**']
   pull_request:
-    paths-ignore: ['docs/**']
+  schedule:
+    # 07:23 UTC daily, off the hour on purpose (GitHub delays :00 cron under load).
+    - cron: '23 7 * * *'
   workflow_dispatch:
 
 jobs:
+  # Did anything outside docs/ change? Every step of `build` runs inside desktop/
+  # and none reads docs/, so a docs-only diff skips the matrix — but as a SKIPPED
+  # job with a completed check, never as a run that does not exist.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            pull_request) range="origin/${{ github.base_ref }}...HEAD" ;;
+            push)
+              before="${{ github.event.before }}"
+              # A brand-new branch has no `before`; run everything.
+              if [[ "$before" =~ ^0+$ ]]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+              range="$before..${{ github.sha }}" ;;
+            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          if git diff --name-only "$range" | grep -qv '^docs/'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "changed files outside docs/: $(git diff --name-only "$range" | grep -vc '^docs/' || true)"
+
   build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     # Windows runs the TESTS only (not the packaging build) because a whole
     # class of bug is invisible on Linux: Git Bash path semantics, MSYS mounts,
     # drive-relative resolution, CRLF. This job was ubuntu-only, so PR #174's
@@ -48,7 +91,9 @@ jobs:
         # coverage was desktop-test-build.yml, so a macOS-only failure could
         # not surface until a beta dispatch — which is exactly how the
         # sync-spaces-engine 5s-ceiling timeouts were found (run 29701441150).
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # PRs: Linux only. Master pushes, the nightly and a manual dispatch: all three.
+        # See the trigger comment above (2026-09-16).
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
