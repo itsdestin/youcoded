@@ -5708,13 +5708,20 @@ describe('specialists plans in the native host (Task 4)', () => {
     fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), JSON.stringify(file));
 
     host = makeHost();
+    // What the journal held at the instant the interrupted card went out.
+    const heldWhenShown: number[] = [];
+    host.on('plans-event', (e) => {
+      if (e.plan.status === 'interrupted') heldWhenShown.push(journalFile().plans[0].steps[0].attempts[0].reservedTokens);
+    });
     expect(await host.resume(SID, root)).toBe(true);
     // Not yet expired: another window might still own it.
     expect(journalFile().plans[0].status).toBe('running');
     await waitFor(() => journalFile().plans[0].status === 'interrupted', 'the recheck at lease expiry');
+    // Read in the same breath: the interrupted state must already hold nothing.
     const rec = journalFile().plans[0];
     expect(rec.lease).toBeUndefined();
     expect(rec.steps[0].attempts[0].reservedTokens).toBe(0);
+    expect(heldWhenShown).toEqual([0]);
     expect(childCalls).toHaveLength(0);
     expect(liveChildren()).toHaveLength(0);
     expect((await host.planViewsFor(SID))[0]).toMatchObject({ planId, status: 'interrupted' });
@@ -5740,8 +5747,14 @@ describe('specialists plans in the native host (Task 4)', () => {
     await host.approvePlan(SID, planId);
     await waitFor(() => childCalls.length === 2, 'both specialists to send');
     const lastSeq = Math.max(...planEvents.filter((e) => e.plan.planId === planId).map((e) => e.plan.seq));
-    fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), '{ not json');
-    await waitFor(() => planEvents.some((e) => e.plan.planId === planId && e.plan.status === 'failed'), 'the failed card');
+    // WHY re-applied while waiting: a heartbeat that read the file just before
+    // this write lands its atomic rename just after, replacing the damage.
+    const damage = () => fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), '{ not json');
+    await waitFor(() => {
+      if (planEvents.some((e) => e.plan.planId === planId && e.plan.status === 'failed')) return true;
+      damage();
+      return false;
+    }, 'the failed card');
     const failed = planEvents.find((e) => e.plan.planId === planId && e.plan.status === 'failed');
     expect(failed.plan.seq).toBe(lastSeq + 1);
     expect(failed.plan.failure.detail).toMatch(/not valid JSON/);

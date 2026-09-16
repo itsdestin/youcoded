@@ -556,7 +556,13 @@ export class PlanJournal {
    * process still answers are not re-scheduled: their owner is alive and
    * responsible for heartbeating or releasing.)
    */
-  async recoverInterrupted(ref: PlanRef): Promise<{ interrupted: string[]; recheckAt?: number }> {
+  async recoverInterrupted(
+    ref: PlanRef,
+    // Task 4: applied to each plan this pass interrupts, INSIDE the same write,
+    // so an interrupted plan is never visible while it still holds budget
+    // (the host passes PlanBudget.releaseOwnerlessHolds).
+    opts: { onInterrupt?: (plan: PlanRecord) => void } = {},
+  ): Promise<{ interrupted: string[]; recheckAt?: number }> {
     // WHY the read first: opening a conversation that never had a plan must
     // not create a plan directory (the lock step creates parents).
     const current = await this.read(ref);
@@ -579,6 +585,7 @@ export class PlanJournal {
         plan.status = 'interrupted';
         delete plan.lease;
         for (const step of plan.steps) if (step.status === 'running') step.status = 'paused';
+        opts.onInterrupt?.(plan);
         interrupted.push(plan.planId);
       }
       return recheckAt === undefined ? { interrupted } : { interrupted, recheckAt };

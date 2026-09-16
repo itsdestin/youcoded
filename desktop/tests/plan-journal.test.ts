@@ -325,6 +325,28 @@ describe('lease and fencing', () => {
   });
 });
 
+describe('recovery settles holds in the same write (Task 4)', () => {
+  it('an interrupted plan is never visible while it still holds budget', async () => {
+    await seed(record('p1', {
+      status: 'running',
+      steps: [{ id: 's1', status: 'running', attempts: [{
+        attemptId: 'a', itemIndex: 0, iteration: 0, baseTokens: 1000, addedTokens: 0, reservedTokens: 1000, spentTokens: 0, phase: 'prepared',
+      }] }],
+    }));
+    const seen: number[] = [];
+    const j = new PlanJournal({
+      home, identity: { instanceId: 'inst-a', pid: 111 }, isProcessAlive: () => false,
+      onEvent: (e) => {
+        const onDisk = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
+        seen.push(onDisk.plans[0].steps[0].attempts[0].reservedTokens);
+        expect(e.plan.status).toBe('interrupted');
+      },
+    });
+    await j.recoverInterrupted(REF, { onInterrupt: (plan) => { for (const s of plan.steps) for (const a of s.attempts) a.reservedTokens = 0; } });
+    expect(seen).toEqual([0]);
+  });
+});
+
 describe('committed reports', () => {
   async function leased(): Promise<string> {
     await seed(record('p1'));

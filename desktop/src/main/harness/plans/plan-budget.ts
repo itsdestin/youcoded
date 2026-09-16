@@ -466,14 +466,20 @@ export class PlanBudget {
     await this.journal.mutate(ref, (file) => {
       const plan = file.plans.find((p) => p.planId === planId);
       if (!plan || plan.lease || plan.status === 'running') return;
-      for (const step of plan.steps) {
-        for (const attempt of step.attempts) {
-          if (isCommitted(attempt)) continue;
-          if (attempt.phase === 'request-sent') this.chargeInFull(plan, step.id, attempt);
-          attempt.reservedTokens = 0;
-        }
-      }
+      this.releaseOwnerlessHolds(plan);
     });
+  }
+
+  /** The in-write half of settleOwnerless, for a caller that is already
+   *  inside a journal mutation (PlanJournal.recoverInterrupted's onInterrupt). */
+  releaseOwnerlessHolds(plan: PlanRecord): void {
+    for (const step of plan.steps) {
+      for (const attempt of step.attempts) {
+        if (isCommitted(attempt)) continue;
+        if (attempt.phase === 'request-sent') this.chargeInFull(plan, step.id, attempt);
+        attempt.reservedTokens = 0;
+      }
+    }
   }
 
   /** Give back what a non-finished attempt holds (it keeps what it spent). */

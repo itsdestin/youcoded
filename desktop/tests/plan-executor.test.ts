@@ -539,12 +539,18 @@ describe('pausing, stopping and interruption settle before anything is visible',
   it('one failing child aborts three siblings, waits only to the deadline, disposes stragglers, settles, then emits paused', async () => {
     const runner = new FakeRunner(fourScripts(true));
     const fence = await seed(record(FOUR));
-    const exec = executor(runner, { settleDeadlineMs: 80 });
+    // WHY 750 ms: the cooperative sibling needs one journal write to settle
+    // after its abort. Under a loaded full-suite run (verify.sh, 2026-09-16)
+    // that write missed an 80 ms deadline — correct behaviour (it was then
+    // charged in full) but not what this test pins. The stuck two still wait
+    // the whole deadline, so this is the test's cost.
+    const exec = executor(runner, { settleDeadlineMs: 750 });
     const t0 = Date.now();
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
     const elapsed = Date.now() - t0;
-    expect(elapsed).toBeGreaterThanOrEqual(80);
+    // A lower bound only: the stragglers were held for the whole deadline.
+    expect(elapsed).toBeGreaterThanOrEqual(750);
     // all three siblings were aborted; every child was disposed
     expect(runner.aborted.sort()).toEqual(expect.arrayContaining(['child-2', 'child-3', 'child-4']));
     expect(runner.disposed.sort()).toEqual(['child-1', 'child-2', 'child-3', 'child-4']);
