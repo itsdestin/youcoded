@@ -59,6 +59,7 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { ClaudeAccount } from './providers/claude-account';
 import { installClaude } from './prerequisite-installer';
 import { toListResult } from './harness/specialists/catalog';
+import { handlePlanRequest } from './harness/plans/plan-requests';
 import { detectEndpoints } from './models/endpoint-detectors';
 import { BrowserWindow, app } from 'electron';
 import { NativeHome } from './native-home';
@@ -2106,6 +2107,24 @@ export class RemoteServer {
           ? this.nativeRuntime.nativeHost.interruptFromUser(payload.sessionId, payload.childId)
           : { ok: false, error: 'The assistant runtime isn’t connected.' };
         this.respond(client.ws, type, id, result);
+        break;
+      }
+      // Specialists plans (Task 6, design §5) — the plan card's buttons and
+      // Settings' read/write from a phone. The SAME shared handler desktop IPC
+      // uses, against the SAME host, so the phone gets exactly the answer the
+      // computer would. Every answer — a refusal or `unsupported` included — is
+      // a value the card reads; none of these is in the shim's REJECT_ON_NOT_OK.
+      // No parallel replay: a reconnecting phone gets plan cards inside
+      // chat:hydrate, and plans:event (broadcast from ipc-handlers.ts) carries
+      // only later changes.
+      case 'plans:approve':
+      case 'plans:comment':
+      case 'plans:add-budget':
+      case 'plans:resume':
+      case 'plans:stop':
+      case 'plans:get-auto-approve':
+      case 'plans:set-auto-approve': {
+        this.respond(client.ws, type, id, await handlePlanRequest(this.nativeRuntime?.nativeHost ?? null, type, payload));
         break;
       }
       case 'tags:list': {

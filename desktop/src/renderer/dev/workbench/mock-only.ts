@@ -110,19 +110,10 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // and Android's catch-all answers unsupported by design. The fakes in mock-shim.ts stay
   // so the status strip, the too-large card and the Download button stay reviewable
   // without a host.
-  // Specialists stage two — plans (design mockup, 2026-09-05). The plan card
-  // and its Settings row are built against these. The backend exists (Tasks
-  // 1–4) and the renderer consumes it through components/plans/plan-bridge.ts
-  // (Task 5a); what is still missing is the transport — the eight channels
-  // below on preload, ipc-handlers, remote-shim/server and SessionService.kt.
-  { channel: 'plans.approve', feature: 'specialists stage two — plans' },
-  { channel: 'plans.comment', feature: 'specialists stage two — plans' },
-  { channel: 'plans.addBudget', feature: 'specialists stage two — plans' },
-  { channel: 'plans.resume', feature: 'specialists stage two — plans' },
-  { channel: 'plans.stop', feature: 'specialists stage two — plans' },
-  { channel: 'plans.getAutoApprove', feature: 'specialists stage two — plans' },
-  { channel: 'plans.setAutoApprove', feature: 'specialists stage two — plans' },
-  // Task 5a: the push the card and the buddy feed subscribe to (plans:event);
-  // Task 6 adds it to preload/remote-shim and removes all eight entries.
-  { channel: 'on.planEvent', feature: 'specialists stage two — plans' },
+  // Specialists stage two — plans: the seven `plans.*` rows and `on.planEvent`
+  // came off on 2026-09-16 (Task 6) when the real channels landed on all five
+  // surfaces (preload, ipc-handlers, remote-shim, remote-server, and
+  // SessionService.kt, which answers a typed "unsupported"). The fakes in
+  // mock-shim.ts stay so the workbench can still show every card state without
+  // a running plan.
 ];

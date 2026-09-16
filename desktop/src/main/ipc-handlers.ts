@@ -12,7 +12,7 @@ import https from 'https';
 import { execFile } from 'child_process';
 import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
 import { HookRelay } from './hook-relay';
-import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
+import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent, type PlansEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { hasRealTitle } from '../shared/session-title';
 import { setPermissionOverrides } from './main';
@@ -59,6 +59,7 @@ import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
 import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
+import { handlePlanRequest } from './harness/plans/plan-requests';
 import type { ProfileProviderType } from './harness/capability-profile';
 import { PermissionStore } from './harness/permission-store';
 import { StepGuardSettings } from './harness/step-guard-settings';
@@ -3025,6 +3026,17 @@ export function registerIpcHandlers(
     }
   });
 
+  // Specialists plans (Task 6, design §5): every visible plan-journal change.
+  // Same routing as specialists:event — the session's own window(s) and every
+  // remote client — but deliberately NOT buffered for a reconnecting phone: its
+  // plan cards come back inside chat:hydrate (the card's record is part of the
+  // chat state), and this push only carries what changed after that snapshot.
+  // A second copy here would be a parallel replay the design rules out.
+  nativeHost.on('plans-event', (event: PlansEvent) => {
+    sendForSession(event.sessionId, IPC.PLANS_EVENT, event);
+    remoteServer?.broadcast({ type: IPC.PLANS_EVENT, payload: event });
+  });
+
   // What this session was given, pushed once when it opens (contract R23: every
   // chat carries the line). Push-only, like specialists:event and shell-event
   // below — there is no request handler, because nothing asks: the strip is part
@@ -3171,8 +3183,9 @@ export function registerIpcHandlers(
       evt.sender.send(IPC.TRANSCRIPT_EVENT, ev);
     }
     // (The blocks this used to inline now live in sendLiveOnlyState, which
-    // SESSION_REPLAY_LIVE_STATE also serves — see its WHY.)
-    sendLiveOnlyState(evt.sender, sessionId, nativeEvents !== null);
+    // SESSION_REPLAY_LIVE_STATE also serves — see its WHY.) Fire-and-forget
+    // channel, so nothing awaits this; sendLiveOnlyState never rejects.
+    void sendLiveOnlyState(evt.sender, sessionId, nativeEvents !== null);
   });
 
   /**
@@ -3187,6 +3200,10 @@ export function registerIpcHandlers(
    *  - specialist run records: a specialist card's status IS its run record,
    *    which the transcript says nothing about;
    *  - background Bash run records: same, for a shell card's background state;
+   *  - plan card records (Specialists plans, Task 6): read from the plan
+   *    journal on disk, not memory, but the transcript page does not carry
+   *    them — the propose_plan result there is the record as first proposed,
+   *    and a plan that ran since has moved on;
    *  - the replay-complete marker, which reaps tool cards the history left
    *    'running' (a transcript ends wherever the process died, so its last
    *    tool_use may have no matching result — Destin, 2026-08-09 dogfood).
@@ -3200,7 +3217,7 @@ export function registerIpcHandlers(
    * behaviour. The marker is sent for both, with sessionIdle false for CC —
    * only the native host can tell "genuinely mid-turn" from "died mid-tool".
    */
-  function sendLiveOnlyState(sender: Electron.WebContents, sessionId: string, isNative: boolean): void {
+  async function sendLiveOnlyState(sender: Electron.WebContents, sessionId: string, isNative: boolean): Promise<void> {
     if (isNative) {
       for (const ev of nativeHost.pendingAskEventsFor(sessionId)) {
         sender.send(IPC.HOOK_EVENT, ev);
@@ -3213,6 +3230,21 @@ export function registerIpcHandlers(
       for (const run of nativeHost.shellRunsFor(sessionId)) {
         sender.send(IPC.NATIVE_SHELL_EVENT, { sessionId, run } satisfies ShellEvent);
       }
+      // Specialists plans (Task 6): the current card records, straight from the
+      // journal. Awaited, and sent BEFORE the marker below, so the renderer's
+      // awaited re-send has every card up to date when it moves on.
+      // A failed read must not stop the marker: without it the page's running
+      // tool cards would never be reaped. The card simply keeps the record the
+      // page gave it; the next journal change pushes a fresh one.
+      try {
+        for (const plan of await nativeHost.planViewsFor(sessionId)) {
+          if (sender.isDestroyed()) return;
+          sender.send(IPC.PLANS_EVENT, { sessionId, plan } satisfies PlansEvent);
+        }
+      } catch (e) {
+        console.error('[plans] could not read plan records for the live-state re-send', e);
+      }
+      if (sender.isDestroyed()) return;
     }
     // sessionIdle gates the reap because this SAME state re-send fires when a
     // window re-docks a session that is genuinely mid-turn. Only the native
@@ -3247,7 +3279,9 @@ export function registerIpcHandlers(
     // Task 5a review: isNative answers the same question (a live native
     // session) without reading and merging the whole transcript — this now
     // runs after every first page, not just on handoff.
-    sendLiveOnlyState(evt.sender, sessionId, nativeHost.isNative(sessionId));
+    // Returned, so the renderer's invoke resolves only once the plan records
+    // (read from disk) have been sent — see sendLiveOnlyState.
+    return sendLiveOnlyState(evt.sender, sessionId, nativeHost.isNative(sessionId));
   });
 
   // --- Native runtime IPC (Phase 1 Plan A) ---
@@ -3434,6 +3468,17 @@ export function registerIpcHandlers(
     nativeHost.steerFromUser(sessionId, childId, text));
   ipcMain.handle(IPC.SPECIALISTS_INTERRUPT, async (_e, sessionId: string, childId: string) =>
     nativeHost.interruptFromUser(sessionId, childId));
+  // Specialists plans (Task 6) — the seven card/settings calls. Each hands the
+  // renderer's payload to the SAME shared handler the remote server uses, so
+  // both answer identically (and never throw across IPC: a thrown invoke
+  // would reach the card as a failure with Electron's wording in it).
+  ipcMain.handle(IPC.PLANS_APPROVE, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:approve', payload));
+  ipcMain.handle(IPC.PLANS_COMMENT, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:comment', payload));
+  ipcMain.handle(IPC.PLANS_ADD_BUDGET, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:add-budget', payload));
+  ipcMain.handle(IPC.PLANS_RESUME, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:resume', payload));
+  ipcMain.handle(IPC.PLANS_STOP, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:stop', payload));
+  ipcMain.handle(IPC.PLANS_GET_AUTO_APPROVE, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:get-auto-approve', payload));
+  ipcMain.handle(IPC.PLANS_SET_AUTO_APPROVE, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:set-auto-approve', payload));
   // --- Local engine IPC (Plan B) ---
   // install/restart resolve to a fresh status() so the caller doesn't need a
   // second round-trip. The push emitters below keep every window + remote in

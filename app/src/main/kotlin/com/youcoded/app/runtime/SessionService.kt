@@ -4097,6 +4097,20 @@ class SessionService : Service() {
                     org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
             }
 
+            // Specialists plans (Task 6): all seven plan requests answer a typed
+            // `unsupported` refusal — see PlansBridge for why that shape. Its OWN
+            // branch, for the reason the engine branch below spells out: a `-> {`
+            // inside a comma list captures every label above it.
+            "plans:approve",
+            "plans:comment",
+            "plans:add-budget",
+            "plans:resume",
+            "plans:stop",
+            "plans:get-auto-approve",
+            "plans:set-auto-approve" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, PlansBridge.unsupportedResponse()) }
+            }
+
             // The six local-engine upgrade channels (2026-09-05). Desktop-only for
             // the same reason as every other branch here — a phone runs no local
             // engine, holds no model folder and has no terminal to open — but they

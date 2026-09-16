@@ -2236,6 +2236,19 @@ export const IPC = {
   SPECIALISTS_STEER: 'specialists:steer',
   SPECIALISTS_INTERRUPT: 'specialists:interrupt',
   SPECIALISTS_EVENT: 'specialists:event',
+  // ---- Specialists plans (Task 6, design §5) ----
+  // Exactly seven requests (the plan card's five buttons + Settings' read and
+  // write) and one push. Every surface answers all seven — Android with a typed
+  // `unsupported` — and the list is pinned by ipc-channels.test.ts. plans:event
+  // is a PUSH: one per visible plan-journal change, never a request.
+  PLANS_APPROVE: 'plans:approve',
+  PLANS_COMMENT: 'plans:comment',
+  PLANS_ADD_BUDGET: 'plans:add-budget',
+  PLANS_RESUME: 'plans:resume',
+  PLANS_STOP: 'plans:stop',
+  PLANS_GET_AUTO_APPROVE: 'plans:get-auto-approve',
+  PLANS_SET_AUTO_APPROVE: 'plans:set-auto-approve',
+  PLANS_EVENT: 'plans:event',
   // ---- Native runtime Plan B (Phase 1): local llama.cpp engine ----
   ENGINE_STATUS: 'engine:status',
   ENGINE_INSTALL: 'engine:install',

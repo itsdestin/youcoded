@@ -73,10 +73,10 @@ declare global {
         // emit per host method). Returns an unsubscribe fn.
         specialistEvent: (cb: (e: import('../../shared/types').SpecialistsEvent) => void) => () => void;
         shellEvent: (cb: (e: import('../../shared/types').ShellEvent) => void) => () => void;   // G-1
-        // Specialists plans (Task 5a contract; Task 6 wires `plans:event` on
-        // every surface): one plan card's record changed. Returns the
-        // unsubscribe fn, like specialistEvent. Optional until Task 6 lands, so
-        // callers subscribe with `?.` and a bridge without it pushes nothing.
+        // Specialists plans (Task 5a contract; wired on preload and the shim
+        // in Task 6): one plan card's record changed. Returns the unsubscribe
+        // fn, like specialistEvent. Still typed optional: callers subscribe
+        // with `?.`, so a bridge without it simply pushes nothing.
         planEvent?: (cb: (e: import('../../shared/types').PlansEvent) => void) => () => void;
       };
       dialog: {
@@ -416,14 +416,14 @@ declare global {
       };
       // Specialists plans (Task 5a contract). The seven request channels are
       // plans:approve / comment / add-budget / resume / stop / get-auto-approve /
-      // set-auto-approve (Task 6 wires them on every surface; until then they
-      // are MOCK_ONLY in the workbench). Every call answers with one of the
+      // set-auto-approve (wired on every surface in Task 6; Android answers
+      // `unsupported`). Every call answers with one of the
       // host's normalized forms — ok, a real failure, or `unsupported` (this
       // device can't run plans: the card disables its controls and never
       // retries). An action's `plan` is the card's NEXT record, landed via
       // PLAN_CHANGED; nothing is ever shown before the host says so.
-      // Optional until Task 6 adds it to preload/remote-shim: a bridge without
-      // it is treated exactly like `unsupported` (components/plans/plan-bridge.ts).
+      // Still typed optional: a bridge without it is treated exactly like
+      // `unsupported` (components/plans/plan-bridge.ts).
       plans?: {
         approve: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
         comment: (sessionId: string, planId: string, text: string) => Promise<import('../../shared/types').PlanActionResult>;

@@ -449,6 +449,15 @@ const IPC = {
   ENGINE_MODELS_CHANGED: 'engine:models-changed',
   NATIVE_MODEL_STATE: 'native:model-state',
   NATIVE_SHELL_EVENT: 'native:shell-event',
+  // Specialists plans (Task 6) — keep in sync with shared/types.ts.
+  PLANS_APPROVE: 'plans:approve',
+  PLANS_COMMENT: 'plans:comment',
+  PLANS_ADD_BUDGET: 'plans:add-budget',
+  PLANS_RESUME: 'plans:resume',
+  PLANS_STOP: 'plans:stop',
+  PLANS_GET_AUTO_APPROVE: 'plans:get-auto-approve',
+  PLANS_SET_AUTO_APPROVE: 'plans:set-auto-approve',
+  PLANS_EVENT: 'plans:event',
   MODELS_MEMORY_CHECK: 'models:memory-check',
   MODELS_LOAD: 'models:load',
   // ---- Voice prompting (design 2026-09-05) ----
@@ -658,6 +667,15 @@ contextBridge.exposeInMainWorld('claude', {
       const handler = (_e: IpcRendererEvent, event: any) => cb(event);
       ipcRenderer.on('specialists:event', handler);
       return () => ipcRenderer.removeListener('specialists:event', handler);
+    },
+    // Specialists plans (Task 6): one plan card's record changed. Fired by
+    // nativeHost's 'plans-event' listener in ipc-handlers.ts, and by the
+    // live-state re-send after a first history page. Unsubscribe fn, same as
+    // specialistEvent.
+    planEvent: (cb: (e: any) => void) => {
+      const handler = (_e: IpcRendererEvent, event: any) => cb(event);
+      ipcRenderer.on(IPC.PLANS_EVENT, handler);
+      return () => ipcRenderer.removeListener(IPC.PLANS_EVENT, handler);
     },
     // G-1: one background command's run record changed (status, tail, exit).
     // Fired by nativeHost's 'shell-event' listener in ipc-handlers.ts. Returns
@@ -1621,6 +1639,21 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('specialists:delegated-set', tier, binding),
     steer: (sessionId: string, childId: string, text: string) => ipcRenderer.invoke('specialists:steer', sessionId, childId, text),
     interrupt: (sessionId: string, childId: string) => ipcRenderer.invoke('specialists:interrupt', sessionId, childId),
+  },
+  // Specialists plans (Task 6) — the card's five buttons and Settings' read and
+  // write. WHY an object payload here, unlike the positional specialists calls
+  // above: main and the remote server hand this exact object to ONE shared
+  // handler (harness/plans/plan-requests.ts), so a click on the computer and the
+  // same click on a phone reach the plan service identically. Every call
+  // resolves with the host's answer, including a refusal; nothing is thrown.
+  plans: {
+    approve: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_APPROVE, { sessionId, planId }),
+    comment: (sessionId: string, planId: string, text: string) => ipcRenderer.invoke(IPC.PLANS_COMMENT, { sessionId, planId, text }),
+    addBudget: (sessionId: string, planId: string, tokens: number) => ipcRenderer.invoke(IPC.PLANS_ADD_BUDGET, { sessionId, planId, tokens }),
+    resume: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_RESUME, { sessionId, planId }),
+    stop: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_STOP, { sessionId, planId }),
+    getAutoApprove: () => ipcRenderer.invoke(IPC.PLANS_GET_AUTO_APPROVE),
+    setAutoApprove: (underTokens: number) => ipcRenderer.invoke(IPC.PLANS_SET_AUTO_APPROVE, { underTokens }),
   },
   // Local llama.cpp engine (Plan B). Progress/status pushes return an
   // unsubscribe, matching every other on* subscription in this file.

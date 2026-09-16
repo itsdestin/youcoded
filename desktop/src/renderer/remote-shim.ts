@@ -740,6 +740,27 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   'native:get-context-preferences', 'native:set-context-preferences',
 ]);
 
+/** Channels whose `{ ok:false, unsupported:true, error }` answer is DATA, to be
+ *  resolved like any other answer rather than rejected with a notice.
+ *
+ *  WHY (Specialists plans, Task 6): the plan card and Settings treat that
+ *  answer as "this device can't run plans" — every control disabled from the
+ *  first paint, the host's own sentence shown, Settings → Plans hidden. If the
+ *  shim rejected it, the caller would see an ordinary failure instead: buttons
+ *  stay clickable and the refusal only appears after a tap, plus a toast that
+ *  repeats what the card already says. The seven are also never in
+ *  REJECT_ON_NOT_OK, because a plain `{ ok:false, error }` is their normal
+ *  refusal (tests/remote-shim-plans.test.ts). */
+export const RESOLVE_UNSUPPORTED: ReadonlySet<string> = new Set([
+  'plans:approve',
+  'plans:comment',
+  'plans:add-budget',
+  'plans:resume',
+  'plans:stop',
+  'plans:get-auto-approve',
+  'plans:set-auto-approve',
+]);
+
 /** What a `<channel>:response` payload MEANS, as one pure decision.
  *
  *  Extracted from handleMessage so it can be tested at all: the dispatcher
@@ -753,7 +774,9 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
  *   'value'       — an ordinary answer. */
 export function responseOutcome(channel: string, payload: unknown): 'unsupported' | 'failure' | 'value' {
   if (!payload || typeof payload !== 'object') return 'value';
-  if ((payload as { unsupported?: unknown }).unsupported === true) return 'unsupported';
+  if ((payload as { unsupported?: unknown }).unsupported === true) {
+    return RESOLVE_UNSUPPORTED.has(channel) ? 'value' : 'unsupported';
+  }
   if ((payload as { ok?: unknown }).ok === false && REJECT_ON_NOT_OK.has(channel)) return 'failure';
   return 'value';
 }
@@ -1102,6 +1125,12 @@ function handleMessage(data: string, generation: number): void {
       // event', ...) forwarder). window.claude.on.specialistEvent subscribers
       // receive the SpecialistsEvent payload verbatim.
       dispatchEvent('specialists:event', payload);
+      break;
+    case 'plans:event':
+      // Specialists plans (Task 6) — push-only, broadcast by ipc-handlers.ts's
+      // nativeHost.on('plans-event', …). Carries only changes AFTER the
+      // chat:hydrate snapshot, which already holds every plan card's record.
+      dispatchEvent('plans:event', payload);
       break;
     case 'native:shell-event':
       // G-1 — push-only (ipc-handlers.ts's nativeHost.on('shell-event', …)
@@ -1984,6 +2013,8 @@ export function installShim(): void {
       // fn, matching preload's specialistEvent (both keep window.claude.on's
       // shape consistent for the specialists card's cleanup effects).
       specialistEvent: (cb: Callback) => { addListener('specialists:event', cb); return () => removeListener('specialists:event', cb); },
+      // Specialists plans (Task 6) — mirrors preload's on.planEvent.
+      planEvent: (cb: Callback) => { addListener('plans:event', cb); return () => removeListener('plans:event', cb); },
       // G-1: background command run records — mirrors preload's on.shellEvent.
       shellEvent: (cb: Callback) => { addListener('native:shell-event', cb); return () => removeListener('native:shell-event', cb); },
       // Android-only push event — see remote-shim handleMessage above for rationale.
@@ -3014,6 +3045,20 @@ export function installShim(): void {
         invoke('specialists:delegated-set', { tier, binding }),
       steer: (sessionId: string, childId: string, text: string) => invoke('specialists:steer', { sessionId, childId, text }),
       interrupt: (sessionId: string, childId: string) => invoke('specialists:interrupt', { sessionId, childId }),
+    },
+    // Specialists plans (Task 6) — the same object payloads preload sends, so
+    // the desktop's WS case hands them to the same shared handler main uses.
+    // Every answer resolves, a refusal or `unsupported` included (see
+    // RESOLVE_UNSUPPORTED above): the card reads them as values. On the phone's
+    // own bridge the seven answer `unsupported` (SessionService.kt).
+    plans: {
+      approve: (sessionId: string, planId: string) => invoke('plans:approve', { sessionId, planId }),
+      comment: (sessionId: string, planId: string, text: string) => invoke('plans:comment', { sessionId, planId, text }),
+      addBudget: (sessionId: string, planId: string, tokens: number) => invoke('plans:add-budget', { sessionId, planId, tokens }),
+      resume: (sessionId: string, planId: string) => invoke('plans:resume', { sessionId, planId }),
+      stop: (sessionId: string, planId: string) => invoke('plans:stop', { sessionId, planId }),
+      getAutoApprove: () => invoke('plans:get-auto-approve', {}),
+      setAutoApprove: (underTokens: number) => invoke('plans:set-auto-approve', { underTokens }),
     },
     // Local llama.cpp engine (Plan B). Server pushes engine:install-progress /
     // engine:status-changed via the WS dispatcher; subscriptions return an

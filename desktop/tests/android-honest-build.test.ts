@@ -51,6 +51,28 @@ describe('Android builds tell the truth about themselves', () => {
     expect(service.slice(catchAll, catchAll + 400)).toContain('buildUnsupportedResponse(');
   });
 
+  it('answers every plan request with a typed unsupported refusal, in its own branch', () => {
+    // Specialists plans (Task 6): the phone has no native runtime, so all seven
+    // plan calls answer {ok:false, unsupported:true, error} — the card reads that
+    // as "disable the controls", Settings as "hide Plans". Its OWN branch, so the
+    // `-> {` cannot capture a neighbouring comma list (see the engine:* branch).
+    const service = read('app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+    const labels = [
+      'plans:approve', 'plans:comment', 'plans:add-budget', 'plans:resume',
+      'plans:stop', 'plans:get-auto-approve', 'plans:set-auto-approve',
+    ];
+    const branch = service.match(/\n(\s*"plans:[a-z-]+",?\s*)+->\s*\{[\s\S]*?\n\s*\}\n/);
+    expect(branch, 'no single branch labelled with the plan channels').not.toBeNull();
+    const body = branch![0];
+    for (const l of labels) expect(body).toContain(`"${l}"`);
+    // Nothing but plan labels before the arrow.
+    const head = body.slice(0, body.indexOf('->'));
+    expect([...head.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort()).toEqual([...labels].sort());
+    expect(body).toContain('PlansBridge.unsupportedResponse()');
+    const helper = read('app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'PlansBridge.kt');
+    expect(helper).toContain('MessageRouter.buildUnsupportedResponse(');
+  });
+
   it('no longer carries the restore-from-backup wizard desktop demolished in July', () => {
     // Deleted on Destin's decision (2026-09-10 deck Q-5): nothing in the shared UI
     // called it, and it was the only place restore still existed in the product.

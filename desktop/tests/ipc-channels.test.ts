@@ -1453,6 +1453,68 @@ describe('specialists:* channel parity', () => {
   });
 });
 
+// Specialists plans, Task 6 (design §5): EXACTLY seven request channels plus
+// one push, on every surface. "Exactly" is the point — the plan card and
+// Settings call these seven and nothing else, so a stray eighth `plans:*`
+// string on one surface is a typo that silently breaks a button there.
+describe('plans:* channel parity (seven requests + plans:event)', () => {
+  const REQUESTS = [
+    'plans:add-budget',
+    'plans:approve',
+    'plans:comment',
+    'plans:get-auto-approve',
+    'plans:resume',
+    'plans:set-auto-approve',
+    'plans:stop',
+  ];
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const kotlin = () => fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+  /** Every distinct `plans:*` channel string quoted in a source, in either quote style. */
+  const plansStrings = (src: string) => [...new Set([...src.matchAll(/['"](plans:[a-z-]+)['"]/g)].map((m) => m[1]))].sort();
+
+  it('the shared list names exactly the seven', async () => {
+    const { PLAN_REQUEST_CHANNELS, PLANS_EVENT_CHANNEL } = await import('../src/main/harness/plans/plan-requests');
+    expect([...PLAN_REQUEST_CHANNELS].sort()).toEqual(REQUESTS);
+    expect(PLANS_EVENT_CHANNEL).toBe('plans:event');
+  });
+
+  it('both IPC maps carry the seven plus the push, with the same strings', () => {
+    for (const src of [read('src', 'main', 'preload.ts'), read('src', 'shared', 'types.ts')]) {
+      expect(plansStrings(src)).toEqual([...REQUESTS, 'plans:event'].sort());
+    }
+  });
+
+  it('remote-shim.ts sends exactly the seven and listens for plans:event', () => {
+    const src = read('src', 'renderer', 'remote-shim.ts');
+    expect(plansStrings(src)).toEqual([...REQUESTS, 'plans:event'].sort());
+    for (const t of REQUESTS) expect(src, `${t} is not invoked by the shim`).toContain(`invoke('${t}'`);
+  });
+
+  it('ipc-handlers.ts registers all seven and forwards the push', () => {
+    const src = read('src', 'main', 'ipc-handlers.ts');
+    for (const c of ['PLANS_APPROVE', 'PLANS_COMMENT', 'PLANS_ADD_BUDGET', 'PLANS_RESUME', 'PLANS_STOP', 'PLANS_GET_AUTO_APPROVE', 'PLANS_SET_AUTO_APPROVE']) {
+      expect(src, `IPC.${c} is not handled`).toMatch(new RegExp(`ipcMain\\.handle\\(IPC\\.${c},`));
+    }
+    expect(src).toContain('IPC.PLANS_EVENT');
+    expect(src).toContain(`nativeHost.on('plans-event'`);
+  });
+
+  it('remote-server.ts has a case for each of the seven, and no other plans:* string', () => {
+    const src = read('src', 'main', 'remote-server.ts');
+    for (const t of REQUESTS) expect(src, `${t} has no WS case`).toContain(`case '${t}':`);
+    // plans:event is broadcast by ipc-handlers.ts, never by the server itself —
+    // the server holds no plan buffer of its own (design §5).
+    expect(plansStrings(src)).toEqual(REQUESTS);
+  });
+
+  it('SessionService.kt answers the seven, and never names the push', () => {
+    const kt = kotlin();
+    expect(plansStrings(kt)).toEqual(REQUESTS);
+    // Push-only, like specialists:event: outbound, so no request label.
+    expect(kt).not.toContain('"plans:event"');
+  });
+});
+
 // Five-surface parity for fs:read-head — the composer attachment card's head
 // read (rendered markdown / mono text preview). Cloned from the permissions:*
 // block: a channel missing from remote-shim.ts or SessionService.kt would
