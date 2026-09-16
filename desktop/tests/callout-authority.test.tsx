@@ -55,6 +55,18 @@ describe('Callout', () => {
     }
   });
 
+  it('collapsible: the title is the one visible line and the body opens under it', () => {
+    render(<Callout tone="warning" collapsible title="2 conversations not syncing">body</Callout>);
+    const summary = screen.getByText('2 conversations not syncing').closest('summary') as HTMLElement;
+    expect(summary).not.toBeNull();
+    // The arrow is the summary's LAST child — on the right, not the left.
+    expect(summary.lastElementChild?.tagName.toLowerCase()).toBe('svg');
+    const details = summary.parentElement as HTMLDetailsElement;
+    expect(details.tagName).toBe('DETAILS');
+    expect(details.open).toBe(false);
+    for (const cls of ['rounded-lg', 'p-3', 'border', 'bg-amber-500/10']) expect(details.className).toContain(cls);
+  });
+
   it('defaults to info', () => {
     render(<Callout>body</Callout>);
     expect(surface().className).toContain('bg-accent/10');
