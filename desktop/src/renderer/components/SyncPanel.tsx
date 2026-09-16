@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow } from './ui';
+import { Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
@@ -1151,17 +1151,21 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   </Button>
                 ) : hk === 'error' ? (
                   <>
-                    {/* Try again reuses syncNow() with the existing .catch error routing. */}
-                    <Button size="sm" onClick={runSpacesSyncNow}>
-                      Try again
-                    </Button>
-                    {/* secondary (outline) so it reads as a peer of the primary "Try again"
-                        rather than competing with it for the same weight. */}
-                    {(githubUnauthed || authError) && (
+                    {/* Offered only when the failure IS a GitHub sign-in problem (the
+                        coded 'github-auth' error). "GitHub reads signed out" alone was
+                        not proof — sync can run on the system's own gh login — so the
+                        button appeared beside unrelated failures (Destin, 2026-09-16).
+                        Secondary (outline) and to the LEFT of the primary action. */}
+                    {authError && (
                       <Button variant="secondary" size="sm" onClick={() => setShowConnectGithub(true)}>
                         Connect GitHub…
                       </Button>
                     )}
+                    {/* Try again reuses syncNow() with the existing .catch error routing;
+                        the primary action sits at the far right. */}
+                    <Button size="sm" onClick={runSpacesSyncNow}>
+                      Try again
+                    </Button>
                   </>
                 ) : null;
 
@@ -1208,16 +1212,20 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       />
                     </div>
                     {/* Action tucked under the reason — same box, no divider. */}
-                    {/* Right-aligned (2026-09-16): actions sit on the right, under the toggle. */}
-                    {cta && <div className="mt-2 flex items-center justify-end gap-2">{cta}</div>}
-                    {/* Raw git/transport error kept available for debugging without
-                        making it the primary message (error-message-standards.md).
-                        Native <details> — no React state needed inside this render. */}
-                    {errorMsg && (hk === 'error' || offError) && (
-                      <details className="mt-2 pl-[18px]">
-                        <summary className="text-2xs text-fg-muted cursor-pointer hover:text-fg-2 select-none">Show details</summary>
-                        <pre className="mt-1 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{errorMsg as string}</pre>
-                      </details>
+                    {/* Raw git error stays behind "Show details" (error-message-standards.md).
+                        One row under the message (Destin, 2026-09-16): "Show details" on
+                        the left, the actions on the right. The details text opens below
+                        the row's left side, so the buttons never move. */}
+                    {(cta || (errorMsg && (hk === 'error' || offError))) && (
+                      <div className="mt-2 pl-[18px] flex items-start justify-between gap-2">
+                        {errorMsg && (hk === 'error' || offError) ? (
+                          <details className="min-w-0 flex-1 pt-1">
+                            <summary className="text-2xs text-fg-muted cursor-pointer hover:text-fg-2 select-none">Show details</summary>
+                            <pre className="mt-1 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{errorMsg as string}</pre>
+                          </details>
+                        ) : <div />}
+                        {cta && <div className="flex items-center gap-2 shrink-0">{cta}</div>}
+                      </div>
                     )}
                   </div>
 
@@ -1306,13 +1314,15 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         </p>
                       )}
                       {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
+                      {/* The app's warning card, names always visible — the bare
+                          dropdown was rejected on review (2026-09-16). */}
                       {oversizeLine && (
-                        <details>
-                          <summary className="text-xs text-amber-600 cursor-pointer select-none">{oversizeLine}</summary>
-                          <ul className="mt-1 text-2xs text-fg-muted list-disc pl-4 space-y-0.5">
+                        <Callout tone="warning" title="Too big to sync">
+                          {oversizeLine}
+                          <ul className="mt-1.5 list-disc pl-4 space-y-0.5">
                             {oversizeNames.map((n, i) => <li key={i} className="break-words">{n}</li>)}
                           </ul>
-                        </details>
+                        </Callout>
                       )}
                       {/* .catch (inside runSpacesSyncNow) routes a failed invoke into the red note slot. */}
                       <button onClick={runSpacesSyncNow} className="text-xs underline text-fg-muted hover:text-fg-2">Sync now</button>
