@@ -2,7 +2,9 @@
 // Composition root: owns the singleton ManagedRoots/SpaceManager/Engine and
 // exposes the functions IPC + remote-server call. Mirrors the sync-state.ts
 // singleton pattern (setSyncService).
+import fs from 'fs';
 import os from 'os';
+import path from 'path';
 import { BrowserWindow } from 'electron';
 import { ManagedRoots } from './managed-roots';
 import { SpaceManager, repoNameForSpace } from './space-manager';
@@ -10,6 +12,7 @@ import { GitTransport } from './git-transport';
 import { SpaceSyncEngine } from './engine';
 import { DailyBackup, BackupTarget } from './daily-backup';
 import { importProjectFolder } from './import-project';
+import { MAX_SYNC_FILE_BYTES } from './guards';
 import { createSyncHubSocket } from '../sync-hub-socket';
 import { getGithubClient } from '../github-client';
 import type { LeaseResult, SyncHubEvent } from '../sync-hub-socket';
@@ -23,6 +26,12 @@ let engine: SpaceSyncEngine | null = null;
 let backup: DailyBackup | null = null;
 let backupTimer: ReturnType<typeof setInterval> | null = null;
 let recentEvents: SpaceSyncEvent[] = [];
+// Every over-limit file reported this launch, per space. Kept outside the
+// last-50 event buffer so the Sync panel can keep telling the user which
+// files are not syncing for as long as that is true (the engine reports each
+// file once per launch, so the buffer alone would forget it). status() drops
+// entries that have since shrunk or been deleted.
+const oversizeBySpace = new Map<string, Set<string>>();
 let logFn: (m: string) => void = console.log;
 
 // SyncHub (Plan 1b): the WebSocket that relays "something changed" signals
@@ -167,6 +176,11 @@ function broadcast(e: SpaceSyncEvent): void {
   // so every stored + fanned-out copy must carry the same timestamp.
   const stamped: SpaceSyncEvent = { ...e, at: Date.now() };
   recentEvents = [...recentEvents.slice(-49), stamped];
+  if (stamped.type === 'oversize') {
+    const set = oversizeBySpace.get(stamped.spaceId) ?? new Set<string>();
+    for (const f of stamped.files) set.add(f);
+    oversizeBySpace.set(stamped.spaceId, set);
+  }
   // Persist "this space has actually synced" evidence. Safe to key on the bare
   // 'synced' type: the engine now refuses to emit it for a space with no
   // remote (it provisions or errors instead), so every 'synced' that reaches
@@ -474,8 +488,24 @@ export async function syncSpacesStatus() {
       };
     }) ?? [],
     recentEvents,
+    oversize: currentOversize(),
+    oversizeLimitMb: MAX_SYNC_FILE_BYTES / (1024 * 1024),
     syncHub: hubStatus, // SyncHub connection state (Plan 1b): 'off' when sync disabled
   };
+}
+
+/** Reported over-limit files that are still over the limit on disk. */
+function currentOversize(): Array<{ spaceId: string; files: string[] }> {
+  const out: Array<{ spaceId: string; files: string[] }> = [];
+  for (const [spaceId, set] of oversizeBySpace) {
+    const root = roots?.spaces().find((s) => s.id === spaceId)?.root;
+    if (!root) continue;
+    const files = [...set].filter((rel) => {
+      try { return fs.statSync(path.join(root, rel)).size > MAX_SYNC_FILE_BYTES; } catch { return false; }
+    });
+    if (files.length) out.push({ spaceId, files });
+  }
+  return out;
 }
 
 function repoNameFor(name: string): string {
@@ -544,11 +574,16 @@ export async function syncSpacesEnable(enabled: boolean) {
 export async function syncSpacesSyncNow(spaceId?: string) {
   // spaceId narrows to one space (the Project View hero's "Sync now" button);
   // no arg keeps the SyncPanel's existing sync-everything behavior.
-  if (engine && roots) {
-    for (const s of roots.spaces()) {
-      if (spaceId && s.id !== spaceId) continue;
-      void engine.syncSpace(s);
-    }
+  // Resolves when the requested syncs have FINISHED (engine.syncSpace never
+  // throws). It used to resolve at once, so the panel's "Syncing…" state
+  // cleared before git even started and "Try again" looked dead (2026-09-16).
+  // The outcome itself still arrives as a synced/error event.
+  const eng = engine;
+  const r = roots;
+  if (eng && r) {
+    await Promise.allSettled(r.spaces()
+      .filter((s) => !spaceId || s.id === spaceId)
+      .map((s) => eng.syncSpace(s)));
   }
   return { ok: true };
 }

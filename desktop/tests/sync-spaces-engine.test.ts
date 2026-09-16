@@ -173,28 +173,27 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
   // follow-up ran made the button look dead (2026-09-16).
   it('a request made mid-sync resolves only after the follow-up sync it queued has finished', async () => {
     const t = fakeTransport();
-    let releaseFirstPull!: () => void;
-    let firstPull = true;
+    // Every pull waits for its own release, so each run can be held open.
+    const releases: Array<() => void> = [];
     t.pull = vi.fn(async (s: SyncSpace) => {
       t.pulls.push(s.id);
-      if (firstPull) {
-        firstPull = false;
-        await new Promise<void>(r => { releaseFirstPull = r; });
-      }
+      await new Promise<void>(r => { releases.push(r); });
       return { updated: false, conflictCopies: [] };
     });
     const engine = new SpaceSyncEngine(t, { debounceMs: 60_000, pollMs: 0, onEvent: () => {} });
     const space: SyncSpace = { id: 'project:x', kind: 'project', root: tmp };
     await engine.addSpace(space);
     const first = engine.syncSpace(space);
-    await vi.waitFor(() => expect(t.pulls.length).toBe(1), { timeout: WAIT_MS });
+    await vi.waitFor(() => expect(releases.length).toBe(1), { timeout: WAIT_MS });
     let retryDone = false;
     const retry = engine.syncSpace(space).then(() => { retryDone = true; });
-    releaseFirstPull();
+    releases[0]();
     await first;
+    // The follow-up run is now in flight, held inside its pull.
+    await vi.waitFor(() => expect(releases.length).toBe(2), { timeout: WAIT_MS });
+    expect(retryDone).toBe(false);
+    releases[1]();
     await retry;
-    expect(retryDone).toBe(true);
-    // By the time the retry resolved, its own sync had pushed.
     expect(t.pushes.length).toBe(2);
     await engine.stop();
   });

@@ -50,6 +50,7 @@ import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType 
 import { hasPendingInteraction, canPtySend } from './state/pty-input-gate';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
+import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
 import { usePromptDetector } from './hooks/usePromptDetector';
 import { useVisualViewport } from './hooks/useVisualViewport';
 import { usePresence } from './hooks/usePresence';
@@ -2344,11 +2345,30 @@ function AppInner() {
       .catch(() => {});
   }, []);
 
-  // Red dot on the gear icon so the user can't miss a push failure —
-  // derived from the pushed warnings, no dedicated poll.
+  // Is GitHub sync (sync-spaces) failing right now? The gear used to read only
+  // the legacy backup warnings, so a sync-spaces failure showed red inside the
+  // Sync panel while the gear stayed calm (2026-09-16). Same derivation the
+  // panel uses; refreshed by the engine's own event push, no poll.
+  const [spacesFailing, setSpacesFailing] = useState(false);
+  useEffect(() => {
+    const api = (window as any).claude?.syncSpaces;
+    if (typeof api?.status !== 'function') return;
+    let cancelled = false;
+    const load = () => {
+      api.status()
+        .then((s: SyncStatusData | null) => { if (!cancelled) setSpacesFailing(!!s?.enabled && !!latestUnresolvedError(s)); })
+        .catch(() => { /* no sync-spaces host (e.g. the phone) — no dot */ });
+    };
+    load();
+    const off = api.onEvent?.((e: { type?: string }) => { if (e?.type === 'error' || e?.type === 'synced') load(); });
+    return () => { cancelled = true; if (typeof off === 'function') off(); };
+  }, []);
+
+  // Red dot on the gear icon so the user can't miss a sync failure — from
+  // either sync system.
   const settingsDangerBadge = useMemo(
-    () => (statusData.syncWarnings ?? []).some((w) => w?.level === 'danger'),
-    [statusData.syncWarnings],
+    () => spacesFailing || (statusData.syncWarnings ?? []).some((w) => w?.level === 'danger'),
+    [spacesFailing, statusData.syncWarnings],
   );
 
   const handleOpenDrawer = useCallback((searchMode: boolean) => {

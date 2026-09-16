@@ -22,7 +22,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import ConnectGithubModal from './ConnectGithubModal';
 import type { PastSession } from '../../shared/types';
-import { latestUnresolvedError, deriveSyncBoxState, type SyncStatusData } from './sync-dot-state';
+import { latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncStatusData } from './sync-dot-state';
 // relativeMs is co-located in the pure device-activity-label module (single
 // wording ladder, shared by the device recency label and the fallback below).
 import { deviceActivityLabel, relativeMs } from './device-activity-label';
@@ -1167,6 +1167,15 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
               const conflict = enabled && visibleSpaceEvents.some((e: any) => e.type === 'conflict');
               const notice = enabled ? [...visibleSpaceEvents].reverse().find((e: any) => e.type === 'notice') : null;
+              // Files too big to sync. Named by conversation title where the file is
+              // a transcript (<id>.jsonl) the conversation list knows; else by path.
+              const oversizeLine = enabled ? oversizeNotice(spacesStatus as unknown as SyncStatusData | null) : null;
+              const oversizeNames = ((spacesStatus?.oversize ?? []) as Array<{ files: string[] }>)
+                .flatMap(o => o.files)
+                .map(f => {
+                  const id = f.replace(/\\/g, '/').split('/').pop()?.replace(/\.jsonl?$/, '');
+                  return conversations?.find(c => c.sessionId === id)?.name ?? f;
+                });
 
               return (
                 <div className="rounded-lg border border-edge bg-well overflow-hidden">
@@ -1199,7 +1208,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       />
                     </div>
                     {/* Action tucked under the reason — same box, no divider. */}
-                    {cta && <div className="mt-2 flex items-center gap-2 pl-[18px]">{cta}</div>}
+                    {/* Right-aligned (2026-09-16): actions sit on the right, under the toggle. */}
+                    {cta && <div className="mt-2 flex items-center justify-end gap-2">{cta}</div>}
                     {/* Raw git/transport error kept available for debugging without
                         making it the primary message (error-message-standards.md).
                         Native <details> — no React state needed inside this render. */}
@@ -1296,6 +1306,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         </p>
                       )}
                       {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
+                      {oversizeLine && (
+                        <details>
+                          <summary className="text-xs text-amber-600 cursor-pointer select-none">{oversizeLine}</summary>
+                          <ul className="mt-1 text-2xs text-fg-muted list-disc pl-4 space-y-0.5">
+                            {oversizeNames.map((n, i) => <li key={i} className="break-words">{n}</li>)}
+                          </ul>
+                        </details>
+                      )}
                       {/* .catch (inside runSpacesSyncNow) routes a failed invoke into the red note slot. */}
                       <button onClick={runSpacesSyncNow} className="text-xs underline text-fg-muted hover:text-fg-2">Sync now</button>
                     </div>

@@ -2355,7 +2355,10 @@ export function installShim(): void {
       status: () => (isAndroidLocal() ? refuseQuietlyOnPhone('syncspaces:status') : invoke('syncspaces:status')),
       enable: (enabled: boolean) => invoke('syncspaces:enable', { enabled }),
       // Optional spaceId narrows to one space (Project View "Sync now"); omit for all.
-      syncNow: (spaceId?: string) => invoke('syncspaces:sync-now', { spaceId }),
+      // Resolves only when the sync has finished (it drives "Syncing…"), and a
+      // big upload or a slow link can take many minutes — each git step alone
+      // may run 5. The 30s default would report a working sync as failed.
+      syncNow: (spaceId?: string) => invoke('syncspaces:sync-now', { spaceId }, { timeoutMs: 30 * 60_000 }),
       createProject: (name: string) => invoke('syncspaces:create-project', { name }),
       // Spec §3 import: move an existing folder into ~/YouCoded/Projects/<name>.
       // Shim wraps args in an object (the established convention).
