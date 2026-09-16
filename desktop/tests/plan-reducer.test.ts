@@ -71,7 +71,7 @@ const ask = (childId: string, requestId: string, input: Record<string, unknown> 
 });
 
 describe('plan records: latest seq wins', () => {
-  it('lands a newer record, ignores an older one, and ignores a card this chat has never seen', () => {
+  it('lands a newer record, ignores an older one, and never touches a card it does not name', () => {
     let s = seeded();
     expect(card(s).plan).toMatchObject({ status: 'proposed', seq: 1 });
     s = run(s, { type: 'PLAN_CHANGED', sessionId: S, plan: plan({ status: 'running', seq: 3 }) });
@@ -79,10 +79,14 @@ describe('plan records: latest seq wins', () => {
     const before = s;
     s = run(s, { type: 'PLAN_CHANGED', sessionId: S, plan: plan({ status: 'proposed', seq: 2 }) });
     expect(s).toBe(before);
+    // A card not on screen: nothing visible changes (the record is only kept —
+    // see "a plan record whose card is on a page not loaded yet" below).
     s = run(s, { type: 'PLAN_CHANGED', sessionId: S, plan: plan({ toolUseId: 'call-unknown', seq: 9 }) });
-    expect(s).toBe(before);
+    expect(s.get(S)!.toolCalls).toBe(before.get(S)!.toolCalls);
+    expect(s.get(S)!.timeline).toBe(before.get(S)!.timeline);
+    const kept = s;
     s = run(s, { type: 'PLAN_CHANGED', sessionId: 'no-such-session', plan: plan({ seq: 9 }) });
-    expect(s).toBe(before);
+    expect(s).toBe(kept);
   });
 
   it('a replayed propose_plan event never rewinds a newer record or wipes it', () => {
@@ -224,5 +228,50 @@ describe('a plan specialist\'s thinking reaches its row on every surface', () =>
       const block = src.slice(at, src.indexOf('});', at));
       expect(block, file).toMatch(/agentId: event\.data\.agentId/);
     }
+  });
+});
+
+describe('a plan record whose card is on a page not loaded yet', () => {
+  // The re-send after the FIRST page carries every plan in the conversation;
+  // a plan proposed further back has no card until the user scrolls to it.
+  // Its record must be kept, not dropped, or that card comes back in its
+  // proposal-time state with live Approve/Comment buttons.
+  const olderPage = (events: any[]) => ({ type: 'HISTORY_PAGE_LOADED' as const, sessionId: S, events, cursor: null, hasMore: false });
+  const planToolUse = { type: 'tool-use', sessionId: S, uuid: 'old-u', timestamp: 1, data: { toolUseId: CARD, toolName: 'propose_plan', toolInput: {} } };
+  const planToolResult = (p: PlanView) => ({ type: 'tool-result', sessionId: S, uuid: 'old-r', timestamp: 2, data: { toolUseId: CARD, toolResult: 'Plan proposed.', plan: p } });
+
+  it('keeps the newest record and applies it when a page creates the card', () => {
+    let s = run(new Map(), { type: 'SESSION_INIT', sessionId: S },
+      { type: 'PLAN_CHANGED', sessionId: S, plan: plan({ status: 'completed', seq: 7 }) },
+      { type: 'PLAN_CHANGED', sessionId: S, plan: plan({ status: 'running', seq: 5 }) },
+    );
+    expect(s.get(S)!.toolCalls.has(CARD)).toBe(false);
+    s = run(s, olderPage([planToolUse, planToolResult(plan({ status: 'proposed', seq: 1 }))]) as any);
+    expect(card(s).plan).toMatchObject({ status: 'completed', seq: 7 });
+    // Applied once: the kept copy is gone, so it can never resurface later.
+    expect(Object.keys(s.get(S)!.pendingPlanRecords ?? {})).toEqual([]);
+  });
+
+  it('a live or replayed tool-use that creates the card applies it too', () => {
+    let s = run(new Map(), { type: 'SESSION_INIT', sessionId: S },
+      { type: 'PLAN_CHANGED', sessionId: S, plan: plan({ status: 'interrupted', seq: 4 }) });
+    s = run(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'u', toolUseId: CARD, toolName: 'propose_plan', toolInput: {} });
+    expect(card(s).plan).toMatchObject({ status: 'interrupted', seq: 4 });
+  });
+
+  it('an older kept record never rewinds what the page itself carries', () => {
+    let s = run(new Map(), { type: 'SESSION_INIT', sessionId: S },
+      { type: 'PLAN_CHANGED', sessionId: S, plan: plan({ status: 'proposed', seq: 1 }) });
+    s = run(s, olderPage([planToolUse, planToolResult(plan({ status: 'stopped', seq: 3 }))]) as any);
+    expect(card(s).plan).toMatchObject({ status: 'stopped', seq: 3 });
+  });
+
+  it('survives the JSON chat:hydrate hop', async () => {
+    const { serializeChatState, deserializeChatState } = await import('../src/renderer/state/chat-types');
+    const s = run(new Map(), { type: 'SESSION_INIT', sessionId: S },
+      { type: 'PLAN_CHANGED', sessionId: S, plan: plan({ status: 'paused', seq: 6 }) });
+    const round = deserializeChatState(JSON.parse(JSON.stringify(serializeChatState(s))));
+    const after = run(round, olderPage([planToolUse]) as any);
+    expect(card(after).plan).toMatchObject({ status: 'paused', seq: 6 });
   });
 });

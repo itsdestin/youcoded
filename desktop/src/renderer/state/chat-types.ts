@@ -400,6 +400,16 @@ export interface SessionChatState {
    * session-start context panel + the "Context was trimmed" banner.
    */
   sessionContext: SessionContext | null;
+  /**
+   * Specialists plans (Task 5a review): plan records whose propose_plan card
+   * is not on screen yet, keyed by that card's toolUseId, newest `seq` only.
+   * The live-state re-send after the FIRST history page carries every plan in
+   * the conversation, but a plan proposed further back has no card until its
+   * page loads — dropping its record would bring that card back in its
+   * proposal-time state with live Approve/Comment. Applied (and removed) by
+   * whichever event creates the card. Optional: absent = none kept.
+   */
+  pendingPlanRecords?: Record<string, import('../../shared/types').PlanView>;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -969,6 +979,9 @@ export interface SerializedSessionChatState {
   // session's prompt, which IS rebuilt on resume. Optional so a pre-field
   // snapshot from an older host still deserializes.
   sessionContext?: SessionContext | null;
+  // Task 5a review: kept plan records for cards on pages not loaded yet — a
+  // remote client pages older history too. Optional for older hosts.
+  pendingPlanRecords?: Record<string, import('../../shared/types').PlanView>;
 }
 
 export interface SerializedChatState {
@@ -1019,6 +1032,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         history: { ...s.history, loading: false },
         totals: s.totals,
         sessionContext: s.sessionContext,
+        ...(s.pendingPlanRecords && Object.keys(s.pendingPlanRecords).length > 0 ? { pendingPlanRecords: s.pendingPlanRecords } : {}),
       },
     ]);
   }
@@ -1076,6 +1090,7 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       totals: ser.totals ?? emptyTotals(),
       // Older hosts predate sessionContext — default null (no panel/banner).
       sessionContext: ser.sessionContext ?? null,
+      ...(ser.pendingPlanRecords ? { pendingPlanRecords: ser.pendingPlanRecords } : {}),
     });
   }
   return result;

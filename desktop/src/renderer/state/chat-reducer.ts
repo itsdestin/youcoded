@@ -448,6 +448,34 @@ function newerPlan(cur: PlanView | undefined, incoming: PlanView | undefined): P
 }
 
 /**
+ * Task 5a review: apply every kept plan record whose card now exists (see
+ * SessionChatState.pendingPlanRecords) and forget it. Returns the session
+ * unchanged (same reference) when nothing applies.
+ */
+function adoptPendingPlans(session: SessionChatState): SessionChatState {
+  const pending = session.pendingPlanRecords;
+  if (!pending) return session;
+  let toolCalls: Map<string, ToolCallState> | null = null;
+  let rest: Record<string, PlanView> | null = null;
+  for (const [id, record] of Object.entries(pending)) {
+    const card = session.toolCalls.get(id);
+    if (!card) continue;
+    toolCalls ??= new Map(session.toolCalls);
+    rest ??= { ...pending };
+    delete rest[id];
+    const kept = newerPlan(card.plan, record);
+    if (kept !== card.plan) toolCalls.set(id, { ...card, plan: kept });
+  }
+  if (!rest) return session;
+  const { pendingPlanRecords: _drop, ...base } = session;
+  return {
+    ...base,
+    toolCalls: toolCalls!,
+    ...(Object.keys(rest).length > 0 ? { pendingPlanRecords: rest } : {}),
+  };
+}
+
+/**
  * Route a subagent-originated transcript event into the parent Agent
  * tool's `subagentSegments`. Returns the original state when the parent
  * tool is missing (the subagent event arrived before the parent tool_use
@@ -1873,7 +1901,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           }
         : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
       // Task 5a: a re-emitted propose_plan tool-use keeps a newer plan record.
-      const keptPlan = newerPlan(superseded?.plan, action.plan);
+      // Task 5a review: …and a record kept for this card before it existed.
+      const keptPlan = newerPlan(newerPlan(superseded?.plan, action.plan), session.pendingPlanRecords?.[action.toolUseId]);
       toolCalls.set(action.toolUseId, {
         toolUseId: action.toolUseId,
         toolName: action.toolName,
@@ -1905,13 +1934,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
       const activeTurnToolIds = new Set(session.activeTurnToolIds);
       activeTurnToolIds.add(action.toolUseId);
-      next.set(action.sessionId, {
+      // adoptPendingPlans finds the record already applied above (newerPlan
+      // keeps the same object) and only forgets it.
+      next.set(action.sessionId, adoptPendingPlans({
         ...session, toolCalls, toolGroups, assistantTurns, timeline,
         currentGroupId, currentTurnId,
         activeTurnToolIds,
         lastActivityAt: Date.now(),
         attentionState: 'ok',
-      });
+      }));
       return next;
     }
 
@@ -2228,18 +2259,23 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // tool finished before the process died, and a card claiming success for
       // work that may never have run is the misleading-success failure
       // docs/error-message-standards.md exists to prevent.
-      // NOTE the asymmetry with NATIVE_SESSION_ERROR, which spreads endTurn()
-      // and then RE-ASSERTS attentionState/errorMessage. This spread does not,
-      // so it resets attentionState to 'ok' and clears errorMessage — which
-      // would wipe an error banner and unblock the input gate
-      // (pty-input-gate.ts keys on attentionState !== 'ok').
-      // Safe today only because no replay lands on a session holding an error:
-      // onOwnershipLost dispatches SESSION_REMOVE, which deletes the state, so
-      // every re-dock replays into a fresh slot. If that ever changes, this
-      // needs the same re-assert NATIVE_SESSION_ERROR does.
+      // Task 5a review: the replay now runs after EVERY first page (start-up,
+      // resume, a renderer reload while main kept running), so it can land on
+      // a session already showing an error or an ended process. endTurn()
+      // resets attentionState to 'ok' and clears errorMessage, which would wipe
+      // that banner and unblock the input gate (pty-input-gate.ts keys on
+      // attentionState !== 'ok') — so, like NATIVE_SESSION_ERROR and
+      // SESSION_PROCESS_EXITED, it re-asserts the two terminal states it did
+      // not set. A 'stuck'/'stalled' state belongs to the turn being ended
+      // here, so those still clear.
+      // WHY this wording: after a reload the session may never have closed;
+      // all that is known is that the call has no result. Non-committal per
+      // docs/error-message-standards.md.
+      const keepAttention = withShells.attentionState === 'error' || withShells.attentionState === 'session-died';
       next.set(action.sessionId, {
         ...withShells,
-        ...endTurn(withShells, 'Session was closed while this was running'),
+        ...endTurn(withShells, 'Stopped before it finished'),
+        ...(keepAttention ? { attentionState: withShells.attentionState, errorMessage: withShells.errorMessage } : {}),
       });
       return next;
     }
@@ -2634,7 +2670,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const card = session.toolCalls.get(action.plan.toolUseId);
-      if (!card) return state;
+      if (!card) {
+        // Task 5a review: not dropped — its card may be on a page this window
+        // has not loaded. Kept (newest seq only) until an event creates it.
+        const kept = session.pendingPlanRecords?.[action.plan.toolUseId];
+        if (newerPlan(kept, action.plan) === kept) return state;
+        next.set(action.sessionId, {
+          ...session,
+          pendingPlanRecords: { ...session.pendingPlanRecords, [action.plan.toolUseId]: action.plan },
+        });
+        return next;
+      }
       const cur = card.plan;
       if (cur?.seq !== undefined && action.plan.seq !== undefined && action.plan.seq < cur.seq) return state;
       const toolCalls = new Map(session.toolCalls);
@@ -2769,7 +2815,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
       const pageSess = scratch.get(action.sessionId)!;
 
-      next.set(action.sessionId, {
+      // Task 5a review: a kept plan record lands on the card this page created.
+      next.set(action.sessionId, adoptPendingPlans({
         ...session,
         timeline: [...pageSess.timeline, ...session.timeline],
         // Union the maps page-first so a live entry always wins over a replayed
@@ -2784,7 +2831,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // otherwise be thrown away, so a resumed session showed no totals at all.
         totals: mergeTotals(session.totals, pageSess.totals),
         history: { cursor: action.cursor, hasMore: action.hasMore, loading: false },
-      });
+      }));
       return next;
     }
 
