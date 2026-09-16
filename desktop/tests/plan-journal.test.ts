@@ -95,10 +95,16 @@ describe('strict read and quarantine', () => {
 
   it('an unreadable journal projects each recoverable card as failed rather than disappearing', async () => {
     fs.mkdirSync(path.dirname(filePath()), { recursive: true });
-    fs.writeFileSync(filePath(), '{"v":1,"plans":[{"planId":"p9","toolUseId":"tool-9", oops');
+    fs.writeFileSync(filePath(), '{"v":1,"plans":[{"planId":"p9","toolUseId":"tool-9","status":"running","seq":7,"x":1},{"planId":"p8","toolUseId":"tool\\"8", oops');
     const views = await journal.list(REF);
-    expect(views).toHaveLength(1);
-    expect(views[0]).toMatchObject({ toolUseId: 'tool-9', status: 'failed' });
+    expect(views.map((v) => [v.toolUseId, v.status, v.seq, v.title])).toEqual([
+      // seq = the damaged record's own seq, so the failed state replaces the
+      // stale card now and a repaired journal (seq >= 7) can replace it later.
+      ['tool-9', 'failed', 7, ''],
+      // No recoverable seq → 0; escaped ids are unescaped; empty title lets
+      // the card fall back to its own wording instead of "Plan: a plan".
+      ['tool"8', 'failed', 0, ''],
+    ]);
   });
 });
 
@@ -117,6 +123,12 @@ describe('mutation chokepoint', () => {
     await journal.mutate(REF, () => {});
     expect(events).toEqual([]);
     expect(fs.readFileSync(filePath(), 'utf8')).toBe(before);
+  });
+
+  it('a no-change or throwing mutate on an absent journal leaves no directory behind', async () => {
+    await journal.mutate(REF, () => {});
+    await expect(journal.mutate(REF, () => { throw new Error('nope'); })).rejects.toThrow('nope');
+    expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false);
   });
 
   it('a throwing mutation writes nothing and emits nothing', async () => {
@@ -142,6 +154,28 @@ describe('mutation chokepoint', () => {
   });
 });
 
+describe('repeat projection', () => {
+  it('labels every repeat-body row as repeat, and the rows still sum to the ceiling', () => {
+    const doc: PlanDocumentV1 = {
+      goal: 'Loop',
+      steps: [
+        { id: 'r', kind: 'repeat', specialist: 'worker', task: 'Loop', budget_tokens: 500, max_iterations: 5, until: 'done',
+          steps: [
+            { id: 'rev', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a', 'b', 'c'] },
+            { id: 'chk', kind: 'verify', specialist: 'reviewer', task: 'Check', budget_tokens: 800, of: 'rev' },
+          ] },
+      ],
+    };
+    const view = projectPlan(record('p1', { document: doc, ceilingTokens: 5 * (3 * 1000 + 800),
+      steps: ['r', 'rev', 'chk'].map((id) => ({ id, status: 'pending' as const, attempts: [] })) }));
+    expect(view.steps.map((s) => [s.id, s.kind, s.fanOut, s.budgetTokens])).toEqual([
+      ['rev', 'repeat', 15, 1000],
+      ['chk', 'repeat', 5, 800],
+    ]);
+    expect(view.steps.reduce((n, s) => n + s.fanOut * s.budgetTokens, 0)).toBe(view.ceilingTokens);
+  });
+});
+
 describe('lease and fencing', () => {
   it('lease acquisition is compare-and-swap: a second live claimant is refused', async () => {
     await seed(record('p1'));
@@ -159,8 +193,23 @@ describe('lease and fencing', () => {
     alive.add(222);
     clock += 5000; // well past expiry
     expect(await journal.acquireLease(REF, 'p1')).toEqual({ ok: false, reason: 'held' });
-    expect(await journal.recoverInterrupted(REF)).toEqual([]);
+    expect(await journal.recoverInterrupted(REF)).toEqual({ interrupted: [] });
     expect((await journal.get(REF, 'p1'))!.status).toBe('running');
+  });
+
+  it('a crashed owner with an unexpired lease is re-checked after expiry and then interrupted', async () => {
+    await seed(record('p1'));
+    const crashed = journalFor('inst-b', 222);
+    const l = await crashed.acquireLease(REF, 'p1', { startFrom: ['proposed'] });
+    if (!l.ok) throw new Error('setup');
+    // pid 222 is dead, but the lease has not expired yet (quick relaunch).
+    const first = await journal.recoverInterrupted(REF);
+    expect(first).toEqual({ interrupted: [], recheckAt: 2000 });
+    expect((await journal.get(REF, 'p1'))!.status).toBe('running');
+    clock = first.recheckAt!;
+    const second = await journal.recoverInterrupted(REF);
+    expect(second).toEqual({ interrupted: ['p1'] });
+    expect((await journal.get(REF, 'p1'))!.status).toBe('interrupted');
   });
 
   it('an unexpired lease is authoritative even if the liveness probe fails', async () => {
@@ -235,7 +284,9 @@ describe('lease and fencing', () => {
       record('proposed'),
     );
     alive.add(222);
-    const interrupted = await journal.recoverInterrupted(REF);
+    const { interrupted, recheckAt } = await journal.recoverInterrupted(REF);
+    // liveForeign's lease (expires 99_999) is the only skipped foreign owner.
+    expect(recheckAt).toBe(99_999);
     expect(interrupted.sort()).toEqual(['deadExpired', 'noLease', 'samePidOtherInstance']);
     const byId = Object.fromEntries((await journal.read(REF) as any).file.plans.map((p: PlanRecord) => [p.planId, p]));
     expect(byId.noLease.status).toBe('interrupted');

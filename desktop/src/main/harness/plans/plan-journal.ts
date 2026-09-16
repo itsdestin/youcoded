@@ -157,8 +157,10 @@ function stepTitle(task: string): string {
  * `budgetTokens × fanOut`, and a repeat body with several differently-budgeted
  * steps has no single honest pair of numbers. Each body step becomes its own
  * row with its fan-out multiplied by max_iterations, so the rows still add up
- * to exactly the approved ceiling. A one-step body keeps the "repeats until
- * done" label, which is what the signed card shows for a repeat.
+ * to exactly the approved ceiling. Every such row is labelled `repeat`
+ * ("repeats until done"), never with the inner step's own kind: a 3-item map
+ * inside a 5-iteration repeat is 15 specialists over time, and "at the same
+ * time" would misdescribe what will happen.
  */
 export function projectPlan(plan: PlanRecord): PlanView {
   const rows: PlanStepView[] = [];
@@ -185,8 +187,7 @@ export function projectPlan(plan: PlanRecord): PlanView {
       row(step, step.kind, 1);
       continue;
     }
-    const body = step.steps!;
-    for (const inner of body) row(inner, body.length === 1 ? 'repeat' : inner.kind, step.max_iterations!);
+    for (const inner of step.steps!) row(inner, 'repeat', step.max_iterations!);
   }
 
   const view: PlanView = {
@@ -221,23 +222,36 @@ export function projectPlan(plan: PlanRecord): PlanView {
 function salvagedFailedViews(raw: string): PlanView[] {
   const views: PlanView[] = [];
   const seen = new Set<string>();
-  for (const match of raw.matchAll(/"toolUseId"\s*:\s*"((?:[^"\\]|\\.){1,200})"/g)) {
-    const toolUseId = match[1];
-    if (seen.has(toolUseId)) continue;
+  const matches = [...raw.matchAll(/"toolUseId"\s*:\s*"((?:[^"\\]|\\.){1,200})"/g)];
+  matches.forEach((match, i) => {
+    let toolUseId: string;
+    try {
+      toolUseId = JSON.parse(`"${match[1]}"`);
+    } catch {
+      return; // an escape we can't decode can't name a real card
+    }
+    if (seen.has(toolUseId)) return;
     seen.add(toolUseId);
+    // WHY the record's own seq: the reducer drops a push whose seq is LOWER
+    // than the card's. Reusing the damaged record's last seq lets this failed
+    // state replace the stale card now, and lets a repaired journal (same or
+    // higher seq) replace it later. A never-superseded MAX_SAFE_INTEGER would
+    // pin the card as failed forever. No recoverable seq → 0.
+    const segmentEnd = matches[i + 1]?.index ?? raw.length;
+    const seqMatch = /"seq"\s*:\s*(\d{1,15})\b/.exec(raw.slice(match.index, segmentEnd));
     views.push({
       planId: `unreadable:${toolUseId}`,
       toolUseId,
-      title: 'a plan',
+      // Empty so the card's own fallback wording applies (not "Plan: a plan").
+      title: '',
       status: 'failed',
       steps: [],
       ceilingTokens: 0,
       ceilingUsd: null,
       model: { label: 'Unknown model' },
-      // Above any seq a real record could have had, so it wins over stale state.
-      seq: Number.MAX_SAFE_INTEGER,
+      seq: seqMatch ? Number(seqMatch[1]) : 0,
     });
-  }
+  });
   return views;
 }
 
@@ -480,24 +494,43 @@ export class PlanJournal {
    * `interrupted`, its lease is dropped and its running steps show paused.
    * Nothing restarts until the user presses Continue. A live foreign owner
    * (another window still working) is left alone.
+   *
+   * HOST OBLIGATION (`recheckAt`): a foreign lease that has not expired yet
+   * is treated as live even if its process is gone — after a crash and a
+   * quick relaunch that is exactly the case, and the card would otherwise
+   * say "running" with nothing behind it. When this returns `recheckAt`, the
+   * host MUST call recoverInterrupted again at (or after) that time — the
+   * earliest skipped foreign expiry — and keep doing so while it returns a
+   * new one. At that point the liveness probe decides. (Expired leases whose
+   * process still answers are not re-scheduled: their owner is alive and
+   * responsible for heartbeating or releasing.)
    */
-  async recoverInterrupted(ref: PlanRef): Promise<string[]> {
+  async recoverInterrupted(ref: PlanRef): Promise<{ interrupted: string[]; recheckAt?: number }> {
     // WHY the read first: opening a conversation that never had a plan must
     // not create a plan directory (the lock step creates parents).
     const current = await this.read(ref);
-    if (current.kind === 'absent') return [];
+    if (current.kind === 'absent') return { interrupted: [] };
     if (current.kind === 'invalid') throw new PlanJournalUnreadableError(current.detail, current.quarantinePath);
     return this.mutate(ref, (file) => {
       const interrupted: string[] = [];
+      let recheckAt: number | undefined;
+      const now = this.now();
       for (const plan of file.plans) {
         if (plan.status !== 'running') continue;
-        if (plan.lease && this.ownerState(plan.lease) !== 'dead') continue;
+        if (plan.lease) {
+          const owner = this.ownerState(plan.lease);
+          if (owner === 'self') continue;
+          if (owner === 'live') {
+            if (plan.lease.expiresAt > now) recheckAt = Math.min(recheckAt ?? Infinity, plan.lease.expiresAt);
+            continue;
+          }
+        }
         plan.status = 'interrupted';
         delete plan.lease;
         for (const step of plan.steps) if (step.status === 'running') step.status = 'paused';
         interrupted.push(plan.planId);
       }
-      return interrupted;
+      return recheckAt === undefined ? { interrupted } : { interrupted, recheckAt };
     });
   }
 }

@@ -204,6 +204,16 @@ describe('NativeHome', () => {
     expect(fs.readFileSync(target, 'utf8')).toBe('first');
   });
 
+  it('mutateText that writes nothing leaves no new directories behind, but keeps existing ones', async () => {
+    await home.mutateText('a/b/c.json', () => null);
+    await expect(home.mutateText('a/b/c.json', () => { throw new Error('x'); })).rejects.toThrow('x');
+    expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false);
+    fs.mkdirSync(path.join(root, '.youcoded', 'a'), { recursive: true });
+    await home.mutateText('a/b/c.json', () => null);
+    expect(fs.existsSync(path.join(root, '.youcoded', 'a'))).toBe(true);
+    expect(fs.existsSync(path.join(root, '.youcoded', 'a', 'b'))).toBe(false);
+  });
+
   it('mutateJson still treats a corrupt file as absent (contract unchanged)', async () => {
     const target = path.join(root, '.youcoded', 'c.json');
     fs.mkdirSync(path.dirname(target), { recursive: true });
