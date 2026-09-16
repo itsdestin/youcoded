@@ -87,6 +87,20 @@ describe('propose', () => {
     expect(executor.start).not.toHaveBeenCalled();
   });
 
+  it('prices the dollar limit from the frozen snapshot at the highest rate (Task 3)', async () => {
+    manifest.specialists.reviewer.pricing = { kind: 'priced', rates: { in: 3, out: 15, cacheWrite: 30 } };
+    const view = await propose();
+    // 2 items × 1,000 tokens, every token at $30/M.
+    expect(view.ceilingUsd).toBeCloseTo(2000 * 30 / 1e6, 12);
+  });
+
+  it('a local or unpriced plan shows tokens only — no fabricated $0.00 (Task 3)', async () => {
+    manifest.specialists.reviewer.pricing = { kind: 'local' };
+    expect((await propose({ toolUseId: 'local' })).ceilingUsd).toBeNull();
+    manifest.specialists.reviewer.pricing = null;
+    expect((await propose({ toolUseId: 'unpriced' })).ceilingUsd).toBeNull();
+  });
+
   it('the first proposal on an absent journal takes the one-shot commit latch exactly once', async () => {
     let calls = 0; let latched = false;
     const commit = () => { calls++; if (latched) return false; latched = true; return true; };

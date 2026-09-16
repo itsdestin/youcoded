@@ -1019,6 +1019,14 @@ export class ChatGptAuth {
     const first = await this.liveCredentials();
     let res = await send(first);
     this.assertCredentialOwner(owner);
+    if (res.status === 401 && context?.singleTransmission) {
+      // Specialists plans (Task 3): this request's budget covers exactly one
+      // send, so it is never re-sent. Refresh the token anyway (a token call,
+      // not a model request) so the next request can succeed, then hand the
+      // 401 back — the plan charges it and pauses with the real error.
+      try { await this.tokenAfter401(first.token, owner); } catch { /* the 401 below is the error to report */ }
+      return res;
+    }
     if (res.status === 401) {
       // Refresh once and re-send the SAME body with the new bearer; a second
       // 401 means the sign-in is over. Keep the refresh scoped to the same

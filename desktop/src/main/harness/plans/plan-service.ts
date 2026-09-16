@@ -13,6 +13,7 @@ import type { NativeHome } from '../../native-home';
 import type { PlanView } from '../../../shared/types';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
+import { planCeilingUsd } from './plan-budget';
 import type {
   ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanRecord, PlanRef,
   PlanSettingsWriteResult, PlanUnsupported,
@@ -41,7 +42,9 @@ export interface PlanServiceDeps {
   /** The parent session's working folder, or undefined when it has no native session here. */
   sessionCwd(sessionId: string): string | undefined;
   /** Model binding (through the automatic specialist model resolver), price,
-   *  specialist definition and permission fingerprints for this document. */
+   *  specialist definition and permission fingerprints for this document.
+   *  `pricing` must be a PlanPricingSnapshot (plan-budget.ts
+   *  `pricingSnapshot`) or null; anything else is read as "no price". */
   resolveManifest(input: { sessionId: string; cwd: string; document: PlanDocumentV1 }): Promise<ExecutionManifest>;
   /** Queue the user-visible follow-up turn a Comment creates. */
   queueCommentTurn(input: { sessionId: string; turnId: string; planId: string; text: string }): Promise<void> | void;
@@ -229,9 +232,10 @@ export class PlanService {
         maximumAttempts: proposal.maximumAttempts,
         maxFanOut: proposal.maxFanOut,
         ceilingTokens: proposal.ceilingTokens,
-        // The budget adapter (Task 3) prices the frozen manifest; until then
-        // the card shows tokens only — never a false $0.00.
-        ceilingUsd: null,
+        // Task 3: every possible token at the frozen snapshot's highest rate.
+        // null (tokens only) when any specialist is unpriced or nothing in the
+        // plan costs money — never a false $0.00.
+        ceilingUsd: planCeilingUsd(proposal.document, manifest),
         usedTokens: 0,
         status: 'proposed',
         seq: 1,

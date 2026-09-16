@@ -243,7 +243,8 @@ export function projectPlan(plan: PlanRecord): PlanView {
   };
   if (plan.usedUsd !== undefined) view.usedUsd = plan.usedUsd;
   if (plan.autoApproved) view.autoApproved = true;
-  if (plan.paused) view.paused = plan.paused;
+  // Only the card's two fields: the attempt id is executor bookkeeping.
+  if (plan.paused) view.paused = { stepId: plan.paused.stepId, reason: plan.paused.reason };
   if (plan.revisionOf) view.revisionOf = plan.revisionOf;
   if (plan.revisedBy) view.revisedBy = plan.revisedBy;
   if (plan.startedAt !== undefined) view.startedAt = plan.startedAt;

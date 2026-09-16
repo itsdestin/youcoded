@@ -1,0 +1,406 @@
+// Specialists plans, Task 3 — locked reserve/settle/release arithmetic.
+// Real filesystem per test (NativeHome in a temp dir), real PlanJournal: every
+// number here is read back from the journal file, because "durable" is the
+// whole point — a reservation that exists only in memory authorizes nothing.
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
+import { NativeHome } from '../src/main/native-home';
+import { PlanJournal } from '../src/main/harness/plans/plan-journal';
+import {
+  PlanBudget, pricingSnapshot, worstCaseUsd, planCeilingUsd, type PlanPricingSnapshot,
+} from '../src/main/harness/plans/plan-budget';
+import {
+  adapterDisabledReason, resetDisabledAdaptersForTests, type PlanBudgetAdapter,
+} from '../src/main/harness/plans/budget-adapter';
+import type { PlanRecord, PlanRef, PlanEvent, ExecutionManifest } from '../src/main/harness/plans/types';
+import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
+import { costForUsage } from '../src/main/harness/pricing';
+
+const REF: PlanRef = { cwd: '/some/project', sessionId: 'parent-1' };
+const REVIEWER_RATES = { in: 1, out: 10 };
+const WORKER_RATES = { in: 2, out: 4, cacheWrite: 20 };
+
+const DOC: PlanDocumentV1 = {
+  goal: 'Review and combine',
+  steps: [
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a.ts', 'b.ts'] },
+    { id: 's2', kind: 'combine', specialist: 'worker', task: 'Combine', budget_tokens: 2000, of: 's1' },
+  ],
+};
+
+function manifest(reviewer: PlanPricingSnapshot | null, worker: PlanPricingSnapshot | null): ExecutionManifest {
+  return {
+    modelLabel: 'Test model',
+    specialists: {
+      reviewer: { definitionFingerprint: 'r', binding: { providerId: 'p', modelId: 'm' }, pricing: reviewer },
+      worker: { definitionFingerprint: 'w', binding: { providerId: 'p', modelId: 'm' }, pricing: worker },
+    },
+    permissionFingerprint: 'perm',
+  };
+}
+const PRICED = manifest({ kind: 'priced', rates: REVIEWER_RATES }, { kind: 'priced', rates: WORKER_RATES });
+
+function record(over: Partial<PlanRecord> = {}): PlanRecord {
+  const m = over.manifest ?? PRICED;
+  return {
+    planId: 'p1', toolUseId: 'tool-p1', document: DOC, maximumAttempts: 3, maxFanOut: 2,
+    ceilingTokens: 4000, ceilingUsd: planCeilingUsd(DOC, m), usedTokens: 0, status: 'running', seq: 1, createdAt: 1,
+    manifest: m,
+    steps: [{ id: 's1', status: 'pending', attempts: [] }, { id: 's2', status: 'pending', attempts: [] }],
+    fenceEpoch: 0,
+    ...over,
+  };
+}
+
+const ADAPTER: PlanBudgetAdapter = { id: 'test-adapter', inputBound: () => ({ ok: true, tokens: 0 }) };
+
+let root: string; let home: NativeHome; let journal: PlanJournal; let budget: PlanBudget;
+let events: PlanEvent[]; let fence: string; let ids: number;
+
+async function seed(rec: PlanRecord): Promise<void> {
+  await journal.mutate(REF, (file) => { file.plans.push(rec); });
+  const lease = await journal.acquireLease(REF, rec.planId, { startFrom: [rec.status] });
+  if (!lease.ok) throw new Error('lease');
+  fence = lease.fence;
+  events = [];
+}
+const plan = async (): Promise<PlanRecord> => (await journal.get(REF, 'p1'))!;
+const attempt = async (stepId: string, attemptId: string) =>
+  (await plan()).steps.find((s) => s.id === stepId)!.attempts.find((a) => a.attemptId === attemptId)!;
+
+beforeEach(() => {
+  root = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-budget-'));
+  home = new NativeHome(root); events = []; ids = 0;
+  journal = new PlanJournal({ home, now: () => 5, identity: { instanceId: 'me', pid: 1 }, onEvent: (e) => events.push(e) });
+  budget = new PlanBudget({ journal, now: () => 7, newId: () => `id${++ids}` });
+  resetDisabledAdaptersForTests();
+});
+afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }));
+
+describe('pricing snapshot and dollar limits', () => {
+  it('snapshots the three honest states: priced, free, local — and missing is null', () => {
+    expect(pricingSnapshot({ pricing: REVIEWER_RATES, free: false, local: false })).toEqual({ kind: 'priced', rates: REVIEWER_RATES });
+    expect(pricingSnapshot({ pricing: { in: 0, out: 0 }, free: false, local: false })).toEqual({ kind: 'free' });
+    expect(pricingSnapshot({ pricing: null, free: true, local: false })).toEqual({ kind: 'free' });
+    expect(pricingSnapshot({ pricing: REVIEWER_RATES, free: true, local: true })).toEqual({ kind: 'local' });
+    expect(pricingSnapshot({ pricing: null, free: false, local: false })).toBeNull();
+  });
+
+  it('prices every token at the HIGHEST published rate, through costForUsage', () => {
+    const worker: PlanPricingSnapshot = { kind: 'priced', rates: WORKER_RATES };
+    expect(worstCaseUsd(worker, 1000)).toBe(costForUsage(
+      { inputTokens: 0, outputTokens: 1000, cacheReadTokens: 0, cacheCreationTokens: 0 }, { in: 20, out: 20 },
+    ));
+    expect(worstCaseUsd(worker, 1000)).toBeCloseTo(0.02, 12);
+  });
+
+  it('missing price → null; free and local → null (never a fabricated $0.00)', () => {
+    expect(worstCaseUsd(null, 1000)).toBeNull();
+    expect(worstCaseUsd({ kind: 'free' }, 1000)).toBeNull();
+    expect(worstCaseUsd({ kind: 'local' }, 1000)).toBeNull();
+    expect(planCeilingUsd(DOC, manifest(null, { kind: 'priced', rates: WORKER_RATES }))).toBeNull();
+    expect(planCeilingUsd(DOC, manifest({ kind: 'local' }, { kind: 'local' }))).toBeNull();
+    expect(planCeilingUsd(DOC, manifest({ kind: 'free' }, { kind: 'local' }))).toBeNull();
+  });
+
+  it('the plan ceiling covers every item at its specialist\'s highest rate', () => {
+    // 2 × 1000 reviewer tokens at $10/M + 2000 worker tokens at $20/M.
+    expect(planCeilingUsd(DOC, PRICED)).toBeCloseTo(0.02 + 0.04, 12);
+    // A free part adds nothing but does not erase the priced part.
+    expect(planCeilingUsd(DOC, manifest({ kind: 'local' }, { kind: 'priced', rates: WORKER_RATES }))).toBeCloseTo(0.04, 12);
+  });
+
+  it('repeat iterations are all priced', () => {
+    const doc: PlanDocumentV1 = { goal: 'g', steps: [
+      { id: 'r', kind: 'repeat', specialist: 'worker', task: 'loop', budget_tokens: 500, max_iterations: 3, until: 'done',
+        steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'fix', budget_tokens: 700, items: ['x', 'y'] }] },
+    ] };
+    expect(planCeilingUsd(doc, PRICED)).toBeCloseTo(700 * 2 * 3 * 20 / 1e6, 12);
+  });
+});
+
+describe('wave reservation — atomic, against spent + reserved', () => {
+  it('reserves every member of a wave in ONE journal write', async () => {
+    await seed(record());
+    const result = await budget.reserveAttempts(REF, 'p1', fence, [
+      { stepId: 's1', itemIndex: 0 }, { stepId: 's1', itemIndex: 1 },
+    ]);
+    expect(result).toEqual({ ok: true, attempts: [
+      { stepId: 's1', attemptId: 'id1', reservedTokens: 1000 },
+      { stepId: 's1', attemptId: 'id2', reservedTokens: 1000 },
+    ] });
+    expect(events).toHaveLength(1);
+    const s1 = (await plan()).steps[0];
+    expect(s1.attempts.map((a) => [a.phase, a.baseTokens, a.addedTokens, a.reservedTokens, a.spentTokens]))
+      .toEqual([['prepared', 1000, 0, 1000, 0], ['prepared', 1000, 0, 1000, 0]]);
+  });
+
+  it('two concurrent waves cannot both spend the same remaining balance', async () => {
+    await seed(record({ ceilingTokens: 3000 }));
+    const [a, b] = await Promise.all([
+      budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }, { stepId: 's1', itemIndex: 1 }]),
+      budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's2' }]),
+    ]);
+    expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+    const failed = a.ok ? b : a;
+    expect(failed).toMatchObject({ ok: false, reason: 'ceiling-tokens' });
+    const p = await plan();
+    const reserved = p.steps.flatMap((s) => s.attempts).reduce((n, x) => n + x.reservedTokens, 0);
+    expect(reserved).toBe(2000);
+  });
+
+  it('already-spent tokens count against the ceiling', async () => {
+    await seed(record({ usedTokens: 2500 }));
+    const result = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's2' }]);
+    expect(result).toMatchObject({ ok: false, reason: 'ceiling-tokens' });
+    expect((await plan()).steps[1].attempts).toEqual([]);
+  });
+
+  it('the dollar limit is checked at the highest applicable rate', async () => {
+    // Tokens fit (2000 ≤ 4000) but 2000 reviewer tokens × $10/M = $0.02 > $0.015.
+    await seed(record({ ceilingUsd: 0.015 }));
+    const result = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }, { stepId: 's1', itemIndex: 1 }]);
+    expect(result).toMatchObject({ ok: false, reason: 'ceiling-usd' });
+  });
+
+  it('local specialists share one context pool — live attempts included', async () => {
+    const local = manifest({ kind: 'local' }, { kind: 'local' });
+    await seed(record({ manifest: local, ceilingUsd: null }));
+    const tooBig = await budget.reserveAttempts(REF, 'p1', fence,
+      [{ stepId: 's1', itemIndex: 0 }, { stepId: 's1', itemIndex: 1 }], { localPoolTokens: 1500 });
+    expect(tooBig).toMatchObject({ ok: false, reason: 'local-pool' });
+    const first = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }], { localPoolTokens: 2500 });
+    expect(first.ok).toBe(true);
+    // The first child is still live (holding 1000): 1000 + 2000 > 2500.
+    const second = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's2' }], { localPoolTokens: 2500 });
+    expect(second).toMatchObject({ ok: false, reason: 'local-pool' });
+  });
+
+  it('a stale executor cannot reserve anything', async () => {
+    await seed(record());
+    await expect(budget.reserveAttempts(REF, 'p1', 'stale-fence', [{ stepId: 's2' }])).rejects.toThrow(/another YouCoded window|restarted/);
+    expect((await plan()).steps[1].attempts).toEqual([]);
+  });
+});
+
+describe('per-request gate — no provider request without a durable reservation', () => {
+  async function reserved(stepId = 's1'): Promise<string> {
+    await seed(record());
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId, itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    return r.attempts[0].attemptId;
+  }
+
+  it('maxOutputTokens is exactly what remains after the input bound, and the request is journalled first', async () => {
+    const id = await reserved();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    expect(await gate.reserve({ inputBoundTokens: 300 })).toEqual({ ok: true, maxOutputTokens: 700 });
+    const a = await attempt('s1', id);
+    expect(a.phase).toBe('request-sent');
+    expect(a.reservedTokens).toBe(1000);
+  });
+
+  it('one output token of room is enough; zero room sends nothing', async () => {
+    const id = await reserved();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    expect(await gate.reserve({ inputBoundTokens: 1000 })).toMatchObject({ ok: false, kind: 'exhausted' });
+    expect((await attempt('s1', id)).phase).toBe('prepared');
+    expect(await gate.reserve({ inputBoundTokens: 999 })).toEqual({ ok: true, maxOutputTokens: 1 });
+  });
+
+  it('an unresolved request blocks a second one', async () => {
+    const id = await reserved();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 10 });
+    expect(await gate.reserve({ inputBoundTokens: 10 })).toMatchObject({ ok: false, kind: 'refused' });
+  });
+
+  it('a lost fence refuses the request and writes nothing', async () => {
+    const id = await reserved();
+    const gate = budget.requestGate(REF, 'p1', 'stale', 's1', id, ADAPTER);
+    expect(await gate.reserve({ inputBoundTokens: 10 })).toMatchObject({ ok: false, kind: 'refused' });
+    expect((await attempt('s1', id)).phase).toBe('prepared');
+  });
+
+  it('authoritative lower usage releases the difference and is priced at the real rates', async () => {
+    const id = await reserved();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 300 });
+    const usage = { inputTokens: 350, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    expect(await gate.settle({ kind: 'reported', tokens: 400, usage })).toEqual({ kind: 'ok', chargedTokens: 400 });
+    const a = await attempt('s1', id);
+    expect([a.phase, a.spentTokens, a.reservedTokens]).toEqual(['response-persisted', 400, 600]);
+    const p = await plan();
+    expect(p.usedTokens).toBe(400);
+    expect(p.usedUsd).toBeCloseTo(costForUsage(usage, REVIEWER_RATES)!, 12);
+    // The next request gets everything that is left.
+    expect(await gate.reserve({ inputBoundTokens: 100 })).toEqual({ ok: true, maxOutputTokens: 500 });
+  });
+
+  it.each(['interrupted', 'error', 'silent'] as const)('%s usage charges the whole reservation', async (why) => {
+    const id = await reserved();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 300 });
+    expect(await gate.settle({ kind: 'unknown', why })).toEqual({ kind: 'ok', chargedTokens: 1000 });
+    const a = await attempt('s1', id);
+    expect([a.spentTokens, a.reservedTokens]).toEqual([1000, 0]);
+    const p = await plan();
+    expect(p.usedTokens).toBe(1000);
+    expect(p.usedUsd).toBeCloseTo(worstCaseUsd({ kind: 'priced', rates: REVIEWER_RATES }, 1000)!, 12);
+    expect(await gate.reserve({ inputBoundTokens: 1 })).toMatchObject({ ok: false, kind: 'exhausted' });
+  });
+
+  it('usage above the reservation disables the adapter for plans and refuses further requests', async () => {
+    const id = await reserved();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 300 });
+    const usage = { inputTokens: 1100, outputTokens: 100, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const settled = await gate.settle({ kind: 'reported', tokens: 1200, usage });
+    expect(settled).toMatchObject({ kind: 'over-bound', chargedTokens: 1200 });
+    const p = await plan();
+    expect(p.usedTokens).toBe(1200); // the real spend is recorded, never hidden
+    expect(p.disabledAdapters).toEqual([{ adapterId: 'test-adapter', detail: expect.stringMatching(/1,200.*1,000/) }]);
+    expect(adapterDisabledReason('test-adapter')).toBeDefined();
+    // The same attempt can send nothing more…
+    expect(await gate.reserve({ inputBoundTokens: 0 })).toMatchObject({ ok: false, kind: 'refused' });
+    // …and neither can another attempt through the same adapter, even though
+    // its own allowance fits (1200 + 2000 ≤ 4000).
+    const other = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's2' }]);
+    if (!other.ok) throw new Error(other.detail);
+    const otherGate = budget.requestGate(REF, 'p1', fence, 's2', other.attempts[0].attemptId, ADAPTER);
+    expect(await otherGate.reserve({ inputBoundTokens: 10 })).toMatchObject({ ok: false, kind: 'refused' });
+    expect((await attempt('s2', other.attempts[0].attemptId)).phase).toBe('prepared');
+  });
+
+  it('local usage is counted in tokens and never priced', async () => {
+    await seed(record({ manifest: manifest({ kind: 'local' }, { kind: 'local' }), ceilingUsd: null }));
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', r.attempts[0].attemptId, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 10 });
+    await gate.settle({ kind: 'unknown', why: 'silent' });
+    const p = await plan();
+    expect(p.usedTokens).toBe(1000);
+    expect(p.usedUsd).toBeUndefined();
+    expect(p.ceilingUsd).toBeNull();
+  });
+});
+
+describe('pausing path — pessimistic charge and release', () => {
+  it('an unresolved request is charged in full and marked ambiguous', async () => {
+    await seed(record());
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    const id = r.attempts[0].attemptId;
+    await budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER).reserve({ inputBoundTokens: 5 });
+    await budget.chargeUnresolved(REF, 'p1', fence, 's1', id);
+    const a = await attempt('s1', id);
+    expect([a.phase, a.spentTokens, a.reservedTokens]).toEqual(['ambiguous', 1000, 0]);
+    expect((await plan()).usedTokens).toBe(1000);
+  });
+
+  it('release drops the held allowance but keeps what was spent', async () => {
+    await seed(record());
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    const id = r.attempts[0].attemptId;
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 5 });
+    await gate.settle({ kind: 'reported', tokens: 300, usage: { inputTokens: 250, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 } });
+    await budget.releaseAttempt(REF, 'p1', fence, 's1', id);
+    const a = await attempt('s1', id);
+    expect([a.spentTokens, a.reservedTokens]).toEqual([300, 0]);
+    // Released allowance is not lost: re-reserving the same attempt gets it back.
+    const again = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', attemptId: id }]);
+    expect(again).toEqual({ ok: true, attempts: [{ stepId: 's1', attemptId: id, reservedTokens: 700 }] });
+  });
+});
+
+describe('Add budget — an authorization tranche for the paused attempt', () => {
+  async function pausedAfterExhaustion(): Promise<string> {
+    await seed(record());
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    const id = r.attempts[0].attemptId;
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 5 });
+    await gate.settle({ kind: 'unknown', why: 'error' });
+    await budget.releaseAttempt(REF, 'p1', fence, 's1', id);
+    await journal.mutateFenced(REF, 'p1', fence, (p) => {
+      p.status = 'paused';
+      p.paused = { stepId: 's1', reason: 'Out of budget', attemptId: id };
+      delete p.lease;
+    });
+    return id;
+  }
+
+  it('enlarges the paused attempt, the token ceiling and the dollar ceiling', async () => {
+    const id = await pausedAfterExhaustion();
+    const before = await plan();
+    const view = await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 500 });
+    const after = await plan();
+    expect(view.ceilingTokens).toBe(before.ceilingTokens + 500);
+    expect(after.ceilingUsd).toBeCloseTo(before.ceilingUsd! + 500 * 10 / 1e6, 12);
+    expect(view.ceilingUsd).toBe(after.ceilingUsd);
+    const a = await attempt('s1', id);
+    expect([a.addedTokens, a.spentTokens, a.reservedTokens]).toEqual([500, 1000, 0]);
+    expect(after.tranches).toEqual([{ trancheId: expect.any(String), stepId: 's1', attemptId: id, tokens: 500, at: 7 }]);
+    // Finished/spent work is unchanged.
+    expect(after.usedTokens).toBe(before.usedTokens);
+  });
+
+  it('the fresh resume prompt must fit inside the tranche before anything is sent', async () => {
+    const id = await pausedAfterExhaustion();
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 500 });
+    const lease = await journal.acquireLease(REF, 'p1', { startFrom: ['paused'] });
+    if (!lease.ok) throw new Error('lease');
+    // A tranche alone authorizes nothing: until the attempt is re-reserved
+    // under the plan-wide check, it may not send.
+    const early = budget.requestGate(REF, 'p1', lease.fence, 's1', id, ADAPTER);
+    expect(await early.reserve({ inputBoundTokens: 1 })).toMatchObject({ ok: false, kind: 'refused' });
+    expect((await attempt('s1', id)).phase).toBe('response-persisted');
+    const again = await budget.reserveAttempts(REF, 'p1', lease.fence, [{ stepId: 's1', attemptId: id }]);
+    expect(again).toEqual({ ok: true, attempts: [{ stepId: 's1', attemptId: id, reservedTokens: 500 }] });
+    const gate = budget.requestGate(REF, 'p1', lease.fence, 's1', id, ADAPTER);
+    expect(await gate.reserve({ inputBoundTokens: 500 })).toMatchObject({ ok: false, kind: 'exhausted' });
+    expect(await gate.reserve({ inputBoundTokens: 400 })).toEqual({ ok: true, maxOutputTokens: 100 });
+  });
+
+  it('a tranche for a step with no attempt yet is applied to its next attempt', async () => {
+    await seed(record());
+    await journal.mutateFenced(REF, 'p1', fence, (p) => {
+      p.status = 'paused';
+      p.paused = { stepId: 's2', reason: 'Out of budget' };
+      delete p.lease;
+    });
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's2', tokens: 300 });
+    expect((await plan()).tranches).toEqual([{ trancheId: expect.any(String), stepId: 's2', tokens: 300, at: 7 }]);
+    const lease = await journal.acquireLease(REF, 'p1', { startFrom: ['paused'] });
+    if (!lease.ok) throw new Error('lease');
+    const r = await budget.reserveAttempts(REF, 'p1', lease.fence, [{ stepId: 's2' }]);
+    if (!r.ok) throw new Error(r.detail);
+    expect(r.attempts[0].reservedTokens).toBe(2300);
+    const p = await plan();
+    expect(p.tranches![0].attemptId).toBe(r.attempts[0].attemptId);
+    expect(p.steps[1].attempts[0].addedTokens).toBe(300);
+  });
+
+  it('refuses a plan that is not paused, or a different step', async () => {
+    await seed(record());
+    await expect(budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 5 })).rejects.toThrow(/paused/);
+    await journal.mutateFenced(REF, 'p1', fence, (p) => {
+      p.status = 'paused'; p.paused = { stepId: 's1', reason: 'x' }; delete p.lease;
+    });
+    await expect(budget.addTokens({ ref: REF, planId: 'p1', stepId: 's2', tokens: 5 })).rejects.toThrow(/paused step/);
+  });
+
+  it('local plans gain tokens only — the dollar ceiling stays absent', async () => {
+    await seed(record({ manifest: manifest({ kind: 'local' }, { kind: 'local' }), ceilingUsd: null }));
+    await journal.mutateFenced(REF, 'p1', fence, (p) => {
+      p.status = 'paused'; p.paused = { stepId: 's2', reason: 'x' }; delete p.lease;
+    });
+    const view = await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's2', tokens: 100 });
+    expect(view.ceilingTokens).toBe(4100);
+    expect(view.ceilingUsd).toBeNull();
+  });
+});

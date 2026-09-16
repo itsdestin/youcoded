@@ -35,8 +35,11 @@ const ExecutionManifestSchema = z.object({
   specialists: z.record(z.string(), z.object({
     definitionFingerprint: z.string().min(1),
     binding: FrozenBindingSchema,
-    /** Whatever the injected resolver returned; the budget adapter (Task 3)
-     *  owns its meaning. null means "no published price", never "free". */
+    /** A PlanPricingSnapshot (plan-budget.ts owns its meaning): priced rates,
+     *  free, or local. null means "no published price", never "free".
+     *  WHY still unknown here: an unrecognized snapshot must not quarantine the
+     *  whole journal — plan-budget reads it strictly and treats anything it
+     *  can't parse as "no published price". */
     pricing: z.unknown().nullable(),
   }).strict()),
   permissionFingerprint: z.string().min(1),
@@ -92,7 +95,17 @@ const PlanLeaseSchema = z.object({
 }).strict();
 export type PlanLease = z.infer<typeof PlanLeaseSchema>;
 
-const JOURNAL_PLAN_STATUSES = ['proposed', 'running', 'paused', 'interrupted', 'completed', 'stopped', 'failed'] as const;
+/** One Add budget authorization (design §4). */
+const PlanTrancheSchema = z.object({
+  trancheId: z.string().min(1),
+  stepId: z.string().min(1),
+  attemptId: z.string().min(1).optional(),
+  tokens: z.number().int().min(1),
+  at: z.number(),
+}).strict();
+export type PlanTranche = z.infer<typeof PlanTrancheSchema>;
+
+const JOURNAL_PLAN_STATUSES =['proposed', 'running', 'paused', 'interrupted', 'completed', 'stopped', 'failed'] as const;
 export type JournalPlanStatus = (typeof JOURNAL_PLAN_STATUSES)[number];
 
 const PlanRecordSchema = z.object({
@@ -113,7 +126,15 @@ const PlanRecordSchema = z.object({
   startedAt: z.number().optional(),
   endedAt: z.number().optional(),
   autoApproved: z.boolean().optional(),
-  paused: z.object({ stepId: z.string(), reason: z.string() }).strict().optional(),
+  /** attemptId (Task 3): which attempt an Add budget tranche enlarges. Absent
+   *  when the pause happened before that step had an attempt. */
+  paused: z.object({ stepId: z.string(), reason: z.string(), attemptId: z.string().optional() }).strict().optional(),
+  /** Task 3: every Add budget, in order. A tranche without attemptId is
+   *  waiting for the step's next attempt and is applied when it is reserved. */
+  tranches: z.array(PlanTrancheSchema).optional(),
+  /** Task 3: budget adapters whose certified bound a real response broke.
+   *  Nothing more is sent through them for this plan (design §4). */
+  disabledAdapters: z.array(z.object({ adapterId: z.string().min(1), detail: z.string() }).strict()).optional(),
   revisionOf: z.string().optional(),
   revisedBy: z.string().optional(),
   /** Set when a Comment retired this proposal; the replacement may not exist yet. */

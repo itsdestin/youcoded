@@ -1168,6 +1168,21 @@ describe('ChatGptAuth: fetch()', () => {
     expect(auth.status()).toMatchObject({ state: 'signed-in' });
   });
 
+  it('a single-transmission request (plan specialist) is never re-sent after a 401', async () => {
+    // Task 3 (specialists plans): a plan's budget reserves exactly one send per
+    // request, so the wrapper's invisible re-send is off. The token is still
+    // refreshed so the next request can succeed; the 401 is returned as-is.
+    await h.seedSignedIn();
+    const auth = h.build();
+    h.fetch.routes.push([CODEX_RESPONSES_URL, () => json(401, { error: { message: 'expired' } })]);
+    const res = await withChatGptRequest('session', 'specialist',
+      () => auth.fetch()(CODEX_RESPONSES_URL, { method: 'POST', body: '{}' }), { singleTransmission: true });
+    expect(res.status).toBe(401);
+    expect(h.fetch.calls.filter((c) => c.url === CODEX_RESPONSES_URL)).toHaveLength(1);
+    expect(refreshCalls()).toHaveLength(1);
+    expect(auth.status()).toMatchObject({ state: 'signed-in' });
+  });
+
   it('a second 401 signs out and throws the expired sentence', async () => {
     const ref = await h.seedSignedIn();
     const auth = h.build();

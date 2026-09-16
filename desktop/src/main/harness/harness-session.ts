@@ -17,7 +17,7 @@ import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { streamText, tool, zodSchema, jsonSchema, type LanguageModel, type ModelMessage } from 'ai';
+import { streamText, tool, zodSchema, jsonSchema, asSchema, type LanguageModel, type ModelMessage } from 'ai';
 import { openAIContinuationBinding, openAIContinuationMessages } from './openai-continuation';
 import {
   AcceptedHistoryCapture,
@@ -177,6 +177,10 @@ import { createSkillTool } from './tools/skill';
 import { createTaskTool } from './tools/task';
 import { createProposePlanTool, failedPlanProjection, stoppedPlanProjection, writingPlanProjection } from './tools/propose-plan';
 import { isPlanEligible } from './plans/eligibility';
+import {
+  authoritativeTokens,
+  type PlanChildRequestGate, type PlanChildStop, type PlanWireTool,
+} from './plans/budget-adapter';
 import { ModelSearchTool } from './tools/model-search';
 import { BUILTIN_ROSTER, type SpecialistRoster } from './specialists/registry';
 import type { ShellRegistry } from './shell-registry';
@@ -299,6 +303,16 @@ export interface HarnessSessionOpts {
    *  tools as ctx.shells; absent in tests, where Bash refuses a background
    *  start and a time limit still kills. */
   shells?: ShellRegistry;
+  /** Specialists plans (Task 3): set ONLY by the host, and only for a plan's
+   *  specialist. Its presence switches this session into plan-child mode:
+   *  every provider request is bounded by `adapter`, durably reserved through
+   *  `reserve` BEFORE it is sent, sent exactly once with the reply capped at
+   *  the exact remaining authorization, and settled through `settle`
+   *  afterwards. No SDK retry, no step retry, no stall re-run, no silent
+   *  empty-step re-run, no compaction or summary call, never a park, and no
+   *  images or saved reasoning on the wire. Absent for every ordinary session
+   *  and every ordinary specialist, which behave exactly as before. */
+  planChild?: PlanChildRequestGate;
 }
 // The opts second arg carries per-turn model construction hints. `serialToolCalls`
 // (Task 10 / spec §4.2) tells the local-engine factory to inject
@@ -358,6 +372,62 @@ interface StepResult {
    *  stream consumption: truncation/abort must close the ordinary tool-use shell
    *  even when no completed SDK tool-call part ever arrives. */
   writingPlanIds: string[];
+  /** What the provider itself reported this request used (input + output, or
+   *  a larger reported total). ABSENT when it did not report both counts —
+   *  `usage` above then holds an estimate, which a plan budget must never
+   *  settle against (plan-child mode charges the whole reservation instead). */
+  reportedTokens?: number;
+}
+
+/** A plan-child request stopped for a budget reason (Task 3). Its message is
+ *  the real, user-facing detail, surfaced through the ordinary session-error. */
+class PlanBudgetStopError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PlanBudgetStopError';
+  }
+}
+
+/** Turn-complete stopReason when a plan specialist has no budget left for its
+ *  next request. A data value on the existing event, never a new event type. */
+const PLAN_BUDGET_EXHAUSTED_STOP_REASON = 'plan_budget_exhausted';
+
+/**
+ * The provider-private continuation parts (encrypted reasoning, OpenAI item
+ * ids) removed from a message list, without touching the input.
+ * WHY a pure function: the account-switch strip rewrites history in place,
+ * while a plan request needs the same shape as a request-only copy — saved
+ * reasoning has no certified token bound (budget-adapter.ts), and dropping it
+ * is the transformation this driver already trusts on every provider.
+ */
+function withoutContinuationParts(messages: ModelMessage[]): { messages: ModelMessage[]; changed: boolean } {
+  let changed = false;
+  const out = messages.flatMap((message) => {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) return [message];
+    const content = (message.content as any[]).filter((part) => {
+      if (part?.type !== 'reasoning') return true;
+      changed = true;
+      return false;
+    })
+      .map((part) => {
+        if (!part?.providerOptions?.openai) return part;
+        changed = true;
+        const { providerOptions: _providerOptions, ...plain } = part;
+        return plain;
+      });
+    if (content.length === 0) { changed = true; return []; }
+    return [{ ...message, content } as ModelMessage];
+  });
+  return { messages: out, changed };
+}
+
+/** The tool list exactly as a request describes it, for the budget adapter. */
+async function planWireTools(aiTools: Record<string, any>): Promise<PlanWireTool[]> {
+  return Promise.all(Object.entries(aiTools).map(async ([name, t]) => ({
+    name,
+    ...(typeof t?.description === 'string' ? { description: t.description } : {}),
+    inputSchema: await asSchema(t.inputSchema).jsonSchema,
+  })));
 }
 
 // v7 stream parts carry the chunk in .text (verified against ai@7.0.22:
@@ -818,6 +888,12 @@ export class HarnessSession extends EventEmitter {
    *  from what this session actually runs with (setBinding can have changed it). */
   get profileSnapshot(): Readonly<CapabilityProfile> { return this.profile; }
 
+  /** Whether images may reach the model. WHY false for a plan specialist: an
+   *  image has no certified token bound (budget-adapter.ts), so a plan child is
+   *  treated as non-vision end to end — Read never promises pixels and the
+   *  wire replaces any stored image with a named placeholder. */
+  private get imagesAllowed(): boolean { return !this.opts.planChild && this.profile.supportsVision; }
+
   // How full this session's context window is right now, in tokens — the SAME
   // number the turn-complete usage payload reports (see the emit site near the
   // end of send()), kept on the instance so a caller can read it BETWEEN turns.
@@ -1004,23 +1080,9 @@ export class HarnessSession extends EventEmitter {
     // actually disappearing is a real history change. Bumping the revision for
     // a no-op strip would invalidate a published checkpoint (and force a
     // republish) for a history that is byte-for-byte what it was.
-    let changed = false;
-    this.history = this.history.flatMap(message => {
-      if (message.role !== 'assistant' || !Array.isArray(message.content)) return [message];
-      const content = (message.content as any[]).filter(part => {
-        if (part?.type !== 'reasoning') return true;
-        changed = true;
-        return false;
-      })
-        .map(part => {
-          if (!part?.providerOptions?.openai) return part;
-          changed = true;
-          const { providerOptions: _providerOptions, ...plain } = part;
-          return plain;
-        });
-      if (content.length === 0) { changed = true; return []; }
-      return [{ ...message, content } as ModelMessage];
-    });
+    const stripped = withoutContinuationParts(this.history);
+    const changed = stripped.changed;
+    this.history = stripped.messages;
     // A strip rewrites history in place: the messages that survive no longer
     // descend byte-for-byte from the events they were accepted from, so any
     // checkpoint taken before this one is stale.
@@ -1401,7 +1463,7 @@ export class HarnessSession extends EventEmitter {
       // descriptionFor lets a tool vary its wording by capability (Read + vision).
       // Simplified presentation still wins for small local models — shortDescription
       // stays the schema-size escape hatch.
-      const full = t.descriptionFor?.({ supportsVision: this.profile.supportsVision }) ?? t.description;
+      const full = t.descriptionFor?.({ supportsVision: this.imagesAllowed }) ?? t.description;
       // Fix (2026-08-11 review): the simplified branch used to drop straight to the
       // static shortDescription, discarding the vision-aware wording above. That
       // silently reopened the Roo Code #10440 gap for exactly the tier — small
@@ -1409,7 +1471,7 @@ export class HarnessSession extends EventEmitter {
       // Read handles images never tries. shortDescriptionFor mirrors descriptionFor
       // at short-text length; only falls through to the static text/full when a
       // tool doesn't define one (or the model has no vision).
-      const shortDesc = t.shortDescriptionFor?.({ supportsVision: this.profile.supportsVision }) ?? t.shortDescription ?? full;
+      const shortDesc = t.shortDescriptionFor?.({ supportsVision: this.imagesAllowed }) ?? t.shortDescription ?? full;
       out[t.name] = tool({ description: simplified ? shortDesc : full, inputSchema: schema });
     }
     return out;
@@ -1863,8 +1925,11 @@ export class HarnessSession extends EventEmitter {
    *  interruptible via interrupt() exactly like a turn's, and makes a concurrent
    *  send() hit the existing re-entrancy guard instead of mutating history
    *  underneath us. Cleared in a finally so a throw can't brick the session. */
-  async compactNow(): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' }> {
+  async compactNow(): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' | 'plan-child' }> {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
+    // A plan specialist never compacts: the summary is a model request its
+    // plan never reserved, and the prune would rewrite what the budget bounded.
+    if (this.opts.planChild) return { ok: false, reason: 'plan-child' };
     this.abort = new AbortController();
     try {
       const cfg = this.compactionConfig();
@@ -2178,7 +2243,7 @@ export class HarnessSession extends EventEmitter {
    *  a turn must not die because one attachment went missing between the composer
    *  and the send, and the path is still in the message text either way. */
   private imagePartsFor(attachments: string[]): Array<{ type: 'file'; mediaType: string; data: Buffer }> {
-    if (!attachments.length || !this.profile.supportsVision) return [];
+    if (!attachments.length || !this.imagesAllowed) return [];
     const parts: Array<{ type: 'file'; mediaType: string; data: Buffer }> = [];
     for (const p of attachments) {
       const img = readImageFromDisk(p);   // shared reader — one table, one cap (fix 3)
@@ -2393,7 +2458,12 @@ export class HarnessSession extends EventEmitter {
         // Two-stage compaction FIRST (spec §4.4) — prune, then summarize only if
         // pruning can't get under budget. Inert (returns immediately) below the
         // trigger, so the existing loop behavior is unchanged for normal turns.
-        await this.maybeCompact(model, lastInputTokens > 0 ? lastInputTokens : (this._contextUsedTokens ?? 0), aiTools);
+        // Plan-child mode skips it entirely (Task 3): a summary is an unreserved
+        // model request. fitToContext still trims the outgoing copy, and the
+        // budget bounds whatever is actually sent.
+        if (!this.opts.planChild) {
+          await this.maybeCompact(model, lastInputTokens > 0 ? lastInputTokens : (this._contextUsedTokens ?? 0), aiTools);
+        }
         // Consume the prefix-moved flag into THIS request: everything above
         // (compaction, a swap between turns) has had its say, and the request
         // below is the one that pays for it. See the field's WHY.
@@ -2403,7 +2473,21 @@ export class HarnessSession extends EventEmitter {
         // errors as {type:'error'} fullStream parts AND rejected promises, so
         // only wrapping the call would miss them (verified ai@7 facts).
         // WHY: all retries belong to this logical step, not newly allocated steps.
-        const step = await withChatGptRequest(this.opts.sessionId, this.opts.isSpecialistChild ? 'specialist' : 'chat', () => this.withRetry(async () => {
+        let step: StepResult;
+        const planGate = this.opts.planChild;
+        if (planGate) {
+          // Plan-child mode (Task 3): bound → durable reservation → exactly one
+          // transmission → settlement. No withRetry, no stall re-run.
+          const planned = await this.runPlanStep(model, aiTools, planGate, (t) => { partialAssistantText = t; });
+          if ('exhausted' in planned) {
+            // Nothing was sent. Ending orderly (turn-complete) keeps history
+            // exactly as it stands; the executor pauses the plan from here.
+            this.notifyPlanStop(planGate, { kind: 'exhausted', detail: planned.exhausted });
+            stopReason = PLAN_BUDGET_EXHAUSTED_STOP_REASON;
+            break turnLoop;
+          }
+          step = planned;
+        } else step = await withChatGptRequest(this.opts.sessionId, this.opts.isSpecialistChild ? 'specialist' : 'chat', () => this.withRetry(async () => {
           try {
             return await this.consumeStep(model, aiTools, (t) => { partialAssistantText = t; });
           } catch (err) {
@@ -2584,7 +2668,9 @@ export class HarnessSession extends EventEmitter {
           || ORDERLY_EMPTY_FINISHES.has(step.finishReason);
         if (isEmptyStep && orderlyFinish) {
           consecutiveEmptySteps++;
-          if (consecutiveEmptySteps === 1) {
+          // A plan specialist gets no silent re-run (Task 3): it would be a
+          // second request the plan did not approve as a retry. It ends honestly.
+          if (consecutiveEmptySteps === 1 && !this.opts.planChild) {
             // Withdraw any preparing card the dead step left on screen — the
             // 'tool-calls' empty shape (announced call, dropped as malformed)
             // almost always put one up. The step re-runs INSIDE the same turn,
@@ -2942,6 +3028,94 @@ export class HarnessSession extends EventEmitter {
     }
   }
 
+  /** Tell the plan why this specialist stopped. A listener failure must not
+   *  change how the turn ends — the executor also sees the turn's own end. */
+  private notifyPlanStop(gate: PlanChildRequestGate, stop: PlanChildStop): void {
+    try { gate.onStop?.(stop); } catch (e) { console.error('[harness] plan stop listener threw', e); }
+  }
+
+  /** The request copy a plan specialist sends (Task 3): the fitted history,
+   *  without saved reasoning, with every image replaced by a named placeholder.
+   *  `this.history` itself is never changed here. */
+  private planWireMessages(): ModelMessage[] {
+    return adaptForWire(withoutContinuationParts(this.fitToContext(this.history)).messages, {
+      nativeImageToolResults: false,
+      supportsVision: false,
+    });
+  }
+
+  /**
+   * One plan-child provider request (Task 3, design §4):
+   *   1. bound the COMPLETE request (system, messages, tool schemas) — content
+   *      with no certified bound is refused before anything else happens;
+   *   2. durably reserve it — "exhausted" means nothing is sent and the turn
+   *      ends orderly; any other refusal ends it with the real reason;
+   *   3. send it exactly once, reply capped at the exact remaining amount,
+   *      inside a single-transmission request scope (no ChatGPT 401 re-send);
+   *   4. settle: provider-reported usage releases the unused part; silent,
+   *      interrupted or failed requests are charged in full; usage above the
+   *      reservation stops the turn BEFORE any returned tool call runs.
+   */
+  private async runPlanStep(
+    model: LanguageModel,
+    aiTools: Record<string, any>,
+    gate: PlanChildRequestGate,
+    reportPartial: (text: string) => void,
+  ): Promise<StepResult | { exhausted: string }> {
+    const messages = this.planWireMessages();
+    const bound = gate.adapter.inputBound({ system: this.systemText, messages, tools: await planWireTools(aiTools) });
+    if (!bound.ok) {
+      this.notifyPlanStop(gate, { kind: 'unsupported-input', detail: bound.reason });
+      throw new PlanBudgetStopError(bound.reason);
+    }
+    const reservation = await gate.reserve({ inputBoundTokens: bound.tokens });
+    if (!reservation.ok) {
+      if (reservation.kind === 'exhausted') return { exhausted: reservation.detail };
+      this.notifyPlanStop(gate, { kind: 'refused', detail: reservation.detail });
+      throw new PlanBudgetStopError(reservation.detail);
+    }
+
+    let outcome: StepResult | typeof STALL_RETRY;
+    try {
+      // isFirstAttempt=false: a silent stall fails instead of re-running.
+      outcome = await withChatGptRequest(
+        this.opts.sessionId, 'specialist',
+        () => this.runStreamOnce(model, aiTools, reportPartial, false, { messages, maxOutputTokens: reservation.maxOutputTokens }),
+        { singleTransmission: true },
+      );
+    } catch (err) {
+      const why = this.interrupted || this.abort?.signal.aborted ? 'interrupted' : 'error';
+      try {
+        await gate.settle({ kind: 'unknown', why });
+      } catch (settleErr) {
+        // The request stays unresolved in the journal; the executor's pause
+        // path charges it in full. The provider's error is the one to report.
+        console.error('[harness] plan settlement failed after a request error', settleErr);
+      }
+      throw err;
+    }
+    if (outcome === STALL_RETRY) {
+      // Unreachable by construction (no first-attempt re-run, no park), but a
+      // re-run here would be an unreserved request — refuse it loudly.
+      await gate.settle({ kind: 'unknown', why: 'error' });
+      throw new PlanBudgetStopError('This specialist stopped responding, so its request was not repeated.');
+    }
+    if (outcome.interrupted) {
+      await gate.settle({ kind: 'unknown', why: 'interrupted' });
+      return outcome;
+    }
+    const settled = await gate.settle(outcome.reportedTokens === undefined
+      ? { kind: 'unknown', why: 'silent' }
+      : { kind: 'reported', tokens: outcome.reportedTokens, usage: outcome.usage });
+    if (settled.kind === 'over-bound') {
+      // The authorization was already broken by the provider; running the
+      // returned tools would act on a response the plan never paid for.
+      this.notifyPlanStop(gate, { kind: 'over-bound', detail: settled.detail });
+      throw new PlanBudgetStopError(`This specialist was stopped because ${settled.detail}.`);
+    }
+    return outcome;
+  }
+
   /** Consume ONE step's stream. Emits assistant-text / assistant-thinking deltas
    *  as they arrive, collects tool-calls + usage, and returns the step result.
    *  Throws on an 'error' stream part or a rejected result promise (→ withRetry).
@@ -2986,6 +3160,9 @@ export class HarnessSession extends EventEmitter {
     aiTools: Record<string, any>,
     reportPartial: (text: string) => void,
     isFirstAttempt: boolean,
+    /** Plan-child mode only (Task 3): the exact messages the budget bounded and
+     *  the exact reply cap it authorized. Sent as-is, with SDK retries off. */
+    plan?: { messages: ModelMessage[]; maxOutputTokens: number },
   ): Promise<StepResult | typeof STALL_RETRY> {
     // One capture attempt per stream attempt. Its delta uuids stay provisional
     // until the turn loop (or send()'s catch) says what became of the step.
@@ -2999,7 +3176,7 @@ export class HarnessSession extends EventEmitter {
       // pushed to history under a vision model is stripped here at build time
       // if the NEXT request targets a model that can't carry or can't see it,
       // rather than riding along stale from whenever it was written.
-      messages: adaptForWire(this.fitToContext(this.history), {
+      messages: plan ? plan.messages : adaptForWire(this.fitToContext(this.history), {
         nativeImageToolResults: this.profile.nativeImageToolResults,
         supportsVision: this.profile.supportsVision,
       }),
@@ -3007,7 +3184,13 @@ export class HarnessSession extends EventEmitter {
       // window at most a quarter of it, so a reply can never overflow the
       // space the history was fitted to. Absent stays absent — the manifest
       // comment above explains why an uncapped request is its own hazard.
-      maxOutputTokens: this.opts.harness.limits?.maxTokens === undefined ? undefined : this.budget().replyReserve,
+      // A plan request instead uses exactly what its reservation left over.
+      maxOutputTokens: plan
+        ? plan.maxOutputTokens
+        : (this.opts.harness.limits?.maxTokens === undefined ? undefined : this.budget().replyReserve),
+      // WHY 0 for plans: the SDK's own retries (2 by default) would be extra
+      // transmissions the plan never reserved. Ordinary sessions keep the default.
+      ...(plan ? { maxRetries: 0 } : {}),
       abortSignal: this.abort!.signal,
       // Fix (2026-08-10 incident): streamText's DEFAULT onError is
       // `({ error }) => console.error(error)` — Node's console.error on a raw
@@ -3033,7 +3216,9 @@ export class HarnessSession extends EventEmitter {
     if (dispatchBinding !== this.continuationBinding) {
       if (this.continuationBinding !== undefined) this.stripOpenAIContinuation();
       this.continuationBinding = dispatchBinding;
-      streamArgs.messages = adaptForWire(this.fitToContext(this.history), {
+      // A plan request already carries no continuation parts, and its messages
+      // must stay exactly what the budget bounded — never rebuilt here.
+      if (!plan) streamArgs.messages = adaptForWire(this.fitToContext(this.history), {
         nativeImageToolResults: this.profile.nativeImageToolResults,
         supportsVision: this.profile.supportsVision,
       });
@@ -3160,7 +3345,10 @@ export class HarnessSession extends EventEmitter {
           // branch removed for children. Surfacing the stalled card inside
           // the parent's own Agent card is a real feature; it is deliberately
           // not attempted here.
-          if (!this.opts.isSpecialistChild && (sawFirstChunk || this.turnEverParked) && !willRetry) {
+          // Plan children are specialist children too; the explicit planChild
+          // check keeps "a plan request never waits on a Retry click" true even
+          // if a host ever wires one differently (Task 3).
+          if (!this.opts.planChild && !this.opts.isSpecialistChild && (sawFirstChunk || this.turnEverParked) && !willRetry) {
             parked = true;
             this.turnEverParked = true;
             this.resolveRetry = signalRetry;
@@ -3499,6 +3687,7 @@ export class HarnessSession extends EventEmitter {
     const providerMetadata = await result.providerMetadata;
     const providerCostUsd = providerCostFromMetadata(providerMetadata);
     const finishReason = await result.finishReason;
+    const reportedTokens = authoritativeTokens(usage);
     const reasoningTokens = usage?.outputTokenDetails?.reasoningTokens;
     // Acceptance is fenced separately from dispatch. If auth ownership moved
     // while bytes were in flight, visible text remains but its old-generation
@@ -3547,6 +3736,7 @@ export class HarnessSession extends EventEmitter {
       // rather than present-and-undefined — the turn accumulator counts
       // reporting steps, and "present but undefined" would muddy that.
       ...(providerCostUsd === undefined ? {} : { providerCostUsd }),
+      ...(reportedTokens === undefined ? {} : { reportedTokens }),
       generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0,
       attempt,
     };
@@ -3776,7 +3966,7 @@ export class HarnessSession extends EventEmitter {
       // ctx.shells genuinely absent rather than explicitly undefined.
       ...(this.opts.shells ? { shells: this.opts.shells } : {}),
       todos: this.todos,
-      supportsVision: this.profile.supportsVision,
+      supportsVision: this.imagesAllowed,
       ...(this.opts.toolServices ? { services: this.opts.toolServices } : {}),
     });
     if (call.toolName !== 'propose_plan' || !payload.planArgsInvalid) return payload;

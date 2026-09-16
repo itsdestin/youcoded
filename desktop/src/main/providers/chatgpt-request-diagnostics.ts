@@ -4,12 +4,20 @@ import { mkdir, open, rename, stat, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type RequestPurpose = 'chat' | 'specialist' | 'title' | 'summary' | 'unknown';
-interface Scope { sessionId: string; purpose: RequestPurpose; logicalStepId: string }
+interface Scope {
+  sessionId: string; purpose: RequestPurpose; logicalStepId: string;
+  /** A plan specialist's request: its budget reserved exactly one send, so the
+   *  auth wrapper must not re-send it after a 401 (specialists plans, Task 3). */
+  singleTransmission?: boolean;
+}
 interface Context extends Scope { diagnostics?: ChatGptRequestDiagnostics; attemptId?: string }
 const contexts = new AsyncLocalStorage<Context>();
-export function withChatGptRequest<T>(sessionId: string, purpose: RequestPurpose, work: () => T): T {
+export function withChatGptRequest<T>(sessionId: string, purpose: RequestPurpose, work: () => T, opts: { singleTransmission?: boolean } = {}): T {
   // WHY: async-local scopes keep concurrent summaries/children off the chat baseline.
-  return contexts.run({ sessionId, purpose, logicalStepId: randomUUID() }, work);
+  return contexts.run({
+    sessionId, purpose, logicalStepId: randomUUID(),
+    ...(opts.singleTransmission ? { singleTransmission: true } : {}),
+  }, work);
 }
 export function bindChatGptRequest<T>(diagnostics: ChatGptRequestDiagnostics, sessionId: string, work: (context: Context) => T, purpose: RequestPurpose = 'unknown'): T {
   const context: Context = { sessionId, purpose, logicalStepId: randomUUID(), ...contexts.getStore(), diagnostics };
