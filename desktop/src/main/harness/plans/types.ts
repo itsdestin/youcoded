@@ -41,6 +41,14 @@ const ExecutionManifestSchema = z.object({
      *  whole journal — plan-budget reads it strictly and treats anything it
      *  can't parse as "no published price". */
     pricing: z.unknown().nullable(),
+    /** Decision 4: this specialist's fixed starting cost — its system prompt,
+     *  tool schemas and framing at the budget adapter's certified bound
+     *  (budget-adapter.ts `setupBound`). Counted on top of each step's
+     *  budget_tokens in the ceiling and in every attempt's allowance. */
+    setupTokens: nonNegativeInt,
+    /** Decision 5: this specialist runs on a route whose replies can't be
+     *  capped (ChatGPT), so the plan's limit is approximate. */
+    approximateLimit: z.boolean().optional(),
   }).strict()),
   permissionFingerprint: z.string().min(1),
 }).strict();
@@ -63,6 +71,11 @@ const PlanAttemptSchema = z.object({
   reservedTokens: nonNegativeInt,
   spentTokens: nonNegativeInt,
   phase: z.enum(ATTEMPT_PHASES),
+  /** While a request is unsettled: the certified input bound it was reserved
+   *  with, so settlement can detect an input-side breach (Task 3 review). */
+  requestInputBound: nonNegativeInt.optional(),
+  /** Set once a request went out through a soft (uncapped) adapter. */
+  softLimit: z.boolean().optional(),
   terminal: z.enum(['completed', 'failed', 'stopped']).optional(),
   reportText: z.string().optional(),
   reportPath: z.string().optional(),
@@ -137,6 +150,11 @@ const PlanRecordSchema = z.object({
   disabledAdapters: z.array(z.object({ adapterId: z.string().min(1), detail: z.string() }).strict()).optional(),
   revisionOf: z.string().optional(),
   revisedBy: z.string().optional(),
+  /** Decision 5: some specialist's replies can't be capped, so the limit is
+   *  approximate (one reply may overshoot before the plan pauses). */
+  approximateLimit: z.boolean().optional(),
+  /** Decision 6: the real reason a failed plan failed, shown verbatim. */
+  failure: z.object({ detail: z.string().min(1) }).strict().optional(),
   /** Set when a Comment retired this proposal; the replacement may not exist yet. */
   revisedByComment: z.boolean().optional(),
   manifest: ExecutionManifestSchema,

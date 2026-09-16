@@ -28,7 +28,7 @@ function record(planId: string, overrides: Partial<PlanRecord> = {}): PlanRecord
     ceilingTokens: 6100, ceilingUsd: null, usedTokens: 0, status: 'proposed', seq: 1, createdAt: 10,
     manifest: {
       modelLabel: 'Test model',
-      specialists: { reviewer: { definitionFingerprint: 'r1', binding: { providerId: 'p', modelId: 'm' }, pricing: null } },
+      specialists: { reviewer: { definitionFingerprint: 'r1', binding: { providerId: 'p', modelId: 'm' }, pricing: null, setupTokens: 300 } },
       permissionFingerprint: 'perm-1',
     },
     steps: ['s1', 's2', 'loop', 'fix'].map((id) => ({ id, status: 'pending' as const, attempts: [] })),
@@ -105,6 +105,23 @@ describe('strict read and quarantine', () => {
       // the card fall back to its own wording instead of "Plan: a plan".
       ['tool"8', 'failed', 0, ''],
     ]);
+    // Product decision 6: each failed card carries the real reason, verbatim.
+    expect(views.map((v) => v.failure?.detail)).toEqual([
+      expect.stringMatching(/^The saved plan file is not valid JSON/),
+      expect.stringMatching(/^The saved plan file is not valid JSON/),
+    ]);
+  });
+
+  it('projects a failed record\'s own detail, the approximate-limit flag and each row\'s setup cost', async () => {
+    await journal.mutate(REF, (file) => {
+      const rec = record('p1', { status: 'failed', failure: { detail: 'The specialist definition file could not be read.' } });
+      rec.manifest.specialists.reviewer.approximateLimit = true;
+      file.plans.push(rec);
+    });
+    const [view] = await journal.list(REF);
+    expect(view.failure).toEqual({ detail: 'The specialist definition file could not be read.' });
+    expect(view.approximateLimit).toBe(true);
+    expect(view.steps[0]).toMatchObject({ id: 's1', budgetTokens: 1000, setupTokens: 300 });
   });
 });
 

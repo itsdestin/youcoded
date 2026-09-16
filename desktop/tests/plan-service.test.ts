@@ -23,7 +23,7 @@ const doc = (budget = 1000, items = ['a', 'b']): PlanDocumentV1 => ({
 
 const baseManifest = (): ExecutionManifest => ({
   modelLabel: 'Budget model',
-  specialists: { reviewer: { definitionFingerprint: 'def-1', binding: { providerId: 'openai', modelId: 'mini' }, pricing: { input: 1, output: 2 } } },
+  specialists: { reviewer: { definitionFingerprint: 'def-1', binding: { providerId: 'openai', modelId: 'mini' }, pricing: { input: 1, output: 2 }, setupTokens: 250 } },
   permissionFingerprint: 'perm-1',
 });
 
@@ -79,7 +79,9 @@ describe('propose', () => {
 
   it('journals a proposal with the frozen execution manifest and emits it', async () => {
     const view = await propose();
-    expect(view).toMatchObject({ status: 'proposed', toolUseId: 'tool-1', title: 'Review things', ceilingTokens: 2000, ceilingUsd: null, model: { label: 'Budget model' }, seq: 1 });
+    // Decision 4: each of the 2 specialists' 250-token setup is counted on top of its work budget.
+    expect(view).toMatchObject({ status: 'proposed', toolUseId: 'tool-1', title: 'Review things', ceilingTokens: 2500, ceilingUsd: null, model: { label: 'Budget model' }, seq: 1 });
+    expect(view.approximateLimit).toBeUndefined();
     const rec = await journal.get(REF, view.planId);
     expect(rec!.manifest).toEqual(baseManifest());
     expect(rec!.steps).toEqual([{ id: 's1', status: 'pending', attempts: [] }]);
@@ -90,8 +92,15 @@ describe('propose', () => {
   it('prices the dollar limit from the frozen snapshot at the highest rate (Task 3)', async () => {
     manifest.specialists.reviewer.pricing = { kind: 'priced', rates: { in: 3, out: 15, cacheWrite: 30 } };
     const view = await propose();
-    // 2 items × 1,000 tokens, every token at $30/M.
-    expect(view.ceilingUsd).toBeCloseTo(2000 * 30 / 1e6, 12);
+    // 2 items × (1,000 work + 250 setup) tokens, every token at $30/M.
+    expect(view.ceilingUsd).toBeCloseTo(2500 * 30 / 1e6, 12);
+  });
+
+  it('a ChatGPT specialist marks the plan limit as approximate (decision 5)', async () => {
+    manifest.specialists.reviewer.approximateLimit = true;
+    const view = await propose();
+    expect(view.approximateLimit).toBe(true);
+    expect((await journal.get(REF, view.planId))!.approximateLimit).toBe(true);
   });
 
   it('a local or unpriced plan shows tokens only — no fabricated $0.00 (Task 3)', async () => {
@@ -343,15 +352,16 @@ describe('auto-approve settings', () => {
   });
 
   it('runs only a proposal strictly under the limit, after emitting it as a proposal', async () => {
-    await service.setAutoApprove(2000);
-    const over = await propose({ toolUseId: 'over', document: doc(1500) }); // 3000
-    const equal = await propose({ toolUseId: 'equal', document: doc(1000) }); // 2000
+    // Ceilings include 2 × 250 setup tokens (decision 4).
+    await service.setAutoApprove(2500);
+    const over = await propose({ toolUseId: 'over', document: doc(1500) }); // 3500
+    const equal = await propose({ toolUseId: 'equal', document: doc(1000) }); // 2500
     expect(over.status).toBe('proposed');
     expect(equal.status).toBe('proposed');
     expect(executor.start).not.toHaveBeenCalled();
 
     events = [];
-    const under = await propose({ toolUseId: 'under', document: doc(500) }); // 1000
+    const under = await propose({ toolUseId: 'under', document: doc(500) }); // 1500
     expect(under).toMatchObject({ status: 'running', autoApproved: true });
     expect(events.map((e) => [e.plan.status, e.plan.autoApproved ?? false])).toEqual([['proposed', false], ['running', true]]);
     expect(executor.start).toHaveBeenCalledTimes(1);

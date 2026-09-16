@@ -13,7 +13,7 @@ import type { NativeHome } from '../../native-home';
 import type { PlanView } from '../../../shared/types';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
-import { planCeilingUsd } from './plan-budget';
+import { planCeilingTokens, planCeilingUsd } from './plan-budget';
 import type {
   ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanRecord, PlanRef,
   PlanSettingsWriteResult, PlanUnsupported,
@@ -44,7 +44,10 @@ export interface PlanServiceDeps {
   /** Model binding (through the automatic specialist model resolver), price,
    *  specialist definition and permission fingerprints for this document.
    *  `pricing` must be a PlanPricingSnapshot (plan-budget.ts
-   *  `pricingSnapshot`) or null; anything else is read as "no price". */
+   *  `pricingSnapshot`) or null; anything else is read as "no price".
+   *  `setupTokens` must come from budget-adapter.ts `setupBound` over the
+   *  specialist's exact system prompt and tool list, and `approximateLimit`
+   *  must be true when its adapter has `capsOutput: false` (ChatGPT). */
   resolveManifest(input: { sessionId: string; cwd: string; document: PlanDocumentV1 }): Promise<ExecutionManifest>;
   /** Queue the user-visible follow-up turn a Comment creates. */
   queueCommentTurn(input: { sessionId: string; turnId: string; planId: string; text: string }): Promise<void> | void;
@@ -231,7 +234,9 @@ export class PlanService {
         document: proposal.document,
         maximumAttempts: proposal.maximumAttempts,
         maxFanOut: proposal.maxFanOut,
-        ceilingTokens: proposal.ceilingTokens,
+        // Decision 4: the validator's Σ work budgets plus every attempt's fixed
+        // setup cost, so the card's total stays an honest worst case.
+        ceilingTokens: planCeilingTokens(proposal.document, manifest),
         // Task 3: every possible token at the frozen snapshot's highest rate.
         // null (tokens only) when any specialist is unpriced or nothing in the
         // plan costs money — never a false $0.00.
@@ -243,6 +248,8 @@ export class PlanService {
         manifest,
         steps: allSteps(proposal.document.steps).map((s) => ({ id: s.id, status: 'pending' as const, attempts: [] })),
         fenceEpoch: 0,
+        // Decision 5: any specialist on an uncapped route makes the limit approximate.
+        ...(Object.values(manifest.specialists).some((sp) => sp.approximateLimit) ? { approximateLimit: true } : {}),
       };
       // WHY the link is decided here and not by the model: only the turn a
       // Comment queued carries the matching turnId, and the token is consumed

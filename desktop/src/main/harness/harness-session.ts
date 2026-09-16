@@ -2474,6 +2474,9 @@ export class HarnessSession extends EventEmitter {
         // only wrapping the call would miss them (verified ai@7 facts).
         // WHY: all retries belong to this logical step, not newly allocated steps.
         let step: StepResult;
+        // Set when a soft (uncapped) plan reply used up its allowance: the step
+        // is accounted below, then the turn stops before its tools run.
+        let planLimitReached: string | undefined;
         const planGate = this.opts.planChild;
         if (planGate) {
           // Plan-child mode (Task 3): bound → durable reservation → exactly one
@@ -2486,7 +2489,10 @@ export class HarnessSession extends EventEmitter {
             stopReason = PLAN_BUDGET_EXHAUSTED_STOP_REASON;
             break turnLoop;
           }
-          step = planned;
+          if ('limitReached' in planned) {
+            step = planned.step;
+            planLimitReached = planned.limitReached;
+          } else step = planned;
         } else step = await withChatGptRequest(this.opts.sessionId, this.opts.isSpecialistChild ? 'specialist' : 'chat', () => this.withRetry(async () => {
           try {
             return await this.consumeStep(model, aiTools, (t) => { partialAssistantText = t; });
@@ -2568,6 +2574,24 @@ export class HarnessSession extends EventEmitter {
           }
           this.emitEvent('user-interrupt', {});
           return;
+        }
+
+        if (planGate && planLimitReached !== undefined) {
+          // Decision 5 (soft limit): this reply may have overshot once; it is
+          // charged, but nothing it asked for runs and no further request is
+          // made. Only its text enters history — its tool calls never got a
+          // tool-use event, so keeping them would leave calls without results.
+          if (step.text && step.text.trim().length > 0) {
+            this.history.push({ role: 'assistant', content: step.text });
+            this.capture.acceptAttemptText(step.attempt);
+          } else {
+            this.capture.abandonAttempt(step.attempt);
+          }
+          partialAssistantText = '';
+          this.withdrawOrphanedPreparing(step.pendingPreparing);
+          this.notifyPlanStop(planGate, { kind: 'exhausted', detail: planLimitReached });
+          stopReason = PLAN_BUDGET_EXHAUSTED_STOP_REASON;
+          break turnLoop;
         }
 
         // ONE emptiness predicate for BOTH the history push and the retry gate
@@ -3061,7 +3085,16 @@ export class HarnessSession extends EventEmitter {
     aiTools: Record<string, any>,
     gate: PlanChildRequestGate,
     reportPartial: (text: string) => void,
-  ): Promise<StepResult | { exhausted: string }> {
+  ): Promise<StepResult | { exhausted: string } | { step: StepResult; limitReached: string }> {
+    // The adapter is certified for ONE provider route. A mismatch (say a
+    // capped adapter handed to a ChatGPT binding, whose endpoint strips the
+    // cap) would make the reservation a false promise — refuse before
+    // anything is measured, reserved or sent. An unknown route is refused too.
+    if (gate.adapter.providerType !== this.opts.providerType) {
+      const detail = "This specialist's plan budget doesn't match the model it runs on, so nothing was sent.";
+      this.notifyPlanStop(gate, { kind: 'refused', detail });
+      throw new PlanBudgetStopError(detail);
+    }
     const messages = this.planWireMessages();
     const bound = gate.adapter.inputBound({ system: this.systemText, messages, tools: await planWireTools(aiTools) });
     if (!bound.ok) {
@@ -3080,7 +3113,12 @@ export class HarnessSession extends EventEmitter {
       // isFirstAttempt=false: a silent stall fails instead of re-running.
       outcome = await withChatGptRequest(
         this.opts.sessionId, 'specialist',
-        () => this.runStreamOnce(model, aiTools, reportPartial, false, { messages, maxOutputTokens: reservation.maxOutputTokens }),
+        () => this.runStreamOnce(model, aiTools, reportPartial, false, {
+          messages,
+          // A soft route (decision 5) rejects any reply cap, so none is sent;
+          // its overshoot is caught at settlement instead.
+          maxOutputTokens: gate.adapter.capsOutput ? reservation.maxOutputTokens : undefined,
+        }),
         { singleTransmission: true },
       );
     } catch (err) {
@@ -3096,9 +3134,16 @@ export class HarnessSession extends EventEmitter {
     }
     if (outcome === STALL_RETRY) {
       // Unreachable by construction (no first-attempt re-run, no park), but a
-      // re-run here would be an unreserved request — refuse it loudly.
-      await gate.settle({ kind: 'unknown', why: 'error' });
-      throw new PlanBudgetStopError('This specialist stopped responding, so its request was not repeated.');
+      // re-run here would be an unreserved request — refuse it, settling the
+      // way the error path above does.
+      const detail = 'This specialist stopped responding, so its request was not repeated.';
+      try {
+        await gate.settle({ kind: 'unknown', why: 'error' });
+      } catch (settleErr) {
+        console.error('[harness] plan settlement failed after a stalled request', settleErr);
+      }
+      this.notifyPlanStop(gate, { kind: 'refused', detail });
+      throw new PlanBudgetStopError(detail);
     }
     if (outcome.interrupted) {
       await gate.settle({ kind: 'unknown', why: 'interrupted' });
@@ -3107,6 +3152,7 @@ export class HarnessSession extends EventEmitter {
     const settled = await gate.settle(outcome.reportedTokens === undefined
       ? { kind: 'unknown', why: 'silent' }
       : { kind: 'reported', tokens: outcome.reportedTokens, usage: outcome.usage });
+    if (settled.kind === 'limit-reached') return { step: outcome, limitReached: settled.detail };
     if (settled.kind === 'over-bound') {
       // The authorization was already broken by the provider; running the
       // returned tools would act on a response the plan never paid for.
@@ -3162,7 +3208,7 @@ export class HarnessSession extends EventEmitter {
     isFirstAttempt: boolean,
     /** Plan-child mode only (Task 3): the exact messages the budget bounded and
      *  the exact reply cap it authorized. Sent as-is, with SDK retries off. */
-    plan?: { messages: ModelMessage[]; maxOutputTokens: number },
+    plan?: { messages: ModelMessage[]; maxOutputTokens: number | undefined },
   ): Promise<StepResult | typeof STALL_RETRY> {
     // One capture attempt per stream attempt. Its delta uuids stay provisional
     // until the turn loop (or send()'s catch) says what became of the step.
@@ -3191,6 +3237,10 @@ export class HarnessSession extends EventEmitter {
       // WHY 0 for plans: the SDK's own retries (2 by default) would be extra
       // transmissions the plan never reserved. Ordinary sessions keep the default.
       ...(plan ? { maxRetries: 0 } : {}),
+      // No providerOptions here, deliberately, and plans must keep it that way:
+      // a thinking/reasoning budget (Anthropic adds it ON TOP of max_tokens)
+      // would let a reply spend past its reservation. Pinned by
+      // harness-session-plan-child.test.ts ("never ask for a thinking budget").
       abortSignal: this.abort!.signal,
       // Fix (2026-08-10 incident): streamText's DEFAULT onError is
       // `({ error }) => console.error(error)` — Node's console.error on a raw

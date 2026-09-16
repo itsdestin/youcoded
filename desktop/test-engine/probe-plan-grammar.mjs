@@ -50,7 +50,7 @@ export const STEP_SCHEMA = {
         kind: { type: 'string', enum: ['map', 'verify', 'combine', 'repeat'] },
         specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
         task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
-        budget_tokens: { type: 'integer', minimum: 500, maximum: 20000 },
+        budget_tokens: { type: 'integer', minimum: 500, maximum: 30000 }, // raised from 20000 on 2026-09-16 (numeric bound only; grammar evidence unchanged, not re-run)
         items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
         of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
         max_iterations: { type: 'integer', minimum: 1, maximum: 5, description: 'repeat only: hard cap.' },

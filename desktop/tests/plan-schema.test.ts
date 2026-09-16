@@ -30,6 +30,13 @@ const nestedRepeat: LooseDocument = {
 };
 
 describe('plan schema and semantic validator', () => {
+  it('a step may budget up to 30,000 tokens of work (product decision 4, 2026-09-16)', () => {
+    const doc = (budget: number) => ({ goal: 'g', steps: [{ id: 's', kind: 'map', specialist: 'worker', task: 't', budget_tokens: budget, items: ['x'] }] });
+    expect(PlanDocumentSchema.safeParse(doc(30_000)).success).toBe(true);
+    expect(PlanDocumentSchema.safeParse(doc(30_001)).success).toBe(false);
+    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.budget_tokens.maximum).toBe(30_000);
+  });
+
   it('pins the complete model-facing schema to the schema proven by the live probe', () => {
     expect(PLAN_DOCUMENT_JSON_SCHEMA).toEqual(PROBE_PLAN_DOCUMENT_JSON_SCHEMA);
     expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.specialist.enum).toEqual(['explorer', 'researcher', 'reviewer', 'worker']);

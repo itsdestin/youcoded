@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 export const PLAN_MIN_BUDGET_TOKENS = 500;
-export const PLAN_MAX_BUDGET_TOKENS = 20_000;
+// WHY 30,000 (product decision 4, 2026-09-16): a step's budget now pays for
+// work only — each specialist's fixed setup cost is counted separately — and
+// the owner asked for "a bit" more room. Only the numeric maximum changed, so
+// the completed grammar probe's evidence still holds (not re-run).
+export const PLAN_MAX_BUDGET_TOKENS = 30_000;
 export const PLAN_MAX_REPEAT_ITERATIONS = 5;
 export const PLAN_MAX_ID_CHARS = 64;
 export const PLAN_MAX_GOAL_CHARS = 2_000;

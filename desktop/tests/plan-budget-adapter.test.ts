@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import type { ModelMessage } from 'ai';
 import {
   GENERIC_BYTES_PER_TOKEN, REQUEST_FRAMING_TOKENS, PER_MESSAGE_FRAMING_TOKENS, PER_TOOL_FRAMING_TOKENS,
-  genericInputBound, budgetAdapterFor, tightenedAdapter, checkAdapterConformance, authoritativeTokens,
+  genericInputBound, budgetAdapterFor, tightenedAdapter, checkAdapterConformance, authoritativeTokens, setupBound,
   disableAdapterForPlans, adapterDisabledReason, resetDisabledAdaptersForTests, type PlanWireRequest,
 } from '../src/main/harness/plans/budget-adapter';
 
@@ -96,21 +96,39 @@ describe('adapter selection and the conformance contract', () => {
     '%s gets a bounding adapter', (type) => {
       const found = budgetAdapterFor(type);
       expect(found.ok).toBe(true);
-      if (found.ok) expect(found.adapter.inputBound(req())).toEqual(genericInputBound(req()));
+      if (!found.ok) return;
+      expect(found.adapter.inputBound(req())).toEqual(genericInputBound(req()));
+      expect(found.adapter).toMatchObject({ providerType: type, capsOutput: true });
     },
   );
 
-  it('the ChatGPT plan route is refused: its endpoint rejects any output cap, so a request could not be bounded', () => {
+  it('ChatGPT gets a soft-limit adapter (decision 5): same certified input bound, but no reply cap', () => {
     const found = budgetAdapterFor('chatgpt');
-    expect(found.ok).toBe(false);
-    if (!found.ok) expect(found.reason).toMatch(/ChatGPT/);
+    expect(found.ok).toBe(true);
+    if (!found.ok) return;
+    expect(found.adapter).toMatchObject({ providerType: 'chatgpt', capsOutput: false });
+    expect(found.adapter.inputBound(req())).toEqual(genericInputBound(req()));
+  });
+
+  it('a specialist\'s setup cost is the same adapter bound over its prompt and tools alone (decision 4)', () => {
+    const found = budgetAdapterFor('anthropic');
+    if (!found.ok) throw new Error('unexpected');
+    const setup = setupBound(found.adapter, { system: 'You are a specialist.', tools: [TOOL] });
+    expect(setup).toEqual(found.adapter.inputBound({ system: 'You are a specialist.', messages: [], tools: [TOOL] }));
+    // The first real request (setup + brief) is covered by setup plus the brief's own bytes.
+    const first = genericInputBound(req());
+    if (!setup.ok || !first.ok) throw new Error('unexpected');
+    expect(first.tokens - setup.tokens).toBe(Buffer.byteLength(JSON.stringify(req().messages[0])) + PER_MESSAGE_FRAMING_TOKENS);
   });
 
   it('a tokenizer adapter may tighten the bound but can never widen it', () => {
     const generic = genericInputBound(req());
     if (!generic.ok) throw new Error('unexpected');
-    const tighter = tightenedAdapter('tight', () => 10);
-    const wider = tightenedAdapter('wide', () => generic.tokens * 10);
+    const base = budgetAdapterFor('anthropic');
+    if (!base.ok) throw new Error('unexpected');
+    const tighter = tightenedAdapter(base.adapter, 'tight', () => 10);
+    const wider = tightenedAdapter(base.adapter, 'wide', () => generic.tokens * 10);
+    expect(tighter).toMatchObject({ providerType: 'anthropic', capsOutput: true });
     expect(tighter.inputBound(req())).toEqual({ ok: true, tokens: 10 });
     expect(wider.inputBound(req())).toEqual(generic);
     // …and it never un-refuses content the generic adapter refuses.
@@ -119,7 +137,9 @@ describe('adapter selection and the conformance contract', () => {
   });
 
   it('conformance fails an adapter whose bound falls below observed provider usage', () => {
-    const tight = tightenedAdapter('tight', () => 10);
+    const base = budgetAdapterFor('openai');
+    if (!base.ok) throw new Error('unexpected');
+    const tight = tightenedAdapter(base.adapter, 'tight', () => 10);
     expect(checkAdapterConformance(tight, [{ request: req(), observedInputTokens: 9 }])).toEqual({ ok: true });
     const failed = checkAdapterConformance(tight, [{ request: req(), observedInputTokens: 11 }]);
     expect(failed.ok).toBe(false);

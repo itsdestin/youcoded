@@ -11,7 +11,10 @@ export interface PlanEligibilitySession {
   isSpecialistChild: boolean;
 }
 
-const CLOUD_PROVIDERS: ReadonlySet<ProfileProviderType> = new Set(['anthropic', 'openai', 'google', 'openrouter']);
+// WHY chatgpt is included (product decision 5, 2026-09-16): ChatGPT sign-in
+// gets plans with an approximate limit — its endpoint refuses a reply cap, so
+// its budget adapter is soft (plans/budget-adapter.ts).
+const CLOUD_PROVIDERS: ReadonlySet<ProfileProviderType> = new Set(['anthropic', 'openai', 'google', 'openrouter', 'chatgpt']);
 
 /** Classify only from provider configuration, never from a model id. Loopback,
  * link-local and RFC1918 hosts are local; an unparseable/missing URL fails closed. */

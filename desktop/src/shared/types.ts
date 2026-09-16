@@ -676,6 +676,10 @@ export interface PlanStepView {
   fanOut: number;
   /** The ENFORCED per-child cap — a hard stop, never an estimate (spec §4). */
   budgetTokens: number;
+  /** Decision 4: each child's fixed starting cost (prompt + tool list),
+   *  allowed ON TOP of budgetTokens. Rows sum to the plan ceiling only with
+   *  it: Σ (budgetTokens + setupTokens) × fanOut. */
+  setupTokens?: number;
   status: 'pending' | 'running' | 'done' | 'paused' | 'failed' | 'skipped';
   /** Children finished so far (≤ fanOut). */
   done?: number;
@@ -725,6 +729,12 @@ export interface PlanView {
   endedAt?: number;
   /** Ordering stamp, same role as SpecialistRunView.seq. */
   seq?: number;
+  /** Decision 5: at least one specialist runs on a route whose replies can't
+   *  be capped (ChatGPT), so the limit is approximate — one reply may go past
+   *  it before the plan pauses. Wording belongs to the card (Task 5). */
+  approximateLimit?: boolean;
+  /** Decision 6: why a failed plan failed — the real reason, never a guess. */
+  failure?: { detail: string };
 }
 
 /** A background specialist's delivered report, folded into its Task card. */

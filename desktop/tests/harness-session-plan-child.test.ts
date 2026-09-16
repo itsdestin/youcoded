@@ -32,6 +32,8 @@ interface FakeGate extends PlanChildRequestGate {
 }
 
 function fakeGate(over: {
+  providerType?: PlanBudgetAdapter['providerType'];
+  capsOutput?: boolean;
   bound?: (r: PlanWireRequest) => ReturnType<PlanBudgetAdapter['inputBound']>;
   reserve?: (n: number, call: number) => PlanRequestReservation;
   settle?: (o: PlanRequestOutcome) => PlanRequestSettlement;
@@ -46,6 +48,8 @@ function fakeGate(over: {
     reservedNow: () => held,
     adapter: {
       id: 'fake-adapter',
+      providerType: over.providerType ?? 'openrouter',
+      capsOutput: over.capsOutput ?? true,
       inputBound: (r) => { bounds.push(r); log.push('bound'); return over.bound?.(r) ?? { ok: true, tokens: 123 }; },
     },
     async reserve({ inputBoundTokens }) {
@@ -91,7 +95,7 @@ const throwing = (err: Error) => () => Promise.reject(err);
 
 function planSession(gate: FakeGate, model: MockLanguageModelV4, over: Parameters<typeof makeOpts>[0] = {}) {
   const session = new HarnessSession(makeOpts({
-    isSpecialistChild: true, planChild: gate, systemPrompt: 'You are a reviewer.',
+    isSpecialistChild: true, planChild: gate, systemPrompt: 'You are a reviewer.', providerType: 'openrouter',
     tools: [fakeTool('Read')], decide: async () => ALLOW,
     stallWarningMs: 60, stallCountdownMs: 60, prefillWarningMs: 60,
     ...over,
@@ -357,4 +361,65 @@ describe('ordinary sessions are unchanged', () => {
     await session.send('go');
     expect(calls).toHaveLength(2);
   });
+});
+
+describe('review round 2 — route checks, soft limit, no thinking budget', () => {
+  it('refuses an adapter certified for a different provider route (nothing reserved or sent)', async () => {
+    const gate = fakeGate({ providerType: 'openrouter' });
+    const { model, calls } = recordingModel(gate, [completing(finishChunk('stop'))]);
+    const { session, events } = planSession(gate, model, { providerType: 'chatgpt' });
+    await session.send('go');
+    expect(calls).toHaveLength(0);
+    expect(gate.log).toEqual([]);
+    expect(events.some((e) => e.type === 'session-error')).toBe(true);
+    expect(gate.onStop).toHaveBeenCalledWith(expect.objectContaining({ kind: 'refused' }));
+  });
+
+  it('refuses when the session does not know its provider route', async () => {
+    const gate = fakeGate();
+    const { model, calls } = recordingModel(gate, [completing(finishChunk('stop'))]);
+    const { session } = planSession(gate, model, { providerType: undefined });
+    await session.send('go');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('a soft (ChatGPT) route is still reserved and sent once, but without a reply cap', async () => {
+    const gate = fakeGate({ providerType: 'chatgpt', capsOutput: false });
+    const { model, calls } = recordingModel(gate, [completing(...textChunks('a', 'ok'), finishChunk('stop'))]);
+    const { session } = planSession(gate, model, { providerType: 'chatgpt' });
+    await session.send('go');
+    expect(gate.log).toEqual(['bound', 'reserve:123', 'fetch', 'settle:reported']);
+    expect(calls[0].options.maxOutputTokens).toBeUndefined();
+    expect(calls[0].chatgpt).toMatchObject({ singleTransmission: true });
+  });
+
+  it('a reply that reaches the soft limit stops before its tools run and before any further request', async () => {
+    const gate = fakeGate({
+      providerType: 'chatgpt', capsOutput: false,
+      settle: () => ({ kind: 'limit-reached', chargedTokens: 2000, detail: 'used 2,000 of 1,000' }),
+    });
+    const read = fakeTool('Read');
+    const { model, calls } = recordingModel(gate, [completing(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls'))]);
+    const { session, events } = planSession(gate, model, { providerType: 'chatgpt', tools: [read] });
+    await session.send('go');
+    expect(calls).toHaveLength(1);
+    expect((read as any).calls).toHaveLength(0);
+    expect(events.some((e) => e.type === 'tool-use')).toBe(false);
+    expect(events.find((e) => e.type === 'turn-complete')?.data.stopReason).toBe('plan_budget_exhausted');
+    expect(gate.onStop).toHaveBeenCalledWith({ kind: 'exhausted', detail: 'used 2,000 of 1,000' });
+    const history = (session as any).history as ModelMessage[];
+    expect(JSON.stringify(history)).not.toContain('tool-call');
+    expect(history.at(-1)).toEqual({ role: 'assistant', content: 'reading' });
+  });
+
+  it.each([['openrouter', true], ['anthropic', true], ['chatgpt', false]] as const)(
+    'plan requests never ask for a thinking/reasoning budget (%s) — it would add on top of the reply cap',
+    async (providerType, capsOutput) => {
+      const gate = fakeGate({ providerType, capsOutput });
+      const { model, calls } = recordingModel(gate, [completing(...textChunks('a', 'ok'), finishChunk('stop'))]);
+      const { session } = planSession(gate, model, { providerType });
+      await session.send('go');
+      expect(JSON.stringify(calls[0].options.providerOptions ?? {})).not.toMatch(/thinking|reasoning|budget/i);
+    },
+  );
 });

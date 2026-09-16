@@ -47,6 +47,13 @@ export type InputBoundResult = { ok: true; tokens: number } | { ok: false; reaso
 export interface PlanBudgetAdapter {
   /** Stable id — the unit that is disabled when observed usage breaks its bound. */
   readonly id: string;
+  /** The provider route this adapter is certified for. The harness refuses to
+   *  use it for a session bound to any other route (Task 3 review). */
+  readonly providerType: ProfileProviderType;
+  /** False for a route that rejects a reply-length cap (ChatGPT, decision 5):
+   *  the request is still reserved and sent once, but its reply can overshoot,
+   *  so the plan's limit is approximate. */
+  readonly capsOutput: boolean;
   inputBound(request: PlanWireRequest): InputBoundResult;
 }
 
@@ -129,9 +136,13 @@ export function genericInputBound(request: PlanWireRequest): InputBoundResult {
  * generic adapter refuses stays refused (design §4 — tokenizers tighten,
  * never widen authorization).
  */
-export function tightenedAdapter(id: string, tighten: (request: PlanWireRequest) => number): PlanBudgetAdapter {
+export function tightenedAdapter(
+  base: PlanBudgetAdapter, id: string, tighten: (request: PlanWireRequest) => number,
+): PlanBudgetAdapter {
   return {
     id,
+    providerType: base.providerType,
+    capsOutput: base.capsOutput,
     inputBound(request) {
       const generic = genericInputBound(request);
       if (!generic.ok) return generic;
@@ -143,19 +154,33 @@ export function tightenedAdapter(id: string, tighten: (request: PlanWireRequest)
   };
 }
 
-function genericAdapter(id: string): PlanBudgetAdapter {
-  return { id, inputBound: genericInputBound };
+function genericAdapter(providerType: ProfileProviderType, capsOutput: boolean): PlanBudgetAdapter {
+  return { id: `generic:${providerType}`, providerType, capsOutput, inputBound: genericInputBound };
+}
+
+/**
+ * Decision 4: a specialist's fixed starting cost — its system prompt, tool
+ * schemas and request framing — measured by the SAME adapter that bounds its
+ * requests, so the plan's ceiling and the first request's reservation can
+ * never disagree about it. Refuses exactly when the adapter would.
+ */
+export function setupBound(
+  adapter: PlanBudgetAdapter,
+  setup: { system: string; tools: readonly PlanWireTool[] },
+): InputBoundResult {
+  return adapter.inputBound({ system: setup.system, messages: [], tools: setup.tools });
 }
 
 export type AdapterLookup = { ok: true; adapter: PlanBudgetAdapter } | { ok: false; reason: string };
 
 /**
- * Which provider routes can run plan specialists. WHY ChatGPT is refused: its
- * endpoint rejects `max_output_tokens` outright (chatgpt-model.ts strips it),
- * so a reply's length could not be capped and a single request could spend
- * past its reservation. Every other route accepts an output cap; an arbitrary
- * compatible endpoint that rejects it fails that one request, which is
- * charged in full — it can never be sent twice or overspend.
+ * Which adapter bounds each provider route. Every route but ChatGPT accepts
+ * an output cap; an arbitrary compatible endpoint that rejects it fails that
+ * one request, which is charged in full — it can never be sent twice or
+ * overspend. ChatGPT's endpoint rejects `max_output_tokens` outright
+ * (chatgpt-model.ts strips it), so by product decision 5 (2026-09-16) it gets
+ * a SOFT adapter: same certified input bound, reservation before sending,
+ * one transmission, but the reply may overshoot once before the plan pauses.
  */
 export function budgetAdapterFor(providerType: ProfileProviderType): AdapterLookup {
   switch (providerType) {
@@ -165,12 +190,9 @@ export function budgetAdapterFor(providerType: ProfileProviderType): AdapterLook
     case 'openrouter':
     case 'openai-compatible':
     case 'local-engine':
-      return { ok: true, adapter: genericAdapter(`generic:${providerType}`) };
+      return { ok: true, adapter: genericAdapter(providerType, true) };
     case 'chatgpt':
-      return {
-        ok: false,
-        reason: "Plans can't run specialists on a ChatGPT subscription model yet: it doesn't accept a reply-length limit, so the budget couldn't be enforced.",
-      };
+      return { ok: true, adapter: genericAdapter(providerType, false) };
     default: {
       const unknownType: never = providerType;
       return { ok: false, reason: `Plans can't run specialists on this provider (${String(unknownType)}).` };
@@ -255,6 +277,10 @@ export type PlanRequestOutcome =
 
 export type PlanRequestSettlement =
   | { kind: 'ok'; chargedTokens: number }
+  /** A soft (uncapped) reply used up the attempt's allowance: charged as
+   *  actually used; no further request may be sent (decision 5). */
+  | { kind: 'limit-reached'; chargedTokens: number; detail: string }
+  /** The certified bound, or the plan's dollar limit, was broken. */
   | { kind: 'over-bound'; chargedTokens: number; detail: string };
 
 export interface PlanChildStop {

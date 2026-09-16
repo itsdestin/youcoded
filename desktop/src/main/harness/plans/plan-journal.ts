@@ -213,6 +213,7 @@ export function projectPlan(plan: PlanRecord): PlanView {
       specialist: step.specialist,
       fanOut: (step.kind === 'map' ? step.items!.length : 1) * multiplier,
       budgetTokens: step.budget_tokens,
+      setupTokens: plan.manifest.specialists[step.specialist]?.setupTokens ?? 0,
       status: rec?.status ?? 'pending',
     };
     if (attempts.length > 0) {
@@ -249,6 +250,11 @@ export function projectPlan(plan: PlanRecord): PlanView {
   if (plan.revisedBy) view.revisedBy = plan.revisedBy;
   if (plan.startedAt !== undefined) view.startedAt = plan.startedAt;
   if (plan.endedAt !== undefined) view.endedAt = plan.endedAt;
+  // Decision 5: the record's own flag, or any frozen specialist on a soft route.
+  if (plan.approximateLimit || Object.values(plan.manifest.specialists).some((s) => s.approximateLimit)) {
+    view.approximateLimit = true;
+  }
+  if (plan.failure) view.failure = { detail: plan.failure.detail };
   return view;
 }
 
@@ -259,7 +265,7 @@ export function projectPlan(plan: PlanRecord): PlanView {
  * as failed instead; the real reason is returned by every action attempted
  * on it.
  */
-function salvagedFailedViews(raw: string): PlanView[] {
+function salvagedFailedViews(raw: string, detail: string): PlanView[] {
   const views: PlanView[] = [];
   const seen = new Set<string>();
   const matches = [...raw.matchAll(/"toolUseId"\s*:\s*"((?:[^"\\]|\\.){1,200})"/g)];
@@ -296,6 +302,8 @@ function salvagedFailedViews(raw: string): PlanView[] {
       ceilingUsd: null,
       model: { label: 'Unknown model' },
       seq: seqMatch ? Number(seqMatch[1]) : 0,
+      // Decision 6: the strict reader's own reason, verbatim — never a guess.
+      failure: { detail },
     });
   });
   return views;
@@ -352,7 +360,7 @@ export class PlanJournal {
     const result = await this.read(ref);
     if (result.kind === 'absent') return [];
     if (result.kind === 'valid') return result.file.plans.map(projectPlan);
-    return salvagedFailedViews(this.home.readRawBytes(this.relPath(ref))?.toString('utf8') ?? '');
+    return salvagedFailedViews(this.home.readRawBytes(this.relPath(ref))?.toString('utf8') ?? '', result.detail);
   }
 
   async get(ref: PlanRef, planId: string): Promise<PlanRecord | undefined> {

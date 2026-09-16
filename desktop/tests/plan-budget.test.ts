@@ -7,7 +7,7 @@ import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path'
 import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
 import {
-  PlanBudget, pricingSnapshot, worstCaseUsd, planCeilingUsd, type PlanPricingSnapshot,
+  PlanBudget, pricingSnapshot, worstCaseUsd, planCeilingUsd, planCeilingTokens, type PlanPricingSnapshot,
 } from '../src/main/harness/plans/plan-budget';
 import {
   adapterDisabledReason, resetDisabledAdaptersForTests, type PlanBudgetAdapter,
@@ -28,12 +28,12 @@ const DOC: PlanDocumentV1 = {
   ],
 };
 
-function manifest(reviewer: PlanPricingSnapshot | null, worker: PlanPricingSnapshot | null): ExecutionManifest {
+function manifest(reviewer: PlanPricingSnapshot | null, worker: PlanPricingSnapshot | null, setup = { reviewer: 0, worker: 0 }): ExecutionManifest {
   return {
     modelLabel: 'Test model',
     specialists: {
-      reviewer: { definitionFingerprint: 'r', binding: { providerId: 'p', modelId: 'm' }, pricing: reviewer },
-      worker: { definitionFingerprint: 'w', binding: { providerId: 'p', modelId: 'm' }, pricing: worker },
+      reviewer: { definitionFingerprint: 'r', binding: { providerId: 'p', modelId: 'm' }, pricing: reviewer, setupTokens: setup.reviewer },
+      worker: { definitionFingerprint: 'w', binding: { providerId: 'p', modelId: 'm' }, pricing: worker, setupTokens: setup.worker },
     },
     permissionFingerprint: 'perm',
   };
@@ -52,7 +52,10 @@ function record(over: Partial<PlanRecord> = {}): PlanRecord {
   };
 }
 
-const ADAPTER: PlanBudgetAdapter = { id: 'test-adapter', inputBound: () => ({ ok: true, tokens: 0 }) };
+const ADAPTER: PlanBudgetAdapter = { id: 'test-adapter', providerType: 'openrouter', capsOutput: true, inputBound: () => ({ ok: true, tokens: 0 }) };
+const SOFT: PlanBudgetAdapter = { id: 'soft-adapter', providerType: 'chatgpt', capsOutput: false, inputBound: () => ({ ok: true, tokens: 0 }) };
+const usageOf = (inputTokens: number, outputTokens: number, cacheCreationTokens = 0) =>
+  ({ inputTokens, outputTokens, cacheReadTokens: 0, cacheCreationTokens });
 
 let root: string; let home: NativeHome; let journal: PlanJournal; let budget: PlanBudget;
 let events: PlanEvent[]; let fence: string; let ids: number;
@@ -226,7 +229,7 @@ describe('per-request gate — no provider request without a durable reservation
     const id = await reserved();
     const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
     await gate.reserve({ inputBoundTokens: 300 });
-    const usage = { inputTokens: 350, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const usage = { inputTokens: 300, outputTokens: 100, cacheReadTokens: 0, cacheCreationTokens: 0 };
     expect(await gate.settle({ kind: 'reported', tokens: 400, usage })).toEqual({ kind: 'ok', chargedTokens: 400 });
     const a = await attempt('s1', id);
     expect([a.phase, a.spentTokens, a.reservedTokens]).toEqual(['response-persisted', 400, 600]);
@@ -254,7 +257,7 @@ describe('per-request gate — no provider request without a durable reservation
     const id = await reserved();
     const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
     await gate.reserve({ inputBoundTokens: 300 });
-    const usage = { inputTokens: 1100, outputTokens: 100, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const usage = { inputTokens: 300, outputTokens: 900, cacheReadTokens: 0, cacheCreationTokens: 0 };
     const settled = await gate.settle({ kind: 'reported', tokens: 1200, usage });
     expect(settled).toMatchObject({ kind: 'over-bound', chargedTokens: 1200 });
     const p = await plan();
@@ -305,8 +308,9 @@ describe('pausing path — pessimistic charge and release', () => {
     if (!r.ok) throw new Error(r.detail);
     const id = r.attempts[0].attemptId;
     const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
-    await gate.reserve({ inputBoundTokens: 5 });
-    await gate.settle({ kind: 'reported', tokens: 300, usage: { inputTokens: 250, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 } });
+    await gate.reserve({ inputBoundTokens: 250 });
+    expect(await gate.settle({ kind: 'reported', tokens: 300, usage: { inputTokens: 250, outputTokens: 50, cacheReadTokens: 0, cacheCreationTokens: 0 } }))
+      .toEqual({ kind: 'ok', chargedTokens: 300 });
     await budget.releaseAttempt(REF, 'p1', fence, 's1', id);
     const a = await attempt('s1', id);
     expect([a.spentTokens, a.reservedTokens]).toEqual([300, 0]);
@@ -402,5 +406,124 @@ describe('Add budget — an authorization tranche for the paused attempt', () =>
     const view = await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's2', tokens: 100 });
     expect(view.ceilingTokens).toBe(4100);
     expect(view.ceilingUsd).toBeNull();
+  });
+});
+
+describe('review fixes (round 2)', () => {
+  async function reservedAttempt(stepId = 's1', rec = record()): Promise<string> {
+    await seed(rec);
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId, itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    return r.attempts[0].attemptId;
+  }
+
+  it('reported INPUT above the certified bound is a breach even when the total fits', async () => {
+    const id = await reservedAttempt();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 300 });
+    expect((await attempt('s1', id)).requestInputBound).toBe(300);
+    const settled = await gate.settle({ kind: 'reported', tokens: 500, usage: usageOf(400, 100) });
+    expect(settled).toMatchObject({ kind: 'over-bound', chargedTokens: 500, detail: expect.stringMatching(/400.*300/) });
+    expect(adapterDisabledReason('test-adapter')).toBeDefined();
+    expect((await plan()).disabledAdapters?.[0].adapterId).toBe('test-adapter');
+    expect((await attempt('s1', id)).requestInputBound).toBeUndefined();
+  });
+
+  it.each([Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY])('an invalid input bound (%s) is refused and nothing is written', async (bad) => {
+    const id = await reservedAttempt();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    expect(await gate.reserve({ inputBoundTokens: bad })).toMatchObject({ ok: false, kind: 'refused' });
+    expect((await attempt('s1', id)).phase).toBe('prepared');
+  });
+
+  it('settlement re-checks the dollar limit', async () => {
+    const id = await reservedAttempt();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 300 });
+    await journal.mutateFenced(REF, 'p1', fence, (p) => { p.ceilingUsd = 0.0000001; });
+    const settled = await gate.settle({ kind: 'reported', tokens: 150, usage: usageOf(100, 50) });
+    expect(settled).toMatchObject({ kind: 'over-bound', detail: expect.stringMatching(/dollar limit/) });
+    // A dollar overrun is not a broken token bound: the adapter stays trusted.
+    expect(adapterDisabledReason('test-adapter')).toBeUndefined();
+  });
+
+  it('prices cache writes once: the SDK input total already contains them', async () => {
+    const id = await reservedAttempt('s2');
+    const gate = budget.requestGate(REF, 'p1', fence, 's2', id, ADAPTER);
+    await gate.reserve({ inputBoundTokens: 400 });
+    await gate.settle({ kind: 'reported', tokens: 350, usage: usageOf(300, 50, 100) });
+    // 200 uncached × $2 + 100 written × $20 + 50 out × $4, per million.
+    expect((await plan()).usedUsd).toBeCloseTo((200 * 2 + 100 * 20 + 50 * 4) / 1e6, 12);
+  });
+});
+
+describe('setup cost counted separately (decision 4)', () => {
+  const SETUP = { reviewer: 100, worker: 200 };
+  const M = manifest({ kind: 'priced', rates: REVIEWER_RATES }, { kind: 'priced', rates: WORKER_RATES }, SETUP);
+
+  it('the ceiling is every attempt\'s setup plus its work budget, dollars included', () => {
+    expect(planCeilingTokens(DOC, M)).toBe(2 * (1000 + 100) + (2000 + 200));
+    expect(planCeilingUsd(DOC, M)).toBeCloseTo((2 * 1100 * 10 + 2200 * 20) / 1e6, 12);
+    const doc: PlanDocumentV1 = { goal: 'g', steps: [
+      { id: 'r', kind: 'repeat', specialist: 'worker', task: 'loop', budget_tokens: 500, max_iterations: 3, until: 'done',
+        steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'fix', budget_tokens: 700, items: ['x', 'y'] }] },
+    ] };
+    expect(planCeilingTokens(doc, M)).toBe(2 * 3 * (700 + 200));
+  });
+
+  it('an attempt\'s first request is covered by setup + its whole work allowance', async () => {
+    await seed(record({ manifest: M, ceilingTokens: planCeilingTokens(DOC, M), ceilingUsd: planCeilingUsd(DOC, M) }));
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }, { stepId: 's1', itemIndex: 1 }, { stepId: 's2' }]);
+    if (!r.ok) throw new Error(r.detail);
+    expect(r.attempts.map((a) => a.reservedTokens)).toEqual([1100, 1100, 2200]);
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', r.attempts[0].attemptId, ADAPTER);
+    // A first request whose bound is exactly setup (100) + a 40-token brief leaves 960 for the reply.
+    expect(await gate.reserve({ inputBoundTokens: 140 })).toEqual({ ok: true, maxOutputTokens: 960 });
+  });
+});
+
+describe('soft limit — no reply cap (decision 5)', () => {
+  async function softAttempt(): Promise<string> {
+    await seed(record());
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    return r.attempts[0].attemptId;
+  }
+
+  it('still reserves first and marks the attempt soft-limited', async () => {
+    const id = await softAttempt();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, SOFT);
+    expect(await gate.reserve({ inputBoundTokens: 300 })).toEqual({ ok: true, maxOutputTokens: 700 });
+    expect(await attempt('s1', id)).toMatchObject({ phase: 'request-sent', softLimit: true });
+    expect(await gate.reserve({ inputBoundTokens: 1000 })).toMatchObject({ ok: false });
+  });
+
+  it('one overshooting reply is charged as actually used, then nothing more is sent', async () => {
+    const id = await softAttempt();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, SOFT);
+    await gate.reserve({ inputBoundTokens: 300 });
+    const settled = await gate.settle({ kind: 'reported', tokens: 1500, usage: usageOf(250, 1250) });
+    expect(settled).toMatchObject({ kind: 'limit-reached', chargedTokens: 1500 });
+    const a = await attempt('s1', id);
+    expect([a.spentTokens, a.reservedTokens]).toEqual([1500, 0]);
+    expect((await plan()).usedTokens).toBe(1500);
+    // Overshoot is the documented soft behaviour, not a broken adapter.
+    expect(adapterDisabledReason('soft-adapter')).toBeUndefined();
+    expect(await gate.reserve({ inputBoundTokens: 1 })).toMatchObject({ ok: false, kind: 'exhausted' });
+  });
+
+  it('a reply that exactly uses the allowance also stops further requests', async () => {
+    const id = await softAttempt();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, SOFT);
+    await gate.reserve({ inputBoundTokens: 300 });
+    expect(await gate.settle({ kind: 'reported', tokens: 1000, usage: usageOf(250, 750) })).toMatchObject({ kind: 'limit-reached' });
+  });
+
+  it('input above the certified bound is still a breach on a soft route', async () => {
+    const id = await softAttempt();
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', id, SOFT);
+    await gate.reserve({ inputBoundTokens: 300 });
+    expect(await gate.settle({ kind: 'reported', tokens: 400, usage: usageOf(350, 50) })).toMatchObject({ kind: 'over-bound' });
+    expect(adapterDisabledReason('soft-adapter')).toBeDefined();
   });
 });

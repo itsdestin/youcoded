@@ -10,7 +10,7 @@ const session = (overrides: Partial<Parameters<typeof isPlanEligible>[0]> = {}) 
 });
 
 describe('plan eligibility', () => {
-  it.each(['anthropic', 'openai', 'google', 'openrouter'] as const)('qualifies every cloud route with tools: %s', (providerType) => {
+  it.each(['anthropic', 'openai', 'google', 'openrouter', 'chatgpt'] as const)('qualifies every cloud route with tools: %s', (providerType) => {
     expect(isPlanEligible(session({ providerType }))).toBe(true);
   });
 

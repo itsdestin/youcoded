@@ -16,7 +16,7 @@
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import type { PlanView } from '../../../shared/types';
-import { costForUsage, isFreePricing, type ModelPricing } from '../pricing';
+import { costForUsage, isFreePricing, type ModelPricing, type PricedUsage } from '../pricing';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalIntegrityError, projectPlan } from './plan-journal';
 import {
@@ -72,6 +72,26 @@ function snapshotFor(manifest: ExecutionManifest, specialist: string): PlanPrici
   return parsePricingSnapshot(manifest.specialists[specialist]?.pricing ?? null);
 }
 
+/** Decision 4: the specialist's frozen fixed starting cost (0 only when the
+ *  manifest has no entry for it, which also leaves it unpriced). */
+function setupFor(manifest: ExecutionManifest, specialist: string): number {
+  return manifest.specialists[specialist]?.setupTokens ?? 0;
+}
+
+/**
+ * What a reported request cost at its real rates. WHY the cache-write
+ * subtraction: the AI SDK's `inputTokens` is the WHOLE prompt, cache writes
+ * included (@ai-sdk/anthropic sums noCache + cacheRead + cacheWrite), while
+ * costForUsage also bills `cacheCreationTokens` at the write rate — so the
+ * written tokens would be billed twice. Plans subtract them first so each
+ * token is priced once. Ordinary sessions still call costForUsage directly;
+ * that shared double count is reported separately rather than changed here.
+ */
+function reportedUsd(usage: PricedUsage, rates: ModelPricing): number | null {
+  const written = rates.cacheWrite != null ? Math.min(usage.cacheCreationTokens, usage.inputTokens) : 0;
+  return costForUsage({ ...usage, inputTokens: usage.inputTokens - written }, rates);
+}
+
 /**
  * Dollars for `tokens` when every one of them is billed at the model's
  * HIGHEST published rate (design §4). Conservative on purpose: a reserved
@@ -100,8 +120,17 @@ function executableStep(document: PlanDocumentV1, stepId: string): PlanStepV1 | 
 }
 
 /**
- * The card's dollar limit: every possible attempt at its specialist's highest
- * rate. null when any specialist has no published price (the dollar limit
+ * The card's token limit (decision 4): every possible attempt's fixed setup
+ * cost plus its step's work budget, repeat iterations included.
+ */
+export function planCeilingTokens(document: PlanDocumentV1, manifest: ExecutionManifest): number {
+  return leafAllocations(document.steps)
+    .reduce((n, { step, attempts }) => n + attempts * (step.budget_tokens + setupFor(manifest, step.specialist)), 0);
+}
+
+/**
+ * The card's dollar limit: every possible attempt (setup + work) at its
+ * specialist's highest rate. null when any specialist has no published price (the dollar limit
  * couldn't be honest), and null when nothing in the plan costs money (a local
  * or free plan shows tokens only — never "$0.00").
  */
@@ -111,7 +140,7 @@ export function planCeilingUsd(document: PlanDocumentV1, manifest: ExecutionMani
   for (const { step, attempts } of leafAllocations(document.steps)) {
     const snapshot = snapshotFor(manifest, step.specialist);
     if (snapshot === null) return null;
-    const usd = worstCaseUsd(snapshot, step.budget_tokens * attempts);
+    const usd = worstCaseUsd(snapshot, (step.budget_tokens + setupFor(manifest, step.specialist)) * attempts);
     if (usd === null) continue;
     total += usd;
     anyPriced = true;
@@ -204,18 +233,22 @@ export class PlanBudget {
         const tranches = (plan.tranches ?? []).filter((t) => t.stepId === member.stepId && !t.attemptId && !claimedTranches.has(t.trancheId));
         tranches.forEach((t) => claimedTranches.add(t.trancheId));
         const added = tranches.reduce((n, t) => n + t.tokens, 0);
+        // Decision 4: the allowance is setup + work, so the first request —
+        // which re-sends the whole prompt and tool list — leaves the step's
+        // full budget_tokens for the work itself.
+        const base = def.budget_tokens + setupFor(plan.manifest, def.specialist);
         const fresh: PlanAttemptRecord = {
           attemptId: this.newId(),
           itemIndex: member.itemIndex ?? 0,
           iteration: member.iteration ?? 0,
-          baseTokens: def.budget_tokens,
+          baseTokens: base,
           addedTokens: added,
           reservedTokens: 0,
           spentTokens: 0,
           phase: 'prepared',
         };
         planned.push({
-          stepId: member.stepId, specialist: def.specialist, amount: def.budget_tokens + added,
+          stepId: member.stepId, specialist: def.specialist, amount: base + added,
           fresh, trancheIds: tranches.map((t) => t.trancheId),
         });
       }
@@ -276,6 +309,11 @@ export class PlanBudget {
       adapter,
       reserve: async ({ inputBoundTokens }): Promise<PlanRequestReservation> => {
         const refused = (detail: string): PlanRequestReservation => ({ ok: false, kind: 'refused', detail });
+        // A bound that isn't a whole, non-negative number can't authorize
+        // anything (NaN would otherwise become a NaN reply cap).
+        if (!Number.isSafeInteger(inputBoundTokens) || inputBoundTokens < 0) {
+          return refused("This specialist's next request couldn't be measured, so it wasn't sent.");
+        }
         try {
           return await this.journal.mutateFenced<PlanRequestReservation>(ref, planId, fence, (plan) => {
             const disabled = adapterDisabledReason(adapter.id)
@@ -292,7 +330,7 @@ export class PlanBudget {
             // or released attempt holds nothing and must be re-reserved (with the
             // plan-wide ceiling check) before it may send anything.
             if (attempt.reservedTokens !== left) return refused("This specialist's budget isn't reserved right now.");
-            const room = left - Math.max(0, Math.ceil(inputBoundTokens));
+            const room = left - inputBoundTokens;
             if (room < 1) {
               return {
                 ok: false, kind: 'exhausted',
@@ -300,6 +338,10 @@ export class PlanBudget {
               };
             }
             attempt.phase = 'request-sent';
+            // Kept until settlement: the input side of the certified bound.
+            attempt.requestInputBound = inputBoundTokens;
+            // Decision 5: this request's reply is not capped by the provider.
+            if (!adapter.capsOutput) attempt.softLimit = true;
             return { ok: true, maxOutputTokens: room };
           });
         } catch (e: any) {
@@ -313,6 +355,7 @@ export class PlanBudget {
           throw new PlanJournalIntegrityError(`Attempt ${attemptId} has no request to settle (plan ${planId}).`);
         }
         const held = attempt.reservedTokens;
+        const inputBound = attempt.requestInputBound;
         let charged: number;
         let usd: number | null;
         if (outcome.kind === 'unknown') {
@@ -323,20 +366,44 @@ export class PlanBudget {
           // Real rates for the split the provider reported; anything a larger
           // reported total adds beyond that split is priced at the worst case.
           const split = outcome.usage.inputTokens + outcome.usage.outputTokens;
-          const base = snapshot?.kind === 'priced' ? costForUsage(outcome.usage, snapshot.rates) : null;
+          const base = snapshot?.kind === 'priced' ? reportedUsd(outcome.usage, snapshot.rates) : null;
           const extra = worstCaseUsd(snapshot, Math.max(0, charged - split));
           usd = base === null && extra === null ? null : (base ?? 0) + (extra ?? 0);
         }
         this.charge(plan, attempt, charged, usd);
         attempt.reservedTokens = Math.max(0, allowanceLeft(attempt));
         attempt.phase = 'response-persisted';
-        if (outcome.kind === 'reported' && outcome.tokens > held) {
-          const detail = `a specialist's request used ${fmt(outcome.tokens)} tokens, more than the ${fmt(held)} reserved for it`;
-          if (!plan.disabledAdapters?.some((d) => d.adapterId === adapter.id)) {
-            plan.disabledAdapters = [...(plan.disabledAdapters ?? []), { adapterId: adapter.id, detail }];
+        delete attempt.requestInputBound;
+        if (outcome.kind === 'reported') {
+          // A broken CERTIFIED bound — either side of it. The input side is
+          // checked on its own: a breach there hides inside the total whenever
+          // the reply is short. The total is only a breach where the reply was
+          // capped; an uncapped (soft) reply is allowed to overshoot once.
+          const inputBreach = inputBound !== undefined && outcome.usage.inputTokens > inputBound;
+          const totalBreach = adapter.capsOutput && outcome.tokens > held;
+          if (inputBreach || totalBreach) {
+            const detail = inputBreach
+              ? `a specialist's request read ${fmt(outcome.usage.inputTokens)} tokens of input, more than the ${fmt(inputBound!)} measured for it`
+              : `a specialist's request used ${fmt(outcome.tokens)} tokens, more than the ${fmt(held)} reserved for it`;
+            if (!plan.disabledAdapters?.some((d) => d.adapterId === adapter.id)) {
+              plan.disabledAdapters = [...(plan.disabledAdapters ?? []), { adapterId: adapter.id, detail }];
+            }
+            disableAdapterForPlans(adapter.id, detail);
+            return { kind: 'over-bound', chargedTokens: charged, detail };
           }
-          disableAdapterForPlans(adapter.id, detail);
-          return { kind: 'over-bound', chargedTokens: charged, detail };
+        }
+        // The dollar limit is re-checked against what was really charged, not
+        // only at reservation time.
+        if (plan.ceilingUsd !== null && (plan.usedUsd ?? 0) > plan.ceilingUsd + USD_EPSILON) {
+          return { kind: 'over-bound', chargedTokens: charged, detail: "the plan's spending passed its dollar limit" };
+        }
+        if (!adapter.capsOutput && outcome.kind === 'reported' && outcome.tokens >= held) {
+          // Decision 5: the one allowed overshoot happened (or the allowance is
+          // exactly used). Charged as actually used; nothing more may be sent.
+          return {
+            kind: 'limit-reached', chargedTokens: charged,
+            detail: `a specialist's reply used ${fmt(outcome.tokens)} tokens, reaching the ${fmt(held)} left in its budget`,
+          };
         }
         return { kind: 'ok', chargedTokens: charged };
       }),
@@ -364,6 +431,7 @@ export class PlanBudget {
       this.charge(plan, attempt, attempt.reservedTokens, worstCaseUsd(snapshotFor(plan.manifest, specialist), attempt.reservedTokens));
       attempt.reservedTokens = 0;
       attempt.phase = 'ambiguous';
+      delete attempt.requestInputBound;
     });
   }
 
