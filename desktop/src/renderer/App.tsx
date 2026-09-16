@@ -4377,8 +4377,9 @@ function AppInner() {
       />
       {/* ProjectView — full-screen artifact browser across all projects.
           Renders null when projectViewOpen === false so no DOM overhead when closed.
-          z-[8000]: sits below the SessionStrip dropdown (9000) but above all
-          L1–L4 overlays, the same tier used by similar full-screen views. */}
+          z-40, the SCREEN layer: BELOW every L1–L4 overlay, so a dialog opened
+          from inside it (rename, a first-time warning) shows on top. This said
+          z-[8000] long after ProjectView.tsx moved it down (see its header). */}
       <ProjectView
         // Project view homes to the focused conversation's folder on every open.
         activeSessionCwd={currentSession?.cwd}
