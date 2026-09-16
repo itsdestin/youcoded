@@ -246,6 +246,12 @@ describe('spill retention sweep (moved out of bash.ts so background logs are swe
 // announced once per mark; the host turns the event into an idle-boundary
 // notice. Marks are a test seam here so the suite does not wait five minutes.
 describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
+  // WHY a tolerance: a mark fires from a timer armed at `startedAt`, and the elapsed
+  // it reports is a second Date.now() read. libuv rounds timers to its own tick, so a
+  // 60 ms mark can report 59 (Ubuntu CI, 2026-09-16, run 35089626563). What the
+  // assertions pin is that each mark measures from the run's OWN start, not the
+  // adopt time — a few milliseconds of clock jitter does not touch that.
+  const JITTER_MS = 5;
   let dir: string;
   let reg: ShellRegistry;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shell-reg-long-')); reg = new ShellRegistry(`t-${path.basename(dir)}`, { longRunNoticeMs: [60, 140] }); });
@@ -271,8 +277,8 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
     if (!r.ok) throw new Error('start failed');
     await waitFor(() => marks.length === 2);
     expect(marks.map((m) => m.shellId)).toEqual([r.run.shellId, r.run.shellId]);
-    expect(marks[0].ms).toBeGreaterThanOrEqual(60);
-    expect(marks[1].ms).toBeGreaterThanOrEqual(140);
+    expect(marks[0].ms).toBeGreaterThanOrEqual(60 - JITTER_MS);
+    expect(marks[1].ms).toBeGreaterThanOrEqual(140 - JITTER_MS);
     expect(r.run.status).toBe('running');
   });
 
@@ -297,7 +303,7 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
     // already past (fires at once), the 140 ms mark is 40 ms away.
     reg.adopt({ toolUseId: 'tu-adopt', command: 'sleep 5', cwd: dir, child, startedAt: Date.now() - 100, seedLog: null, recent: '', logPath: null, logStream: null, captureEnv: false });
     await waitFor(() => marks.length === 2);
-    expect(marks[0]).toBeGreaterThanOrEqual(100);
-    expect(marks[1]).toBeGreaterThanOrEqual(140);
+    expect(marks[0]).toBeGreaterThanOrEqual(100 - JITTER_MS);
+    expect(marks[1]).toBeGreaterThanOrEqual(140 - JITTER_MS);
   });
 });

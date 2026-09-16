@@ -667,14 +667,6 @@ export type ChatAction =
       requestId: string;
     }
   | {
-      // Specialists 1c: the child-ask-router's 5-minute hold elapsed. The ask
-      // stays answerable (the broker keeps the entry); the specialist was told
-      // to continue without it. Flags the nested segment so the row can say so.
-      type: 'PERMISSION_HELD';
-      sessionId: string;
-      requestId: string;
-    }
-  | {
       // Specialists 1c: the host's delegation ledger changed for one hire
       // (`specialists:event`, also replayed on attach). Lands on the Task
       // card keyed by run.parentToolCallId. A steer ("send a note") rides on

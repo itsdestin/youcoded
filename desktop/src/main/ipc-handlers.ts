@@ -2813,14 +2813,12 @@ export function registerIpcHandlers(
     // nativeHome instance every other ~/.youcoded/ writer above shares, never
     // a second one.
     nativeHome,
-    // specialistAskHoldMs (12th param) left at its real production default —
-    // explicit undefined only to reach the 13th positional slot below.
-    undefined,
-    // specialistCatalog (13th param, Task 4 plan 1c): the real catalog built
+    // specialistCatalog (12th param, Task 4 plan 1c; the ask-hold parameter
+    // that sat before it was removed 2026-09-16): the real catalog built
     // above, sharing nativeHome with every other ~/.youcoded/ writer here.
     specialistCatalog,
     () => stepGuardSettings.read(),
-    // Continuation (16th param): the private store above, plus the registry's
+    // Continuation (15th param): the private store above, plus the registry's
     // SINGLE continuation-identity method — the same one the ChatGPT model's
     // owner closure calls, so what the harness accepts and what a resume looks
     // up can never disagree. It throws when ChatGPT is signed out; the host
@@ -3002,13 +3000,12 @@ export function registerIpcHandlers(
       // native hook events reach remote clients ONLY through this direct
       // broadcast() call. RemoteServer's own onHookEvent — which is what
       // fills hookBuffers for connect-time replay — is wired solely to the
-      // LEGACY CC hookRelay, never to nativeHost. So a phone reconnecting
-      // while a native permission ask was HELD got nothing back: PermissionHeld
-      // is one-shot and the 3s heartbeat stops re-announcing once an ask is
-      // held (permission-broker.ts). bufferHookEvent() feeds the SAME
-      // hookBuffers map the legacy path fills, so the existing replay loop in
-      // restoreClient() picks these up for free, in the same push order
-      // (request, then held).
+      // LEGACY CC hookRelay, never to nativeHost. Without this a phone
+      // reconnecting while a native permission ask was open would see no card
+      // until the next 3s heartbeat (permission-broker.ts). bufferHookEvent()
+      // feeds the SAME hookBuffers map the legacy path fills, so the existing
+      // replay loop in restoreClient() picks these up for free, and its
+      // PermissionResolved purge keeps answered asks out of that replay.
       remoteServer.bufferHookEvent(event);
       remoteServer.broadcast({ type: 'hook:event', payload: event });
     }

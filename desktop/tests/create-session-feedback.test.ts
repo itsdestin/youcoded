@@ -8,10 +8,13 @@
 // when the computer's announcement arrived — which a phone still catching up does not get. The
 // second is a failed question about past conversations being read as "you have none".
 import { describe, expect, it } from 'vitest';
+import { fileURLToPath } from 'node:url';
 import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 import { showFirstRunWelcome } from '../src/renderer/first-run-screen';
 
-const read = (rel: string) => readStripped(new URL(rel, import.meta.url).pathname);
+// WHY fileURLToPath and not URL.pathname: on Windows the pathname is `/D:/a/…`, and
+// joining it produces `D:\D:\a\…` — every read here failed with ENOENT on the Windows CI leg.
+const read = (rel: string) => readStripped(fileURLToPath(new URL(rel, import.meta.url)));
 const app = read('../src/renderer/App.tsx');
 
 describe('who gets told "Start your first session"', () => {

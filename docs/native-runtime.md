@@ -763,17 +763,16 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
   reads identically, so the refusal never leaks whether a foreign id exists. A specialist header
   can never re-enter through the root `resume()` path (it would get the preset's prompt and could
   re-acquire the Task tool) — `resumeSpecialist` is the only door back in.
-- **A child's ask now reaches a real user — routed to the parent's card, with a 5-minute
-  redirect.** `childAskRouter` replaces 1a's synchronous refusal: a child's `doom_loop` or
-  decide-originated ask re-registers on the broker under the PARENT's own sessionId (the existing
-  permission card renders it) and holds for `SPECIALIST_ASK_HOLD_MS` (5 minutes,
-  `specialists/limits.ts`). Only if nobody answers by then does it resolve with
-  `ASK_REDIRECT_MESSAGE` — copy that tells the child to keep working on anything that doesn't
-  depend on the blocked action and never route around it — while the ask entry stays answerable
-  past the timeout, not canceled. A real answer that lands late either steers the still-live child
-  (`APPROVED`/`DENIED`, naming the tool) or, once the child has already ended, queues a parent
-  delivery naming the `task_id` to resume.
-  <!-- verify: {"path": "youcoded/desktop/src/main/harness/specialists/child-ask-router.ts", "contains": "ASK_REDIRECT_MESSAGE"} -->
+- **A child's ask reaches a real user — routed to the parent's card, and it waits for the answer
+  with no time limit.** `childAskRouter` replaces 1a's synchronous refusal: a child's `doom_loop`
+  or decide-originated ask re-registers on the broker under the PARENT's own sessionId (the
+  existing permission card renders it, `raisedBy` = the child) and calls `broker.ask()` with no
+  timeout — exactly like a root session's own ask. The child's turn stays paused until the person
+  answers or the ask is canceled (parent interrupt/teardown, or the child's own teardown via the
+  `raisedBy` match). The 2026-09-16 decision removed the old 5-minute hold, its "still pending,
+  carry on" redirect, the `PermissionHeld` event and the late-answer route. AskUserQuestion and
+  outside-the-work-directory asks still deny instantly with factual copy.
+  <!-- verify: {"path": "youcoded/desktop/src/main/harness/specialists/child-ask-router.ts", "contains": "No timeout options"} -->
 - **Permission-store rule identity is now a quad, and the store is versioned.** `specialist?:
   string` (the agentType) joined `(tool, pattern, action)` as identity's fourth axis at every
   comparison site (dedupe, remove, the host's in-memory filter, the UI's `ruleKey`) — a
@@ -993,9 +992,9 @@ Settings only, creating the personal folder + its starter file if absent), `spec
 children-only, checked host-side). The run record itself pushes as `specialists:event { kind:'run',
 sessionId, run }` — one emission point (`delegation-ledger.ts`'s private `mutate()`), replayed on
 session attach and after a transcript replay. Nested asks ride the existing `hook:event
-PermissionRequest`, now carrying `specialist.parentToolCallId`; the 5-minute hold flip adds a new
-`PermissionHeld` hook event, itself replayed to a reconnecting client (`pendingEventsFor`) alongside
-a `PermissionResolved` purge signal that stops a stale answered ask from replaying with live buttons.
+PermissionRequest`, now carrying `specialist.parentToolCallId`, replayed to a reconnecting client
+(`pendingEventsFor`) alongside a `PermissionResolved` purge signal that stops a stale answered ask
+from replaying with live buttons.
 
 **File formats.** A personal specialist is frontmatter (`name`, `description`, `tools:`, `model:
 budget|frontier|parent`, `reportBudgetTokens`) + a system-prompt body, in
