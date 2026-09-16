@@ -156,11 +156,14 @@ function PageCard({ page, onOpen, pinFull }: { page: PageSummary; onOpen: () => 
   );
 }
 
+/** A push-pin, upright. Round 1 of the shell deck (2026-09-16): the first
+ *  glyph, a tilted pin, read as "a little odd" — this one is the familiar
+ *  upright shape, filled when the page is pinned. */
 function PinGlyph({ filled }: { filled: boolean }) {
   return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" aria-hidden="true">
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" aria-hidden="true">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-        d="M15 4l5 5-4 1-3 3v6l-2-2-4 4-1-1 4-4-2-2h6l3-3 1-4z" />
+        d="M12 17v5M9 10.76a2 2 0 01-1.11 1.79l-1.78.9A2 2 0 005 15.24V16a1 1 0 001 1h12a1 1 0 001-1v-.76a2 2 0 00-1.11-1.79l-1.78-.9A2 2 0 0115 10.76V7a1 1 0 011-1 2 2 0 000-4H8a2 2 0 000 4 1 1 0 011 1z" />
     </svg>
   );
 }
@@ -179,9 +182,13 @@ function PagesEmptyCard({ onMake }: { onMake: () => void }) {
             <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase mb-1">Pages</div>
             <h3 className="text-base font-semibold text-fg leading-snug">Pages are little apps you describe</h3>
           </div>
+          {/* Examples that intrigue, not the smallest things a page could be
+              (Destin, shell deck round 1, 2026-09-16). */}
           <p className="text-sm text-fg-2 leading-relaxed">
-            Tell the assistant what you want — a timer, a notes board, a dashboard — and it
-            builds a page that looks like the rest of YouCoded and follows your theme.
+            Tell the assistant what you want — a calendar that pulls your accounts together, a
+            news feed built around your interests, an email browser that works your way, a
+            timesheet tracker for your team — and it builds a page that looks like the rest of
+            YouCoded and follows your theme.
           </p>
           <p className="text-sm text-fg-2 leading-relaxed">
             Pin the ones you use most and they get their own button up top.

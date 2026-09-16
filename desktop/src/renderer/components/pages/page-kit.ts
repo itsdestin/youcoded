@@ -131,5 +131,27 @@ table.yc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.yc-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg-muted); font-weight: 500; padding: 8px; border-bottom: 1px solid var(--edge); }
 table.yc-table td { padding: 8px; border-bottom: 1px solid var(--edge-dim); }
 
+/* App-shaped pages: a toolbar across the top, a tool rail on the left, a
+   sidebar on the right, the work in the middle. Added for the paint studio
+   and planner samples (shell deck round 1: the first samples were "too
+   basic"), so the creator skill has a layout vocabulary, not only controls. */
+.yc-app { height: 100%; display: flex; flex-direction: column; }
+.yc-app__body { flex: 1; display: flex; min-height: 0; }
+.yc-app__main { flex: 1; min-width: 0; position: relative; overflow: auto; }
+.yc-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--edge); }
+.yc-rail { display: flex; flex-direction: column; gap: 4px; padding: 8px; background: var(--panel); border-right: 1px solid var(--edge); }
+.yc-sidebar { width: 232px; padding: 12px; background: var(--panel); border-left: 1px solid var(--edge); overflow: auto; display: flex; flex-direction: column; gap: 16px; }
+.yc-tool { width: 36px; height: 36px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md, 8px); border: 1px solid transparent; background: transparent; color: var(--fg-2); cursor: pointer; }
+.yc-tool:hover { background: var(--inset); color: var(--fg); }
+.yc-tool--on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.yc-tool svg { width: 18px; height: 18px; }
+.yc-range { width: 100%; accent-color: var(--accent); }
+.yc-swatches { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.yc-swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--edge); cursor: pointer; padding: 0; }
+.yc-swatch--on { outline: 2px solid var(--fg); outline-offset: 2px; }
+.yc-kbd { font-family: var(--font-mono); font-size: 11px; padding: 1px 6px; border-radius: var(--radius-sm, 4px); background: var(--inset); border: 1px solid var(--edge-dim); color: var(--fg-2); }
+.yc-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-2); }
+.yc-badge::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--badge, var(--accent)); }
+
 @media (prefers-reduced-motion: reduce) { .yc-button { transition: none; } }
 `;
