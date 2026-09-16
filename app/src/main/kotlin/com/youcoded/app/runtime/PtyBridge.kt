@@ -236,9 +236,15 @@ class PtyBridge(
         // chat-message fast path while fixing menu navigation.
         val SAFE_ATOMIC_LEN = 56
         val hasEscape = text.any { it.code == 0x1b }
+        // WHY bytes, not `length` (2026-09-16, claude-code-integration.md): the
+        // 64-byte paste threshold counts BYTES on the pipe; `String.length`
+        // counts UTF-16 units, so a 30-character CJK or emoji message (90–120
+        // bytes) took the atomic path and its `\r` landed as a literal newline.
+        // Same fix as desktop's pty-worker.js byteLen.
+        val atomicBytes = text.toByteArray(Charsets.UTF_8).size
         when {
             !text.endsWith("\r") -> session?.write(text)
-            !hasEscape && text.length <= SAFE_ATOMIC_LEN -> session?.write(text)
+            !hasEscape && atomicBytes <= SAFE_ATOMIC_LEN -> session?.write(text)
             else -> {
                 val preamble = text.dropLast(1)
                 session?.write(preamble)
