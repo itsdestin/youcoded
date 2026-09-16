@@ -242,14 +242,18 @@ describe('oversizeNotice', () => {
   });
 
   it('names conversations as conversations, with the limit the host enforces', () => {
-    expect(oversizeNotice(status(['Conversations/claude/transcripts/p/a.jsonl'], 50)))
-      .toBe("1 conversation is over the 50 MB sync size limit, so it won't update on your other devices. It stays safe on this device.");
-    expect(oversizeNotice(status(['Conversations/a.jsonl', 'Conversations\\b.jsonl'], 50)))
-      .toBe("2 conversations are over the 50 MB sync size limit, so they won't update on your other devices. They stay safe on this device.");
+    expect(oversizeNotice(status(['Conversations/claude/transcripts/p/a.jsonl'], 50))).toEqual({
+      header: '1 conversation too big to sync',
+      body: "It is over the 50 MB sync size limit, so your other devices won't get new changes. It stays safe on this device.",
+    });
+    expect(oversizeNotice(status(['Conversations/a.jsonl', 'Conversations\\b.jsonl'], 50))?.header)
+      .toBe('2 conversations too big to sync');
   });
 
   it('calls a mix of anything else files, and omits a limit it was not told', () => {
-    expect(oversizeNotice(status(['Conversations/a.jsonl', 'video.mp4'])))
-      .toBe("2 files are over the sync size limit, so they won't update on your other devices. They stay safe on this device.");
+    expect(oversizeNotice(status(['Conversations/a.jsonl', 'video.mp4']))).toEqual({
+      header: '2 files too big to sync',
+      body: "They are over the sync size limit, so your other devices won't get new changes. They stay safe on this device.",
+    });
   });
 });

@@ -1314,11 +1314,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         </p>
                       )}
                       {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
-                      {/* The app's warning card, names always visible — the bare
-                          dropdown was rejected on review (2026-09-16). */}
+                      {/* The app's warning card, collapsed to one informative line
+                          (review, 2026-09-16); it opens to the reason and the names. */}
                       {oversizeLine && (
-                        <Callout tone="warning" title="Too big to sync">
-                          {oversizeLine}
+                        <Callout tone="warning" collapsible title={oversizeLine.header}>
+                          {oversizeLine.body}
                           <ul className="mt-1.5 list-disc pl-4 space-y-0.5">
                             {oversizeNames.map((n, i) => <li key={i} className="break-words">{n}</li>)}
                           </ul>

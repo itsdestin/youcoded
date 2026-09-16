@@ -36,11 +36,24 @@ export type CalloutProps = {
   /** Optional bold lead-in line above the body. */
   title?: React.ReactNode;
   className?: string;
+  /** Collapse to the title line; the body opens on click. Needs `title`.
+   *  Opening is not an action, so this keeps the no-button rule — it is for a
+   *  warning whose headline says enough and whose detail is a list (the Sync
+   *  box's too-big conversations, 2026-09-16). */
+  collapsible?: boolean;
   children: React.ReactNode;
 };
 
-export function Callout({ tone = 'info', title, className = '', children }: CalloutProps) {
+export function Callout({ tone = 'info', title, className = '', collapsible = false, children }: CalloutProps) {
   const t = TONE[tone];
+  if (collapsible && title) {
+    return (
+      <details className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
+        <summary className={`text-xs font-medium cursor-pointer select-none ${t.title}`}>{title}</summary>
+        <div className={`text-xs mt-1.5 ${t.body}`}>{children}</div>
+      </details>
+    );
+  }
   return (
     <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
       {/* Both slots are <div>, not <p>. A callout body can legitimately carry a

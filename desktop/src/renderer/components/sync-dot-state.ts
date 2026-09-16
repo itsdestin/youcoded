@@ -181,21 +181,25 @@ export function lastSyncedLabel(spaceId: string, status: SyncStatusData | null, 
 }
 
 /**
- * The Sync box's line about files too big to sync, or null when there are
- * none. WHY it exists (2026-09-16): over-limit files used to be skipped with
- * no word anywhere, so a user's longest conversations quietly stopped reaching
- * their other devices. Transcripts live under `Conversations/`, so a list of
- * only those is worded as conversations. The limit comes from the host so
- * the copy can never disagree with the number the sync layer enforces.
+ * The Sync box's warning about files too big to sync, or null when there are
+ * none: a one-line `header` (the collapsed card) and the `body` it opens to.
+ * WHY it exists (2026-09-16): over-limit files used to be skipped with no word
+ * anywhere, so a user's longest conversations quietly stopped reaching their
+ * other devices. Transcripts live under `Conversations/`, so a list of only
+ * those is worded as conversations. The limit comes from the host so the copy
+ * can never disagree with the number the sync layer enforces.
  */
-export function oversizeNotice(status: SyncStatusData | null): string | null {
+export function oversizeNotice(status: SyncStatusData | null): { header: string; body: string } | null {
   const files = (status?.oversize ?? []).flatMap((o) => o.files);
   const n = files.length;
   if (n === 0) return null;
-  const limit = status?.oversizeLimitMb ? `${status.oversizeLimitMb} MB ` : '';
   const allConversations = files.every((f) => f.replace(/\\/g, '/').startsWith('Conversations/'));
-  const noun = allConversations ? (n === 1 ? 'conversation is' : 'conversations are') : (n === 1 ? 'file is' : 'files are');
   const one = n === 1;
-  return `${n} ${noun} over the ${limit}sync size limit, so ${one ? 'it' : 'they'} won't update on your other devices. `
-    + `${one ? 'It stays' : 'They stay'} safe on this device.`;
+  const noun = allConversations ? (one ? 'conversation' : 'conversations') : (one ? 'file' : 'files');
+  const limit = status?.oversizeLimitMb ? ` ${status.oversizeLimitMb} MB` : '';
+  return {
+    header: `${n} ${noun} too big to sync`,
+    body: `${one ? 'It is' : 'They are'} over the${limit} sync size limit, so your other devices won't get new changes. `
+      + `${one ? 'It stays' : 'They stay'} safe on this device.`,
+  };
 }
