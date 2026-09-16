@@ -481,7 +481,10 @@ export class PlanHostBridge {
 }
 
 /** The follow-up turn a Comment queues (design §2). The user's own words come
- *  first; the instruction after them tells the assistant what to do next. */
+ *  first; the instruction after them tells the assistant what to do next.
+ *  Task 5b: this text shows in the chat as the USER's own message, so it is
+ *  short and plain — no tool name. The assistant just proposed the plan with
+ *  its plan tool, so "propose it again" is enough for it to use that tool. */
 export function commentTurnText(comment: string): string {
-  return `${comment}\n\n(Comment on your proposed plan: revise the plan to address this and propose the new version with propose_plan.)`;
+  return `${comment}\n\n(Feedback on your plan: please revise it and propose it again.)`;
 }

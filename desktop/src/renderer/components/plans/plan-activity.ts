@@ -1,4 +1,4 @@
-import type { PlanView, SubagentSegment } from '../../../shared/types';
+import type { PlanChildView, PlanView, SubagentSegment, ToolCallState } from '../../../shared/types';
 
 /**
  * Specialists plans, Task 5a — the plan record as its card renders it: each
@@ -36,4 +36,28 @@ export function planWithActivity(plan: PlanView, segments: SubagentSegment[] | u
     };
   });
   return changed ? { ...plan, steps } : plan;
+}
+
+/**
+ * One plan specialist in the shape of an ordinary specialist's Task card, so
+ * the sections that draw a specialist (Briefing / Activity / Report) and the
+ * status-bar Specialists popup draw it the same way. Task 5b: shared by the
+ * plan card's rows and the popup (hooks/useSpecialists.ts), so the two can
+ * never describe the same specialist differently.
+ */
+export function planChildCard(child: PlanChildView): ToolCallState {
+  return {
+    toolUseId: child.childId,
+    toolName: 'Task',
+    input: { agent: child.agentType, description: child.description, prompt: child.prompt },
+    status: child.status === 'running' ? 'running' : 'complete',
+    specialistRun: child,
+    specialistReport: child.report,
+    subagentSegments: child.segments,
+  };
+}
+
+/** Task 5b: a `propose_plan` card (the same test the reducer uses). */
+export function isPlanCard(tool: ToolCallState): boolean {
+  return tool.toolName === 'propose_plan';
 }

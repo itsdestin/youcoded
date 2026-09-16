@@ -25,6 +25,9 @@ const NO_BRIDGE: PlanUnsupported = { ok: false, unsupported: true, error: "Plans
 /** General and non-committal on purpose (docs/error-message-standards.md): an
  *  answer we can't read has no known cause, so none is invented. */
 const UNREADABLE = "Couldn't update the plan. Please try again.";
+/** Task 5b: the card tells this general line (no known cause) from a host's
+ *  own reason, because only the general one also offers Report bug. */
+export const PLAN_UNREADABLE = UNREADABLE;
 const UNREADABLE_SETTINGS = "Couldn't read the plan settings. Please try again.";
 
 function bridge(): PlansBridge | undefined {

@@ -3,7 +3,7 @@
 {"type": "tool_use", "id": "toolu_01Plan", "name": "propose_plan", "input": {"title": "Review the auth module before the release"}}
 {"tool_use_id": "toolu_01Plan", "type": "tool_result", "content": "Plan proposed; waiting for the user.", "is_error": false}
 {"type": "plan", "plan": {"planId": "plan-1", "toolUseId": "toolu_01Plan", "title": "Review the auth module before the release", "status": "stopped", "steps": [{"id": "s1", "kind": "map", "title": "Review the six files that changed in the auth module", "specialist": "reviewer", "fanOut": 3, "budgetTokens": 9000, "status": "pending"}, {"id": "s2", "kind": "verify", "title": "Check each review against the file it describes", "specialist": "reviewer", "fanOut": 1, "budgetTokens": 9000, "status": "pending"}, {"id": "s3", "kind": "combine", "title": "Combine the findings into one ranked list", "specialist": "worker", "fanOut": 1, "budgetTokens": 4000, "status": "pending"}], "ceilingTokens": 40000, "ceilingUsd": 0.12, "model": {"label": "Claude Sonnet 4.6"}, "revisedBy": "plan-2"}}
-{"type": "user_message", "text": "Also check the tests folder, not just the auth code.\n\n(Comment on your proposed plan: revise the plan to address this and propose the new version with propose_plan.)"}
+{"type": "user_message", "text": "Also check the tests folder, not just the auth code.\n\n(Feedback on your plan: please revise it and propose it again.)"}
 {"type": "assistant_text", "text": "Here's the revised plan with the tests included."}
 {"type": "tool_use", "id": "toolu_02Plan", "name": "propose_plan", "input": {"title": "Review the auth module and its tests before the release"}}
 {"tool_use_id": "toolu_02Plan", "type": "tool_result", "content": "Plan proposed; waiting for the user.", "is_error": false}
