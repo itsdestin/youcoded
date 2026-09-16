@@ -9,7 +9,9 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/react';
 
+import { join } from 'path';
 import AttentionBanner from '../src/renderer/components/AttentionBanner';
+import { RENDERER, readStripped } from './helpers/guard-scope';
 
 // The literal message provider-registry throws when a provider has no API key.
 const CONFIG_ERROR = 'OpenRouter needs an API key — add one in Settings → Providers.';
@@ -106,6 +108,36 @@ function buttonByText(container: HTMLElement, text: string): HTMLButtonElement |
     (b) => b.textContent?.trim() === text,
   ) as HTMLButtonElement | undefined ?? null;
 }
+
+describe('AttentionBanner — the stuck line', () => {
+  afterEach(() => cleanup());
+
+  // Claude Code sessions HAVE a Terminal view, so the pointer is the right
+  // resolution path there — and the default when no provider is passed.
+  it('points a Claude Code session at Terminal view', () => {
+    for (const provider of ['claude', undefined] as const) {
+      const { container } = render(<AttentionBanner state="stuck" provider={provider} />);
+      expect(container.textContent).toMatch(/check Terminal view/);
+      cleanup();
+    }
+  });
+
+  // A native session has no Terminal view; the pointer would be a dead end.
+  it('does NOT point a native session at Terminal view', () => {
+    const { container } = render(<AttentionBanner state="stuck" provider="native" />);
+    expect(container.textContent).toMatch(/Still waiting on your assistant\.$/);
+    expect(container.textContent).not.toMatch(/Terminal/);
+    expect(container.querySelector('button')).toBeNull();
+  });
+
+  // The component tests above prove nothing if ChatView never hands the
+  // session's provider to the banner.
+  it('ChatView passes the session provider to the banner', () => {
+    const src = readStripped(join(RENDERER, 'components', 'ChatView.tsx'));
+    const banner = src.slice(src.indexOf('<AttentionBanner'), src.indexOf('/>', src.indexOf('<AttentionBanner')));
+    expect(banner).toMatch(/\bprovider=\{provider\}/);
+  });
+});
 
 describe('AttentionBanner — the stalled card', () => {
   afterEach(() => cleanup());

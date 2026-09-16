@@ -12,7 +12,6 @@ import { isAndroid } from '../platform';
 import SessionPreviewPane from './SessionPreviewPane';
 import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
 import { ResumeFilterPopover } from './ResumeFilterPopover';
-import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
 import {
   applyFilters,
   sortSessions,
@@ -26,45 +25,11 @@ import { useTagRegistry } from '../hooks/useTagRegistry';
 import { TagPicker } from './tags/TagPicker';
 import { TagManagerPopup } from './tags/TagManagerPopup';
 import { TagChip } from './tags/TagChip';
+import { SessionCardTags, SessionCardMeta, CompleteToggle } from './SessionCardDetails';
 import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
 import { TagGlyph } from './tags/glyphs';
 import { NoteEditor } from './tags/NoteEditor';
-import ModelPicker, { ModelIcon, type ModelChoice } from './model/ModelPicker';
-import { resolveModelBrand } from './provider-brand';
-import { ProviderIcon } from './ProviderIcon';
-import { claudeAliasForModelId } from '../../shared/model-ids';
-import type { ModelBinding } from '../../shared/provider-types';
-import { SkipPermissionsCaption } from './SkipPermissionsCaption';
-import { useFirstTimeGate } from './FirstTimeWarning';
-
-function formatRelativeTime(epochMs: number): string {
-  const diff = Date.now() - epochMs;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(epochMs).toLocaleDateString();
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  const kb = Math.round(bytes / 1024);
-  if (kb < 1024) return `${kb}KB`;
-  return `${(kb / 1024).toFixed(1)}MB`;
-}
-
-// Claude Code model ids carry a release date — `claude-sonnet-4-5-20250929`.
-// The date is noise on a card that already shows when the conversation last
-// ran, and it is the difference between the chip fitting and truncating. Only a
-// TRAILING 8-digit group is stripped, so a native id that happens to contain
-// digits (`gpt-5.6-sol`, `qwen3-coder-30b-a3b-instruct`) is untouched. The full
-// id stays in the chip's title attribute.
-function formatModelId(id: string): string {
-  return id.replace(/-\d{8}$/, '');
-}
+import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './ResumeOptions';
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -289,7 +254,7 @@ interface Props {
   // that never acked keeps the browser open (App toasts the reason) so the user can
   // retry, instead of closing over a silent failure (Task 6 review ack-gap). `void`
   // return kept in the union for any non-awaiting wiring (defaults to "close").
-  onResume: (sessionId: string, projectSlug: string, projectPath: string, model: string, dangerous: boolean, launchInNewWindow?: boolean, provider?: string, nativeBinding?: ModelBinding) => void | boolean | Promise<void | boolean>;
+  onResume: ResumeHandler;
   defaultModel?: string;
   defaultSkipPermissions?: boolean;
 }
@@ -346,7 +311,7 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
     // data-preview-id: lets the header card's scroll handler tell the layer on
     // screen from the hidden ones (see onPreviewScroll).
     <div className="absolute inset-0 flex flex-col" data-preview-id={id} style={{ visibility: visible ? 'visible' : 'hidden' }}>
-      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} />
+      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} backdrop={false} />
     </div>
   );
 });
@@ -530,12 +495,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     if (!shownId) return;
     const s = sessionsRef.current.find((r) => r.sessionId === shownId);
     if (!s) return;
-    setResumeModel(claudeModelForRow(s));
-    setResumeDangerous(defaultSkipPermissions || false);
-    setResumeLaunchInNewWindow(false);
-    setNativeResumeBinding(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- claudeModelForRow
-    // is redefined every render; the row id is what actually changes here.
+    resumeOptions.resetFor(s);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resetFor is
+    // redefined every render; the row id is what actually changes here.
   }, [shownId, defaultSkipPermissions]);
 
   useEffect(() => {
@@ -558,35 +520,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   //    makes hiding it legitimate rather than a narrow "fix" that removes the
   //    only route to something.
   const previewOn = !narrowViewport && !isAndroid();
-  const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
-  const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
-  // First-time Skip Permissions warning (spec §5). This browser is an L1
-  // modal, so the L2 warning simply sits on top of it — no yielding needed.
-  const { gate: gateSkipPermissions, dialog: skipPermissionsDialog } = useFirstTimeGate('skip-permissions');
-  // Task 6 — native resume ALWAYS offers the provider-scoped model selector
-  // (Destin's ruling: never auto-launch a binding). null until the user picks
-  // a row OR ModelPicker auto-selects a prefill match; the Resume button
-  // stays disabled for a native row until this is set. Reset whenever a
-  // (possibly different) row expands/collapses — a fresh ModelPicker
-  // mount per expansion is what actually resets ITS internal state; this just
-  // keeps the Resume-button gate and the value threaded through onResume in
-  // sync with that same lifecycle.
-  //
-  // OWNED by the conversation it was picked for. In the preview panel the reset
-  // lands one render AFTER the next conversation's picker has mounted — and that
-  // picker only pre-fills when it sees no value. Unowned, it saw the PREVIOUS
-  // conversation's model, skipped its own pre-fill, and then the reset left it
-  // on "Choose a model…" (Destin, 2026-09-11). Read it only through
-  // nativeBindingFor, which never hands one conversation another's pick.
-  const [nativeResumeBinding, setNativeResumeBinding] = useState<{ sessionId: string; binding: ModelBinding } | null>(null);
-  const nativeBindingFor = (s: PastSession): ModelBinding | null =>
-    (nativeResumeBinding && nativeResumeBinding.sessionId === s.sessionId ? nativeResumeBinding.binding : null);
-  // Launch the resumed session in a new peer window (multi-window only).
-  const [resumeLaunchInNewWindow, setResumeLaunchInNewWindow] = useState(false);
-  // Sesion id currently resuming — keeps its Resume button busy + the browser open
-  // until the create acks (Task 6 review ack-gap). Closes only on a launched resume.
-  const [resumingId, setResumingId] = useState<string | null>(null);
-  const detachAvailable = typeof (window as any).claude?.detach?.openDetached === 'function';
+  // Model, Skip Permissions, new window and the in-flight resume — shared with
+  // the Projects page's preview (ResumeOptions.tsx).
+  const resumeOptions = useResumeOptions(defaultModel, defaultSkipPermissions);
   // Show Complete: when off, sessions marked complete are hidden (default).
   // Deliberately NOT persisted — it resets to off on every open, same as the
   // project/tag filter pills below. Destin's ruling: a browser that reopens
@@ -664,9 +600,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     if (open) {
       setSearch('');
       setExpandedId(null);
-      setResumeModel(defaultModel || 'sonnet');
-      setResumeDangerous(defaultSkipPermissions || false);
-      setNativeResumeBinding(null);
+      resumeOptions.resetFor(null);
       setOrganizeId(null);
       setTagManagerOpen(false);
       // Reset the sticky-visible set each open — previously kept rows drop out.
@@ -1075,28 +1009,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   // Which Claude alias a row's dropdown should OPEN on.
   //
-  // Fix: every card used to open on `defaultModel` — the app-wide Settings
-  // default — so resuming an Opus conversation silently offered Sonnet (or
-  // whatever the global default was) unless you noticed and changed it. The
-  // card already displays the real answer in its model chip; this feeds that
-  // same value into the control beside it.
-  //
-  // Falls back to the global default when the row records no model, or records
-  // one outside the four aliases the picker offers.
-  //
-  // Gated on the row being a Claude Code row: a native row's picker is driven
-  // by nativeResumeBinding, and its recorded model can be an OpenRouter id that
-  // merely CONTAINS a family word (`anthropic/claude-sonnet-4.5`). Letting that
-  // set the CC alias would put a value into the argument handleConfirmResume
-  // still forwards for native rows, on no evidence at all.
-  const claudeModelForRow = (s: PastSession): string => {
-    const recorded = s.provider !== 'native' ? s.lastUsedModel?.modelId : undefined;
-    return (recorded ? claudeAliasForModelId(recorded) : null) || defaultModel || 'sonnet';
-  };
-
   // Takes the whole row, not just its id: the expanded pane's model dropdown
   // starts on the model THIS conversation last ran on, which only the row
-  // knows. See claudeModelForRow.
+  // knows. See useResumeOptions' modelForRow.
   const handleSelectSession = (s: PastSession) => {
     // With the panel open, clicking a row PREVIEWS it (and
     // re-clicking the same row does nothing, because collapsing the panel would
@@ -1126,10 +1041,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       // card's open sheet, not just this one — two cards' panes open at once
       // would be the same stacking problem spread across rows.
       setOrganizeId(null);
-      setResumeModel(claudeModelForRow(s));
-      setResumeDangerous(defaultSkipPermissions || false);
-      setResumeLaunchInNewWindow(false);
-      setNativeResumeBinding(null);
+      resumeOptions.resetFor(s);
     }
   };
 
@@ -1164,40 +1076,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     return [s, showPath, previewOn, previewOn && previewId === s.sessionId, registry.byId, !!namingApi(), opened ? renderStamp : null];
   };
 
-  // Bridge the unified <ModelPicker> onto the two pieces of resume state that
-  // already existed: `resumeModel` (a Claude alias) and `nativeResumeBinding`.
-  // Which one a row uses is decided by its own provider, so the picker is
-  // scoped and only one can ever be in play.
-  const resumeChoice = (s: PastSession): ModelChoice | null => {
-    if (s.provider === 'native') {
-      const b = nativeBindingFor(s);
-      return b ? { runtime: 'native', providerId: b.providerId, modelId: b.modelId } : null;
-    }
-    return resumeModel ? { runtime: 'claude', alias: resumeModel } : null;
-  };
-
-  const applyResumeChoice = (s: PastSession, c: ModelChoice) => {
-    if (c.runtime === 'native') setNativeResumeBinding({ sessionId: s.sessionId, binding: { providerId: c.providerId, modelId: c.modelId } });
-    else setResumeModel(c.alias);
-  };
-
   const handleConfirmResume = async (s: PastSession) => {
-    // Native sessions: the CC-only model / skip-permissions choices are
-    // irrelevant (no PTY, no /model or /effort), so pass the current (default)
-    // values but tag the row's provider so App takes the native path, PLUS the
-    // binding the user just picked (or the prefill auto-selected) in the
-    // ModelPicker below — the Resume button is disabled until this is
-    // set (see the (s.provider === 'native' && !nativeResumeBinding) guard on
-    // the button), so it is always present here for a native row.
-    //
-    // Task 6 review ack-gap: await the resume and close the browser ONLY when it
-    // actually launched. A create that never acked returns false — keep the
-    // browser open (App has toasted the honest reason) so the user can retry or
-    // pick another row, rather than closing over a silent failure.
-    setResumingId(s.sessionId);
-    const result = await onResume(s.sessionId, s.projectSlug, s.projectPath, resumeModel, resumeDangerous, resumeLaunchInNewWindow, s.provider, nativeBindingFor(s) ?? undefined);
-    setResumingId(null);
-    if (result !== false) onClose(); // undefined (non-awaiting wiring) or true → close
+    // Close ONLY when it actually launched. A create that never acked returns
+    // false — keep the browser open (App has toasted the honest reason) so the
+    // user can retry or pick another row (Task 6 review ack-gap).
+    if (await resumeOptions.resume(s, onResume)) onClose();
   };
 
   if (!open) return null;
@@ -1256,108 +1139,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // the two launch toggles, Resume. Flags/tags/note used to be stacked in here
   // too, which is what made an open card a seven-field form with its primary
   // action at the bottom.
-  const renderExpandedOptions = (s: PastSession, opts?: { flush?: boolean }) => {
-  return (
-    // `flush`: the action card at the foot of the preview draws
-    // its own border, and this block's top hairline would double up against it.
-    <div className={opts?.flush ? '' : 'border-t border-edge-dim'}>
-      <div className="p-3 flex flex-col gap-2">
-        {/* ONE model control for both runtimes. Was two: a Claude alias button
-            row here and a separate native picker below, which is the duplication this
-            picker exists to end. The list is SCOPED to the row's own runtime —
-            a resume cannot move a conversation across runtimes, so offering the
-            other side would be a pick that cannot be honoured. */}
-        <div onClick={(e) => e.stopPropagation()}>
-          <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
-          <ModelPicker
-            // One picker per conversation. The preview's action card stays
-            // mounted while you move between conversations, and the picker fills
-            // in `prefill` only once per mount — so without this key only the
-            // FIRST conversation previewed got its last-used model, and every
-            // later one opened on "Choose a model…" (Destin, 2026-09-11).
-            key={s.sessionId}
-            value={resumeChoice(s)}
-            onSelect={(c) => applyResumeChoice(s, c)}
-            includeClaude={s.provider !== 'native'}
-            includeNative={s.provider === 'native'}
-            prefill={s.lastUsedModel}
-            onManageModels={() => window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))}
-          />
-        </div>
-
-        {/* Skip Permissions is Claude-Code-only — a native session has no PTY
-            permission flow. */}
-        {s.provider !== 'native' && (
-          <>
-            {/* Skip Permissions */}
-            <div className="flex items-center justify-between">
-              <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
-                Skip Permissions
-                <SkipPermissionsInfoTooltip />
-              </label>
-              {/* Shared Toggle (change 15). Its "danger" tone replaces the raw
-                  #DD4444 hex this used to hard-code, so themes can restyle it.
-                  aria-label added because the adjacent <label> was never
-                  associated with the control — screen readers announced nothing. */}
-              <Toggle
-                checked={resumeDangerous}
-                // Turning ON goes through the first-time warning; Cancel there
-                // leaves it off. Turning off never asks.
-                onChange={(next) => (next ? gateSkipPermissions(() => setResumeDangerous(true)) : setResumeDangerous(false))}
-                tone="danger"
-                aria-label="Skip Permissions"
-              />
-            </div>
-            {/* Warning text was a raw text-[#DD4444] hex. Change 17 moves it onto
-                the same token as the toggle beside it, so a community theme
-                restyling its red doesn't leave the two out of sync. */}
-            {resumeDangerous && (
-              <SkipPermissionsCaption />
-            )}
-          </>
-        )}
-
-        {/* Launch in new window — hidden on remote/Android (single-window) */}
-        {detachAvailable && (
-          <div className="flex items-center justify-between">
-            <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Launch in New Window</label>
-            {/* Shared Toggle (change 15) — same accent on-state as before. */}
-            <Toggle
-              checked={resumeLaunchInNewWindow}
-              onChange={setResumeLaunchInNewWindow}
-              aria-label="Launch in New Window"
-            />
-          </div>
-        )}
-
-        {/* Resume button. The dangerous (skip-permissions) styling is CC-only —
-            native sessions have no PTY permission flow, so it never applies. */}
-        {(() => {
-          const dangerous = s.provider !== 'native' && resumeDangerous;
-          // Task 6 — Resume stays disabled for a native row until a model
-          // binding exists (manual pick or a prefill auto-select). Never lets
-          // resume proceed with no binding to launch — that would be exactly
-          // the auto-launch Destin's ruling forbids.
-          const nativeNeedsPick = s.provider === 'native' && !nativeBindingFor(s);
-          const busy = resumingId === s.sessionId; // create in flight — keep the button busy (ack-gap)
-          return (
-            /* Filled danger for skip-permissions — same call as SessionStrip's
-               Create button (spec §11, change 62). See the longer note there. */
-            <Button
-              variant={dangerous ? 'danger' : 'primary'}
-              size="lg"
-              onClick={() => handleConfirmResume(s)}
-              disabled={nativeNeedsPick || busy}
-              className="w-full py-1.5"
-            >
-              {busy ? 'Resuming…' : dangerous ? 'Resume (Dangerous)' : 'Resume Session'}
-            </Button>
-          );
-        })()}
-      </div>
-    </div>
+  const renderExpandedOptions = (s: PastSession, opts?: { flush?: boolean }) => (
+    <ResumeOptionsForm session={s} options={resumeOptions} onResume={() => handleConfirmResume(s)} flush={opts?.flush} />
   );
-  };
 
   // `clone`: the preview's header is this same card drawn a
   // second time. Both copies are on screen at once, so the tag/note sheet needs
@@ -1509,16 +1293,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               same TagChip as everything else — it is a built-in tag, not a
               separate species of label (built-in-tags.ts). Complete has no chip:
               its state is the hide icon on the right of this row. */}
-          {(s.flags?.priority || (s.tags && s.tags.length > 0) || s.note) && (
-            <div className={`flex items-center gap-1 mt-0.5 flex-wrap ${ICON_GUTTER}`}>
-              {s.flags?.priority && <TagChip tag={PRIORITY_TAG} />}
-              {(s.tags ?? []).map((id) => {
-                const t = registry.byId.get(id);
-                return t ? <TagChip key={id} tag={t} /> : null;
-              })}
-              {s.note && <span className="text-4xs text-fg-muted" title={s.note}>📝 note</span>}
-            </div>
-          )}
+          <SessionCardTags session={s} tagsById={registry.byId} className={ICON_GUTTER} />
           {/* Bottom line: one dotted trail of context on the left — project,
               model, size — then the timestamp on the right.
               The model sits INSIDE that trail rather than floating right beside
@@ -1533,67 +1308,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               The timestamp lives here rather than on the title line: the two
               icon buttons own the card's top-right corner, and a third item
               crowding in beside them read as part of that control cluster. */}
-          <div className="flex items-center gap-1.5 text-3xs text-fg-muted">
-            {s.missingProject || s.notSyncedYet ? (
-              // Plain words, no glyphs (house rule). The conversation is visible
-              // everywhere; resume needs the project folder AND its transcript
-              // present on this device — the two notes say which one is missing.
-              <span className="truncate flex-1 min-w-0">
-                {s.notSyncedYet ? 'Not synced to this device yet' : 'Project folder not on this device'}
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 flex-1 min-w-0 overflow-hidden">
-                {[
-                  // Same folder glyph as the project picker (FolderSwitcher.tsx:186)
-                  // so "which project" looks the same wherever it is answered.
-                  showPath ? (
-                    <span key="project" className="flex items-center gap-1 min-w-0">
-                      <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                      </svg>
-                      <span className="truncate">{s.projectPath.replace(/\\/g, '/').split('/').pop()}</span>
-                    </span>
-                  ) : null,
-                  // Last model this conversation actually RAN on, beside the same
-                  // layers glyph the model picker uses. Rendered only when the
-                  // record has one — showing the app default here would be a
-                  // guess dressed as history. See PastSession.lastUsedModel for
-                  // which conversations carry it.
-                  s.lastUsedModel ? (
-                    <span
-                      key="model"
-                      className="flex items-center gap-1 min-w-0"
-                      title={`Last used ${s.lastUsedModel.modelId} (${s.lastUsedModel.providerLabel})`}
-                    >
-                      {/* Company mark instead of the generic stacked-layers
-                          glyph. The mark carries the brand colour; the model
-                          NAME stays muted like the rest of the meta line — this
-                          is a card of five grey facts, and colouring the text
-                          would promote the model above the project and the date
-                          for no reason. PortableModelRef already carries
-                          providerType, so the match works even for an id that
-                          names no company (a bare custom-endpoint id). */}
-                      {(() => {
-                        const b = resolveModelBrand(s.lastUsedModel.modelId, s.lastUsedModel.providerType);
-                        return b?.icon
-                          ? <span className="shrink-0 inline-flex" style={{ color: b.color }}><ProviderIcon icon={b.icon} size={12} /></span>
-                          : <ModelIcon className="w-3 h-3 shrink-0" />;
-                      })()}
-                      <span className="truncate">{formatModelId(s.lastUsedModel.modelId)}</span>
-                    </span>
-                  ) : null,
-                  <span key="size" className="shrink-0">{formatSize(s.size)}</span>,
-                ]
-                  .filter(Boolean)
-                  // Separators are injected between surviving segments, so a
-                  // missing project or model never leaves a dangling dot.
-                  .flatMap((node, i) => (i === 0
-                    ? [node]
-                    : [<span key={`sep-${i}`} className="shrink-0">·</span>, node]))}
-              </span>
-            )}
-            <span className="shrink-0 ml-auto">{formatRelativeTime(s.lastModified)}</span>
-          </div>
+          <SessionCardMeta session={s} showProject={!!showPath} />
         </div>
       </button>
       {/* The two icon buttons, overlaid on the card's top-right corner rather
@@ -1641,33 +1356,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           menu-open for it is what made the old flag row feel buried. Hover copy
           is a question ("Mark this session complete?") so the icon reads as an
           action, not a status badge. */}
-      {(() => {
-        const done = !!s.flags?.complete;
-        return (
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); rowActions.current?.toggleFlag(s.sessionId, 'complete', !done); }}
-            aria-pressed={done}
-            title={done ? 'Marked complete — hidden unless Show Complete is on. Click to undo.' : 'Mark this session complete?'}
-            aria-label={done ? `Mark ${s.name} not complete` : `Mark ${s.name} complete`}
-            className={`px-1 py-1.5 rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-              done ? 'text-accent' : 'text-fg-faint hover:text-fg-2'
-            }`}
-          >
-            {/* Check-in-a-circle, not the eye-with-a-slash this started as:
-                the control's NAME is Complete, and "done" is what the user is
-                actually saying. That its effect is to hide the row from the
-                list is a consequence, and one the Show Complete toggle already
-                explains. Filled when set so the state reads at a glance. */}
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <circle cx="12" cy="12" r="9" fill={done ? 'currentColor' : 'none'} />
-              {/* Knocked out of the fill when set — var(--canvas), not a
-                  hardcoded white, so it survives a dark or community theme. */}
-              <path d="M8 12.5l2.5 2.5L16 9.5" stroke={done ? 'var(--canvas)' : 'currentColor'} />
-            </svg>
-          </button>
-        );
-      })()}
+      <CompleteToggle
+        done={!!s.flags?.complete}
+        name={s.name}
+        onToggle={(next) => rowActions.current?.toggleFlag(s.sessionId, 'complete', next)}
+        className="px-1 py-1.5"
+      />
       </div>
       {/* 'sheet' variant: the organize controls drop INTO the card rather than
           floating. No positioning maths and nothing to clamp — the trade is
@@ -1689,8 +1383,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   // The action card at the FOOT of the sheet, in the place a real
   // conversation puts its message box: this is where you act on what you just
-  // read. Its contents are `renderExpandedOptions` verbatim — the same block the
-  // expanded card in the list and ResumeOptionsPopover already draw — because
+  // read. Its contents are `renderExpandedOptions` verbatim — ResumeOptionsForm,
+  // the same block the expanded card in the list, the Projects preview and the
+  // side panel's preview draw — because
   // Destin's ruling on the switches was "this should look like it does in our
   // other existing new/resume surfaces", and re-styling them here is exactly how
   // three surfaces drift apart. `flush` only drops the top hairline, which would
@@ -1889,7 +1584,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   return (
     <>
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
-      {skipPermissionsDialog}
+      {resumeOptions.dialog}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
       <Scrim layer={1} onClick={onClose} />
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
@@ -2072,7 +1767,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                   <EmptyState message="Pick a conversation to read it here before you resume." />
                 </div>
               )}
-              <div className={`relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas${
+              {/* preview-backdrop on the WHOLE sheet, not per pane: the action
+                  card sits below the conversation, and a pane-only surface left
+                  the plain sheet showing around it (Destin, 2026-09-16). The
+                  panes are told not to paint their own (backdrop={false}). */}
+              <div className={`relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim preview-backdrop${
                 !s || arrival === 'staged' ? ' opacity-0' : arrival === 'run' ? ' switch-arrival' : ''
               }`}>
                 {s && (

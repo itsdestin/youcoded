@@ -4409,13 +4409,18 @@ function AppInner() {
       />
       {/* ProjectView — full-screen artifact browser across all projects.
           Renders null when projectViewOpen === false so no DOM overhead when closed.
-          z-[8000]: sits below the SessionStrip dropdown (9000) but above all
-          L1–L4 overlays, the same tier used by similar full-screen views. */}
+          z-40, the SCREEN layer: BELOW every L1–L4 overlay, so a dialog opened
+          from inside it (rename, a first-time warning) shows on top. This said
+          z-[8000] long after ProjectView.tsx moved it down (see its header). */}
       <ProjectView
         // Project view homes to the focused conversation's folder on every open.
         activeSessionCwd={currentSession?.cwd}
         onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
-        onResumeConversation={(sid, slug, path, provider) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); handleResumeSession(sid, slug, path, undefined, undefined, undefined, provider); }}
+        // Project View closes first, as it always has, so whatever the resume
+        // shows (the chat, a take-over prompt) is not under it.
+        onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}
+        defaultModel={sessionDefaults.model}
+        defaultSkipPermissions={sessionDefaults.skipPermissions}
       />
     </div>
     </ArtifactProvider>

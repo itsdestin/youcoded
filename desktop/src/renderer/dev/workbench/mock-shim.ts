@@ -1887,14 +1887,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // conversations beat's one-result search.
   const conversationsIn = (projectPath: string) => {
     const past = store.getState().past
-      .filter((p) => p.projectPath === projectPath)
-      .map((p) => ({ ...p, preview: p.note ?? `Session in ${p.projectSlug}` }));
+      .filter((p) => p.projectPath === projectPath);
     if (!studentSwitch) return past;
     const live = store.getState().sessions
       .filter((x: any) => x.cwd === projectPath && !past.some((p) => p.name === x.name))
       .map((x: any) => ({
         sessionId: x.id, name: x.name, projectSlug: projectPath.split('/').pop()!, projectPath,
-        lastModified: Date.now() - 30 * 60_000, size: 2048, provider: x.provider, preview: 'Open in a tab right now',
+        lastModified: Date.now() - 30 * 60_000, size: 2048, provider: x.provider,
       }));
     return [...live, ...past];
   };
@@ -1971,37 +1970,56 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
 
   const chatsearch = {
     resolve: async (shortIds: string[]) => ({ ok: true as const, results: shortIds.map(resolveFixture) }),
-    read: async (req: { provider: string; id: string; tail: number; before?: number }) => {
+    read: async (req: { provider: string; id: string; before?: number }) => {
       if (req.id === CS_ERR_READ) return { ok: false as const, error: "EACCES: permission denied, open '/home/destin/YouCoded/Personal/Conversations/claude/transcripts/youcoded/ee0011aa.jsonl'" };
-      // 60 fake messages; every 4th assistant message follows a "tool gap".
+      // 24 fake turns as REAL transcript events — the shape chatsearch:read
+      // returns since 2026-09-16, so the preview replays them through the chat
+      // reducer exactly as it does a real page. A turn with a third line gets a
+      // short sentence, a few tool calls, then the answer, so the preview shows
+      // a real tool group (tests/workbench-transcript-fixture.test.ts).
       //
-      // The turns cycle through CHAT_TURNS rather than printing "step 57" /
-      // "User question number 58". WHY (2026-09-10): the resume-browser preview
-      // panel puts this text in front of a human who is deciding whether the
-      // panel earns its half of the screen, and filler that says nothing makes
-      // that judgement impossible — "does reading this tell me which
-      // conversation it is?" is the entire question the panel exists to answer.
-      // The words are still invented; nothing here is read off disk.
-      const all: { role: string; content: string; timestamp: number; seq: number; droppedToolCalls: number }[] = [];
-      const push = (role: string, content: string, droppedToolCalls = 0) =>
-        all.push({ role, content, timestamp: 0, seq: all.length, droppedToolCalls });
-      while (all.length < 60) {
-        const turns = studentSwitch ? STUDENT_TURNS : CHAT_TURNS;
-        const turn = turns[Math.floor(all.length / 2.5) % turns.length];
-        push('user', turn[0]);
-        if (turn[2]) {
-          push('assistant', turn[2]);
-          push('assistant', turn[1], 3);   // the gap those three tools left
-        } else {
-          push('assistant', turn[1]);
+      // The turns cycle through CHAT_TURNS rather than printing filler. WHY
+      // (2026-09-10): a human reads this text to judge whether the preview
+      // tells them which conversation it is. The words are invented; nothing
+      // here is read off disk.
+      const sessionId = `preview:${req.id}`;
+      const TOTAL = 24;
+      const PAGE = 10;
+      const turnsFor = studentSwitch ? STUDENT_TURNS : CHAT_TURNS;
+      const eventsFor = (i: number) => {
+        const [ask, answer, lead] = turnsFor[i % turnsFor.length];
+        const t = Date.now() - (TOTAL - i) * 60_000;
+        const ev = (type: string, n: string, data: Record<string, unknown>) =>
+          ({ type, sessionId, uuid: `${req.id}-${i}-${n}`, timestamp: t, data });
+        const out = [ev('user-message', 'u', { text: ask })];
+        if (lead) {
+          out.push(ev('assistant-text', 'l', { text: lead }));
+          const tools: [string, Record<string, unknown>, string][] = [
+            ['Read', { file_path: '/home/destin/youcoded-dev/youcoded/desktop/src/renderer/components/ChatView.tsx' }, '1  import React from \'react\';'],
+            ['Grep', { pattern: 'useStickToBottom', path: 'src/renderer' }, 'src/renderer/components/ChatView.tsx'],
+            ['Bash', { command: 'npx vitest run tests/chat-scroll.test.tsx', description: 'Run the scroll tests' }, 'Tests  41 passed (41)'],
+          ];
+          tools.forEach(([name, input, result], k) => {
+            out.push(ev('tool-use', `t${k}`, { toolUseId: `${req.id}-${i}-${k}`, toolName: name, toolInput: input }));
+            out.push(ev('tool-result', `r${k}`, { toolUseId: `${req.id}-${i}-${k}`, toolResult: result }));
+          });
         }
-      }
-      const total = all.length;
-      for (const m of all) m.timestamp = Date.now() - (total - m.seq) * 60_000;
-      const end = Math.min(req.before ?? total, total);
-      const start = Math.max(0, end - Math.min(req.tail, 200));
-      const messages = all.slice(start, end);
-      return { ok: true as const, messages, hasMore: start > 0 };
+        out.push(ev('assistant-text', 'a', { text: answer }));
+        out.push(ev('turn-complete', 'c', { stopReason: 'end_turn' }));
+        return out;
+      };
+      // `before` is a turn index here; the real reader uses a byte offset.
+      // Either way it is opaque to the pane, which only hands it back.
+      const end = Math.min(req.before ?? TOTAL, TOTAL);
+      const start = Math.max(0, end - PAGE);
+      const events = [];
+      for (let i = start; i < end; i++) events.push(...eventsFor(i));
+      return {
+        ok: true as const,
+        events,
+        cursor: start > 0 ? { path: `wb:${req.id}`, offset: start, sizeAtRead: 0 } : null,
+        hasMore: start > 0,
+      };
     },
   };
 

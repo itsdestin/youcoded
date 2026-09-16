@@ -181,7 +181,10 @@ describe('setting row adoption', () => {
     'SyncPanel.tsx': { count: 2, why: 'K6 sync-space list rows — a per-item list, not settings rows' },
     'ProvidersSection.tsx': { count: 1, why: 'K6 provider list row' },
     'SyncSetupWizard.tsx': { count: 1, why: 'a wizard step, not a settings menu' },
-    'ResumeBrowser.tsx': { count: 3, why: 'L1 drawer — out of the dialog family entirely' },
+    'ResumeBrowser.tsx': { count: 1, why: 'L1 drawer — out of the dialog family entirely' },
+    // The Resume browser's Skip Permissions / new-window switches, moved into a
+    // shared file (2026-09-16) so the Projects preview draws the same block.
+    'ResumeOptions.tsx': { count: 2, why: 'the Resume browser\'s launch switches, shared with the Projects preview — same drawer styling, not a settings menu' },
     'CloseSessionPrompt.tsx': { count: 1, why: 'dialog footer: "Don\'t show again" beside the confirm button — a footer convention, not a settings row (P-15, 2026-08-26)' },
   };
 
