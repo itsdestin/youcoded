@@ -100,6 +100,14 @@ export class AcceptedHistoryCapture {
     this.commit(attempt, (e) => e.kind === 'text');
   }
 
+  /** Only the named TEXT deltas were pushed. WHY: a manual Retry after a plan
+   *  shell keeps the text streamed BEFORE the shell (the transcript already
+   *  flushed it and the screen keeps it above the plan card), while the text
+   *  after the shell is erased like any retried partial. */
+  acceptAttemptTextEvents(attempt: AttemptId, uuids: ReadonlySet<string>): void {
+    this.commit(attempt, (e) => e.kind === 'text' && uuids.has(e.uuid));
+  }
+
   private commit(attempt: AttemptId, keep: (event: AttemptEvent) => boolean): void {
     const events = this.pending.get(attempt);
     if (!events) return;                     // already consumed, or never begun

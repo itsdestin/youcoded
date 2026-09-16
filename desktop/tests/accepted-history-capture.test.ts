@@ -147,4 +147,18 @@ describe('AcceptedHistoryCapture', () => {
     first.push('mutating the caller\'s copy');
     expect(capture.snapshot().eventUuids).toEqual(['a', 'b']);
   });
+
+  it('acceptAttemptTextEvents keeps only the named text deltas (plan-shell manual Retry)', () => {
+    const capture = new AcceptedHistoryCapture();
+    const attempt = capture.beginAttempt();
+    capture.recordAttemptEvent(attempt, 'before', 'text');
+    capture.recordAttemptEvent(attempt, 'thinking', 'reasoning');
+    capture.recordAttemptEvent(attempt, 'after', 'text');
+    const revision = capture.revision;
+    capture.acceptAttemptTextEvents(attempt, new Set(['before', 'thinking']));
+    expect(capture.snapshot().eventUuids).toEqual(['before']);
+    expect(capture.revision).toBe(revision + 1);
+    capture.abandonAttempt(attempt);   // already consumed: a no-op
+    expect(capture.snapshot().eventUuids).toEqual(['before']);
+  });
 });

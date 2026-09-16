@@ -25,7 +25,7 @@ import {
   type AcceptedHistoryTransformation,
   type AttemptId,
 } from './accepted-history-capture';
-import type { TranscriptEvent, InjectedMeta } from '../../shared/types';
+import type { TranscriptEvent, InjectedMeta, PlanView } from '../../shared/types';
 import type { ModelBinding } from '../../shared/provider-types';
 import type { HarnessManifest } from '../../shared/harness-manifest';
 import type { PermissionDecision, PermissionRule } from '../../shared/permission-types';
@@ -890,6 +890,9 @@ export class HarnessSession extends EventEmitter {
   seedHistory(messages: ModelMessage[], seed?: AcceptedHistorySeed & { continuationBinding?: string }): void {
     this.history = messages;
     this.capture.reset(seed);
+    // WHY: a writing plan belongs to the history being replaced — pairing it
+    // later would push a call the new history never contained.
+    this.activeWritingPlanIds.clear();
     // WHY both: the restored ciphertext was accepted under THIS identity, so the
     // first dispatch must compare against it and strip on a mismatch — and the
     // published checkpoint must keep naming it until a live factory replaces it.
@@ -1414,8 +1417,10 @@ export class HarnessSession extends EventEmitter {
 
   /** Pair every still-writing plan shell. This is idempotent by deletion-before-
    * emit, so competing stream-error/interrupt/finally paths cannot double-close. */
-  private terminateWritingPlans(text: string, stopped: boolean): ToolCall[] {
-    const calls = [...this.activeWritingPlanIds].map((toolCallId) => ({
+  private terminateWritingPlans(text: string, stopped: boolean, ids: readonly string[] = [...this.activeWritingPlanIds]): ToolCall[] {
+    // WHY filter by membership: a caller passing a step's own ids must never
+    // re-close one some other path already paired.
+    const calls = ids.filter((id) => this.activeWritingPlanIds.has(id)).map((toolCallId) => ({
       toolCallId, toolName: 'propose_plan', input: {},
     }));
     for (const call of calls) {
@@ -1433,6 +1438,36 @@ export class HarnessSession extends EventEmitter {
       }));
     }
     return calls;
+  }
+
+  /** Close every still-writing plan AND record the matching model-history pair
+   *  (assistant [text?, shells] then tool [results]) — the transcript already
+   *  holds each shell's tool-use, so live history must hold the same call.
+   *  Used by every path that abandons a step mid-stream (retry, error, interrupt).
+   *  Returns the calls it closed; the caller decides the attempt's capture fate. */
+  private pairWritingPlans(text: string, stopped: boolean, assistantText: string): ToolCall[] {
+    const calls = this.terminateWritingPlans(text, stopped);
+    if (calls.length > 0) {
+      this.history.push(this.assistantMessage(assistantText, calls));
+      this.history.push({ role: 'tool', content: calls.map((call) => this.toolResultPart(call, text)) });
+    }
+    return calls;
+  }
+
+  /** The plan-specific fields of ANY tool-result event the turn loop emits.
+   *  WHY one helper: a result emitted for a propose_plan id is that call's one
+   *  pairing, so the id must leave the writing set right here (or a later
+   *  terminateWritingPlans would pair it a second time — a duplicate call id
+   *  providers reject), and the card must get a terminal state even on paths
+   *  whose payload carries no plan (interrupt, dismissal, skipped siblings). */
+  private planResultFields(call: ToolCall, stopped: boolean, plan?: PlanView): { plan?: PlanView } {
+    if (call.toolName !== 'propose_plan') return plan ? { plan } : {};
+    this.activeWritingPlanIds.delete(call.toolCallId);
+    return {
+      plan: plan ?? (stopped
+        ? stoppedPlanProjection(call.toolCallId, this.binding.modelId)
+        : failedPlanProjection(call.toolCallId, this.binding.modelId)),
+    };
   }
 
   /** Assistant history message: text part (if any) + one tool-call part per call.
@@ -1901,6 +1936,7 @@ export class HarnessSession extends EventEmitter {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     this.history = [];
     this.prefixMoved = true;   // the next request shares nothing with the last one — a known full miss
+    this.activeWritingPlanIds.clear();   // same reason as seedHistory: nothing left to pair against
     // No seed: the accepted list empties AND takes the next revision, so a
     // checkpoint published before the clear can never be restored over it.
     this.capture.reset();
@@ -2376,10 +2412,8 @@ export class HarnessSession extends EventEmitter {
             // withRetry sleeps/re-enters consumeStep, or the old writing plan
             // survives beside the successful retry as an orphan.
             const text = `Plan proposal failed: ${describeProviderError(err)}`;
-            const failedPlans = this.terminateWritingPlans(text, false);
+            const failedPlans = this.pairWritingPlans(text, false, partialAssistantText);
             if (failedPlans.length > 0) {
-              this.history.push(this.assistantMessage(partialAssistantText, failedPlans));
-              this.history.push({ role: 'tool', content: failedPlans.map((call) => this.toolResultPart(call, text)) });
               // WHY: the pushed message holds this failed attempt's partial text,
               // so its text deltas are now accepted history (same decision
               // send()'s catch makes); with no text there is nothing to accept.
@@ -2422,14 +2456,12 @@ export class HarnessSession extends EventEmitter {
           // WHY pair it here: no completed SDK tool-call exists to enter the
           // normal execution loop, but leaving it unmatched or writing forever
           // would corrupt both transcript history and the plan card lifecycle.
-          const canceledPlans = this.terminateWritingPlans(CANCELED_TOOL_TEXT, true);
+          // The provider's completed calls (if any) never reached the seam that
+          // re-emits them, so the transcript holds only each shell — synthesize
+          // exactly that pair. WHY: live continuation and restart replay must agree.
+          const hasText = !!step.text && step.text.trim().length > 0;
+          const canceledPlans = this.pairWritingPlans(CANCELED_TOOL_TEXT, true, hasText ? step.text : '');
           if (canceledPlans.length > 0) {
-            // The provider never emitted a completed call, so synthesize only the
-            // model-history pair represented by the already-emitted transcript
-            // shell/result. WHY: live continuation and restart replay must agree.
-            const hasText = !!step.text && step.text.trim().length > 0;
-            this.history.push(this.assistantMessage(hasText ? step.text : '', canceledPlans));
-            this.history.push({ role: 'tool', content: canceledPlans.map((call) => this.toolResultPart(call, CANCELED_TOOL_TEXT)) });
             if (hasText) this.capture.acceptAttemptText(step.attempt);
             else this.capture.abandonAttempt(step.attempt);
             partialAssistantText = '';
@@ -2463,6 +2495,26 @@ export class HarnessSession extends EventEmitter {
         // invariant the retry rests on.
         const stepHasText = !!step.text && step.text.trim().length > 0;
 
+        // A completed plan call's pairing now belongs to the result loop below,
+        // so it leaves the writing set BEFORE anything else can throw. WHY: if a
+        // later emit throws into send()'s catch, that catch pairs the writing
+        // set — and pairing an id this push already put in history would add a
+        // second call with the same id, which providers reject.
+        const completedIds = new Set(step.toolCalls.map((call) => call.toolCallId));
+        for (const id of completedIds) this.activeWritingPlanIds.delete(id);
+        // Plan shells this step started but never completed (truncated, or
+        // announced and then dropped). Each already has a persisted tool-use, so
+        // each needs a call in history and a paired result below.
+        const openShells: ToolCall[] = step.writingPlanIds
+          .filter((id) => !completedIds.has(id) && this.activeWritingPlanIds.has(id))
+          .map((toolCallId) => ({ toolCallId, toolName: 'propose_plan', input: {} }));
+        const sdkShaped = step.responseMessages.length > 0;
+        // WHY the SDK-shaped exception: a Responses message cannot gain a call
+        // the provider never completed, and a separate shell message cannot sit
+        // between that message and its own results. The transcript still pairs
+        // those shells; only this model-memory copy omits them.
+        const shellsInHistory = openShells.length > 0 && (!sdkShaped || step.toolCalls.length === 0);
+
         // Record the assistant message (text + any tool-call parts). Skip an
         // empty one (no real text and no calls) so we never push a content-less
         // turn.
@@ -2470,9 +2522,15 @@ export class HarnessSession extends EventEmitter {
           // WHY: the completed SDK response is the only faithful ordering and
           // metadata authority. Non-Responses models keep the established
           // flattened shape; SDK tool messages are never copied.
-          this.history.push(...(step.responseMessages.length > 0
-            ? step.responseMessages
-            : [this.assistantMessage(step.text, step.toolCalls)]));
+          // Uncompleted shells go FIRST: that is where replay puts them (they were
+          // persisted mid-stream, before any completed call), and ONE message
+          // holds the text exactly once.
+          if (sdkShaped) {
+            this.history.push(...step.responseMessages);
+            if (shellsInHistory) this.history.push(this.assistantMessage('', openShells));
+          } else {
+            this.history.push(this.assistantMessage(step.text, shellsInHistory ? [...openShells, ...step.toolCalls] : step.toolCalls));
+          }
           this.capture.acceptAttempt(step.attempt);
           // WHY the clear lands HERE, not only at the next loop top: everything
           // between this push and that loop top can throw into send()'s catch —
@@ -2481,6 +2539,13 @@ export class HarnessSession extends EventEmitter {
           // holds, so a stale one re-pushes text that is already in history (and
           // already accepted). The loop-top reset stays: it also covers the
           // steer/compaction window and a step that pushed nothing.
+          partialAssistantText = '';
+        } else if (openShells.length > 0) {
+          // No real text and no completed call, but a plan card is on screen:
+          // record the shell call (with any whitespace text the transcript holds).
+          this.history.push(this.assistantMessage(step.text, openShells));
+          if (step.text) this.capture.acceptAttemptText(step.attempt);
+          else this.capture.abandonAttempt(step.attempt);
           partialAssistantText = '';
         } else {
           // An empty step pushed nothing — whether it re-runs once (below) or
@@ -2502,10 +2567,14 @@ export class HarnessSession extends EventEmitter {
         // A SECOND consecutive empty step ends the turn honestly instead.
         // Reasoning-only steps count as empty BY DECISION (StepResult carries
         // no reasoning; the user-visible outcome is identical to silence).
+        // A step that started a plan is NOT empty: its card and tool-use are
+        // already on screen and on disk, and a silent re-run would leave that
+        // card writing forever (it falls through to the plan block below instead).
         const isEmptyStep =
           !step.interrupted &&
           step.toolCalls.length === 0 &&
-          !stepHasText;
+          !stepHasText &&
+          openShells.length === 0;
         // Gate on the "provider claims an orderly finish" shapes ONLY (single
         // list next to mapStopReason — see ORDERLY_EMPTY_FINISHES for why
         // 'tool-calls' is in and 'length'/'content-filter' are out). Without
@@ -2547,16 +2616,14 @@ export class HarnessSession extends EventEmitter {
           // a generic preparing orphan: it already projected `writing`, so close
           // it through a paired ordinary result and do not silently retry a
           // truncated/invalid provider response.
-          if (step.writingPlanIds.length > 0) {
-            const calls = step.writingPlanIds.map((toolUseId) => ({ toolCallId: toolUseId, toolName: 'propose_plan', input: {} }));
+          if (openShells.length > 0) {
             const text = step.finishReason === 'length'
               ? 'Plan proposal failed: the model response was truncated before the plan arguments completed.'
               : 'Plan proposal failed: the plan arguments did not complete.';
-            this.terminateWritingPlans(text, false);
-            // Match the transcript pair in model history even though the SDK did
-            // not complete the call; otherwise a later turn's wire request and a
-            // restart rebuild would disagree about whether this call existed.
-            this.history.push(this.assistantMessage(step.text, calls));
+            const calls = this.terminateWritingPlans(text, false, openShells.map((call) => call.toolCallId));
+            // The matching call is already in the ONE assistant message pushed
+            // above (pushing it here again duplicated the step's text). This adds
+            // only its result, so a later request and a restart rebuild agree.
             this.history.push({ role: 'tool', content: calls.map((call) => this.toolResultPart(call, text)) });
           }
           // Natural stop. finishReason 'length' (truncated output, including a
@@ -2591,12 +2658,12 @@ export class HarnessSession extends EventEmitter {
         this.withdrawOrphanedPreparing(step.pendingPreparing);
 
         for (const call of step.toolCalls) {
-          // tool-input-start already emitted the plan's one persisted tool-use
-          // shell under this id (and recorded it as accepted provenance there).
-          // WHY do not duplicate it here: reducer placement is idempotent, but
-          // replay/history pairing must not depend on silently deduplicating two
-          // uses for one result.
-          if (call.toolName === 'propose_plan' && step.writingPlanIds.includes(call.toolCallId)) continue;
+          // A plan that already has a writing shell (tool-input-start) is emitted
+          // AGAIN here under the same id. WHY: the shell was persisted with empty
+          // input, and this is the only event carrying the real arguments. The
+          // renderer supersedes the card in place by id, replay keeps the later
+          // input for a repeated id (history-rebuild.ts), and the durable store
+          // matches this event, not the shell, by its input.
           // The call parts are already in the accepted assistant message above;
           // recording the event is what lets the store cite id/name/input from
           // the transcript rather than copying them into the manifest.
@@ -2612,6 +2679,14 @@ export class HarnessSession extends EventEmitter {
 
         // Execute tool calls SERIALLY; collect their results for the next step.
         const resultParts: any[] = [];
+        if (openShells.length > 0) {
+          // A plan this step abandoned beside real calls. Paired before any tool
+          // runs so the step's one tool message holds its result first — the same
+          // order replay reads the events in.
+          const text = 'Plan proposal failed: the plan arguments did not complete.';
+          const closed = this.terminateWritingPlans(text, false, openShells.map((call) => call.toolCallId));
+          if (shellsInHistory) for (const call of closed) resultParts.push(this.toolResultPart(call, text));
+        }
         // Parallel-capable providers may emit several malformed propose_plan
         // siblings in one response. They are one failed authoring attempt, not N
         // repair turns: execute the first, pair the rest as suppressed siblings,
@@ -2646,7 +2721,10 @@ export class HarnessSession extends EventEmitter {
             for (let j = i; j < step.toolCalls.length; j++) {
               const rem = step.toolCalls[j];
               this.capture.recordEvent(
-                this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: CANCELED_TOOL_TEXT, isError: true }));
+                this.emitEvent('tool-result', {
+                  toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: CANCELED_TOOL_TEXT, isError: true,
+                  ...this.planResultFields(rem, true),
+                }));
               resultParts.push(this.toolResultPart(rem, CANCELED_TOOL_TEXT));
             }
             this.history.push({ role: 'tool', content: resultParts });
@@ -2665,12 +2743,17 @@ export class HarnessSession extends EventEmitter {
             this.capture.recordEvent(this.emitEvent('tool-result', {
               toolUseId: call.toolCallId, toolName: call.toolName,
               toolResult: payload.payload.text, isError: true,
+              ...this.planResultFields(call, true),
             }));
             resultParts.push(this.toolResultPart(call, payload.payload.text));
             for (let j = i + 1; j < step.toolCalls.length; j++) {
               const rem = step.toolCalls[j];
               this.capture.recordEvent(
-                this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: NOT_RUN_TOOL_TEXT, isError: true }));
+                this.emitEvent('tool-result', {
+                  toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: NOT_RUN_TOOL_TEXT, isError: true,
+                  // A human dismissal ended the turn: the plan was stopped, not broken.
+                  ...this.planResultFields(rem, true),
+                }));
               resultParts.push(this.toolResultPart(rem, NOT_RUN_TOOL_TEXT));
             }
             this.history.push({ role: 'tool', content: resultParts });
@@ -2681,11 +2764,10 @@ export class HarnessSession extends EventEmitter {
           // the per-turn budget/dedupe and amending the text with a named note
           // for every skip (Task 5 — the driver never promises silently).
           const delivered = this.resolveToolImages(payload, imageBudget);
-          if (call.toolName === 'propose_plan') this.activeWritingPlanIds.delete(call.toolCallId);
           this.capture.recordEvent(this.emitEvent('tool-result', {
             toolUseId: call.toolCallId, toolName: call.toolName,
             toolResult: delivered.text, isError: payload.isError ?? false,
-            ...(payload.plan ? { plan: payload.plan } : {}),
+            ...this.planResultFields(call, false, payload.plan),
             ...(payload.structuredPatch ? { structuredPatch: payload.structuredPatch } : {}),
             // Paths only — events carry no binary; resume re-reads (history-rebuild.ts).
             ...(delivered.images.length ? { images: delivered.images.map((i) => i.path) } : {}),
@@ -2701,12 +2783,9 @@ export class HarnessSession extends EventEmitter {
             for (let j = i + 1; j < step.toolCalls.length; j++) {
               const rem = step.toolCalls[j];
               const text = 'Not run: the plan repair opportunity was exhausted.';
-              const plan = rem.toolName === 'propose_plan'
-                ? failedPlanProjection(rem.toolCallId, this.binding.modelId)
-                : undefined;
               this.capture.recordEvent(this.emitEvent('tool-result', {
                 toolUseId: rem.toolCallId, toolName: rem.toolName,
-                toolResult: text, isError: true, ...(plan ? { plan } : {}),
+                toolResult: text, isError: true, ...this.planResultFields(rem, false),
               }));
               resultParts.push(this.toolResultPart(rem, text));
             }
@@ -2846,11 +2925,8 @@ export class HarnessSession extends EventEmitter {
       const terminalText = interrupted
         ? CANCELED_TOOL_TEXT
         : `Plan proposal failed: ${describeProviderError(err)}`;
-      const terminalPlans = this.terminateWritingPlans(terminalText, !!interrupted);
-      if (terminalPlans.length > 0) {
-        this.history.push(this.assistantMessage(partialAssistantText, terminalPlans));
-        this.history.push({ role: 'tool', content: terminalPlans.map((call) => this.toolResultPart(call, terminalText)) });
-      } else if (partialAssistantText) {
+      const terminalPlans = this.pairWritingPlans(terminalText, !!interrupted, partialAssistantText);
+      if (terminalPlans.length === 0 && partialAssistantText) {
         this.history.push({ role: 'assistant', content: partialAssistantText });
       }
       // The attempt that produced this partial threw, so the loop never saw its
@@ -3122,6 +3198,14 @@ export class HarnessSession extends EventEmitter {
     // these to the renderer and the store so the abandoned text is removed
     // rather than appended to.
     const emittedPartIds = new Set<string>();
+    // Text deltas streamed BEFORE this attempt's first plan shell, and their
+    // text. WHY: the shell's tool-use event flushes that text to the transcript
+    // and the screen keeps it above the plan card, so a manual Retry must keep
+    // it in model memory too — only text after the shell is truly erased.
+    let planShellStarted = false;
+    let textBeforePlanShell = '';
+    const textUuidsBeforePlanShell = new Set<string>();
+    const planRetryText = 'Plan proposal failed: the model stopped responding, so this step was retried.';
 
     try {
       while (true) {
@@ -3156,13 +3240,25 @@ export class HarnessSession extends EventEmitter {
           // so endTurn's reaping never fires and the card would spin forever
           // beside the one the re-run mints. (Same reason as the auto-retry path.)
           for (const [prepId, entry] of preparing) {
+            // A plan is an ordinary tool card, not a preparing card — it is
+            // closed below with a paired result instead.
+            if (entry.toolName === 'propose_plan') continue;
             this.emitEvent('assistant-thinking', {
               toolPreparing: { toolCallId: prepId, toolName: entry.toolName, chars: entry.chars, cleared: true },
             });
           }
           // Erase what the abandoned attempt put on screen BEFORE re-running.
+          // (Also BEFORE any plan result below: that result would flush the
+          // abandoned open text part to disk.)
           if (emittedPartIds.size > 0) {
             this.emitEvent('assistant-thinking', { dropPart: { partIds: [...emittedPartIds] } });
+          }
+          if (planShellStarted && this.activeWritingPlanIds.size > 0) {
+            // The step re-runs inside this turn, so nothing else would ever
+            // close the writing card. Keep the pre-shell text (see its WHY),
+            // then pair every shell in history and transcript.
+            if (textBeforePlanShell) this.capture.acceptAttemptTextEvents(attempt, textUuidsBeforePlanShell);
+            this.pairWritingPlans(planRetryText, false, textBeforePlanShell);
           }
           // The fourth place Retry erases: the model's memory, the screen and
           // the store already forget this text, so its provenance must too.
@@ -3183,10 +3279,15 @@ export class HarnessSession extends EventEmitter {
             // fires. Withdraw any preparing card explicitly or it spins for the
             // rest of the turn while the retry mints a second card beside it.
             for (const [prepId, entry] of preparing) {
+              if (entry.toolName === 'propose_plan') continue;   // closed below, as a real card
               this.emitEvent('assistant-thinking', {
                 toolPreparing: { toolCallId: prepId, toolName: entry.toolName, chars: entry.chars, cleared: true },
               });
             }
+            // Same reason as the manual Retry: a plan card left writing would
+            // spin beside the re-run's own. Nothing countable streamed (that is
+            // what made this retry automatic), so there is no text to keep.
+            this.pairWritingPlans(planRetryText, false, '');
             this.capture.abandonAttempt(attempt);   // the re-run starts this step over
             return STALL_RETRY;
           }
@@ -3238,8 +3339,9 @@ export class HarnessSession extends EventEmitter {
             // segment always separates consecutive text STEPS in the reducer, so a
             // repeated id across steps can't wrongly merge two bubbles.
             emittedPartIds.add(part.id ?? 'text-0');
-            this.capture.recordAttemptEvent(
-              attempt, this.emitEvent('assistant-text', { text: t, partId: part.id ?? 'text-0' }), 'text');
+            const textUuid = this.emitEvent('assistant-text', { text: t, partId: part.id ?? 'text-0' });
+            this.capture.recordAttemptEvent(attempt, textUuid, 'text');
+            if (!planShellStarted) { textBeforePlanShell = assistantText; textUuidsBeforePlanShell.add(textUuid); }
             break;
           }
           case 'reasoning-delta': {
@@ -3277,9 +3379,11 @@ export class HarnessSession extends EventEmitter {
               // event here: the renderer already anchors PlanView to that card,
               // and the completed call/result reuse this provider-stable id.
               this.activeWritingPlanIds.add(prepId);
-              // WHY record now: this is the ONLY tool-use event this call gets
-              // (the completed-call seam skips it), and every exit path pushes a
-              // history pair citing it.
+              planShellStarted = true;
+              // WHY record now: every path that abandons this call pushes a
+              // history pair citing THIS empty-input event. A call that completes
+              // is re-emitted with its real input at the completed-call seam, and
+              // the store cites that later event instead (it matches by input).
               this.capture.recordEvent(this.emitEvent('tool-use', {
                 toolUseId: prepId,
                 toolName: prepName,

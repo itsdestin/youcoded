@@ -4,7 +4,12 @@ import { validatePlanDocument } from '../src/main/harness/plans/validator';
 import { BUILTIN_ROSTER, type SpecialistRoster } from '../src/main/harness/specialists/registry';
 import { STEP_SCHEMA as PROBE_PLAN_DOCUMENT_JSON_SCHEMA } from '../test-engine/probe-plan-grammar.mjs';
 
-const mapVerifyCombine = {
+// WHY loose step records: several tests below deliberately build documents the
+// strict type forbids (wrong kind fields, forward ids) to prove the validator
+// rejects them; the typed PlanDocumentV1 would refuse to even compile those.
+type LooseDocument = { goal: string; steps: Array<Record<string, any>> };
+
+const mapVerifyCombine: LooseDocument = {
   goal: 'Review each source and produce one report.',
   steps: [
     { id: 'map', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, items: ['auth.ts', 'billing.ts'] },
@@ -13,7 +18,7 @@ const mapVerifyCombine = {
   ],
 };
 
-const nestedRepeat = {
+const nestedRepeat: LooseDocument = {
   goal: 'Iterate on a draft.',
   steps: [{
     id: 'repeat', kind: 'repeat', specialist: 'reviewer', task: 'Direct the iteration.', budget_tokens: 500,

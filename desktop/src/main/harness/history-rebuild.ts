@@ -15,6 +15,8 @@
 // A tool-result arriving flushes the open assistant message (this is what keeps
 // step 2's text from merging into step 1's assistant message); an assistant-text
 // or tool-use arriving flushes any open tool-results.
+//   - a tool-use whose id is already in the open message replaces that part (a
+//     propose_plan shell followed by its completed call — see the case below).
 //
 // Deliberately NOT reconstructed: readRegistry (read-before-edit mtimes), the
 // todo list, and the tracked shell cwd — those are per-session RUNTIME state,
@@ -75,13 +77,34 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
         const text = String(e.data?.text ?? '');
         const last = assistantParts[assistantParts.length - 1];
         if (last && last.type === 'text') last.text += text;
-        else assistantParts.push({ type: 'text', text });
+        else if (assistantParts.some((p) => p.type === 'tool-call')) {
+          // WHY: the driver always pushes a step as [all of its text, then its
+          // calls]. The only tool-use that can precede text inside one open
+          // message is a propose_plan shell, which is emitted MID-stream (at
+          // tool-input-start) so its "writing" card appears at once — text the
+          // model streams after that point still belongs to the step's single
+          // leading text part, not to a second part after the call.
+          const first = assistantParts[0];
+          if (first.type === 'text') first.text += text;
+          else assistantParts.unshift({ type: 'text', text });
+        } else assistantParts.push({ type: 'text', text });
         break;
       }
-      case 'tool-use':
+      case 'tool-use': {
         flushResults();
-        assistantParts.push({ type: 'tool-call', toolCallId: String(e.data?.toolUseId ?? ''), toolName: String(e.data?.toolName ?? ''), input: e.data?.toolInput ?? {} });
+        const call: ToolCallPart = { type: 'tool-call', toolCallId: String(e.data?.toolUseId ?? ''), toolName: String(e.data?.toolName ?? ''), input: e.data?.toolInput ?? {} };
+        // WHY a repeated id REPLACES the earlier part: a propose_plan shell is
+        // persisted with empty input when the model starts writing, and the
+        // same id is persisted again with the real arguments once the call
+        // completes. Both lines are one call — the later one is the truth, and
+        // it goes where the driver put the call: after every shell that never
+        // completed, in completion order. (Text is always merged into the
+        // leading part above, so removing a call never leaves two texts adjacent.)
+        const earlier = assistantParts.findIndex((p) => p.type === 'tool-call' && p.toolCallId === call.toolCallId);
+        if (earlier >= 0) assistantParts.splice(earlier, 1);
+        assistantParts.push(call);
         break;
+      }
       case 'tool-result': {
         // Close the assistant(tool-call) message this result answers — this
         // flush is what prevents the NEXT step's text from merging into it.

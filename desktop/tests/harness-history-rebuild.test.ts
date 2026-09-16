@@ -532,3 +532,41 @@ describe('image tool-result resume', () => {
     });
   });
 });
+
+// A propose_plan shell is persisted MID-stream (empty input) and, once the call
+// completes, again under the same id with the real arguments. Replay must read
+// those as ONE call in the driver's [text, ...calls] shape.
+describe('plan shell replay', () => {
+  const ev = (type: TranscriptEvent['type'], data: Record<string, unknown>): TranscriptEvent =>
+    ({ type, sessionId: 's-1', uuid: `${type}-${Math.random()}`, timestamp: 1, data } as TranscriptEvent);
+
+  it('a repeated tool-use id replaces the shell, and text after the shell joins the leading text', () => {
+    const doc = { goal: 'g', steps: [] };
+    const events = [
+      ev('user-message', { text: 'plan' }),
+      ev('assistant-text', { text: 'Before. ', partId: 'a' }),
+      ev('tool-use', { toolUseId: 'dropped', toolName: 'propose_plan', toolInput: {} }),
+      ev('tool-use', { toolUseId: 'pc', toolName: 'propose_plan', toolInput: {} }),
+      ev('assistant-text', { text: 'After.', partId: 'a' }),
+      ev('tool-use', { toolUseId: 'r1', toolName: 'Read', toolInput: { file_path: 'x' } }),
+      ev('tool-use', { toolUseId: 'pc', toolName: 'propose_plan', toolInput: doc }),
+      ev('tool-result', { toolUseId: 'dropped', toolName: 'propose_plan', toolResult: 'failed' }),
+      ev('tool-result', { toolUseId: 'r1', toolName: 'Read', toolResult: 'ok' }),
+      ev('tool-result', { toolUseId: 'pc', toolName: 'propose_plan', toolResult: 'proposed' }),
+    ];
+    expect(rebuildHistory(events)).toEqual([
+      { role: 'user', content: 'plan' },
+      { role: 'assistant', content: [
+        { type: 'text', text: 'Before. After.' },
+        { type: 'tool-call', toolCallId: 'dropped', toolName: 'propose_plan', input: {} },
+        { type: 'tool-call', toolCallId: 'r1', toolName: 'Read', input: { file_path: 'x' } },
+        { type: 'tool-call', toolCallId: 'pc', toolName: 'propose_plan', input: doc },
+      ] },
+      { role: 'tool', content: [
+        { type: 'tool-result', toolCallId: 'dropped', toolName: 'propose_plan', output: { type: 'text', value: 'failed' } },
+        { type: 'tool-result', toolCallId: 'r1', toolName: 'Read', output: { type: 'text', value: 'ok' } },
+        { type: 'tool-result', toolCallId: 'pc', toolName: 'propose_plan', output: { type: 'text', value: 'proposed' } },
+      ] },
+    ]);
+  });
+});

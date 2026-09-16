@@ -7,8 +7,10 @@ import { HarnessSession } from '../src/main/harness/harness-session';
 import { HARNESS, EMPTY_SKILL_CATALOG, FAKE_SESSION_CWD } from './helpers/harness-fakes';
 import { finishChunk, stream, textChunks, toolCallChunk, toolInputChunks } from './helpers/scripted-model';
 import type { PlanView } from '../src/shared/types';
+import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
 
-const VALID = {
+// Typed as the tool's own input so `kind` stays the literal union (tsconfig.tests).
+const VALID: PlanDocumentV1 = {
   goal: 'Review the source files.',
   steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, items: ['a.ts', 'b.ts'] }],
 };
@@ -171,7 +173,13 @@ describe('HarnessSession plan integration', () => {
     expect(use?.data).toMatchObject({ toolUseId: 'plan-call', toolName: 'propose_plan', plan: { toolUseId: 'plan-call', status: 'writing' } });
     expect(result?.data.plan).toMatchObject({ toolUseId: 'plan-call', status: 'proposed' });
     expect(events.indexOf(use)).toBeLessThan(events.indexOf(result));
-    expect(events.filter((event) => event.type === 'tool-use' && event.data.toolUseId === 'plan-call')).toHaveLength(1);
+    // Two tool-use lines, one call: the shell announces the card with empty
+    // input, then the completed call re-emits the same id with the real
+    // arguments (the only persisted copy of them). Replay/renderer treat both as
+    // one call by id — pinned in plan-transcript-pairing.test.ts.
+    const uses = events.filter((event) => event.type === 'tool-use' && event.data.toolUseId === 'plan-call');
+    expect(uses.map((event) => event.data.toolInput)).toEqual([{}, VALID]);
+    expect(uses.every((event) => event.data.plan?.status === 'writing')).toBe(true);
     expect(propose).toHaveBeenCalledTimes(1);
   });
 
