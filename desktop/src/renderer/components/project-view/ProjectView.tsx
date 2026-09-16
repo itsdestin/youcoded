@@ -951,7 +951,6 @@ export function ProjectView(props: ProjectViewProps) {
             )}
             {previewSession && activeProject && (
               <ConversationPreview
-                project={activeProject}
                 session={previewSession}
                 onClose={() => setPreviewSession(null)}
                 onResume={(s) => {

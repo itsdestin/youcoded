@@ -11,6 +11,7 @@ import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import ResumeBrowser from '../src/renderer/components/ResumeBrowser';
+import { previewPage } from './helpers/preview-page';
 
 // Wide: jsdom has no matchMedia, and the hook already treats its absence as
 // wide — stubbed anyway so the intent is on the page rather than inherited
@@ -25,8 +26,8 @@ const setViewport = (narrow: boolean) => {
 };
 
 beforeAll(() => {
-  // jsdom implements neither; ConversationTranscript jumps to the newest
-  // message on load (see tests/conversation-transcript.test.tsx for precedent).
+  // jsdom implements neither; the chat components the preview renders may
+  // call scrollIntoView, and the sheet measures itself with ResizeObserver.
   Element.prototype.scrollIntoView = vi.fn();
   if (typeof window.ResizeObserver === 'undefined') {
     window.ResizeObserver = class {
@@ -61,11 +62,7 @@ function mockClaude(sessions: any[]) {
     tags: { list: vi.fn().mockResolvedValue([]) },
     providers: { catalog: vi.fn().mockResolvedValue([]), list: vi.fn().mockResolvedValue([]) },
     chatsearch: {
-      read: vi.fn().mockResolvedValue({
-        ok: true,
-        messages: [{ role: 'user', content: 'why did the ask time out', timestamp: 1, seq: 0 }],
-        hasMore: false,
-      }),
+      read: vi.fn(async (req: { id: string }) => previewPage(req.id, ['why did the ask time out'])),
     },
     on: {},
   };
@@ -98,8 +95,8 @@ describe('Resume browser — the preview panel', () => {
     setViewport(false);
     mockClaude([row()]);
     let release: (v: unknown) => void = () => {};
-    (window as any).claude.chatsearch.read = vi.fn(() => new Promise((r) => {
-      release = () => r({ ok: true, messages: [{ role: 'user', content: 'why did the ask time out', timestamp: 1, seq: 0 }], hasMore: false });
+    (window as any).claude.chatsearch.read = vi.fn((req: { id: string }) => new Promise((r) => {
+      release = () => r(previewPage(req.id, ['why did the ask time out']));
     }));
     const { container } = open();
     fireEvent.click(await screen.findByText('Permission ask timeout'));

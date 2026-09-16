@@ -34,6 +34,7 @@ vi.mock('../src/renderer/state/theme-context', () => ({
 }));
 
 import { SessionDrawer } from '../src/renderer/components/SessionDrawer';
+import { previewPage } from './helpers/preview-page';
 
 /**
  * Find a control by the words of its hover hint.
@@ -54,9 +55,8 @@ const findByHint = async (t: string): Promise<HTMLElement> => {
   return getByHint(t);
 };
 
-// jsdom does not implement scrollIntoView; ConversationTranscript (rendered
-// inside SessionPreviewPane) calls it to jump to the newest message.
-// jsdom also has no matchMedia — the preview header's narrow-viewport
+// jsdom does not implement scrollIntoView; the chat components the preview
+// renders may call it. jsdom also has no matchMedia — the preview header's narrow-viewport
 // collapse (spec A4) now calls useNarrowViewport() unconditionally on every
 // SessionDrawer render, same pattern as use-narrow-viewport.test.tsx's own
 // stub. `matches: false` keeps these header-shape assertions on the WIDE
@@ -97,7 +97,7 @@ function mockWindowClaude() {
   (window as any).claude = {
     artifacts: { get: vi.fn(), checkExistence: vi.fn().mockResolvedValue({ ok: true, missingIds: [] }) },
     chatsearch: {
-      read: vi.fn().mockResolvedValue({ ok: true, messages: [], hasMore: false }),
+      read: vi.fn(async (req: { id: string }) => previewPage(req.id, [])),
       // The preview header (A1/A2/A4) resolves the previewed id for Resume's
       // enabled/disabled state. Answering 'unknown' keeps these pre-existing
       // header-shape tests indifferent to Resume — they assert on the title/
@@ -221,7 +221,7 @@ function mockWindowClaudeFor(row: ResolvedConversation | null, opts: {
   (window as any).claude = {
     artifacts: { get: vi.fn(), checkExistence: vi.fn().mockResolvedValue({ ok: true, missingIds: [] }) },
     chatsearch: {
-      read: vi.fn().mockResolvedValue({ ok: true, messages: [], hasMore: false }),
+      read: vi.fn(async (req: { id: string }) => previewPage(req.id, [])),
       resolve: vi.fn().mockResolvedValue({ ok: true, results: row ? [row] : [] }),
     },
     session: {

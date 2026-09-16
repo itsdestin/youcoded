@@ -1,9 +1,9 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { listPastSessions, loadHistory } from './session-browser';
+import { listPastSessions } from './session-browser';
 import { ccProjectSlug } from './slug-encoding';
-import type { PastSession, HistoryMessage } from '../shared/types';
+import type { PastSession } from '../shared/types';
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects');
 // Cap the per-session read used to build the row preview. The first user message
@@ -93,15 +93,4 @@ export async function listProjectConversations(projectPath: string): Promise<Con
       return { ...s, preview };
     }),
   );
-}
-
-export async function projectConversationHistory(
-  projectPath: string, sessionId: string, count: number, all: boolean,
-): Promise<HistoryMessage[]> {
-  // CC realpaths the cwd before slugging (probe-verified) — resolve
-  // caller-supplied paths the same way, falling back to the raw path.
-  let resolved: string;
-  try { resolved = fs.realpathSync.native(projectPath); } catch { resolved = projectPath; }
-  const slug = ccProjectSlug(resolved);
-  return loadHistory(sessionId, slug, count, all);
 }

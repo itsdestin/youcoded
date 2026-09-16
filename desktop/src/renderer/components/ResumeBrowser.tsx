@@ -26,6 +26,7 @@ import { useTagRegistry } from '../hooks/useTagRegistry';
 import { TagPicker } from './tags/TagPicker';
 import { TagManagerPopup } from './tags/TagManagerPopup';
 import { TagChip } from './tags/TagChip';
+import { SessionCardTags, SessionCardMeta } from './SessionCardDetails';
 import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
 import { TagGlyph } from './tags/glyphs';
 import { NoteEditor } from './tags/NoteEditor';
@@ -36,35 +37,6 @@ import { claudeAliasForModelId } from '../../shared/model-ids';
 import type { ModelBinding } from '../../shared/provider-types';
 import { SkipPermissionsCaption } from './SkipPermissionsCaption';
 import { useFirstTimeGate } from './FirstTimeWarning';
-
-function formatRelativeTime(epochMs: number): string {
-  const diff = Date.now() - epochMs;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(epochMs).toLocaleDateString();
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  const kb = Math.round(bytes / 1024);
-  if (kb < 1024) return `${kb}KB`;
-  return `${(kb / 1024).toFixed(1)}MB`;
-}
-
-// Claude Code model ids carry a release date — `claude-sonnet-4-5-20250929`.
-// The date is noise on a card that already shows when the conversation last
-// ran, and it is the difference between the chip fitting and truncating. Only a
-// TRAILING 8-digit group is stripped, so a native id that happens to contain
-// digits (`gpt-5.6-sol`, `qwen3-coder-30b-a3b-instruct`) is untouched. The full
-// id stays in the chip's title attribute.
-function formatModelId(id: string): string {
-  return id.replace(/-\d{8}$/, '');
-}
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -1509,16 +1481,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               same TagChip as everything else — it is a built-in tag, not a
               separate species of label (built-in-tags.ts). Complete has no chip:
               its state is the hide icon on the right of this row. */}
-          {(s.flags?.priority || (s.tags && s.tags.length > 0) || s.note) && (
-            <div className={`flex items-center gap-1 mt-0.5 flex-wrap ${ICON_GUTTER}`}>
-              {s.flags?.priority && <TagChip tag={PRIORITY_TAG} />}
-              {(s.tags ?? []).map((id) => {
-                const t = registry.byId.get(id);
-                return t ? <TagChip key={id} tag={t} /> : null;
-              })}
-              {s.note && <span className="text-4xs text-fg-muted" title={s.note}>📝 note</span>}
-            </div>
-          )}
+          <SessionCardTags session={s} tagsById={registry.byId} className={ICON_GUTTER} />
           {/* Bottom line: one dotted trail of context on the left — project,
               model, size — then the timestamp on the right.
               The model sits INSIDE that trail rather than floating right beside
@@ -1533,67 +1496,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               The timestamp lives here rather than on the title line: the two
               icon buttons own the card's top-right corner, and a third item
               crowding in beside them read as part of that control cluster. */}
-          <div className="flex items-center gap-1.5 text-3xs text-fg-muted">
-            {s.missingProject || s.notSyncedYet ? (
-              // Plain words, no glyphs (house rule). The conversation is visible
-              // everywhere; resume needs the project folder AND its transcript
-              // present on this device — the two notes say which one is missing.
-              <span className="truncate flex-1 min-w-0">
-                {s.notSyncedYet ? 'Not synced to this device yet' : 'Project folder not on this device'}
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 flex-1 min-w-0 overflow-hidden">
-                {[
-                  // Same folder glyph as the project picker (FolderSwitcher.tsx:186)
-                  // so "which project" looks the same wherever it is answered.
-                  showPath ? (
-                    <span key="project" className="flex items-center gap-1 min-w-0">
-                      <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                      </svg>
-                      <span className="truncate">{s.projectPath.replace(/\\/g, '/').split('/').pop()}</span>
-                    </span>
-                  ) : null,
-                  // Last model this conversation actually RAN on, beside the same
-                  // layers glyph the model picker uses. Rendered only when the
-                  // record has one — showing the app default here would be a
-                  // guess dressed as history. See PastSession.lastUsedModel for
-                  // which conversations carry it.
-                  s.lastUsedModel ? (
-                    <span
-                      key="model"
-                      className="flex items-center gap-1 min-w-0"
-                      title={`Last used ${s.lastUsedModel.modelId} (${s.lastUsedModel.providerLabel})`}
-                    >
-                      {/* Company mark instead of the generic stacked-layers
-                          glyph. The mark carries the brand colour; the model
-                          NAME stays muted like the rest of the meta line — this
-                          is a card of five grey facts, and colouring the text
-                          would promote the model above the project and the date
-                          for no reason. PortableModelRef already carries
-                          providerType, so the match works even for an id that
-                          names no company (a bare custom-endpoint id). */}
-                      {(() => {
-                        const b = resolveModelBrand(s.lastUsedModel.modelId, s.lastUsedModel.providerType);
-                        return b?.icon
-                          ? <span className="shrink-0 inline-flex" style={{ color: b.color }}><ProviderIcon icon={b.icon} size={12} /></span>
-                          : <ModelIcon className="w-3 h-3 shrink-0" />;
-                      })()}
-                      <span className="truncate">{formatModelId(s.lastUsedModel.modelId)}</span>
-                    </span>
-                  ) : null,
-                  <span key="size" className="shrink-0">{formatSize(s.size)}</span>,
-                ]
-                  .filter(Boolean)
-                  // Separators are injected between surviving segments, so a
-                  // missing project or model never leaves a dangling dot.
-                  .flatMap((node, i) => (i === 0
-                    ? [node]
-                    : [<span key={`sep-${i}`} className="shrink-0">·</span>, node]))}
-              </span>
-            )}
-            <span className="shrink-0 ml-auto">{formatRelativeTime(s.lastModified)}</span>
-          </div>
+          <SessionCardMeta session={s} showProject={!!showPath} />
         </div>
       </button>
       {/* The two icon buttons, overlaid on the card's top-right corner rather

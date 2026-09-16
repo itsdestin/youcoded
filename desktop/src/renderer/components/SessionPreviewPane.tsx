@@ -1,25 +1,56 @@
-// Drawer host for a previewed past conversation. Reads bounded slices through
-// chatsearch:read and pages backwards on demand — there is deliberately no
-// "load everything" (a 42 MB transcript would cross IPC and be markdown-
-// rendered bubble by bubble, inside a 480px pane, on a phone).
-import { useCallback, useEffect, useRef, useState } from 'react';
-import ConversationTranscript from './project-view/ConversationTranscript';
+// A previewed past conversation — the Resume browser, the side drawer and the
+// Projects page all show one through this pane. Reads one PAGE at a time
+// through chatsearch:read and pages backwards as the reader scrolls up; there
+// is deliberately no "load everything" (a 42 MB transcript would cross IPC and
+// be rendered bubble by bubble, inside a 480px pane, on a phone).
+//
+// WHY a private chat reducer (2026-09-16): a page is the same transcript
+// events a resumed chat pages its history with, and replaying them through
+// chatReducer's own HISTORY_PAGE_LOADED is what makes the preview group tools,
+// reasoning and messages exactly as the chat will once resumed. The state is
+// LOCAL — never the app's chat store — because that store is serialized to
+// remote browsers and read by every session-keyed hook; a preview is not a
+// session.
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import PreviewTimeline from './PreviewTimeline';
 import { ErrorState } from './ui/states';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
-import { COPY, READ_TAIL_DEFAULT, type TranscriptMessage, type ChatsearchProvider } from '../../shared/chatsearch-refs';
+import { chatReducer } from '../state/chat-reducer';
+import type { ChatAction, ChatState } from '../state/chat-types';
+import { useTheme } from '../state/theme-context';
+import { COPY, previewSessionKey, type ChatsearchProvider } from '../../shared/chatsearch-refs';
+import type { TranscriptPageResult } from '../../shared/types';
 
 // Fix (2026-08-27): the conversation title for the right-click scaffold (A3)
-// now arrives as a `title` prop instead of being resolved a second time in
-// here. SessionDrawer already resolves this same id for its own header
-// (title, Resume eligibility, tags — spec A1/A2/A4) and has had the title on
-// hand since the moment the preview was opened (activePreview.title) — this
-// pane used to re-run chatsearch:resolve for the exact same id just to get
-// the same string, purely because the two changes landed in separate commits
-// that couldn't touch each other's file yet. Passing '' is fine: the same
-// string an unresolved/untitled conversation always had — askPreviewContext
-// (build-menu.ts) already falls back to COPY.untitled when it's empty.
+// arrives as a `title` prop instead of being resolved a second time in here —
+// every host already has it. Passing '' is fine: askPreviewContext
+// (build-menu.ts) falls back to COPY.untitled when it's empty.
 type Phase = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; message: string };
+
+const RESET = { type: '__preview_reset' } as const;
+function previewReducer(state: ChatState, action: ChatAction | typeof RESET): ChatState {
+  return action.type === RESET.type ? new Map() : chatReducer(state, action as ChatAction);
+}
+
+/**
+ * The chat's background, drawn inside the preview. "Same as the chat" (Destin,
+ * 2026-09-16): on a wallpaper theme the chat is the wallpaper itself with
+ * frosted bubbles over it, but a preview sits inside a panel that paints its
+ * own surface, so the wallpaper behind the app cannot show through. These are
+ * the same layers ThemeBg.tsx paints behind the app (#theme-bg, #theme-pattern),
+ * built from the same theme styles, scaled to this box. The bubbles'
+ * backdrop-filter then frosts THIS wallpaper, as it does in the chat.
+ */
+function ChatBackdrop() {
+  const { bgStyle, patternStyle } = useTheme();
+  return (
+    <div className="pointer-events-none absolute inset-0 bg-canvas" aria-hidden="true">
+      {bgStyle && <div className="absolute inset-0" style={bgStyle as React.CSSProperties} />}
+      {patternStyle && <div className="absolute inset-0" style={patternStyle as React.CSSProperties} />}
+    </div>
+  );
+}
 
 export default function SessionPreviewPane({ provider, id, title, onSettled, projectSlug }: {
   provider: ChatsearchProvider;
@@ -37,181 +68,196 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
    *  id up in the search index — see ChatsearchReadRequest.projectSlug. */
   projectSlug?: string;
 }) {
-  const [messages, setMessages] = useState<TranscriptMessage[]>([]);
-  const [hasMore, setHasMore] = useState(false);
+  const key = previewSessionKey(id);
+  const [chat, dispatch] = useReducer(previewReducer, undefined, () => new Map() as ChatState);
+  const session = chat.get(key);
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  // Fix 2: a failed "Load older" reports its error HERE, near the paging
-  // control, instead of through `phase` — `phase` stays 'ready' so the
-  // messages already on screen are never replaced by a full-pane error.
-  // WHY an object and not a bare string: `message` can legitimately be ''
-  // (backend gave no reason — see the `load()` WHY comment below), and a
-  // bare '' is falsy, which would make the "did this fail at all" check
-  // below silently treat a real, unexplained failure as no failure and
-  // re-show the "Load older" button as if nothing happened.
+  // A failed older page reports its error HERE, at the top of the list,
+  // instead of through `phase` — `phase` stays 'ready' so the messages already
+  // on screen are never replaced by a full-pane error. An object, not a bare
+  // string: `message` can legitimately be '' (no reason given), and a bare ''
+  // is falsy, which would read a real failure as no failure.
   const [olderError, setOlderError] = useState<{ message: string } | null>(null);
-  const [scrollKey, setScrollKey] = useState(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  // Set when the first page lands: jump to the newest message once it is laid out.
+  const jumpToEnd = useRef(false);
+  // Distance from the BOTTOM, captured just before an older page is prepended,
+  // so the message being read stays put while the content above it grows.
+  const keepFromBottom = useRef<number | null>(null);
 
-  // Fix 1: generation token guarding every in-flight read. Bumped by every
-  // loadNewest() call (mount, prop swap, or Retry); a response is applied
-  // only if the token it captured is still current. WHY: this pane can be
-  // reused for a NEW conversation without unmounting (the drawer swaps
-  // provider/id in place when the user previews a second conversation before
-  // the first finishes loading) — without this guard, the first request's
-  // late response would land after the second's and overwrite the correct
-  // conversation with the wrong one. Same pattern as ConversationPreview.tsx's
-  // `cancelled` flag, generalized to a counter so loadOlder can share it.
+  // Generation token guarding every in-flight read. Bumped by every
+  // loadNewest() call (mount, prop swap, or Retry); a response is applied only
+  // if the token it captured is still current. WHY: this pane is reused for a
+  // NEW conversation without unmounting (the drawer swaps provider/id in
+  // place), and a late answer for the first must not land on the second.
   const genRef = useRef(0);
 
-  // Opens BugReportPopup for the "no reason given" branch of a read failure
-  // (case (b) below) — same one-destination pattern as SettingsPanel's
-  // Tailscale setup error and PermissionsSection's load failure: both
-  // "Report bug" and "Diagnose with the assistant" land on this popup, which already
-  // wraps dev:summarize-issue + dev:submit-issue.
+  // Opens BugReportPopup for a read failure with no reason given — both
+  // "Report bug" and "Diagnose" land on this popup (docs/error-message-standards.md).
   const [reportContext, setReportContext] = useState<ReportContext | null>(null);
 
-  const load = useCallback(async (before?: number) => {
+  const read = useCallback(async (before?: number): Promise<TranscriptPageResult> => {
     const req = {
-      provider, id, tail: READ_TAIL_DEFAULT,
+      provider, id,
       ...(before === undefined ? {} : { before }),
       ...(projectSlug ? { projectSlug } : {}),
     };
     const res = await (window.claude as any).chatsearch.read(req);
-    if (!res?.ok) {
-      // WHY: never invent a cause for a failure nobody diagnosed. `res.error`
-      // is the real reason when chatsearch:read supplied one — surfaced
-      // verbatim below. When it did not, `new Error(undefined)` yields an
-      // EMPTY message (not a guessed string like the old
-      // 'Unknown error reading the transcript'), which the render below reads
-      // as "we don't know why" and shows the general Report-bug/Diagnose card
-      // instead of asserting a specific cause that might not even be true —
-      // the read may not have failed at all. This line is what
-      // tests/status-strip-authority.test.tsx's "no user-facing error falls
-      // back to a hardcoded cause" guard checks; don't put the fallback back.
-      throw new Error(res?.error);
-    }
-    return res as { messages: TranscriptMessage[]; hasMore: boolean };
+    // WHY: never invent a cause for a failure nobody diagnosed. `res.error` is
+    // the real reason when chatsearch:read supplied one — surfaced verbatim.
+    // When it did not, `new Error(undefined)` has an EMPTY message, which the
+    // render reads as "we don't know why" and answers with the general
+    // Report-bug/Diagnose card. tests/status-strip-authority.test.tsx guards
+    // this line; don't put a hardcoded fallback cause back.
+    if (!res?.ok) throw new Error(res?.error);
+    // An answer with no event list is not a page. Treat it as an unexplained
+    // failure (the general card) rather than letting the reducer throw on it.
+    if (!Array.isArray(res.events)) throw new Error();
+    return res as TranscriptPageResult;
   }, [provider, id, projectSlug]);
 
   // Held in a ref, not a dep: a caller that passes an inline arrow would
-  // otherwise rebuild loadNewest on every one of ITS renders and re-read the
-  // transcript each time.
+  // otherwise rebuild loadNewest on every one of ITS renders and re-read.
   const onSettledRef = useRef(onSettled);
   onSettledRef.current = onSettled;
 
   const loadNewest = useCallback(() => {
     const myGen = ++genRef.current;
-    setPhase({ kind: 'loading' }); setMessages([]);
-    setOlderError(null); setLoadingOlder(false);
-    return load().then((r) => {
-      if (genRef.current !== myGen) return; // superseded — see genRef comment above
-      setMessages(r.messages); setHasMore(r.hasMore); setPhase({ kind: 'ready' }); setScrollKey((k) => k + 1);
+    dispatch(RESET);
+    setPhase({ kind: 'loading' });
+    setOlderError(null);
+    keepFromBottom.current = null;
+    return read().then((page) => {
+      if (genRef.current !== myGen) return; // superseded — see genRef above
+      dispatch({ type: 'SESSION_INIT', sessionId: key });
+      dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: key, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+      jumpToEnd.current = true;
+      setPhase({ kind: 'ready' });
       onSettledRef.current?.(id);
     }).catch((e) => {
       if (genRef.current !== myGen) return;
       // An error settles too: the card that says so should arrive the same way
       // a conversation does, rather than appearing without motion.
       onSettledRef.current?.(id);
-      // e.message is '' exactly when load() couldn't find a real reason —
-      // keep it '' rather than falling back to String(e) ('Error'), which
-      // would just be a different hardcoded guess wearing a JS-native mask.
       setPhase({ kind: 'error', message: e instanceof Error ? e.message : '' });
     });
-  }, [load]);
+  }, [read, key, id]);
 
   useEffect(() => { void loadNewest(); }, [loadNewest]);
 
-  const loadOlder = async () => {
-    if (!messages.length) return;
-    const beforeSeq = messages[0].seq;
-    const myGen = genRef.current; // captured, not bumped: a swap bumps it via loadNewest, which invalidates this response too
-    setLoadingOlder(true);
+  const cursor = session?.history.cursor ?? null;
+  const hasMore = !!session?.history.hasMore;
+  const loadingOlder = !!session?.history.loading;
+
+  const loadOlder = useCallback(async () => {
+    if (!cursor || loadingOlder) return;
+    const myGen = genRef.current; // captured, not bumped: a swap bumps it and invalidates this answer too
+    // Announce FIRST: `history.loading` is the one-in-flight guard (the same
+    // one ChatView's pager relies on), so a second trigger sees it set.
+    dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: key });
     setOlderError(null);
     try {
-      const r = await load(beforeSeq);
+      const page = await read(cursor.offset);
       if (genRef.current !== myGen) return;
-      setMessages((m) => [...r.messages, ...m]); setHasMore(r.hasMore);
-    } catch (e: any) {
+      const el = scrollRef.current;
+      keepFromBottom.current = el ? el.scrollHeight - el.scrollTop : null;
+      dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: key, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+    } catch (e) {
       if (genRef.current !== myGen) return;
-      // Fix 2: keep the already-loaded messages on screen and report the
-      // failure next to "Load older" instead of blowing away the pane. Retry
-      // re-runs loadOlder() with the SAME beforeSeq (messages[0] didn't
-      // change on failure), so it retries this backwards page, not the
-      // newest slice. Same '' handling as loadNewest's catch above.
+      // Keeps the cursor, so Retry asks for this same older page.
+      dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: key });
       setOlderError({ message: e instanceof Error ? e.message : '' });
-    } finally {
-      if (genRef.current === myGen) setLoadingOlder(false);
     }
-  };
+  }, [cursor, loadingOlder, read, key]);
+
+  // Scroll-up paging, as in the chat: crossing the sentinel above the first
+  // message loads the page before it. Not re-armed while an error is showing —
+  // the sentinel would still be on screen and retry in a loop; Retry does it.
+  useEffect(() => {
+    if (!hasMore || loadingOlder || olderError || typeof IntersectionObserver === 'undefined') return;
+    const el = sentinelRef.current;
+    const root = scrollRef.current;
+    if (!el || !root) return;
+    const io = new IntersectionObserver(
+      (entries) => { if (entries.some((e) => e.isIntersecting)) void loadOlder(); },
+      { root, rootMargin: '400px 0px' },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loadingOlder, olderError, loadOlder]);
+
+  // Before paint, so neither the jump nor the prepend is ever SEEN moving.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (jumpToEnd.current) {
+      jumpToEnd.current = false;
+      el.scrollTop = el.scrollHeight;
+    } else if (keepFromBottom.current !== null) {
+      el.scrollTop = el.scrollHeight - keepFromBottom.current;
+      keepFromBottom.current = null;
+    }
+  }, [chat, phase]);
 
   return (
-    // bg-canvas: the drawer's <aside> is bg-inset (SessionDrawer.tsx), and so is
-    // the assistant bubble ConversationTranscript renders (bg-inset — same
-    // token as its own background is exactly the invisible-bubble bug this
-    // pane shipped with). The real chat never has this collision because its
-    // bubbles sit on the app-shell's bg-canvas, not on another bg-inset
-    // surface (ChatView's .chat-pane paints no background of its own — see
-    // the comment on that rule in globals.css — so bg-canvas is what's
-    // actually behind a real assistant bubble). Painting THIS pane bg-canvas
-    // reproduces that same canvas-under-bubble relationship instead of
-    // recoloring the shared bubble, so ConversationPreview (which already
-    // sits on a contrasting bg-panel via ProjectDetailOverlay's OverlayPanel)
-    // doesn't need to change. Precedent for a bg-canvas "well" nested inside
-    // this same bg-inset aside: the rename input a few dozen lines up.
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-col bg-canvas">
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-        {/* WHY: this pane deliberately has NO header/close of its own — the
-            drawer's top bar (SessionDrawer.tsx) already supplies the title
-            and the single close button, the same way it does for an open
-            file. This pane used to draw a second title/close row here, which
-            was the "two X's" bug Destin flagged; don't reintroduce one. The
-            read-only/lane info that row used to carry still matters, so it
-            gets a quiet caption line instead — no close control, no size
-            change to the drawer's own bar. */}
-        <div className="mb-2 text-xs text-fg-muted">{COPY.paneSubtitle(provider)}</div>
-        {phase.kind === 'loading' && <p className="text-sm text-fg-muted">{COPY.loading}</p>}
+    // relative + isolate: the backdrop layers sit under the scroller without
+    // escaping this box's stacking context.
+    <div className="relative isolate flex h-full min-h-0 w-full min-w-0 flex-col">
+      <ChatBackdrop />
+      {/* overflow-anchor: none — the prepend is anchored by hand above; the
+          browser's own anchoring would move it a second time. */}
+      <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-y-auto py-3" style={{ overflowAnchor: 'none' }}>
+        {/* WHY: this pane deliberately has NO header/close of its own — each
+            host's top bar supplies the title and the single close button (the
+            "two X's" bug Destin flagged). The read-only/lane line still
+            matters, so it is a quiet caption, not a control. */}
+        <div className="mb-2 px-4 text-xs text-fg-muted">{COPY.paneSubtitle(provider)}</div>
+        {phase.kind === 'loading' && <p className="px-4 text-sm text-fg-muted">{COPY.loading}</p>}
         {/* First load has nothing to show behind it, so a full-pane error is
             correct here. Two shapes per docs/error-message-standards.md:
-            phase.message set → the real reason, verbatim, with Retry (case a).
-            phase.message === '' → we don't have one; say so and offer the two
-            actions instead of asserting a cause nobody checked (case b). */}
+            a reason → shown verbatim with Retry; none → say so, and offer
+            Report bug / Diagnose instead of asserting a cause. */}
         {phase.kind === 'error' && (
-          phase.message
-            ? <ErrorState mode="recoverable" message={`${COPY.errReadPrefix}${phase.message}`} onRetry={() => void loadNewest()} />
-            : (
-              <ErrorState
-                mode="general"
-                title={COPY.errReadUnknownTitle}
-                explainer={COPY.errReadUnknownExplainer}
-                onReportBug={() => setReportContext({ surface: 'Reading a past conversation' })}
-                onDiagnose={() => setReportContext({ surface: 'Reading a past conversation', diagnose: true })}
-              />
-            )
+          <div className="px-4">
+            {phase.message
+              ? <ErrorState mode="recoverable" message={`${COPY.errReadPrefix}${phase.message}`} onRetry={() => void loadNewest()} />
+              : (
+                <ErrorState
+                  mode="general"
+                  title={COPY.errReadUnknownTitle}
+                  explainer={COPY.errReadUnknownExplainer}
+                  onReportBug={() => setReportContext({ surface: 'Reading a past conversation' })}
+                  onDiagnose={() => setReportContext({ surface: 'Reading a past conversation', diagnose: true })}
+                />
+              )}
+          </div>
         )}
-        {phase.kind === 'ready' && (
-          <ConversationTranscript messages={messages} scrollToEndKey={scrollKey}
-            conversationId={id} conversationTitle={title}
-            olderHint={hasMore
-              ? (
-                <div className="py-2 text-center">
-                  {olderError ? (
-                    olderError.message
-                      ? <ErrorState mode="recoverable" variant="inline" message={`${COPY.errReadPrefix}${olderError.message}`} onRetry={() => void loadOlder()} />
-                      : (
-                        <ErrorState
-                          mode="general"
-                          title={COPY.errReadUnknownTitle}
-                          explainer={COPY.errReadUnknownExplainer}
-                          onReportBug={() => setReportContext({ surface: 'Loading older messages' })}
-                          onDiagnose={() => setReportContext({ surface: 'Loading older messages', diagnose: true })}
-                        />
-                      )
-                  ) : (
-                    <button type="button" className="rounded-md border border-edge bg-well px-3 py-1 text-xs text-fg hover:bg-inset disabled:opacity-50" disabled={loadingOlder} onClick={loadOlder}>{COPY.loadOlder}</button>
+        {phase.kind === 'ready' && session && (
+          // data-conversation-id/-title: what lets the right-click menu fire in
+          // here (build-menu.ts widens its `.chat-scroll` gate to this
+          // container) and name the conversation in "Ask about this".
+          // w-full + min-w-0: .drawer-pane collapses to 100% on narrow screens
+          // WITHOUT resizing children (.claude/rules/narrow-viewport.md).
+          <div className="w-full min-w-0" data-conversation-id={id} data-conversation-title={title}>
+            {olderError && (
+              <div className="px-4 py-2">
+                {olderError.message
+                  ? <ErrorState mode="recoverable" variant="inline" message={`${COPY.errReadPrefix}${olderError.message}`} onRetry={() => void loadOlder()} />
+                  : (
+                    <ErrorState
+                      mode="general"
+                      title={COPY.errReadUnknownTitle}
+                      explainer={COPY.errReadUnknownExplainer}
+                      onReportBug={() => setReportContext({ surface: 'Loading older messages' })}
+                      onDiagnose={() => setReportContext({ surface: 'Loading older messages', diagnose: true })}
+                    />
                   )}
-                </div>
-              )
-              : <div className="py-2 text-center text-[11.5px] text-fg-muted">— {COPY.startOfConversation} —</div>} />
+              </div>
+            )}
+            {hasMore && !olderError && <div ref={sentinelRef} data-history-sentinel className="h-px" aria-hidden="true" />}
+            <PreviewTimeline state={session} sessionId={key} provider={provider} />
+          </div>
         )}
       </div>
       <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
