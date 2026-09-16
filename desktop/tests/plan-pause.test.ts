@@ -1,8 +1,9 @@
 /**
  * Specialists plans, Task 5b — the card tells two pauses apart by the
  * executor's `paused.kind` (5b follow-up; the executor side is pinned in
- * plan-executor.test.ts and plan-journal.test.ts). Also pinned: the "On ChatGPT" note is true only while ChatGPT is the one
- * route without an output cap, and the Comment follow-up turn's wording.
+ * plan-executor.test.ts and plan-journal.test.ts). Also pinned: ChatGPT is the one route without an output cap (the route
+ * whose plan cards show "~" limits — Task 8 removed the 5b "On ChatGPT" note
+ * that named it), and the Comment follow-up turn's wording.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -38,7 +39,7 @@ describe('classifyPause reads the executor’s pause kind (5b follow-up)', () =>
   });
 });
 
-describe('the card’s "On ChatGPT" note', () => {
+describe('the routes whose plan limits are approximate (~)', () => {
   it('stays true: ChatGPT is the only route whose replies cannot be capped', () => {
     const types = ['anthropic', 'openai', 'google', 'openrouter', 'openai-compatible', 'local-engine', 'chatgpt'] as const;
     const soft = types.filter((t) => { const r = budgetAdapterFor(t); return r.ok && !r.adapter.capsOutput; });

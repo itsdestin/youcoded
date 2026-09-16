@@ -59,8 +59,8 @@ exports[`the signed plan card reads exactly as approved > plan-proposed 1`] = `
 step plan-step-s1: pending
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releasewaiting for your approval | 1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens | 2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens | 3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens | Approve | Comment
-text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens7 specialists · Up to about $0.12 (40,000 tokens) · specialists run on Claude Sonnet 4.6ApproveComment"
+buttons: Plan: Review the auth module before the releasewaiting for your approval | 1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens | 2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens | 3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens | Comment | Approve
+text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens7 specialists · Up to about $0.12 (40,000 tokens) · specialists run on Claude Sonnet 4.6CommentApprove"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-proposed-local 1`] = `
@@ -68,8 +68,8 @@ exports[`the signed plan card reads exactly as approved > plan-proposed-local 1`
 step plan-step-s1: pending
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releasewaiting for your approval | 1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens | 2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens | 3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens | Approve | Comment
-text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens7 specialists · Up to 40,000 tokens · specialists run on Qwen3.5-9B (your computer), which has no published priceApproveComment"
+buttons: Plan: Review the auth module before the releasewaiting for your approval | 1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens | 2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens | 3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens | Comment | Approve
+text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens7 specialists · Up to 40,000 tokens · specialists run on Qwen3.5-9B (your computer), which has no published priceCommentApprove"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-revised 1`] = `
@@ -119,6 +119,6 @@ exports[`the signed plan card reads exactly as approved > the proposed card open
 step plan-step-s1: pending
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releasewaiting for your approval | 1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens | 2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens | 3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens | Send [disabled] | Cancel
-text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens7 specialists · Up to about $0.12 (40,000 tokens) · specialists run on Claude Sonnet 4.6SendCancel"
+buttons: Plan: Review the auth module before the releasewaiting for your approval | 1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens | 2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens | 3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens | Cancel | Send [disabled]
+text: Plan: Review the auth module before the releasewaiting for your approval1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens7 specialists · Up to about $0.12 (40,000 tokens) · specialists run on Claude Sonnet 4.6CancelSend"
 `;

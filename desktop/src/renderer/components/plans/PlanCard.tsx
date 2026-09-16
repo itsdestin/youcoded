@@ -103,17 +103,26 @@ function usd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
+/** Task 8 (review 6, R6-1): a limit one reply can overshoot (ChatGPT sends
+ *  without an output cap) is not exact, so every LIMIT figure on the card —
+ *  tokens and dollars alike — wears a tilde: "~42,000 tokens", "~$0.12".
+ *  Spent figures are real counts and never get one. Replaced the 5b "about"
+ *  wording plus its extra "On ChatGPT…" sentence, which the product owner
+ *  found unnecessary. An exact limit reads exactly as signed. */
+function approx(plan: PlanView): string { return plan.approximateLimit ? '~' : ''; }
+function limitTokens(plan: PlanView, n: number): string { return `${approx(plan)}${tokens(n)}`; }
+
 /** The ceiling, priced when the model has a price. */
 function ceiling(plan: PlanView): string {
   // UX run 1, U9/U21: the dollar figure is the part a student understands, so it
   // leads when the model has a price; the token limit always follows (spec §4).
   // "specialists run on" says whose model this is — the chat may be on another.
-  // Task 5b (decision 5): a limit that one reply can overshoot is not exact,
-  // so its token figure says "about" too — an honest worst case, not a cap.
-  const t = `${plan.approximateLimit ? 'about ' : ''}${tokens(plan.ceilingTokens)}`;
-  return plan.ceilingUsd == null
-    ? `Up to ${t} · specialists run on ${plan.model.label}, which has no published price`
-    : `Up to about ${usd(plan.ceilingUsd)} (${t}) · specialists run on ${plan.model.label}`;
+  const t = limitTokens(plan, plan.ceilingTokens);
+  if (plan.ceilingUsd == null) return `Up to ${t} · specialists run on ${plan.model.label}, which has no published price`;
+  // A priced ceiling was always "about $X" (a price is an estimate); an
+  // approximate one says it with the tilde instead, like its token figure.
+  const dollars = plan.approximateLimit ? `~${usd(plan.ceilingUsd)}` : `about ${usd(plan.ceilingUsd)}`;
+  return `Up to ${dollars} (${t}) · specialists run on ${plan.model.label}`;
 }
 
 function spent(plan: PlanView): string {
@@ -124,20 +133,9 @@ function spent(plan: PlanView): string {
 /** "of the $0.12 limit" / "of the 40,000-token limit" — one word, "limit", for the
  *  cap everywhere on the card (UX run 1, U8: budget/cap/ceiling were four words for one idea). */
 function limit(plan: PlanView): string {
-  // Task 5b: "the about-42,000-token limit" does not read; an approximate
-  // limit is phrased "the limit of about …" instead.
-  if (plan.approximateLimit) {
-    return plan.ceilingUsd == null
-      ? `the limit of about ${tokens(plan.ceilingTokens)}`
-      : `the limit of about ${usd(plan.ceilingUsd)} (about ${tokens(plan.ceilingTokens)})`;
-  }
-  return plan.ceilingUsd == null ? `the ${tokens(plan.ceilingTokens)} limit` : `the ${usd(plan.ceilingUsd)} limit (${tokens(plan.ceilingTokens)})`;
+  const t = limitTokens(plan, plan.ceilingTokens);
+  return plan.ceilingUsd == null ? `the ${t} limit` : `the ${approx(plan)}${usd(plan.ceilingUsd)} limit (${t})`;
 }
-
-/** Task 5b (decision 5): the one line that says why an approximate limit is
- *  approximate. Only ChatGPT sends replies without a cap today — pinned by
- *  tests/plan-pause.test.ts, so this sentence cannot silently become false. */
-const APPROXIMATE_NOTE = 'On ChatGPT, one reply can run past this limit before the plan pauses.';
 
 // ---- the block ---------------------------------------------------------------
 
@@ -273,12 +271,6 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
           </div>
           )}
 
-          {/* Task 5b (decision 5): only while the limit still matters — before
-              approval and while the plan can still spend. */}
-          {plan.approximateLimit && hasControls && (
-            <div className="text-2xs text-fg-muted" data-testid="plan-approximate-note">{APPROXIMATE_NOTE}</div>
-          )}
-
           {/* Task 5b (decision 6): a failed plan says why, in the reader's own
               words, with the two actions for a failure the user cannot fix
               from here (error-message-standards §2). No reason → no block:
@@ -369,11 +361,14 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
           )}
 
       {/* The proposal keeps its buttons on their own row: it has two forward
-          actions and no status sentence to share a line with. */}
+          actions and no status sentence to share a line with.
+          Task 8 (review 6, R6-4; design guide G-29): the row sits on the
+          RIGHT and the filled Approve is the rightmost button, with the light
+          Comment to its left — a filled button is never left-aligned. */}
           {plan.status === 'proposed' && !commenting && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button size="sm" variant="primary" onClick={approve} disabled={blocked}>{busy === 'approve' ? 'Approving…' : 'Approve'}</Button>
+            <div className="flex items-center justify-end gap-2 flex-wrap">
               <Button size="sm" variant="secondary" onClick={() => setCommenting(true)} disabled={blocked}>Comment</Button>
+              <Button size="sm" variant="primary" onClick={approve} disabled={blocked}>{busy === 'approve' ? 'Approving…' : 'Approve'}</Button>
             </div>
           )}
           {plan.status === 'proposed' && commenting && (
@@ -388,9 +383,11 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                 placeholder="What should change?"
                 autoFocus
               />
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="primary" onClick={sendComment} disabled={blocked || !comment.trim()} title="The assistant rewrites the plan and shows you a new one">{busy === 'comment' ? 'Sending…' : 'Send'}</Button>
+              {/* Task 8 (G-29): same rule as the proposal row — Cancel (light)
+                  on the left, Send (filled) rightmost, row on the right. */}
+              <div className="flex items-center justify-end gap-2">
                 <Button size="sm" variant="ghost" onClick={() => { setCommenting(false); setComment(''); }} disabled={blocked}>Cancel</Button>
+                <Button size="sm" variant="primary" onClick={sendComment} disabled={blocked || !comment.trim()} title="The assistant rewrites the plan and shows you a new one">{busy === 'comment' ? 'Sending…' : 'Send'}</Button>
               </div>
             </div>
           )}
@@ -492,7 +489,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
   useEffect(() => { if (asking) setOpen(true); }, [asking]);
   const who = `${step.fanOut} ${step.specialist}${step.fanOut === 1 ? '' : 's'}`;
   const right =
-    step.status === 'pending' || plan.status === 'proposed' ? `up to ${tokens(step.budgetTokens * step.fanOut)}`
+    step.status === 'pending' || plan.status === 'proposed' ? `up to ${limitTokens(plan, step.budgetTokens * step.fanOut)}`
     : step.status === 'running' || step.status === 'paused' ? `${step.done ?? 0} of ${step.fanOut} ${step.specialist}s done · ${tokens(step.usedTokens ?? 0)}`
     : step.status === 'done' ? tokens(step.usedTokens ?? 0)
     : '';
@@ -516,7 +513,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
             step.children.map((c) => <PlanSpecialistCard key={c.childId} child={c} sessionId={sessionId} />)
           ) : (
             <div className="text-2xs text-fg-muted">
-              Each {step.specialist} stops at its {tokens(step.budgetTokens)} limit.
+              Each {step.specialist} stops at its {limitTokens(plan, step.budgetTokens)} limit.
             </div>
           )}
         </div>

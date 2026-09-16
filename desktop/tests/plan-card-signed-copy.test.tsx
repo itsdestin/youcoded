@@ -12,6 +12,11 @@
  * workbench fixtures at base 710bb9dd) and the snapshot was recorded on that
  * base BEFORE any card code changed. A diff here is a visible change to the
  * signed card: that goes to the product owner, not into the snapshot.
+ *
+ * Re-recorded once, Task 8 (2026-09-16): the product owner asked on review
+ * deck 6 (R6-4) for Approve to be the rightmost button with Comment to its
+ * left (and so Cancel · Send in the comment box). Those three states changed
+ * button ORDER only — every word is as signed.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';

@@ -64,12 +64,35 @@ export interface HelperView {
    *  no start time, and `Date.now() - 0` would render "56y 3m" (status-bar
    *  rule: a value we do not have renders nothing, never a fabricated one). */
   elapsedUnknown?: boolean;
+  /** Task 8 (review 6, Q6-2): set when this specialist runs a step of a plan.
+   *  The popup lists such specialists under their plan's row, never in the
+   *  ordinary Needs you / Working / Finished sections. */
+  planId?: string;
+}
+
+/** Task 8 (review 6, Q6-2): one plan in the Specialists popup — a one-line,
+ *  foldable row over the plan's specialists that are working or asking. */
+export interface PlanGroupView {
+  planId: string;
+  /** The plan card, for "show in chat". */
+  toolUseId: string;
+  title: string;
+  stepsDone: number;
+  stepsTotal: number;
+  /** Specialists of this plan with an open ask. */
+  needsYou: number;
+  /** The rows under the plan: askers first, then the working ones. */
+  helpers: HelperView[];
 }
 
 export type HelperKind = 'native' | 'claude-code';
 
 export interface SpecialistSummary {
+  /** Every listed specialist, plan ones included (tagged `planId`), so the
+   *  counts below and the chip's "is there anything?" check see them all. */
   helpers: HelperView[];
+  /** The plans those tagged specialists belong to, in card order. */
+  plans: PlanGroupView[];
   needsYou: number;
   working: number;
   finished: number;
@@ -82,7 +105,7 @@ export interface SpecialistSummary {
   noun: 'specialist' | 'subagent';
 }
 
-const EMPTY: SpecialistSummary = { helpers: [], needsYou: 0, working: 0, finished: 0, noun: 'specialist' };
+const EMPTY: SpecialistSummary = { helpers: [], plans: [], needsYou: 0, working: 0, finished: 0, noun: 'specialist' };
 
 function asText(v: unknown): string {
   return typeof v === 'string' ? v : '';
@@ -181,29 +204,47 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
     if (!sessionId) return EMPTY;
     const session = store.getSession(sessionId);
     const helpers: HelperView[] = [];
+    const plans: PlanGroupView[] = [];
     const keyParts: string[] = [];
     for (const [id, tool] of session.toolCalls) {
       // Task 5b: a plan's specialists have no card of their own, so the loop
-      // below never sees them. One that is WAITING ON THE USER is listed
-      // here, so the chip says "needs you" and its popup can answer the ask
-      // even when the plan card is scrolled out of view — the same signal an
-      // ordinary specialist's ask gets. Working or finished plan specialists
-      // are left out on purpose: the plan card is their progress surface
-      // (contract R2), and listing them would change the chip for every plan.
+      // below never sees them; they are read off the plan card instead.
+      // Task 8 (review 6, Q6-2 — "we need to associate each one with its
+      // plan"): the popup now lists a plan's WORKING specialists too, not only
+      // the ones waiting on the user, grouped under a row for their plan. A
+      // plan that has finished, stopped or failed is not listed — the card in
+      // the chat is its record — except for a specialist whose ask is still
+      // open, which must stay answerable here (an ask never goes silent).
       if (tool.plan && isPlanCard(tool)) {
-        for (const kid of planWithActivity(tool.plan, tool.subagentSegments).steps.flatMap((st) => st.children ?? [])) {
+        const record = planWithActivity(tool.plan, tool.subagentSegments);
+        // Only a plan that is under way can have specialists at work.
+        const live = record.status === 'running' || record.status === 'paused';
+        const rows: HelperView[] = [];
+        for (const kid of record.steps.flatMap((st) => st.children ?? [])) {
           const kidTools: AskSegment[] = [];
           for (const seg of kid.segments ?? []) if (seg.type === 'tool') kidTools.push(seg);
           const asks = kidTools.filter(t => t.status === 'awaiting-approval' && !!t.requestId);
-          if (asks.length === 0) continue;
-          helpers.push({
+          const working = live && kid.status === 'running';
+          if (asks.length === 0 && !working) continue;
+          rows.push({
             run: kid, parentToolCallId: id, tool: planChildCard(kid), asks, toolCalls: kidTools.length,
-            group: 'needs-you', kind: 'native',
+            group: asks.length > 0 ? 'needs-you' : 'working', kind: 'native', planId: record.planId,
           });
-          keyParts.push(['plan', kid.childId, kid.status, kid.title, kidTools.length,
+          const segs = kid.segments ?? [];
+          const last = segs[segs.length - 1];
+          keyParts.push(['plan', kid.childId, kid.status, kid.title, kid.steps ?? '', kid.model?.label ?? '', segs.length,
+            last ? `${last.type}:${last.id}:${'content' in last ? last.content.length : (last as AskSegment).status}` : '',
             kidTools.slice(-4).map(t => `${t.toolUseId}:${t.status}${t.askHeld ? 'h' : ''}${t.response ? t.response.length : ''}`).join('+'),
             asks.map(a => a.requestId).join('+')].join(':'));
         }
+        if (rows.length === 0) continue;
+        // Askers first: they are the reason to open the popup at all.
+        rows.sort((a, b) => (a.group === b.group ? 0 : a.group === 'needs-you' ? -1 : 1));
+        helpers.push(...rows);
+        const stepsDone = record.steps.filter((st) => st.status === 'done').length;
+        const needsYou = rows.filter((r) => r.group === 'needs-you').length;
+        plans.push({ planId: record.planId, toolUseId: id, title: record.title, stepsDone, stepsTotal: record.steps.length, needsYou, helpers: rows });
+        keyParts.push(['plan-group', record.planId, record.title, stepsDone, record.steps.length].join(':'));
         continue;
       }
       // A native hire brings its own ledger record; a Claude Code subagent has
@@ -256,8 +297,13 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
     }
     const key = keyParts.join('|');
     if (key === cache.current.key) return cache.current.value;
+    // Task 8: the counts include plan specialists — the chip reads
+    // "2 specialists" while a plan has two working, and "1 needs you" when
+    // one of them asks (a plan is not counted as one; the chip counts
+    // specialists, which is the word on it).
     const value: SpecialistSummary = helpers.length === 0 ? EMPTY : {
       helpers,
+      plans,
       needsYou: helpers.filter(h => h.group === 'needs-you').length,
       working: helpers.filter(h => h.group === 'working').length,
       finished: helpers.filter(h => h.group === 'finished').length,

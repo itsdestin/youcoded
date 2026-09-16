@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
 import type { AttentionState } from '../state/chat-types';
 import type { SessionStatusColor } from '../components/StatusDot';
+import { hasOpenSpecialistAsk } from '../utils/specialist-cards';
 
 // Attention states that mean "act now" get the same red the permission prompt
 // uses. Amber is reserved for the one state that genuinely means "I don't know"
@@ -110,6 +111,15 @@ export function useSessionAttention(
         else if (t.status === 'running') hasRunning = true;
         if (hasAwaiting) break;
       }
+      // Task 8 (review 6, Q6-1): a specialist waiting on the user — hired or
+      // part of a plan — needs the user exactly like the assistant's own ask,
+      // so it lights the same red dot. That one signal also drives the alert
+      // sound (App.tsx, on a change TO red — so an ask arriving while the dot
+      // is already red plays nothing twice) and the buddy's "awaiting
+      // approval" (via the attention report below). Its ask lives inside a
+      // card, often one from a turn that already ended, hence the separate
+      // check over every card (cached per toolCalls Map).
+      if (!hasAwaiting && hasOpenSpecialistAsk(chatState.toolCalls)) hasAwaiting = true;
       // Priority: red (permission prompt OR a state that needs a decision) →
       // amber ("something may be wrong, I don't know") → green (working) →
       // blue (unseen activity) → gray (idle).
@@ -143,6 +153,8 @@ export function useSessionAttention(
         const t = chatState.toolCalls.get(id);
         if (t?.status === 'awaiting-approval') { awaitingApproval = true; break; }
       }
+      // Same specialist-ask rule as the owned-session branch above.
+      if (!awaitingApproval && hasOpenSpecialistAsk(chatState.toolCalls)) awaitingApproval = true;
       const status: SessionStatusColor = awaitingApproval ? 'red' : attentionDotColor(chatState.attentionState) ?? 'gray';
       next.set(sid, { status, attentionState: chatState.attentionState, awaitingApproval });
     }

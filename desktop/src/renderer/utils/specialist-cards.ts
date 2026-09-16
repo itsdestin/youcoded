@@ -28,3 +28,33 @@ export function hasPlanChildAsk(tool: ToolCallState): boolean {
   if (tool.toolName !== 'propose_plan' || !tool.subagentSegments) return false;
   return tool.subagentSegments.some(s => s.type === 'tool' && s.status === 'awaiting-approval' && !!s.requestId);
 }
+
+// Answers keyed on the toolCalls Map itself: the reducer replaces that Map
+// only when a tool card changes (never on streamed text), so a session whose
+// cards did not change is answered without walking them again.
+const openAskCache = new WeakMap<Map<string, ToolCallState>, boolean>();
+
+/**
+ * Specialists plans, Task 8 (review 6, Q6-1): is ANY specialist in this
+ * conversation — a hired one (Task card) or a plan's (plan card) — waiting on
+ * the user? The conversation's red dot, its alert sound and the buddy's
+ * "awaiting approval" all follow this (useSessionAttention), the same as for
+ * the assistant's own asks.
+ *
+ * WHY every card and not just the current turn's: a background specialist
+ * asks after the turn that hired it has ended, so its card is no longer in
+ * `activeTurnToolIds`. An answered, expired or resolved-elsewhere ask drops
+ * its requestId / leaves 'awaiting-approval' (chat-reducer patchNestedAsk),
+ * so the dot clears with it. A HELD ask (the specialist carried on without
+ * it) is still answerable and still counts, as it does on the chip.
+ */
+export function hasOpenSpecialistAsk(toolCalls: Map<string, ToolCallState>): boolean {
+  const cached = openAskCache.get(toolCalls);
+  if (cached !== undefined) return cached;
+  let found = false;
+  for (const tool of toolCalls.values()) {
+    if (hasNestedAsk(tool) || hasPlanChildAsk(tool)) { found = true; break; }
+  }
+  openAskCache.set(toolCalls, found);
+  return found;
+}

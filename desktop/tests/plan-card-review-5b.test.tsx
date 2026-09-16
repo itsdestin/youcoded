@@ -89,25 +89,10 @@ function bridge(over: Record<string, unknown> = {}) {
 beforeEach(() => resetPlanSupportForTests());
 afterEach(() => { cleanup(); delete (window as any).claude; });
 
-describe('1. an approximate limit says so', () => {
-  it('the ceiling reads "about" and one line explains the ChatGPT overshoot', () => {
-    bridge();
-    render(<ChatProvider><Card initial={plan({ approximateLimit: true })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Up to about 42,000 tokens · specialists run on GPT-5.1 (ChatGPT), which has no published price');
-    expect(screen.getByTestId('plan-approximate-note')).toHaveTextContent('On ChatGPT, one reply can run past this limit before the plan pauses.');
-  });
-
-  it('a priced approximate plan says "about" for the tokens too, and so does "spent of"', () => {
-    bridge();
-    const { unmount } = render(<ChatProvider><Card initial={plan({ approximateLimit: true, ceilingUsd: 0.12 })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Up to about $0.12 (about 42,000 tokens)');
-    unmount();
-    render(<ChatProvider><Card initial={plan({ approximateLimit: true, status: 'running', usedTokens: 1000, steps: [{ ...plan().steps[0], status: 'running' }] })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Spent 1,000 tokens of the limit of about 42,000 tokens');
-    expect(screen.getByTestId('plan-approximate-note')).toBeInTheDocument();
-  });
-
-  it('an exact limit is unchanged and has no note', () => {
+// 1. The approximate limit: superseded by Task 8 (review 6, R6-1 — a tilde on
+// every limit figure, no extra sentence). Pinned in tests/plan-card-review-r7.test.tsx.
+describe('1. an exact limit is unchanged', () => {
+  it('reads as signed, with no tilde and no note', () => {
     bridge();
     render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
     expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Up to 42,000 tokens · specialists run on');
@@ -328,13 +313,15 @@ describe('10. a plan specialist waiting on the user lights the specialists chip'
     fireEvent.click(chip);
     const card = screen.getByTestId('helper-card-kid-a');
     expect(within(card).getByTestId('helper-card-ask')).toHaveTextContent('Wren wants to:');
-    // Only the asking specialist is listed — its working sibling is not.
-    expect(screen.queryByTestId('helper-card-kid-b')).toBeNull();
+    // Task 8 (review 6, Q6-2): the working sibling is now listed too, under
+    // the same plan (tests/plan-card-review-r7.test.tsx pins the grouping).
+    expect(screen.getByTestId('helper-card-kid-b')).toBeInTheDocument();
   });
 
-  it('a plan with no open ask adds nothing to the chip', () => {
+  it('a plan with no open ask does not say "needs you" (Task 8: it counts its working specialists instead)', () => {
     bridge();
     render(<ChatProvider><Card initial={running} /></ChatProvider>);
-    expect(screen.queryByTestId('specialists-chip')).toBeNull();
+    expect(screen.getByTestId('specialists-chip')).toHaveTextContent('2 specialists');
+    expect(screen.getByTestId('specialists-chip')).not.toHaveTextContent('needs you');
   });
 });
