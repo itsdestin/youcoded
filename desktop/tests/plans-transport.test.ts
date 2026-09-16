@@ -99,6 +99,7 @@ import { RemoteServer } from '../src/main/remote-server';
 import { WindowRegistry } from '../src/main/window-registry';
 import { IPC } from '../src/shared/types';
 import { PLAN_REQUEST_CHANNELS, handlePlanRequest } from '../src/main/harness/plans/plan-requests';
+import { chatReducer } from '../src/renderer/state/chat-reducer';
 
 const plan = (seq: number, planId = 'p1') => ({
   planId, toolUseId: `tu-${planId}`, status: 'proposed', seq, steps: [], goal: 'g',
@@ -366,5 +367,71 @@ describe('the plans-event push', () => {
     const planFrames = frames.filter((f) => f.type === 'plans:event');
     expect(planFrames.map((f) => f.payload.plan.seq)).toEqual([8]);
     expect(types.indexOf('plans:event')).toBeGreaterThan(types.indexOf('chat:hydrate'));
+  });
+});
+
+// Review fix 1: a phone that loads a session's FIRST page itself (over
+// transcript:page) has no live-state re-send — the shim's replayLiveState is a
+// no-op — so without this a finished plan's card kept its proposal-time record
+// and live buttons forever.
+describe('a remote first page brings its plan records along', () => {
+  function pagingServer(planViews: any[]) {
+    const host = {
+      getHistoryPage: vi.fn((_id: string, before: number | null) => ({
+        events: [{ type: 'user-message', sessionId: 's1', uuid: `u-${before}`, timestamp: 1, data: { text: 'hi' } }],
+        hasMore: before === null, nextIndex: 5,
+      })),
+      planViewsFor: vi.fn(async () => planViews),
+    };
+    const server: any = new RemoteServer(Object.assign(new EventEmitter(), { listSessions: () => [] }) as any, new EventEmitter() as any, { enabled: true } as any);
+    server.setNativeRuntime({ nativeHost: host });
+    const client = (name: string) => {
+      const frames: any[] = [];
+      return { frames, c: { id: name, ws: { readyState: 1, bufferedAmount: 0, send: (raw: string) => frames.push(JSON.parse(raw)) }, deviceId: name, phase: 'live' } };
+    };
+    return { server, host, client };
+  }
+
+  it('sends the page first, then every journal record, to the asking client only', async () => {
+    const { server, host, client } = pagingServer([plan(9, 'p1'), plan(2, 'p2')]);
+    const asker = client('asker');
+    const bystander = client('bystander');
+    server.clients.add(asker.c);
+    server.clients.add(bystander.c);
+    await server.handleMessage(asker.c, JSON.stringify({ type: 'transcript:page', id: 'pg', payload: { sessionId: 's1', beforeCursor: null } }));
+    await vi.waitFor(() => expect(asker.frames.filter((f) => f.type === 'plans:event')).toHaveLength(2));
+    expect(asker.frames.map((f) => f.type)).toEqual(['transcript:page:response', 'plans:event', 'plans:event']);
+    expect(asker.frames.slice(1).map((f) => f.payload)).toEqual([
+      { sessionId: 's1', plan: plan(9, 'p1') },
+      { sessionId: 's1', plan: plan(2, 'p2') },
+    ]);
+    expect(host.planViewsFor).toHaveBeenCalledWith('s1');
+    expect(bystander.frames).toEqual([]);
+  });
+
+  it('an older page sends no records — the renderer keeps them from the first page', async () => {
+    const { server, host, client } = pagingServer([plan(9)]);
+    const asker = client('asker');
+    await server.handleMessage(asker.c, JSON.stringify({ type: 'transcript:page', id: 'pg', payload: { sessionId: 's1', beforeCursor: { path: 'native:s1', offset: 5 } } }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(asker.frames.map((f) => f.type)).toEqual(['transcript:page:response']);
+    expect(host.planViewsFor).not.toHaveBeenCalled();
+  });
+
+  it('a record the phone already holds changes nothing', () => {
+    const S = 'sess';
+    const record = { ...plan(4), toolUseId: 'call-plan', title: 't', ceilingTokens: 1, ceilingUsd: null, model: { label: 'm' } } as any;
+    const base = [
+      { type: 'SESSION_INIT', sessionId: S },
+      { type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'u', toolUseId: 'call-plan', toolName: 'propose_plan', toolInput: {} },
+      { type: 'PLAN_CHANGED', sessionId: S, plan: record },
+    ].reduce(chatReducer as any, new Map()) as any;
+    const again: any = chatReducer(base, { type: 'PLAN_CHANGED', sessionId: S, plan: JSON.parse(JSON.stringify(record)) } as any);
+    expect(again.get(S).toolCalls.get('call-plan').plan).toEqual(record);
+    expect([...again.get(S).toolCalls.keys()]).toEqual([...base.get(S).toolCalls.keys()]);
+    expect(again.get(S).pendingPlanRecords).toBeUndefined();
+    // …and an older copy never rewinds it.
+    const older = chatReducer(base, { type: 'PLAN_CHANGED', sessionId: S, plan: { ...record, seq: 3, status: 'proposed' } } as any);
+    expect(older).toBe(base);
   });
 });

@@ -2643,6 +2643,24 @@ export class RemoteServer {
             cursor: nativePage.hasMore ? { path: `native:${pageSessionId}`, offset: nativePage.nextIndex, sizeAtRead: 0 } : null,
             hasMore: nativePage.hasMore,
           });
+          // Specialists plans (Task 6 review): a phone that loads a session's
+          // FIRST page itself gets no live-state re-send (the shim's
+          // replayLiveState does nothing), so its plan cards would keep the
+          // record from when they were proposed — with live buttons — forever.
+          // Send the journal's current records right after the page, to THIS
+          // client only. Older pages need nothing: the renderer keeps a record
+          // whose card is not loaded yet and applies it when that page arrives.
+          // A record the phone already has is a no-op (latest seq wins).
+          if (beforeOffset === null && this.nativeRuntime) {
+            const host = this.nativeRuntime.nativeHost;
+            try {
+              for (const plan of await host.planViewsFor(pageSessionId)) {
+                if (!(await this.sendGated(client, { type: 'plans:event', payload: { sessionId: pageSessionId, plan } }))) break;
+              }
+            } catch (err) {
+              console.error('[remote-server] could not read plan records for a first page:', err);
+            }
+          }
           break;
         }
 

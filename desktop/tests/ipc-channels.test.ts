@@ -1502,9 +1502,11 @@ describe('plans:* channel parity (seven requests + plans:event)', () => {
   it('remote-server.ts has a case for each of the seven, and no other plans:* string', () => {
     const src = read('src', 'main', 'remote-server.ts');
     for (const t of REQUESTS) expect(src, `${t} has no WS case`).toContain(`case '${t}':`);
-    // plans:event is broadcast by ipc-handlers.ts, never by the server itself —
-    // the server holds no plan buffer of its own (design §5).
-    expect(plansStrings(src)).toEqual(REQUESTS);
+    // plans:event appears ONCE: the first transcript page's records, sent to
+    // the asking client. Live changes are broadcast by ipc-handlers.ts, and the
+    // server holds no plan buffer of its own (design §5; plans-transport.test.ts).
+    expect(plansStrings(src)).toEqual([...REQUESTS, 'plans:event'].sort());
+    expect(src.match(/'plans:event'/g)).toHaveLength(1);
   });
 
   it('SessionService.kt answers the seven, and never names the push', () => {

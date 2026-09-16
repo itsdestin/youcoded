@@ -96,6 +96,11 @@ export async function handlePlanRequest(
         // it must never reach the journal with `undefined` as a path part.
         if (!nonEmpty(p.sessionId) || !nonEmpty(p.planId)) return fail(ACTION_FAILED);
         const { sessionId, planId } = p;
+        // `text` and `tokens` are cast, not checked: PlanService.comment and
+        // .addBudget are the validators (empty or over-long comment, a token
+        // amount that isn't a positive whole number, below the paused minimum)
+        // and answer with the exact reason the card shows. Checking here too
+        // would put a second, drifting copy of those rules in the transport.
         if (channel === 'plans:approve') answer = await host.approvePlan(sessionId, planId);
         else if (channel === 'plans:comment') answer = await host.commentOnPlan(sessionId, planId, p.text as string);
         else if (channel === 'plans:add-budget') answer = await host.addPlanBudget(sessionId, planId, p.tokens as number);
