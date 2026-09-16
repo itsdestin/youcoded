@@ -24,13 +24,22 @@ const session: PastSession = {
 
 beforeEach(() => {
   const sessionId = previewSessionKey('sess-1');
-  (window as any).claude = { chatsearch: { read: vi.fn().mockResolvedValue({
+  (window as any).claude = {
+    // The resume controls and the tag sheet read these on open.
+    providers: { list: vi.fn().mockResolvedValue([]), catalog: vi.fn().mockResolvedValue([]) },
+    tags: { list: vi.fn().mockResolvedValue([]) },
+    session: {
+      getMeta: vi.fn().mockResolvedValue({ tags: [], note: '', flags: { complete: true } }),
+      setFlag: vi.fn().mockResolvedValue({ ok: true }),
+    },
+    chatsearch: { read: vi.fn().mockResolvedValue({
     ok: true, cursor: null, hasMore: false,
     events: [
       { type: 'user-message', sessionId, uuid: 'u1', timestamp: 1, data: { text: 'why is sync broken' } },
       { type: 'assistant-text', sessionId, uuid: 'a1', timestamp: 2, data: { text: 'checking the logs now' } },
     ],
-  }) } };
+  }) },
+  };
 });
 
 describe('ConversationPreview', () => {
@@ -45,10 +54,31 @@ describe('ConversationPreview', () => {
 
   it('Resume hands the row back to the parent', async () => {
     const onResume = vi.fn();
-    render(<ConversationPreview session={{ ...session, provider: 'native' }} onClose={() => {}} onResume={onResume} />);
+    render(<ConversationPreview session={{ ...session, provider: 'claude' }} onClose={() => {}} onResume={onResume} />);
     await screen.findByText('why is sync broken');
-    expect((window as any).claude.chatsearch.read).toHaveBeenCalledWith({ provider: 'native', id: 'sess-1', projectSlug: 'proj' });
-    fireEvent.click(screen.getByRole('button', { name: /Resume/ }));
-    expect(onResume).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sess-1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resume Session' }));
+    // App's own resume arguments: id, folder, then the picked launch choices.
+    expect(onResume).toHaveBeenCalledWith('sess-1', 'proj', '/home/user/proj', expect.any(String), false, false, 'claude', undefined);
+  });
+});
+
+describe('ConversationPreview organize controls', () => {
+  it('shows Complete as the stored state, and toggling it writes the flag', async () => {
+    render(<ConversationPreview session={session} onClose={() => {}} onResume={() => {}} />);
+    // getMeta says complete; the list row did not know.
+    const done = await screen.findByRole('button', { name: `Mark ${session.name} not complete` });
+    fireEvent.click(done);
+    expect((window as any).claude.session.setFlag).toHaveBeenCalledWith('sess-1', 'complete', false);
+  });
+
+  it('puts the date in the action card at the foot, with the Resume button', async () => {
+    const { container } = render(<ConversationPreview session={{ ...session, lastModified: Date.now() - 3 * 3600_000 }} onClose={() => {}} onResume={() => {}} />);
+    await screen.findByText('why is sync broken');
+    const resume = screen.getByRole('button', { name: 'Resume Session' });
+    const date = screen.getByText('3h ago');
+    // Same card: the date sits above the Resume button, not under the title.
+    const card = resume.closest('.bg-panel');
+    expect(card && card.contains(date)).toBe(true);
+    expect(container.querySelector('header')?.textContent).not.toContain('3h ago');
   });
 });

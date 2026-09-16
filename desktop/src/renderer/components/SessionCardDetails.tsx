@@ -1,6 +1,6 @@
-// The two lines a past-conversation card shows under its title: the tag row and
-// the dotted details line (project · model · size … date). Shared by the Resume
-// browser's cards and Project View's Conversations tab.
+// The parts a past-conversation card is made of: the tag row, the dotted
+// details line (project · model · size … date) and the Complete button. Shared
+// by the Resume browser, Project View's Conversations tab and its preview.
 //
 // WHY one file (2026-09-16): Destin asked for the Projects page's conversation
 // cards to look like the Resume browser's. Copying these lines would give two
@@ -134,5 +134,38 @@ export function SessionCardMeta({ session: s, showProject }: { session: PastSess
       )}
       <span className="shrink-0 ml-auto">{formatRelativeTime(s.lastModified)}</span>
     </div>
+  );
+}
+
+/** Mark a conversation complete, or undo it. The Resume card and the Projects
+ *  preview both carry it. Hover copy is a question ("Mark this session
+ *  complete?") so the icon reads as an action, not a status badge. */
+export function CompleteToggle({ done, name, onToggle, className = '' }: {
+  done: boolean;
+  name: string;
+  onToggle: (next: boolean) => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onToggle(!done); }}
+      aria-pressed={done}
+      title={done ? 'Marked complete — hidden unless Show Complete is on. Click to undo.' : 'Mark this session complete?'}
+      aria-label={done ? `Mark ${name} not complete` : `Mark ${name} complete`}
+      className={`rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        done ? 'text-accent' : 'text-fg-faint hover:text-fg-2'
+      } ${className}`}
+    >
+      {/* Check-in-a-circle: "done" is what the user is saying; hiding the row is
+          a consequence the Show Complete toggle already explains. Filled when
+          set so the state reads at a glance. */}
+      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <circle cx="12" cy="12" r="9" fill={done ? 'currentColor' : 'none'} />
+        {/* Knocked out of the fill when set — var(--canvas), not a hardcoded
+            white, so it survives a dark or community theme. */}
+        <path d="M8 12.5l2.5 2.5L16 9.5" stroke={done ? 'var(--canvas)' : 'currentColor'} />
+      </svg>
+    </button>
   );
 }

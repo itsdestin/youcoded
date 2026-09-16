@@ -33,6 +33,7 @@ import { FilesTab } from './tabs/FilesTab';
 import { ConversationsTab } from './tabs/ConversationsTab';
 import { ContextTab } from './tabs/ContextTab';
 import { ConversationPreview } from './ConversationPreview';
+import type { ResumeHandler } from '../ResumeOptions';
 import { ProjectHero, formatFileCount } from './ProjectHero';
 import { ProjectsEmptyCard } from './ProjectsEmptyCard';
 import { ProjectSwitcher } from './ProjectSwitcher';
@@ -91,9 +92,12 @@ interface ProjectViewProps {
   activeSessionCwd?: string;
   // Threaded from App: starts a new conversation in the given cwd.
   onNewConversation: (cwd: string) => void;
-  // provider threads the row's runtime so App's resume takes the native path
-  // (pre-resume model picker) for a native conversation instead of the CC path.
-  onResumeConversation: (sessionId: string, projectSlug: string, projectPath: string, provider?: string) => void;
+  // App's own resume entry (handleResumeSession), so the preview's model
+  // picker and launch switches reach it exactly as the Resume browser's do.
+  onResumeConversation: ResumeHandler;
+  // The Settings defaults the preview's resume controls start from.
+  defaultModel?: string;
+  defaultSkipPermissions?: boolean;
 }
 
 // Basename of a picked path, for naming the file a failure is ABOUT.
@@ -953,11 +957,15 @@ export function ProjectView(props: ProjectViewProps) {
               <ConversationPreview
                 session={previewSession}
                 onClose={() => setPreviewSession(null)}
-                onResume={(s) => {
-                  // WHY: resume closes Project View and launches/resumes the session
-                  // (handled by the App-threaded prop), then drops the preview.
-                  props.onResumeConversation(s.sessionId, s.projectSlug, s.projectPath, s.provider);
-                  setPreviewSession(null);
+                defaultModel={props.defaultModel}
+                defaultSkipPermissions={props.defaultSkipPermissions}
+                onResume={async (...args) => {
+                  // WHY: App closes Project View and launches/resumes the
+                  // session; the preview is dropped only once that launched,
+                  // so a refused resume leaves it open to retry.
+                  const launched = await props.onResumeConversation(...args);
+                  if (launched !== false) setPreviewSession(null);
+                  return launched;
                 }}
               />
             )}

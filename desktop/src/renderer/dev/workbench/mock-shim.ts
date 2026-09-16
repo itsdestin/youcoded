@@ -1888,7 +1888,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const conversationsIn = (projectPath: string) => {
     const past = store.getState().past
       .filter((p) => p.projectPath === projectPath)
-      .map((p) => ({ ...p, preview: p.note ?? `Session in ${p.projectSlug}` }));
+      // `preview` is the conversation's FIRST message on the real list
+      // (project-conversations.ts) — the same opening line the fake preview
+      // pane starts from. It used to read "Session in <folder>", which Destin
+      // reasonably asked about (2026-09-16): nothing real ever says that.
+      .map((p) => ({ ...p, preview: (studentSwitch ? STUDENT_TURNS : CHAT_TURNS)[0][0] }));
     if (!studentSwitch) return past;
     const live = store.getState().sessions
       .filter((x: any) => x.cwd === projectPath && !past.some((p) => p.name === x.name))

@@ -18,7 +18,6 @@ import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import { chatReducer } from '../state/chat-reducer';
 import type { ChatAction, ChatState } from '../state/chat-types';
-import { useTheme } from '../state/theme-context';
 import { COPY, previewSessionKey, type ChatsearchProvider } from '../../shared/chatsearch-refs';
 import type { TranscriptPageResult } from '../../shared/types';
 
@@ -33,26 +32,7 @@ function previewReducer(state: ChatState, action: ChatAction | typeof RESET): Ch
   return action.type === RESET.type ? new Map() : chatReducer(state, action as ChatAction);
 }
 
-/**
- * The chat's background, drawn inside the preview. "Same as the chat" (Destin,
- * 2026-09-16): on a wallpaper theme the chat is the wallpaper itself with
- * frosted bubbles over it, but a preview sits inside a panel that paints its
- * own surface, so the wallpaper behind the app cannot show through. These are
- * the same layers ThemeBg.tsx paints behind the app (#theme-bg, #theme-pattern),
- * built from the same theme styles, scaled to this box. The bubbles'
- * backdrop-filter then frosts THIS wallpaper, as it does in the chat.
- */
-function ChatBackdrop() {
-  const { bgStyle, patternStyle } = useTheme();
-  return (
-    <div className="pointer-events-none absolute inset-0 bg-canvas" aria-hidden="true">
-      {bgStyle && <div className="absolute inset-0" style={bgStyle as React.CSSProperties} />}
-      {patternStyle && <div className="absolute inset-0" style={patternStyle as React.CSSProperties} />}
-    </div>
-  );
-}
-
-export default function SessionPreviewPane({ provider, id, title, onSettled, projectSlug }: {
+export default function SessionPreviewPane({ provider, id, title, onSettled, projectSlug, backdrop = true }: {
   provider: ChatsearchProvider;
   id: string;
   title: string;
@@ -67,6 +47,11 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
    *  list row does). Main then opens the file directly instead of looking the
    *  id up in the search index — see ChatsearchReadRequest.projectSlug. */
   projectSlug?: string;
+  /** Paint the preview surface (`.preview-backdrop`, globals.css). A host
+   *  that paints it over a larger area — the Resume browser's sheet, whose
+   *  action card sits below this pane — passes false, so the two do not meet
+   *  at a seam. */
+  backdrop?: boolean;
 }) {
   const key = previewSessionKey(id);
   const [chat, dispatch] = useReducer(previewReducer, undefined, () => new Map() as ChatState);
@@ -201,10 +186,7 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
   }, [chat, phase]);
 
   return (
-    // relative + isolate: the backdrop layers sit under the scroller without
-    // escaping this box's stacking context.
-    <div className="relative isolate flex h-full min-h-0 w-full min-w-0 flex-col">
-      <ChatBackdrop />
+    <div className={`relative flex h-full min-h-0 w-full min-w-0 flex-col${backdrop ? ' preview-backdrop' : ''}`}>
       {/* overflow-anchor: none — the prepend is anchored by hand above; the
           browser's own anchoring would move it a second time. */}
       <div ref={scrollRef} className="relative min-h-0 flex-1 overflow-y-auto py-3" style={{ overflowAnchor: 'none' }}>

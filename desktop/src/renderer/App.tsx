@@ -4383,7 +4383,11 @@ function AppInner() {
         // Project view homes to the focused conversation's folder on every open.
         activeSessionCwd={currentSession?.cwd}
         onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
-        onResumeConversation={(sid, slug, path, provider) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); handleResumeSession(sid, slug, path, undefined, undefined, undefined, provider); }}
+        // Project View closes first, as it always has, so whatever the resume
+        // shows (the chat, a take-over prompt) is not under it.
+        onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}
+        defaultModel={sessionDefaults.model}
+        defaultSkipPermissions={sessionDefaults.skipPermissions}
       />
     </div>
     </ArtifactProvider>
