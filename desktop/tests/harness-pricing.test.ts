@@ -25,9 +25,59 @@ describe('costForUsage', () => {
     expect(costForUsage(u, { in: 3, out: 15, cacheRead: 0.3 })).toBeCloseTo(0.3 + 0.27, 10);
   });
 
-  it('charges cache writes at the write rate on top of the prompt', () => {
+  // Fix 2026-09-16. This test used to be titled "…on top of the prompt" and
+  // expected 3 + 1.875 = $4.875 — i.e. the whole 1M prompt at the input rate AND
+  // the 500k written tokens again at the write rate, billing 1.5M tokens for a
+  // 1M-token prompt. It rested on `inputTokens` meaning "the prompt excluding
+  // cache writes", which is not what the SDK reports: `inputTokens` is
+  // `inputTokens.total` = noCache + cacheRead + cacheWrite (ai/dist/index.js →
+  // asLanguageModelUsage, over @ai-sdk/anthropic's convertAnthropicUsage). The
+  // written tokens must therefore come OUT of the prompt bucket before the write
+  // premium is applied, exactly as cached reads do in the test above.
+  it('charges cache writes at the write rate INSTEAD of the input rate, not on top of it', () => {
     const u = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 500_000 };
-    expect(costForUsage(u, { in: 3, out: 15, cacheWrite: 3.75 })).toBeCloseTo(3 + 1.875, 10);
+    // 500k uncached at $3/M + 500k written at $3.75/M
+    expect(costForUsage(u, { in: 3, out: 15, cacheWrite: 3.75 })).toBeCloseTo(1.5 + 1.875, 10);
+  });
+
+  it('charges reads and writes out of the same prompt, never twice over', () => {
+    // A cache-establishing turn that also reused a warm prefix: 200k fresh,
+    // 300k written, 500k read — one million prompt tokens, billed once each.
+    const u = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 500_000, cacheCreationTokens: 300_000 };
+    const cost = costForUsage(u, { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 })!;
+    expect(cost).toBeCloseTo(0.6 + 1.125 + 0.15, 10);
+    // The whole point: never more than pricing the entire prompt at the dearest
+    // of the three rates.
+    expect(cost).toBeLessThan((1_000_000 / 1e6) * 3.75);
+  });
+
+  it('leaves written tokens at the full input rate when no write rate is published', () => {
+    // Same fallback the read side has: an unpublished rate means we don't know
+    // the premium, so the tokens stay where they are rather than going free.
+    const u = { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 500_000 };
+    expect(costForUsage(u, { in: 3, out: 15 })).toBeCloseTo(3, 10);
+  });
+
+  // Review finding 2026-09-16: this used to assert only `>= 0`, which
+  // `costForUsage`'s own trailing `Math.max(0, cost)` guarantees whatever the
+  // clamps do — so it could not go red and pinned nothing. Both halves of the
+  // clamp are asserted by exact value instead.
+  it('bounds a malformed cache report by the prompt, on BOTH the subtraction and the charge', () => {
+    // 5,000 written tokens claimed against a 1,000-token prompt. Only 1,000 can
+    // come out of the prompt, so only 1,000 may go back in at the write rate:
+    // charging the raw 5,000 would bill tokens the prompt was never credited
+    // with, and would exceed the whole prompt priced at the dearest rate.
+    const u = { inputTokens: 1_000, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 5_000 };
+    const cost = costForUsage(u, { in: 3, out: 15, cacheWrite: 3.75 })!;
+    expect(cost).toBeCloseTo((1_000 / 1e6) * 3.75, 10);          // 0.00375, not 0.01875
+    expect(cost).toBeLessThanOrEqual((1_000 / 1e6) * 3.75);
+  });
+
+  it('never bills a negative prompt when reads and writes together overrun it', () => {
+    const u = { inputTokens: 100, outputTokens: 0, cacheReadTokens: 5_000, cacheCreationTokens: 5_000 };
+    // Reads take the whole prompt, leaving nothing for writes to claim.
+    expect(costForUsage(u, { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 }))
+      .toBeCloseTo((100 / 1e6) * 0.3, 10);
   });
 
   it('falls back to the full input rate when no cache rate is published', () => {
