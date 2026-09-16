@@ -353,11 +353,6 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
-        if (parsed.held === true) {
-          const heldAction: ChatAction = { type: 'PERMISSION_HELD', sessionId, requestId: parsed.requestId };
-          state = chatReducer(state, heldAction);
-          actions.push(heldAction);
-        }
       } else if (parsed.type === 'specialist_run' && parsed.run) {
         // A RUNNING record's elapsed time is inherently live — the card ticks
         // against the wall clock — so a fixed startedAt would read "9189h" by

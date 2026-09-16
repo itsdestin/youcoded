@@ -60,14 +60,6 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
       };
     }
 
-    // Specialists 1c: the child-ask-router's 5-minute hold elapsed. The ask is
-    // still answerable; the nested row just tells the user the helper moved on.
-    case 'PermissionHeld': {
-      const requestId = payload._requestId as string;
-      if (!requestId) return null;
-      return { type: 'PERMISSION_HELD', sessionId, requestId };
-    }
-
     // Remote access batch 2 (§7): the broker/relay's "this ask is no longer open"
     // signal. Until batch 2 it was a host-side purge only; a phone that never
     // saw the answer kept live-looking Yes/No buttons on a dead question.

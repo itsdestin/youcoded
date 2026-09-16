@@ -92,20 +92,28 @@ describe('invalidation', () => {
   });
 
   it('is triggered by the ChatGPT card on a status transition', async () => {
-    const status = (window as any).claude.chatgpt.status as ReturnType<typeof vi.fn>;
-    status.mockResolvedValueOnce({ state: 'waiting' });
-    status.mockResolvedValue({ state: 'signed-in', email: 'd@example.com', plan: 'free', usage: null });
-    render(<ChatGptBlock />);
-    // First read → 'waiting' (a mount, not a transition: no invalidation yet).
-    expect(await screen.findByText('Waiting for the browser…')).toBeInTheDocument();
-    expect(invalidateSpy).not.toHaveBeenCalled();
-    // The 1 s poll sees 'signed-in' → a transition → the cache is dropped.
-    // WHY the generous timeout: this waits on a REAL one-second interval, and
-    // the suite runs ~170 files in parallel, so a 3 s budget flaked under load.
-    // A genuine regression never transitions at all, so it still fails — just
-    // eight seconds later instead of three.
-    expect(await screen.findByText('Signed in as d@example.com', {}, { timeout: 8000 })).toBeInTheDocument();
-    expect(invalidateSpy).toHaveBeenCalled();
+    // WHY fake timers: the card polls on a REAL one-second setInterval while the
+    // browser sign-in is open. Waiting on that wall clock under a ~885-file
+    // parallel run flaked at a 3 s budget, then again at 8 s (the treadmill the
+    // hygiene rule warns about — 2026-09-10 and 09-14 on macOS CI). Advancing a
+    // fake clock past the interval makes the tick deterministic; toFake keeps
+    // the timers testing-library's own waiting relies on real.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const status = (window as any).claude.chatgpt.status as ReturnType<typeof vi.fn>;
+      status.mockResolvedValueOnce({ state: 'waiting' });
+      status.mockResolvedValue({ state: 'signed-in', email: 'd@example.com', plan: 'free', usage: null });
+      render(<ChatGptBlock />);
+      // First read → 'waiting' (a mount, not a transition: no invalidation yet).
+      expect(await screen.findByText('Waiting for the browser…')).toBeInTheDocument();
+      expect(invalidateSpy).not.toHaveBeenCalled();
+      // The 1 s poll sees 'signed-in' → a transition → the cache is dropped.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(await screen.findByText('Signed in as d@example.com')).toBeInTheDocument();
+      expect(invalidateSpy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is triggered by the card after a sign-out resolves', async () => {

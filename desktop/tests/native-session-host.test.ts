@@ -244,7 +244,7 @@ describe('NativeSessionHost', () => {
     const readGuard = vi.fn(() => 12);
     const guarded = new NativeSessionHost(
       new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null,
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
       new SpecialistCatalog({ claudeUserDir: null }), readGuard,
     );
     await guarded.create({ sessionId: 'guarded', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
@@ -259,7 +259,7 @@ describe('NativeSessionHost', () => {
     let preference = 14;
     const guarded = new NativeSessionHost(
       store, factory, NO_CONTEXT, async () => null, async () => null,
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
       new SpecialistCatalog({ claudeUserDir: null }), () => preference,
     );
     await guarded.create({ sessionId: 'stored', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
@@ -275,7 +275,7 @@ describe('NativeSessionHost', () => {
     for (const id of ['old', 'bad']) {
       const resumed = new NativeSessionHost(
         store, factory, NO_CONTEXT, async () => null, async () => null,
-        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined,
         new SpecialistCatalog({ claudeUserDir: null }), () => 77,
       );
       expect(await resumed.resume(id, root)).toBe(true);
@@ -2018,19 +2018,6 @@ describe('NativeSessionHost', () => {
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
       return { store, h };
     }
-    // Task 8: a host whose specialistAskHoldMs is overridden to a small,
-    // real (not fake-timer) delay — see the constructor param's own WHY for
-    // why tests prefer this over vi.useFakeTimers() against a file this
-    // heavy in setImmediate-driven async machinery.
-    async function withParentFastAskHold(askHoldMs: number, modelFactory: any = factory) {
-      const store = new SessionStore(new NativeHome(root));
-      const h = new NativeSessionHost(
-        store, modelFactory, NO_CONTEXT, async () => null, async () => null, undefined,
-        undefined, undefined, undefined, undefined, undefined, undefined, askHoldMs,
-      );
-      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-      return { store, h };
-    }
     // The child's live HarnessSession — Task 7 reaches it the same way (through
     // the host's live map); here it is the only route to the child's tool surface.
     const childSession = (h: NativeSessionHost, id: string) => (h as any).live.get(id).session;
@@ -2218,268 +2205,23 @@ describe('NativeSessionHost', () => {
       expect(ask.payload.denyListed).toBe(true);
       expect(ask.payload.specialist).toMatchObject({ childId, agentType: 'worker' });
       expect(fs.existsSync(path.join(root, 'marker.txt'))).toBe(true); // still hasn't run — awaiting an answer
-      // A real user answers (deny) within the window — real declines get the
-      // plain copy, no redirect wording.
+      // A real user answers (deny) — real declines get the plain copy.
       expect(h.respondPermission(requestId, { behavior: 'deny' })).toBe(true);
       await sendPromise;
       const res = events.find((e) => e.type === 'tool-result')!;
       expect(res.data.isError).toBe(true);
       expect(res.data.toolResult).toMatch(/user declined/i);
-      expect(res.data.toolResult).not.toMatch(/pending on their screen/i); // not the timeout redirect
       expect(fs.existsSync(path.join(root, 'marker.txt'))).toBe(true);     // never ran
       await h.destroyAll();
     });
 
-    it('an unanswered destructive-action ask times out into the redirect, and the ask stays answerable after', async () => {
+    it('destroy(childId) cancels a routed ask registered under the parent id (raisedBy match)', async () => {
       const WORKER = resolveSpecialist('worker')!;
       const rmOnce = () => scriptedModel([
         stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
         stream(...textChunks('t', 'done'), finishChunk('stop')),
       ]) as any;
-      const { h } = await withParentFastAskHold(20, async () => rmOnce());
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const asks: any[] = [];
-      const events: any[] = [];
-      h.on('hook-event', (e) => asks.push(e));
-      childSession(h, childId).on('transcript-event', (e: any) => events.push(e));
-      const askArrived = firstAsk(h);
-      await childSession(h, childId).send('go'); // resolves once the (timed-out) turn settles
-      const requestId = await askArrived;
-      const res = events.find((e) => e.type === 'tool-result')!;
-      expect(res.data.isError).toBe(true);
-      expect(res.data.toolResult).toMatch(/pending on their screen/i);
-      expect(res.data.toolResult).toMatch(/Do NOT attempt the blocked action by any other means/);
-      // Nothing expired the card — no PermissionExpired for this id, so it is
-      // exactly what "the entry stays answerable" means.
-      expect(asks.some((e) => e.type === 'PermissionExpired' && e.payload._requestId === requestId)).toBe(false);
-      expect(h.respondPermission(requestId, { behavior: 'allow' })).toBe(true); // still findable
-      await h.destroyAll();
-    });
-
-    it('a late APPROVE while the child is still live arrives as a steer naming the tool', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      const rmOnce = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-        stream(...textChunks('t', 'done'), finishChunk('stop')),
-      ]) as any;
-      const { h } = await withParentFastAskHold(20, async () => rmOnce());
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      const child = childSession(h, childId);
-      const steerSpy = vi.spyOn(child, 'postSteer');
-      await child.send('go'); // times out into the redirect; the child stays LIVE (never destroy()'d here)
-      const requestId = await askArrived;
-      expect(h.respondPermission(requestId, { behavior: 'allow' })).toBe(true);
-      expect(steerSpy).toHaveBeenCalledTimes(1);
-      const [text] = steerSpy.mock.calls[0];
-      expect(text).toMatch(/Bash/);
-      expect(text).toMatch(/APPROVED — you may do it now/);
-      await h.destroyAll();
-    });
-
-    it('a late DENY while the child is still live arrives as a steer naming the tool, denied', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      const rmOnce = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-        stream(...textChunks('t', 'done'), finishChunk('stop')),
-      ]) as any;
-      const { h } = await withParentFastAskHold(20, async () => rmOnce());
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      const child = childSession(h, childId);
-      const steerSpy = vi.spyOn(child, 'postSteer');
-      await child.send('go');
-      const requestId = await askArrived;
-      expect(h.respondPermission(requestId, { behavior: 'deny' })).toBe(true);
-      const [text] = steerSpy.mock.calls[0];
-      expect(text).toMatch(/DENIED — do not attempt it/);
-      await h.destroyAll();
-    });
-
-    // ---- Fix pass, Finding 2: a LATE "Always allow" must persist too, not
-    // just steer/notify. Before this fix onLateResponse never read
-    // decision.always at all — it only ever steered the live child or queued
-    // a host notice, so "Always allow" answered after the timeout silently
-    // dropped the "and remember this" half, reachable through a second door
-    // beyond child-ask-router.ts's in-time path. ----
-    it('a LATE "Always allow" while the child is still live BOTH steers AND persists a specialist-keyed rule (Fix 2)', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      const rmOnce = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-        stream(...textChunks('t', 'done'), finishChunk('stop')),
-      ]) as any;
-      const store = new PermissionStore(new NativeHome(root));
-      const h = new NativeSessionHost(
-        new SessionStore(new NativeHome(root)), async () => rmOnce(), NO_CONTEXT, async () => null, async () => null, undefined,
-        store, undefined, undefined, undefined, undefined, undefined, 20,
-      );
-      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      const child = childSession(h, childId);
-      const steerSpy = vi.spyOn(child, 'postSteer');
-      await child.send('go'); // times out into the redirect; child stays live
-      const requestId = await askArrived;
-      // Same "Always allow" payload shape the in-time router test uses.
-      expect(h.respondPermission(requestId, { decision: { behavior: 'allow' }, updatedPermissions: [{ tool: 'Bash' }] })).toBe(true);
-      expect(steerSpy).toHaveBeenCalledTimes(1); // the steer still happens — this fix must not regress it
-
-      let rules: any[] = [];
-      for (let i = 0; i < POLL_TRIES; i++) {
-        rules = await store.rulesFor(root);
-        if (rules.some((r) => r.specialist === 'worker')) break;
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      expect(rules).toContainEqual(expect.objectContaining({
-        tool: 'Bash', pattern: 'rm -rf marker.txt', action: 'allow', specialist: 'worker',
-      }));
-      await h.destroyAll();
-    });
-
-    it('a LATE "Always allow" after the child already ended ALSO persists a specialist-keyed rule (Fix 2)', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      let calls = 0;
-      const rmThenText = async () => {
-        calls += 1;
-        if (calls === 1) {
-          return scriptedModel([
-            stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-            stream(...textChunks('t', 'done'), finishChunk('stop')),
-          ]) as any;
-        }
-        return factory();
-      };
-      const store = new PermissionStore(new NativeHome(root));
-      const h = new NativeSessionHost(
-        new SessionStore(new NativeHome(root)), rmThenText, NO_CONTEXT, async () => null, async () => null, undefined,
-        store, undefined, undefined, undefined, undefined, undefined, 20,
-      );
-      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      await childSession(h, childId).send('go'); // times out into the redirect
-      const requestId = await askArrived;
-      await h.destroy(childId); // normal teardown AFTER the ask already timed out
-      const noticeArrived = waitForEvent(h, (e) => e.sessionId === 'root-1' && e.type === 'user-message' && e.data.injected === 'specialist-report');
-      expect(h.respondPermission(requestId, { decision: { behavior: 'allow' }, updatedPermissions: [{ tool: 'Bash' }] })).toBe(true);
-      await noticeArrived; // the host-notice half still fires — this fix must not regress it
-
-      let rules: any[] = [];
-      for (let i = 0; i < POLL_TRIES; i++) {
-        rules = await store.rulesFor(root);
-        if (rules.some((r) => r.specialist === 'worker')) break;
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      expect(rules).toContainEqual(expect.objectContaining({
-        tool: 'Bash', pattern: 'rm -rf marker.txt', action: 'allow', specialist: 'worker',
-      }));
-      await h.destroyAll();
-    });
-
-    // Fix (Important 6, final review): onLateResponse used to hand-build its
-    // own rule object, discarding decision.grantScope entirely — an exact
-    // rule was stored no matter what width the user picked. Same command
-    // shape (git push origin feat/x) the root-session-level rememberedRuleFor
-    // test suite already pins for the 'wide' grant, driven through the LATE
-    // routed path this time.
-    it('a LATE "Always allow" persists the DERIVED WIDE rule when the user picked that width, not an exact-match rule', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      let calls = 0;
-      const pushThenText = async () => {
-        calls += 1;
-        if (calls === 1) {
-          return scriptedModel([
-            stream(toolCallChunk('c1', 'Bash', { command: 'git push origin feat/x' }), finishChunk('tool-calls')),
-            stream(...textChunks('t', 'done'), finishChunk('stop')),
-          ]) as any;
-        }
-        return factory();
-      };
-      const store = new PermissionStore(new NativeHome(root));
-      const h = new NativeSessionHost(
-        new SessionStore(new NativeHome(root)), pushThenText, NO_CONTEXT, async () => null, async () => null, undefined,
-        store, undefined, undefined, undefined, undefined, undefined, 20,
-      );
-      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      await childSession(h, childId).send('go'); // times out into the redirect
-      const requestId = await askArrived;
-      await h.destroy(childId); // normal teardown AFTER the ask already timed out
-      const noticeArrived = waitForEvent(h, (e) => e.sessionId === 'root-1' && e.type === 'user-message' && e.data.injected === 'specialist-report');
-      expect(h.respondPermission(requestId, { decision: { behavior: 'allow' }, updatedPermissions: [{ tool: 'Bash' }], grantScope: 'wide' })).toBe(true);
-      await noticeArrived;
-
-      let rules: any[] = [];
-      for (let i = 0; i < POLL_TRIES; i++) {
-        rules = await store.rulesFor(root);
-        if (rules.some((r) => r.specialist === 'worker')) break;
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      expect(rules).toContainEqual(expect.objectContaining({
-        tool: 'Bash', pattern: 'git push*origin feat/x', match: 'glob', action: 'allow', specialist: 'worker',
-      }));
-      // The forbidden shape (what the bug produced): an exact-match rule
-      // storing the literal command instead of the derived wide pattern.
-      expect(rules).not.toContainEqual(expect.objectContaining({
-        tool: 'Bash', pattern: 'git push origin feat/x', specialist: 'worker',
-      }));
-      await h.destroyAll();
-    });
-
-    it('a late APPROVE after the child ended queues a parent delivery naming task_id', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      // First factory call (the child's turn) attempts the destructive Bash
-      // call; every later call (the parent's own turns, including the
-      // injected notice's turn) gets the plain text-only model.
-      let calls = 0;
-      const rmThenText = async () => {
-        calls += 1;
-        if (calls === 1) {
-          return scriptedModel([
-            stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-            stream(...textChunks('t', 'done'), finishChunk('stop')),
-          ]) as any;
-        }
-        return factory();
-      };
-      const { h } = await withParentFastAskHold(20, rmThenText);
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      await childSession(h, childId).send('go'); // times out into the redirect
-      const requestId = await askArrived;
-      await h.destroy(childId); // the specialist's own normal teardown, AFTER its ask already timed out
-      const noticeArrived = waitForEvent(h, (e) => e.sessionId === 'root-1' && e.type === 'user-message' && e.data.injected === 'specialist-report');
-      expect(h.respondPermission(requestId, { behavior: 'allow' })).toBe(true);
-      const notice = await noticeArrived;
-      expect(notice.data.text).toMatch(/^\[Specialist follow-up\]/);
-      expect(notice.data.text).toMatch(/approved/i);
-      expect(notice.data.text).toMatch(/Bash/);
-      expect(notice.data.text).toContain(childId); // task_id, so the parent can name what to resume
-      await h.destroyAll();
-    });
-
-    it('destroy(childId) cancels a routed ask registered under the parent id (raisedBy match) while still within its window', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      const rmOnce = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-        stream(...textChunks('t', 'done'), finishChunk('stop')),
-      ]) as any;
-      const { h } = await withParent(async () => rmOnce()); // real 5-minute hold — never lets the timeout race this test
+      const { h } = await withParent(async () => rmOnce());
       const { childId } = await h.createChild('root-1', {
         specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
       });
@@ -2488,7 +2230,7 @@ describe('NativeSessionHost', () => {
       const askArrived = firstAsk(h);
       const sendPromise = childSession(h, childId).send('go');
       await askArrived;
-      await h.destroy(childId); // torn down WHILE the ask is still pending, not yet timed out
+      await h.destroy(childId); // torn down WHILE the ask is still pending
       await sendPromise; // the child's own turn unwinds via the 'canceled' interrupt path
       expect(asks.some((e) => e.type === 'PermissionExpired')).toBe(true); // card cleared
       await h.destroyAll();
@@ -3761,7 +3503,7 @@ describe('NativeSessionHost', () => {
         const home = new NativeHome(projectDir);
         const h = new NativeSessionHost(
           new SessionStore(home), factory, NO_CONTEXT, async () => null, async () => null,
-          undefined, undefined, undefined, undefined, undefined, undefined, home, undefined, catalog,
+          undefined, undefined, undefined, undefined, undefined, undefined, home, catalog,
         );
         // create() awaits catalog.ensureFresh(cwd), so the roster below is
         // loaded by the time any test reads it.
@@ -5107,7 +4849,7 @@ describe('NativeSessionHost', () => {
     function bootWithCatalog(catalog: SpecialistCatalog) {
       return new NativeSessionHost(
         new SessionStore(new NativeHome(projectDir)), factory, NO_CONTEXT, async () => null, async () => null,
-        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, catalog,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, catalog,
       );
     }
     // waitForTurnComplete alone isn't enough between TWO sends on the SAME

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SubagentSegment, ToolCallState, SpecialistRunView } from '../../../shared/types';
+import type { SubagentSegment } from '../../../shared/types';
 import MarkdownContent from '../MarkdownContent';
 import ToolBody from './ToolBody';
 import { friendlyToolDisplay } from '../ToolCard';
@@ -7,6 +7,7 @@ import { SpecialistAskBlock } from '../specialists/SpecialistAskBlock';
 import { CheckIcon, FailIcon, ChevronIcon, QuestionIcon, NoteIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
 import { useExpandAllToggle, getInitialExpanded } from '../../hooks/useExpandAllToggle';
+import { segmentToToolState } from '../../utils/specialist-cards';
 
 /**
  * Renders a subagent's inline timeline inside the parent AgentView card.
@@ -28,7 +29,7 @@ import { useExpandAllToggle, getInitialExpanded } from '../../hooks/useExpandAll
  * The left vertical border frames the nested work visually so a dense
  * subagent (20+ tool calls) doesn't dominate the parent AgentView card.
  */
-export function SubagentTimeline({ segments, sessionId, specialistName, suppressAsk = false, runStatus }: {
+export function SubagentTimeline({ segments, sessionId, specialistName, suppressAsk = false }: {
   segments: SubagentSegment[];
   /** Needed only for a nested ask's response dispatch + folder name. */
   sessionId?: string;
@@ -38,10 +39,6 @@ export function SubagentTimeline({ segments, sessionId, specialistName, suppress
    *  band): keep the ? row, drop the buttons, so one ask never shows twice
    *  in one card. */
   suppressAsk?: boolean;
-  /** Task 12: the parent card's specialistRun.status, threaded down to a
-   *  nested SpecialistAskBlock so a held ask can say whether the helper that
-   *  asked is still running or has already finished. */
-  runStatus?: SpecialistRunView['status'];
 }) {
   if (!segments || segments.length === 0) return null;
   const groups = groupSegments(segments);
@@ -51,7 +48,7 @@ export function SubagentTimeline({ segments, sessionId, specialistName, suppress
         g.kind === 'text' ? <SubagentText key={g.id} content={g.content} />
         : g.kind === 'thinking' ? <SubagentThinking key={g.id} content={g.content} />
         : g.kind === 'note' ? <SubagentNote key={g.id} content={g.content} from={g.from} specialistName={specialistName} />
-        : <SubagentToolGroup key={g.id} tools={g.tools} sessionId={sessionId} specialistName={specialistName} suppressAsk={suppressAsk} runStatus={runStatus} />
+        : <SubagentToolGroup key={g.id} tools={g.tools} sessionId={sessionId} specialistName={specialistName} suppressAsk={suppressAsk} />
       )}
     </div>
   );
@@ -154,7 +151,7 @@ function SubagentNote({ content, from, specialistName }: { content: string; from
 // at a smaller scale suited to a nested timeline.
 // ---------------------------------------------------------------------------
 
-function SubagentToolGroup({ tools, sessionId, specialistName, suppressAsk, runStatus }: { tools: ToolSegment[]; sessionId?: string; specialistName?: string; suppressAsk?: boolean; runStatus?: SpecialistRunView['status'] }) {
+function SubagentToolGroup({ tools, sessionId, specialistName, suppressAsk }: { tools: ToolSegment[]; sessionId?: string; specialistName?: string; suppressAsk?: boolean }) {
   const [expanded, setExpanded] = useState<Set<string>>(() =>
     getInitialExpanded() ? new Set(tools.map(t => t.id)) : new Set()
   );
@@ -183,7 +180,6 @@ function SubagentToolGroup({ tools, sessionId, specialistName, suppressAsk, runS
           sessionId={sessionId}
           specialistName={specialistName}
           suppressAsk={suppressAsk}
-          runStatus={runStatus}
         />
       ))}
     </div>
@@ -191,7 +187,7 @@ function SubagentToolGroup({ tools, sessionId, specialistName, suppressAsk, runS
 }
 
 function SubagentToolRow({
-  segment, expanded, onToggle, separatorAbove, sessionId, specialistName, suppressAsk, runStatus,
+  segment, expanded, onToggle, separatorAbove, sessionId, specialistName, suppressAsk,
 }: {
   segment: ToolSegment;
   expanded: boolean;
@@ -200,7 +196,6 @@ function SubagentToolRow({
   sessionId?: string;
   specialistName?: string;
   suppressAsk?: boolean;
-  runStatus?: SpecialistRunView['status'];
 }) {
   const tool = segmentToToolState(segment);
   // Same natural-language title derivation the main ChatView uses for its
@@ -231,7 +226,7 @@ function SubagentToolRow({
         <ChevronIcon className="w-3 h-3 shrink-0 text-fg-muted ml-auto" expanded={expanded} />
       </button>
       {awaiting && !suppressAsk && (
-        <SpecialistAskBlock segment={segment} sessionId={sessionId} specialistName={specialistName} runStatus={runStatus} />
+        <SpecialistAskBlock segment={segment} sessionId={sessionId} specialistName={specialistName} />
       )}
       {expanded && <ToolBody tool={tool} sessionId={sessionId} />}
     </div>
@@ -247,24 +242,3 @@ function StatusIcon({ status }: { status: ToolSegment['status'] }) {
 
 // ---------------------------------------------------------------------------
 
-function segmentToToolState(segment: ToolSegment): ToolCallState {
-  return {
-    toolUseId: segment.toolUseId,
-    toolName: segment.toolName,
-    input: segment.input,
-    status: segment.status,
-    response: segment.response,
-    error: segment.error,
-    structuredPatch: segment.structuredPatch,
-    // Specialists 1c: the ask fields ride along so ToolBody's per-tool views
-    // (and friendlyToolDisplay) see the same shape a top-level card has. The
-    // buttons themselves are rendered by NestedAsk, not by ToolCard, so this
-    // never double-renders an ask. (Before 1c these were dropped with the note
-    // "subagents run in auto-accept mode" — true of CC subagents, not native
-    // specialists.)
-    requestId: segment.requestId,
-    denyListed: segment.denyListed,
-    external: segment.external,
-    permissionMode: segment.permissionMode,
-  };
-}

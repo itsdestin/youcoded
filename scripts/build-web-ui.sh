@@ -13,7 +13,11 @@ ASSETS_DIR="$REPO_ROOT/app/src/main/assets/web"
 echo "Building React UI from $DESKTOP_DIR..."
 cd "$DESKTOP_DIR"
 npm ci
-npm run build
+# WHY build:web and not build (2026-09-16, deck answer Q-3): the phone needs only
+# dist/renderer. `npm run build` also ran electron-builder for four Linux installer
+# formats — most of a 13-minute Android CI run spent on installers nobody downloads
+# from it, and a build that broke whenever desktop packaging did.
+npm run build:web
 
 if [ ! -d "$DESKTOP_DIR/dist/renderer" ]; then
   echo "ERROR: Build output not found at $DESKTOP_DIR/dist/renderer"

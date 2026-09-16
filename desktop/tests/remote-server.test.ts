@@ -1227,7 +1227,7 @@ describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
     expect(frames.find((m) => m.id === 'r2')?.payload).toEqual({ ok: true });
   });
 
-  it('a reconnecting client receives a held ask\'s PermissionRequest and its PermissionHeld, in that order', async () => {
+  it('a reconnecting client receives an open native ask\'s PermissionRequest', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
     const { frames, ws } = fakeWs();
@@ -1237,20 +1237,18 @@ describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
     // through this class's own onHookEvent (that's wired only to the legacy
     // hookRelay) — bufferHookEvent is the fix, called from that same site.
     server.bufferHookEvent({ sessionId: 's1', type: 'PermissionRequest', payload: { _requestId: 'native-x' }, timestamp: Date.now() });
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionHeld', payload: { _requestId: 'native-x' }, timestamp: Date.now() });
 
     await replayAndWait(server, ws);
 
-    const held = frames.filter((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-x');
-    expect(held).toHaveLength(2);
-    expect(held[0].payload.type).toBe('PermissionRequest');
-    expect(held[1].payload.type).toBe('PermissionHeld');
+    const open = frames.filter((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-x');
+    expect(open).toHaveLength(1);
+    expect(open[0].payload.type).toBe('PermissionRequest');
   });
 
   // Fix pass (2026-08-16 review finding, "the catch-up replays asks that were
   // already answered"): PermissionBroker now emits PermissionResolved from
   // its one removal chokepoint (permission-broker.ts) whenever an entry
-  // leaves `pending` — respond() in time, respond() late, or a cancel.
+  // leaves `pending` — respond() or a cancel.
   // bufferHookEvent() must treat that as a purge signal instead of just
   // another event to append, or a reconnecting phone still gets replayed a
   // dead question with live-looking Yes/No buttons.

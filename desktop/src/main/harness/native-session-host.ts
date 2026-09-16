@@ -19,13 +19,13 @@ import * as path from 'path';
 import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
-import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
+import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
 import { rebuildHistory } from './history-rebuild';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
 import { SessionStore, type NativeSessionListEntry } from './session-store';
-import { PermissionBroker, type AskDecision, type LateResponseEntry } from './permission-broker';
+import { PermissionBroker } from './permission-broker';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
 import { getShell } from './tools/bash';
@@ -40,9 +40,9 @@ import { isUnderRoot } from '../artifacts/read-binary-access';
 import type { SpecialistDefinition } from './specialists/registry';
 import { SpecialistCatalog } from './specialists/catalog';
 import { buildChildDecide } from './specialists/child-permissions';
-import { childAskRouter, BUDGET_ASK_TOOL_NAMES } from './specialists/child-ask-router';
+import { childAskRouter } from './specialists/child-ask-router';
 import { assignSpecialistName } from './specialists/names';
-import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION, SPECIALIST_IDLE_STALE_MS, SPECIALIST_IN_TOOL_STALE_MS, SPECIALIST_ASK_HOLD_MS, SPECIALIST_NOTE_MAX_CHARS } from './specialists/limits';
+import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION, SPECIALIST_IDLE_STALE_MS, SPECIALIST_IN_TOOL_STALE_MS, SPECIALIST_NOTE_MAX_CHARS } from './specialists/limits';
 import { DelegationLedger, OWNER, RAW_REPORT_CAP_CHARS, isOwnerAlive, toRunView, type DelegationRecord } from './specialists/delegation-ledger';
 import { DelegatedModels, delegatedModelsView, type DelegatedTier } from './specialists/delegated-models';
 import type { NativeHome } from '../native-home';
@@ -478,16 +478,14 @@ export class NativeSessionHost extends EventEmitter {
   private inMemoryFallback = new Map<string, { parentId: string; rec: DelegationRecord }>();
 
   // Plan 1b Task 8 — plain-text notices for a parent that are NOT a specialist
-  // RUN outcome (a DelegationRecord): today the only producer is a late answer
-  // to a routed permission ask that arrived after the child that raised it had
-  // already ended (onLateResponse below). Kept as its own, much simpler lane
-  // rather than shoehorned into DelegationRecord's completed/failed status
-  // machine — a late answer isn't a run the ledger models, it's a one-line
-  // follow-up. It still lands through the SAME idle-boundary injection
+  // RUN outcome (a DelegationRecord): today the producers are background
+  // shell commands (onShellLongRunning / onShellExit below). Kept as its own,
+  // much simpler lane rather than shoehorned into DelegationRecord's
+  // completed/failed status machine. It still lands through the SAME idle-boundary injection
   // mechanism Task 4 built for background completions (kickIdleDeliveryPass +
   // drainDeliveries' runNotice call) rather than a second delivery path.
   // Purely in-memory, like inMemoryFallback above: an app restart losing an
-  // unread late-answer notice is an accepted loss, not a durability promise
+  // unread notice is an accepted loss, not a durability promise
   // this lane makes.
   // G-1: notices now carry the structured meta the renderer folds into a
   // card; shell notices ready in one drain are concatenated into ONE turn (D8).
@@ -504,21 +502,6 @@ export class NativeSessionHost extends EventEmitter {
    *  once — so quitting the app inside that window left a process that ignores
    *  SIGTERM alive with nothing left to reach it. destroyAll sweeps this too. */
   private drainingShellRegistries = new Set<ShellRegistry>();
-
-  // Plan 1b Task 8 — a routed ask's late APPROVE, recorded once the child that
-  // raised it has already ended, keyed by childId.
-  //
-  // Final-review fix: this used to say "nothing in this file reads it back
-  // yet" / "honestly inert" — true when Task 8 first wrote it, false now.
-  // resumeSpecialist (below, around the `childApprovedAsks.get(opts.childId)`
-  // call) is its consumer: it folds any late approval into the resumed
-  // child's steer lines and clears the entry, so a later resume of the same
-  // child never repeats an ask the user already answered. A maintainer
-  // trusting the old wording could delete this write believing nothing reads
-  // it, which would silently break that ask-skipping on resume.
-  // Keyed by CHILD id; `parentId` is carried so destroy() of the PARENT can
-  // sweep every entry that can no longer be consumed (2026-09-16).
-  private childApprovedAsks = new Map<string, { parentId: string; grants: { tool: string }[] }>();
 
   /** Pop (remove) the first in-memory fallback report belonging to `parentId`,
    *  if any — the delivery loop's second-choice lane, tried only after the
@@ -1044,17 +1027,7 @@ export class NativeSessionHost extends EventEmitter {
       missedSteers = record.missedSteers ?? [];
     }
 
-    // childApprovedAsks (Task 8's forward-looking storage — this is its FIRST
-    // consumer): an approval that landed on a routed ask AFTER this child had
-    // already ended is otherwise invisible to the resumed run, which would
-    // have to re-ask something the user already answered. Folded in and
-    // cleared here, once, so a later resume of the SAME child never repeats it.
-    const approvals = this.childApprovedAsks.get(opts.childId)?.grants ?? [];
-    this.childApprovedAsks.delete(opts.childId);
-    const steerLines = [
-      ...missedSteers.map((s) => `<steer>\n${s}\n</steer>`),
-      ...approvals.map((a) => `<steer>\nThe user has now approved your earlier blocked request (${a.tool}) — you may do it now.\n</steer>`),
-    ];
+    const steerLines = missedSteers.map((s) => `<steer>\n${s}\n</steer>`);
     const prompt = steerLines.length > 0 ? `${steerLines.join('\n')}\n\n${opts.prompt}` : opts.prompt;
 
     const spawnOptsLike: SpecialistSpawnOpts = {
@@ -1551,7 +1524,7 @@ export class NativeSessionHost extends EventEmitter {
     this.kickIdleDeliveryPass(parentId);
   }
 
-  /** Shared by queueDelivery (the ledger lane) and queueHostNotice (Task 8's
+  /** Shared by queueDelivery (the ledger lane) and queueHostNotice (the
    *  plain-notice lane, below): if the parent is ALREADY idle, nothing else
    *  is going to reach runTurns' own post-drain tail on its own, so dispatch
    *  a no-op "first" turn just to get INTO runTurns from an idle start —
@@ -1579,11 +1552,10 @@ export class NativeSessionHost extends EventEmitter {
   private queueHostNotice(
     parentId: string,
     text: string,
-    meta?: InjectedMeta,
-    // Why a caller-supplied message: this lane now carries shell completions
-    // too, and "a late permission answer arrived" printed about a finished
-    // build would be a false log line (review I5).
-    whyDropped = 'a late permission answer arrived after its parent session was already destroyed — the notice has nowhere left to be delivered',
+    meta: InjectedMeta,
+    // Why a caller-supplied message: each producer knows what was lost, and a
+    // generic line printed about a finished build would be misleading (review I5).
+    whyDropped: string,
   ): void {
     if (!this.live.has(parentId)) {
       log('WARN', 'NativeSessionHost', whyDropped, { parentId });
@@ -1664,90 +1636,6 @@ export class NativeSessionHost extends EventEmitter {
     const reg = this.shellRegistries.get(sessionId);
     if (!reg || !this.live.has(sessionId)) return [];
     return reg.list().map((r) => reg.toView(r));
-  }
-
-  /** Plan 1b Task 8 — the ONE handler for a real response that arrives after
-   *  its routed ask already timed out (wired to the broker in the
-   *  constructor). Two cases, both honest about what "the entry stays
-   *  answerable" actually delivers:
-   *   - the child that raised the ask is STILL LIVE (it took the redirect and
-   *     kept working, hasn't finished yet) → course-correct it directly with
-   *     postSteer, naming the tool and the real decision. A `false` return
-   *     (no turn in flight right this instant) is fine to ignore, same
-   *     reasoning as the compaction steer above: the next turn-loop iteration
-   *     boundary drains it, and if there never is one the child is about to
-   *     end anyway with nothing left for a steer to change.
-   *   - the child has ALREADY ended (destroy() already ran — runDelegation's
-   *     finally tears every child down on every exit path) → there is no
-   *     session left to steer, so the answer reaches the PARENT instead, via
-   *     the same idle-boundary delivery path Task 4 built for background
-   *     completions (queueHostNotice). On an approval, the decision is also
-   *     recorded into childApprovedAsks — see that field's own WHY for what
-   *     this does and does not wire up yet. */
-  private onLateResponse(entry: LateResponseEntry, decision: AskDecision): void {
-    const allowed = decision.behavior === 'allow';
-    const childId = entry.raisedBy;
-
-    // Task 11 fix pass (Finding 2): a LATE "Always allow" used to silently
-    // drop the "and remember this" half — this handler only ever steered the
-    // still-live child or notified the parent, never persisted anything,
-    // even though decision.always rides the same AskDecision the in-time path
-    // (child-ask-router.ts) reads. This handler is reached ONLY for a routed
-    // (specialist) ask: a root session's own askUser is wired straight to
-    // `this.broker.ask(req)` with no `opts.timeoutMs` (see the `askUser:
-    // (req) => this.broker.ask(req)` root wiring below), so a root ask's
-    // PendingAsk.timedOut never flips true and it never reaches
-    // lateResponseHandler at all — only createChild's childAskRouter wiring
-    // passes a timeout. So `entry.specialist` is always set here in
-    // production; the `undefined` guard below is belt-and-suspenders for a
-    // hand-built test entry, not a real production path. Persisted against
-    // `entry.sessionId`, which childAskRouter already rewrote to the PARENT's
-    // id before ever calling broker.ask() (see AskRequest.raisedBy's own
-    // comment) — the same session/cwd pair the in-time path writes against.
-    // The doom_loop synthetic budget ask never supports "Always allow" even
-    // for a root session (child-ask-router.ts's BUDGET_ASK_TOOL_NAMES) —
-    // excluded here for the same reason the in-time path excludes it.
-    //
-    // Fix (Important 6, final review): same fix as child-ask-router.ts's
-    // in-time path, applied to the LATE path — this used to hand-build
-    // `{tool, pattern: subject, action:'allow'}` itself instead of calling
-    // the shared rememberedRuleFor() builder, discarding the grant WIDTH the
-    // user picked (decision.grantScope) and skipping the builder's own
-    // "never rememberable" cases. See child-ask-router.ts's own comment on
-    // its now-identical call for the full reasoning; both sites must derive
-    // the rule the SAME way or a late answer and an in-time answer to the
-    // identical ask could persist two different rules.
-    if (allowed && decision.always && entry.specialist && !BUDGET_ASK_TOOL_NAMES.has(entry.toolName)) {
-      const parent = this.live.get(entry.sessionId);
-      if (parent) {
-        const rule = rememberedRuleFor(entry.toolName, entry.subject, decision.grantScope);
-        if (rule) this.rememberRule(entry.sessionId, parent.cwd, { ...rule, specialist: entry.specialist.agentType });
-      } else {
-        // The parent session was torn down before the late answer arrived —
-        // there is no live cwd left to persist against (the store is keyed by
-        // project, not sessionId). Same accepted loss as queueHostNotice's own
-        // WARN below: nothing durable was ever promised once the parent is gone.
-        log('WARN', 'NativeSessionHost', 'a late "Always allow" arrived after its parent session was already destroyed — the rule could not be persisted', { sessionId: entry.sessionId, toolName: entry.toolName });
-      }
-    }
-
-    if (childId && this.live.has(childId)) {
-      this.live.get(childId)!.session.postSteer(
-        `The user has now responded to your earlier blocked request (${entry.toolName}): ${allowed ? 'APPROVED — you may do it now.' : 'DENIED — do not attempt it.'}`,
-      );
-      return;
-    }
-    const title = entry.specialist?.title ?? entry.toolName;
-    const idForNotice = entry.specialist?.childId ?? childId ?? 'unknown';
-    this.queueHostNotice(
-      entry.sessionId,
-      `[Specialist follow-up] The user ${allowed ? 'approved' : 'denied'} ${title}'s blocked ${entry.toolName} request after the specialist finished. Use task_id ${idForNotice} to continue that work if needed.`,
-    );
-    if (allowed && childId) {
-      const held = this.childApprovedAsks.get(childId) ?? { parentId: entry.sessionId, grants: [] };
-      held.grants.push({ tool: entry.toolName });
-      this.childApprovedAsks.set(childId, held);
-    }
   }
 
   /** Task 4 — format one claimed ledger record into the text runNotice()
@@ -1877,6 +1765,10 @@ export class NativeSessionHost extends EventEmitter {
       }
     };
     const staleCheck = setInterval(() => {
+      // Waiting on the person is not being stuck: helper asks have no timeout
+      // (2026-09-16), so a helper can sit here for hours. Count the wait as
+      // activity, so the clock restarts from the answer.
+      if (this.broker.isWaitingOnUser(childId)) { lastActivityAt = Date.now(); setStale(false); return; }
       const threshold = openTools.size > 0 ? SPECIALIST_IN_TOOL_STALE_MS : SPECIALIST_IDLE_STALE_MS;
       if (Date.now() - lastActivityAt >= threshold) setStale(true);
     }, STALE_CHECK_INTERVAL_MS);
@@ -2264,14 +2156,6 @@ export class NativeSessionHost extends EventEmitter {
     // recording, not a NativeHome pointed at a real home dir by accident);
     // the real wiring (ipc-handlers.ts) always passes the shared nativeHome.
     nativeHome?: NativeHome,
-    // Plan 1b Task 8: how long a routed specialist ask waits on the parent's
-    // screen before the redirect fires. Optional + LAST, same reasoning as
-    // every other trailing param here — defaults to the real 5-minute
-    // production value (specialists/limits.ts) so every existing construction
-    // is unaffected; tests that need the timeout to actually fire in a
-    // reasonable wall-clock time override it with a small number instead of
-    // fighting this file's setImmediate-heavy async machinery with fake timers.
-    private specialistAskHoldMs: number = SPECIALIST_ASK_HOLD_MS,
     // Task 4 (plan 1c) — the per-cwd specialist catalog: three folders read
     // per project folder (personal, ~/.claude/agents, <cwd>/.claude/agents),
     // merged with the four built-ins into one roster. Optional + LAST, same
@@ -2305,10 +2189,6 @@ export class NativeSessionHost extends EventEmitter {
     // Re-emit broker asks/expirations so ipc-handlers can forward them to the
     // renderer + remote clients (see the 'hook-event' listener there).
     this.broker.on('hook-event', (event) => this.emit('hook-event', event));
-    // Plan 1b Task 8: the ONE handler for a real answer that arrives after its
-    // ask already timed out — see onLateResponse's own comment for the
-    // live-child-vs-ended-child split.
-    this.broker.setLateResponseHandler((entry, decision) => this.onLateResponse(entry, decision));
     // Plan 1c — the ONE place a ledger write becomes a renderer-visible push.
     // The listener lives HERE, at construction, and nowhere else: the global
     // house rule is "emit in the ledger, never the host per method" — every
@@ -2864,7 +2744,12 @@ export class NativeSessionHost extends EventEmitter {
         switch (r.status) {
           case 'running': {
             const elapsedS = Math.max(0, Math.round((Date.now() - r.startedAt) / 1000));
-            const staleNote = r.stale ? `, may be stuck — no activity for at least ${Math.round(SPECIALIST_IDLE_STALE_MS / 60_000)}m` : '';
+            // A helper paused on an approval is reported as exactly that, so the
+            // assistant can point the person at the card instead of treating
+            // the helper as broken or redoing its step.
+            const staleNote = this.broker.isWaitingOnUser(r.childId)
+              ? ', waiting for the user to approve a request'
+              : r.stale ? `, may be stuck — no activity for at least ${Math.round(SPECIALIST_IDLE_STALE_MS / 60_000)}m` : '';
             return `${r.title} (${r.agentType}): running — ${elapsedS}s${staleNote}`;
           }
           case 'completed':
@@ -3464,9 +3349,8 @@ export class NativeSessionHost extends EventEmitter {
         // ASKS (plan 1b Task 8): routed through the PARENT's broker under the
         // PARENT's sessionId — never the child's own (no window owns a raw
         // child id, so an ask emitted under it would never resolve; see
-        // child-ask-router.ts). Held up to specialistAskHoldMs before the
-        // child is unblocked with a scripted redirect; a later real answer
-        // still reaches it (postSteer) or the parent (onLateResponse) either way.
+        // child-ask-router.ts). The child waits for the person's answer with
+        // no time limit, exactly like the parent's own asks.
         //
         // `remember` (Task 11, closes a review finding): a routed ask's own
         // "Always allow" makes HarnessSession emit 'remember-rule' on ITSELF,
@@ -3482,7 +3366,6 @@ export class NativeSessionHost extends EventEmitter {
           // Task 6: carried through so a routed ask's `specialist` payload
           // lets the renderer nest the row under the right specialist card.
           parentToolCallId,
-          timeoutMs: this.specialistAskHoldMs,
           remember: (rule) => this.rememberRule(parentId, parent.cwd, rule),
         }),
         ...(this.toolServices ? { toolServices: this.toolServices } : {}),
@@ -3992,7 +3875,7 @@ export class NativeSessionHost extends EventEmitter {
         // D8: every shell notice already queued goes out as ONE turn — each
         // runNotice is a full model turn over the whole conversation, so three
         // builds finishing during one busy turn must not cost three turns.
-        // Specialist follow-ups keep their one-per-turn shape.
+        // Any other notice keeps its one-per-turn shape.
         const head = notices[0];
         // A still-running mark (2026-09-16) is only true while the run is
         // still running: one that finished while the mark waited behind a
@@ -4434,7 +4317,8 @@ export class NativeSessionHost extends EventEmitter {
     // Cancel pending asks FIRST (resolve them 'canceled') so a loop paused on a
     // permission await unwinds cleanly before the stream is aborted underneath
     // it (spec pending-ask ruling). Also expires the renderer's approval cards.
-    this.broker.cancelSession(sessionId);
+    // ownOnly: a background helper's routed ask survives Stop, like the helper.
+    this.broker.cancelSession(sessionId, { ownOnly: true });
     entry?.session.interrupt();
     // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
     // Root sessions only: a child's own deliveries go to its parent, not to it.
@@ -4809,16 +4693,8 @@ export class NativeSessionHost extends EventEmitter {
     // conversation is gone, so the count is too (a resume in the same app run
     // starts fresh, exactly as an app restart always did).
     this.specialistSpawnCounts.delete(sessionId);
-    // Late approvals parked for this parent's children (childApprovedAsks) are
-    // only ever read by resumeSpecialist, which needs the parent live — so once
-    // the parent is torn down nothing can consume them. A child's OWN destroy
-    // must NOT clear its entry (that is the case the map exists for: an
-    // approval landing after the child ended, folded into a later resume).
-    if (!entry.parentSessionId) {
-      for (const [childId, held] of this.childApprovedAsks) {
-        if (held.parentId === sessionId) this.childApprovedAsks.delete(childId);
-      }
-    }
+    // (The childApprovedAsks sweep that sat here went away with the map itself:
+    // helper asks no longer time out, so there are no late approvals to park.)
     this.releaseModel(sessionId, modelId); // last session gone → unload it (#1)
     // Release THIS generation's MCP lease (Task 6), LAST — orthogonal to the
     // transcript/live-map teardown above (releasing never touches either), so

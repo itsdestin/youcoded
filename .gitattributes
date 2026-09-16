@@ -6,5 +6,9 @@ gradlew text eol=lf
 # Windows batch files should keep CRLF
 *.bat text eol=crlf
 
-# Default: auto-detect
-* text=auto
+# Default: auto-detect text, and check it out with LF on EVERY platform. Until 2026-09-16 this
+# was bare `text=auto`, which let Windows checkouts convert to CRLF — and eleven tests that read
+# source or config files as text (`split('\n')`) failed or false-passed on the Windows CI leg
+# because every line carried a trailing \r. The repo is authored on Linux and macOS; LF is what
+# every tool here expects. `*.bat` above keeps CRLF, which cmd.exe needs.
+* text=auto eol=lf

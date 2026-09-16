@@ -5,14 +5,11 @@
 // child has no window of its own to raise a card under.
 //
 // Scope of THIS file: the router + broker contract only (no HarnessSession,
-// no NativeSessionHost). The "child still running" vs "child already ended"
-// branch of a late answer is HOST state (this.live), not something the
-// router or the broker can know — those two cases are pinned instead in
-// native-session-host.test.ts, against the real host.
+// no NativeSessionHost). Since 2026-09-16 a routed ask waits for the person
+// with no time limit, exactly like a root session's own ask — pinned below.
 import { describe, it, expect, vi } from 'vitest';
-import { childAskRouter, ASK_REDIRECT_MESSAGE, BUDGET_ASK_TOOL_NAMES } from '../src/main/harness/specialists/child-ask-router';
+import { childAskRouter, BUDGET_ASK_TOOL_NAMES } from '../src/main/harness/specialists/child-ask-router';
 import { PermissionBroker } from '../src/main/harness/permission-broker';
-import { SPECIALIST_ASK_HOLD_MS } from '../src/main/harness/specialists/limits';
 
 function firstPayload(emitted: any[]) {
   return emitted[0].payload;
@@ -58,35 +55,44 @@ describe('childAskRouter', () => {
     expect(firstPayload(emitted).specialist.parentToolCallId).toBe('tc-42');
   });
 
-  it('after SPECIALIST_ASK_HOLD_MS the child receives the redirect deny and the entry stays answerable', async () => {
+  // PINNING TEST (2026-09-16 decision): a helper's ask used to be answered
+  // FOR it after five minutes ("still pending, carry on without it"). It must
+  // now wait for the person exactly like the main assistant's own ask — no
+  // timeout options reach the broker, and the router's promise stays open
+  // far past the old deadline until a real answer arrives.
+  it('a routed ask stays pending long past the old 5-minute mark and resolves only when answered', async () => {
     vi.useFakeTimers();
     try {
       const broker = new PermissionBroker();
+      const askSpy = vi.spyOn(broker, 'ask');
       const emitted: any[] = [];
       broker.on('hook-event', (e) => emitted.push(e));
       const router = childAskRouter({
         broker, parentId: 'parent-1', childId: 'child-1', agentType: 'worker', title: 'W',
         parentToolCallId: 'tc-1',
       });
-      const p = router({ sessionId: 'child-1', toolName: 'Bash', toolInput: {}, denyListed: true });
-      await vi.advanceTimersByTimeAsync(SPECIALIST_ASK_HOLD_MS);
-      const d = await p;
-      expect(d.behavior).toBe('deny');
-      expect(d.message).toBe(ASK_REDIRECT_MESSAGE);
-      // Stays answerable: the id is still known to the broker after the timeout fired.
+      let settled = false;
+      const p = router({ sessionId: 'child-1', toolName: 'Bash', toolInput: {}, denyListed: true })
+        .then((d) => { settled = true; return d; });
+      // Exactly one argument: no { timeoutMs, onTimeout } options object.
+      expect(askSpy).toHaveBeenCalledTimes(1);
+      expect(askSpy.mock.calls[0]).toHaveLength(1);
+      // An hour of simulated time — twelve times the old hold.
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      expect(settled).toBe(false);
+      // Nothing but the original ask and its heartbeats went out — no
+      // expiry, no resolution.
+      expect(new Set(emitted.map((e) => e.type))).toEqual(new Set(['PermissionRequest']));
       const requestId = firstPayload(emitted)._requestId as string;
       expect(broker.respond(requestId, { behavior: 'allow' })).toBe(true);
+      await expect(p).resolves.toMatchObject({ behavior: 'allow' });
+      expect(settled).toBe(true);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('the redirect wording contains both load-bearing clauses', () => {
-    expect(ASK_REDIRECT_MESSAGE).toMatch(/Do NOT attempt the blocked action by any other means/);
-    expect(ASK_REDIRECT_MESSAGE).toMatch(/Do NOT build further work on the assumption/);
-  });
-
-  it('a real user deny inside the window carries no redirect — the plain declined copy stands', async () => {
+  it('a real user deny carries no message — the plain declined copy stands', async () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];
     broker.on('hook-event', (e) => emitted.push(e));

@@ -57,21 +57,17 @@ describe('specialist foreground run (Task 7)', () => {
   // spanning MORE THAN ONE TURN (the empty-report nudge) advances rather than
   // restarting — the factory is called once per turn, and a fresh instance per
   // call would replay script[0] forever.
-  // `askHoldMs` (Task 8): overrides specialistAskHoldMs for a test that drives
-  // a routed ask (doom_loop/deny-listed) all the way to its timeout — undefined
-  // keeps the real 5-minute production default, which
-  // every OTHER test in this file relies on never actually firing.
-  function boot(scripts: any[][], askHoldMs?: number) {
+  function boot(scripts: any[][]) {
     const model = scriptedModel(scripts);
     store = new SessionStore(new NativeHome(root));
     host = new NativeSessionHost(
       store, async () => model as any, async () => ({ contextLength: null, totalSlots: null }), async () => null, async () => null, undefined,
-      undefined, undefined, undefined, undefined, undefined, undefined, askHoldMs,
+      undefined, undefined, undefined, undefined, undefined, undefined,
     );
     return model;
   }
-  async function withParent(scripts: any[][], askHoldMs?: number) {
-    boot(scripts, askHoldMs);
+  async function withParent(scripts: any[][]) {
+    boot(scripts);
     await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
   }
   // Every event the HOST emitted (what ipc-handlers forwards to the renderer).

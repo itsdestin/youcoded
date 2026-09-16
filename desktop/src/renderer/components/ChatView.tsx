@@ -34,6 +34,7 @@ import { CardKeysLiveContext } from '../state/card-keys-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { Tooltip, StatusStrip, Button } from './ui';
+import { helperAsksOf } from '../utils/specialist-cards';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -229,6 +230,9 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
     }
     return { hasAwaitingApproval: hasAwaiting, hasRunningTools: hasRunning, awaitingTools: awaiting };
   }, [state.toolCalls, state.activeTurnToolIds]);
+  // Helper (specialist) requests join the main assistant's at the bottom —
+  // see helperAsksOf for why they were invisible before.
+  const helperAsks = useMemo(() => helperAsksOf(state.toolCalls), [state.toolCalls]);
 
 
 
@@ -1271,8 +1275,8 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                 glass. Normal timeline bubbles get `in-view` from their wrapper; these
                 pop-out bubbles aren't in that wrapper, so set it here. They're pinned
                 at the bottom and always visible, so a static `in-view` is correct. */}
-            {awaitingTools.map((tool) => (
-                <div key={tool.toolUseId} className="in-view flex justify-start px-4 py-0.5">
+            {[...awaitingTools, ...helperAsks].map((tool) => (
+                <div key={tool.requestId ?? tool.toolUseId} className="in-view flex justify-start px-4 py-0.5">
                   <div className="assistant-bubble max-w-[85%] rounded-2xl rounded-bl-sm bg-inset px-5 py-3">
                     <ToolCard tool={tool} sessionId={sessionId} />
                   </div>
