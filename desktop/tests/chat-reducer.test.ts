@@ -968,3 +968,53 @@ describe('native runtime reducer paths', () => {
     });
   });
 });
+
+// 2026-09-16 smoothness sweep, A3: per-word work must not grow with the chat.
+// Every streamed word used to COPY the set of every uuid the session had ever
+// seen (`new Set(session.seenUuids).add(uuid)`), so a 4,000-word reply did
+// ~8M copies and the last paragraph lurched. The set is append-only and
+// nothing renders it, so the reducer now appends in place — its one documented
+// purity exception (see markSeen's WHY). Pinned by identity, not timing.
+describe('seen-uuid dedup appends in place (2026-09-16 A3)', () => {
+  const text = (uuid: string, t = 'w'): ChatAction => ({ type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid, text: t, timestamp: 1 });
+  const turnText = (s: ChatState) => {
+    const sess = s.get(SESSION)!;
+    return [...sess.assistantTurns.values()].flatMap((t) => t.segments).filter((seg) => seg.type === 'text').map((seg: any) => seg.content).join('');
+  };
+
+  it('a streamed word keeps the seenUuids Set identity and records the uuid', () => {
+    let state = dispatch(initState(), text('u0'));
+    const before = state.get(SESSION)!.seenUuids;
+    state = dispatch(state, text('u1'));
+    expect(state.get(SESSION)!.seenUuids).toBe(before);
+    expect(before.has('u1')).toBe(true);
+  });
+
+  it('a duplicate uuid is still dropped and leaves the state untouched', () => {
+    let state = dispatch(initState(), text('u0', 'a'));
+    state = dispatch(state, text('u1', 'b'));
+    const before = state;
+    state = dispatch(state, text('u1', 'b'));
+    expect(state).toBe(before);
+    expect(turnText(state)).toBe('ab');
+  });
+
+  it('a user message, a skill invocation and a turn end record their uuids the same way', () => {
+    let state = dispatch(initState(), { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION, uuid: 'um1', text: 'hi', timestamp: 1 } as ChatAction);
+    const set = state.get(SESSION)!.seenUuids;
+    expect(set.has('um1')).toBe(true);
+    state = dispatch(state, text('t1'));
+    state = dispatch(state, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'tc1', usage: { input_tokens: 1, output_tokens: 1 } } as ChatAction);
+    expect(state.get(SESSION)!.seenUuids).toBe(set);
+    expect(set.has('t1')).toBe(true);
+    expect(set.has('tc1')).toBe(true);
+  });
+
+  it('a session that started without a set (legacy snapshot) still records uuids', () => {
+    let state = initState();
+    const bare = { ...state.get(SESSION)!, seenUuids: undefined as unknown as Set<string> };
+    state = new Map(state).set(SESSION, bare);
+    state = dispatch(state, { type: 'TRANSCRIPT_SKILL_INVOKED', sessionId: SESSION, uuid: 'sk1', skillId: 'x', displayName: 'x', timestamp: 1 } as ChatAction);
+    expect(state.get(SESSION)!.seenUuids.has('sk1')).toBe(true);
+  });
+});

@@ -149,6 +149,28 @@ function appendAbovePending(timeline: TimelineEntry[], entry: TimelineEntry): Ti
 }
 
 /**
+ * Record a transcript uuid as applied, IN PLACE, and hand the same Set back.
+ *
+ * WHY in place — the reducer's ONE documented purity exception (2026-09-16
+ * smoothness sweep, A3): every streamed word used to copy the set of every
+ * uuid the session had ever seen (`new Set(session.seenUuids).add(uuid)`), so
+ * a 4,000-word reply did ~8M copies and its last paragraph lurched, and an
+ * old chat felt heavier than a fresh one for no other reason. Appending is
+ * safe because the set is append-only, nothing renders it (no component or
+ * selector reads it), the store only ever applies the reducer to its LATEST
+ * state, the page-replay scratch (HISTORY_PAGE_PREPEND) copies it before
+ * replaying so scratch appends cannot reach the live set, and serialisation
+ * snapshots it with Array.from. Every caller sits on a path that commits the
+ * new session object — a site that could still `return state` after calling
+ * this would mark the uuid as applied without applying it, so keep it that way.
+ */
+function markSeen(session: SessionChatState, uuid: string): Set<string> {
+  const set = session.seenUuids ?? new Set<string>();
+  set.add(uuid);
+  return set;
+}
+
+/**
  * Returns the current assistant turn (or creates a new one).
  * All assistant text and tool groups within a single turn accumulate here.
  */
@@ -604,7 +626,7 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
   // Only assistant-text needs to grow seenUuids — see the dedup check above
   // for why tool-use/tool-result deliberately don't participate.
   const seenUuids = action.type === 'TRANSCRIPT_ASSISTANT_TEXT'
-    ? new Set(session.seenUuids).add(action.uuid)
+    ? markSeen(session, action.uuid)
     : session.seenUuids;
   // A specialist's edits are the parent session's edits (spec §7). They live in
   // subagentSegments, NOT session.toolCalls, so a count over toolCalls alone
@@ -1096,7 +1118,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         totals,
         seenUuids: totals === session.totals || !action.uuid
           ? session.seenUuids
-          : new Set(session.seenUuids).add(action.uuid),
+          : markSeen(session, action.uuid),
         ...endTurn(session, action.message),
         attentionState: 'error',
         errorMessage: action.message,
@@ -1291,7 +1313,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // (there is no pending match on the second delivery). See seenUuids.
       if (action.uuid && session.seenUuids.has(action.uuid)) return state;
       const seenUuids = action.uuid
-        ? new Set(session.seenUuids).add(action.uuid)
+        ? markSeen(session, action.uuid)
         : session.seenUuids;
 
       // Task 12 (drain-side removal): independent of whether a pending
@@ -1343,6 +1365,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Oldest-first so two identical optimistic bubbles get confirmed by two
       // transcript events in order.
       let confirmedIdx = -1;
+      // The matched entry, captured where the loop already narrowed it to a
+      // user entry. WHY (2026-09-16 A3): this used to be re-read from the
+      // timeline below behind an `if (entry.kind !== 'user') return state`
+      // type guard — unreachable, but with markSeen above appending in place a
+      // `return state` after it would record the uuid without applying the
+      // message. Capturing the narrowed entry removes the guard and the hazard.
+      let confirmedEntry: Extract<TimelineEntry, { kind: 'user' }> | null = null;
       for (let i = 0; i < session.timeline.length; i++) {
         const entry = session.timeline[i];
         if (
@@ -1351,13 +1380,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           sameUserMessage(entry.message, action.text)
         ) {
           confirmedIdx = i;
+          confirmedEntry = entry;
           break;
         }
       }
 
-      if (confirmedIdx >= 0) {
-        const entry = session.timeline[confirmedIdx];
-        if (entry.kind !== 'user') return state; // type-narrowing safety
+      if (confirmedIdx >= 0 && confirmedEntry) {
+        const entry = confirmedEntry;
         // Confirming clears `pending`. Rebuilt object (rather than spreading
         // entry) so any stale extra field is dropped, not carried forward —
         // this arm only ever matches a `sent`-path bubble (Task 12: a queued
@@ -1528,7 +1557,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // streaming deltas (which merge by partId below).
       if (action.uuid && session.seenUuids.has(action.uuid)) return state;
       const seenUuids = action.uuid
-        ? new Set(session.seenUuids).add(action.uuid)
+        ? markSeen(session, action.uuid)
         : session.seenUuids;
 
       // Fix (2026-09-02, bubble grouping): some models stream NEWLINE-ONLY text
@@ -1941,7 +1970,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const next = new Map(state);
       next.set(action.sessionId, {
         ...session,
-        seenUuids: new Set([...(session.seenUuids ?? []), action.uuid]),
+        seenUuids: markSeen(session, action.uuid),
         // A skill invocation IS a turn start, so it must set the same state
         // TRANSCRIPT_USER_MESSAGE does — otherwise nothing tells the UI a turn
         // began and the thinking indicator, prompt-processing progress and stall
@@ -2046,7 +2075,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Widening the set cannot disturb the mint branch, which additionally
       // requires abnormalStop.
       const alreadyCounted = session.seenUuids.has(action.uuid);
-      seenUuids = alreadyCounted ? seenUuids : new Set(session.seenUuids).add(action.uuid);
+      seenUuids = alreadyCounted ? seenUuids : markSeen(session, action.uuid);
       if (targetTurnId) {
         const turn = assistantTurns.get(targetTurnId);
         if (turn) {
@@ -2138,7 +2167,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         totals: addSubagentUsage(session.totals, action.usage),
-        seenUuids: new Set(session.seenUuids).add(action.uuid),
+        seenUuids: markSeen(session, action.uuid),
       });
       return next;
     }
@@ -2177,7 +2206,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         totals,
-        seenUuids: totals === session.totals ? session.seenUuids : new Set(session.seenUuids).add(action.uuid),
+        seenUuids: totals === session.totals ? session.seenUuids : markSeen(session, action.uuid),
         ...endTurn(session, 'Turn interrupted', assistantTurns),
       });
       return next;
@@ -2862,7 +2891,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         totals,
-        seenUuids: alreadyCounted ? session.seenUuids : new Set(session.seenUuids).add(action.uuid),
+        seenUuids: alreadyCounted ? session.seenUuids : markSeen(session, action.uuid),
         contextUsedOverride: override,
       });
       return next;
