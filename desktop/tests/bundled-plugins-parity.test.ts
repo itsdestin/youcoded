@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { BUNDLED_PLUGIN_IDS } from '../src/shared/bundled-plugins';
+import { readSource } from './helpers/guard-scope';
 
 // Both platforms auto-install bundled plugins from their own list. Until now the
 // two lists were kept in sync by a comment only — a plugin added to one and not
@@ -16,7 +17,7 @@ describe('bundled plugin parity', () => {
   });
 
   it('BundledPlugins.kt lists exactly the same ids in the same order', () => {
-    const src = fs.readFileSync(KOTLIN_MIRROR, 'utf8');
+    const src = readSource(KOTLIN_MIRROR);
     const block = src.match(/val\s+IDS\s*=\s*listOf\(([\s\S]*?)\)/);
     expect(block, 'could not find `val IDS = listOf(...)` in BundledPlugins.kt').not.toBeNull();
 
@@ -34,7 +35,7 @@ describe('bundled plugin parity', () => {
   // upgradePluginFromLocal, reconcileBundledPlugins) — a bundled-plugin
   // upgrade fix that lands on only one platform is worse than no fix at all.
   it('the Kotlin installer implements the same reconcile entry points', () => {
-    const kt = (f: string) => fs.readFileSync(path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'skills', f), 'utf8');
+    const kt = (f: string) => readSource(path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'skills', f));
     expect(kt('LocalSkillProvider.kt')).toMatch(/fun reconcileBundledPlugins\(/);
     expect(kt('PluginInstaller.kt')).toMatch(/fun upgradeFromLocal\(/);
     expect(kt('PluginInstaller.kt')).toMatch(/fun refreshLocalMarketplaceCache\(/);
@@ -69,7 +70,7 @@ describe('bundled plugin parity', () => {
   // "YOUCODED_PROFILE" far enough apart, and on the wrong side, to stay
   // outside this window).
   it('LocalSkillProvider.kt never grows desktop\'s dev-instance guard', () => {
-    const kt = (f: string) => fs.readFileSync(path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'skills', f), 'utf8');
+    const kt = (f: string) => readSource(path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'skills', f));
     // WHY: Android has no dev-instance concept — YOUCODED_PROFILE only exists
     // to protect desktop's real ~/.claude from a run-dev.sh copy. Porting it
     // to Android would silently skip real upgrades with no equivalent reason.
