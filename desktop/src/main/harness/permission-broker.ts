@@ -48,7 +48,12 @@ export interface AskRequest {
    *  `parentToolCallId` (Task 6, 1c) is the Task-tool call that spawned this
    *  specialist — the renderer needs it to nest the routed row under the
    *  right specialist card instead of just labelling it. */
-  specialist?: { childId: string; agentType: string; title: string; parentToolCallId: string };
+  specialist?: {
+    childId: string; agentType: string; title: string; parentToolCallId: string;
+    /** Task 4 review item 6: set when the specialist belongs to a plan — the
+     *  renderer places the ask in that plan step's specialist row. */
+    plan?: { planId: string; stepId: string; attemptId: string };
+  };
   /** Task 11: the exact permission-engine SUBJECT this ask is about (e.g. a
    *  Bash command string) — harness-session.ts already computes this via
    *  tool.permissionSubject(args) before calling askUser, but only THREADS it

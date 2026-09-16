@@ -26,7 +26,7 @@ import { PlanJournal, PlanJournalUnreadableError } from './plan-journal';
 import { PlanBudget, pricingSnapshot } from './plan-budget';
 import { PlanService, type PlanProposal } from './plan-service';
 import {
-  PlanExecutor, PLAN_RESTART_BRIEF, classifyChildTranscript,
+  PlanExecutor, classifyChildTranscript, planRestartBrief,
   type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type TranscriptVerdict,
 } from './plan-executor';
 import {
@@ -63,7 +63,7 @@ export interface PlanChildStart {
   resumeChildId?: string;
   signal: AbortSignal;
   tag: { planId: string; stepId: string; attemptId: string };
-  recordChild(childId: string): Promise<void>;
+  recordChild(childId: string, info?: { title?: string }): Promise<void>;
   brief: string;
   /** The budget stop the gate reported during the turn, if any. */
   budgetStop(): PlanChildStop | undefined;
@@ -418,9 +418,18 @@ export class PlanHostBridge {
     const lookup = budgetAdapterFor(route.providerType);
     if (!lookup.ok) return undefined;
     const left = attempt.baseTokens + attempt.addedTokens - attempt.spentTokens;
-    const softGap = !lookup.adapter.capsOutput && plan.usedTokens >= plan.ceilingTokens ? plan.usedTokens - plan.ceilingTokens + 1 : 0;
+    // Review item 2: the plan-wide gap is asked ONCE. Every other unfinished
+    // specialist that overshot its own allowance will pause on its own and be
+    // asked at least that overshoot then, so it is not asked for here too.
+    const coveredByOthers = plan.steps.flatMap((s) => s.attempts)
+      .filter((a) => a.attemptId !== attemptId && a.phase !== 'committed' && a.completedAt === undefined)
+      .reduce((n, a) => n + Math.max(0, a.spentTokens - a.baseTokens - a.addedTokens), 0);
+    const softGap = !lookup.adapter.capsOutput && plan.usedTokens >= plan.ceilingTokens
+      ? plan.usedTokens - plan.ceilingTokens + 1 - coveredByOthers : 0;
     const verdict = classifyChildTranscript(this.port.readChildEvents(attempt.childId, ref.cwd));
-    if (verdict.kind !== 'resumable' || !verdict.briefDelivered) return softGap > 0 ? softGap : undefined;
+    // A terminal transcript needs no request; an undelivered brief is covered
+    // by the attempt's untouched allowance.
+    if (verdict.kind === 'terminal' || (verdict.kind === 'resumable' && !verdict.briefDelivered)) return softGap > 0 ? softGap : undefined;
     const cwd = this.port.rootCwd(ref.sessionId);
     const def = cwd !== undefined ? this.port.roster(cwd).resolve(step.specialist) : undefined;
     if (!def) return softGap > 0 ? softGap : undefined;
@@ -430,7 +439,8 @@ export class PlanHostBridge {
     });
     let need = 0;
     try {
-      const bound = await probe.session.planNextRequestBound(lookup.adapter, PLAN_RESTART_BRIEF);
+      // The exact turn the restart will send (items 3/4).
+      const bound = await probe.session.planNextRequestBound(lookup.adapter, planRestartBrief(verdict));
       if (bound.ok) need = bound.tokens + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - left;
     } finally {
       probe.dispose();

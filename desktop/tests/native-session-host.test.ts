@@ -5642,9 +5642,28 @@ describe('specialists plans in the native host (Task 4)', () => {
     // Ordinary durable specialist sessions…
     const store = new SessionStore(new NativeHome(root));
     for (const id of childIds) expect(store.readHeader(id, root)).toMatchObject({ sessionKind: 'specialist', parentSessionId: SID, agentType: 'reviewer' });
-    // …never wired as conversations (no namer/feeder) and never shown as Task-card copies.
+    // …never wired as conversations (no namer/feeder)…
     expect(events.some((e) => childIds.includes(e.sessionId))).toBe(false);
-    expect(events.some((e) => e.type !== 'subagent-usage' && childIds.includes(e.data?.agentId))).toBe(false);
+    // …and (review item 6) their display copies carry the plan identity, so the
+    // renderer can place them in that specialist's row of the plan card.
+    const copies = events.filter((e) => e.type !== 'subagent-usage' && childIds.includes(e.data?.agentId));
+    expect(copies.length).toBeGreaterThan(0);
+    for (const c of copies) {
+      expect(c.sessionId).toBe(SID);
+      expect(c.data.parentAgentToolUseId).toBe('call-plan');
+      const attempt = rec.steps.flatMap((st: any) => st.attempts.map((a: any) => ({ ...a, stepId: st.id }))).find((a: any) => a.childId === c.data.agentId);
+      expect(c.data.planChild).toEqual({ planId, stepId: attempt.stepId, attemptId: attempt.attemptId });
+    }
+    // The plan card's rows list their specialists from the journal.
+    const view = (await host.planViewsFor(SID))[0];
+    const s1 = view.steps.find((st) => st.id === 's1')!;
+    expect(s1.children!.map((c) => c.childId).sort()).toEqual(rec.steps[0].attempts.map((a: any) => a.childId).sort());
+    expect(s1.children![0]).toMatchObject({
+      parentToolCallId: 'call-plan', agentType: 'reviewer', background: false, status: 'completed',
+      title: expect.any(String), prompt: expect.stringMatching(/^Review /), model: { label: CHILD },
+      report: { status: 'completed', text: expect.stringMatching(/^REPORT for/) },
+      planAttempt: { stepId: 's1', attemptId: expect.any(String), itemIndex: expect.any(Number), iteration: 0 },
+    });
     // Their spend still reaches the parent's totals.
     expect(events.filter((e) => e.type === 'subagent-usage' && e.sessionId === SID)).toHaveLength(3);
     // Nothing is left running, and the 30-per-conversation spawn budget is untouched.
@@ -5652,6 +5671,48 @@ describe('specialists plans in the native host (Task 4)', () => {
     for (let i = 0; i < SPECIALIST_SPAWN_BUDGET_PER_SESSION; i++) expect(host.trySpendSpecialistSpawnBudget(SID)).toBe(true);
     const done = planEvents.filter((e) => e.plan.planId === planId).map((e) => e.plan.status);
     expect(done[done.length - 1]).toBe('completed');
+  });
+
+  it('review item 6: a plan specialist\'s routed ask carries the plan, step and specialist identity', async () => {
+    const doc = { goal: 'Clean up', steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, items: ['build'] }] };
+    await host.create({ sessionId: SID, cwd: root, binding: PARENT });
+    parentSteps = [proposeStep('call-clean', doc), textStep('ok')];
+    host.send(SID, 'Plan it');
+    await waitFor(() => planStatus().includes('proposed'), 'the proposal');
+    childReply = (_p, call) => (call === 1
+      ? { chunks: [toolCallChunk('bash-1', 'Bash', { command: 'rm -rf build' }), finishChunk('tool-calls', 5, 5)] }
+      : { chunks: [...textChunks('d', 'Skipped the removal.'), finishChunk('stop', 5, 5)] });
+    const asks: any[] = [];
+    host.on('hook-event', (e: any) => { if (e.type === 'PermissionRequest') asks.push(e); });
+    await host.approvePlan(SID, journalFile().plans[0].planId);
+    await waitFor(() => asks.length === 1, 'the routed ask');
+    const rec = journalFile().plans[0];
+    const attempt = rec.steps[0].attempts[0];
+    expect(asks[0].sessionId).toBe(SID);
+    expect(asks[0].payload.specialist).toEqual({
+      childId: attempt.childId, agentType: 'worker', title: expect.any(String), parentToolCallId: 'call-clean',
+      plan: { planId: rec.planId, stepId: 'fix', attemptId: attempt.attemptId },
+    });
+    // The row it belongs to exists while it waits.
+    const row = (await host.planViewsFor(SID))[0].steps[0].children!;
+    expect(row).toEqual([expect.objectContaining({ childId: attempt.childId, status: 'running' })]);
+    host.respondPermission(asks[0].payload._requestId, { behavior: 'deny' });
+    await waitFor(() => planStatus()[0] === 'completed', 'completion');
+  });
+
+  it('review item 9: the model\'s task_id surface cannot reach a plan specialist; the card\'s own actions can', async () => {
+    const planId = await proposeOne();
+    childReply = () => 'hang';
+    await host.approvePlan(SID, planId);
+    await waitFor(() => childCalls.length === 2, 'both specialists to send');
+    const childId = liveChildren()[0].session.opts.sessionId;
+    const services = (host as any).live.get(SID).session.opts.toolServices.specialists;
+    expect(services.steerSpecialist(SID, childId, 'do something else')).toEqual({ status: 'not-yours' });
+    expect(services.interruptSpecialist(SID, childId)).toEqual({ status: 'not-yours' });
+    expect(await services.resumeSpecialist(SID, { childId, prompt: 'again', parentToolCallId: 'x', reservation: { parentId: SID, writer: false } }))
+      .toEqual({ status: 'not-yours' });
+    expect(liveChildren()).toHaveLength(2);
+    expect(host.steerFromUser(SID, childId, 'a note from the user')).toEqual({ ok: true });
   });
 
   it('Stop on the parent turn leaves plan specialists running; closing the conversation interrupts the plan', async () => {

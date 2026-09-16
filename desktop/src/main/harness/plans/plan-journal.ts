@@ -25,7 +25,7 @@ import type { NativeHome } from '../../native-home';
 // nativeStoreSlug (not the CC-mirroring slug): an app-private sidecar beside
 // the delegation ledger, under the same frozen native-store directory.
 import { nativeStoreSlug } from '../../slug-encoding';
-import type { PlanStepView, PlanView } from '../../../shared/types';
+import type { PlanChildView, PlanStepView, PlanView } from '../../../shared/types';
 import type { PlanStepV1 } from './schema';
 import {
   PLAN_JOURNAL_VERSION, PlanJournalFileSchema,
@@ -188,6 +188,34 @@ function stepTitle(task: string): string {
   return firstLine.length > STEP_TITLE_MAX_CHARS ? `${firstLine.slice(0, STEP_TITLE_MAX_CHARS - 1)}…` : firstLine;
 }
 
+/** One plan specialist as the card's row shows it. A finished attempt says how
+ *  it ended; an unfinished one is `running` only while this plan is actually
+ *  being advanced (it holds a lease), otherwise `interrupted`. */
+function childView(plan: PlanRecord, step: PlanStepV1, stepStatus: string, a: PlanAttemptRecord): PlanChildView {
+  const binding = plan.manifest.specialists[step.specialist]?.binding;
+  const done = isCommitted(a);
+  const status: PlanChildView['status'] = done
+    ? (a.terminal === 'completed' ? 'completed' : a.terminal === 'failed' ? 'failed' : 'interrupted')
+    : (plan.status === 'running' && plan.lease && stepStatus === 'running' ? 'running' : 'interrupted');
+  const view: PlanChildView = {
+    childId: a.childId!,
+    parentToolCallId: plan.toolUseId,
+    agentType: step.specialist,
+    title: a.childTitle ?? step.specialist,
+    background: false,
+    status,
+    startedAt: a.startedAt ?? plan.startedAt ?? plan.createdAt,
+    planAttempt: { stepId: step.id, attemptId: a.attemptId, itemIndex: a.itemIndex, iteration: a.iteration },
+  };
+  if (a.completedAt !== undefined) view.endedAt = a.completedAt;
+  if (binding) view.model = { label: binding.modelId };
+  if (a.brief !== undefined) view.prompt = a.brief;
+  if (done && a.reportText !== undefined) {
+    view.report = { text: a.reportText, status: a.terminal === 'completed' ? 'completed' : 'failed', timestamp: a.completedAt ?? 0 };
+  }
+  return view;
+}
+
 /**
  * The renderer's view of one journal record. The ONLY place a PlanView is
  * built from durable state — the renderer never invents lifecycle states.
@@ -219,6 +247,10 @@ export function projectPlan(plan: PlanRecord): PlanView {
     if (attempts.length > 0) {
       out.done = attempts.filter((a) => isCommitted(a) && a.terminal === 'completed').length;
       out.usedTokens = attempts.reduce((n, a) => n + a.spentTokens, 0);
+      // Task 4 review item 6: one row per specialist this step launched, from
+      // durable state (the renderer adds the live activity to it).
+      const children = attempts.filter((a) => a.childId).map((a) => childView(plan, step, rec!.status, a));
+      if (children.length > 0) out.children = children;
     }
     rows.push(out);
   };

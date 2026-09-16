@@ -259,6 +259,10 @@ export interface TranscriptEvent {
     /** Specialists stage two: projection attached to the existing propose_plan
      * tool-use/result seam; this is deliberately not a transcript event type. */
     plan?: PlanView;
+    /** Task 4 review item 6: set on a plan specialist's display copy (which
+     *  rides under the parent's id with parentAgentToolUseId = the plan's
+     *  propose_plan call). The renderer places it in that specialist's row. */
+    planChild?: { planId: string; stepId: string; attemptId: string };
     stopReason?: string;
     /** Edit/MultiEdit tool-result payloads carry structuredPatch hunks. */
     structuredPatch?: StructuredPatchHunk[];
@@ -695,6 +699,10 @@ export interface PlanStepView {
  *  a hired specialist's card shows — the brief it was given, its own events
  *  (thinking, tool calls, output) and its report. */
 export interface PlanChildView extends SpecialistRunView {
+  /** Task 4 review item 6: which step, attempt, map item and repeat round this
+   *  specialist served — the key its display copies (`planChild` on the event)
+   *  and its routed asks (`specialist.plan`) are matched against. */
+  planAttempt?: { stepId: string; attemptId: string; itemIndex: number; iteration: number };
   prompt?: string;
   segments?: SubagentSegment[];
   report?: SpecialistReportView;

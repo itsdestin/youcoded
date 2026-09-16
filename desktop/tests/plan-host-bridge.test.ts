@@ -121,9 +121,29 @@ describe('the minimum Add budget', () => {
     const min = await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1');
     // left = 2000 − 2600 = −600 → the resume request needs 300 + 1 + margin + 600.
     expect(min).toBe(300 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
-    // The plan-wide soft stop alone would need only used − ceiling + 1.
+    // Review items 3/4: an unexplained action restarts with the tool-naming
+    // brief, so that request is measured too.
     childEvents = [ev('user-message', { text: 'brief' }), ev('tool-use', { toolUseId: 'w', toolName: 'Write' })];
+    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1')).toBe(300 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
+    // The plan-wide soft stop alone (nothing measurable) needs used − ceiling + 1.
+    childEvents = [];
     expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1')).toBe(2600 - 2000 + 1);
+  });
+
+  it('review item 2: the plan-wide gap is asked once — a sibling\'s own overshoot is left to its own pause', async () => {
+    routeType = 'chatgpt';
+    nextBound = 0;
+    childEvents = [ev('user-message', { text: 'brief' })];
+    const plan = soft({ usedTokens: 6600, ceilingTokens: 4000 });
+    plan.document = { goal: 'g', steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a', 'b'] }] };
+    plan.steps[0].attempts.push({
+      attemptId: 'b1', itemIndex: 1, iteration: 0, childId: 'kid-b', baseTokens: 2000, addedTokens: 0, reservedTokens: 0, spentTokens: 4000, phase: 'response-persisted', softLimit: true,
+    });
+    const bridge = new PlanHostBridge(port()) as any;
+    // A: its own need (0 + 1 + margin + its 600 overshoot). Without the fix the
+    // whole gap (6600 − 4000 + 1 = 2601, which includes B's 2000) was asked here
+    // AND again at B's own pause.
+    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, plan, 'a1')).toBe(1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
   });
 
   it('a capped route has no plan-wide gap; nothing is needed when the allowance already fits', async () => {

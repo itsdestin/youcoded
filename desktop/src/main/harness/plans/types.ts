@@ -64,6 +64,11 @@ const PlanAttemptSchema = z.object({
   itemIndex: nonNegativeInt,
   iteration: nonNegativeInt,
   childId: z.string().min(1).optional(),
+  /** Task 4 review item 6: what the plan card's specialist row shows — the
+   *  name minted at launch, when it started, and the brief it was sent. */
+  childTitle: z.string().optional(),
+  startedAt: z.number().optional(),
+  brief: z.string().optional(),
   /** The spawn-time manifest entry actually used (Task 4 fills it). */
   manifest: ExecutionManifestSchema.optional(),
   baseTokens: nonNegativeInt,

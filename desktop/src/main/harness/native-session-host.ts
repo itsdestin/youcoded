@@ -2651,10 +2651,17 @@ export class NativeSessionHost extends EventEmitter {
               shells.length ? `Background commands:\n${shells.join('\n')}` : null,
             ].filter(Boolean).join('\n\n');
           },
-          steerSpecialist: (parentId: string, childId: string, text: string) => this.steerSpecialist(parentId, childId, text),
-          interruptSpecialist: (parentId: string, childId: string) => this.interruptSpecialist(parentId, childId),
-          resumeSpecialist: (parentId: string, resumeOpts: Parameters<NativeSessionHost['resumeSpecialist']>[1]) =>
-            this.resumeSpecialist(parentId, resumeOpts),
+          // Task 4 review item 9: a plan's specialist belongs to the plan (its
+          // budget gate, its journal), so the model's task_id surface treats it
+          // as not its own — a steer would spend unapproved turns and a resume
+          // would rebuild it without its budget gate. The card's own note/stop
+          // actions (steerFromUser/interruptFromUser) still reach it.
+          steerSpecialist: (parentId: string, childId: string, text: string) =>
+            (this.isPlanSpecialist(childId) ? { status: 'not-yours' as const } : this.steerSpecialist(parentId, childId, text)),
+          interruptSpecialist: (parentId: string, childId: string) =>
+            (this.isPlanSpecialist(childId) ? { status: 'not-yours' as const } : this.interruptSpecialist(parentId, childId)),
+          resumeSpecialist: async (parentId: string, resumeOpts: Parameters<NativeSessionHost['resumeSpecialist']>[1]) =>
+            (this.isPlanSpecialist(resumeOpts.childId) ? { status: 'not-yours' as const } : this.resumeSpecialist(parentId, resumeOpts)),
         },
         // Task 14 fix pass: `designated` is real (backed by NativeHome) whenever
         // this host was constructed with one — the same condition `this.ledger`
@@ -3328,7 +3335,7 @@ export class NativeSessionHost extends EventEmitter {
     // construction plus its budget gate and provider route (plan-child mode,
     // harness-session.ts). `probe` builds one only to measure a request, so it
     // gets no background-command registry (nothing may ever run in it).
-    extra: { plan?: { gate: PlanChildRequestGate; providerType: ProfileProviderType }; probe?: boolean } = {},
+    extra: { plan?: { gate: PlanChildRequestGate; providerType: ProfileProviderType; tag?: NonNullable<LiveEntry['plan']> }; probe?: boolean } = {},
   ): HarnessSession {
     const allowed = new Set(specialist.allowedTools);
     return new HarnessSession(
@@ -3421,6 +3428,7 @@ export class NativeSessionHost extends EventEmitter {
           parentToolCallId,
           timeoutMs: this.specialistAskHoldMs,
           remember: (rule) => this.rememberRule(parentId, parent.cwd, rule),
+          ...(extra.plan?.tag ? { plan: extra.plan.tag } : {}),
         }),
         ...(this.toolServices ? { toolServices: this.toolServices } : {}),
         // BELT-AND-SUSPENDERS (Task 6): syncTaskTool's SECOND, independent
@@ -3488,15 +3496,17 @@ export class NativeSessionHost extends EventEmitter {
       // The original is never mutated — the persisted event above and this copy
       // are two different objects on purpose.
       if (!isSubagentDisplayEvent(event)) return;
-      // Specialists plans (Task 4): a plan specialist has no Task card to
-      // nest under — its progress is the plan card (plans-event). Stamped
-      // copies would be attached to the propose_plan card, which the signed
-      // card design does not show, so none are emitted.
-      if (opts.plan) return;
+      // Specialists plans (Task 4, review item 6): a plan specialist's copy
+      // rides under the plan's propose_plan call and carries its plan identity,
+      // so the renderer can place it in that specialist's row of the plan card
+      // (PlanStepView.children) rather than in a Task card that doesn't exist.
       this.emit('transcript-event', {
         ...event,
         sessionId: parentId,
-        data: { ...event.data, parentAgentToolUseId: parentToolCallId, agentId: childId },
+        data: {
+          ...event.data, parentAgentToolUseId: parentToolCallId, agentId: childId,
+          ...(opts.plan ? { planChild: { planId: opts.plan.planId, stepId: opts.plan.stepId, attemptId: opts.plan.attemptId } } : {}),
+        },
       } satisfies TranscriptEvent);
     });
   }
@@ -4577,6 +4587,12 @@ export class NativeSessionHost extends EventEmitter {
   // hydration, and the session mechanics the plan bridge borrows. Every plan
   // change is pushed as a 'plans-event' ({ sessionId, plan: PlanView }).
 
+  /** A live plan specialist (Task 4 review item 9). A finished one has no
+   *  delegation-ledger row, so the task_id paths already find nothing. */
+  private isPlanSpecialist(childId: string): boolean {
+    return this.live.get(childId)?.plan !== undefined;
+  }
+
   private static readonly PLANS_UNSUPPORTED = { ok: false as const, unsupported: true as const, error: "Plans aren't available in this session." };
 
   approvePlan(sessionId: string, planId: string): Promise<PlanActionResult> {
@@ -4669,6 +4685,7 @@ export class NativeSessionHost extends EventEmitter {
     if (!parent || parent.parentSessionId) throw new Error("the conversation that owns this plan isn't open");
     const token = await this.waitForPlanSlot(input.parentId, input.specialist.charter !== 'read-only', input.signal);
     let childId: string | undefined;
+    let title: string | undefined;
     try {
       const plan = { gate: input.gate, providerType: input.providerType, tag: input.tag };
       if (input.resumeChildId) {
@@ -4686,14 +4703,15 @@ export class NativeSessionHost extends EventEmitter {
         this.seedResumedHistory(resumeId, parent.cwd, session);
         this.wireChildLive(input.parentId, resumeId, parent.cwd, session, input.binding, input.parentToolCallId, { plan: input.tag });
         childId = resumeId;
+        title = header.title ?? input.specialist.displayName;
       } else {
-        ({ childId } = await this.createChild(input.parentId, {
+        ({ childId, title } = await this.createChild(input.parentId, {
           specialist: input.specialist, prompt: input.brief, workDir: parent.cwd,
           parentToolCallId: input.parentToolCallId, binding: input.binding, plan,
         }));
       }
       this.bindReservation(token, childId);
-      await input.recordChild(childId);
+      await input.recordChild(childId, { title });
     } catch (err) {
       if (childId) {
         try { await this.destroy(childId); } catch (destroyErr) {

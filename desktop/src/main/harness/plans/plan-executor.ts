@@ -81,7 +81,7 @@ export interface PlanChildLaunch {
   signal: AbortSignal;
   /** Must be awaited after the session exists and BEFORE anything is sent, so
    *  the journal always knows which session an attempt's spending belongs to. */
-  recordChild(childId: string): Promise<void>;
+  recordChild(childId: string, info?: { title?: string }): Promise<void>;
 }
 
 export type PlanChildOutcome =
@@ -698,9 +698,13 @@ export class PlanExecutor implements PlanExecutorHooks {
           itemIndex: attempt.itemIndex, iteration: attempt.iteration, specialist: step.specialist, brief,
           ...(attempt.childId ? { resumeChildId: attempt.childId } : {}),
           signal: run.launchAbort.signal,
-          recordChild: (childId) => this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
+          recordChild: (childId, info) => this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
             const a = this.findAttempt(p, step.id, attemptId);
             a.childId = childId;
+            // Review item 6: what the card's specialist row shows.
+            if (info?.title) a.childTitle = info.title;
+            a.startedAt = Date.now();
+            a.brief = brief;
             // The spawn-time manifest entry actually used (design §2).
             const entry = p.manifest.specialists[step.specialist];
             a.manifest = { ...p.manifest, specialists: entry ? { [step.specialist]: entry } : {} };

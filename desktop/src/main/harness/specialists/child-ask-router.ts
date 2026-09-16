@@ -65,6 +65,8 @@ export interface ChildAskRouterDeps {
    *  bound to the PARENT's id/cwd — never called with anything the caller
    *  didn't ask to persist. */
   remember?: (rule: PermissionRule) => void;
+  /** Task 4 review item 6: the plan identity of a plan's specialist. */
+  plan?: { planId: string; stepId: string; attemptId: string };
 }
 
 export function childAskRouter(deps: ChildAskRouterDeps): NonNullable<HarnessSessionOpts['askUser']> {
@@ -86,7 +88,10 @@ export function childAskRouter(deps: ChildAskRouterDeps): NonNullable<HarnessSes
         ...req,
         sessionId: deps.parentId,
         raisedBy: deps.childId,
-        specialist: { childId: deps.childId, agentType: deps.agentType, title: deps.title, parentToolCallId: deps.parentToolCallId },
+        specialist: {
+          childId: deps.childId, agentType: deps.agentType, title: deps.title, parentToolCallId: deps.parentToolCallId,
+          ...(deps.plan ? { plan: deps.plan } : {}),
+        },
       },
       {
         timeoutMs: deps.timeoutMs ?? SPECIALIST_ASK_HOLD_MS,
