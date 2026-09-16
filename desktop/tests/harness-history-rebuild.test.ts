@@ -348,7 +348,7 @@ describe('rebuildHistory — the resume deep-equal contract', () => {
     // session must start with neither — a stale mtime could wrongly satisfy the
     // read-before-edit gate on the first edit after resume.
     const session = new HarnessSession(makeOpts({ tools: [fakeTool('Read')] }), async () => ({} as any));
-    (session as any).readRegistry.set('C:/proj/a.ts', 123456);
+    (session as any).readRegistry.set('C:/proj/a.ts', '3:stale-fingerprint');
     (session as any).todos.push({ content: 'stale', status: 'pending', activeForm: 'x' });
 
     const events: TranscriptEvent[] = [

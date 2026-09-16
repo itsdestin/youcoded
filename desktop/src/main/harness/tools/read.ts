@@ -5,6 +5,7 @@ import { defineTool } from './registry';
 import { canonicalize, resolveP, shellCwdMissHint } from './guards';
 import { deliverableImageMediaType, UNDELIVERABLE_IMAGE_EXTENSIONS, MAX_ATTACHMENT_BYTES } from '../image-support';
 import { readPdfAsToolResult } from '../pdf-text';
+import { fingerprintFile, fingerprintOf } from './file-fingerprint';
 
 const BINARY_SNIFF_BYTES = 8000;
 
@@ -181,7 +182,7 @@ export const ReadTool = defineTool({
       if (st.size > MAX_ATTACHMENT_BYTES) {
         return { text: `Read rejected: ${args.file_path} is a ${(st.size / (1024 * 1024)).toFixed(1)} MB image (limit ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB).`, isError: true };
       }
-      ctx.readRegistry.set(canonicalize(args.file_path, ctx.cwd), st.mtimeMs);
+      ctx.readRegistry.set(canonicalize(args.file_path, ctx.cwd), fingerprintFile(abs));
       return { text: `Read image ${args.file_path} (${Math.max(1, Math.round(st.size / 1024))} KB, ${imageMediaType}).`, images: [abs] };
     }
     if (undeliverableExt) {
@@ -195,7 +196,7 @@ export const ReadTool = defineTool({
     // for PDFs — `pages` is the paging vocabulary — and the description says so.
     if (path.extname(args.file_path).toLowerCase() === '.pdf') {
       const r = await readPdfAsToolResult(abs, { displayPath: args.file_path, pages: args.pages, supportsVision: !!ctx.supportsVision });
-      if (!r.isError) ctx.readRegistry.set(canonicalize(args.file_path, ctx.cwd), st.mtimeMs);
+      if (!r.isError) ctx.readRegistry.set(canonicalize(args.file_path, ctx.cwd), fingerprintFile(abs));
       return r;
     }
     const offset = args.offset ?? 1;
@@ -214,7 +215,7 @@ export const ReadTool = defineTool({
     const servedKey = `${canonical}|${offset}|${limit}`;
     const prior = ctx.servedReads?.get(servedKey);
     if (prior && prior.mtimeMs === st.mtimeMs) {
-      ctx.readRegistry.set(canonical, st.mtimeMs);
+      ctx.readRegistry.set(canonical, prior.fingerprint);
       const ago = ctx.toolCallIndex !== undefined ? ctx.toolCallIndex - prior.callIndex : undefined;
       const when = ago !== undefined ? `(${ago} call${ago === 1 ? '' : 's'} ago)` : '(earlier this session)';
       return {
@@ -231,10 +232,12 @@ export const ReadTool = defineTool({
     // 4) — drop it so line counts and the paging trailer are honest.
     if (raw.endsWith('\n')) all.pop();
     const totalLines = all.length;
-    // Record for the read-before-edit gate (mtime so a later external change
-    // invalidates it) — the file exists and was readable, so it counts as read
-    // even if the requested page is past EOF.
-    ctx.readRegistry.set(canonical, st.mtimeMs);
+    // Record for the read-before-edit gate (a content fingerprint, so a later
+    // external change invalidates it and a mere touch does not) — the file
+    // exists and was readable, so it counts as read even if the requested page
+    // is past EOF.
+    const fingerprint = fingerprintOf(buf);
+    ctx.readRegistry.set(canonical, fingerprint);
     if (offset > totalLines) {
       return { text: `Read failed: ${args.file_path}: offset ${offset} is past the end of the file (${totalLines} lines).`, isError: true };
     }
@@ -259,7 +262,7 @@ export const ReadTool = defineTool({
     }
     const shownLines = numberedLines.length;
     const last = offset + shownLines - 1;
-    ctx.servedReads?.set(servedKey, { mtimeMs: st.mtimeMs, callIndex: ctx.toolCallIndex ?? 0, from: offset, to: last });
+    ctx.servedReads?.set(servedKey, { mtimeMs: st.mtimeMs, fingerprint, callIndex: ctx.toolCallIndex ?? 0, from: offset, to: last });
     // WHY a declared bound instead of the hand-written trailer this used to carry:
     // every tool now reports paging the same way, and the "use offset=N" advice is
     // Read's own vocabulary rather than a shared string other tools inherited.

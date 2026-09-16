@@ -718,7 +718,7 @@ export class HarnessSession extends EventEmitter {
   // Tool runtime state (Task 9). readRegistry + todos are per-SESSION runtime
   // state — NOT persisted transcript. seedHistory() clears both on resume.
   private toolByName: Map<string, NativeTool>;
-  private readRegistry = new Map<string, number>();  // canonical path → mtimeMs at last Read
+  private readRegistry = new Map<string, string>();  // canonical path → content fingerprint at last Read (tools/file-fingerprint.ts)
   /** G-11 (2026-08-26 tools investigation) — what Read has already served this
    *  session (`path|offset|limit` → mtime + which call). Read answers a repeat
    *  of an unchanged slice with "the content you already have is current"
