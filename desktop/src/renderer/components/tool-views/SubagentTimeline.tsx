@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { SubagentSegment, ToolCallState, SpecialistRunView } from '../../../shared/types';
+import type { SubagentSegment, SpecialistRunView } from '../../../shared/types';
 import MarkdownContent from '../MarkdownContent';
 import ToolBody from './ToolBody';
 import { friendlyToolDisplay } from '../ToolCard';
@@ -7,6 +7,7 @@ import { SpecialistAskBlock } from '../specialists/SpecialistAskBlock';
 import { CheckIcon, FailIcon, ChevronIcon, QuestionIcon, NoteIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
 import { useExpandAllToggle, getInitialExpanded } from '../../hooks/useExpandAllToggle';
+import { segmentToToolState } from '../../utils/specialist-cards';
 
 /**
  * Renders a subagent's inline timeline inside the parent AgentView card.
@@ -247,24 +248,3 @@ function StatusIcon({ status }: { status: ToolSegment['status'] }) {
 
 // ---------------------------------------------------------------------------
 
-function segmentToToolState(segment: ToolSegment): ToolCallState {
-  return {
-    toolUseId: segment.toolUseId,
-    toolName: segment.toolName,
-    input: segment.input,
-    status: segment.status,
-    response: segment.response,
-    error: segment.error,
-    structuredPatch: segment.structuredPatch,
-    // Specialists 1c: the ask fields ride along so ToolBody's per-tool views
-    // (and friendlyToolDisplay) see the same shape a top-level card has. The
-    // buttons themselves are rendered by NestedAsk, not by ToolCard, so this
-    // never double-renders an ask. (Before 1c these were dropped with the note
-    // "subagents run in auto-accept mode" — true of CC subagents, not native
-    // specialists.)
-    requestId: segment.requestId,
-    denyListed: segment.denyListed,
-    external: segment.external,
-    permissionMode: segment.permissionMode,
-  };
-}

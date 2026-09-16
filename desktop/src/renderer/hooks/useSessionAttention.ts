@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
 import type { AttentionState } from '../state/chat-types';
 import type { SessionStatusColor } from '../components/StatusDot';
+import { hasHelperAsk } from '../utils/specialist-cards';
 
 // Attention states that mean "act now" get the same red the permission prompt
 // uses. Amber is reserved for the one state that genuinely means "I don't know"
@@ -110,6 +111,10 @@ export function useSessionAttention(
         else if (t.status === 'running') hasRunning = true;
         if (hasAwaiting) break;
       }
+      // A helper's request counts too, from any turn: a background helper
+      // keeps asking after the turn that hired it ended, and those requests
+      // used to leave the dot un-red (see helperAsksOf).
+      if (!hasAwaiting) hasAwaiting = hasHelperAsk(chatState.toolCalls);
       // Priority: red (permission prompt OR a state that needs a decision) →
       // amber ("something may be wrong, I don't know") → green (working) →
       // blue (unseen activity) → gray (idle).
@@ -143,6 +148,7 @@ export function useSessionAttention(
         const t = chatState.toolCalls.get(id);
         if (t?.status === 'awaiting-approval') { awaitingApproval = true; break; }
       }
+      if (!awaitingApproval) awaitingApproval = hasHelperAsk(chatState.toolCalls);
       const status: SessionStatusColor = awaitingApproval ? 'red' : attentionDotColor(chatState.attentionState) ?? 'gray';
       next.set(sid, { status, attentionState: chatState.attentionState, awaitingApproval });
     }
