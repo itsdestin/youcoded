@@ -314,6 +314,9 @@ interface ActiveRun {
   live: LiveChild[];
   /** Review fix 1: member work settle must wait for (see track()). */
   busy: Set<Promise<void>>;
+  /** Follow-up: settle stopped waiting for member work; anything a member
+   *  starts after this is torn down at once. */
+  closed?: boolean;
   heartbeat?: unknown;
   done: Promise<void>;
 }
@@ -558,7 +561,9 @@ export class PlanExecutor implements PlanExecutorHooks {
       console.error('[plan-executor] settling failed', e);
     } finally {
       this.retireRun(run);
-      this.finishing.delete(run.key);
+      // Follow-up: a fast Continue may already have a newer run of this plan
+      // finishing under the same key; only this run's own entry is removed.
+      if (this.finishing.get(run.key) === run) this.finishing.delete(run.key);
     }
   }
 
@@ -968,7 +973,15 @@ export class PlanExecutor implements PlanExecutorHooks {
         const child: LiveChild = { stepId: step.id, attemptId, handle, finalLeaf };
         run.live.push(child);
         wave.push(child);
-        if (run.halt) { handle.abort(); return undefined; }
+        if (run.halt) {
+          handle.abort();
+          // Settle already ran its disposals: nobody else would free this one.
+          if (run.closed) {
+            await handle.dispose();
+            run.live = run.live.filter((c) => c !== child);
+          }
+          return undefined;
+        }
         return child;
       } catch (e) {
         this.memberFailed(run, step.id, attemptId, e);
@@ -1270,7 +1283,25 @@ export class PlanExecutor implements PlanExecutorHooks {
     //    finish first (they stop at once now that the plan is halted), so
     //    every specialist they started is in `run.live` and every hold they
     //    took is released below.
-    while (run.busy.size > 0) await Promise.all([...run.busy]);
+    //    Follow-up: bounded by the same settle deadline — a start that never
+    //    comes back must not keep the card from settling. Whatever is left is
+    //    logged; a hold it takes later is released by recoverAttempt on the
+    //    next start, and a specialist it starts later is disposed (run.closed).
+    const busyDeadline = Date.now() + this.settleDeadlineMs;
+    while (run.busy.size > 0) {
+      const left = busyDeadline - Date.now();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = await Promise.race([
+        Promise.all([...run.busy]).then(() => false),
+        new Promise<boolean>((r) => { timer = setTimeout(() => r(true), Math.max(0, left)); }),
+      ]);
+      if (timer) clearTimeout(timer);
+      if (timedOut) {
+        console.error(`[plan-executor] settling plan ${run.planId} while ${run.busy.size} specialist start(s) are still busy`);
+        break;
+      }
+    }
+    run.closed = true;
     // 1. Everything still running was already asked to stop (requestHalt, or
     //    runWave for a launch that landed after the halt) and gets until the
     //    deadline to finish on its own.

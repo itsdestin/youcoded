@@ -1355,7 +1355,9 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       : l.brief === 'Do b' ? async () => { await reservingSeen; return { kind: 'stopped', stop: { kind: 'refused', detail: 'nothing was sent' } }; }
       : hangs(true)));
     const fence = await seed(record(THREE));
-    const exec = executor(runner);
+    // The settle's wait for member work is bounded by its deadline (follow-up
+    // 1); this test's retry takes 100 ms on purpose, so the deadline is longer.
+    const exec = executor(runner, { settleDeadlineMs: 2_000 });
     // The retry's re-reservation waits until the pause has been requested,
     // then takes a while longer than everything else in the settle.
     let halted!: () => void;
@@ -1410,6 +1412,89 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     expect(p.paused!.reason).toContain('disk full');
     expect(reservedTotal(p)).toBe(0);
     expect(runner.live).toBe(0);
+  });
+
+  it('follow-up 1: a member stuck in its launch holds the settle only until the deadline; a late launch is torn down', async () => {
+    const runner = new FakeRunner((l) => (l.brief === 'Do b'
+      ? async () => ({ kind: 'stopped', stop: { kind: 'refused', detail: 'nothing was sent' } })
+      : completes('ok')));
+    const real = runner.launch.bind(runner);
+    let lateStart!: () => void;
+    const stuck = new Promise<void>((r) => { lateStart = r; });
+    let lateHandle: PlanChildHandle | undefined;
+    runner.launch = async (input) => {
+      if (input.brief === 'Do flaky') {
+        await stuck;   // ignores the abort — a start that never comes back in time
+        // (A real host's own fenced journal write would already refuse here,
+        // since the lease is gone; skipping it exercises the executor's own
+        // teardown of a start that lands after settle.)
+        lateHandle = await real({ ...input, recordChild: async () => {} });
+        return lateHandle;
+      }
+      return real(input);
+    };
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fence = await seed(record(THREE));
+    const exec = executor(runner, { settleDeadlineMs: 60 });
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(p.status).toBe('paused');
+    expect(p.lease).toBeUndefined();
+    expect(reservedTotal(p)).toBe(0);
+    expect(errors.mock.calls.some((c) => String(c[0]).includes('still busy'))).toBe(true);
+    // The start comes back after the plan settled: it is disposed, never run.
+    lateStart();
+    await vi.waitFor(() => expect(lateHandle).toBeDefined());
+    await vi.waitFor(() => expect(runner.disposed).toContain(lateHandle!.childId));
+    expect(runner.live).toBe(0);
+    errors.mockRestore();
+  });
+
+  it('follow-up 2: a run finishing late never drops the NEXT run of the same plan from the executor\'s books', async () => {
+    const runner = new FakeRunner(() => async () => ({ kind: 'stopped', stop: { kind: 'refused', detail: 'no' } }));
+    const fence = await seed(record(THREE));
+    const exec = executor(runner);
+    const key = `${REF.sessionId}\u0000p1`;
+    const finishing = (exec as any).finishing as Map<string, unknown>;
+    const realSettle = (exec as any).settle.bind(exec);
+    let calls = 0;
+    let releaseSecondWrite!: () => void;
+    const secondWriteGate = new Promise<void>((r) => { releaseSecondWrite = r; });
+    let secondRun: unknown;
+    // Hold the SECOND run's final write while it is in `finishing`.
+    const realMutate = journal.mutateFenced.bind(journal);
+    vi.spyOn(journal, 'mutateFenced').mockImplementation(async (...args: any[]) => {
+      if (secondRun && finishing.get(key) === secondRun) await secondWriteGate;
+      return (realMutate as any)(...args);
+    });
+    (exec as any).settle = async (run: unknown) => {
+      const n = ++calls;
+      await realSettle(run);
+      if (n !== 1) return;
+      // Run A has written "paused"; before its bookkeeping ends, the user
+      // presses Continue and run B reaches its own final write.
+      const again = await journal.acquireLease(REF, 'p1', { startFrom: ['paused'] });
+      if (!again.ok) throw new Error('lease');
+      exec.start({ ref: REF, planId: 'p1', fence: again.fence });
+      secondRun = (exec as any).runs.get(key);
+      await vi.waitFor(() => expect(finishing.get(key)).toBe(secondRun));
+    };
+    exec.start({ ref: REF, planId: 'p1', fence });
+    const firstRun = (exec as any).runs.get(key);
+    await vi.waitFor(() => expect(secondRun).toBeDefined());
+    await firstRun.done;
+    // Run A's cleanup left run B's entry alone …
+    expect(finishing.get(key)).toBe(secondRun);
+    // … so waiting for the plan still waits for B.
+    let settled = false;
+    const waiting = exec.settled('p1').then(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+    releaseSecondWrite();
+    await waiting;
+    expect(finishing.size).toBe(0);
+    expect((await plan()).lease).toBeUndefined();
   });
 
   it('review fix 6: a start the runner refuses (no approved settings, unusable budget route) is never retried and is Stop-only', async () => {
