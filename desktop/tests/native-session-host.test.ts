@@ -5563,14 +5563,14 @@ describe('specialists plans in the native host (Task 4)', () => {
     }) as any;
   };
 
-  function makeHost(opts: { heartbeatMs?: number } = {}): NativeSessionHost {
+  function makeHost(opts: { heartbeatMs?: number; now?: () => number } = {}): NativeSessionHost {
     const home = new NativeHome(root);
     const h = new NativeSessionHost(
       new SessionStore(home), planFactory as any, NO_CONTEXT, async () => 'openrouter', async () => null,
       async () => ({ in: 1, out: 2 }), undefined, undefined,
       { modelCatalog: async () => CATALOG },
       undefined, undefined, home, undefined, undefined, undefined, {},
-      { settleDeadlineMs: 60, heartbeatMs: opts.heartbeatMs ?? 5_000, slotPollMs: 5 },
+      { settleDeadlineMs: 60, heartbeatMs: opts.heartbeatMs ?? 5_000, slotPollMs: 5, ...(opts.now ? { now: opts.now } : {}) },
     );
     h.on('transcript-event', (e) => events.push(e));
     h.on('plans-event', (e) => planEvents.push(e));
@@ -5820,20 +5820,32 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect((host as any).live.size).toBe(0);
   });
 
+  // Task 7 (was flaky under verify.sh load: `expected [] to deeply equal [0]`).
+  // Two wall-clock races, both removed:
+  //  1. The test polled the FILE for "interrupted", but the journal emits its
+  //     plans-event only after the write lands and the lock is released — so a
+  //     loaded run could see the file change before the card went out. It now
+  //     waits on the card itself.
+  //  2. The foreign lease expired 300 ms of wall time after it was written; a
+  //     slow reopen could outlive it, so "not yet expired" was luck. The host
+  //     now runs on a test clock that only moves when the test moves it.
   it('reopening recovers a stale running plan as interrupted, starts nothing, and rechecks a live-looking lease when it expires', async () => {
     const planId = await proposeOne();
     await host.destroyAll();
     const { spawnSync } = await import('child_process');
     const deadPid = spawnSync(process.execPath, ['-e', '0']).pid!;
+    let clock = Date.now();
     const file = journalFile();
     const p = file.plans[0];
     p.status = 'running';
     p.fenceEpoch = 1;
-    p.lease = { instanceId: 'another-window', pid: deadPid, heartbeatAt: Date.now(), expiresAt: Date.now() + 300, epoch: 1, fence: '1:x' };
+    // Expires 20 ms after the test clock's "now": short, so the recheck timer
+    // comes round quickly, but it only counts as expired once the clock moves.
+    p.lease = { instanceId: 'another-window', pid: deadPid, heartbeatAt: clock, expiresAt: clock + 20, epoch: 1, fence: '1:x' };
     p.steps[0].attempts.push({ attemptId: 'a1', itemIndex: 0, iteration: 0, childId: 'gone', baseTokens: 3000, addedTokens: 0, reservedTokens: 3000, spentTokens: 0, phase: 'prepared' });
     fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), JSON.stringify(file));
 
-    host = makeHost();
+    host = makeHost({ now: () => clock });
     // What the journal held at the instant the interrupted card went out.
     const heldWhenShown: number[] = [];
     host.on('plans-event', (e) => {
@@ -5842,15 +5854,25 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(await host.resume(SID, root)).toBe(true);
     // Not yet expired: another window might still own it.
     expect(journalFile().plans[0].status).toBe('running');
-    await waitFor(() => journalFile().plans[0].status === 'interrupted', 'the recheck at lease expiry');
-    // Read in the same breath: the interrupted state must already hold nothing.
+    // Several rechecks come round in real time (every ~25 ms) while the clock
+    // stands still; none of them may take the plan over.
+    await new Promise((r) => setTimeout(r, 120));
+    expect(journalFile().plans[0].status).toBe('running');
+    expect(heldWhenShown).toEqual([]);
+
+    clock += 1_000;   // the lease has now expired, and its process is gone
+    await waitFor(() => heldWhenShown.length > 0, 'the interrupted card after the recheck at lease expiry');
+    // The card went out only once the interrupted state already held nothing.
+    expect(heldWhenShown).toEqual([0]);
     const rec = journalFile().plans[0];
+    expect(rec.status).toBe('interrupted');
     expect(rec.lease).toBeUndefined();
     expect(rec.steps[0].attempts[0].reservedTokens).toBe(0);
-    expect(heldWhenShown).toEqual([0]);
     expect(childCalls).toHaveLength(0);
     expect(liveChildren()).toHaveLength(0);
     expect((await host.planViewsFor(SID))[0]).toMatchObject({ planId, status: 'interrupted' });
+    // Nothing keeps checking once it is settled.
+    expect((host as any).plans.rechecks.size).toBe(0);
   });
 
   it('a Comment queues a follow-up turn whose new proposal is linked as the revision', async () => {

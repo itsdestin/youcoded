@@ -137,6 +137,9 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // fixture data to serve instead of a real filesystem/ledger.
   'specialists.list', 'specialists.getDelegatedModels', 'specialists.setDelegatedModel',
   'specialists.steer', 'specialists.interrupt', 'on.specialistEvent',
+  // Specialists plans — real backend as of 2026-09-16 (Task 6: preload,
+  // ipc-handlers, remote-shim, remote-server, SessionService.kt); still
+  // hand-written so the workbench can show every card state with no running plan.
   'plans.approve', 'plans.comment', 'plans.addBudget', 'plans.resume', 'plans.stop',
   'plans.getAutoApprove', 'plans.setAutoApprove', 'on.planEvent',
   // Voice prompting (2026-09-05) — no real backend yet, registered in
@@ -1647,17 +1650,26 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // workbench transition is a button's own returned record — but the
   // subscription must exist so App/BubbleFeed wire it as they do for real.
   const planSubs = new Set<(e: any) => void>();
-  // Specialists stage two — plans (design mockup, 2026-09-05; MOCK_ONLY). The
-  // card hands each button to one of these and lands whatever comes back, so
-  // the fake only has to answer with the plan's NEXT record. PLANS is keyed by
-  // planId and filled by seed-chat/fixture-loader as `plan` lines replay —
-  // the same arrangement RUNS uses for hires. The transitions here are the
-  // approved behaviour, not invention: Approve → running (first step opens
-  // with its specialists), Comment → the old card greys out and a revised
-  // plan is NOT posted by the mock (that is the assistant's turn, which the
-  // workbench cannot fake honestly), Add budget → running again with a
-  // higher ceiling, Continue → running with finished steps kept, Stop →
-  // stopped.
+  // Specialists stage two — plans. The real channels exist (Task 6,
+  // 2026-09-16; the backend is plans/plan-service.ts behind
+  // NativeSessionHost), so these are no longer MOCK_ONLY: they are FIXTURE
+  // fakes that let the workbench show every card state without running a
+  // plan. The card hands each button to one of these and lands whatever comes
+  // back, so the fake only has to answer with the plan's NEXT record. PLANS is
+  // keyed by planId and filled by seed-chat/fixture-loader as `plan` lines
+  // replay — the same arrangement RUNS uses for hires. Approve → running
+  // (first step opens with its specialists), Continue → running with finished
+  // steps kept, Stop → stopped.
+  // WHERE THE FAKE IS SIMPLER THAN THE REAL BACKEND (kept on purpose so the
+  // design states stay one click apart; do not read them as the contract):
+  //  - Comment: the real service answers the old card as stopped with
+  //    `revisedByComment`, and `revisedBy` only appears when the follow-up
+  //    turn proposes (a later plans:event). The fake sets `revisedBy` at once
+  //    and never posts the revision (that is the assistant's turn).
+  //  - Add budget: the real service raises the limit and leaves the plan
+  //    PAUSED (Continue starts it; tests/plans-lifecycle.integration.test.ts).
+  //    The fake resumes straight away (UX run 1, U7).
+  //  - Transitions are never pushed here; the real host pushes every change.
   const plansAutoApprove = { underTokens: 0 };
   const nextPlan = (planId: string, mutate: (p: PlanView) => PlanView) => {
     const cur = PLANS.get(planId);

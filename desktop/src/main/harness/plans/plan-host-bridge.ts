@@ -98,6 +98,14 @@ export interface PlanHostPort {
 export interface PlanHostBridgeOptions {
   settleDeadlineMs?: number;
   heartbeatMs?: number;
+  /**
+   * The lease clock (tests only). WHY: restart recovery decides "another
+   * window may still own this plan" by comparing a lease's expiry with now,
+   * and schedules its recheck from the same clock. A test on wall time races
+   * the machine's load (Task 7: a 300 ms lease expired before a loaded run
+   * finished reopening); an injected clock makes that decision deterministic.
+   */
+  now?: () => number;
 }
 
 function canonical(value: unknown): string {
@@ -143,10 +151,13 @@ export class PlanHostBridge {
   readonly service: PlanService;
   private readonly lastViews = new Map<string, PlanView>();
   private readonly rechecks = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly now: () => number;
 
   constructor(private readonly port: PlanHostPort, opts: PlanHostBridgeOptions = {}) {
+    this.now = opts.now ?? Date.now;
     this.journal = new PlanJournal({
       home: port.home,
+      ...(opts.now ? { now: opts.now } : {}),
       onEvent: (event) => {
         this.lastViews.set(this.viewKey(event.sessionId, event.plan.planId), event.plan);
         port.emit(event);
@@ -264,7 +275,7 @@ export class PlanHostBridge {
         const timer = setTimeout(() => {
           this.rechecks.delete(sessionId);
           if (this.port.rootCwd(sessionId) === cwd) void this.recover(sessionId, cwd);
-        }, Math.max(0, recheckAt - Date.now()) + 5);
+        }, Math.max(0, recheckAt - this.now()) + 5);
         (timer as { unref?: () => void }).unref?.();
         this.rechecks.set(sessionId, timer);
       }

@@ -1055,6 +1055,147 @@ bucket's revoke behaviour), `permission-store.test.ts` (bucket routing and reads
 
 Rule: `.claude/rules/native-specialists.md` → "Specialists (plan 1c)".
 
+## Specialists plans (stage two, 2026-09-16)
+
+A plan is a multi-step job the assistant proposes with `propose_plan` and the user approves on a
+card with a hard budget. Code: `desktop/src/main/harness/plans/`. Design:
+`youcoded-dev/docs/active/design/2026-09-07-specialists-plans-backend-design.md`.
+
+**Who is offered it.** Cloud providers (ChatGPT sign-in included) and reviewed local models from
+the 9B class up (`plans/eligibility.ts`). Specialists never are.
+<!-- verify: {"path": "youcoded/desktop/src/main/harness/plans/eligibility.ts", "contains": "REVIEWED_LOCAL_9B_PLUS"} -->
+
+**Pieces and who owns what.**
+- `plan-service.ts`: propose, the seven actions, auto-approve settings (`~/.youcoded/plans.json`).
+  Every action answers `{ok:true, plan}`, `{ok:false, error}` or `{ok:false, unsupported:true, error}`
+  and never throws.
+- `plan-journal.ts`: the only place plan state is written.
+- `plan-budget.ts` + `budget-adapter.ts`: reservation, settlement, Add budget.
+- `plan-executor.ts`: waves, settle, stop/interrupt, restart.
+- `plan-host-bridge.ts`: manifest, specialist launch, recovery. It reaches `NativeSessionHost`
+  only through `PlanHostPort`; the host exposes the seven actions plus `planViewsFor` and the
+  `'plans-event'` push.
+
+### Journal
+- One file per conversation: `~/.youcoded/sessions/<slug>/<sessionId>.plans.json`, written under
+  `NativeHome.mutateText` (lock + atomic rename). Each visible change bumps `seq`, and a
+  `plans-event` goes out **after** the write lands. The renderer keeps the highest `seq`.
+  <!-- verify: {"path": "youcoded/desktop/src/main/harness/plans/plan-journal.ts", "contains": "plans\\.json"} -->
+- A damaged file is never read as empty. It is copied byte-for-byte to
+  `<file>.quarantine-<sha16>`, every write refuses, and the card shows `failed` with the
+  reader's own detail, one `seq` above the last card shown.
+- **Lease and fence.** Running needs a lease: instance id, pid, 60 s expiry, heartbeat every
+  20 s, and a fence `epoch:uuid`. Every executor write is fenced, so a lost lease stops all
+  writes. Taking over another window's plan needs BOTH an expired lease and a dead pid. A
+  foreign lease that has not expired is checked again at its expiry, and after that for as
+  long as one remains (`PlanHostBridge.recover`).
+  <!-- verify: {"path": "youcoded/desktop/src/main/harness/plans/plan-journal.ts", "contains": "PLAN_LEASE_TTL_MS = 60_000"} -->
+
+### Budgets
+- **Ceiling** = Σ over every possible attempt of (step `budget_tokens` + that specialist's
+  **setup cost**) (`planCeilingTokens`). A step budget pays for work only. The setup cost is the
+  certified bound of the specialist's exact system prompt and tool schemas, measured on an
+  unwired probe session (`planSetupRequest`). The card's total is therefore an honest worst case.
+  One step may be 500–30,000 tokens.
+  <!-- verify: {"path": "youcoded/desktop/src/main/harness/plans/schema.ts", "contains": "PLAN_MAX_BUDGET_TOKENS = 30_000"} -->
+- **Certified input bound** (`genericInputBound`): 1 token per UTF-8 byte of the JSON form,
+  plus fixed framing. Provider tokenizers may only tighten it. A reply that reads more input than
+  was measured (or, on a capped route, exceeds its hold) disables that adapter for plans for the
+  rest of the process, and records it on the plan.
+- **Every request is reserved before it is sent, and sent once.** Unknown outcomes are charged
+  in full. On capped routes the reply cap is the room left (`maxOutputTokens`).
+- **ChatGPT is a soft limit** (decision 5). Its endpoint rejects a reply cap, so the request goes
+  without one (`harness-session.ts`: `capsOutput ? … : undefined`). After each reply, usage is
+  checked: once a reply reaches its hold, or the plan's limit is used up, the plan pauses before
+  any further request. One reply may overshoot. Such a plan carries `approximateLimit: true`.
+  ChatGPT has no per-token price, so its plans have a token limit only.
+- **Add budget** needs a paused plan and never starts it; Continue does.
+  - It raises the ceiling by exactly the amount. It also raises the paused specialist's
+    allowance, unless the pause was a plan-limit shortfall (`ceilingShortfall`), in which case
+    only the ceiling rises.
+  - An amount below `paused.minimumAddTokens` is refused with the number. The minimum is what
+    the restart turn needs plus a 512-token margin, or the soft overshoot gap.
+- **Plan specialists don't spend the 30-per-conversation spawn budget** (decision 2). They
+  still take a specialist slot (max 4) and the single-writer lock.
+
+### Executor, settle, recovery
+- Steps run in waves up to the resolved cap (≤4); write-capable specialists serialize.
+  Verify/combine get only bounded, labelled reports (6,000 characters each, 24,000 total), read
+  from the journal. A completion is journalled before its successor launches.
+- **Settle before visible.** Pause, stop and interrupt all follow the same order:
+  1. abort the siblings;
+  2. wait at most 10 s (`PLAN_SETTLE_DEADLINE_MS`);
+  3. dispose what is left;
+  4. keep real reports, and charge unsettled requests in full;
+  5. release holds, lease and timers;
+  6. only then write the visible status.
+
+  A paused, interrupted or stopped plan owns no specialist, slot, reservation, lease or timer.
+  Stop is one fenced write (`finalize`).
+- **Quit, close and hand-off** (`destroyAll`, `destroy`, `quiesce`) leave plans `interrupted`.
+  Reopening (`resume()`) interrupts stale running plans and releases ownerless holds in the same
+  write. Nothing runs until Continue.
+- **Continue never re-runs a committed attempt.**
+  - `prepared` may restart.
+  - A terminal transcript is committed without a request.
+  - A cut-off request was charged in full, so the plan usually pauses at once for a top-up
+    before that specialist continues.
+  - A tool call with no recorded result pauses the plan, and the restart turn names that call.
+  - A restarted specialist continues its own session and pays one fresh prompt.
+- **Comment** stops the proposal and stores a `pendingRevision` token keyed by a host turn id,
+  then queues the follow-up turn. Only a proposal made in THAT turn is linked as the revision;
+  the model cannot claim one.
+
+### Transport
+- **Channels.** Seven request channels (`plan-requests.ts` `PLAN_REQUEST_CHANNELS`) plus the
+  `plans:event` push. Desktop IPC and the remote server both call `handlePlanRequest`, so their
+  answers match by construction.
+- **Hydration.** Local Electron hydration awaits `planViewsFor` inside `sendLiveOnlyState`,
+  before the replay-complete marker. A remote first page (`transcript:page`) sends the records
+  to the asking client only. `chat:hydrate` carries the rest; there is no plan buffer.
+- **Unsupported answers.** The phone answers all seven with typed `unsupported`
+  (`PlansBridge.kt`, in its own `when` branch). The shim resolves these as data
+  (`RESOLVE_UNSUPPORTED`), so the card disables its controls and shows no toast.
+- **Plan specialists** never wire as conversations. Their display copies ride the plan card
+  under the parent (`parentAgentToolUseId` = the propose_plan id). Their asks route to the
+  parent's broker with `specialist.plan`. History replays their past activity (`getHistory`).
+<!-- verify: {"path": "youcoded/desktop/src/main/harness/plans/plan-requests.ts", "contains": "PLAN_REQUEST_CHANNELS"} -->
+
+### Tests
+Unit tests: `plan-journal`, `plan-budget`, `plan-budget-adapter`, `plan-executor`,
+`plan-service`, `plan-host-bridge`, `plan-tool`, `plan-eligibility`.
+
+Host wiring: `native-session-host` ("specialists plans in the native host").
+
+Whole lifecycles on the real host: `plans-lifecycle.integration`. It covers approve → waves →
+complete, auto-approve, pause → exact top-up → Continue, quit → reopen → Continue, the
+comment-trust rule, Stop during a four-specialist wave, the ChatGPT soft limit, and a routed ask.
+
+Transport: `plans-transport`, `ipc-channels`, `remote-shim-plans`, `PlansBridgeTest.kt`.
+
+Renderer: `plan-reducer`, `plan-card-actions`, `plan-card-signed-copy`, `first-page-live-replay`.
+<!-- verify: {"test": "youcoded/desktop/tests/plans-lifecycle.integration.test.ts"} -->
+
+### Known limits (2026-09-16)
+- **Needs two Continues.** A request cut off mid-flight is charged in full, so the plan can need
+  Add budget and a second Continue before that specialist resumes.
+- **A soft overshoot can block Add budget.** When several ChatGPT siblings overshoot, the
+  send-time check can stay unmet whatever the Add budget amount; re-propose the plan.
+- **Pid reuse.** It is not hardened with a start time. An expired lease whose pid now belongs to
+  another process counts as live, which is the safe direction, but the card stays "running"
+  until that process exits.
+- **Permission fingerprint.** It is preset + mode, so switching mode between propose and
+  approve blocks approval (fails closed).
+- **Iteration cap.** At a repeat's iteration cap the plan pauses with no attempt: Add budget is
+  refused, and only Stop or a revised plan helps.
+- **Not in the status-bar chip.** Plan specialists aren't listed there, and their asks aren't
+  counted in its "needs you".
+- **The phone can't run plans.** It sees the card and answers "unsupported".
+- **Workbench fakes are simpler than the backend.** In `mock-shim.ts`, Add budget resumes at
+  once and Comment sets `revisedBy` straight away.
+
+Rule: `.claude/rules/native-specialists.md` → "Specialists plans (stage two)".
+
 ## Background Bash (ledger G-1, shipped 2026-08-28)
 
 Design: workspace `docs/archive/specs/2026-08-28-bash-background-execution-design.md`; plan
