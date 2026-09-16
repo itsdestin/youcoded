@@ -92,7 +92,7 @@ import { ProjectView } from './components/project-view/ProjectView';
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
-import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
+import { loadFirstPageThenReplay } from './state/first-page-load';
 
 import FirstRunView from './components/FirstRunView';
 import { getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
@@ -1360,6 +1360,21 @@ function AppInner() {
     const transcriptBatcher = installTranscriptBatcher(dispatch);
     const batchTranscriptDispatch = (action: ChatAction) => transcriptBatcher.push(action);
 
+    // Specialists plans (Task 5a): a plan card's record changed (plans:event —
+    // every journal write, and the re-send after a first page). MUST mirror
+    // BubbleFeed.tsx. WHY through the transcript batcher, unlike the specialist
+    // feed above: a record lands only on a propose_plan card that already
+    // exists, and that card is created by a transcript event that may still be
+    // waiting in this frame's batch — dispatching the record first would drop
+    // it. Queued behind the batch, it keeps main's order. `?.` because the
+    // bridge member arrives with Task 6 (preload/remote-shim); until then a
+    // window simply receives no pushes and the card lands only what its own
+    // button calls return.
+    const planHandler = window.claude.on.planEvent?.((event) => {
+      if (!event?.sessionId || !event.plan) return;
+      batchTranscriptDispatch({ type: 'PLAN_CHANGED', sessionId: event.sessionId, plan: event.plan });
+    });
+
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
       if (!event?.type || !event?.sessionId) return;
 
@@ -1924,6 +1939,7 @@ function AppInner() {
       // it silently unsubscribed nothing and the feed kept running per mount.
       specialistHandler();
       shellHandler();
+      planHandler?.();
       window.claude.off('session:renamed', renamedHandler);
       if (movedHandler) window.claude.off('session:moved', movedHandler);
       window.claude.off('status:data', statusHandler);
@@ -2006,44 +2022,49 @@ function AppInner() {
   // one that ever runs.
   const firstPageAsked = useRef<Set<string>>(new Set());
 
-  const loadFirstPage = useCallback(async (sid: string, locator?: { claudeSessionId: string; projectSlug: string }) => {
-    if (firstPageAsked.current.has(sid)) return;
+  // The in-flight (or finished) first load per session, so a caller that must
+  // re-send live state even when the page was already asked for can wait for
+  // that load first (window handoff — see applyAcquired).
+  const firstPageLoads = useRef<Map<string, Promise<unknown>>>(new Map());
+
+  const loadFirstPage = useCallback(async (
+    sid: string,
+    locator?: { claudeSessionId: string; projectSlug: string },
+    opts?: { replayIfAlreadyAsked?: boolean },
+  ) => {
+    const det = (window as any).claude?.detach;
+    if (firstPageAsked.current.has(sid)) {
+      // Window handoff re-sends main's memory-only state even for a session
+      // whose page this window already asked for — AFTER that load, never
+      // before it (the re-send lands on the cards the page creates).
+      if (opts?.replayIfAlreadyAsked) {
+        await firstPageLoads.current.get(sid);
+        try { await det?.replayLiveState?.(sid); } catch { /* best-effort, as in first-page-load.ts */ }
+      }
+      return;
+    }
     // Batch 2 (§4): the computer's copy is the only source on a remote client — wait for
     // it, and never load a page on top of a session it delivered. Not recorded as asked,
     // so the sessions effect retries when the hydrate lands (hydrateTick).
     if (!shouldLoadFirstPage({ remote: isRemoteMode(), placeDecided: placeDecidedRef.current, hydrated: !!chatStore.getState().get(sid)?.history.hydrated })) return;
     firstPageAsked.current.add(sid);
     dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: sid });
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const page = await (window as any).claude?.detach?.requestTranscriptPage?.({
-          sessionId: sid,
-          beforeCursor: null,
-          claudeSessionId: locator?.claudeSessionId,
-          projectSlug: locator?.projectSlug,
-        });
-        if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }
-        // An empty page used to be ambiguous: either the session genuinely has
-        // no history, or main could not resolve its transcript YET (a
-        // just-started session is not watched until Claude Code's hook reports
-        // its path). Main now says which — `unresolved` — so the two get
-        // different budgets, and an unresolved one is never RECORDED: writing
-        // hasMore:false + a null cursor is what permanently removes the
-        // scroll-up sentinel (Destin, 2026-09-07). See first-page-retry.ts.
-        const decision = decideFirstPage(page, attempt);
-        if (decision === 'accept') {
-          dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
-          return;
-        }
-        if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }
-      } catch {
-        // The scroll sentinel can retry; a failed first page leaves an empty
-        // view rather than a wrong one.
-        dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid });
-        return;
-      }
-      await new Promise((r) => setTimeout(r, FIRST_PAGE_RETRY_MS));
-    }
+    // Task 5a: EVERY first-page path (start-up, resume, handoff) re-sends
+    // main's memory-only state once the page is reduced — open asks, specialist
+    // and shell records, and the plan cards' current records. The retry rules
+    // and the ordering live in state/first-page-load.ts.
+    const load = loadFirstPageThenReplay(sid, {
+      requestPage: () => det?.requestTranscriptPage?.({
+        sessionId: sid,
+        beforeCursor: null,
+        claudeSessionId: locator?.claudeSessionId,
+        projectSlug: locator?.projectSlug,
+      }),
+      dispatch,
+      replayLiveState: det?.replayLiveState ? () => det.replayLiveState(sid) : undefined,
+    });
+    firstPageLoads.current.set(sid, load);
+    await load;
   }, [dispatch, chatStore]);
 
   // Every session this window knows about gets its most recent page — not just
@@ -2058,7 +2079,9 @@ function AppInner() {
     // resumes, so the same id can legitimately come back — and a stale entry
     // here would silently deny it any history at all.
     const live = new Set(sessions.map((s) => s.id));
-    for (const id of firstPageAsked.current) if (!live.has(id)) firstPageAsked.current.delete(id);
+    for (const id of firstPageAsked.current) {
+      if (!live.has(id)) { firstPageAsked.current.delete(id); firstPageLoads.current.delete(id); }
+    }
     for (const s of sessions) void loadFirstPage(s.id);
   }, [sessions, loadFirstPage, hydrateTick]);
 
@@ -2202,11 +2225,14 @@ function AppInner() {
       //
       // Called here rather than left to the sessions effect below so the order
       // is deterministic: this claims `firstPageAsked` first, and replayLiveState
-      // is chained AFTER the page resolves. That ordering is load-bearing —
-      // replayLiveState ends with the replay-complete marker, which reaps tool
-      // cards the history left 'running', and it must not run before the page
-      // that creates those cards has been applied.
-      void loadFirstPage(sid).then(() => det.replayLiveState?.(sid));
+      // runs AFTER the page resolves (loadFirstPage chains it — Task 5a moved
+      // the chain there so every first-page path gets it). That ordering is
+      // load-bearing — replayLiveState ends with the replay-complete marker,
+      // which reaps tool cards the history left 'running', and it must not run
+      // before the page that creates those cards has been applied.
+      // replayIfAlreadyAsked keeps this path's old promise: a handoff always
+      // re-sends, even for a session whose page was asked for earlier.
+      void loadFirstPage(sid, undefined, { replayIfAlreadyAsked: true });
     };
 
     const cleanupAcquired = det.onOwnershipAcquired?.(applyAcquired);

@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../../state/chat-context';
 import { hookEventToAction } from '../../state/hook-dispatcher';
-import { decideFirstPage, FIRST_PAGE_RETRY_MS } from '../../state/first-page-retry';
+import { loadFirstPageThenReplay } from '../../state/first-page-load';
 import UserMessage from '../UserMessage';
 import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
@@ -323,38 +323,39 @@ export function BubbleFeed({ sessionId }: Props) {
     //
     // The buddy has no scroll-up sentinel this cycle: it is a glanceable recent
     // view, not a place to read back through a conversation.
-    void (async () => {
-      dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
-      // Retried, and on the same terms as the main window's first page
-      // (first-page-retry.ts). The floater has no scroll-up sentinel, so a
-      // single attempt that main could not resolve — a just-resumed session
-      // whose transcript path CC has not reported yet — silently showed a feed
-      // starting mid-conversation, with nothing to nudge it.
-      for (let attempt = 0; ; attempt++) {
-        try {
-          const page = await (window as any).claude?.detach?.requestTranscriptPage?.({ sessionId, beforeCursor: null });
-          if (cancelled) return;
-          if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
-          const decision = decideFirstPage(page, attempt);
-          if (decision === 'accept') {
-            dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
-            return;
-          }
-          if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
-        } catch {
-          if (!cancelled) dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
-          return;
-        }
-        await new Promise((r) => setTimeout(r, FIRST_PAGE_RETRY_MS));
-        if (cancelled) return;
-      }
-    })();
+    // Specialists plans (Task 5a): plan card records — MUST mirror App.tsx,
+    // including going through the transcript batch so a record never lands
+    // before the propose_plan card it belongs to. `?.`: arrives with Task 6.
+    const unsubPlan = window.claude.on.planEvent?.((event) => {
+      if (event?.sessionId !== sessionId || !event.plan) return;
+      batchDispatch({ type: 'PLAN_CHANGED', sessionId, plan: event.plan });
+    });
+
+    dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
+    // Retried, and on the same terms as the main window's first page
+    // (first-page-retry.ts). The floater has no scroll-up sentinel, so a
+    // single attempt that main could not resolve — a just-resumed session
+    // whose transcript path CC has not reported yet — silently showed a feed
+    // starting mid-conversation, with nothing to nudge it.
+    // Task 5a: then main's memory-only state (open asks, specialist/shell
+    // records, plan card records) is re-sent to THIS window, after the page is
+    // reduced — the same chained loader every main-window path uses. Nothing
+    // is applied once the feed has been torn down.
+    const det = (window as any).claude?.detach;
+    void loadFirstPageThenReplay(sessionId, {
+      requestPage: () => det?.requestTranscriptPage?.({ sessionId, beforeCursor: null }),
+      dispatch: (action) => { if (!cancelled) dispatch(action); },
+      replayLiveState: det?.replayLiveState ? () => (cancelled ? undefined : det.replayLiveState(sessionId)) : undefined,
+      // A torn-down feed stops retrying: the rejection ends the loader.
+      sleep: (ms) => new Promise<void>((resolve, reject) => setTimeout(() => (cancelled ? reject(new Error('cancelled')) : resolve()), ms)),
+    }).catch(() => { /* cancelled mid-retry — nothing to show */ });
 
     return () => {
       cancelled = true;
       if (rafId !== null) cancelAnimationFrame(rafId);
       // Unregister: preload returns the raw handler for removeListener
       window.claude.off('transcript:event', unsubTranscript);
+      unsubPlan?.();
     };
   }, [sessionId, dispatch]);
 
@@ -386,6 +387,7 @@ export function BubbleFeed({ sessionId }: Props) {
       if (event.sessionId !== sessionId) return;
       dispatch({ type: 'SHELL_RUN_CHANGED', sessionId, run: event.run });
     });
+
 
     return () => {
       window.claude.off('hook:event', unsubHook);

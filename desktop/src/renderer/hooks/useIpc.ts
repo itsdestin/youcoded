@@ -73,6 +73,11 @@ declare global {
         // emit per host method). Returns an unsubscribe fn.
         specialistEvent: (cb: (e: import('../../shared/types').SpecialistsEvent) => void) => () => void;
         shellEvent: (cb: (e: import('../../shared/types').ShellEvent) => void) => () => void;   // G-1
+        // Specialists plans (Task 5a contract; Task 6 wires `plans:event` on
+        // every surface): one plan card's record changed. Returns the
+        // unsubscribe fn, like specialistEvent. Optional until Task 6 lands, so
+        // callers subscribe with `?.` and a bridge without it pushes nothing.
+        planEvent?: (cb: (e: import('../../shared/types').PlansEvent) => void) => () => void;
       };
       dialog: {
         openFile: () => Promise<string[]>;
@@ -409,19 +414,25 @@ declare global {
         steer: (sessionId: string, childId: string, text: string) => Promise<{ ok: true } | { ok: false; error: string }>;
         interrupt: (sessionId: string, childId: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       };
-      // Specialists stage two (design mockup, 2026-09-05). NO backend yet — every
-      // member is a MOCK_ONLY channel (dev/workbench/mock-only.ts), which is
-      // the backend to-do list once the design is approved. Each call answers
-      // with the plan's NEXT record, which the card lands via PLAN_CHANGED.
-      plans: {
-        approve: (sessionId: string, planId: string) => Promise<{ ok: true; plan: import('../../shared/types').PlanView } | { ok: false; error: string }>;
-        comment: (sessionId: string, planId: string, text: string) => Promise<{ ok: true; plan: import('../../shared/types').PlanView } | { ok: false; error: string }>;
-        addBudget: (sessionId: string, planId: string, tokens: number) => Promise<{ ok: true; plan: import('../../shared/types').PlanView } | { ok: false; error: string }>;
-        resume: (sessionId: string, planId: string) => Promise<{ ok: true; plan: import('../../shared/types').PlanView } | { ok: false; error: string }>;
-        stop: (sessionId: string, planId: string) => Promise<{ ok: true; plan: import('../../shared/types').PlanView } | { ok: false; error: string }>;
+      // Specialists plans (Task 5a contract). The seven request channels are
+      // plans:approve / comment / add-budget / resume / stop / get-auto-approve /
+      // set-auto-approve (Task 6 wires them on every surface; until then they
+      // are MOCK_ONLY in the workbench). Every call answers with one of the
+      // host's normalized forms — ok, a real failure, or `unsupported` (this
+      // device can't run plans: the card disables its controls and never
+      // retries). An action's `plan` is the card's NEXT record, landed via
+      // PLAN_CHANGED; nothing is ever shown before the host says so.
+      // Optional until Task 6 adds it to preload/remote-shim: a bridge without
+      // it is treated exactly like `unsupported` (components/plans/plan-bridge.ts).
+      plans?: {
+        approve: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
+        comment: (sessionId: string, planId: string, text: string) => Promise<import('../../shared/types').PlanActionResult>;
+        addBudget: (sessionId: string, planId: string, tokens: number) => Promise<import('../../shared/types').PlanActionResult>;
+        resume: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
+        stop: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
         /** Settings → Specialists: run plans without asking when under this many tokens (0 = off). */
-        getAutoApprove: () => Promise<{ underTokens: number }>;
-        setAutoApprove: (underTokens: number) => Promise<{ ok: true } | { ok: false; error: string }>;
+        getAutoApprove: () => Promise<import('../../shared/types').PlanAutoApproveRead>;
+        setAutoApprove: (underTokens: number) => Promise<import('../../shared/types').PlanSettingsWriteResult>;
       };
       // Local llama.cpp engine (Plan B). install() streams progress via
       // onInstallProgress; onStatusChanged pushes state transitions
