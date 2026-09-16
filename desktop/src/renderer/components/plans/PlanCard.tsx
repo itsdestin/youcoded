@@ -566,6 +566,12 @@ function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessio
             ? <div className="text-xs text-fg-muted" data-testid="specialist-status-line">Not started</div>
             : <RunStatusLine run={child} report={child.report} />}
         </div>
+        {/* Task 9a (pause handoff §1): the plan restarted this specialist by
+            itself after an error. Muted and beside the status, so the row
+            otherwise looks exactly as before and the card keeps running. */}
+        {child.retried && (
+          <span className="shrink-0 text-2xs text-fg-muted" data-testid="plan-child-retried">Retried after an error</span>
+        )}
         <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
       </button>
       {open && (

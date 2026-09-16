@@ -1142,8 +1142,31 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
   - A terminal transcript is committed without a request.
   - A cut-off request was charged in full, so the plan usually pauses at once for a top-up
     before that specialist continues.
-  - A tool call with no recorded result pauses the plan, and the restart turn names that call.
+  - A tool call with no recorded result is judged by the tool's declared effect (below).
   - A restarted specialist continues its own session and pays one fresh prompt.
+- **Who handles a pause** (Task 9a; design `2026-09-16-specialists-plans-pause-handoff.md` §1).
+  Every native tool declares `effect: 'read' | 'local' | 'external'` beside its definition
+  (`tools/types.ts`); MCP and unclassified tools are `external`; the executor reads it through
+  `nativeToolEffect` (pinned by `tool-effects.test.ts`). `plans/pause-routing.ts`
+  (`routePlanPause`, `pausedRouting`) is the one table:
+  - **Automatic, once:** a start error (never a refusal or a drift), a specialist error, an
+    invalid report, a cut-off request, a cut-off `read` or `local` call (the restart turn tells
+    the specialist to check a `local` one first).
+  - **Assistant:** a cut-off `external` call (Bash included), a second failure, budget kinds,
+    local-pool, refusals, drift, iteration cap, unexpected errors. Until Task 9b these are
+    ordinary visible pauses.
+  - **User:** a specialist the user stopped; a plan interrupted by an app restart.
+  - An automatic retry runs inside `runWave` (`runMember`): its siblings keep running. The
+    recovery is journalled in `recoveries` (step, iteration, item, cause) with the fence
+    BEFORE the relaunch, so a crash never yields a second one. The retry reserves normally
+    (unfundable → budget pause), and an unanswered `external` call always goes to the
+    assistant.
+  - An invalid report gets one **report-only turn**: a new attempt (`reportOnly`) on the same
+    specialist session, one dedicated message, tools off (`toolChoice: 'none'`; a call made
+    anyway never runs), reply capped at `PLAN_REPORT_ONLY_REPLY_TOKENS` (2,000). Its allowance
+    is the failed attempt's unspent share; less than 2,000 → assistant.
+  - Saved pauses carry `launch` / `retried` / `toolEffect` for `pausedRouting`; the card's
+    specialist row shows "Retried after an error" (`PlanChildView.retried`), one row per session.
 - **Comment** stops the proposal and stores a `pendingRevision` token keyed by a host turn id,
   then queues the follow-up turn. Only a proposal made in THAT turn is linked as the revision;
   the model cannot claim one.
@@ -1165,7 +1188,8 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
 
 ### Tests
 Unit tests: `plan-journal`, `plan-budget`, `plan-budget-adapter`, `plan-executor`,
-`plan-service`, `plan-host-bridge`, `plan-tool`, `plan-eligibility`.
+`plan-service`, `plan-host-bridge`, `plan-tool`, `plan-eligibility`, `plan-pause-routing`,
+`tool-effects`.
 
 Host wiring: `native-session-host` ("specialists plans in the native host").
 
@@ -1175,7 +1199,7 @@ comment-trust rule, Stop during a four-specialist wave, the ChatGPT soft limit, 
 
 Transport: `plans-transport`, `ipc-channels`, `remote-shim-plans`, `PlansBridgeTest.kt`.
 
-Renderer: `plan-reducer`, `plan-card-actions`, `plan-card-signed-copy`, `first-page-live-replay`.
+Renderer: `plan-reducer`, `plan-card-actions`, `plan-card-signed-copy`, `plan-card-retried`, `first-page-live-replay`.
 <!-- verify: {"test": "youcoded/desktop/tests/plans-lifecycle.integration.test.ts"} -->
 
 ### Known limits (2026-09-16)

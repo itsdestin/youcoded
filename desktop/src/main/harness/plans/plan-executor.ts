@@ -17,9 +17,13 @@
 //    reservation is given back, the lease is dropped — and only THEN does the
 //    card change. A paused plan therefore costs nothing while it waits.
 //  - NO SILENT REPLAY. Resume reads finished results from disk and never
-//    reruns a finished step. A specialist whose last request or action has an
-//    unknown outcome pauses the plan and is only picked up again after the
-//    user has been told and pressed Continue.
+//    reruns a finished step. A specialist whose last action may have reached
+//    outside this computer (a command, a web request, a message) pauses the
+//    plan and is only picked up again after the user has been told and pressed
+//    Continue. Task 9a (pause handoff §1): an obviously safe case — a cut-off
+//    request, a read, a local file change (restarted with "check first"), a
+//    start or provider error, an invalid report — is retried by itself ONCE,
+//    recorded in the journal before the retry (pause-routing.ts decides).
 //
 // Host-agnostic on purpose: the host (native-session-host.ts) supplies a
 // PlanRunner that turns "launch this attempt" into a real specialist session.
