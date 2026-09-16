@@ -1532,6 +1532,27 @@ describe('NativeSessionHost', () => {
       await restarted.destroyAll();
     });
 
+    // No saved-file store here (no NativeHome passed), so only the in-memory
+    // copy can carry the choice across close → reopen in one app run.
+    it('a close and reopen in the same app run keeps the chosen mode in memory', async () => {
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null);
+      await h.create({ sessionId: 'mem', cwd: root, binding, presetId: 'coder' });
+      h.setPermissionMode('mem', 'ask');
+      await h.destroy('mem');
+      expect(await h.resume('mem', root)).toBe(true);
+      expect(h.getPermissionMode('mem')).toBe('ask');
+      await h.destroyAll();
+    });
+
+    it('rapid changes save the latest mode, whatever order the saves finish in', async () => {
+      const saved = new PermissionModeStore(new NativeHome(root));
+      let current: 'ask' | 'full-auto' = 'full-auto';
+      const first = saved.set('rapid', () => current);   // started while on full-auto
+      current = 'ask';                                    // the user moved on
+      await Promise.all([first, saved.set('rapid', () => current)]);
+      expect(saved.get('rapid')).toBe('ask');
+    });
+
     it('a resume with nothing saved starts from the preset default', async () => {
       const h = hostWithHome();
       await h.create({ sessionId: 'unsaved', cwd: root, binding, presetId: 'coder' });

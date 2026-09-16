@@ -43,10 +43,14 @@ export class PermissionModeStore {
     return VALID.includes(mode) ? mode : null;
   }
 
-  async set(sessionId: string, mode: NativePermissionMode): Promise<void> {
+  /** `latest` is read INSIDE the file lock. WHY: two quick chip clicks start
+   *  two saves that can take the lock in either order; writing the value
+   *  captured at call time could let the older click land last, and a
+   *  restart would then restore a mode the user had already left. */
+  async set(sessionId: string, latest: () => NativePermissionMode): Promise<void> {
     await this.home.mutateJson(FILE, (current) => ({
       v: 1,
-      modes: { ...modesOf(current), [sessionId]: mode },
+      modes: { ...modesOf(current), [sessionId]: latest() },
     } satisfies ModeFile));
   }
 }

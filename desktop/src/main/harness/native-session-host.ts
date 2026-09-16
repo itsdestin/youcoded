@@ -2335,7 +2335,7 @@ export class NativeSessionHost extends EventEmitter {
     // Remember the choice so a resume restores it (see seedMode). Best-effort:
     // the mode is already live in memory, so a failed save only means a later
     // resume starts from the preset default — which the chip will show.
-    this.modeStore?.set(sessionId, mode).catch((err) => {
+    this.modeStore?.set(sessionId, () => this.modeFor.get(sessionId) ?? mode).catch((err) => {
       log('WARN', 'NativeSessionHost', 'could not save the permission mode; a resume will start from the preset default', { sessionId, error: String(err) });
     });
     return mode;
