@@ -59,4 +59,18 @@ describe('hot main-process paths use fs.promises', () => {
     expect(methodBody(host, 'async getHistoryPageAsync(')).not.toMatch(SYNC_FS);
     expect(methodBody(host, 'isLive(')).not.toMatch(/readEvents|getHistory/);
   });
+
+  it("the model's file tools — Glob's walk, Read, Edit, Write (several times per turn)", () => {
+    const glob = read('harness/tools/glob.ts');
+    const walk = glob.indexOf('const walk = async (');
+    expect(walk).toBeGreaterThan(0);
+    expect(glob.slice(walk, glob.indexOf('\n    };\n', walk))).not.toMatch(SYNC_FS);
+    // The root probe just above the walk is async too; the one sync stat left
+    // in the file is inside the missing-root hint (error path, one stat).
+    expect(glob).toMatch(/await fs\.promises\.stat\(root\)/);
+    expect(read('harness/tools/read.ts')).not.toMatch(/\bfs\.readFileSync\s*\(/);
+    expect(read('harness/tools/edit.ts')).not.toMatch(SYNC_FS);
+    expect(read('harness/tools/write.ts')).not.toMatch(SYNC_FS);
+    expect(read('harness/tools/file-fingerprint.ts')).not.toMatch(SYNC_FS);
+  });
 });

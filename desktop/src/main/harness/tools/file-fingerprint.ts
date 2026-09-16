@@ -26,7 +26,8 @@ export function fingerprintOf(buf: Buffer | string): string {
   return `${b.length}:${createHash('sha256').update(b).digest('hex')}`;
 }
 
-/** Fingerprint of a file's current bytes on disk. Throws like readFileSync. */
-export function fingerprintFile(absPath: string): string {
-  return fingerprintOf(fs.readFileSync(absPath));
+/** Fingerprint of a file's current bytes on disk, read off the main thread
+ *  (2026-09-16 C4). Rejects like fs.promises.readFile. */
+export async function fingerprintFile(absPath: string): Promise<string> {
+  return fingerprintOf(await fs.promises.readFile(absPath));
 }
