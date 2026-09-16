@@ -683,11 +683,15 @@ describe('download hardening', () => {
     expect(dated.status).toBe(200);
     expect((await dated.arrayBuffer()).byteLength).toBe(5000);
 
-    const quoted = path.join(root, "Destin's (1)*.txt");
+    // WHY two spellings: `*` is illegal in an NTFS file name, so the POSIX name threw
+    // ENOENT at the write on Windows CI. The quote, space and parentheses still prove
+    // the encoding on every platform; the asterisk only where the OS can create it.
+    const quotedName = posix ? "Destin's (1)*.txt" : "Destin's (1).txt";
+    const quoted = path.join(root, quotedName);
     fs.writeFileSync(quoted, 'q');
     const minted = await mint(quoted);
     const res = await fetch(minted.url);
-    expect(res.headers.get('content-disposition')).toContain("filename*=UTF-8''Destin%27s%20%281%29%2A.txt");
+    expect(res.headers.get('content-disposition')).toContain(`filename*=UTF-8''${encodeURIComponent(quotedName).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())}`);
     await res.arrayBuffer();
   });
 
