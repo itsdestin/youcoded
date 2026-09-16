@@ -240,6 +240,15 @@ export interface SpecialistRunResult {
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number };
 }
 
+/** A specialist run's spend so far, carried OUT on the error when the run
+ *  throws. `runSpecialist` accumulates it in a closure local and only ever
+ *  returned it on the success path, so a helper that was stopped or hit an
+ *  error reported nothing at all — the whole bill for a run that may have
+ *  worked for several turns (Destin, 2026-09-16). */
+export interface SpecialistRunError extends Error {
+  specialistUsage?: SpecialistRunResult['usage'];
+}
+
 interface LiveEntry {
   session: HarnessSession;
   cwd: string;
@@ -1140,51 +1149,10 @@ export class NativeSessionHost extends EventEmitter {
       // and has to say so, and the reverse — a metered parent delegating to a
       // local specialist — is why `free` rides along too.
       //
-      // Emitted HERE, before the ledger write and before the `finally`
+      // Reported HERE, before the ledger write and before the `finally`
       // teardown, because the child must still be in `this.live` for its price
-      // card to be readable. Log-only try/catch, the same contract every other
-      // bookkeeping call in this method follows: a failed usage report must
-      // never discard the report the child actually produced.
-      try {
-        const parentSession = this.live.get(parentId)?.session;
-        const childSession = this.live.get(childId)?.session;
-        if (parentSession && childSession) {
-          const { pricing, free } = childSession.priceCard;
-          parentSession.emitSubagentUsage({
-            // `free` WINS over any rate card (Task 23 item 1 — the specialist
-            // twin of the same fix Task 22 made for turn-complete in
-            // harness-session.ts). The two facts come from independent
-            // sources: `free` from the provider TYPE, the number from the
-            // catalog, which keys on the model id and has no idea where the
-            // model runs. A specialist delegated to a local model whose id
-            // happens to carry a published rate would otherwise report
-            // {"costUsd": 0.027, "free": true} — a run billed AND free. Free
-            // means free, and free is reported as null, never as a $0.00 bill.
-            usage: { ...run.usage, costUsd: free ? null : costForUsage(run.usage, pricing), free },
-            model: childSession.binding.modelId,
-            parentAgentToolUseId: opts.parentToolCallId,
-            agentId: childId,
-          });
-        } else {
-          // Task 23 item 2. This `if` used to have no `else`, so a teardown
-          // race that removed either session between the run finishing and its
-          // spend being priced dropped a whole delegated run's tokens and cost
-          // with ZERO log output — the parent's totals silently went short and
-          // nothing anywhere said so. A cost figure that is quietly short is
-          // worse than one that is visibly missing: the user has no way to know
-          // not to trust it.
-          //
-          // The message states ONLY what was just looked up and found absent —
-          // never a guessed cause (docs/error-message-standards.md). We know
-          // which half was missing; we do NOT know why, so we don't say.
-          const missing = !parentSession && !childSession ? 'neither session was still live'
-            : !parentSession ? 'the parent session was no longer live'
-            : 'the specialist session was no longer live';
-          log('ERROR', 'NativeSessionHost', `could not report a finished specialist's spend to its parent (${missing}) — the parent's session totals will be short by this run`, { childId, parentId });
-        }
-      } catch (usageErr) {
-        log('ERROR', 'NativeSessionHost', 'failed to report a finished specialist\'s spend to its parent — the parent\'s session totals will be short by this run', { childId, parentId, error: String(usageErr) });
-      }
+      // card to be readable.
+      this.reportSpecialistSpend(parentId, childId, opts.parentToolCallId, run.usage);
       // WHY drain HERE, not at turn start (folded Task 3 concern): pendingSteers
       // is not reset per-turn by design (harness-session.ts), so anything left
       // in the CHILD's queue at this point is a steer that arrived too late to
@@ -1248,6 +1216,14 @@ export class NativeSessionHost extends EventEmitter {
       }
       return run;
     } catch (err: any) {
+      // The run failed, but whatever it spent getting there was still billed.
+      // FIRST, while the child is still live for its price card to be read —
+      // the `finally` below tears it down. runSpecialist carries its
+      // accumulator out on the error precisely so this line has something to
+      // report; a run that threw before any step reported tokens carries
+      // nothing, and nothing is what gets reported.
+      const spentBeforeFailing = (err as SpecialistRunError)?.specialistUsage;
+      if (spentBeforeFailing) this.reportSpecialistSpend(parentId, childId, opts.parentToolCallId, spentBeforeFailing);
       const missedSteers = this.live.get(childId)?.session.drainUnappliedSteers() ?? [];
       if (this.ledger && parentCwd) {
         // Fix (review round 2, Finding 4), preserved: updateIfRunning (not
@@ -1290,6 +1266,69 @@ export class NativeSessionHost extends EventEmitter {
       } catch (err) {
         log('ERROR', 'NativeSessionHost', 'specialist teardown failed after the run finished', { childId, parentId, error: String(err) });
       }
+    }
+  }
+
+  /** Report one delegated run's spend to the parent that paid for it (spec §2).
+   *
+   *  Called from BOTH of runDelegation's exits. It used to be inlined on the
+   *  success path only, so a specialist that was STOPPED or hit a provider
+   *  error reported nothing — the whole bill for a run that may have worked for
+   *  several turns went uncounted, and the parent's Cost chip was quietly short
+   *  with nothing to trace it to (Destin, 2026-09-16). The codebase already
+   *  treated that loss as unacceptable for the much rarer teardown race below,
+   *  which logs an ERROR about it.
+   *
+   *  Must run while the child is still in `this.live` — its price card is read
+   *  here. Log-only throughout, the same contract every other bookkeeping call
+   *  in runDelegation follows: a failed usage report must never discard the
+   *  report the child actually produced, nor replace the error a failed run has
+   *  to rethrow. */
+  private reportSpecialistSpend(
+    parentId: string,
+    childId: string,
+    parentToolCallId: string,
+    usage: SpecialistRunResult['usage'],
+  ): void {
+    try {
+      const parentSession = this.live.get(parentId)?.session;
+      const childSession = this.live.get(childId)?.session;
+      if (parentSession && childSession) {
+        const { pricing, free } = childSession.priceCard;
+        parentSession.emitSubagentUsage({
+          // `free` WINS over any rate card (Task 23 item 1 — the specialist
+          // twin of the same fix Task 22 made for turn-complete in
+          // harness-session.ts). The two facts come from independent
+          // sources: `free` from the provider TYPE, the number from the
+          // catalog, which keys on the model id and has no idea where the
+          // model runs. A specialist delegated to a local model whose id
+          // happens to carry a published rate would otherwise report
+          // {"costUsd": 0.027, "free": true} — a run billed AND free. Free
+          // means free, and free is reported as null, never as a $0.00 bill.
+          usage: { ...usage, costUsd: free ? null : costForUsage(usage, pricing), free },
+          model: childSession.binding.modelId,
+          parentAgentToolUseId: parentToolCallId,
+          agentId: childId,
+        });
+      } else {
+        // Task 23 item 2. This `if` used to have no `else`, so a teardown
+        // race that removed either session between the run finishing and its
+        // spend being priced dropped a whole delegated run's tokens and cost
+        // with ZERO log output — the parent's totals silently went short and
+        // nothing anywhere said so. A cost figure that is quietly short is
+        // worse than one that is visibly missing: the user has no way to know
+        // not to trust it.
+        //
+        // The message states ONLY what was just looked up and found absent —
+        // never a guessed cause (docs/error-message-standards.md). We know
+        // which half was missing; we do NOT know why, so we don't say.
+        const missing = !parentSession && !childSession ? 'neither session was still live'
+          : !parentSession ? 'the parent session was no longer live'
+          : 'the specialist session was no longer live';
+        log('ERROR', 'NativeSessionHost', `could not report a specialist's spend to its parent (${missing}) — the parent's session totals will be short by this run`, { childId, parentId });
+      }
+    } catch (usageErr) {
+      log('ERROR', 'NativeSessionHost', 'failed to report a specialist\'s spend to its parent — the parent\'s session totals will be short by this run', { childId, parentId, error: String(usageErr) });
     }
   }
 
@@ -1764,6 +1803,16 @@ export class NativeSessionHost extends EventEmitter {
     let sinceLastTool = '';
     let steps = 0;
     const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    /** Fold one event's token counts into this run's total. FOUR event types
+     *  carry them — a completed turn, an interrupted one, a failed one, and the
+     *  child's own summarize call — and this accumulator is the only route any
+     *  of them has into the parent's totals. Absent usage adds nothing; a run
+     *  that measured nothing reports nothing rather than a fabricated zero. */
+    const addSpend = (u: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number } | undefined): void => {
+      if (!u) return;
+      usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
+      usage.cacheReadTokens += u.cacheReadTokens; usage.cacheCreationTokens += u.cacheCreationTokens;
+    };
     // Task 12, item 4 — compaction-finalize: counts SPONTANEOUS auto-compactions
     // (data.autoCompaction, harness-session.ts's maybeCompact) during this run.
     // A small local context window can force more than one across a long
@@ -1799,18 +1848,20 @@ export class NativeSessionHost extends EventEmitter {
           // cares about the tool remaining "open" for staleness purposes.
           if (event.data.toolUseId) openTools.delete(event.data.toolUseId);
           break;
-        case 'turn-complete': {
-          const u = event.data.usage;
-          if (u) {
-            usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
-            usage.cacheReadTokens += u.cacheReadTokens; usage.cacheCreationTokens += u.cacheCreationTokens;
-          }
+        case 'turn-complete':
+          addSpend(event.data.usage);
           break;
-        }
+        // An abandoned turn is billed like any other: since 2026-09-16 the
+        // harness carries what the completed steps spent on BOTH of these
+        // events, and this accumulator is the only route a specialist's spend
+        // has into the parent's totals. Stopping a helper mid-run is ordinary,
+        // not an edge case.
         case 'session-error':
+          addSpend(event.data.usage);
           errorText = String(event.data.text ?? '').trim() || null;
           break;
         case 'user-interrupt':
+          addSpend(event.data.usage);
           interrupted = true;
           break;
         case 'compact-summary':
@@ -1822,11 +1873,7 @@ export class NativeSessionHost extends EventEmitter {
           // counted absolutely nowhere. Not an edge case: the wrap-up steer just
           // below exists precisely because a small local window compacts a
           // specialist run repeatedly (fix 2026-09-16).
-          if (event.data.usage) {
-            const c = event.data.usage;
-            usage.inputTokens += c.inputTokens; usage.outputTokens += c.outputTokens;
-            usage.cacheReadTokens += c.cacheReadTokens; usage.cacheCreationTokens += c.cacheCreationTokens;
-          }
+          addSpend(event.data.usage);
           if (event.data.autoCompaction) {
             autoCompactionCount += 1;
             if (autoCompactionCount === 2 && !steered) {
@@ -1891,6 +1938,15 @@ export class NativeSessionHost extends EventEmitter {
       }
       // +1 for the step that produced the final message (see SpecialistRunResult).
       return { report, steps: steps + 1, usage };
+    } catch (err) {
+      // `usage` is a closure local, so a throw out of this method used to take
+      // the whole run's bill with it — a helper stopped after five real turns
+      // reported zero. Carry it out on the error instead; runDelegation's catch
+      // reports it while the child is still live for its price card to be read.
+      // A copy, not the live object: nothing after this may keep adding to what
+      // has already been reported.
+      if (err instanceof Error) (err as SpecialistRunError).specialistUsage = { ...usage };
+      throw err;
     } finally {
       // Detach BEFORE the caller tears the session down, so this listener can
       // never observe teardown-time events (and so a run that throws does not
