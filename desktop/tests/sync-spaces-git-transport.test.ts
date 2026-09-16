@@ -483,7 +483,9 @@ describe('GitTransport auth-failure surfacing', () => {
       diff: { code: 0, stdout: '' },
       fetch: { code: 1, stderr: 'fatal: Could not resolve host: github.com' },
     });
-    await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [] });
+    // `contacted: false` is what stops an offline cycle from stamping
+    // "Last synced just now" (engine → service.broadcast).
+    await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [], contacted: false });
   });
 
   it('push(): an auth-refused push (after the recovery retry) THROWS the coded error', async () => {
@@ -553,7 +555,9 @@ describe('GitTransport benign-allowlist intent', () => {
     // downstream unscripted call falls through to its `{code:0}` default,
     // producing {pushed:true, commit:'', oversize:[]} — a silently wrong
     // result that still satisfies `toBeDefined()`.
-    await expect(t.push(space, 'msg')).resolves.toEqual({ pushed: false, oversize: [] });
+    // `contacted: false`: the lock was lost before any push ran, so origin
+    // was never reached and "Last synced" must not move.
+    await expect(t.push(space, 'msg')).resolves.toEqual({ pushed: false, contacted: false, oversize: [] });
   });
 
   it('LOCK_CONTENDED now also covers `checkout` (pull() adopting a fresh remote while a lock is still live) — but the checkout still did not happen, so it must not report updated:true', async () => {
@@ -582,7 +586,9 @@ describe('GitTransport benign-allowlist intent', () => {
       // exact-shape assertion below catches that value; the mock-calls check
       // proves `merge` specifically never ran.
     });
-    await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [] });
+    // Lost the lock race BEFORE the fetch: origin was never reached, so this
+    // cycle must not stamp "Last synced" either.
+    await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [], contacted: false });
     const calledMerge = (t as any).git.mock.calls.some((c: any[]) => c[1][0] === 'merge');
     expect(calledMerge).toBe(false);
   });
@@ -602,8 +608,10 @@ describe('GitTransport benign-allowlist intent', () => {
     // prior HEAD sha) — the field that actually decides whether the "nothing
     // was pushed" story is honest never gets checked. Pin the full result so
     // a future regression at any field surfaces here.
+    // `contacted: true` — the recovery pull's fetch DID reach origin; only the
+    // push itself had nothing to send.
     await expect(t.push(space, 'msg')).resolves.toEqual({
-      pushed: false, commit: undefined, oversize: [], updated: false, conflictCopies: [],
+      pushed: false, contacted: true, commit: undefined, oversize: [], updated: false, conflictCopies: [],
     });
   });
 
@@ -645,7 +653,7 @@ describe('GitTransport credentialed against real git', () => {
       fs.writeFileSync(path.join(root, 'note.md'), 'hello');
       const push = await t.push(space, 'first');
       expect(push.pushed).toBe(true);
-      await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [] });
+      await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [], contacted: true });
       // HYGIENE: the token must not appear in the hidden repo's config (the
       // helper is per-invocation argv config, and even that carries only the
       // env var NAME).

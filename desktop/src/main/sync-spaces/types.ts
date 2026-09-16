@@ -12,6 +12,14 @@ export interface SyncSpace {
 
 export interface PushResult {
   pushed: boolean;          // false when nothing changed or no remote configured
+  // Did this push (or its recovery pull) actually reach the remote — a git
+  // exit 0 against origin, not merely "the call returned"? Offline is silent
+  // by design (spec §13), so without this a failed push and a successful
+  // no-op push look identical to the engine, and "Last synced just now" kept
+  // ticking on a device that had been offline for days (2026-07-30 review).
+  // Optional: a transport that does not track it is read as contact (the
+  // pre-2026-09-16 behaviour); the git transport always reports it.
+  contacted?: boolean;
   commit?: string;          // HEAD sha after commit, when one was made
   oversize: string[];       // rel paths excluded for exceeding MAX_SYNC_FILE_BYTES
   // Present when a rejected push ran a RECOVERY pull (a peer pushed first).
@@ -26,6 +34,8 @@ export interface PushResult {
 export interface PullResult {
   updated: boolean;         // true when remote changes were applied
   conflictCopies: string[]; // rel paths of conflict copies written this pull
+  // The fetch reached origin (exit 0). See PushResult.contacted for why.
+  contacted?: boolean;
 }
 
 export interface SpaceVersion { commit: string; date: string; message: string; }
@@ -84,7 +94,12 @@ export interface SyncTransport {
 // replayed or older payloads without it still typecheck. The renderer derives
 // "Last synced N minutes ago" (Project View hero) from it.
 export type SpaceSyncEvent = (
-  | { type: 'synced'; spaceId: string; pushed: boolean; updated: boolean }
+  // `contacted`: the cycle reached GitHub (a fetch or push exited 0). false
+  // is an offline cycle that completed silently — the engine still emits it,
+  // but service.broadcast() does NOT stamp "last synced" from it. Optional so
+  // replayed/older payloads and pure-function fixtures still typecheck; the
+  // engine always sets it.
+  | { type: 'synced'; spaceId: string; pushed: boolean; updated: boolean; contacted?: boolean }
   | { type: 'conflict'; spaceId: string; copies: string[] }
   | { type: 'oversize'; spaceId: string; files: string[] }
   // errorCode is a stable machine-readable marker (e.g. 'github-auth') copied

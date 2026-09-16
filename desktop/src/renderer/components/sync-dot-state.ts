@@ -27,7 +27,9 @@ export interface SyncStatusData {
   // machine-readable marker on 'error' events ('github-auth' → the panel
   // shows a Connect/Reconnect GitHub CTA instead of only "Try again");
   // matching on it, never on the prose message, is the contract.
-  recentEvents: Array<{ type: string; spaceId: string; at?: number; message?: string; errorCode?: string }>;
+  // `contacted` (2026-09-16) rides 'synced' events: false is an offline cycle
+  // that completed without reaching GitHub, which must not read as "synced".
+  recentEvents: Array<{ type: string; spaceId: string; at?: number; message?: string; errorCode?: string; contacted?: boolean }>;
 }
 
 export interface SyncDot { color: 'green' | 'red' | 'gray'; label: string }
@@ -158,7 +160,10 @@ export function lastSyncedLabel(spaceId: string, status: SyncStatusData | null, 
   if (!status) return null;
   let latest: number | null = null;
   for (const e of status.recentEvents) {
-    if (e.spaceId === spaceId && e.type === 'synced' && typeof e.at === 'number') {
+    // An offline cycle still emits 'synced' (the engine's state machine needs
+    // the cycle end) but never reached GitHub; without this gate the Project
+    // View hero read "just now" on a device offline for days (review, 2026-09-16).
+    if (e.spaceId === spaceId && e.type === 'synced' && typeof e.at === 'number' && e.contacted !== false) {
       if (latest === null || e.at > latest) latest = e.at;
     }
   }
