@@ -138,7 +138,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'specialists.list', 'specialists.getDelegatedModels', 'specialists.setDelegatedModel',
   'specialists.steer', 'specialists.interrupt', 'on.specialistEvent',
   'plans.approve', 'plans.comment', 'plans.addBudget', 'plans.resume', 'plans.stop',
-  'plans.getAutoApprove', 'plans.setAutoApprove',
+  'plans.getAutoApprove', 'plans.setAutoApprove', 'on.planEvent',
   // Voice prompting (2026-09-05) — no real backend yet, registered in
   // mock-only.ts. Listed so the contract test covers the fake.
   'voice.status', 'voice.download', 'voice.start', 'voice.stop', 'voice.cancel', 'voice.onEvent',
@@ -1643,6 +1643,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   let tiers = seedDelegatedModels();
   const specialistSubs = new Set<(e: any) => void>();
   const shellSubs = new Set<(e: any) => void>();   // G-1: background command run records
+  // Task 5a: plan card pushes (plans:event). The fake never pushes — every
+  // workbench transition is a button's own returned record — but the
+  // subscription must exist so App/BubbleFeed wire it as they do for real.
+  const planSubs = new Set<(e: any) => void>();
   // Specialists stage two — plans (design mockup, 2026-09-05; MOCK_ONLY). The
   // card hands each button to one of these and lands whatever comes back, so
   // the fake only has to answer with the plan's NEXT record. PLANS is keyed by
@@ -1695,7 +1699,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       ...p, status: 'stopped', endedAt: Date.now(),
       steps: p.steps.map((st) => st.status === 'running' || st.status === 'paused' ? { ...st, status: 'skipped', children: st.children?.map((c) => ({ ...c, status: 'interrupted' as const, endedAt: Date.now() })) } : st),
     })),
-    getAutoApprove: async () => ({ ...plansAutoApprove }),
+    // Task 5a: the real forms (plan-service.ts) — the settings row reads `ok`.
+    // A refused write answers `{ ok: false }` via `write`, which the bridge
+    // turns into its general "Couldn't save" line.
+    getAutoApprove: async () => ({ ok: true as const, ...plansAutoApprove }),
     setAutoApprove: (underTokens: number) => write(() => { plansAutoApprove.underTokens = Math.max(0, Math.floor(underTokens)); }),
   };
 
@@ -2759,6 +2766,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // members above stay compiler-checked.
   (on as any).specialistEvent = (cb: (e: any) => void) => { specialistSubs.add(cb); return () => { specialistSubs.delete(cb); }; };
   (on as any).shellEvent = (cb: (e: any) => void) => { shellSubs.add(cb); return () => { shellSubs.delete(cb); }; };
+  (on as any).planEvent = (cb: (e: any) => void) => { planSubs.add(cb); return () => { planSubs.delete(cb); }; };
 
   // `theme` is absent from useIpc.ts entirely, so NONE of this is
   // compiler-checked — the contract test is the only guard. Typed as a plain

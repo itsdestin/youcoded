@@ -5,6 +5,7 @@ import { Button, EmptyState, ErrorState, FieldError, LoadingState, SettingRow, T
 import type { ExplainerSection } from './SettingsExplainer';
 import { refreshSpecialistRoster, useSpecialistRoster, provenanceWithinGroup, NOT_IMPLEMENTED_ON_MOBILE } from '../hooks/useSpecialists';
 import { AUTOMATIC_SPECIALIST_MODEL_COPY, SPECIALIST_DEFAULTS_CHANGED_EVENT } from './SpecialistModelUnavailable';
+import { readPlanAutoApprove, writePlanAutoApprove } from './plans/plan-bridge';
 
 // Specialists 1c — Settings → Specialists. Two things, in the order a person
 // needs them: (1) the two model tiers the assistant can hire onto (Destin's
@@ -258,10 +259,7 @@ export default function SpecialistsSection({ cwd }: {
           asks until they decide they trust the card. The amount is the one
           number a plan card prints (its ceiling), so the row speaks in the same
           unit the card does. */}
-      <div>
-        <h3 className={SECTION_LABEL}>Plans</h3>
-        <PlansAutoApproveRow />
-      </div>
+      <PlansSettings />
 
       {/* ── 2. The roster ─────────────────────────────────────────────────── */}
       <div>
@@ -328,58 +326,77 @@ export default function SpecialistsSection({ cwd }: {
   );
 }
 
-/** "Run plans without asking when under N tokens" — the auto-approve limit.
- *  Reads/writes the MOCK_ONLY plans.getAutoApprove / setAutoApprove pair. */
-function PlansAutoApproveRow() {
+/**
+ * Settings → Specialists → Plans ("Run plans without asking when under N
+ * tokens" — the auto-approve limit). Task 5a: reads and writes through the typed
+ * plans bridge (plan-bridge.ts) and shows ONLY what the host saved — the switch
+ * does not move until the write succeeds, and a refused write leaves it where
+ * it was with the host's reason. A device that can't run plans (the phone) has
+ * nothing to configure, so the whole section is left out there.
+ */
+export function PlansSettings() {
   const [under, setUnder] = useState<number | null>(null);
   const [draft, setDraft] = useState('20000');
   const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [unsupported, setUnsupported] = useState(false);
   useEffect(() => {
     let alive = true;
-    (window as any).claude?.plans?.getAutoApprove?.().then((r: { underTokens: number }) => {
+    void readPlanAutoApprove().then((r) => {
       if (!alive) return;
-      setUnder(r.underTokens);
-      if (r.underTokens > 0) setDraft(String(r.underTokens));
-    }).catch((e: Error) => alive && setError(e.message));
+      if (r.ok) {
+        setUnder(r.underTokens);
+        if (r.underTokens > 0) setDraft(String(r.underTokens));
+      } else if (r.unsupported) setUnsupported(true);
+      else setError(r.error);
+    });
     return () => { alive = false; };
   }, []);
   const save = async (n: number) => {
-    const prev = under;
-    setUnder(n); setError(null);
+    setSaving(true); setError(null);
     try {
-      const res = await (window as any).claude.plans.setAutoApprove(n);
-      if (res && res.ok === false) { setUnder(prev); setError(res.error); }
-    } catch (e) { setUnder(prev); setError((e as Error).message); }
+      const res = await writePlanAutoApprove(n);
+      if (res.ok) setUnder(n);
+      else if (res.unsupported) setUnsupported(true);
+      else setError(res.error);
+    } finally { setSaving(false); }
   };
+  if (unsupported) return null;
   const on = (under ?? 0) > 0;
-  // SettingRow variant="item" + Toggle: the one shape every boolean setting
-  // takes (design guide §4.6; setting-row-authority guards it).
+  // Q-4 on the questions deck: OFF until the user turns it on — every plan
+  // asks until they decide they trust the card. The amount is the one number
+  // a plan card prints (its ceiling), so the row speaks in the same unit the
+  // card does. SettingRow variant="item" + Toggle: the one shape every boolean
+  // setting takes (design guide §4.6; setting-row-authority guards it).
   return (
-    <div className="space-y-1.5" data-testid="plans-auto-approve">
-      <SettingRow
-        variant="item"
-        title="Run small plans without asking"
-        description="A plan under the limit starts on its own; its card still shows the ceiling. Bigger plans always ask."
-        control={<Toggle checked={on} onChange={(next) => void save(next ? (Number(draft) || 20000) : 0)} disabled={under === null} aria-label="Run small plans without asking" />}
-      />
-      {/* UX run 1, U3: the limit is visible even while the switch is off, so
-          "small" always has a number next to it; the field just cannot be
-          edited until the switch is on. */}
-      <div className={`flex items-center gap-2 flex-wrap px-3 ${on ? '' : 'opacity-50'}`}>
-          <span className="text-2xs text-fg-dim">when the plan's limit is under</span>
-          <TextInput
-            size="sm"
-            inputMode="numeric"
-            className="w-24"
-            disabled={!on}
-            value={draft}
-            aria-label="Token limit for plans that run without asking"
-            onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ''))}
-            onBlur={() => { const n = Number(draft); if (n > 0 && n !== under) void save(n); }}
-          />
-          <span className="text-2xs text-fg-dim">tokens</span>
+    <div>
+      <h3 className={SECTION_LABEL}>Plans</h3>
+      <div className="space-y-1.5" data-testid="plans-auto-approve">
+        <SettingRow
+          variant="item"
+          title="Run small plans without asking"
+          description="A plan under the limit starts on its own; its card still shows the ceiling. Bigger plans always ask."
+          control={<Toggle checked={on} onChange={(next) => void save(next ? (Number(draft) || 20000) : 0)} disabled={under === null || saving} aria-label="Run small plans without asking" />}
+        />
+        {/* UX run 1, U3: the limit is visible even while the switch is off, so
+            "small" always has a number next to it; the field just cannot be
+            edited until the switch is on. */}
+        <div className={`flex items-center gap-2 flex-wrap px-3 ${on ? '' : 'opacity-50'}`}>
+            <span className="text-2xs text-fg-dim">when the plan's limit is under</span>
+            <TextInput
+              size="sm"
+              inputMode="numeric"
+              className="w-24"
+              disabled={!on || saving}
+              value={draft}
+              aria-label="Token limit for plans that run without asking"
+              onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ''))}
+              onBlur={() => { const n = Number(draft); if (n > 0 && n !== under) void save(n); }}
+            />
+            <span className="text-2xs text-fg-dim">tokens</span>
+        </div>
+        {error && <div className="px-3"><FieldError>{error}</FieldError></div>}
       </div>
-      {error && <div className="px-3"><FieldError>{error}</FieldError></div>}
     </div>
   );
 }

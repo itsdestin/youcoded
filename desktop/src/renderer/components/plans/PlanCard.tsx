@@ -11,10 +11,15 @@ import { RunStatusLine, formatElapsed } from '../specialists/RunStatusLine';
 // one outside it (Destin, review round 1, P-5).
 import { AgentSections } from '../tool-views/ToolBody';
 import { asString } from '../../utils/tool-input';
+import { hasNestedAsk } from '../../utils/specialist-cards';
+import type { SubagentSegment } from '../../../shared/types';
+import { planAction, usePlanUnsupported } from './plan-bridge';
+import { planWithActivity } from './plan-activity';
 
 /**
- * Specialists stage two — the PLAN CARD (design mockup, 2026-09-05; no backend
- * yet, every `window.claude.plans.*` call below is a MOCK_ONLY channel).
+ * Specialists stage two — the PLAN CARD (designed 2026-09-05; since Task 5a
+ * every button goes through the typed `window.claude.plans` bridge via
+ * plan-bridge.ts, and the workbench fakes answer the same forms).
  *
  * What Destin decided on the 2026-09-05 questions deck, and what each answer
  * pins here:
@@ -108,7 +113,14 @@ function limit(plan: PlanView): string {
 
 // ---- the block ---------------------------------------------------------------
 
-export function PlanBlock({ plan, sessionId }: { plan: PlanView; sessionId?: string }) {
+export function PlanBlock({ plan: record, segments, sessionId }: {
+  plan: PlanView;
+  /** Task 5a: the card's collected specialist activity (tagged by childId),
+   *  joined into each specialist's row here — see plan-activity.ts. */
+  segments?: SubagentSegment[];
+  sessionId?: string;
+}) {
+  const plan = useMemo(() => planWithActivity(record, segments), [record, segments]);
   const dispatch = useChatDispatch();
   // Destin, round 2 (R-1): while the plan is being written the card must be
   // exactly a header row — not a header plus an empty padded body, which read
@@ -123,26 +135,36 @@ export function PlanBlock({ plan, sessionId }: { plan: PlanView; sessionId?: str
   const [extra, setExtra] = useState(String(pausedStep?.budgetTokens ?? 10000));
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Task 5a: a device or host that can't run plans (asked once per window, or
+  // learned from a button's answer) keeps every control disabled and says why
+  // in the card's own error line. Nothing is retried or shown in advance.
+  const probedUnsupported = usePlanUnsupported();
+  const [answeredUnsupported, setAnsweredUnsupported] = useState<string | null>(null);
+  const unsupported = answeredUnsupported ?? probedUnsupported?.error ?? null;
+  const blocked = busy !== null || unsupported !== null;
   const revised = plan.status === 'stopped' && !!plan.revisedBy;
 
-  // Every button goes through one mock call and lands the returned record the
-  // way the real push will — so the card never invents a state on its own.
-  const act = async (name: string, fn: () => Promise<{ ok: true; plan: PlanView } | { ok: false; error: string }>) => {
-    if (!sessionId) return;
+  // Every button makes one bridge call and lands ONLY the record the host
+  // returned (the same record its plans:event push carries) — so the card
+  // never invents a state on its own. Returns whether the host accepted.
+  const act = async (name: string, fn: Parameters<typeof planAction>[0]): Promise<boolean> => {
+    if (!sessionId || unsupported !== null) return false;
     setBusy(name); setError(null);
     try {
-      const res = await fn();
-      if (res.ok) dispatch({ type: 'PLAN_CHANGED', sessionId, plan: res.plan });
+      const res = await planAction(fn);
+      if (res.ok) { dispatch({ type: 'PLAN_CHANGED', sessionId, plan: res.plan }); return true; }
+      if (res.unsupported) setAnsweredUnsupported(res.error);
       else setError(res.error);
-    } catch (e) { setError((e as Error).message); }
-    finally { setBusy(null); }
+      return false;
+    } finally { setBusy(null); }
   };
-  const plans = () => (window as any).claude?.plans;
-  const approve = () => act('approve', () => plans().approve(sessionId, plan.planId));
-  const sendComment = () => act('comment', () => plans().comment(sessionId, plan.planId, comment.trim())).then(() => { setComment(''); setCommenting(false); });
-  const addBudget = () => act('budget', () => plans().addBudget(sessionId, plan.planId, Number(extra) || 0)).then(() => setAdding(false));
-  const cont = () => act('continue', () => plans().resume(sessionId, plan.planId));
-  const stop = () => act('stop', () => plans().stop(sessionId, plan.planId));
+  const id = sessionId ?? '';
+  const approve = () => act('approve', (b) => b.approve(id, plan.planId));
+  // A refused note or amount stays where it was typed, so it can be sent again.
+  const sendComment = () => act('comment', (b) => b.comment(id, plan.planId, comment.trim())).then((ok) => { if (ok) { setComment(''); setCommenting(false); } });
+  const addBudget = () => act('budget', (b) => b.addBudget(id, plan.planId, Number(extra) || 0)).then((ok) => { if (ok) setAdding(false); });
+  const cont = () => act('continue', (b) => b.resume(id, plan.planId));
+  const stop = () => act('stop', (b) => b.stop(id, plan.planId));
 
   const specialists = plan.steps.reduce((n, s) => n + s.fanOut, 0);
   const done = plan.steps.filter((s) => s.status === 'done').length;
@@ -170,7 +192,7 @@ export function PlanBlock({ plan, sessionId }: { plan: PlanView; sessionId?: str
                 : <>Spent {spent(plan)} of {limit(plan)}</>}
           </span>
             {plan.status === 'running' && (
-              <Button size="sm" variant="danger-outline" className="shrink-0" onClick={stop} disabled={busy !== null}>{busy === 'stop' ? 'Stopping…' : 'Stop the plan'}</Button>
+              <Button size="sm" variant="danger-outline" className="shrink-0" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop the plan'}</Button>
             )}
           </div>
 
@@ -190,16 +212,16 @@ export function PlanBlock({ plan, sessionId }: { plan: PlanView; sessionId?: str
               className="!py-2"
               action={!adding ? (
                 <div className="flex items-center gap-2 shrink-0">
-                  <Button size="sm" variant="danger-outline" onClick={stop} disabled={busy !== null}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
-                  <Button size="sm" variant="primary" onClick={() => setAdding(true)} disabled={busy !== null}>Add budget</Button>
+                  <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
+                  <Button size="sm" variant="primary" onClick={() => setAdding(true)} disabled={blocked}>Add budget</Button>
                 </div>
               ) : (
                 <div className="flex items-center gap-2 shrink-0" data-testid="plan-add-budget">
                   <span className="text-xs text-fg-dim">Allow</span>
                   <TextInput size="sm" inputMode="numeric" value={Number(extra) ? Number(extra).toLocaleString() : extra} onChange={(e) => setExtra(e.target.value.replace(/[^0-9]/g, ''))} className="w-20" aria-label="Tokens to allow" />
                   <span className="text-xs text-fg-dim">tokens{plan.ceilingUsd != null && plan.ceilingTokens > 0 ? ` (${usd((Number(extra) || 0) * (plan.ceilingUsd / plan.ceilingTokens))})` : ''}</span>
-                  <Button size="sm" variant="ghost" onClick={() => setAdding(false)} disabled={busy !== null}>Cancel</Button>
-                  <Button size="sm" variant="primary" onClick={addBudget} disabled={busy !== null || !(Number(extra) > 0)}>{busy === 'budget' ? 'Continuing…' : 'Continue'}</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setAdding(false)} disabled={blocked}>Cancel</Button>
+                  <Button size="sm" variant="primary" onClick={addBudget} disabled={blocked || !(Number(extra) > 0)}>{busy === 'budget' ? 'Continuing…' : 'Continue'}</Button>
                 </div>
               )}
             >
@@ -216,8 +238,8 @@ export function PlanBlock({ plan, sessionId }: { plan: PlanView; sessionId?: str
               className="!py-2"
               action={(
                 <div className="flex items-center gap-2 shrink-0">
-                  <Button size="sm" variant="danger-outline" onClick={stop} disabled={busy !== null}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
-                  <Button size="sm" variant="primary" onClick={cont} disabled={busy !== null}>{busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
+                  <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
+                  <Button size="sm" variant="primary" onClick={cont} disabled={blocked}>{busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
                 </div>
               )}
             >
@@ -235,8 +257,8 @@ export function PlanBlock({ plan, sessionId }: { plan: PlanView; sessionId?: str
           actions and no status sentence to share a line with. */}
           {plan.status === 'proposed' && !commenting && (
             <div className="flex items-center gap-2 flex-wrap">
-              <Button size="sm" variant="primary" onClick={approve} disabled={busy !== null}>{busy === 'approve' ? 'Approving…' : 'Approve'}</Button>
-              <Button size="sm" variant="secondary" onClick={() => setCommenting(true)} disabled={busy !== null}>Comment</Button>
+              <Button size="sm" variant="primary" onClick={approve} disabled={blocked}>{busy === 'approve' ? 'Approving…' : 'Approve'}</Button>
+              <Button size="sm" variant="secondary" onClick={() => setCommenting(true)} disabled={blocked}>Comment</Button>
             </div>
           )}
           {plan.status === 'proposed' && commenting && (
@@ -252,13 +274,13 @@ export function PlanBlock({ plan, sessionId }: { plan: PlanView; sessionId?: str
                 autoFocus
               />
               <div className="flex items-center gap-2">
-                <Button size="sm" variant="primary" onClick={sendComment} disabled={busy !== null || !comment.trim()} title="The assistant rewrites the plan and shows you a new one">{busy === 'comment' ? 'Sending…' : 'Send'}</Button>
-                <Button size="sm" variant="ghost" onClick={() => { setCommenting(false); setComment(''); }} disabled={busy !== null}>Cancel</Button>
+                <Button size="sm" variant="primary" onClick={sendComment} disabled={blocked || !comment.trim()} title="The assistant rewrites the plan and shows you a new one">{busy === 'comment' ? 'Sending…' : 'Send'}</Button>
+                <Button size="sm" variant="ghost" onClick={() => { setCommenting(false); setComment(''); }} disabled={blocked}>Cancel</Button>
               </div>
             </div>
           )}
 
-      {error && <div className="text-xs text-destructive-fg">{error}</div>}
+      {(error ?? unsupported) && <div className="text-xs text-destructive-fg">{error ?? unsupported}</div>}
     </div>
   );
 }
@@ -296,8 +318,13 @@ const KIND_WORD: Record<PlanStepView['kind'], string> = {
 function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: number; plan: PlanView; sessionId?: string }) {
   // A running step opens itself so its specialists are visible without a
   // click (Q-5: the card is the progress surface); anything else folds.
-  const [open, setOpen] = useState(step.status === 'running' || step.status === 'paused');
+  // Task 5a: a specialist in this step waiting on the user opens the step
+  // too — its buttons are useless behind a folded row (the same rule that
+  // force-opens a Task card holding an ask).
+  const asking = !!step.children?.some((c) => c.segments?.some((sg) => sg.type === 'tool' && sg.status === 'awaiting-approval' && !!sg.requestId));
+  const [open, setOpen] = useState(step.status === 'running' || step.status === 'paused' || asking);
   useEffect(() => { if (step.status === 'running' || step.status === 'paused') setOpen(true); }, [step.status]);
+  useEffect(() => { if (asking) setOpen(true); }, [asking]);
   const who = `${step.fanOut} ${step.specialist}${step.fanOut === 1 ? '' : 's'}`;
   const right =
     step.status === 'pending' || plan.status === 'proposed' ? `up to ${tokens(step.budgetTokens * step.fanOut)}`
@@ -345,7 +372,6 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
  * per specialist, so there is no tool card to hang them on.
  */
 function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessionId?: string }) {
-  const [open, setOpen] = useState(false);
   const tool = useMemo<ToolCallState>(() => ({
     toolUseId: child.childId,
     toolName: 'Task',
@@ -355,6 +381,12 @@ function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessio
     specialistReport: child.report,
     subagentSegments: child.segments,
   }), [child]);
+  // Task 5a: this specialist's ask is answered inside its Activity, so the row
+  // opens when one arrives (Activity itself opens for it — AgentSections).
+  // Opens once per ask; the user can still fold it afterwards.
+  const asking = hasNestedAsk(tool);
+  const [open, setOpen] = useState(asking);
+  useEffect(() => { if (asking) setOpen(true); }, [asking]);
   const glyph = child.status === 'running' ? <BrailleSpinner size="sm" />
     : child.status === 'completed' ? <CheckIcon className="w-3 h-3 text-fg-dim" />
     : child.status === 'failed' ? <FailIcon className="w-3 h-3 text-destructive-fg" />

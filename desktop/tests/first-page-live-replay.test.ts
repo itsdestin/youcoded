@@ -69,7 +69,7 @@ describe('first page, then the live-state re-send', () => {
   });
 
   it('retries an unresolved page before recording it, then replays once', async () => {
-    const pages = [{ events: [], cursor: null, hasMore: false, unresolved: true }, pageWithPlanCard];
+    const pages: TranscriptPageResult[] = [{ events: [], cursor: null, hasMore: false, unresolved: true }, pageWithPlanCard];
     const h = harness(async () => pages.shift()!);
     await loadFirstPageThenReplay(S, { requestPage: h.requestPage, dispatch: h.dispatch, replayLiveState: h.replayLiveState, sleep: async () => {} });
     expect(h.requestPage).toHaveBeenCalledTimes(2);

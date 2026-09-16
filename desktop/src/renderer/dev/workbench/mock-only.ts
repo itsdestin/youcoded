@@ -111,9 +111,10 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // so the status strip, the too-large card and the Download button stay reviewable
   // without a host.
   // Specialists stage two — plans (design mockup, 2026-09-05). The plan card
-  // and its Settings row are built against these; the backend (the
-  // `propose_plan` tool, schema + validator, executor + journal, budgets as
-  // hard stops, resume across restarts) is the work this list describes.
+  // and its Settings row are built against these. The backend exists (Tasks
+  // 1–4) and the renderer consumes it through components/plans/plan-bridge.ts
+  // (Task 5a); what is still missing is the transport — the eight channels
+  // below on preload, ipc-handlers, remote-shim/server and SessionService.kt.
   { channel: 'plans.approve', feature: 'specialists stage two — plans' },
   { channel: 'plans.comment', feature: 'specialists stage two — plans' },
   { channel: 'plans.addBudget', feature: 'specialists stage two — plans' },
@@ -121,4 +122,7 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   { channel: 'plans.stop', feature: 'specialists stage two — plans' },
   { channel: 'plans.getAutoApprove', feature: 'specialists stage two — plans' },
   { channel: 'plans.setAutoApprove', feature: 'specialists stage two — plans' },
+  // Task 5a: the push the card and the buddy feed subscribe to (plans:event);
+  // Task 6 adds it to preload/remote-shim and removes all eight entries.
+  { channel: 'on.planEvent', feature: 'specialists stage two — plans' },
 ];

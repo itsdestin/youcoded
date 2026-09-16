@@ -1494,7 +1494,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
           steps, ceiling, and the buttons for whatever state it is in — is the
           card's face, visible without expanding, because approving a fan-out
           you have not seen is the thing the card exists to prevent. */}
-      {tool.plan && <PlanBlock plan={tool.plan} sessionId={sessionId} />}
+      {tool.plan && <PlanBlock plan={tool.plan} segments={tool.subagentSegments} sessionId={sessionId} />}
       {/* Remote access batch 2 (§7): the ask was answered on another device while
           this client could not see it. Neutral by design — nothing failed and no
           socket closed; the result comes with the transcript or a Refresh. */}

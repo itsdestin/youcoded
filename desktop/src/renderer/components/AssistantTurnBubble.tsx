@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AssistantTurn, abnormalStopReason } from '../state/chat-types';
 import { ToolCallState, ToolGroupState, SessionProvider } from '../../shared/types';
 import { assistantName } from '../utils/assistant-name';
-import { hasNestedAsk } from '../utils/specialist-cards';
+import { hasNestedAsk, hasPlanChildAsk } from '../utils/specialist-cards';
 import { buildToolGroupHeadline } from '../utils/tool-group-summary';
 import MarkdownContent from './MarkdownContent';
 import { SessionRefsEnabled } from './session-refs-context';
@@ -171,7 +171,9 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
   // should describe the most recent result.
   const latestToolFailed = tools.at(-1)?.status === 'failed';
   const stoppedCount = tools.filter((t) => t.specialistRun?.status === 'interrupted').length;
-  const askingCount = tools.filter(hasNestedAsk).length;
+  // Task 5a: a plan specialist's ask counts too, so a folded group never
+  // hides a plan card that is waiting on the user.
+  const askingCount = tools.filter((t) => hasNestedAsk(t) || hasPlanChildAsk(t)).length;
   // Plain-language "Created a file and ran a command" in place of the raw
   // "N tools (Bash, Write)" — Q1-Q5, 2026-09-06 tool-group-readability deck.
   const headline = buildToolGroupHeadline(tools);
