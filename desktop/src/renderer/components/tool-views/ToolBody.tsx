@@ -2,7 +2,7 @@ import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import { ToolCallState, type ShellRunView } from '../../../shared/types';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import MarkdownContent from '../MarkdownContent';
-import { useChatState } from '../../state/chat-context';
+import { useSessionToolCalls } from '../../state/chat-context';
 import { buildTasksById, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
 import { SubagentTimeline } from './SubagentTimeline';
 import { ChevronIcon } from '../Icons';
@@ -1123,10 +1123,15 @@ export default function ToolBody({ tool, sessionId }: { tool: ToolCallState; ses
   // TaskUpdate consumes this right now, but TaskGet/Stop could later.
   // `Task` (capital T) is the sub-agent launcher and is UNRELATED to the
   // TaskCreate/TaskUpdate agent-lifecycle tools despite the name overlap.
-  const chatState = useChatState(sessionId || '');
+  // WHY the selector, not useChatState (2026-09-16 A6): ToolCard is memoised
+  // with a comparator written to keep a card still while text streams, and a
+  // whole-session subscription down here routed around it — every EXPANDED
+  // card re-rendered per streamed word. The toolCalls Map's identity survives
+  // text deltas, so this re-renders on tool events only.
+  const toolCalls = useSessionToolCalls(sessionId || '');
   const tasksById = useMemo(
-    () => buildTasksById(chatState.toolCalls),
-    [chatState.toolCalls],
+    () => buildTasksById(toolCalls),
+    [toolCalls],
   );
   // Fix: this must sit above the `inner` IIFE's switch, not inside the Bash
   // case — hooks are unconditional, and the case only runs when toolName is
