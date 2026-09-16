@@ -354,7 +354,9 @@ async function startEngine(log: (m: string) => void): Promise<void> {
       void e.syncSpace(space); // initial reconcile
     } catch (err: any) {
       log(`sync-spaces: failed to start space ${space.id}: ${String(err?.message ?? err)}`);
-      broadcast({ type: 'error', spaceId: space.id, message: String(err?.message ?? err) });
+      // Keep the typed marker (github-auth): the panel only offers Connect
+      // GitHub for a coded sign-in failure (2026-09-16 review F8).
+      broadcast({ type: 'error', spaceId: space.id, message: String(err?.message ?? err), errorCode: typeof err?.syncErrorCode === 'string' ? err.syncErrorCode : undefined });
     }
   }
 
@@ -371,9 +373,13 @@ async function startEngine(log: (m: string) => void): Promise<void> {
 
   // Cross-device discovery: await a fresh Personal pull so the registry is
   // current, register this device's own projects, then reconcile.
-  const personalSpace = roots!.spaces().find((s) => s.kind === 'personal');
-  if (personalSpace) { try { await e.syncSpace(personalSpace); } catch { /* offline — poll/connect retries */ } }
-  if (engine !== e) return; // disabled while we synced Personal — bail
+  // The loop above already started Personal's initial sync. Awaiting a second
+  // syncSpace call here now waits for that run AND a full follow-up (an
+  // in-flight call waits for the rerun it queues), which on a device with a
+  // backlog held discovery and SyncHub back for minutes (2026-09-16 review F4).
+  // Discovery doesn't need it: it re-runs when that sync lands with changes
+  // (broadcast → 'synced' + updated).
+  if (engine !== e) return; // disabled meanwhile — bail
   backfillRegistry();
   void runDiscovery();
 
@@ -515,7 +521,10 @@ function repoNameFor(name: string): string {
 async function pushPersonal(): Promise<void> {
   if (!engine || !roots) return;
   const personal = roots.spaces().find((s) => s.kind === 'personal');
-  if (personal) await engine.syncSpace(personal); // push the registry change to peers
+  // Not awaited: a sync never throws, so waiting only made rename/stop/description
+  // hang until the upload finished — longer still now that a call made mid-sync
+  // waits for the follow-up run (2026-09-16 review F4).
+  if (personal) void engine.syncSpace(personal); // push the registry change to peers
 }
 
 /** Rename = change the SYNCED display name only (no folder move). Propagates via
@@ -564,6 +573,9 @@ export async function syncSpacesEnable(enabled: boolean) {
       engine = null;
       teardownHub(); // stop cross-device signalling too — the engine is going away
       await current.stop();
+      // Turning sync off emitted nothing, so status-driven UI (the Settings gear's
+      // red dot, project dots) kept showing the last error (2026-09-16 review F6).
+      broadcast({ type: 'projects-changed', spaceId: 'projects' });
     }
   });
   transition = run;
@@ -588,30 +600,15 @@ export async function syncSpacesSyncNow(spaceId?: string) {
   return { ok: true };
 }
 
-// Awaitable counterpart to syncSpacesSyncNow, for the takeover handoff barrier.
-// syncSpacesSyncNow is fire-and-forget (void engine.syncSpace) so a UI "Sync now"
-// click never blocks on the network — but that means its Promise resolves BEFORE
-// any git pull/push runs, which is exactly why the takeover "mirror-before-release"
-// barrier didn't exist (2026-07-18 investigation §3.2): the holder's flush and the
-// requester's pre-materialize pull both returned before the final turn reached the
-// space. This variant resolves only AFTER each targeted space's pull+push settles,
-// so the caller can genuinely sequence "push landed" before "peer pulls".
-//
-// Bounded by timeoutMs: on timeout we resolve anyway (the push keeps running in the
-// background) because a handoff must never hard-block on a slow network — the cost
-// of a timed-out wait is the pre-fix behavior (the turn may arrive a beat late),
-// never a wedged handoff. engine.syncSpace never throws (fully try/caught inside),
-// so allSettled is belt-and-suspenders.
+// Bounded variant of syncSpacesSyncNow for the takeover handoff barrier
+// (2026-07-18 investigation §3.2): the holder's flush and the requester's
+// pre-materialize pull must not return before the final turn reached the space,
+// but a handoff must never hard-block on a slow network either — on timeout we
+// resolve anyway and the push keeps running in the background.
 export async function syncSpacesSyncNowAwaited(spaceId: string, timeoutMs: number): Promise<void> {
-  // Capture engine/roots into locals: both are module-level `let` nulled on teardown,
-  // and a sync-disable could null them between the guard and the async resolution.
-  const eng = engine;
-  const r = roots;
-  if (!eng || !r) return;
-  const targets = r.spaces().filter((s) => s.id === spaceId);
-  if (targets.length === 0) return;
+  if (!roots?.spaces().some((s) => s.id === spaceId)) return; // no arg would mean "sync everything"
   await Promise.race([
-    Promise.allSettled(targets.map((s) => eng.syncSpace(s))),
+    syncSpacesSyncNow(spaceId),
     new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
 }

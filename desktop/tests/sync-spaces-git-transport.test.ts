@@ -142,6 +142,100 @@ describe('GitTransport specifics', () => {
       await h.cleanup();
     });
 
+    // Review 2026-09-16 F2/F11: when the over-cap file is the ONLY unpublished
+    // change there is nothing to send — not a "Sync failed (git commit)".
+    it('an over-cap file that is the only unpublished change ends quietly with nothing pushed', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'chat.jsonl'), 'tiny');
+      await small.push(a, 'base');
+      const before = gitIn(a, ['ls-remote', bareOf(a), 'refs/heads/main']);
+      fs.writeFileSync(path.join(a.root, 'chat.jsonl'), 'x'.repeat(11));
+      commitRaw(a, 'leaked');
+      const r = await small.push(a, 'next');
+      expect(r).toMatchObject({ pushed: false, oversize: ['chat.jsonl'] });
+      expect(gitIn(a, ['ls-remote', bareOf(a), 'refs/heads/main'])).toBe(before);
+      await h.cleanup();
+    });
+
+    // Review F3: a name git would read as pathspec magic must still be held back.
+    it('holds back a file whose name starts with a colon, and leaves a look-alike name alone', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'f1.md'), 'v1');
+      await small.push(a, 'base');
+      fs.writeFileSync(path.join(a.root, ':big'), 'x'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'f[1].md'), 'x'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'f1.md'), 'v2');
+      commitRaw(a, 'leaked');
+      const r = await small.push(a, 'next');
+      expect(r.pushed).toBe(true);
+      expect([...r.oversize].sort()).toEqual([':big', 'f[1].md']);
+      expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
+      expect(gitIn(a, ['show', 'origin/main:f1.md'])).toBe('v2');
+      await h.cleanup();
+    });
+
+    // Review F7: a big file already published and unchanged is not "held back".
+    it('does not report a big file that is already published and unchanged', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(a.root, 'old.bin'), 'x'.repeat(11));
+      await h.transport.push(a, 'published under the normal cap');
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'new.bin'), 'y'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'ok.md'), 'fine');
+      commitRaw(a, 'leaked');
+      const r = await small.push(a, 'next');
+      expect(r.oversize).toEqual(['new.bin']);
+      await h.cleanup();
+    });
+  });
+
+  // Review F1: a NEW big file is excluded by pull() before push() looks, and
+  // was never reported to the user.
+  it('keeps reporting a new over-cap file after an earlier cycle excluded it', async () => {
+    const h = await makeHarness();
+    const a = await h.makeDeviceSpace();
+    const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+    fs.writeFileSync(path.join(a.root, 'video [raw].bin'), 'x'.repeat(11));
+    await small.pull(a);
+    expect((await small.push(a, 'one')).oversize).toEqual(['video [raw].bin']);
+    expect((await small.push(a, 'two')).oversize).toEqual(['video [raw].bin']);
+    fs.rmSync(path.join(a.root, 'video [raw].bin'));
+    expect((await small.push(a, 'three')).oversize).toEqual([]);
+    await h.cleanup();
+  });
+
+  describe('first push guard', () => {
+    const gitIn = (space: SyncSpace, args: string[]) => execFileSync('git', args, {
+      cwd: space.root, encoding: 'utf8',
+      env: { ...process.env, GIT_DIR: path.join(space.root, '.youcoded', 'sync.git'), GIT_WORK_TREE: space.root },
+    });
+    const commitRaw = (space: SyncSpace, msg: string) => { gitIn(space, ['add', '-A']); gitIn(space, ['commit', '-qm', msg]); };
+    const largestRemoteBlob = (bare: string) => {
+      const sizes = execFileSync('sh', ['-c',
+        `git --git-dir="${bare}" rev-list --objects --no-object-names --all | git --git-dir="${bare}" cat-file --batch-check='%(objecttype) %(objectsize)' | awk '$1=="blob"{print $2}'`,
+      ], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number);
+      if (!sizes.length) throw new Error('remote has no blobs — probe is broken');
+      return Math.max(...sizes);
+    };
+    const bareOf = (space: SyncSpace) => gitIn(space, ['remote', 'get-url', 'origin']).trim();
+
+    it('an over-cap file that is the whole first commit is never pushed and throws nothing', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'big.bin'), 'x'.repeat(11));
+      commitRaw(a, 'leaked before any push');
+      const r = await small.push(a, 'first');
+      expect(r).toMatchObject({ pushed: false, oversize: ['big.bin'] });
+      expect(gitIn(a, ['ls-remote', bareOf(a)])).toBe('');
+      await h.cleanup();
+    });
+
     it('also holds on the very first push, before GitHub has any history', async () => {
       const h = await makeHarness();
       const a = await h.makeDeviceSpace();

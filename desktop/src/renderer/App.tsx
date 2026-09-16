@@ -2354,13 +2354,17 @@ function AppInner() {
     const api = (window as any).claude?.syncSpaces;
     if (typeof api?.status !== 'function') return;
     let cancelled = false;
+    // Only the newest request may set the dot — answers can arrive out of order.
+    let seq = 0;
     const load = () => {
+      const mine = ++seq;
       api.status()
-        .then((s: SyncStatusData | null) => { if (!cancelled) setSpacesFailing(!!s?.enabled && !!latestUnresolvedError(s)); })
+        .then((s: SyncStatusData | null) => { if (!cancelled && mine === seq) setSpacesFailing(!!s?.enabled && !!latestUnresolvedError(s)); })
         .catch(() => { /* no sync-spaces host (e.g. the phone) — no dot */ });
     };
     load();
-    const off = api.onEvent?.((e: { type?: string }) => { if (e?.type === 'error' || e?.type === 'synced') load(); });
+    // Any event: turning sync off arrives as 'projects-changed', not error/synced.
+    const off = api.onEvent?.(() => load());
     return () => { cancelled = true; if (typeof off === 'function') off(); };
   }, []);
 

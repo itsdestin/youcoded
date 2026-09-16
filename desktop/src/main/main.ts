@@ -1034,10 +1034,8 @@ function createWindow(firstRunManager?: FirstRunManager) {
   // installs share a hostname (the dev instance + built app dogfood gate).
   const requester = createRequesterTakeover({
     leaseClient,
-    // AWAITABLE sync (not the fire-and-forget syncSpacesSyncNow): the requester
-    // pulls the holder's final turn right after this, so the pull must not run
-    // until the push it depends on has actually landed. Bounded so a slow network
-    // can't wedge the resume.
+    // Waits for the push to land (the requester pulls the holder's final turn
+    // right after this), bounded so a slow network can't wedge the resume.
     syncNow: () => syncSpacesSyncNowAwaited('personal', HANDOFF_SYNC_TIMEOUT_MS),
     materializeOne: (id) => materializeOne(id),
     forceAcquire: (id) => hubLeaseRequest('force-acquire', id, deviceIdentity!.id),
