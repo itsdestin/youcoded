@@ -30,4 +30,18 @@ describe('hot main-process paths use fs.promises', () => {
     expect(start).toBeGreaterThan(0);
     expect(body).not.toMatch(SYNC_FS);
   });
+
+  // 2026-09-16 smoothness sweep, Batch C. Each runs per turn or per click.
+  it('accepted-history publish() and its incremental reader (per turn boundary)', () => {
+    const src = read('harness/accepted-history-store.ts');
+    const reader = src.indexOf('class IncrementalTranscriptReader');
+    expect(reader).toBeGreaterThan(0);
+    expect(src.slice(reader, src.indexOf('\n}\n', reader))).not.toMatch(SYNC_FS);
+    const publish = src.indexOf('async publish(');
+    expect(publish).toBeGreaterThan(0);
+    expect(src.slice(publish, src.indexOf('\n  }\n', publish))).not.toMatch(SYNC_FS);
+    const write = src.indexOf('private async atomicWrite(');
+    expect(write).toBeGreaterThan(0);
+    expect(src.slice(write, src.indexOf('\n  }\n', write))).not.toMatch(SYNC_FS);
+  });
 });

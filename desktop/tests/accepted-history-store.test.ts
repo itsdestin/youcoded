@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -453,5 +453,93 @@ describe('AcceptedHistoryStore', () => {
     fs.rmSync(transcript);
     await store.cleanupOrphans();
     expect(fs.existsSync(store.manifestPath(sessionId))).toBe(false);
+  });
+
+  // 2026-09-16 smoothness sweep, C1: publish() runs at every turn boundary and
+  // used to re-read and re-parse the whole transcript synchronously. The reader
+  // now keeps the parsed prefix and reads only what was appended, off the main
+  // thread — and must answer exactly what the whole-file reader answered.
+  describe('incremental transcript reader', () => {
+    const extra: Fixture[] = [
+      { type: 'user-message', sessionId, uuid: 'u2', data: { text: 'more' } },
+      { type: 'assistant-text', sessionId, uuid: 'a2', data: { partId: 'text-1', text: 'reply' } },
+    ];
+    function appendTranscript(events: Fixture[]): void {
+      fs.appendFileSync(transcript, events.map(e => JSON.stringify(e)).join('\n') + '\n');
+    }
+    async function publishFresh(input: Partial<AcceptedHistoryProposal> = {}) {
+      const revision = await store.invalidate(sessionId, 'history-mutation');
+      return store.publish(proposal({ ...input, revision }));
+    }
+
+    it('a second publish after an append reads incrementally and restore still sees the whole-file digest', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 1, incremental: 0 });
+      appendTranscript(extra);
+      await expect(publishFresh({ references: [...base.slice(0, 3), ...extra].map(refFor), messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: [
+          { type: 'reasoning', text: 'summary' },
+          { type: 'text', text: 'answer' },
+        ] },
+        { role: 'user', content: 'more' },
+        { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
+      ] as any })).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 1, incremental: 1 });
+      // restore() reads the whole file and compares its digest to the manifest's.
+      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      expect(restored.ok).toBe(true);
+      expect((restored as any).eventUuids).toEqual(['u1', 'r1', 'a1', 'u2', 'a2']);
+    });
+
+    it('a transcript whose earlier bytes changed (header rewritten) is re-read in full', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      // Rewrite with a LONGER header line and the same events: size grows, prefix differs.
+      fs.writeFileSync(transcript, [JSON.stringify({ v: 1, sessionId, title: 'renamed later' }), ...base.map(e => JSON.stringify(e)), ''].join('\n'));
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 2, incremental: 0 });
+      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+    });
+
+    it('a transcript that shrank is re-read in full', async () => {
+      appendTranscript(extra);
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      writeTranscript(base); // back to the shorter file
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 2, incremental: 0 });
+      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+    });
+
+    it('a duplicate uuid appended later still fails the publish', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      appendTranscript([{ type: 'user-message', sessionId, uuid: 'u1', data: { text: 'again' } }]);
+      await expect(publishFresh()).resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
+    });
+
+    it('a torn tail is hashed into the digest but never cached; completing the line reads on', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      fs.appendFileSync(transcript, '{"type":"user-message","sessionId":"' + sessionId + '","uuid":"u2","data":{"te');
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      // The manifest's digest must be of the WHOLE file, torn tail included.
+      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+      fs.appendFileSync(transcript, 'xt":"more"}}\n');
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      expect(store.reader.stats.full).toBe(1);
+      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      expect(restored.ok).toBe(true);
+    });
+
+    it('the event loop keeps ticking while the transcript is read', async () => {
+      // WHY: this is the freeze shape — publish() used to hold the loop for the
+      // whole read. A hung open() must not stop a timer from firing.
+      const never = new Promise<never>(() => {});
+      const spy = vi.spyOn(fs.promises, 'open').mockReturnValue(never as any);
+      try {
+        const revision = await store.invalidate(sessionId, 'history-mutation');
+        void store.publish(proposal({ revision }));
+        const ticked = await new Promise<boolean>((r) => setTimeout(() => r(true), 20));
+        expect(ticked).toBe(true);
+      } finally { spy.mockRestore(); }
+    });
   });
 });
