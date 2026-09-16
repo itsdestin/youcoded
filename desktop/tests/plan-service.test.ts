@@ -214,6 +214,41 @@ describe('approve, resume, stop', () => {
     expect((await journal.get(REF, view.planId))!.fenceEpoch).toBe(2);
   });
 
+  it('review fix 4: the user\'s own Continue gives unfinished work its one automatic retry back, in the lease write', async () => {
+    const view = await propose();
+    okPlan(await service.approve(SID, view.planId));
+    const attempt = (over: Record<string, unknown>) => ({
+      attemptId: 'x', itemIndex: 0, iteration: 0, baseTokens: 1250, addedTokens: 0, reservedTokens: 0, spentTokens: 10, phase: 'response-persisted', ...over,
+    });
+    await journal.mutate(REF, (file) => {
+      const p = file.plans[0];
+      p.status = 'paused'; delete p.lease;
+      p.paused = { stepId: 's1', reason: 'x', kind: 'specialist-error', retried: true };
+      p.steps[0].attempts = [
+        attempt({ attemptId: 'done-a', itemIndex: 0, phase: 'committed', terminal: 'completed', reportText: 'A', completedAt: 1 }),
+        attempt({ attemptId: 'open-b', itemIndex: 1 }),
+      ] as any;
+      p.recoveries = [
+        { stepId: 's1', iteration: 0, itemIndex: 0, cause: 'specialist-error', at: 1, relaunched: true },
+        { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'specialist-error', at: 2, relaunched: true },
+        { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'unknown-request', at: 3 },
+      ];
+    });
+    const seqBefore = (await journal.get(REF, view.planId))!.seq;
+    okPlan(await service.resume(SID, view.planId));
+    const rec = (await journal.get(REF, view.planId))!;
+    // One write: the lease and the reset together.
+    expect(rec.seq).toBe(seqBefore + 1);
+    expect(rec.lease).toBeDefined();
+    // The finished item keeps its record; the resumed one is reset (kept for
+    // the card's "Retried" marker, no longer counted).
+    expect(rec.recoveries).toEqual([
+      { stepId: 's1', iteration: 0, itemIndex: 0, cause: 'specialist-error', at: 1, relaunched: true },
+      { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'specialist-error', at: 2, relaunched: true, reset: true },
+      { stepId: 's1', iteration: 0, itemIndex: 1, cause: 'unknown-request', at: 3, reset: true },
+    ]);
+  });
+
   it('stop settles a running plan through the executor, then journals skipped steps with no lease', async () => {
     const view = await propose();
     okPlan(await service.approve(SID, view.planId));

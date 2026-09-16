@@ -29,7 +29,7 @@ import { PlanJournal, PlanJournalUnreadableError } from './plan-journal';
 import { PlanBudget, pricingSnapshot } from './plan-budget';
 import { PlanService, type PlanProposal } from './plan-service';
 import {
-  PlanExecutor, PlanLaunchDriftError, classifyChildTranscript, planRestartBrief,
+  PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, classifyChildTranscript, planRestartBrief,
   type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type TranscriptVerdict,
 } from './plan-executor';
 import {
@@ -381,6 +381,14 @@ export class PlanHostBridge {
       onUnreadable: (ref, planId, detail) => this.onUnreadable(ref, planId, detail),
       minimumAddTokens: (ref, plan, attemptId) => this.minimumAddTokens(ref, plan, attemptId),
       launchRefusal: (_ref, plan, specialist) => this.launchRefusal(plan, specialist),
+      reportOnlyInputBound: (ref, plan, attemptId, message) => this.reportOnlyInputBound(ref, plan, attemptId, message),
+      latestUserText: (ref, childId) => {
+        const events = this.port.readChildEvents(childId, ref.cwd);
+        for (let i = events.length - 1; i >= 0; i--) {
+          if (events[i].type === 'user-message') return String(events[i].data.text ?? '');
+        }
+        return undefined;
+      },
     };
   }
 
@@ -409,7 +417,9 @@ export class PlanHostBridge {
     if (cwd === undefined) throw new Error("the conversation that owns this plan isn't open");
     const plan = await this.journal.get(ref, input.planId);
     const frozen = plan?.manifest.specialists[input.specialist];
-    if (!plan || !frozen) throw new Error(`the plan has no approved settings for the "${input.specialist}" specialist`);
+    // Review fix 6: these two can never succeed by trying again, so they are
+    // refusals (never retried automatically; Stop-only for the assistant).
+    if (!plan || !frozen) throw new PlanLaunchRefusedError(`the plan has no approved settings for the "${input.specialist}" specialist`);
     const def = this.port.roster(cwd).resolve(input.specialist);
     if (!def || definitionFingerprint(def) !== frozen.definitionFingerprint) {
       // Task 9a: a drift, never retried automatically.
@@ -417,7 +427,7 @@ export class PlanHostBridge {
     }
     const route = await this.port.resolveRoute(frozen.binding);
     const lookup = budgetAdapterFor(route.providerType);
-    if (!lookup.ok) throw new Error(lookup.reason);
+    if (!lookup.ok) throw new PlanLaunchRefusedError(lookup.reason);
     let stop: PlanChildStop | undefined;
     const gate: PlanChildRequestGate = {
       ...this.budget.requestGate(ref, input.planId, input.fence, input.stepId, input.attemptId, lookup.adapter),
@@ -448,6 +458,36 @@ export class PlanHostBridge {
       (views) => { for (const plan of views) this.port.emit({ sessionId: ref.sessionId, plan }); },
       (e) => log('WARN', 'PlanHostBridge', 'could not project a damaged plan journal', { error: String(e) }),
     );
+  }
+
+  /**
+   * Review fix 2: the certified bound of the report-only request — `message`
+   * as the next turn of the failed attempt's own specialist session, measured
+   * exactly as the Add budget minimum measures a restart (an unwired probe
+   * rebuilt from that transcript). undefined when it can't be measured.
+   */
+  private async reportOnlyInputBound(ref: PlanRef, plan: PlanRecord, attemptId: string, message: string): Promise<number | undefined> {
+    const stepRec = plan.steps.find((s) => s.attempts.some((a) => a.attemptId === attemptId));
+    const attempt = stepRec?.attempts.find((a) => a.attemptId === attemptId);
+    const step = stepRec && leafSteps(plan.document.steps).find((s) => s.id === stepRec.id);
+    const frozen = step && plan.manifest.specialists[step.specialist];
+    const cwd = this.port.rootCwd(ref.sessionId);
+    if (!attempt?.childId || !step || !frozen || cwd === undefined) return undefined;
+    const def = this.port.roster(cwd).resolve(step.specialist);
+    if (!def) return undefined;
+    const route = await this.port.resolveRoute(frozen.binding);
+    const lookup = budgetAdapterFor(route.providerType);
+    if (!lookup.ok) return undefined;
+    const probe = this.port.probeSession({
+      parentId: ref.sessionId, specialist: def, binding: frozen.binding, route,
+      gate: measurementGate(lookup.adapter), historyFromChildId: attempt.childId,
+    });
+    try {
+      const bound = await probe.session.planNextRequestBound(lookup.adapter, message);
+      return bound.ok ? bound.tokens : undefined;
+    } finally {
+      probe.dispose();
+    }
   }
 
   /**

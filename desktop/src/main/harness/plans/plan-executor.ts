@@ -84,10 +84,21 @@ export function planReportOnlyBrief(input: { finalLeaf: boolean; problem: string
   return `You finished without writing your report. ${noTools} Reply now with your report: what you found and what you did.`;
 }
 
+/** Review fix 2: the turn a report-only retry sends when its message already
+ *  reached the specialist (a Continue after it paused) — never that message
+ *  a second time. */
+export const PLAN_REPORT_ONLY_RESEND = 'Send the report asked for above now. Your tools are still switched off.';
+
 /** Thrown by the runner when a specialist's definition changed since the plan
  *  was approved. WHY a type: a drift would fail the same way every time, so it
  *  is never retried automatically (pause handoff §1). */
 export class PlanLaunchDriftError extends Error {}
+
+/** Thrown by the runner when a start can never succeed as things stand (the
+ *  plan has no approved settings for the specialist, or its budget route can't
+ *  be used). Review fix 6: a refusal, like `launchRefusal` — never retried,
+ *  and the assistant may only recommend Stop. */
+export class PlanLaunchRefusedError extends Error {}
 
 // ---- the runner contract (implemented by the host) ----
 
@@ -162,6 +173,12 @@ export interface PlanRunner {
    *  or that adapter was switched off), or undefined. Asked BEFORE its wave is
    *  reserved, so a refusal never holds any budget (Task 3 obligation). */
   launchRefusal?(ref: PlanRef, plan: PlanRecord, specialist: string): Promise<string | undefined>;
+  /** Review fix 2: the certified input bound of the report-only request —
+   *  `message` sent next on the specialist session of `attemptId` — or
+   *  undefined when it can't be measured (then it is not attempted). */
+  reportOnlyInputBound?(ref: PlanRef, plan: PlanRecord, attemptId: string, message: string): Promise<number | undefined>;
+  /** Review fix 2: the newest user message in a specialist's transcript. */
+  latestUserText?(ref: PlanRef, childId: string): string | undefined;
 }
 
 /** The turn-complete stopReason a plan specialist ends with when its budget
@@ -295,6 +312,8 @@ interface ActiveRun {
   fireHalt: () => void;
   launchAbort: AbortController;
   live: LiveChild[];
+  /** Review fix 1: member work settle must wait for (see track()). */
+  busy: Set<Promise<void>>;
   heartbeat?: unknown;
   done: Promise<void>;
 }
@@ -332,10 +351,23 @@ function errorText(e: unknown): string {
 
 type RecoveryKey = { stepId: string; iteration: number; itemIndex: number };
 
+/** What one wave member carries between its launches. `recovered`: the
+ *  automatic retry the next launch is (review fix 3 marks it on that launch). */
+interface MemberState { attemptId: string; recovered?: PlanRecoveryCause }
+
+const isJournalError = (e: unknown): boolean => e instanceof PlanFenceError || e instanceof PlanJournalUnreadableError;
+
+/** Review fix 3: the automatic retry for this key actually relaunched. */
+function markRelaunched(plan: PlanRecord, key: RecoveryKey, cause: PlanRecoveryCause): void {
+  for (const r of plan.recoveries ?? []) {
+    if (!r.reset && r.stepId === key.stepId && r.iteration === key.iteration && r.itemIndex === key.itemIndex && r.cause === cause) r.relaunched = true;
+  }
+}
+
 /** Task 9a: has this step/iteration/item already been recovered automatically
  *  for this cause? (One recovery each — pause handoff §1.) */
 function hasRecovery(plan: PlanRecord, key: RecoveryKey, cause: PlanRecoveryCause): boolean {
-  return (plan.recoveries ?? []).some((r) => r.stepId === key.stepId && r.iteration === key.iteration
+  return (plan.recoveries ?? []).some((r) => !r.reset && r.stepId === key.stepId && r.iteration === key.iteration
     && r.itemIndex === key.itemIndex && r.cause === cause);
 }
 
@@ -414,7 +446,7 @@ export class PlanExecutor implements PlanExecutorHooks {
     const haltSignal = new Promise<void>((r) => { fireHalt = r; });
     const run: ActiveRun = {
       key, ref: input.ref, planId: input.planId, fence: input.fence,
-      haltSignal, fireHalt, launchAbort: new AbortController(), live: [], done: Promise.resolve(),
+      haltSignal, fireHalt, launchAbort: new AbortController(), live: [], busy: new Set(), done: Promise.resolve(),
     };
     this.runs.set(key, run);
     run.heartbeat = this.timers.setInterval(() => { void this.beat(run); }, this.heartbeatMs);
@@ -799,7 +831,11 @@ export class PlanExecutor implements PlanExecutorHooks {
    *  message with tools off (Task 9a). */
   private launchBrief(run: ActiveRun, attempt: PlanAttemptRecord, briefBase: (itemIndex: number) => string): { brief: string; toolsDisabled?: true } {
     if (attempt.reportOnly) {
-      return { brief: attempt.brief ?? planReportOnlyBrief({ finalLeaf: false, problem: '' }), toolsDisabled: true };
+      const message = attempt.brief ?? planReportOnlyBrief({ finalLeaf: false, problem: '' });
+      // Review fix 2: already delivered (it paused after sending it) → a
+      // short nudge, so the session never holds the message twice.
+      const delivered = attempt.childId !== undefined && this.runner.latestUserText?.(run.ref, attempt.childId) === message;
+      return { brief: delivered ? PLAN_REPORT_ONLY_RESEND : message, toolsDisabled: true };
     }
     let brief = briefBase(attempt.itemIndex);
     if (attempt.childId) {
@@ -822,6 +858,21 @@ export class PlanExecutor implements PlanExecutorHooks {
   }
 
   /**
+   * Review fix 1: register member work that settle must wait for. Everything a
+   * wave member does EXCEPT waiting on its specialist's own turn (launching,
+   * re-reserving, journalling, retiring a session) is tracked, and settle
+   * drains it before it tears anything down — otherwise a pause could be
+   * written while a sibling's retry was still reserving or launching, leaving
+   * a paused plan holding budget or a specialist nobody disposes.
+   */
+  private track<T>(run: ActiveRun, work: Promise<T>): Promise<T> {
+    const done = work.then(() => undefined, () => undefined);
+    run.busy.add(done);
+    void done.then(() => run.busy.delete(done));
+    return work;
+  }
+
+  /**
    * One wave member, from launch to its journalled end (Task 9a). Recoverable
    * failures (pause handoff §1) are retried here once each; everything else
    * halts the plan exactly as before.
@@ -830,121 +881,170 @@ export class PlanExecutor implements PlanExecutorHooks {
     run: ActiveRun, step: PlanStepV1, firstAttemptId: string, briefBase: (itemIndex: number) => string,
     finalLeaf: boolean, wave: LiveChild[],
   ): Promise<void> {
-    let attemptId = firstAttemptId;
+    const member: MemberState = { attemptId: firstAttemptId };
     for (;;) {
-      if (run.halt) return;
-      const attempt = this.findAttempt(await this.load(run), step.id, attemptId);
-      const { brief, toolsDisabled } = this.launchBrief(run, attempt, briefBase);
-      if (run.halt) return;
-      let handle: PlanChildHandle;
-      try {
-        handle = await this.runner.launch({
-          ref: run.ref, planId: run.planId, fence: run.fence, stepId: step.id, attemptId,
-          itemIndex: attempt.itemIndex, iteration: attempt.iteration, specialist: step.specialist, brief,
-          ...(attempt.childId ? { resumeChildId: attempt.childId } : {}),
-          ...(toolsDisabled ? { toolsDisabled: true } : {}),
-          signal: run.launchAbort.signal,
-          recordChild: (childId, info) => this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
-            const a = this.findAttempt(p, step.id, attemptId);
-            a.childId = childId;
-            // Review item 6: what the card's specialist row shows.
-            if (info?.title) a.childTitle = info.title;
-            a.startedAt = Date.now();
-            a.brief = brief;
-            // The spawn-time manifest entry actually used (design §2).
-            const entry = p.manifest.specialists[step.specialist];
-            a.manifest = { ...p.manifest, specialists: entry ? { [step.specialist]: entry } : {} };
-          }),
-        });
-      } catch (e) {
-        if (this.onJournalError(run, e)) return;
-        if (run.halt) return;
-        const drift = e instanceof PlanLaunchDriftError;
-        const reason = `A specialist in step "${step.id}" couldn't start: ${errorText(e)}`;
-        const again = drift ? undefined : await this.restartAfter(run, step, attemptId, 'launch-failed');
-        if (again === 'retry') continue;
-        if (again !== 'halted') {
-          this.requestHalt(run, {
-            kind: 'pause', why: 'launch-failed', stepId: step.id, attemptId, reason,
-            ...(drift ? { launch: 'drift' as const } : {}),
-            ...(again?.retried ? { retried: true as const } : {}),
-          });
-        }
-        return;
-      }
-      const child: LiveChild = { stepId: step.id, attemptId, handle, finalLeaf };
-      run.live.push(child);
-      wave.push(child);
-      if (run.halt) { handle.abort(); return; }
-
-      const outcome = await handle.outcome;
+      const child = await this.track(run, this.memberStart(run, step, member, briefBase, finalLeaf, wave));
+      if (!child) return;
+      // The one untracked wait: the specialist's own turn. Settle bounds it
+      // with its deadline and disposal.
+      const outcome = await child.handle.outcome;
       child.outcome = outcome;
-      if (outcome.kind === 'completed') {
-        let invalid: HaltRequest | undefined;
-        child.commit = (async () => {
-          try {
-            invalid = await this.commitReport(run, step, attemptId, outcome.report, finalLeaf);
-          } catch (e) {
-            if (!this.onJournalError(run, e)) {
-              this.requestHalt(run, { kind: 'pause', why: 'unexpected-error', stepId: step.id, attemptId, reason: `A specialist's result couldn't be saved: ${errorText(e)}` });
-            }
-          }
-        })();
-        await child.commit;
-        if (!invalid) return;
-        if (run.halt || invalid.kind !== 'pause') { this.requestHalt(run, invalid); return; }
-        const next = await this.reportOnlyRetry(run, step, wave, child, invalid, finalLeaf);
-        if (next === undefined) return;
-        attemptId = next;
-        continue;
-      }
+      const next = await this.track(run, this.memberEnd(run, step, member, child, outcome, finalLeaf, wave));
+      if (next !== 'retry') return;
+    }
+  }
+
+  /** Launch the member's current attempt (retrying a failed start once).
+   *  Resolves to the live child, or undefined when the member is finished. */
+  private async memberStart(
+    run: ActiveRun, step: PlanStepV1, member: MemberState, briefBase: (itemIndex: number) => string,
+    finalLeaf: boolean, wave: LiveChild[],
+  ): Promise<LiveChild | undefined> {
+    for (;;) {
+      const attemptId = member.attemptId;
       try {
-        if (run.halt) return;
-        if (outcome.kind === 'stopped') {
-          this.requestHalt(run, {
-            kind: 'pause', stepId: step.id, attemptId, reason: outcome.stop.detail,
-            // Only running out is fixed by Add budget; a refused or broken
-            // request is not a matter of size.
-            why: outcome.stop.kind === 'exhausted' ? 'budget' : 'budget-refused',
+        if (run.halt) return undefined;
+        const attempt = this.findAttempt(await this.load(run), step.id, attemptId);
+        const { brief, toolsDisabled } = this.launchBrief(run, attempt, briefBase);
+        if (run.halt) return undefined;
+        // Review fix 3: only a retry that really relaunches marks the row.
+        const relaunching = member.recovered;
+        let handle: PlanChildHandle;
+        try {
+          handle = await this.runner.launch({
+            ref: run.ref, planId: run.planId, fence: run.fence, stepId: step.id, attemptId,
+            itemIndex: attempt.itemIndex, iteration: attempt.iteration, specialist: step.specialist, brief,
+            ...(attempt.childId ? { resumeChildId: attempt.childId } : {}),
+            ...(toolsDisabled ? { toolsDisabled: true } : {}),
+            signal: run.launchAbort.signal,
+            recordChild: (childId, info) => this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
+              const a = this.findAttempt(p, step.id, attemptId);
+              a.childId = childId;
+              // Review item 6: what the card's specialist row shows.
+              if (info?.title) a.childTitle = info.title;
+              a.startedAt = Date.now();
+              a.brief = brief;
+              // The spawn-time manifest entry actually used (design §2).
+              const entry = p.manifest.specialists[step.specialist];
+              a.manifest = { ...p.manifest, specialists: entry ? { [step.specialist]: entry } : {} };
+              if (relaunching) markRelaunched(p, { stepId: step.id, iteration: a.iteration, itemIndex: a.itemIndex }, relaunching);
+            }),
           });
-          return;
+        } catch (e) {
+          if (isJournalError(e)) { this.onJournalError(run, e); return undefined; }
+          if (run.halt) return undefined;
+          const drift = e instanceof PlanLaunchDriftError;
+          const refused = e instanceof PlanLaunchRefusedError;
+          const reason = `A specialist in step "${step.id}" couldn't start: ${errorText(e)}`;
+          const again = drift || refused ? undefined : await this.restartAfter(run, step, attemptId, 'launch-failed');
+          if (again === 'retry') { member.recovered = 'launch-failed'; continue; }
+          if (again !== 'halted') {
+            this.requestHalt(run, {
+              kind: 'pause', why: 'launch-failed', stepId: step.id, attemptId, reason,
+              ...(drift ? { launch: 'drift' as const } : refused ? { launch: 'refused' as const } : {}),
+              ...(again?.retried ? { retried: true as const } : {}),
+            });
+          }
+          return undefined;
         }
-        if (outcome.kind === 'interrupted') {
-          this.requestHalt(run, {
-            kind: 'pause', why: 'specialist-stopped', stepId: step.id, attemptId,
-            reason: `A specialist in step "${step.id}" was stopped before it finished.`,
-          });
-          return;
-        }
-        // A specialist error: its session is dropped first, so its transcript
-        // is complete on disk before the routing check reads it.
-        await this.retire(run, wave, child);
-        const reason = `A specialist in step "${step.id}" stopped with an error: ${outcome.detail}`;
-        const again = await this.restartAfter(run, step, attemptId, 'specialist-error');
-        if (again === 'retry') continue;
-        if (again === 'halted') return;
-        if (again.unanswered) {
-          // The error left an outside action with no result: this pause
-          // shows it, so Continue restarts with the check-first turn instead
-          // of pausing a second time for the same thing.
-          const { tool } = again.unanswered;
-          this.requestHalt(run, {
-            kind: 'pause', why: 'unknown-outcome', stepId: step.id, attemptId, tool, toolEffect: 'external', acknowledge: attemptId,
-            ...(again.retried ? { retried: true as const } : {}),
-            reason: `${reason}. Its last action (${tool}) has no recorded result, so it isn't known whether it finished. `
-              + 'Press Continue to let it check and pick up from what it recorded.',
-          });
-          return;
-        }
-        this.requestHalt(run, { kind: 'pause', why: 'specialist-error', stepId: step.id, attemptId, reason, ...(again.retried ? { retried: true as const } : {}) });
-        return;
+        member.recovered = undefined;
+        const child: LiveChild = { stepId: step.id, attemptId, handle, finalLeaf };
+        run.live.push(child);
+        wave.push(child);
+        if (run.halt) { handle.abort(); return undefined; }
+        return child;
       } catch (e) {
-        // WHY: an unexpected throw here must still end the wave (a pause
-        // with the real message), or the plan would wait forever.
-        if (this.onJournalError(run, e)) return;
-        this.requestHalt(run, { kind: 'pause', why: 'unexpected-error', stepId: step.id, attemptId, reason: `The plan stopped because of an unexpected problem: ${errorText(e)}` });
-        return;
+        this.memberFailed(run, step.id, attemptId, e);
+        return undefined;
       }
+    }
+  }
+
+  /** A member's own work threw (a journal write while retrying, say): pause on
+   *  that specialist with the real message, never an escaped rejection. */
+  private memberFailed(run: ActiveRun, stepId: string, attemptId: string, e: unknown): void {
+    if (isJournalError(e)) { this.onJournalError(run, e); return; }
+    this.requestHalt(run, { kind: 'pause', why: 'unexpected-error', stepId, attemptId, reason: `The plan stopped because of an unexpected problem: ${errorText(e)}` });
+  }
+
+  /** Journal what the member's turn produced and decide: done, or retry. */
+  private async memberEnd(
+    run: ActiveRun, step: PlanStepV1, member: MemberState, child: LiveChild, outcome: PlanChildOutcome,
+    finalLeaf: boolean, wave: LiveChild[],
+  ): Promise<'retry' | 'done'> {
+    const { attemptId } = child;
+    if (outcome.kind === 'completed') {
+      let invalid: HaltRequest | undefined;
+      // Set synchronously: settle commits a finished report itself only when
+      // no commit is under way.
+      child.commit = (async () => {
+        try {
+          invalid = await this.commitReport(run, step, attemptId, outcome.report, finalLeaf);
+        } catch (e) {
+          if (!isJournalError(e)) {
+            this.requestHalt(run, { kind: 'pause', why: 'unexpected-error', stepId: step.id, attemptId, reason: `A specialist's result couldn't be saved: ${errorText(e)}` });
+          } else this.onJournalError(run, e);
+        }
+      })();
+      await child.commit;
+      if (!invalid) return 'done';
+      if (run.halt || invalid.kind !== 'pause') { this.requestHalt(run, invalid); return 'done'; }
+      try {
+        const next = await this.reportOnlyRetry(run, step, wave, child, invalid, finalLeaf);
+        if (next === undefined) return 'done';
+        member.attemptId = next;
+        member.recovered = 'invalid-report';
+        return 'retry';
+      } catch (e) {
+        this.memberFailed(run, step.id, attemptId, e);
+        return 'done';
+      }
+    }
+    try {
+      if (run.halt) return 'done';
+      if (outcome.kind === 'stopped') {
+        this.requestHalt(run, {
+          kind: 'pause', stepId: step.id, attemptId, reason: outcome.stop.detail,
+          // Only running out is fixed by Add budget; a refused or broken
+          // request is not a matter of size.
+          why: outcome.stop.kind === 'exhausted' ? 'budget' : 'budget-refused',
+        });
+        return 'done';
+      }
+      if (outcome.kind === 'interrupted') {
+        this.requestHalt(run, {
+          kind: 'pause', why: 'specialist-stopped', stepId: step.id, attemptId,
+          reason: `A specialist in step "${step.id}" was stopped before it finished.`,
+        });
+        return 'done';
+      }
+      // A specialist error: its session is dropped first, so its transcript
+      // is complete on disk before the routing check reads it.
+      await this.retire(run, wave, child);
+      const reason = `A specialist in step "${step.id}" stopped with an error: ${outcome.detail}`;
+      const again = await this.restartAfter(run, step, attemptId, 'specialist-error');
+      if (again === 'retry') { member.recovered = 'specialist-error'; return 'retry'; }
+      if (again === 'halted') return 'done';
+      if (again.unanswered) {
+        // The error left an outside action with no result: this pause
+        // shows it, so Continue restarts with the check-first turn instead
+        // of pausing a second time for the same thing.
+        const { tool } = again.unanswered;
+        this.requestHalt(run, {
+          kind: 'pause', why: 'unknown-outcome', stepId: step.id, attemptId, tool, toolEffect: 'external', acknowledge: attemptId,
+          ...(again.retried ? { retried: true as const } : {}),
+          reason: `${reason}. Its last action (${tool}) has no recorded result, so it isn't known whether it finished. `
+            + 'Press Continue to let it check and pick up from what it recorded.',
+        });
+        return 'done';
+      }
+      this.requestHalt(run, { kind: 'pause', why: 'specialist-error', stepId: step.id, attemptId, reason, ...(again.retried ? { retried: true as const } : {}) });
+      return 'done';
+    } catch (e) {
+      // WHY: an unexpected throw here must still end the wave (a pause
+      // with the real message), or the plan would wait forever.
+      this.memberFailed(run, step.id, attemptId, e);
+      return 'done';
     }
   }
 
@@ -966,6 +1066,9 @@ export class PlanExecutor implements PlanExecutorHooks {
       : { kind: 'resumable', briefDelivered: false };
     const unanswered = verdict.kind === 'dangling-effect' && verdict.effect === 'external' ? { tool: verdict.tool } : undefined;
     const key = { stepId: step.id, iteration: before.iteration, itemIndex: before.itemIndex };
+    // Review fix 1: once the plan is halting, no retry is started (and none
+    // is recorded); the settle gives back whatever this attempt holds.
+    if (run.halt) return 'halted';
     const decided = await this.journal.mutateFenced(run.ref, run.planId, run.fence, (plan) => {
       const ctx: PlanPauseContext = { unansweredExternal: !!unanswered, alreadyRecovered: hasRecovery(plan, key, cause) };
       if (routePlanPause(cause, ctx).route !== 'auto') return { auto: false as const, retried: ctx.alreadyRecovered === true };
@@ -985,7 +1088,9 @@ export class PlanExecutor implements PlanExecutorHooks {
       this.requestHalt(run, this.reservePause(rec, step.id, members, reserved));
       return 'halted';
     }
-    return 'retry';
+    // Halted while reserving: nothing is relaunched; settle (which waits for
+    // this) releases the hold just taken.
+    return run.halt ? 'halted' : 'retry';
   }
 
   /**
@@ -1004,7 +1109,15 @@ export class PlanExecutor implements PlanExecutorHooks {
       ? this.runner.inspectTranscript(run.ref, failed.childId)
       : { kind: 'resumable', briefDelivered: false };
     const key = { stepId: step.id, iteration: failed.iteration, itemIndex: failed.itemIndex };
-    const fundable = !!failed.childId && failed.baseTokens + failed.addedTokens - failed.spentTokens >= PLAN_REPORT_ONLY_REPLY_TOKENS;
+    const message = planReportOnlyBrief({ finalLeaf, problem: invalid.reason });
+    // Review fix 2: the turn re-sends the whole transcript, so the unspent
+    // share must cover that measured input AND the 2,000-token reply. An
+    // unmeasurable request is not attempted.
+    const plan = await this.load(run);
+    const inputBound = failed.childId ? await this.runner.reportOnlyInputBound?.(run.ref, plan, failed.attemptId, message) : undefined;
+    const unspent = failed.baseTokens + failed.addedTokens - failed.spentTokens;
+    const fundable = inputBound !== undefined && unspent >= inputBound + PLAN_REPORT_ONLY_REPLY_TOKENS;
+    if (run.halt) { this.requestHalt(run, invalid); return undefined; }
     const decided = await this.journal.mutateFenced(run.ref, run.planId, run.fence, (plan) => {
       const ctx: PlanPauseContext = {
         reportOnlyFundable: fundable,
@@ -1021,7 +1134,7 @@ export class PlanExecutor implements PlanExecutorHooks {
     }
     const members: ReserveMember[] = [{
       stepId: step.id, reportOnlyOf: child.attemptId,
-      brief: planReportOnlyBrief({ finalLeaf, problem: invalid.reason }),
+      brief: message,
     }];
     const reserved = await this.budget.reserveAttempts(run.ref, run.planId, run.fence, members);
     if (!reserved.ok) {
@@ -1029,7 +1142,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       this.requestHalt(run, this.reservePause(rec, step.id, members, reserved));
       return undefined;
     }
-    return reserved.attempts[0].attemptId;
+    return run.halt ? undefined : reserved.attempts[0].attemptId;
   }
 
   /**
@@ -1136,6 +1249,11 @@ export class PlanExecutor implements PlanExecutorHooks {
 
   private async settle(run: ActiveRun): Promise<void> {
     const halt = run.halt ?? { kind: 'lost' as const };
+    // 0. Review fix 1: members still launching, re-reserving or journalling
+    //    finish first (they stop at once now that the plan is halted), so
+    //    every specialist they started is in `run.live` and every hold they
+    //    took is released below.
+    while (run.busy.size > 0) await Promise.all([...run.busy]);
     // 1. Everything still running was already asked to stop (requestHalt, or
     //    runWave for a launch that landed after the halt) and gets until the
     //    deadline to finish on its own.

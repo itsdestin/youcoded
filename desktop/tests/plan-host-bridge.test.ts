@@ -11,6 +11,7 @@ import { DelegatedModels } from '../src/main/harness/specialists/delegated-model
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
 import { disableAdapterForPlans, resetDisabledAdaptersForTests } from '../src/main/harness/plans/budget-adapter';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
+import { PlanLaunchDriftError, PlanLaunchRefusedError } from '../src/main/harness/plans/plan-executor';
 import type { PlanRecord } from '../src/main/harness/plans/types';
 import type { TranscriptEvent } from '../src/shared/types';
 
@@ -164,5 +165,69 @@ describe('launch refusal', () => {
     resetDisabledAdaptersForTests();
     expect(await bridge.launchRefusal(soft({ disabledAdapters: [{ adapterId: 'generic:openrouter', detail: 'in this plan' }] }), 'reviewer'))
       .toMatch(/in this plan/);
+  });
+});
+
+describe('review fix 6: starts that can never succeed are refusals', () => {
+  const launchInput = (over: Record<string, unknown> = {}) => ({
+    ref: { cwd: '/proj', sessionId: SID }, planId: 'p1', fence: 'f', stepId: 's1', attemptId: 'a1',
+    itemIndex: 0, iteration: 0, specialist: 'reviewer', brief: 'b', signal: new AbortController().signal,
+    recordChild: async () => {}, ...over,
+  });
+  const seedPlan = async (bridge: any, rec: PlanRecord) => {
+    await bridge.journal.mutate({ cwd: '/proj', sessionId: SID }, (file: any) => { file.plans.push(rec); });
+  };
+  const withReviewer = (binding = { providerId: 'openrouter', modelId: 'm' }) => soft({
+    manifest: { ...soft().manifest, specialists: { reviewer: {
+      definitionFingerprint: definitionFingerprint(resolveSpecialist('reviewer')!), binding, pricing: null, setupTokens: 1000,
+    } } },
+  });
+
+  it('no approved settings for the specialist → PlanLaunchRefusedError', async () => {
+    const bridge = new PlanHostBridge(port()) as any;
+    await seedPlan(bridge, withReviewer());
+    await expect(bridge.launch(launchInput({ specialist: 'writer' }))).rejects.toBeInstanceOf(PlanLaunchRefusedError);
+  });
+
+  it('a route with no budget adapter → PlanLaunchRefusedError', async () => {
+    routeType = 'no-such-provider' as any;
+    const bridge = new PlanHostBridge(port()) as any;
+    await seedPlan(bridge, withReviewer());
+    await expect(bridge.launch(launchInput())).rejects.toBeInstanceOf(PlanLaunchRefusedError);
+  });
+
+  it('a changed definition stays a drift, not a refusal', async () => {
+    const bridge = new PlanHostBridge(port()) as any;
+    await seedPlan(bridge, soft());
+    const err = await bridge.launch(launchInput()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PlanLaunchDriftError);
+    expect(err).not.toBeInstanceOf(PlanLaunchRefusedError);
+  });
+});
+
+describe('review fix 2: the report-only request is measured on the specialist\'s own session', () => {
+  it('measures `message` as the next turn of that session, and reads its newest user message', async () => {
+    const probes: Array<{ historyFromChildId?: string; text?: string }> = [];
+    const p = port();
+    p.probeSession = (input) => {
+      const rec: { historyFromChildId?: string; text?: string } = { historyFromChildId: input.historyFromChildId };
+      probes.push(rec);
+      return {
+        session: { planNextRequestBound: async (_a: unknown, text: string) => { rec.text = text; return { ok: true, tokens: 4321 }; } } as any,
+        dispose: () => {},
+      };
+    };
+    const bridge = new PlanHostBridge(p) as any;
+    const runner = bridge.runner();
+    const plan = soft({ manifest: { ...soft().manifest, specialists: { reviewer: { ...soft().manifest.specialists.reviewer, binding: { providerId: 'openrouter', modelId: 'm' }, approximateLimit: undefined } } } });
+    expect(await runner.reportOnlyInputBound({ cwd: '/proj', sessionId: SID }, plan, 'a1', 'REPORT NOW')).toBe(4321);
+    expect(probes).toEqual([{ historyFromChildId: 'kid', text: 'REPORT NOW' }]);
+    // Nothing to measure without a specialist session → not fundable.
+    plan.steps[0].attempts[0].childId = undefined;
+    expect(await runner.reportOnlyInputBound({ cwd: '/proj', sessionId: SID }, plan, 'a1', 'REPORT NOW')).toBeUndefined();
+    childEvents = [ev('user-message', { text: 'brief' }), ev('assistant-text', { text: 'x' }), ev('user-message', { text: 'REPORT NOW' }), ev('assistant-text', { text: 'y' })];
+    expect(runner.latestUserText({ cwd: '/proj', sessionId: SID }, 'kid')).toBe('REPORT NOW');
+    childEvents = [];
+    expect(runner.latestUserText({ cwd: '/proj', sessionId: SID }, 'kid')).toBeUndefined();
   });
 });

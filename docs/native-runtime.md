@@ -1161,12 +1161,23 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     BEFORE the relaunch, so a crash never yields a second one. The retry reserves normally
     (unfundable → budget pause), and an unanswered `external` call always goes to the
     assistant.
+  - Settle first drains every member's in-flight work (launching, re-reserving, journalling —
+    `ActiveRun.busy`), so a pause is never written while a sibling's retry still holds budget
+    or is starting a specialist.
+  - A user's own Continue marks the recoveries of the work it resumes `reset` in the lease
+    write (`resetRecoveriesForContinue`): the next hiccup gets its one automatic retry again.
+  - Starts that can never succeed (no approved settings, no usable budget route:
+    `PlanLaunchRefusedError`) and drift (`PlanLaunchDriftError`) are never retried.
   - An invalid report gets one **report-only turn**: a new attempt (`reportOnly`) on the same
     specialist session, one dedicated message, tools off (`toolChoice: 'none'`; a call made
     anyway never runs), reply capped at `PLAN_REPORT_ONLY_REPLY_TOKENS` (2,000). Its allowance
-    is the failed attempt's unspent share; less than 2,000 → assistant.
+    is the failed attempt's unspent share, which must cover the MEASURED input of that request
+    (the transcript is re-sent) plus 2,000; less, or unmeasurable → assistant. A Continue after
+    the message was delivered sends `PLAN_REPORT_ONLY_RESEND`, never the message again.
   - Saved pauses carry `launch` / `retried` / `toolEffect` for `pausedRouting`; the card's
-    specialist row shows "Retried after an error" (`PlanChildView.retried`), one row per session.
+    specialist row shows "Retried after an error" (`PlanChildView.retried`) only for an error
+    retry (start error, specialist error, invalid report) that really relaunched
+    (`recoveries[].relaunched`, set in that launch's write); one row per session.
 - **Comment** stops the proposal and stores a `pendingRevision` token keyed by a host turn id,
   then queues the follow-up turn. Only a proposal made in THAT turn is linked as the revision;
   the model cannot claim one.

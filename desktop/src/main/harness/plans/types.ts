@@ -203,6 +203,14 @@ const PlanRecordSchema = z.object({
     itemIndex: nonNegativeInt,
     cause: z.enum(PLAN_RECOVERY_CAUSES),
     at: z.number(),
+    /** Review fix 3: set in the launch write of the retry itself, so the card
+     *  says "Retried after an error" only for a retry that really ran. */
+    relaunched: z.literal(true).optional(),
+    /** Review fix 4 (controller decision): the user's own Continue resumed
+     *  this unfinished work, so this recovery no longer counts — the next
+     *  hiccup gets its one automatic retry again. Kept (not deleted) so the
+     *  card can still say the specialist was retried. */
+    reset: z.literal(true).optional(),
   }).strict()).optional(),
   /** Task 3: every Add budget, in order. A tranche without attemptId is
    *  waiting for the step's next attempt and is applied when it is reserved. */

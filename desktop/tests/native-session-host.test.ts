@@ -5691,7 +5691,16 @@ describe('specialists plans in the native host (Task 4)', () => {
       }
       return { chunks: [...textChunks('r', prompt.includes('Combine') ? 'COMBINED' : `REPORT for ${prompt.includes('a.ts') ? 'a' : 'b'}`), finishChunk('stop', 10, 5)] };
     };
-    const planId = await proposeOne();
+    // Review fix 2: the report-only turn must be fundable from what the first
+    // try left — its measured request (setup + transcript) plus 2,000 — so
+    // this plan's first step has room for that.
+    const BIG = { ...DOC, steps: [{ ...DOC.steps[0], budget_tokens: 8000 }, DOC.steps[1]] };
+    await host.create({ sessionId: SID, cwd: root, binding: PARENT });
+    parentSteps = [proposeStep('call-plan', BIG), textStep('Here is the plan.')];
+    host.send(SID, 'Plan the review');
+    await waitFor(() => planStatus().includes('proposed'), 'the proposal');
+    await waitFor(() => host.isIdle(SID), 'the proposing turn to end');
+    const planId = journalFile().plans[0].planId;
     await host.approvePlan(SID, planId);
     await waitFor(() => planStatus()[0] === 'completed', 'completion');
     const reportOnly = childCalls.filter((c) => c.prompt.includes('switched off'));
@@ -5714,6 +5723,20 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(row.children).toHaveLength(2);
     expect(row.children!.find((c) => c.childId === failed.childId)).toMatchObject({ retried: true, status: 'completed' });
     expect(planEvents.some((e) => e.plan.status === 'paused')).toBe(false);
+    expect(liveChildren()).toHaveLength(0);
+  });
+
+  it('review fix 2: with only the step\'s 2,000 tokens, the report-only turn cannot be funded and the pause goes to the assistant', async () => {
+    childReply = (prompt) => (prompt.includes('Review a.ts')
+      ? { chunks: [finishChunk('stop', 10, 5)] }
+      : { chunks: [...textChunks('r', 'REPORT'), finishChunk('stop', 10, 5)] });
+    const planId = await proposeOne();
+    await host.approvePlan(SID, planId);
+    await waitFor(() => planStatus()[0] === 'paused', 'the pause');
+    expect(childCalls.some((c) => c.prompt.includes('switched off'))).toBe(false);
+    const rec = journalFile().plans[0];
+    expect(rec.paused).toMatchObject({ kind: 'invalid-report', stepId: 's1' });
+    expect(rec.recoveries).toBeUndefined();
     expect(liveChildren()).toHaveLength(0);
   });
 

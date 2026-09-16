@@ -13,6 +13,7 @@
 // disagree about a pause.
 import type { PlanPauseKind } from '../../../shared/types';
 import type { ToolEffect } from '../tools/types';
+import type { PlanRecord } from './types';
 
 export type PlanPauseRoute = 'auto' | 'assistant' | 'user';
 /** What the card may offer / the assistant may recommend (§2 table). */
@@ -116,4 +117,23 @@ export function pausedRouting(paused: RecordedPauseFacts): PlanPauseRouting {
     ...(paused.toolEffect ? { toolEffect: paused.toolEffect } : {}),
   });
   return routed.route === 'auto' ? toAssistant(CONTINUE_OR_STOP) : routed;
+}
+
+/**
+ * Review fix 4 (controller decision, decision 13's intent): the person's own
+ * Continue gives every piece of work it resumes its one automatic retry back.
+ * Applied inside the same journal write that takes the lease. "Resumed" = an
+ * item whose newest attempt has not finished with a report; a finished item's
+ * record is left alone. Entries are marked, not deleted, so the card can still
+ * say a specialist was retried.
+ */
+export function resetRecoveriesForContinue(plan: PlanRecord): void {
+  for (const r of plan.recoveries ?? []) {
+    if (r.reset) continue;
+    const attempts = plan.steps.find((s) => s.id === r.stepId)?.attempts
+      .filter((a) => a.itemIndex === r.itemIndex && a.iteration === r.iteration) ?? [];
+    const latest = attempts[attempts.length - 1];
+    const finished = latest !== undefined && (latest.phase === 'committed' || latest.completedAt !== undefined) && latest.terminal === 'completed';
+    if (!finished) r.reset = true;
+  }
 }

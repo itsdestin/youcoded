@@ -6,13 +6,11 @@
 // to declare one must fail here rather than silently count as anything.
 import { describe, it, expect } from 'vitest';
 import { CORE_TOOLS, nativeToolEffect } from '../src/main/harness/tools';
-import { createSkillTool } from '../src/main/harness/tools/skill';
-import { createTaskTool } from '../src/main/harness/tools/task';
-import { ModelSearchTool } from '../src/main/harness/tools/model-search';
-import { createProposePlanTool } from '../src/main/harness/tools/propose-plan';
-import { BUILTIN_ROSTER } from '../src/main/harness/specialists/registry';
+import { HarnessSession } from '../src/main/harness/harness-session';
+import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
 import { mcpToolsFor } from '../src/main/harness/mcp/mcp-tools';
 import type { NativeTool } from '../src/main/harness/tools/types';
+import { makeOpts } from './helpers/harness-fakes';
 
 const fakeServer = (names: string[]) => ({
   id: 'srv', label: 'Server',
@@ -20,13 +18,26 @@ const fakeServer = (names: string[]) => ({
   call: async () => ({ text: '', isError: false }),
 }) as any;
 
-const everyNativeTool = (): NativeTool[] => [
-  ...CORE_TOOLS,
-  ModelSearchTool,
-  createSkillTool({ list: () => [{ id: 'x', description: 'd' }], load: () => { throw new Error('unused'); } }),
-  createTaskTool(),
-  createProposePlanTool(BUILTIN_ROSTER),
-];
+/**
+ * Review fix 5: the tools a REAL root session ends up holding — the host's
+ * CORE_TOOLS (native-session-host.ts passes exactly that list) plus every
+ * conditional tool the session attaches itself (Skill, Task, ModelSearch,
+ * propose_plan, MCP) — read from the session's own tool map after it syncs.
+ * WHY not a hand-written list: a tool added to the session later would escape
+ * a list; it cannot escape the map the model is actually offered.
+ */
+const everyNativeTool = (): NativeTool[] => {
+  const session = new HarnessSession(makeOpts({
+    tools: CORE_TOOLS,
+    providerType: 'openrouter',
+    profile: { ...CLOUD_DEFAULT, exposeSkillCatalog: true, canDelegate: true, supportsTools: true, mcpToolBudgetTokens: 1_000_000 },
+    skillCatalog: { list: () => [{ id: 'x', description: 'd' }], load: () => { throw new Error('unused'); } },
+    mcpServers: [fakeServer(['search', 'read_file'])],
+    decide: async () => ({ action: 'allow', denyListed: false }),
+  }), async () => { throw new Error('no model needed'); });
+  (session as any).buildAiTools();
+  return [...((session as any).toolByName as Map<string, NativeTool>).values()];
+};
 
 /** The design's table (§1), verbatim. Task and propose_plan are not in it;
  *  Task may start a specialist that runs commands (external), propose_plan
@@ -36,9 +47,16 @@ const EXPECTED: Record<string, 'read' | 'local' | 'external'> = {
   Write: 'local', Edit: 'local', TodoWrite: 'local', KillShell: 'local', propose_plan: 'local',
   Bash: 'external', WebFetch: 'external', AskUserQuestion: 'external', SendUserFile: 'external', SendUserLink: 'external',
   Task: 'external',
+  mcp__srv__search: 'external', mcp__srv__read_file: 'external',
 };
 
 describe('tool effects (pause handoff §1)', () => {
+  it('the session really attached every conditional tool (so the checks below cover them)', () => {
+    const names = everyNativeTool().map((t) => t.name);
+    for (const n of ['Skill', 'Task', 'ModelSearch', 'propose_plan', 'mcp__srv__search']) expect(names).toContain(n);
+    for (const t of CORE_TOOLS) expect(names).toContain(t.name);
+  });
+
   it('every native tool declares an effect', () => {
     const missing = everyNativeTool().filter((t) => !['read', 'local', 'external'].includes(t.effect as string)).map((t) => t.name);
     expect(missing, `tools with no effect: ${missing.join(', ')}`).toEqual([]);

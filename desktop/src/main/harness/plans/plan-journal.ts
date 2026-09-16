@@ -191,6 +191,8 @@ function stepTitle(task: string): string {
 /** One plan specialist as the card's row shows it. A finished attempt says how
  *  it ended; an unfinished one is `running` only while this plan is actually
  *  being advanced (it holds a lease), otherwise `interrupted`. */
+const RETRIED_AFTER_ERROR: ReadonlySet<string> = new Set(['launch-failed', 'specialist-error', 'invalid-report']);
+
 function childView(plan: PlanRecord, step: PlanStepV1, stepStatus: string, a: PlanAttemptRecord): PlanChildView {
   const binding = plan.manifest.specialists[step.specialist]?.binding;
   const done = isCommitted(a);
@@ -211,7 +213,10 @@ function childView(plan: PlanRecord, step: PlanStepV1, stepStatus: string, a: Pl
     phase: a.phase,
   };
   // Task 9a: the plan restarted this specialist by itself after an error.
-  if ((plan.recoveries ?? []).some((r) => r.stepId === step.id && r.iteration === a.iteration && r.itemIndex === a.itemIndex)) {
+  // Review fix 3: only an ERROR retry (start error, specialist error, invalid
+  // report) that actually relaunched — a restart after Continue is not one.
+  if ((plan.recoveries ?? []).some((r) => r.stepId === step.id && r.iteration === a.iteration && r.itemIndex === a.itemIndex
+    && r.relaunched && RETRIED_AFTER_ERROR.has(r.cause))) {
     view.retried = true;
   }
   if (a.completedAt !== undefined) view.endedAt = a.completedAt;

@@ -14,6 +14,7 @@ import type { PlanView } from '../../../shared/types';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
 import { planCeilingTokens, planCeilingUsd } from './plan-budget';
+import { resetRecoveriesForContinue } from './pause-routing';
 import type {
   ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanRecord, PlanRef,
   PlanSettingsWriteResult, PlanUnsupported,
@@ -315,7 +316,9 @@ export class PlanService {
         throw new PlanActionRefused(`Plan budgets are switched off for this model after a request went over its limit: ${disabled.detail}`);
       }
       await this.assertNoDrift(ref, plan);
-      return { ok: true, plan: await this.startRun(ref, planId, ['paused', 'interrupted'], () => {}) };
+      // Review fix 4: the user's Continue resets the automatic-retry allowance
+      // of the work it resumes, in the same write that takes the lease.
+      return { ok: true, plan: await this.startRun(ref, planId, ['paused', 'interrupted'], (p) => resetRecoveriesForContinue(p)) };
     });
   }
 
