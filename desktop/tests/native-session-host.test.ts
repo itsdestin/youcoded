@@ -5533,7 +5533,7 @@ describe('specialists plans in the native host (Task 4)', () => {
   // 5b follow-up: what the parent model was actually sent, per request.
   let parentPrompts: string[] = [];
   let childReply: (prompt: string, call: number) => Reply;
-  let childCalls: Array<{ prompt: string; maxOutputTokens: unknown; maxRetries?: unknown }>;
+  let childCalls: Array<{ prompt: string; maxOutputTokens: unknown; maxRetries?: unknown; toolChoice?: unknown }>;
   let events: any[];
   let planEvents: any[];
 
@@ -5545,7 +5545,7 @@ describe('specialists plans in the native host (Task 4)', () => {
       return new MockLanguageModelV4({
         doStream: async (options: any) => {
           const prompt = JSON.stringify(options.prompt);
-          childCalls.push({ prompt, maxOutputTokens: options.maxOutputTokens });
+          childCalls.push({ prompt, maxOutputTokens: options.maxOutputTokens, toolChoice: options.toolChoice });
           const reply = childReply(prompt, childCalls.length);
           if (reply === 'hang') {
             return {
@@ -5680,6 +5680,41 @@ describe('specialists plans in the native host (Task 4)', () => {
     for (let i = 0; i < SPECIALIST_SPAWN_BUDGET_PER_SESSION; i++) expect(host.trySpendSpecialistSpawnBudget(SID)).toBe(true);
     const done = planEvents.filter((e) => e.plan.planId === planId).map((e) => e.plan.status);
     expect(done[done.length - 1]).toBe('completed');
+  });
+
+  it('Task 9a: an empty report is asked for again on the same specialist, tools off, and the plan completes', async () => {
+    let emptyOnce = true;
+    childReply = (prompt) => {
+      if (prompt.includes('Review a.ts') && !prompt.includes('switched off') && emptyOnce) {
+        emptyOnce = false;
+        return { chunks: [finishChunk('stop', 10, 5)] };
+      }
+      return { chunks: [...textChunks('r', prompt.includes('Combine') ? 'COMBINED' : `REPORT for ${prompt.includes('a.ts') ? 'a' : 'b'}`), finishChunk('stop', 10, 5)] };
+    };
+    const planId = await proposeOne();
+    await host.approvePlan(SID, planId);
+    await waitFor(() => planStatus()[0] === 'completed', 'completion');
+    const reportOnly = childCalls.filter((c) => c.prompt.includes('switched off'));
+    expect(reportOnly).toHaveLength(1);
+    // The same specialist session: its original brief is in the request.
+    expect(reportOnly[0].prompt).toContain('Review a.ts');
+    expect(reportOnly[0].toolChoice).toEqual({ type: 'none' });
+    expect(reportOnly[0].maxOutputTokens).toBeLessThanOrEqual(2000);
+    for (const c of childCalls.filter((x) => !x.prompt.includes('switched off'))) expect(c.toolChoice).not.toEqual({ type: 'none' });
+    const rec = journalFile().plans[0];
+    const s1 = rec.steps.find((s: any) => s.id === 's1');
+    const retry = s1.attempts.find((a: any) => a.reportOnly);
+    const failed = s1.attempts.find((a: any) => a.terminal === 'failed');
+    expect(retry).toMatchObject({ terminal: 'completed', reportText: 'REPORT for a', childId: failed.childId });
+    expect(rec.recoveries).toEqual([expect.objectContaining({ stepId: 's1', cause: 'invalid-report' })]);
+    const combine = childCalls.find((c) => c.prompt.includes('Combine the reviews'))!;
+    expect(combine.prompt).toContain('REPORT for a');
+    // One row per specialist, and the retried one says so.
+    const row = (await host.planViewsFor(SID))[0].steps.find((st) => st.id === 's1')!;
+    expect(row.children).toHaveLength(2);
+    expect(row.children!.find((c) => c.childId === failed.childId)).toMatchObject({ retried: true, status: 'completed' });
+    expect(planEvents.some((e) => e.plan.status === 'paused')).toBe(false);
+    expect(liveChildren()).toHaveLength(0);
   });
 
   // Task 5a: an ORDINARY specialist's card gets its past activity back after a

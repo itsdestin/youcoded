@@ -813,6 +813,12 @@ export class HarnessSession extends EventEmitter {
   /** 1-based running count of tool calls dispatched — lets Read say "N calls ago". */
   private toolCallCount = 0;
   private bashOutputReadsThisTurn = 0;   // G-1 per-turn cap, reset in beginTurn
+  /** Plans Task 9a: this turn may call no tool (a plan specialist's report-only
+   *  turn). Set per turn in beginTurn. The tool schemas are still sent — the
+   *  history holds tool calls, and the request stays exactly what the plan
+   *  budget measured — but `toolChoice: 'none'` forbids a call, and a call a
+   *  model makes anyway is never run. */
+  private toolsOffThisTurn = false;
   private todos: ToolContext['todos'] = [];
   /** Scoped-persistence shell cwd (ROADMAP 2026-07-17): where the next Bash call
    *  starts. null → the session root. Session runtime like readRegistry/todos —
@@ -2180,12 +2186,12 @@ export class HarnessSession extends EventEmitter {
    *  must stay byte-identical to what the composer built. The paths therefore
    *  remain in the text AND the pixels are attached — the model gets both, and
    *  the bubble still resolves. */
-  async send(text: string, attachments: string[] = [], opts?: { historyNote?: string }): Promise<void> {
+  async send(text: string, attachments: string[] = [], opts?: { historyNote?: string; toolsDisabled?: boolean }): Promise<void> {
     // Attachments ride the persisted event (paths only — events carry no binary)
     // so rebuildHistory can restore the pixels on resume. Emitted only when
     // present to keep the no-attachment event byte-identical to before (#290
     // follow-up fix 2).
-    return this.beginTurn(text, () => this.emitEvent('user-message', attachments.length ? { text, attachments } : { text }), attachments, opts?.historyNote);
+    return this.beginTurn(text, () => this.emitEvent('user-message', attachments.length ? { text, attachments } : { text }), attachments, opts?.historyNote, opts?.toolsDisabled === true);
   }
 
   /** Task 4 (native specialists, background execution) — inject a background
@@ -2334,7 +2340,7 @@ export class HarnessSession extends EventEmitter {
    *  like a steer — no transcript event, so the emit surface stays frozen and
    *  the chat shows only what the user wrote. Like a steer it is not rebuilt
    *  on resume; it only has to steer the turn it rides. */
-  private async beginTurn(text: string, emit: () => string, attachments: string[] = [], historyNote?: string): Promise<void> {
+  private async beginTurn(text: string, emit: () => string, attachments: string[] = [], historyNote?: string, toolsDisabled = false): Promise<void> {
     // Re-entrancy guard: a non-null abort means a turn is already streaming.
     // Throw loudly rather than corrupt the single-slot turn state (see the
     // class-level CONCURRENCY PRECONDITION note).
@@ -2343,6 +2349,7 @@ export class HarnessSession extends EventEmitter {
     }
     this.interrupted = false;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
+    this.toolsOffThisTurn = toolsDisabled;   // plans Task 9a: per turn, never sticky
     // The uuid of the user-message / skill-invoked event this turn entered on —
     // recorded at the history push below, which is the mutation it accounts for.
     const enteringEventUuid = emit();
@@ -2603,6 +2610,21 @@ export class HarnessSession extends EventEmitter {
           this.withdrawOrphanedPreparing(step.pendingPreparing);
           this.notifyPlanStop(planGate, { kind: 'exhausted', detail: planLimitReached });
           stopReason = PLAN_BUDGET_EXHAUSTED_STOP_REASON;
+          break turnLoop;
+        }
+
+        if (this.toolsOffThisTurn && step.toolCalls.length > 0) {
+          // Plans Task 9a: tools are off for this turn and the model called one
+          // anyway. Same handling as the soft-limit stop above: only its text
+          // enters history, and nothing it asked for runs.
+          if (step.text && step.text.trim().length > 0) {
+            this.history.push({ role: 'assistant', content: step.text });
+            this.capture.acceptAttemptText(step.attempt);
+          } else {
+            this.capture.abandonAttempt(step.attempt);
+          }
+          partialAssistantText = '';
+          this.withdrawOrphanedPreparing(step.pendingPreparing);
           break turnLoop;
         }
 
@@ -3268,6 +3290,8 @@ export class HarnessSession extends EventEmitter {
       // WHY 0 for plans: the SDK's own retries (2 by default) would be extra
       // transmissions the plan never reserved. Ordinary sessions keep the default.
       ...(plan ? { maxRetries: 0 } : {}),
+      // Plans Task 9a: a report-only turn may not call tools.
+      ...(this.toolsOffThisTurn ? { toolChoice: 'none' as const } : {}),
       // No providerOptions here, deliberately, and plans must keep it that way:
       // a thinking/reasoning budget (Anthropic adds it ON TOP of max_tokens)
       // would let a reply spend past its reservation. Pinned by

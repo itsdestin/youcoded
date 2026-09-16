@@ -451,3 +451,42 @@ describe('plan measurements the host needs (Task 4)', () => {
     expect(predicted).toEqual({ ok: true, tokens: actual });
   });
 });
+
+describe('the report-only turn (Task 9a)', () => {
+  it('is sent with the tools still described but tool calls forbidden, and a call made anyway never runs', async () => {
+    const gate = fakeGate();
+    const read = fakeTool('Read');
+    const { model, calls } = recordingModel(gate, [
+      completing(...textChunks('a', 'my report'), toolCallChunk('c1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls')),
+      completing(...textChunks('b', 'never'), finishChunk('stop')),
+    ]);
+    const { session, events } = planSession(gate, model, { tools: [read] });
+    await session.send('Send your report now.', [], { toolsDisabled: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options.toolChoice).toEqual({ type: 'none' });
+    // Same request the budget measured: the tool list is still in it.
+    expect(gate.bounds[0].tools.map((t) => t.name)).toContain('Read');
+    expect((read as any).calls).toHaveLength(0);
+    expect(events.some((e) => e.type === 'tool-use')).toBe(false);
+    expect(events.find((e) => e.type === 'turn-complete')?.data.stopReason).toBe('end_turn');
+    const history = (session as any).history as ModelMessage[];
+    expect(JSON.stringify(history)).not.toContain('tool-call');
+    expect(history.at(-1)).toEqual({ role: 'assistant', content: 'my report' });
+  });
+
+  it('is scoped to that one turn: the next turn may call tools again', async () => {
+    const gate = fakeGate();
+    const read = fakeTool('Read');
+    const { model, calls } = recordingModel(gate, [
+      completing(...textChunks('a', 'report'), finishChunk('stop')),
+      completing(toolCallChunk('c2', 'Read', { file_path: 'b.ts' }), finishChunk('tool-calls')),
+      completing(...textChunks('c', 'done'), finishChunk('stop')),
+    ]);
+    const { session } = planSession(gate, model, { tools: [read] });
+    await session.send('report', [], { toolsDisabled: true });
+    await session.send('carry on');
+    expect(calls[0].options.toolChoice).toEqual({ type: 'none' });
+    expect(calls[1].options.toolChoice).not.toEqual({ type: 'none' });
+    expect((read as any).calls).toHaveLength(1);
+  });
+});

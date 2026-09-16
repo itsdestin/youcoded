@@ -711,6 +711,10 @@ export interface PlanChildView extends SpecialistRunView {
   /** 5b follow-up: the attempt's journal phase — `prepared` means this
    *  specialist's first request was never sent. */
   phase?: PlanAttemptPhase;
+  /** Task 9a (pause handoff §1): the plan restarted this specialist by itself
+   *  after an error. The row says "Retried after an error"; the card keeps
+   *  running. */
+  retried?: boolean;
   prompt?: string;
   segments?: SubagentSegment[];
   report?: SpecialistReportView;
@@ -779,6 +783,13 @@ export interface PlanView {
     /** The note about OTHER specialists cut off mid-request, when the pause
      *  added one (it is also appended to `reason`). */
     note?: string;
+    /** Task 9a: facts the routing reads (main/harness/plans/pause-routing.ts):
+     *  the start was refused / the specialist changed since approval; this is
+     *  the failure after an automatic retry; what the unanswered `tool` could
+     *  change. Task 9b words the card from them. */
+    launch?: 'refused' | 'drift';
+    retried?: boolean;
+    toolEffect?: 'read' | 'local' | 'external';
   };
   /** The plan this one revises (after a Comment) — the old card greys out. */
   revisionOf?: string;

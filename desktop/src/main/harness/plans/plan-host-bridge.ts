@@ -22,12 +22,14 @@ import {
   DelegatedModelRefused, DelegatedModelUnavailable, resolveDelegatedBinding, resolveRequestedModel, type DelegatedModels,
 } from '../specialists/delegated-models';
 import { log } from '../../logger';
+// Task 9a: each tool's declared effect decides what a cut-off call means.
+import { nativeToolEffect } from '../tools';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError } from './plan-journal';
 import { PlanBudget, pricingSnapshot } from './plan-budget';
 import { PlanService, type PlanProposal } from './plan-service';
 import {
-  PlanExecutor, classifyChildTranscript, planRestartBrief,
+  PlanExecutor, PlanLaunchDriftError, classifyChildTranscript, planRestartBrief,
   type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type TranscriptVerdict,
 } from './plan-executor';
 import {
@@ -66,6 +68,8 @@ export interface PlanChildStart {
   tag: { planId: string; stepId: string; attemptId: string };
   recordChild(childId: string, info?: { title?: string }): Promise<void>;
   brief: string;
+  /** Task 9a: send `brief` with tools switched off (the report-only turn). */
+  toolsDisabled?: boolean;
   /** The budget stop the gate reported during the turn, if any. */
   budgetStop(): PlanChildStop | undefined;
 }
@@ -373,7 +377,7 @@ export class PlanHostBridge {
       isWriter: (ref, specialist) => this.port.roster(ref.cwd).resolve(specialist)?.charter !== 'read-only',
       localPoolTokens: (ref, plan) => this.localPoolTokens(plan),
       launch: (input) => this.launch(input),
-      inspectTranscript: (ref, childId): TranscriptVerdict => classifyChildTranscript(this.port.readChildEvents(childId, ref.cwd)),
+      inspectTranscript: (ref, childId): TranscriptVerdict => classifyChildTranscript(this.port.readChildEvents(childId, ref.cwd), nativeToolEffect),
       onUnreadable: (ref, planId, detail) => this.onUnreadable(ref, planId, detail),
       minimumAddTokens: (ref, plan, attemptId) => this.minimumAddTokens(ref, plan, attemptId),
       launchRefusal: (_ref, plan, specialist) => this.launchRefusal(plan, specialist),
@@ -408,7 +412,8 @@ export class PlanHostBridge {
     if (!plan || !frozen) throw new Error(`the plan has no approved settings for the "${input.specialist}" specialist`);
     const def = this.port.roster(cwd).resolve(input.specialist);
     if (!def || definitionFingerprint(def) !== frozen.definitionFingerprint) {
-      throw new Error(`the "${input.specialist}" specialist's instructions or tools changed since the plan was approved. Ask the assistant to propose the plan again`);
+      // Task 9a: a drift, never retried automatically.
+      throw new PlanLaunchDriftError(`the "${input.specialist}" specialist's instructions or tools changed since the plan was approved. Ask the assistant to propose the plan again`);
     }
     const route = await this.port.resolveRoute(frozen.binding);
     const lookup = budgetAdapterFor(route.providerType);
@@ -426,6 +431,7 @@ export class PlanHostBridge {
       tag: { planId: input.planId, stepId: input.stepId, attemptId: input.attemptId },
       recordChild: input.recordChild,
       brief: input.brief,
+      ...(input.toolsDisabled ? { toolsDisabled: true } : {}),
       budgetStop: () => stop,
     });
   }
@@ -469,7 +475,7 @@ export class PlanHostBridge {
       .reduce((n, a) => n + Math.max(0, a.spentTokens - a.baseTokens - a.addedTokens), 0);
     const softGap = !lookup.adapter.capsOutput && plan.usedTokens >= plan.ceilingTokens
       ? plan.usedTokens - plan.ceilingTokens + 1 - coveredByOthers : 0;
-    const verdict = classifyChildTranscript(this.port.readChildEvents(attempt.childId, ref.cwd));
+    const verdict = classifyChildTranscript(this.port.readChildEvents(attempt.childId, ref.cwd), nativeToolEffect);
     // A terminal transcript needs no request; an undelivered brief is covered
     // by the attempt's untouched allowance.
     if (verdict.kind === 'terminal' || (verdict.kind === 'resumable' && !verdict.briefDelivered)) return softGap > 0 ? softGap : undefined;

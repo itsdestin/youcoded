@@ -163,8 +163,20 @@ function attemptsWithSpecialist(plan: PlanRecord): Array<{ attempt: PlanAttemptR
   });
 }
 
+/** Task 9a (pause handoff §1): the fixed reply allowance of the report-only
+ *  turn that follows an invalid report. The turn is funded from what the failed
+ *  attempt left unspent; with less than this left it is not attempted. */
+export const PLAN_REPORT_ONLY_REPLY_TOKENS = 2_000;
+
 export interface ReserveMember {
   stepId: string;
+  /** Task 9a: create the report-only retry of this committed, failed attempt
+   *  (same item, iteration and specialist session; allowance = its unspent
+   *  share, so the plan's limit and every other allowance are untouched). */
+  reportOnlyOf?: string;
+  /** With reportOnlyOf: the report-only message, stored on the new attempt so
+   *  a crash before its launch still sends exactly that turn. */
+  brief?: string;
   /** Re-reserve an existing (restarting/resumed) attempt instead of creating one. */
   attemptId?: string;
   itemIndex?: number;
@@ -228,6 +240,26 @@ export class PlanBudget {
             return { ok: false, reason: 'attempt-exhausted', detail: `The specialist in step "${member.stepId}" has used its whole budget.` };
           }
           planned.push({ stepId: member.stepId, specialist: def.specialist, amount, existing });
+          continue;
+        }
+        if (member.reportOnlyOf !== undefined) {
+          const failed = stepRec.attempts.find((a) => a.attemptId === member.reportOnlyOf);
+          if (!failed || !isCommitted(failed) || failed.terminal !== 'failed' || !failed.childId) {
+            return invalid(`Attempt ${member.reportOnlyOf} can't be asked for its report again.`);
+          }
+          const unspent = allowanceLeft(failed);
+          if (unspent < PLAN_REPORT_ONLY_REPLY_TOKENS) {
+            return { ok: false, reason: 'attempt-exhausted', detail: `The specialist in step "${member.stepId}" has too little of its budget left to send its report again.` };
+          }
+          // WHY no tranche claim and the whole unspent share: the retry must
+          // not take budget meant for another specialist, and its request
+          // re-sends the transcript, so it needs more than the reply alone.
+          const fresh: PlanAttemptRecord = {
+            attemptId: this.newId(), itemIndex: failed.itemIndex, iteration: failed.iteration,
+            childId: failed.childId, baseTokens: unspent, addedTokens: 0, reservedTokens: 0, spentTokens: 0,
+            phase: 'prepared', reportOnly: true, ...(member.brief !== undefined ? { brief: member.brief } : {}),
+          };
+          planned.push({ stepId: member.stepId, specialist: def.specialist, amount: unspent, fresh, trancheIds: [] });
           continue;
         }
         // An Add budget made before this step had an attempt belongs to its
@@ -353,7 +385,10 @@ export class PlanBudget {
             // or released attempt holds nothing and must be re-reserved (with the
             // plan-wide ceiling check) before it may send anything.
             if (attempt.reservedTokens !== left) return refused("This specialist's budget isn't reserved right now.");
-            const room = left - inputBoundTokens;
+            // Task 9a: a report-only turn's reply is capped at its fixed
+            // allowance; the rest of what it holds pays for the input.
+            const uncapped = left - inputBoundTokens;
+            const room = attempt.reportOnly ? Math.min(uncapped, PLAN_REPORT_ONLY_REPLY_TOKENS) : uncapped;
             if (room < 1) {
               return {
                 ok: false, kind: 'exhausted',

@@ -8,13 +8,18 @@ import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
 import { PlanBudget, planCeilingTokens } from '../src/main/harness/plans/plan-budget';
 import {
-  PlanExecutor, PLAN_DEPENDENCY_REPORT_MAX_CHARS, PLAN_RESTART_BRIEF, classifyChildTranscript, planRestartBrief,
+  PlanExecutor, PlanLaunchDriftError, PLAN_DEPENDENCY_REPORT_MAX_CHARS, PLAN_RESTART_BRIEF, classifyChildTranscript as classifyWith, planRestartBrief,
   type PlanChildHandle, type PlanChildLaunch, type PlanChildOutcome, type PlanRunner, type TranscriptVerdict,
 } from '../src/main/harness/plans/plan-executor';
 import { resetDisabledAdaptersForTests, type PlanBudgetAdapter, type PlanChildRequestGate } from '../src/main/harness/plans/budget-adapter';
 import type { ExecutionManifest, PlanAttemptRecord, PlanEvent, PlanRecord, PlanRef } from '../src/main/harness/plans/types';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
 import type { TranscriptEvent } from '../src/shared/types';
+import { nativeToolEffect } from '../src/main/harness/tools';
+import { projectPlan } from '../src/main/harness/plans/plan-journal';
+
+// Task 9a: the classifier reads each tool's declared effect.
+const classifyChildTranscript = (events: TranscriptEvent[]) => classifyWith(events, nativeToolEffect);
 
 const REF: PlanRef = { cwd: '/proj', sessionId: 'parent-1' };
 const ADAPTER: PlanBudgetAdapter = { id: 'exec-test', providerType: 'openrouter', capsOutput: true, inputBound: () => ({ ok: true, tokens: 0 }) };
@@ -369,7 +374,7 @@ describe('durable completion and resume', () => {
     expect(runner.launches.map((l) => l.attemptId)).not.toContain('p2');
   });
 
-  it('an ambiguous request pauses without replaying; only a Continue after that pause picks it up', async () => {
+  it('Task 9a: a cut-off request is picked up by itself once — here its charged-in-full allowance makes that a budget pause, never a replay', async () => {
     const rec = record(TWO_STEP, {
       status: 'interrupted', usedTokens: 400,
       steps: [
@@ -387,34 +392,46 @@ describe('durable completion and resume', () => {
     let p = await plan();
     expect(p.status).toBe('paused');
     expect(p.lease).toBeUndefined();
-    expect(p.paused).toMatchObject({ stepId: 's1', attemptId: 'p2' });
-    expect(p.paused!.reason).toMatch(/isn't known whether/);
-    // 5b follow-up: a cut-off REQUEST (no action named) is its own kind.
-    expect(p.paused).toMatchObject({ kind: 'unknown-request' });
-    expect(p.paused!.tool).toBeUndefined();
-    const a = p.steps[0].attempts[1];
-    expect(a).toMatchObject({ phase: 'ambiguous', ambiguityReported: true, spentTokens: 1000, reservedTokens: 0 });
+    // The automatic recovery is recorded; restarting then needs budget.
+    expect(p.recoveries).toEqual([expect.objectContaining({ stepId: 's1', iteration: 0, itemIndex: 1, cause: 'unknown-request' })]);
+    expect(p.paused).toMatchObject({ stepId: 's1', attemptId: 'p2', kind: 'budget' });
+    expect(p.steps[0].attempts[1]).toMatchObject({ phase: 'response-persisted', spentTokens: 1000, reservedTokens: 0 });
+    expect(p.steps[0].attempts[1].ambiguityReported).toBeUndefined();
 
-    // The whole allowance was charged, so Continue first needs budget.
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 500 });
     const again = await journal.acquireLease(REF, 'p1', { startFrom: ['paused'] });
     if (!again.ok) throw new Error('lease');
     exec.start({ ref: REF, planId: 'p1', fence: again.fence });
-    await exec.settled('p1');
-    p = await plan();
-    expect(runner.launches).toHaveLength(0);
-    expect(p.status).toBe('paused');
-    expect(p.paused).toMatchObject({ stepId: 's1', attemptId: 'p2' });
-
-    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 500 });
-    const third = await journal.acquireLease(REF, 'p1', { startFrom: ['paused'] });
-    if (!third.ok) throw new Error('lease');
-    exec.start({ ref: REF, planId: 'p1', fence: third.fence });
     await exec.settled('p1');
     expect(runner.launches[0]).toMatchObject({ attemptId: 'p2', resumeChildId: 'kid-2', brief: PLAN_RESTART_BRIEF });
     expect((await plan()).status).toBe('completed');
   });
 
-  it('a side-effecting tool call with no durable result pauses and is not replayed', async () => {
+  it('Task 9a: a second cut-off request on the same item goes to the assistant and is never replayed', async () => {
+    const rec = record(TWO_STEP, {
+      status: 'interrupted', usedTokens: 400,
+      recoveries: [{ stepId: 's1', iteration: 0, itemIndex: 1, cause: 'unknown-request', at: 1 }],
+      steps: [
+        { id: 's1', status: 'paused', attempts: [committed('c1', 0, 'A'), attemptRec({ attemptId: 'p2', itemIndex: 1, childId: 'kid-2', phase: 'request-sent', reservedTokens: 1000, requestInputBound: 100 })] },
+        { id: 's2', status: 'pending', attempts: [] },
+      ],
+    });
+    const runner = new FakeRunner(() => completes('x'));
+    runner.verdicts.set('kid-2', { kind: 'resumable', briefDelivered: true });
+    const fence = await seed(rec);
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect(runner.launches).toHaveLength(0);
+    const p = await plan();
+    expect(p.paused).toMatchObject({ stepId: 's1', attemptId: 'p2', kind: 'unknown-request', retried: true });
+    expect(p.paused!.reason).toMatch(/isn't known whether/);
+    expect(p.paused!.tool).toBeUndefined();
+    expect(p.steps[0].attempts[1]).toMatchObject({ phase: 'ambiguous', ambiguityReported: true, spentTokens: 1000, reservedTokens: 0 });
+    expect(p.recoveries).toHaveLength(1);
+  });
+
+  it('an outside action (Bash) with no durable result pauses for the assistant and is not replayed', async () => {
     const rec = record(TWO_STEP, {
       status: 'interrupted', usedTokens: 700,
       steps: [
@@ -423,7 +440,7 @@ describe('durable completion and resume', () => {
       ],
     });
     const runner = new FakeRunner(() => completes('x'));
-    runner.verdicts.set('kid-2', { kind: 'dangling-effect', tool: 'Write' });
+    runner.verdicts.set('kid-2', { kind: 'dangling-effect', tool: 'Bash', effect: 'external' });
     const fence = await seed(rec);
     const exec = executor(runner);
     exec.start({ ref: REF, planId: 'p1', fence });
@@ -431,9 +448,10 @@ describe('durable completion and resume', () => {
     expect(runner.launches).toHaveLength(0);
     const p = await plan();
     expect(p.status).toBe('paused');
-    expect(p.paused!.reason).toContain('Write');
+    expect(p.paused!.reason).toContain('Bash');
     // 5b follow-up: the card reads the kind and the tool, never the sentence.
-    expect(p.paused).toMatchObject({ kind: 'unknown-outcome', tool: 'Write' });
+    expect(p.paused).toMatchObject({ kind: 'unknown-outcome', tool: 'Bash', toolEffect: 'external' });
+    expect(p.recoveries).toBeUndefined();
     expect(p.steps[0].attempts[1]).toMatchObject({ phase: 'ambiguous', ambiguityReported: true, spentTokens: 300 });
   });
 
@@ -547,6 +565,8 @@ describe('pausing, stopping and interruption settle before anything is visible',
     { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine', budget_tokens: 1000, of: 's1' },
   ] };
   const fourScripts = (failFirst: boolean) => (l: PlanChildLaunch): Script => {
+    // Task 9a: a specialist error is retried once by itself (same brief — it
+    // never got going), so this one fails on both tries.
     if (l.brief === 'Do fail') return failFirst ? failsWith('the provider returned an error', 15) : hangs(true);
     if (l.brief === 'Do quick') return hangs(true);
     return hangs(false);
@@ -569,7 +589,9 @@ describe('pausing, stopping and interruption settle before anything is visible',
     expect(elapsed).toBeGreaterThanOrEqual(750);
     // all three siblings were aborted; every child was disposed
     expect(runner.aborted.sort()).toEqual(expect.arrayContaining(['child-2', 'child-3', 'child-4']));
-    expect(runner.disposed.sort()).toEqual(['child-1', 'child-2', 'child-3', 'child-4']);
+    // child-1 ran twice (the automatic retry continues the same session).
+    expect(runner.disposed.sort()).toEqual(['child-1', 'child-1', 'child-2', 'child-3', 'child-4']);
+    expect(runner.launches.filter((x) => x.brief === 'Do fail')).toHaveLength(2);
     expect(runner.live).toBe(0);
     // paused is the last visible thing, after every disposal
     const pausedAt = log.indexOf('event:paused');
@@ -586,6 +608,8 @@ describe('pausing, stopping and interruption settle before anything is visible',
       return p.steps[0].attempts.find((a) => a.attemptId === l.attemptId)!;
     };
     expect(p.paused!.attemptId).toBe(byBrief('Do fail').attemptId);
+    // Task 9a: the second failure after an automatic retry is the assistant's.
+    expect(p.paused!.retried).toBe(true);
     // the stragglers' unsettled requests were charged in full (pessimistic)
     expect(byBrief('Do stuck1')).toMatchObject({ phase: 'ambiguous', spentTokens: 1000 });
     expect(byBrief('Do stuck2')).toMatchObject({ phase: 'ambiguous', spentTokens: 1000 });
@@ -859,15 +883,25 @@ describe('what a specialist transcript proves', () => {
       .toEqual({ kind: 'resumable', briefDelivered: true });
   });
 
-  it('a side-effecting tool call without a result → dangling effect; a read-only one is safe', () => {
+  it('Task 9a: a tool call without a result → dangling, with its declared effect (the widest of several)', () => {
     expect(classifyChildTranscript([
       ev('user-message', { text: 'b' }),
       ev('tool-use', { toolUseId: 'w', toolName: 'Write' }),
-    ])).toEqual({ kind: 'dangling-effect', tool: 'Write' });
+    ])).toEqual({ kind: 'dangling-effect', tool: 'Write', effect: 'local' });
     expect(classifyChildTranscript([
       ev('user-message', { text: 'b' }),
       ev('tool-use', { toolUseId: 'r', toolName: 'Grep' }),
-    ])).toEqual({ kind: 'resumable', briefDelivered: true });
+    ])).toEqual({ kind: 'dangling-effect', tool: 'Grep', effect: 'read' });
+    expect(classifyChildTranscript([
+      ev('user-message', { text: 'b' }),
+      ev('tool-use', { toolUseId: 'r', toolName: 'Read' }),
+      ev('tool-use', { toolUseId: 'x', toolName: 'Bash' }),
+      ev('tool-use', { toolUseId: 'e', toolName: 'Edit' }),
+    ])).toEqual({ kind: 'dangling-effect', tool: 'Bash', effect: 'external' });
+    expect(classifyChildTranscript([
+      ev('user-message', { text: 'b' }),
+      ev('tool-use', { toolUseId: 'm', toolName: 'mcp__mail__send' }),
+    ])).toEqual({ kind: 'dangling-effect', tool: 'mcp__mail__send', effect: 'external' });
     expect(classifyChildTranscript([
       ev('user-message', { text: 'b' }),
       ev('tool-use', { toolUseId: 'b1', toolName: 'Bash' }),
@@ -911,7 +945,9 @@ describe('a specialist whose budget route cannot be used', () => {
     const p = await plan();
     expect(runner.launches).toHaveLength(0);
     expect(p.steps[0].attempts).toHaveLength(0);
-    expect(p).toMatchObject({ status: 'paused', paused: { stepId: 's1', reason: runner.refusal, kind: 'launch-failed' } });
+    expect(p).toMatchObject({ status: 'paused', paused: { stepId: 's1', reason: runner.refusal, kind: 'launch-failed', launch: 'refused' } });
+    // Task 9a: a refusal would only repeat — never retried.
+    expect(p.recoveries).toBeUndefined();
   });
 });
 
@@ -980,17 +1016,367 @@ describe('review fixes (Task 4 review 1)', () => {
       ],
     });
     const runner = new FakeRunner(() => completes('B'));
-    runner.verdicts.set('kid-2', { kind: 'dangling-effect', tool: 'Bash' });
+    runner.verdicts.set('kid-2', { kind: 'dangling-effect', tool: 'Bash', effect: 'external' });
     const fence = await seed(rec);
     const exec = executor(runner);
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
     const first = runner.launches[0];
     expect(first).toMatchObject({ attemptId: 'p2', resumeChildId: 'kid-2' });
-    expect(first.brief).toBe(planRestartBrief({ kind: 'dangling-effect', tool: 'Bash' }));
+    expect(first.brief).toBe(planRestartBrief({ kind: 'dangling-effect', tool: 'Bash', effect: 'external' }));
     expect(first.brief).toContain('Bash');
     expect(first.brief).toMatch(/check/i);
     expect(first.brief).not.toContain('Review b');
     expect((await plan()).status).toBe('completed');
+  });
+});
+
+describe('Task 9a: automatic recovery (pause handoff §1)', () => {
+  const THREE: PlanDocumentV1 = { goal: 'three', steps: [
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', budget_tokens: 1000, items: ['flaky', 'b', 'c'] },
+  ] };
+  const slowCompletes = (ms: number): Script => async (ctx) => {
+    await new Promise((r) => setTimeout(r, ms));
+    return completes(`done ${ctx.launch.brief}`)(ctx);
+  };
+  const failsOnce = (): ((l: PlanChildLaunch) => Script) => {
+    let failed = false;
+    return (l) => {
+      if (l.brief !== 'Do flaky') return slowCompletes(60);
+      if (!failed) { failed = true; return failsWith('the provider hiccupped'); }
+      return completes('flaky done');
+    };
+  };
+
+  it('a specialist error retries that one member inside the wave: siblings keep running and are not charged', async () => {
+    const runner = new FakeRunner(failsOnce());
+    const fence = await seed(record(THREE));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(p.status).toBe('completed');
+    expect(events.some((e) => e.plan.status === 'paused')).toBe(false);
+    // Nobody was stopped; the flaky one ran twice on the same session.
+    expect(runner.aborted).toEqual([]);
+    const flaky = runner.launches.filter((l) => l.brief === 'Do flaky' || l.resumeChildId === 'child-1');
+    expect(flaky).toHaveLength(2);
+    expect(flaky[1]).toMatchObject({ resumeChildId: 'child-1', attemptId: flaky[0].attemptId });
+    expect(runner.launches.filter((l) => l.brief === 'Do b')).toHaveLength(1);
+    expect(runner.launches.filter((l) => l.brief === 'Do c')).toHaveLength(1);
+    // The siblings were still running when the retry launched.
+    const atRetry = runner.planAtLaunch[3];
+    expect(atRetry.steps[0].attempts.filter((a) => a.phase === 'committed')).toHaveLength(0);
+    // The recovery was journalled BEFORE the relaunch.
+    expect(atRetry.recoveries).toEqual([expect.objectContaining({ stepId: 's1', iteration: 0, itemIndex: 0, cause: 'specialist-error' })]);
+    // Siblings are charged only their own request.
+    const byItem = (i: number) => p.steps[0].attempts.find((a) => a.itemIndex === i)!;
+    expect(byItem(1).spentTokens).toBe(150);
+    expect(byItem(2).spentTokens).toBe(150);
+    expect(p.steps[0].attempts).toHaveLength(3);
+    // The card: one row per specialist, the retried one says so.
+    const rows = projectPlan(p).steps[0].children!;
+    expect(rows).toHaveLength(3);
+    expect(rows.find((r) => r.childId === 'child-1')!.retried).toBe(true);
+    expect(rows.filter((r) => r.retried)).toHaveLength(1);
+  });
+
+  it('a crash between the recovery write and the relaunch never yields a second automatic retry', async () => {
+    // The journal exactly as the recovery write left it: recovery recorded,
+    // hold given back, nothing relaunched yet — then the app died.
+    const rec = record(THREE, {
+      status: 'interrupted', usedTokens: 100,
+      recoveries: [{ stepId: 's1', iteration: 0, itemIndex: 0, cause: 'specialist-error', at: 1 }],
+      steps: [{ id: 's1', status: 'paused', attempts: [
+        attemptRec({ attemptId: 'f', itemIndex: 0, childId: 'kid-f', phase: 'response-persisted', spentTokens: 100 }),
+        committed('c1', 1, 'B'), committed('c2', 2, 'C'),
+      ] }],
+    });
+    const runner = new FakeRunner(() => failsWith('the provider hiccupped again'));
+    runner.verdicts.set('kid-f', { kind: 'resumable', briefDelivered: true });
+    const fence = await seed(rec);
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    // Continue restarted it once (the person's Continue, not an automatic
+    // retry); its failure is the assistant's.
+    expect(runner.launches).toHaveLength(1);
+    expect(p.status).toBe('paused');
+    expect(p.paused).toMatchObject({ kind: 'specialist-error', attemptId: 'f', retried: true });
+    expect(p.recoveries).toHaveLength(1);
+  });
+
+  it('a retry that cannot be funded becomes a budget pause on that specialist', async () => {
+    const runner = new FakeRunner((l) => (l.brief === 'Do flaky'
+      ? async ({ gate }) => {
+        await gate.reserve({ inputBoundTokens: 100 });
+        await gate.settle({ kind: 'reported', tokens: 1000, usage: { inputTokens: 100, outputTokens: 900, cacheReadTokens: 0, cacheCreationTokens: 0 } });
+        return { kind: 'failed', detail: 'boom' };
+      }
+      : slowCompletes(5)));
+    const fence = await seed(record(THREE));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    const flaky = runner.launches.find((l) => l.brief === 'Do flaky')!;
+    expect(runner.launches.filter((l) => l.attemptId === flaky.attemptId)).toHaveLength(1);
+    expect(p.paused).toMatchObject({ kind: 'budget', attemptId: flaky.attemptId });
+    expect(p.recoveries).toHaveLength(1);
+    expect(reservedTotal(p)).toBe(0);
+  });
+
+  it('a specialist error that left a Bash call unanswered goes to the assistant; Continue then restarts it with the check-first turn', async () => {
+    const runner = new FakeRunner((l) => (l.brief === 'Do flaky' ? failsWith('lost the connection') : slowCompletes(5)));
+    runner.verdicts.set('child-1', { kind: 'dangling-effect', tool: 'Bash', effect: 'external' });
+    const fence = await seed(record(THREE));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    let p = await plan();
+    expect(runner.launches.filter((l) => l.brief === 'Do flaky')).toHaveLength(1);
+    expect(p.paused).toMatchObject({ kind: 'unknown-outcome', tool: 'Bash', toolEffect: 'external' });
+    expect(p.paused!.reason).toContain('lost the connection');
+    expect(p.paused!.retried).toBeUndefined();
+    expect(p.recoveries).toBeUndefined();
+    const flakyAttempt = p.steps[0].attempts.find((a) => a.childId === 'child-1')!;
+    expect(flakyAttempt).toMatchObject({ phase: 'ambiguous', ambiguityReported: true });
+
+    runner.script = () => completes('checked and done');
+    const before = runner.launches.length;
+    const again = await journal.acquireLease(REF, 'p1', { startFrom: ['paused'] });
+    if (!again.ok) throw new Error('lease');
+    exec.start({ ref: REF, planId: 'p1', fence: again.fence });
+    await exec.settled('p1');
+    p = await plan();
+    const restart = runner.launches.slice(before).find((l) => l.resumeChildId === 'child-1');
+    expect(restart).toMatchObject({ resumeChildId: 'child-1', brief: planRestartBrief({ kind: 'dangling-effect', tool: 'Bash', effect: 'external' }) });
+    expect(p.status).toBe('completed');
+  });
+
+  it.each(['BashOutput', 'WebSearch'])('a specialist error that left a %s call unanswered is still retried by itself', async (tool) => {
+    const runner = new FakeRunner(failsOnce());
+    runner.verdicts.set('child-1', { kind: 'dangling-effect', tool, effect: nativeToolEffect(tool) });
+    const fence = await seed(record(THREE));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(p.status).toBe('completed');
+    // A cut-off read is simply re-run: the plain continue turn.
+    expect(runner.launches.find((l) => l.resumeChildId === 'child-1')!.brief).toBe(PLAN_RESTART_BRIEF);
+  });
+
+  const resumeWith = async (tool: string) => {
+    const rec = record(TWO_STEP, {
+      status: 'interrupted', usedTokens: 700,
+      steps: [
+        { id: 's1', status: 'paused', attempts: [committed('c1', 0, 'A'), attemptRec({ attemptId: 'p2', itemIndex: 1, childId: 'kid-2', phase: 'response-persisted', spentTokens: 300 })] },
+        { id: 's2', status: 'pending', attempts: [] },
+      ],
+    });
+    const runner = new FakeRunner(() => completes('B'));
+    runner.verdicts.set('kid-2', { kind: 'dangling-effect', tool, effect: nativeToolEffect(tool) });
+    const fence = await seed(rec);
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    return runner;
+  };
+
+  it.each(['BashOutput', 'WebSearch', 'Read'])('a cut-off %s call is re-run by itself on Continue', async (tool) => {
+    const runner = await resumeWith(tool);
+    expect(runner.launches[0]).toMatchObject({ attemptId: 'p2', brief: PLAN_RESTART_BRIEF });
+    const p = await plan();
+    expect(p.status).toBe('completed');
+    expect(p.recoveries).toEqual([expect.objectContaining({ itemIndex: 1, cause: 'unknown-outcome' })]);
+  });
+
+  it.each(['Write', 'Edit'])('a cut-off %s call restarts by itself with the brief that says to check first', async (tool) => {
+    const runner = await resumeWith(tool);
+    expect(runner.launches[0].brief).toBe(planRestartBrief({ kind: 'dangling-effect', tool, effect: 'local' }));
+    expect(runner.launches[0].brief).toContain(tool);
+    expect((await plan()).status).toBe('completed');
+  });
+
+  it.each(['Bash', 'WebFetch', 'mcp__mail__send', 'SomethingUnclassified'])('a cut-off %s call goes to the assistant', async (tool) => {
+    const runner = await resumeWith(tool);
+    expect(runner.launches).toHaveLength(0);
+    expect((await plan()).paused).toMatchObject({ kind: 'unknown-outcome', tool, toolEffect: 'external' });
+  });
+
+  it('a start error is retried once; a second one goes to the assistant', async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    const real = runner.launch.bind(runner);
+    let throws = 2;
+    runner.launch = async (input) => {
+      if (input.brief === 'Do flaky' && throws-- > 0) throw new Error('the model service refused the connection');
+      return real(input);
+    };
+    const fence = await seed(record(THREE));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(throws).toBe(0);
+    expect(p.paused).toMatchObject({ kind: 'launch-failed', retried: true });
+    expect(p.paused!.reason).toContain('refused the connection');
+    expect(p.recoveries).toEqual([expect.objectContaining({ itemIndex: 0, cause: 'launch-failed' })]);
+    expect(reservedTotal(p)).toBe(0);
+  });
+
+  it('a start error once is recovered and the plan completes', async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    const real = runner.launch.bind(runner);
+    let throws = 1;
+    runner.launch = async (input) => {
+      if (input.brief === 'Do flaky' && throws-- > 0) throw new Error('temporary');
+      return real(input);
+    };
+    const fence = await seed(record(THREE));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect((await plan()).status).toBe('completed');
+  });
+
+  it('a specialist that changed since approval (drift) is never retried', async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    const real = runner.launch.bind(runner);
+    let calls = 0;
+    runner.launch = async (input) => {
+      if (input.brief === 'Do flaky') { calls++; throw new PlanLaunchDriftError('its instructions changed'); }
+      return real(input);
+    };
+    const fence = await seed(record(THREE));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(calls).toBe(1);
+    expect(p.paused).toMatchObject({ kind: 'launch-failed', launch: 'drift' });
+    expect(p.recoveries).toBeUndefined();
+  });
+
+  describe('the report-only turn after an invalid report', () => {
+    const BIG: PlanDocumentV1 = { goal: 'big', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Write it up {item}', budget_tokens: 6000, items: ['x'] },
+      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine', budget_tokens: 1000, of: 's1' },
+    ] };
+
+    it('asks the same specialist once more, tools off, from the failed attempt\'s unspent share', async () => {
+      let first = true;
+      const runner = new FakeRunner((l) => {
+        if (l.stepId !== 's1') return completes('combined');
+        if (first) { first = false; return completes('   ', 1000, 500); }
+        return completes('THE REPORT', 1200, 300);
+      });
+      const fence = await seed(record(BIG));
+      const ceiling = (await plan()).ceilingTokens;
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      const p = await plan();
+      expect(p.status).toBe('completed');
+      expect(p.ceilingTokens).toBe(ceiling);
+      const [a, b] = runner.launches.filter((l) => l.stepId === 's1');
+      expect(b).toMatchObject({ resumeChildId: a.childId, toolsDisabled: true });
+      expect(a.toolsDisabled).toBeUndefined();
+      expect(b.attemptId).not.toBe(a.attemptId);
+      expect(b.brief).toMatch(/switched off/);
+      expect(b.brief).toMatch(/report/);
+      const attempts = p.steps[0].attempts;
+      expect(attempts).toHaveLength(2);
+      expect(attempts[0]).toMatchObject({ terminal: 'failed', spentTokens: 1500 });
+      expect(attempts[1]).toMatchObject({ reportOnly: true, childId: a.childId, baseTokens: 6000 - 1500, terminal: 'completed', reportText: 'THE REPORT' });
+      expect(p.recoveries).toEqual([expect.objectContaining({ stepId: 's1', cause: 'invalid-report' })]);
+      // The combine step read the report-only answer.
+      expect(runner.launches.find((l) => l.stepId === 's2')!.brief).toContain('THE REPORT');
+      // One row for that specialist, marked retried.
+      const rows = projectPlan(p).steps[0].children!;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ childId: a.childId, retried: true, status: 'completed' });
+    });
+
+    it('a repeat check answers in the required form on its report-only turn', async () => {
+      const doc: PlanDocumentV1 = { goal: 'loop', steps: [
+        { id: 'r', kind: 'repeat', specialist: 'reviewer', task: 'loop', budget_tokens: 500, max_iterations: 2, until: 'tests pass',
+          steps: [
+            { id: 'fix', kind: 'map', specialist: 'reviewer', task: 'Fix {item}', budget_tokens: 1000, items: ['x'] },
+            { id: 'check', kind: 'verify', specialist: 'reviewer', task: 'Check the fix', budget_tokens: 5000, of: 'fix' },
+          ] },
+      ] };
+      let checks = 0;
+      const runner = new FakeRunner((l) => (l.stepId === 'fix' ? completes('fixed')
+        : ++checks === 1 ? completes('looks good to me') : completes(JSON.stringify({ report: 'ok', repeatSatisfied: true }))));
+      const fence = await seed(record(doc));
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      expect((await plan()).status).toBe('completed');
+      const retry = runner.launches[2];
+      expect(retry).toMatchObject({ stepId: 'check', toolsDisabled: true });
+      expect(retry.brief).toContain('repeatSatisfied');
+      expect(retry.brief).toContain("didn't answer in the required form");
+    });
+
+    it('less than the report allowance left → the assistant, no second request', async () => {
+      const runner = new FakeRunner((l) => (l.stepId === 's1' ? completes('', 4000, 500) : completes('x')));
+      const fence = await seed(record(BIG));
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      const p = await plan();
+      expect(runner.launches).toHaveLength(1);
+      expect(p.paused).toMatchObject({ kind: 'invalid-report', stepId: 's1' });
+      expect(p.recoveries).toBeUndefined();
+    });
+
+    it('a second invalid report goes to the assistant', async () => {
+      const runner = new FakeRunner((l) => (l.stepId === 's1' ? completes('') : completes('x')));
+      const fence = await seed(record(BIG));
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      const p = await plan();
+      expect(runner.launches).toHaveLength(2);
+      expect(p.paused).toMatchObject({ kind: 'invalid-report', retried: true });
+      expect(reservedTotal(p)).toBe(0);
+    });
+
+    it('a crash before the report-only turn was sent sends exactly that turn on Continue, tools still off', async () => {
+      const rec = record(BIG, {
+        status: 'interrupted', usedTokens: 1500,
+        recoveries: [{ stepId: 's1', iteration: 0, itemIndex: 0, cause: 'invalid-report', at: 1 }],
+        steps: [
+          { id: 's1', status: 'paused', attempts: [
+            attemptRec({ attemptId: 'bad', childId: 'kid-s', baseTokens: 6000, spentTokens: 1500, phase: 'committed', terminal: 'failed', reportText: '', completedAt: 2 }),
+            attemptRec({ attemptId: 'ro', childId: 'kid-s', baseTokens: 4500, phase: 'prepared', reservedTokens: 4500, reportOnly: true, brief: 'REPORT NOW' }),
+          ] },
+          { id: 's2', status: 'pending', attempts: [] },
+        ],
+      });
+      const runner = new FakeRunner(() => completes('R'));
+      // The finished (invalid) first turn is what the transcript shows.
+      runner.verdicts.set('kid-s', { kind: 'terminal', report: 'not it' });
+      const fence = await seed(rec);
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      expect(runner.launches[0]).toMatchObject({ attemptId: 'ro', resumeChildId: 'kid-s', brief: 'REPORT NOW', toolsDisabled: true });
+      expect((await plan()).status).toBe('completed');
+    });
+  });
+
+  it('the report-only turn\'s reply is capped at its fixed allowance', async () => {
+    const rec = record(TWO_STEP, { status: 'running', steps: [
+      { id: 's1', status: 'running', attempts: [attemptRec({ attemptId: 'ro', baseTokens: 9000, reservedTokens: 9000, reportOnly: true, childId: 'k' })] },
+      { id: 's2', status: 'pending', attempts: [] },
+    ] });
+    const fence = await seed({ ...rec, status: 'proposed' });
+    await journal.mutate(REF, (f) => { f.plans[0].steps = rec.steps; });
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', 'ro', ADAPTER);
+    expect(await gate.reserve({ inputBoundTokens: 3000 })).toEqual({ ok: true, maxOutputTokens: 2000 });
   });
 });

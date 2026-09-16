@@ -210,6 +210,10 @@ function childView(plan: PlanRecord, step: PlanStepV1, stepStatus: string, a: Pl
     // fact that lets the card say "Not started" without guessing.
     phase: a.phase,
   };
+  // Task 9a: the plan restarted this specialist by itself after an error.
+  if ((plan.recoveries ?? []).some((r) => r.stepId === step.id && r.iteration === a.iteration && r.itemIndex === a.itemIndex)) {
+    view.retried = true;
+  }
   if (a.completedAt !== undefined) view.endedAt = a.completedAt;
   if (binding) view.model = { label: binding.modelId };
   if (a.brief !== undefined) view.prompt = a.brief;
@@ -252,7 +256,12 @@ export function projectPlan(plan: PlanRecord): PlanView {
       out.usedTokens = attempts.reduce((n, a) => n + a.spentTokens, 0);
       // Task 4 review item 6: one row per specialist this step launched, from
       // durable state (the renderer adds the live activity to it).
-      const children = attempts.filter((a) => a.childId).map((a) => childView(plan, step, rec!.status, a));
+      // Task 9a: a report-only retry continues the SAME specialist session as
+      // the attempt it follows, so only the newest attempt per session is a
+      // row (the card keys rows by session id, and it is one specialist).
+      const latestPerChild = new Map<string, PlanAttemptRecord>();
+      for (const a of attempts) if (a.childId) latestPerChild.set(a.childId, a);
+      const children = attempts.filter((a) => a.childId && latestPerChild.get(a.childId) === a).map((a) => childView(plan, step, rec!.status, a));
       if (children.length > 0) out.children = children;
     }
     rows.push(out);
@@ -288,6 +297,10 @@ export function projectPlan(plan: PlanRecord): PlanView {
     if (plan.paused.tool) view.paused.tool = plan.paused.tool;
     if (plan.paused.repeat) view.paused.repeat = { ...plan.paused.repeat };
     if (plan.paused.note) view.paused.note = plan.paused.note;
+    // Task 9a: what pause-routing.ts needs to route this pause again.
+    if (plan.paused.launch) view.paused.launch = plan.paused.launch;
+    if (plan.paused.retried) view.paused.retried = true;
+    if (plan.paused.toolEffect) view.paused.toolEffect = plan.paused.toolEffect;
   }
   if (plan.revisionOf) view.revisionOf = plan.revisionOf;
   if (plan.revisedBy) view.revisedBy = plan.revisedBy;

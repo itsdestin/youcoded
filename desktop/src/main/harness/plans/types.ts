@@ -10,8 +10,13 @@
 import { z } from 'zod';
 import { PlanDocumentSchema } from './schema';
 import { PLAN_PAUSE_KINDS, type PlanView } from '../../../shared/types';
+import type { ToolEffect } from '../tools/types';
+import type { PlanRecoveryCause } from './pause-routing';
 
 export const PLAN_JOURNAL_VERSION = 1 as const;
+
+const TOOL_EFFECTS = ['read', 'local', 'external'] as const satisfies readonly ToolEffect[];
+const PLAN_RECOVERY_CAUSES = ['launch-failed', 'specialist-error', 'invalid-report', 'unknown-request', 'unknown-outcome'] as const satisfies readonly PlanRecoveryCause[];
 
 const nonNegativeInt = z.number().int().min(0);
 
@@ -87,6 +92,13 @@ const PlanAttemptSchema = z.object({
    *  unsettled sibling in full). Only an ambiguity the user has actually been
    *  shown may be picked up again by Continue; an unshown one pauses first. */
   ambiguityReported: z.boolean().optional(),
+  /** Task 9a (pause handoff §1): a report-only retry after an invalid report.
+   *  It continues the failed attempt's specialist session (`childId` is set
+   *  when it is reserved), with one dedicated message (`brief`), tools
+   *  switched off, and a reply capped at PLAN_REPORT_ONLY_REPLY_TOKENS. Its
+   *  allowance is what the failed attempt left unspent. Kept on the record so
+   *  a crash before or during that turn restarts it the same way. */
+  reportOnly: z.literal(true).optional(),
   terminal: z.enum(['completed', 'failed', 'stopped']).optional(),
   reportText: z.string().optional(),
   reportPath: z.string().optional(),
@@ -174,7 +186,24 @@ const PlanRecordSchema = z.object({
     tool: z.string().min(1).optional(),
     repeat: z.object({ rounds: nonNegativeInt, until: z.string() }).strict().optional(),
     note: z.string().min(1).optional(),
+    /** Task 9a: facts the routing (pause-routing.ts) reads back. `launch`: the
+     *  start was refused or the specialist changed since approval (never
+     *  retried); `retried`: this is the failure after an automatic recovery;
+     *  `toolEffect`: what the unanswered `tool` could change. */
+    launch: z.enum(['refused', 'drift']).optional(),
+    retried: z.literal(true).optional(),
+    toolEffect: z.enum(TOOL_EFFECTS).optional(),
   }).strict().optional(),
+  /** Task 9a (pause handoff §1): every automatic recovery, journalled with the
+   *  fence BEFORE the relaunch. One per step, iteration, item and cause — so a
+   *  crash between this write and the relaunch can never yield a second one. */
+  recoveries: z.array(z.object({
+    stepId: z.string().min(1),
+    iteration: nonNegativeInt,
+    itemIndex: nonNegativeInt,
+    cause: z.enum(PLAN_RECOVERY_CAUSES),
+    at: z.number(),
+  }).strict()).optional(),
   /** Task 3: every Add budget, in order. A tranche without attemptId is
    *  waiting for the step's next attempt and is applied when it is reserved. */
   tranches: z.array(PlanTrancheSchema).optional(),

@@ -107,7 +107,9 @@ const NOOP_REMEMBERED_STORE: RememberedRuleStore = {
 // can never supply it.
 // historyNote (plans 5b follow-up): model-only text that rides this turn —
 // see HarnessSession.send. Never shown in the chat.
-type SendUnit = { text: string; attachments: string[]; turnId?: string; historyNote?: string };
+// toolsDisabled (plans Task 9a): a plan specialist's report-only turn — the
+// model is sent its tools but may not call any (HarnessSession.send).
+type SendUnit = { text: string; attachments: string[]; turnId?: string; historyNote?: string; toolsDisabled?: boolean };
 
 const SEND_QUEUE_LIMIT = 10;
 
@@ -3066,7 +3068,7 @@ export class NativeSessionHost extends EventEmitter {
     if (held.length > 0) {
       const [first, ...rest] = held;
       entry.queue.push(...rest);
-      this.sendTurn(sessionId, first.text, first.attachments, first.turnId, first.historyNote);
+      this.sendTurn(sessionId, first.text, first.attachments, first.turnId, first.historyNote, first.toolsDisabled);
     }
   }
 
@@ -3759,10 +3761,12 @@ export class NativeSessionHost extends EventEmitter {
 
   /** send(), plus an optional host turn id carried through the queue (plans
    *  Task 4: a Comment's follow-up turn). Same never-throws contract. */
-  private sendTurn(sessionId: string, text: string, attachments: string[], turnId?: string, historyNote?: string): NativeSendResult {
+  private sendTurn(sessionId: string, text: string, attachments: string[], turnId?: string, historyNote?: string, toolsDisabled?: boolean): NativeSendResult {
     // One spread for every place this turn is held, so the note can't be
     // dropped on one of the three paths (starting, queued, sent now).
-    const extra = { ...(turnId !== undefined ? { turnId } : {}), ...(historyNote ? { historyNote } : {}) };
+    const extra = {
+      ...(turnId !== undefined ? { turnId } : {}), ...(historyNote ? { historyNote } : {}), ...(toolsDisabled ? { toolsDisabled } : {}),
+    };
     const entry = this.live.get(sessionId);
     if (!entry) {
       // Not live YET is not the same as not live any more. A session still being
@@ -3903,7 +3907,10 @@ export class NativeSessionHost extends EventEmitter {
         try {
           if (entry.cancelledBeforeSend) break;
           if (typeof next === 'function') await next();
-          else await entry.session.send(next.text, next.attachments, next.historyNote ? { historyNote: next.historyNote } : undefined);
+          else {
+            const opts = { ...(next.historyNote ? { historyNote: next.historyNote } : {}), ...(next.toolsDisabled ? { toolsDisabled: true } : {}) };
+            await entry.session.send(next.text, next.attachments, Object.keys(opts).length > 0 ? opts : undefined);
+          }
         } catch (err) {
           log('ERROR', 'NativeSessionHost', 'send failed', { sessionId, error: String(err) });
         } finally {
@@ -4779,7 +4786,10 @@ export class NativeSessionHost extends EventEmitter {
     const disposedSignal = new Promise<void>((r) => { markDisposed = r; });
     const outcome = (async (): Promise<PlanChildOutcome> => {
       try {
-        const res = this.send(childId, input.brief);
+        // Task 9a: the report-only turn goes out with tools switched off.
+        const res = input.toolsDisabled
+          ? this.sendTurn(childId, input.brief, [], undefined, undefined, true)
+          : this.send(childId, input.brief);
         if (res.status !== 'sent') return { kind: 'failed', detail: `the specialist couldn't start its turn (${res.status})` };
         await Promise.race([entry.running, disposedSignal]);
         const stop = input.budgetStop();
