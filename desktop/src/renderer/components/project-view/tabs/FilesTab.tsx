@@ -752,7 +752,7 @@ export function FilesTab({
                 const capped = contentTruncated || displayCapped;
                 return (
                   <div className={`${fullW} min-w-0`}>
-                    <div className="text-3xs uppercase tracking-wider text-fg-muted mt-2 mb-1.5 px-0.5">
+                    <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mt-2 mb-1.5 px-0.5">
                       Matches by file contents ({shownRows}{capped ? '+' : ''})
                     </div>
                     <div className="flex flex-col gap-2">
