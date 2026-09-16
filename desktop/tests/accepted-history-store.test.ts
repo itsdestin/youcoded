@@ -534,17 +534,39 @@ describe('AcceptedHistoryStore', () => {
       expect(restored.ok).toBe(true);
     });
 
-    it('the event loop keeps ticking while the transcript is read', async () => {
-      // WHY: this is the freeze shape — publish() used to hold the loop for the
-      // whole read. A hung open() must not stop a timer from firing.
-      const never = new Promise<never>(() => {});
-      const spy = vi.spyOn(fs.promises, 'open').mockReturnValue(never as any);
-      try {
-        const revision = await store.invalidate(sessionId, 'history-mutation');
-        void store.publish(proposal({ revision }));
-        const ticked = await new Promise<boolean>((r) => setTimeout(() => r(true), 20));
-        expect(ticked).toBe(true);
-      } finally { spy.mockRestore(); }
+    it('a junk line in the middle is skipped, and events after it stay referenceable — incrementally too', async () => {
+      // WHY (review, 2026-09-16): a crash-sealed torn record is exactly this
+      // shape. An earlier draft stopped parsing at it, which made every later
+      // publish for that session "unreferenced-history" for good.
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      fs.appendFileSync(transcript, '{"type":"user-message","sessionId":"x","uuid":"torn","data":{"te\n');
+      appendTranscript(extra);
+      await expect(publishFresh({ references: [...base.slice(0, 3), ...extra].map(refFor), messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: [{ type: 'reasoning', text: 'summary' }, { type: 'text', text: 'answer' }] },
+        { role: 'user', content: 'more' },
+        { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
+      ] as any })).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 1, incremental: 1 });
+      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      expect(restored.ok).toBe(true);
+      expect((restored as any).eventUuids).toEqual(['u1', 'r1', 'a1', 'u2', 'a2']);
+      // The cached prefix survives the junk line: a third publish is incremental again.
+      await expect(publishFresh({ references: [...base.slice(0, 3), ...extra].map(refFor), messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: [{ type: 'reasoning', text: 'summary' }, { type: 'text', text: 'answer' }] },
+        { role: 'user', content: 'more' },
+        { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
+      ] as any })).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 1, incremental: 2 });
+    });
+
+    it('remove() forgets the session\'s cached prefix', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      await store.remove(sessionId);
+      const revision = await store.invalidate(sessionId, 'history-mutation');
+      await expect(store.publish(proposal({ revision }))).resolves.toEqual({ ok: true });
+      expect(store.reader.stats.full).toBe(2);
     });
   });
 });

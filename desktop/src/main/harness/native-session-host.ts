@@ -935,7 +935,7 @@ export class NativeSessionHost extends EventEmitter {
     // readRegistry + todos too (the same reset-on-resume contract root
     // sessions get in resume() above); readImageFromDisk re-reads any
     // persisted attachment paths so images survive the resume.
-    this.seedResumedHistory(opts.childId, workDir, session);
+    await this.seedResumedHistory(opts.childId, workDir, session);
     this.bindReservation(opts.reservation, opts.childId);
     this.wireChildLive(parentId, opts.childId, workDir, session, binding, opts.parentToolCallId);
 
@@ -2912,9 +2912,13 @@ export class NativeSessionHost extends EventEmitter {
    * two resume paths used to do. Never throws: a signed-out ChatGPT makes
    * continuationIdentityFor throw, which is just another fallback.
    */
-  private seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): void {
+  private async seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): Promise<void> {
     const store = this.continuationStore();
-    const persisted = this.store.readEvents(sessionId, cwd);
+    // Off the main thread (2026-09-16 C2 review): this ran on every Resume
+    // click and read the whole transcript synchronously. (restore() below
+    // still reads it once more, synchronously, to verify the checkpoint's
+    // digest — filed as a follow-up in the plan.)
+    const persisted = await this.store.readEventsAsync(sessionId, cwd);
     if (store) {
       // WHY hydrate: `references` is in-memory, so every accepted uuid from a
       // previous process is unknown to this one. Without this the session's
@@ -3631,7 +3635,7 @@ export class NativeSessionHost extends EventEmitter {
       // already clears readRegistry + todos (the reset-on-resume ruling) — those
       // are runtime state, never persisted. readImageFromDisk re-reads any
       // persisted attachment paths so images survive resume (#290 follow-up fix 2).
-      this.seedResumedHistory(sessionId, cwd, session);
+      await this.seedResumedHistory(sessionId, cwd, session);
     } catch (err) {
       await mcpLease?.release();
       throw err;

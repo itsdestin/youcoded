@@ -3195,8 +3195,17 @@ export function registerIpcHandlers(
     // Async (2026-09-16 C2): the whole-history read is off the main thread; the
     // sends below still go out in order, and the renderer's uuid dedup already
     // covers a live event that lands between the read and the replay.
-    const nativeEvents = await nativeHost.getHistoryAsync(sessionId);
-    const events = nativeEvents ?? transcriptWatcher.getHistory(sessionId);
+    let events: TranscriptEvent[];
+    let nativeEvents: TranscriptEvent[] | null;
+    try {
+      nativeEvents = await nativeHost.getHistoryAsync(sessionId);
+      events = nativeEvents ?? transcriptWatcher.getHistory(sessionId);
+    } catch (err) {
+      log('WARN', 'IPC', 'transcript replay failed to read the history', { sessionId, error: String((err as any)?.message ?? err) });
+      return;
+    }
+    // The window may have closed during the read (a tear-off dismissed mid-replay).
+    if (evt.sender.isDestroyed()) return;
     for (const ev of events) {
       evt.sender.send(IPC.TRANSCRIPT_EVENT, ev);
     }
@@ -3728,6 +3737,9 @@ export function registerIpcHandlers(
 
     // Read initial value
     void readTopicFile(claudeId).then((initial) => {
+      // Torn down (a /clear remap or exit) while the read was in flight: the
+      // topic belongs to a session id this desktop id no longer maps to.
+      if (!topicWatchers.has(desktopId)) return;
       if (initial && initial !== 'New Session') {
         // lastTopics is set only if the title was actually APPLIED. A topic
         // refused because the user owns the name must stay un-recorded, or a
@@ -3744,15 +3756,25 @@ export function registerIpcHandlers(
    *  the file does not exist yet — the poll upgrades back to a watch once it does. */
   function attachTopicWatch(desktopId: string, claudeId: string) {
     const topicFilePath = path.join(topicDir, `topic-${claudeId}`);
-    const onTopicMaybeChanged = () => {
-      void readTopicFile(claudeId).then((topic) => {
-        if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
-          void applyTopic(desktopId, claudeId, topic);
-        }
-      });
-    };
     try {
-      const watcher = fs.watch(topicFilePath, { persistent: false }, onTopicMaybeChanged);
+      const watcher: fs.FSWatcher = fs.watch(topicFilePath, { persistent: false }, (eventType) => {
+        // WHY the rename branch (review, 2026-09-16): the hook's daily prune
+        // deletes topic files older than 30 days and recreates them on a new
+        // inode; Linux reports that as 'rename' and the old watch goes dead
+        // without an 'error'. Fall back to the poll, which re-attaches a watch
+        // the moment the file reads again.
+        if (eventType === 'rename') {
+          watcher.close();
+          if (topicWatchers.get(desktopId) === watcher) { topicWatchers.delete(desktopId); startPolling(desktopId, claudeId); }
+          return;
+        }
+        void readTopicFile(claudeId).then((topic) => {
+          if (topicWatchers.get(desktopId) !== watcher) return; // torn down or replaced mid-read
+          if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
+            void applyTopic(desktopId, claudeId, topic);
+          }
+        });
+      });
       watcher.on('error', () => {
         // File may not exist yet — fall back to polling
         watcher.close();
@@ -3772,6 +3794,7 @@ export function registerIpcHandlers(
     if (topicWatchers.has(desktopId)) return;
     const interval = setInterval(() => {
       void readTopicFile(claudeId).then((topic) => {
+        if (topicWatchers.get(desktopId) !== interval) return; // torn down or replaced mid-read
         if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
           void applyTopic(desktopId, claudeId, topic);
         }
@@ -4907,7 +4930,12 @@ export function registerIpcHandlers(
     // (Guarded: test harnesses fake `webContents` with only getAllWebContents,
     // and a throw here would also swallow the remote broadcast below.)
     const byId = typeof webContents.fromId === 'function' ? webContents.fromId.bind(webContents) : () => undefined;
-    for (const id of subscriberIds) byId(id)?.send(ARTIFACT_IPC.CHANGED, evt);
+    for (const id of subscriberIds) {
+      try {
+        const wc = byId(id);
+        if (wc && !wc.isDestroyed()) wc.send(ARTIFACT_IPC.CHANGED, evt);
+      } catch { /* a window closing mid-send must not cost the others their event */ }
+    }
     // A phone subscribed over remote access (remote-server.ts watch-project)
     // is not a webContents; without this line the phone's file list never
     // updated while the assistant worked (contract row R12). Every consumer

@@ -2637,7 +2637,9 @@ export class RemoteServer {
 
         // Native sessions page over the merged event array; null means "not a
         // native id", so CC's transcript file is the source.
-        const nativePage = this.nativeRuntime?.nativeHost.getHistoryPage(pageSessionId, beforeOffset) ?? null;
+        // Async form (2026-09-16 C2 review): the desktop's page handler was
+        // converted; the phone's scroll-up read the whole transcript sync too.
+        const nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null;
         if (nativePage) {
           this.respond(client.ws, type, id, {
             events: nativePage.events,

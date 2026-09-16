@@ -54,7 +54,10 @@ const WATCH_DEPTH = 6;
 // attribute, plus a multi-hundred-millisecond main-process freeze each time
 // the watcher started. Two levels keeps live refresh for files sitting in Home
 // and one folder down; deeper files still LIST and OPEN (discovery has its
-// own caps), they just do not live-refresh while Home is the project.
+// own caps), they just do not live-refresh while Home is the project — an
+// assistant edit to ~/A/B/C/file neither joins the list nor refreshes an open
+// preview until the tab is reopened (the harness's writes reach the UI only
+// through this watcher). The trade is recorded in docs/roadmap/files.md.
 const HOME_WATCH_DEPTH = 2;
 
 /** chokidar `depth` for a project root — see HOME_WATCH_DEPTH. Exported for tests. */

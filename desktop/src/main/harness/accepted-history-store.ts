@@ -204,23 +204,25 @@ function createDigestCache(): (file: string) => string | null {
 
 type RawTranscript = { bytes: number; digest: string; events: Map<string, TranscriptEvent> };
 
-/** Parse transcript lines into the uuid→event map. Returns null on a duplicate
+/** Parse transcript lines into the uuid→event map. Returns false on a duplicate
  *  uuid (WHY: duplicate UUIDs are ambiguous persistence anchors, never a basis
- *  for faithful restore) and stops at the first unparseable line (the raw
- *  digest still fences torn/junk lines; they are not referenceable). `parsedAll`
- *  tells the incremental reader whether the bytes it just parsed can be cached. */
-function parseTranscriptLines(text: string, events: Map<string, TranscriptEvent>): { parsedAll: boolean } | null {
+ *  for faithful restore). An unparseable line is SKIPPED and parsing continues
+ *  — the raw digest still fences torn/junk lines; they are not referenceable.
+ *  (Review, 2026-09-16: an earlier draft stopped at the first junk line, which
+ *  a crash-sealed torn record would have made permanent for that session —
+ *  every later event invisible, every publish "unreferenced-history".) */
+function parseTranscriptLines(text: string, events: Map<string, TranscriptEvent>): boolean {
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try {
       const value = JSON.parse(line) as TranscriptEvent;
       if (value && typeof value.type === 'string' && typeof value.uuid === 'string') {
-        if (events.has(value.uuid)) return null;
+        if (events.has(value.uuid)) return false;
         events.set(value.uuid, value);
       }
-    } catch { return { parsedAll: false }; }
+    } catch { /* junk line: skipped, never referenceable */ }
   }
-  return { parsedAll: true };
+  return true;
 }
 
 /** Whole-file, synchronous read. Serves restore(), which runs once at resume. */
@@ -228,14 +230,20 @@ function rawTranscriptSync(file: string): RawTranscript | null {
   let data: Buffer;
   try { data = fs.readFileSync(file); } catch { return null; }
   const events = new Map<string, TranscriptEvent>();
-  if (parseTranscriptLines(data.toString('utf8'), events) === null) return null;
+  if (!parseTranscriptLines(data.toString('utf8'), events)) return null;
   return { bytes: data.length, digest: digest(data), events };
 }
 
 // How many bytes just before the cached boundary are kept to prove the prefix
 // is still the prefix. A rewrite that changes an earlier line shifts every byte
-// after it, so the bytes at the boundary differ.
+// after it, so the bytes at the boundary differ. (A same-length rewrite more
+// than this far before the boundary is undetectable by design — and no
+// production writer rewrites a session file; the store only appends.)
 const PREFIX_CHECK_BYTES = 4096;
+// How many transcripts' parsed prefixes the reader keeps. WHY a cap (review,
+// 2026-09-16): the cache lived for the app's life, one parsed event map per
+// native session ever published. remove() also forgets a session's entry.
+const MAX_CACHED_TRANSCRIPTS = 24;
 
 /**
  * Reads a transcript for publish(), keeping the parsed prefix between calls.
@@ -288,17 +296,18 @@ class IncrementalTranscriptReader {
       // Only whole lines are parsed and cached; a torn tail is hashed, never kept.
       const lastNewline = data.lastIndexOf(0x0a);
       const complete = lastNewline >= 0 ? data.subarray(0, lastNewline + 1) : data.subarray(0, 0);
-      const parsed = parseTranscriptLines(complete.toString('utf8'), base.events);
-      if (parsed === null) { this.cache.delete(file); return null; }
+      if (!parseTranscriptLines(complete.toString('utf8'), base.events)) { this.cache.delete(file); return null; }
 
       const prefixHash = base.hash.copy().update(complete);
       const fullDigest = prefixHash.copy().update(data.subarray(complete.length)).digest('hex');
       const cachedBytes = from + complete.length;
-      if (parsed.parsedAll && cachedBytes > 0) {
+      if (cachedBytes > 0) {
         // The check window is the last PREFIX_CHECK_BYTES of the cached prefix,
         // which may straddle the old boundary — take it from what we hold.
         const tail = Buffer.concat([hit && from > 0 ? hit.check : Buffer.alloc(0), complete]);
+        this.cache.delete(file); // re-insert so Map order is least-recently-used first
         this.cache.set(file, { bytes: cachedBytes, hash: prefixHash, events: base.events, check: tail.subarray(Math.max(0, tail.length - PREFIX_CHECK_BYTES)) });
+        while (this.cache.size > MAX_CACHED_TRANSCRIPTS) this.cache.delete(this.cache.keys().next().value!);
       } else {
         this.cache.delete(file);
       }
@@ -455,6 +464,8 @@ export class AcceptedHistoryStore {
   private disabled = new Set<string>();
   /** One reader per store: its cache is the parsed prefix of each session's transcript. */
   readonly reader = new IncrementalTranscriptReader();
+  /** Which transcript each session last published from, so remove() can forget it. */
+  private transcriptBySession = new Map<string, string>();
 
   constructor(userDataRoot: string, private hooks: AcceptedHistoryStoreHooks = {}) {
     // WHY: continuation is profile-private Electron state, never the syncable NativeHome tree.
@@ -491,6 +502,7 @@ export class AcceptedHistoryStore {
       if (this.disabled.has(proposal.sessionId) || proposal.revision !== this.currentRevision(proposal.sessionId)) return { ok: false, reason: 'stale-generation' } as const;
       let json: string;
       try {
+        this.transcriptBySession.set(proposal.sessionId, proposal.transcriptPath);
         const raw = await this.reader.read(proposal.transcriptPath);
         if (!raw) return { ok: false, reason: 'unreferenced-history' } as const;
         const eventUuids = acceptedAnchors(proposal.references, raw.events);
@@ -560,6 +572,8 @@ export class AcceptedHistoryStore {
   }
 
   async remove(sessionId: string): Promise<{ ok: true } | { ok: false; reason: 'unlink-failed' }> {
+    const transcript = this.transcriptBySession.get(sessionId);
+    if (transcript) { this.reader.forget(transcript); this.transcriptBySession.delete(sessionId); }
     await this.invalidate(sessionId, 'deleted');
     const unlink = this.hooks.unlink ?? ((file: string) => fs.promises.unlink(file));
     const drop = async (file: string): Promise<boolean> => {

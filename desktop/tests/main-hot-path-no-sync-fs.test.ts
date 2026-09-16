@@ -89,7 +89,10 @@ describe('hot main-process paths use fs.promises', () => {
     // The root probe just above the walk is async too; the one sync stat left
     // in the file is inside the missing-root hint (error path, one stat).
     expect(glob).toMatch(/await fs\.promises\.stat\(root\)/);
-    expect(read('harness/tools/read.ts')).not.toMatch(/\bfs\.readFileSync\s*\(/);
+    // Read: the only sync stat left is inside the missing-file hint (error path, one stat).
+    const readTool = read('harness/tools/read.ts');
+    expect(readTool).not.toMatch(/\bfs\.(readFileSync|readdirSync)\s*\(/);
+    expect(readTool).not.toMatch(/\bfs\.statSync\(abs\)/);
     expect(read('harness/tools/edit.ts')).not.toMatch(SYNC_FS);
     expect(read('harness/tools/write.ts')).not.toMatch(SYNC_FS);
     expect(read('harness/tools/file-fingerprint.ts')).not.toMatch(SYNC_FS);

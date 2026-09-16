@@ -57,6 +57,20 @@ export interface PersistedEventReference {
   end: number;
 }
 
+/** map() with at most `limit` promises in flight; results in input order. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 /** Newest activity first — mtime moves on every append, which is exactly
  *  "last active" for a single-writer JSONL file. Shared by list/listAsync. */
 function sortNewestFirst(rows: NativeSessionListEntry[]): NativeSessionListEntry[] {
@@ -372,7 +386,11 @@ export class SessionStore {
   async listAsync(options?: { includeChildren?: boolean }): Promise<NativeSessionListEntry[]> {
     const includeChildren = options?.includeChildren ?? false;
     const files = await this.home.listSessionFilesAsync();
-    const heads = await Promise.all(files.map((file) => this.home.readSessionHeadAsync(file.slug, file.sessionId)));
+    // WHY bounded (review, 2026-09-16): opening every session file at once could
+    // exhaust file descriptors on a long-used install, and an open failure
+    // reads back as "not a native session" — rows would vanish from Resume
+    // with no error. Sixteen at a time keeps the read parallel and safe.
+    const heads = await mapLimit(files, 16, (file) => this.home.readSessionHeadAsync(file.slug, file.sessionId));
     const out: NativeSessionListEntry[] = [];
     files.forEach((file, i) => {
       const entry = this.listEntry(file, heads[i], includeChildren);

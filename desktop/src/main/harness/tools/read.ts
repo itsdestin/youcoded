@@ -109,7 +109,7 @@ export const ReadTool = defineTool({
     const abs = resolveP(args.file_path, ctx.cwd);
     let st: fs.Stats;
     try {
-      st = fs.statSync(abs);
+      st = await fs.promises.stat(abs); // off the main thread (2026-09-16 C4 review)
     } catch (err: any) {
       // Fix (two independent 2026-08 harness reviews, Grok 4.5 + Qwen 3.8 Max —
       // see guards.ts's WHY block above shellCwdMissHint): Read always resolves
@@ -139,7 +139,7 @@ export const ReadTool = defineTool({
     if (st.isDirectory()) {
       let names: string[] = [];
       try {
-        names = fs.readdirSync(abs, { withFileTypes: true })
+        names = (await fs.promises.readdir(abs, { withFileTypes: true }))
           .map((d) => (d.isDirectory() ? `${d.name}/` : d.name))
           .sort((a, b) => a.localeCompare(b));
       } catch {
