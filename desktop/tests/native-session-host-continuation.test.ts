@@ -73,7 +73,7 @@ function makeHost(o: {
   };
   const host = new NativeSessionHost(
     sessionStore, factory as any, o.contextAndSlots ?? NO_CONTEXT, async () => null, async () => o.vision ?? null,
-    undefined, undefined, undefined, undefined, undefined, undefined, nativeHome, undefined,
+    undefined, undefined, undefined, undefined, undefined, undefined, nativeHome,
     new SpecialistCatalog({ claudeUserDir: null }), () => null,
     o.withoutContinuation ? undefined : { acceptedHistory, continuationIdentityFor: identity as any },
   );

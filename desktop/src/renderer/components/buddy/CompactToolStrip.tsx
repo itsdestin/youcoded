@@ -235,7 +235,10 @@ function ToolRow({
           flexShrink: 0,
         }}
       >
-        {tool.toolName}
+        {/* A helper's request names the helper, so it never reads as the main assistant's. */}
+        {/* First name only ("Wren"): this label never shrinks, and the full
+            title plus three buttons overflows the floater's narrow row. */}
+        {tool.specialist ? `${tool.specialist.title.split(' ')[0]}: ${tool.toolName}` : tool.toolName}
       </span>
       {/* Truncated target path / command */}
       <span

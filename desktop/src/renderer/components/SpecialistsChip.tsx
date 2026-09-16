@@ -199,11 +199,6 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
               segment={seg}
               sessionId={sessionId}
               specialistName={first}
-              // Task 12: the popup already has this helper's run record (`run`,
-              // destructured from `h` above) — pass its status straight through
-              // so the held-ask line can tell a finished helper apart from a
-              // running one.
-              runStatus={run.status}
               compact
               leading={
                 <div className="text-xs leading-snug">
