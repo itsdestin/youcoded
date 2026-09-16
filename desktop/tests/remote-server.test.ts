@@ -705,6 +705,8 @@ describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
       nativeHost: {
         isNativeSessionId: (id: string) => nativeIds.has(id),
         list: () => listEntries,
+        // The browse handler reads through the async form since 2026-09-16 (C6).
+        listAsync: async () => listEntries,
       },
     } as any;
   }

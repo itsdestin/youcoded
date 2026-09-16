@@ -4907,7 +4907,10 @@ export function registerIpcHandlers(
     // (the drawer, its viewer and git footer, the Files tab). A phone's
     // subscriber id is not a webContents id; fromId() answers undefined for it
     // and the remote broadcast below carries the event there.
-    for (const id of subscriberIds) webContents.fromId(id)?.send(ARTIFACT_IPC.CHANGED, evt);
+    // (Guarded: test harnesses fake `webContents` with only getAllWebContents,
+    // and a throw here would also swallow the remote broadcast below.)
+    const byId = typeof webContents.fromId === 'function' ? webContents.fromId.bind(webContents) : () => undefined;
+    for (const id of subscriberIds) byId(id)?.send(ARTIFACT_IPC.CHANGED, evt);
     // A phone subscribed over remote access (remote-server.ts watch-project)
     // is not a webContents; without this line the phone's file list never
     // updated while the assistant worked (contract row R12). Every consumer
