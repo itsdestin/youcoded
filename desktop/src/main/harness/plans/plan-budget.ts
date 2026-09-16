@@ -441,11 +441,38 @@ export class PlanBudget {
     await this.journal.mutateFenced(ref, planId, fence, (plan) => {
       const attempt = plan.steps.find((s) => s.id === stepId)?.attempts.find((a) => a.attemptId === attemptId);
       if (!attempt || attempt.phase !== 'request-sent') return;
-      const specialist = executableStep(plan.document, stepId)!.specialist;
-      this.charge(plan, attempt, attempt.reservedTokens, worstCaseUsd(snapshotFor(plan.manifest, specialist), attempt.reservedTokens));
-      attempt.reservedTokens = 0;
-      attempt.phase = 'ambiguous';
-      delete attempt.requestInputBound;
+      this.chargeInFull(plan, stepId, attempt);
+    });
+  }
+
+  private chargeInFull(plan: PlanRecord, stepId: string, attempt: PlanAttemptRecord): void {
+    const specialist = executableStep(plan.document, stepId)!.specialist;
+    this.charge(plan, attempt, attempt.reservedTokens, worstCaseUsd(snapshotFor(plan.manifest, specialist), attempt.reservedTokens));
+    attempt.reservedTokens = 0;
+    attempt.phase = 'ambiguous';
+    delete attempt.requestInputBound;
+  }
+
+  /**
+   * Task 4 — restart recovery for a plan NO executor owns (a crash left it
+   * running; recovery just marked it interrupted). WHY unfenced: there is no
+   * lease to present, and taking one would flip the plan back to running.
+   * Refused while any lease exists, so it can never race a live executor.
+   * Same pessimism as the pausing path: an unsettled request is charged in
+   * full and marked ambiguous, and every other hold is given back — so a
+   * visible interrupted/paused/stopped plan owns no reservation.
+   */
+  async settleOwnerless(ref: PlanRef, planId: string): Promise<void> {
+    await this.journal.mutate(ref, (file) => {
+      const plan = file.plans.find((p) => p.planId === planId);
+      if (!plan || plan.lease || plan.status === 'running') return;
+      for (const step of plan.steps) {
+        for (const attempt of step.attempts) {
+          if (isCommitted(attempt)) continue;
+          if (attempt.phase === 'request-sent') this.chargeInFull(plan, step.id, attempt);
+          attempt.reservedTokens = 0;
+        }
+      }
     });
   }
 
@@ -491,6 +518,12 @@ export class PlanBudget {
         target = open[0];
       }
       if (target) target.addedTokens += tokens;
+      // Task 4: what is still missing before Continue can send anything.
+      if (plan.paused.minimumAddTokens !== undefined) {
+        const left = plan.paused.minimumAddTokens - tokens;
+        if (left > 0) plan.paused.minimumAddTokens = left;
+        else delete plan.paused.minimumAddTokens;
+      }
       plan.tranches = [...(plan.tranches ?? []), {
         trancheId: this.newId(), stepId, ...(target ? { attemptId: target.attemptId } : {}), tokens, at: this.now(),
       }];

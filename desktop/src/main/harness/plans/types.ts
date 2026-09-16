@@ -76,6 +76,12 @@ const PlanAttemptSchema = z.object({
   requestInputBound: nonNegativeInt.optional(),
   /** Set once a request went out through a soft (uncapped) adapter. */
   softLimit: z.boolean().optional(),
+  /** Task 4: set in the SAME write that paused the plan to tell the user this
+   *  attempt's last request/action has an unknown outcome. WHY a flag: an
+   *  attempt also becomes `ambiguous` silently (the pausing path charges an
+   *  unsettled sibling in full). Only an ambiguity the user has actually been
+   *  shown may be picked up again by Continue; an unshown one pauses first. */
+  ambiguityReported: z.boolean().optional(),
   terminal: z.enum(['completed', 'failed', 'stopped']).optional(),
   reportText: z.string().optional(),
   reportPath: z.string().optional(),
@@ -141,7 +147,13 @@ const PlanRecordSchema = z.object({
   autoApproved: z.boolean().optional(),
   /** attemptId (Task 3): which attempt an Add budget tranche enlarges. Absent
    *  when the pause happened before that step had an attempt. */
-  paused: z.object({ stepId: z.string(), reason: z.string(), attemptId: z.string().optional() }).strict().optional(),
+  paused: z.object({
+    stepId: z.string(), reason: z.string(), attemptId: z.string().optional(),
+    /** Task 4: the smallest Add budget that lets the paused specialist send
+     *  its next request (its fresh resume prompt plus any soft overshoot).
+     *  Add budget lowers it by what was added; the service refuses less. */
+    minimumAddTokens: nonNegativeInt.optional(),
+  }).strict().optional(),
   /** Task 3: every Add budget, in order. A tranche without attemptId is
    *  waiting for the step's next attempt and is applied when it is reserved. */
   tranches: z.array(PlanTrancheSchema).optional(),

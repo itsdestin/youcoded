@@ -718,8 +718,11 @@ export interface PlanView {
   usedUsd?: number | null;
   /** Set when the plan ran without asking because it fell under the user's limit. */
   autoApproved?: boolean;
-  /** Why it is paused, in plain words, plus the step that hit its cap. */
-  paused?: { stepId: string; reason: string };
+  /** Why it is paused, in plain words, plus the step that hit its cap.
+   *  `minimumAddTokens` (Task 4): the smallest Add budget that lets the paused
+   *  specialist continue — a smaller amount would pause again on Continue.
+   *  Wording belongs to the card (Task 5). */
+  paused?: { stepId: string; reason: string; minimumAddTokens?: number };
   /** The plan this one revises (after a Comment) — the old card greys out. */
   revisionOf?: string;
   /** Set on the OLD plan once a Comment produced a new one: the card greys out

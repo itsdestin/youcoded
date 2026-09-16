@@ -121,6 +121,24 @@ describe('propose_plan tool', () => {
     expect(result).toMatchObject({ isError: true, plan: { status: 'stopped' } });
   });
 
+  it('reports the durable plan when interruption lands after the commit latched (Task 4)', async () => {
+    const controller = new AbortController();
+    const propose = vi.fn(async (proposal: any) => {
+      expect(proposal.commit()).toBe(true);
+      // The durable write lands, then the user presses Stop.
+      controller.abort();
+      return proposed(proposal.toolUseId);
+    });
+    const tool = createProposePlanTool(BUILTIN_ROSTER);
+    const result = await tool.execute(VALID, {
+      sessionId: 's-1', cwd: FAKE_SESSION_CWD, signal: controller.signal,
+      toolCallId: 'call-1', binding: { providerId: 'openrouter', modelId: 'model' },
+      readRegistry: new Map(), todos: [], services: { plans: { propose } },
+    });
+    expect(result).toMatchObject({ isError: false, plan: { status: 'proposed', planId: 'plan-1' } });
+    expect(result.text).not.toMatch(/canceled/i);
+  });
+
   it.each([
     ['missing service', undefined],
     ['callback throw', { propose: async () => { throw new Error('disk exploded'); } }],

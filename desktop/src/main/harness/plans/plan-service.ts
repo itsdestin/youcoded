@@ -388,6 +388,13 @@ export class PlanService {
       if (!this.deps.budget) return unsupported("Adding budget isn't available in this version of YouCoded.");
       const { ref, plan } = await this.loadPlan(sessionId, planId);
       if (plan.status !== 'paused' || !plan.paused) throw new PlanActionRefused('Budget can only be added to a paused plan.');
+      // Task 4: a smaller amount would let Continue start and then pause again
+      // at once (the resume prompt, or a soft overshoot, would not fit), so it
+      // is refused with the real minimum instead of being silently accepted.
+      const minimum = plan.paused.minimumAddTokens;
+      if (minimum !== undefined && tokens < minimum) {
+        return failure(`Add at least ${minimum.toLocaleString('en-US')} tokens so the paused specialist can continue.`);
+      }
       return { ok: true, plan: await this.deps.budget.addTokens({ ref, planId, stepId: plan.paused.stepId, tokens }) };
     });
   }

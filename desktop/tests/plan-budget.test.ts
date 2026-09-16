@@ -338,6 +338,16 @@ describe('Add budget — an authorization tranche for the paused attempt', () =>
     return id;
   }
 
+  it('lowers the recorded minimum by what was added (Task 4)', async () => {
+    await pausedAfterExhaustion();
+    await journal.mutate(REF, (file) => { file.plans[0].paused!.minimumAddTokens = 800; });
+    const view = await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 500 });
+    expect((await plan()).paused!.minimumAddTokens).toBe(300);
+    expect(view.paused!.minimumAddTokens).toBe(300);
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 300 });
+    expect((await plan()).paused!.minimumAddTokens).toBeUndefined();
+  });
+
   it('enlarges the paused attempt, the token ceiling and the dollar ceiling', async () => {
     const id = await pausedAfterExhaustion();
     const before = await plan();
@@ -573,5 +583,32 @@ describe('the plan-wide stop is for soft routes only (round 4)', () => {
     await journal.mutateFenced(REF, 'p1', fence, (p) => { p.usedUsd = p.ceilingUsd!; });
     const gate = budget.requestGate(REF, 'p1', fence, 's1', r.attempts[0].attemptId, SOFT);
     expect(await gate.reserve({ inputBoundTokens: 100 })).toMatchObject({ ok: true });
+  });
+});
+
+describe('restart recovery for an ownerless plan (Task 4)', () => {
+  it('charges an unsettled request in full, gives back every other hold, and needs no lease', async () => {
+    await seed(record());
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }, { stepId: 's1', itemIndex: 1 }]);
+    if (!r.ok) throw new Error(r.detail);
+    const [sent, held] = r.attempts.map((a) => a.attemptId);
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', sent, ADAPTER);
+    expect(await gate.reserve({ inputBoundTokens: 100 })).toMatchObject({ ok: true });
+    // The process died: recovery marks it interrupted and drops the lease.
+    await journal.mutate(REF, (file) => { const p = file.plans[0]; p.status = 'interrupted'; delete p.lease; });
+    await budget.settleOwnerless(REF, 'p1');
+    const p = await plan();
+    expect(p.steps[0].attempts.find((a) => a.attemptId === sent)).toMatchObject({ phase: 'ambiguous', spentTokens: 1000, reservedTokens: 0 });
+    expect(p.steps[0].attempts.find((a) => a.attemptId === held)).toMatchObject({ phase: 'prepared', spentTokens: 0, reservedTokens: 0 });
+    expect(p.usedTokens).toBe(1000);
+    expect(p.usedUsd).toBeCloseTo(worstCaseUsd({ kind: 'priced', rates: REVIEWER_RATES }, 1000)!, 12);
+  });
+
+  it('never touches a plan that still has an owner', async () => {
+    await seed(record());
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    await budget.settleOwnerless(REF, 'p1');
+    expect((await plan()).steps[0].attempts[0].reservedTokens).toBe(1000);
   });
 });

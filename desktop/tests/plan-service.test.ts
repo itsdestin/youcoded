@@ -400,6 +400,23 @@ describe('result discriminants', () => {
     expect(addTokens).toHaveBeenCalledWith({ ref: REF, planId: view.planId, stepId: 's1', tokens: 1000 });
   });
 
+  it('refuses an Add budget smaller than the recorded minimum, naming that minimum (Task 4)', async () => {
+    const addTokens = vi.fn(async ({ ref, planId }: { ref: PlanRef; planId: string }) => {
+      const { projectPlan } = await import('../src/main/harness/plans/plan-journal');
+      return projectPlan((await journal.get(ref, planId))!);
+    });
+    const svc = makeService({ budget: { addTokens } });
+    const view = await propose({ svc });
+    await journal.mutate(REF, (file) => {
+      file.plans[0].status = 'paused';
+      file.plans[0].paused = { stepId: 's1', reason: 'limit', attemptId: 'a1', minimumAddTokens: 2_500 };
+    });
+    expect(await svc.addBudget(SID, view.planId, 2_499)).toEqual({ ok: false, error: expect.stringContaining('2,500') });
+    expect(addTokens).not.toHaveBeenCalled();
+    expect(await svc.addBudget(SID, view.planId, 2_500)).toMatchObject({ ok: true });
+    expect(addTokens).toHaveBeenCalledTimes(1);
+  });
+
   it('settings results use the same three forms', () => {
     const forms: Array<PlanAutoApproveRead | PlanSettingsWriteResult> = [
       { ok: true, underTokens: 0 }, { ok: true }, { ok: false, error: 'x' }, { ok: false, unsupported: true, error: 'y' },

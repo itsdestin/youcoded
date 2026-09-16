@@ -104,7 +104,11 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
             : failedPlanProjection(toolUseId, modelLabel),
         };
       }
-      if (ctx.signal.aborted || !committed) {
+      // WHY `committed` alone decides (Task 4, from the Task 2 review): once the
+      // latch was taken the service wrote the plan durably, so a Stop that
+      // lands afterwards must not relabel a real, approvable plan "Canceled" —
+      // the card would contradict the journal. Only an uncommitted call fails.
+      if (!committed) {
         return {
           text: ctx.signal.aborted
             ? 'Canceled: the user interrupted this plan proposal.'
