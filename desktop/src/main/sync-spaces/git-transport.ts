@@ -381,17 +381,17 @@ export class GitTransport implements SyncTransport {
       // down, returning {pushed:true} while none of the user's changes
       // actually pushed. Only the "nothing to commit" half of isCommitBenign
       // is safe to fall through on — there, HEAD already IS the right commit.
-      if (c.code !== 0 && isLockContended(c)) return { pushed: false, oversize };
+      if (c.code !== 0 && isLockContended(c)) return { pushed: false, contacted: false, oversize };
       const head = await this.git(space, ['rev-parse', 'HEAD']);
       this.assertLocalOk(space, 'rev-parse', head);
       commit = head.stdout.trim();
     }
-    if (!(await this.hasRemote(space))) return { pushed: false, commit, oversize };
+    if (!(await this.hasRemote(space))) return { pushed: false, contacted: false, commit, oversize };
     const ahead = await this.git(space, ['rev-list', '--count', 'origin/main..main']);
     // origin/main may not exist yet (first push) — rev-list fails benignly;
     // push anyway. Corruption must not ride that fallthrough.
     this.throwIfCorrupt(space, 'rev-list', ahead);
-    if (ahead.code === 0 && ahead.stdout.trim() === '0' && !commit) return { pushed: false, oversize };
+    if (ahead.code === 0 && ahead.stdout.trim() === '0' && !commit) return { pushed: false, contacted: false, oversize };
     const p = await this.git(space, ['push', '-u', 'origin', 'main']);
     if (p.code !== 0) {
       // Non-fast-forward: another device pushed first. Merge, then push again.
@@ -418,9 +418,12 @@ export class GitTransport implements SyncTransport {
           throw new Error(`Sync push failed for ${space.id}: ${stderrTail(retry.stderr)}`);
         }
       }
-      return { pushed: retry.code === 0, commit, oversize, updated: recovery.updated, conflictCopies: recovery.conflictCopies };
+      // Contact is either the retry landing or the recovery pull's fetch
+      // having reached origin — an offline retry after an offline fetch is
+      // the one case that must NOT read as contact (see PushResult.contacted).
+      return { pushed: retry.code === 0, contacted: retry.code === 0 || recovery.contacted === true, commit, oversize, updated: recovery.updated, conflictCopies: recovery.conflictCopies };
     }
-    return { pushed: true, commit, oversize };
+    return { pushed: true, contacted: true, commit, oversize };
   }
 
   private async unstageOversize(space: SyncSpace): Promise<string[]> {
@@ -464,7 +467,7 @@ export class GitTransport implements SyncTransport {
     // honest benign result immediately and let the next poll cycle retry once
     // the lock clears — mirrors the same transient-lock-is-silent behavior at
     // every other lock-taking op in this file.
-    if (add.code !== 0 && isLockContended(add)) return { updated: false, conflictCopies: [] };
+    if (add.code !== 0 && isLockContended(add)) return { updated: false, conflictCopies: [], contacted: false };
     await this.unstageOversize(space);
     const dirtyR = await this.git(space, ['diff', '--cached', '--name-only']);
     this.assertLocalOk(space, 'diff', dirtyR);
@@ -485,10 +488,10 @@ export class GitTransport implements SyncTransport {
       // Report the honest benign result instead and let the next poll cycle
       // retry once the lock clears. "Nothing to commit" doesn't need this —
       // there the tree genuinely was clean already.
-      if (snap.code !== 0 && isLockContended(snap)) return { updated: false, conflictCopies: [] };
+      if (snap.code !== 0 && isLockContended(snap)) return { updated: false, conflictCopies: [], contacted: false };
     }
 
-    if (!(await this.hasRemote(space))) return { updated: false, conflictCopies: [] };
+    if (!(await this.hasRemote(space))) return { updated: false, conflictCopies: [], contacted: false };
     const fetch = await this.git(space, ['fetch', 'origin', 'main']);
     if (fetch.code !== 0) {
       // Auth refusals must NOT masquerade as offline: "offline" is silent by
@@ -498,8 +501,12 @@ export class GitTransport implements SyncTransport {
       const auth = classifyGitAuthFailure(fetch.stderr, fetch.tokenUsed);
       if (auth) throwAuthFailure(auth);
       this.throwIfCorrupt(space, 'fetch', fetch);
-      return { updated: false, conflictCopies: [] }; // offline — never block (spec §13)
+      return { updated: false, conflictCopies: [], contacted: false }; // offline — never block (spec §13)
     }
+    // Every return below follows a fetch that exited 0: origin was reached,
+    // whatever the local merge then decides. Stamped once here so no branch
+    // below can forget it.
+    const contacted = true;
     // Fix: a fresh device has no local `main` yet (nothing committed). `main..origin/main`
     // errors on an unborn branch, so adopt the remote wholesale on first sync — this is
     // what lets a second device actually receive the first device's push.
@@ -521,11 +528,11 @@ export class GitTransport implements SyncTransport {
       // the real outcome; the throw above still fires for anything that isn't
       // the benign lock case, so this stays honest without widening the
       // allowlist.
-      return { updated: co.code === 0, conflictCopies: [] };
+      return { updated: co.code === 0, conflictCopies: [], contacted };
     }
     const behind = await this.git(space, ['rev-list', '--count', 'main..origin/main']);
     this.throwIfCorrupt(space, 'rev-list', behind);
-    if (behind.code !== 0 || behind.stdout.trim() === '0') return { updated: false, conflictCopies: [] };
+    if (behind.code !== 0 || behind.stdout.trim() === '0') return { updated: false, conflictCopies: [], contacted };
 
     // Fix: --allow-unrelated-histories covers the mainline "second device" case —
     // a device that enables sync on a space that ALREADY has content (e.g. the
@@ -535,7 +542,7 @@ export class GitTransport implements SyncTransport {
     // still route through the convergent conflict-copy resolution below;
     // non-overlapping files simply union.
     const merge = await this.git(space, ['merge', '--no-edit', '--allow-unrelated-histories', 'origin/main']);
-    if (merge.code === 0) return { updated: true, conflictCopies: [] };
+    if (merge.code === 0) return { updated: true, conflictCopies: [], contacted };
 
     // Conflicts: resolve each convergently.
     const conflicted = (await this.git(space, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout
@@ -579,7 +586,7 @@ export class GitTransport implements SyncTransport {
       await this.git(space, ['merge', '--abort']);
       throw new Error(`Sync merge could not complete for ${space.id}: ${commit.stderr.trim() || 'git commit failed'}`);
     }
-    return { updated: true, conflictCopies: copies };
+    return { updated: true, conflictCopies: copies, contacted };
   }
 
   private freeCopyName(space: SyncSpace, rel: string): string {

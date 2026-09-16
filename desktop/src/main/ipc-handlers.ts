@@ -2770,7 +2770,14 @@ export function registerIpcHandlers(
       const providers = await providerRegistry.list();
       const p = providers.find((x) => x.id === binding.providerId);
       if (p?.type === 'local-engine') return null;
-      const models = await modelCatalog.get(providers);
+      // `[p]`, not `providers` — the same narrowing the vision closure above
+      // already has, for the same reason: this lookup only ever reads the
+      // binding's own provider's rows, so handing over the whole list built
+      // and threw away every OTHER provider's catalog on every hosted
+      // create/resume/swap (measured 2026-09-05 while fixing the local half).
+      // A provider missing from the registry is caught below: `p` undefined
+      // means no rows, and the lookup falls through to null as before.
+      const models = await modelCatalog.get(p ? [p] : []);
       const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
       return hit?.pricing ?? null;
     },

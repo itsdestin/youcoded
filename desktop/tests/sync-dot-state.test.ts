@@ -149,6 +149,13 @@ describe('lastSyncedLabel', () => {
     const s = status({ recentEvents: [{ type: 'synced', spaceId: 'project:budget-app', at: NOW - 2 * 60_000 }] });
     expect(lastSyncedLabel('project:budget-app', s, NOW)).toBe('2 minutes ago');
   });
+  it('ignores an offline cycle (contacted:false) — "just now" must mean GitHub was reached', () => {
+    const s = status({ recentEvents: [
+      { type: 'synced', spaceId: 'project:budget-app', at: NOW - 3 * 60 * 60_000, contacted: true },
+      { type: 'synced', spaceId: 'project:budget-app', at: NOW - 5_000, contacted: false },
+    ] });
+    expect(lastSyncedLabel('project:budget-app', s, NOW)).toBe('3 hours ago');
+  });
   it('returns null when no synced event carries a timestamp', () => {
     const s = status({ recentEvents: [{ type: 'synced', spaceId: 'project:budget-app' }] });
     expect(lastSyncedLabel('project:budget-app', s, NOW)).toBeNull();

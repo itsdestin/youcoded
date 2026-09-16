@@ -358,7 +358,9 @@ export interface TranscriptEvent {
      * instead of a user bubble — the text is what the PARENT MODEL reads, and
      * showing it as the user's own words, or even as a big notice, put text in
      * the chat nobody actually said (Destin, 1b hands-on).
-     * Values today: 'specialist-report' (a background helper's report) and
+     * Values today: 'specialist-report' (a background helper's report),
+     * 'shell-running' (a background command still going at a 5/15-minute
+     * mark — a plain note, never a card) and
      * 'shell-complete' (G-1: a background command finished or was stopped by
      * the user); a plain `string` (not a union) so a future injected kind never
      * needs a TranscriptEvent schema change.
@@ -962,7 +964,19 @@ export interface ShellInjectedMeta {
   }>;
 }
 
-export type InjectedMeta = SpecialistInjectedMeta | ShellInjectedMeta;
+/** Companion to `injected: 'shell-running'` (2026-09-16): a background command
+ *  that is STILL running at one of the LONG_RUN_NOTICE_MS marks. Not a
+ *  completion — deliberately a different kind from ShellInjectedMeta so the
+ *  chat reducer never folds it into a Bash card as a finished run; the
+ *  renderer shows it as a plain system note. */
+export interface ShellRunningInjectedMeta {
+  kind: 'shell-running';
+  /** A list for the same reason ShellInjectedMeta's is: every mark ready at
+   *  one idle boundary goes out as ONE turn (D8), never one turn per build. */
+  runs: Array<{ shellId: string; toolUseId: string; elapsedMs: number }>;
+}
+
+export type InjectedMeta = SpecialistInjectedMeta | ShellInjectedMeta | ShellRunningInjectedMeta;
 
 /** The push event `native:shell-event` carries (G-1): one run record changed. */
 export type ShellEvent = { sessionId: string; run: ShellRunView };
