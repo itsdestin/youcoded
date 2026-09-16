@@ -222,6 +222,85 @@ describe('subagent-usage — the producer half', () => {
     return { seen, childId };
   }
 
+  // Fix 2026-09-16 (Destin: "lets also fix 1"). runSpecialist summed the run's
+  // spend in a CLOSURE LOCAL and only returned it on the success path, and
+  // runDelegation reported it only there — so a helper that was STOPPED, or that
+  // hit a provider error after several real turns, reported nothing at all. The
+  // parent's Cost chip went quietly short with nothing to trace it to, which is
+  // the exact loss the teardown-race branch already logs an ERROR about.
+  //
+  // Both tests drive the REAL failure paths through runDelegation's catch.
+  describe('a run that does not finish still reports what it spent', () => {
+    /** Run a specialist, injecting one event on the CHILD's own session as soon
+     *  as the child names itself — which is how the harness ends a run early. */
+    async function runInterruptedBy(data: Record<string, unknown>, type: 'user-interrupt' | 'session-error') {
+      boot(RUN);
+      await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const seen: any[] = [];
+      let injected = false;
+      host.on('transcript-event', (e: any) => {
+        seen.push(e);
+        if (injected || !e.data?.agentId) return;
+        const child = (host as any).live.get(e.data.agentId);
+        if (!child) return;
+        injected = true;
+        child.session.emit('transcript-event', {
+          type, sessionId: e.data.agentId, uuid: `child-${type}`, timestamp: 1, data,
+        });
+      });
+      let threw: unknown;
+      try {
+        await host.spawnSpecialist('root-1', {
+          specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
+          binding: { providerId: 'openrouter', modelId: 'child-model' },
+          token: { parentId: 'root-1', writer: false }, description: 'find it',
+        } as any);
+      } catch (err) { threw = err; }
+      await host.drain('root-1');
+      expect(injected).toBe(true);
+      return { seen, threw };
+    }
+
+    const SPENT = { inputTokens: 300_000, outputTokens: 8_000, cacheReadTokens: 0, cacheCreationTokens: 0 };
+
+    it('a STOPPED specialist reports the tokens its completed steps already spent', async () => {
+      const { seen, threw } = await runInterruptedBy({ usage: SPENT }, 'user-interrupt');
+      // The run still fails — this fix changes the accounting, not the outcome.
+      expect(String((threw as Error)?.message)).toMatch(/stopped before it could report/);
+
+      const reports = seen.filter((e) => e.type === 'subagent-usage');
+      expect(reports).toHaveLength(1);
+      // The abandoned turn's 300k, on top of whatever the run had completed
+      // before it — never zero, which is what it used to be.
+      expect(reports[0].data.usage.inputTokens).toBeGreaterThanOrEqual(300_000);
+      expect(reports[0].data.usage.outputTokens).toBeGreaterThanOrEqual(8_000);
+      // …and priced at the CHILD's own model, exactly like a finished run.
+      expect(reports[0].data.usage.costUsd).toBeGreaterThan(0);
+      expect(reports[0].data.model).toBe('child-model');
+      expect(reports[0].sessionId).toBe('root-1');
+    });
+
+    it('a FAILED specialist reports it too', async () => {
+      const { seen, threw } = await runInterruptedBy(
+        { text: 'the provider gave up', usage: SPENT }, 'session-error',
+      );
+      expect(String((threw as Error)?.message)).toMatch(/the provider gave up/);
+      const reports = seen.filter((e) => e.type === 'subagent-usage');
+      expect(reports).toHaveLength(1);
+      expect(reports[0].data.usage.inputTokens).toBeGreaterThanOrEqual(300_000);
+    });
+
+    it('a run that measured nothing reports nothing — never a fabricated zero', async () => {
+      // No usage on the ending event. The run's own completed steps are still
+      // counted (RUN's first step lands before the injection), but nothing is
+      // invented for the abandoned one.
+      const { seen } = await runInterruptedBy({}, 'user-interrupt');
+      const reports = seen.filter((e) => e.type === 'subagent-usage');
+      expect(reports).toHaveLength(1);
+      expect(reports[0].data.usage.inputTokens).toBeLessThan(300_000);
+    });
+  });
+
   // Fix 2026-09-16. A specialist that compacts pays for its own summarize call,
   // and that money was counted absolutely nowhere: runSpecialist's accumulator
   // only read `turn-complete`, and a child's `compact-summary` is not in
@@ -388,7 +467,7 @@ describe('subagent-usage — the producer half', () => {
     // (docs/error-message-standards.md).
     expect(logSpy).toHaveBeenCalledWith(
       'ERROR', 'NativeSessionHost',
-      "could not report a finished specialist's spend to its parent (the parent session was no longer live) — the parent's session totals will be short by this run",
+      "could not report a specialist's spend to its parent (the parent session was no longer live) — the parent's session totals will be short by this run",
       expect.objectContaining({ childId, parentId: 'root-1' }),
     );
     logSpy.mockRestore();
@@ -431,7 +510,7 @@ describe('subagent-usage — the producer half', () => {
     // saying the parent had gone would be a false statement of cause.
     expect(logSpy).toHaveBeenCalledWith(
       'ERROR', 'NativeSessionHost',
-      "could not report a finished specialist's spend to its parent (the specialist session was no longer live) — the parent's session totals will be short by this run",
+      "could not report a specialist's spend to its parent (the specialist session was no longer live) — the parent's session totals will be short by this run",
       expect.objectContaining({ childId, parentId: 'root-1' }),
     );
     logSpy.mockRestore();
@@ -481,7 +560,7 @@ describe('subagent-usage — the producer half', () => {
     // the child was still there, and it wasn't.
     expect(logSpy).toHaveBeenCalledWith(
       'ERROR', 'NativeSessionHost',
-      "could not report a finished specialist's spend to its parent (neither session was still live) — the parent's session totals will be short by this run",
+      "could not report a specialist's spend to its parent (neither session was still live) — the parent's session totals will be short by this run",
       expect.objectContaining({ childId, parentId: 'root-1' }),
     );
     logSpy.mockRestore();
