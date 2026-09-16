@@ -293,7 +293,7 @@ export class PlanExecutor implements PlanExecutorHooks {
   }
 
   private keyOf(ref: PlanRef, planId: string): string {
-    return `${ref.sessionId} ${planId}`;
+    return `${ref.sessionId}\u0000${planId}`;
   }
 
   /** How many plans are advancing right now (tests + diagnostics). */
