@@ -764,6 +764,29 @@ describe('pausing, stopping and interruption settle before anything is visible',
     expect(runner.live).toBe(0);
   });
 
+  it('review fix 7 follow-up: the heartbeat is stopped and the run is gone BEFORE the paused card is emitted', async () => {
+    const runner = new FakeRunner((l) => (l.brief === 'Review a'
+      ? async () => ({ kind: 'stopped', stop: { kind: 'exhausted', detail: 'used up' } })
+      : completes('ok')));
+    const fence = await seed(record(TWO_STEP));
+    const timers = { setInterval: () => 'hb', clearInterval: () => { log.push('heartbeat-cleared'); } };
+    const exec = executor(runner, { timers });
+    const activeAtEvent: number[] = [];
+    const seen = events;
+    events = Object.assign(seen, {
+      push: (...e: PlanEvent[]) => {
+        if (e.some((x) => x.plan.status === 'paused')) activeAtEvent.push(exec.activeRuns());
+        return Array.prototype.push.apply(seen, e);
+      },
+    });
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect((await plan()).status).toBe('paused');
+    expect(log.indexOf('heartbeat-cleared')).toBeGreaterThan(-1);
+    expect(log.indexOf('heartbeat-cleared')).toBeLessThan(log.indexOf('event:paused'));
+    expect(activeAtEvent).toEqual([0]);
+  });
+
   it('a paused, interrupted or stopped plan owns no timer', async () => {
     const live = new Set<unknown>();
     const timers = {
@@ -794,8 +817,10 @@ describe('the lease', () => {
     exec.start({ ref: REF, planId: 'p1', fence });
     const before = (await plan()).lease!.expiresAt;
     now = 50_000;
-    await new Promise((r) => setTimeout(r, 40));
-    expect((await plan()).lease!.expiresAt).toBe(50_000 + 60_000);
+    // Wait on the renewed lease itself, not a fixed sleep: a loaded machine
+    // can miss a 10 ms tick within 40 ms (failed once under verify load,
+    // 2026-09-16; test-suite-hygiene "never a fixed sleep").
+    await vi.waitFor(async () => expect((await plan()).lease!.expiresAt).toBe(50_000 + 60_000));
     expect(before).toBe(61_000);
     release();
     await exec.settled('p1');
@@ -1128,7 +1153,11 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       ] }],
     });
     let failed = false;
-    const runner = new FakeRunner(() => (failed ? completes('ok') : (failed = true, failsWith('hiccup'))));
+    const runner = new FakeRunner(() => {
+      if (failed) return completes('ok');
+      failed = true;
+      return failsWith('hiccup');
+    });
     runner.verdicts.set('kid-f', { kind: 'resumable', briefDelivered: true });
     const fence = await seed(rec);
     const exec = executor(runner);

@@ -400,6 +400,11 @@ export class PlanExecutor implements PlanExecutorHooks {
   private readonly heartbeatMs: number;
   private readonly timers: PlanExecutorTimers;
   private readonly runs = new Map<string, ActiveRun>();
+  /** Runs whose visible end is being written. WHY separate (review fix 7
+   *  follow-up): "a paused plan owns no timer" must already hold when the
+   *  paused card is emitted, so the heartbeat stops and the run leaves `runs`
+   *  BEFORE that write; `settled`/`stop` still find it here until it is done. */
+  private readonly finishing = new Map<string, ActiveRun>();
 
   constructor(deps: PlanExecutorDeps) {
     this.journal = deps.journal;
@@ -429,7 +434,7 @@ export class PlanExecutor implements PlanExecutorHooks {
 
   /** Resolves once the plan's current run (if any) has fully settled. */
   async settled(planId: string): Promise<void> {
-    for (const run of [...this.runs.values()]) if (run.planId === planId) await run.done;
+    for (const run of [...this.runs.values(), ...this.finishing.values()]) if (run.planId === planId) await run.done;
   }
 
   // ---- PlanExecutorHooks ----
@@ -456,7 +461,8 @@ export class PlanExecutor implements PlanExecutorHooks {
   /** Returns true when `finalize` was applied in the executor's final write
    *  (so the caller must not write the stopped state again). */
   async stop(input: { ref: PlanRef; planId: string; finalize?: (plan: PlanRecord) => void }): Promise<boolean> {
-    const run = this.runs.get(this.keyOf(input.ref, input.planId));
+    const key = this.keyOf(input.ref, input.planId);
+    const run = this.runs.get(key) ?? this.finishing.get(key);
     if (!run) return false;
     const request: HaltRequest = { kind: 'stop', ...(input.finalize ? { finalize: input.finalize } : {}) };
     this.requestHalt(run, request);
@@ -468,14 +474,16 @@ export class PlanExecutor implements PlanExecutorHooks {
   async interruptSession(sessionId: string): Promise<void> {
     const runs = [...this.runs.values()].filter((r) => r.ref.sessionId === sessionId);
     for (const run of runs) this.requestHalt(run, { kind: 'interrupt' });
-    await Promise.all(runs.map((r) => r.done));
+    // A run already writing its end is waited for too (it is not interrupted).
+    const ending = [...this.finishing.values()].filter((r) => r.ref.sessionId === sessionId);
+    await Promise.all([...runs, ...ending].map((r) => r.done));
   }
 
   /** App quit: every plan becomes `interrupted`, all settled in parallel. */
   async interruptAll(): Promise<void> {
     const runs = [...this.runs.values()];
     for (const run of runs) this.requestHalt(run, { kind: 'interrupt' });
-    await Promise.all(runs.map((r) => r.done));
+    await Promise.all([...runs, ...this.finishing.values()].map((r) => r.done));
   }
 
   // ---- internals ----
@@ -549,9 +557,18 @@ export class PlanExecutor implements PlanExecutorHooks {
     } catch (e) {
       console.error('[plan-executor] settling failed', e);
     } finally {
-      this.timers.clearInterval(run.heartbeat);
-      run.heartbeat = undefined;
+      this.retireRun(run);
+      this.finishing.delete(run.key);
+    }
+  }
+
+  /** Stop the heartbeat and take the run out of the active set (idempotent). */
+  private retireRun(run: ActiveRun): void {
+    this.timers.clearInterval(run.heartbeat);
+    run.heartbeat = undefined;
+    if (this.runs.get(run.key) === run) {
       this.runs.delete(run.key);
+      this.finishing.set(run.key, run);
     }
   }
 
@@ -1308,6 +1325,9 @@ export class PlanExecutor implements PlanExecutorHooks {
           console.error('[plan-executor] could not work out the minimum Add budget', e);
         }
       }
+      // Nothing of this run may outlive the visible write below (settle before
+      // visible): the heartbeat stops and the run leaves the active set now.
+      this.retireRun(run);
       if (final.kind === 'stop') {
         // Review item 8: PlanService's "stopped" edit rides in this same
         // write, so a crash can never leave a released-but-running plan.
