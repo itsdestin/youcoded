@@ -1004,7 +1004,7 @@ describe('seen-uuid dedup appends in place (2026-09-16 A3)', () => {
     const set = state.get(SESSION)!.seenUuids;
     expect(set.has('um1')).toBe(true);
     state = dispatch(state, text('t1'));
-    state = dispatch(state, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'tc1', usage: { input_tokens: 1, output_tokens: 1 } } as ChatAction);
+    state = dispatch(state, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'tc1', usage: { input_tokens: 1, output_tokens: 1 } } as unknown as ChatAction);
     expect(state.get(SESSION)!.seenUuids).toBe(set);
     expect(set.has('t1')).toBe(true);
     expect(set.has('tc1')).toBe(true);
