@@ -12,9 +12,17 @@ const mocks = vi.hoisted(() => ({
   state: { timeline: [] as any[] },
 }));
 
+// useTrustGateActive reads through the store (a cached selector since
+// 2026-09-16 — see its WHY), so the mock exposes the same state via the two
+// store methods the selector uses. Each test assigns a NEW timeline array, so
+// the selector's timeline-identity cache rescans per case.
 vi.mock('../src/renderer/state/chat-context', () => ({
   useChatState: () => mocks.state,
   useChatDispatch: () => vi.fn(),
+  useChatStore: () => ({
+    getSession: () => mocks.state,
+    subscribeSession: () => () => {},
+  }),
 }));
 
 import { useTrustGateActive } from '../src/renderer/components/TrustGate';

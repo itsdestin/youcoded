@@ -6,7 +6,7 @@ import React, {
   useSyncExternalStore,
   Dispatch,
 } from 'react';
-import { ChatAction, ChatState, SessionChatState, createSessionChatState } from './chat-types';
+import { ChatAction, ChatState, SessionChatState, ToolCallState, createSessionChatState } from './chat-types';
 import { chatReducer } from './chat-reducer';
 
 // Stable fallback returned by useChatState(id) when the session doesn't exist
@@ -138,6 +138,35 @@ export function useChatState(sessionId: string): SessionChatState {
     [store, sessionId],
   );
   const getSnapshot = useCallback(() => store.getSession(sessionId), [store, sessionId]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+// WHY these two exist (2026-09-16 smoothness sweep, A1): AppInner read the
+// streaming session's WHOLE state three times — for the tasks chip's map, for
+// the trust overlay's flag and for one "is it thinking" boolean — so every
+// streamed word re-rendered the entire shell (header, pills, status bar, input
+// bar, the parked settings drawer, every session's chat and terminal), ~60×/s
+// for the length of a reply. Each selector returns a primitive or a Map whose
+// identity the reducer preserves across text deltas (toolCalls only changes on
+// a tool event), so useSyncExternalStore skips the render unless the value
+// itself moved. Same idiom as useStreamingGate / useSessionAttention.
+export function useSessionToolCalls(sessionId: string): Map<string, ToolCallState> {
+  const store = useStore();
+  const subscribe = useCallback(
+    (cb: () => void) => store.subscribeSession(sessionId, cb),
+    [store, sessionId],
+  );
+  const getSnapshot = useCallback(() => store.getSession(sessionId).toolCalls, [store, sessionId]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+export function useSessionIsThinking(sessionId: string): boolean {
+  const store = useStore();
+  const subscribe = useCallback(
+    (cb: () => void) => store.subscribeSession(sessionId, cb),
+    [store, sessionId],
+  );
+  const getSnapshot = useCallback(() => store.getSession(sessionId).isThinking, [store, sessionId]);
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 

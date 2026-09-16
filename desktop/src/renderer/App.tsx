@@ -25,7 +25,7 @@ import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
-import { ChatProvider, useChatDispatch, useChatStore, useChatState } from './state/chat-context';
+import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
 import type { ChatAction } from './state/chat-types';
 import { installTranscriptBatcher, applyChatHydrate } from './state/transcript-batch';
 import {
@@ -3439,10 +3439,12 @@ function AppInner() {
     if (done !== null && Date.now() - done >= 24 * 60 * 60 * 1000) triggerTip('themes');
   }, [settingsOpen, tourOpen]);
 
-  // A tip waits while the assistant is answering (GuideTipHost). One session's
-  // state through the cached per-session selector, never the whole map.
-  const guideChatState = useChatState(sessionId ?? '');
-  const guideBusy = !!sessionId && !!guideChatState?.isThinking;
+  // A tip waits while the assistant is answering (GuideTipHost). One boolean
+  // through a cached selector — NOT useChatState: that subscribed this root
+  // component to the whole session, so every streamed word re-rendered the
+  // entire shell (2026-09-16 A1).
+  const guideThinking = useSessionIsThinking(sessionId ?? '');
+  const guideBusy = !!sessionId && guideThinking;
   const exitTour = useCallback(() => {
     markGuideDone();
     setTourOpen(false);
