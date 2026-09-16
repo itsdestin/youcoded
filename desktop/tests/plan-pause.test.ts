@@ -40,15 +40,20 @@ describe('classifyPause', () => {
   });
 });
 
+// The executor's source text holds template placeholders; they are written
+// here as #{…} and turned into ${…}, so this file has no string that only
+// looks like a template (lint: no-template-curly-in-string).
+const src = (text: string) => text.replaceAll('#{', '$' + '{');
+
 describe('the executor still writes the sentences the card reads', () => {
   it('unknown outcome', () => {
-    expect(executorSource).toContain('`its last action (${verdict.tool})`');
-    expect(executorSource).toContain('reason: `A specialist in step "${stepId}" was cut off, and it isn\'t known whether ${what} finished. `');
+    expect(executorSource).toContain(src('`its last action (#{verdict.tool})`'));
+    expect(executorSource).toContain(src('reason: `A specialist in step "#{stepId}" was cut off, and it isn\'t known whether #{what} finished. `'));
     expect(executorSource).toContain("+ 'Press Continue to let it pick up from what it recorded.',");
   });
 
   it('iteration cap', () => {
-    expect(executorSource).toContain('reason: `The repeated steps ran ${step.max_iterations} times without meeting their stop condition ("${step.until}"). `');
+    expect(executorSource).toContain(src('reason: `The repeated steps ran #{step.max_iterations} times without meeting their stop condition ("#{step.until}"). `'));
     expect(executorSource).toContain("+ 'Ask the assistant to revise the plan.',");
   });
 });
