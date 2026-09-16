@@ -9,6 +9,7 @@
 // specialist runs on, what its fixed starting cost is, what a transcript
 // proves after a crash, how much Add budget is enough — live here, next to the
 // rest of the plan code, where they can be read and tested together.
+import { PLAN_COMMENT_TAG } from '../history-only';
 import { createHash } from 'crypto';
 import type { CatalogModel, ModelBinding } from '../../../shared/provider-types';
 import type { PlanView, TranscriptEvent } from '../../../shared/types';
@@ -484,7 +485,7 @@ export class PlanHostBridge {
 /** 5b follow-up: what the MODEL is also told with a Comment's follow-up turn.
  *  History-only (HarnessSession `historyNote`): the chat shows only
  *  commentTurnText, while the model is pointed at the one tool that answers. */
-export const COMMENT_MODEL_NOTE = '<plan-comment>\nThe user\'s message above is feedback on the plan you proposed. '
+export const COMMENT_MODEL_NOTE = `${PLAN_COMMENT_TAG}\nThe user's message above is feedback on the plan you proposed. `
   + 'Answer it by calling propose_plan with a revised plan that addresses it.\n</plan-comment>';
 
 /** The follow-up turn a Comment queues (design §2). The user's own words come

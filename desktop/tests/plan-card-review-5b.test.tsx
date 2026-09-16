@@ -257,6 +257,8 @@ describe('7. the card’s error line follows the error standards', () => {
     const alert = await within(block()).findByRole('alert');
     expect(alert).toHaveTextContent("Couldn't update the plan. Please try again.");
     expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
+    // 5b review: an unknown cause offers Diagnose too (error-message-standards §2).
+    expect(within(alert).getByRole('button', { name: 'Diagnose with the assistant' })).toBeInTheDocument();
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(status()).toBe('running'));
     expect(plans.approve).toHaveBeenCalledTimes(2);
@@ -269,6 +271,7 @@ describe('7. the card’s error line follows the error standards', () => {
     const alert = await within(block()).findByRole('alert');
     expect(alert).toHaveTextContent('This plan is running in another YouCoded window. Stop it there.');
     expect(within(alert).queryByRole('button', { name: 'Report bug' })).toBeNull();
+    expect(within(alert).queryByRole('button', { name: 'Diagnose with the assistant' })).toBeNull();
     expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
   });
 

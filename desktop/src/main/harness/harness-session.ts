@@ -186,6 +186,7 @@ import { BUILTIN_ROSTER, type SpecialistRoster } from './specialists/registry';
 import type { ShellRegistry } from './shell-registry';
 import { createSkillCatalog, type SkillCatalog } from './skills/skill-catalog';
 import { fitInjection } from './injection/injection-budget';
+import { isHistoryOnlyUserMessage } from './history-only';
 import type { TriggerIndex } from './injection/path-triggers';
 import { mcpToolsFor, estimateToolSchemaTokens } from './mcp/mcp-tools';
 import type { ReadyServer } from './mcp/mcp-manager';
@@ -1665,10 +1666,12 @@ export class HarnessSession extends EventEmitter {
     const call = messages[toolIdx - 1];
     const hasCall = !!call && call.role === 'assistant';
     // The user turn that started this exchange, when there is one — it is what
-    // tells the model WHY the tool ran, and it is small.
+    // tells the model WHY the tool ran, and it is small. 5b review: a
+    // history-only user message (a rule injection or a plan Comment note) is
+    // not that turn — keep looking for the user's own words.
     let userIdx = -1;
     for (let i = (hasCall ? toolIdx - 2 : toolIdx - 1); i >= 0; i--) {
-      if (messages[i].role === 'user') { userIdx = i; break; }
+      if (messages[i].role === 'user' && !isHistoryOnlyUserMessage(messages[i])) { userIdx = i; break; }
     }
     const head: ModelMessage[] = [];
     if (userIdx >= 0) head.push(messages[userIdx]);
@@ -2035,11 +2038,11 @@ export class HarnessSession extends EventEmitter {
    *  exclusion was retired 2026-09-09; Task `list: true` replaced it.) */
   private summarizeCutIndex(): number {
     const userIdx: number[] = [];
+    // 5b review: a plan Comment's model-only `<plan-comment>` note is skipped
+    // the same way, so the cut can never fall between a Comment and its note
+    // (history-only.ts holds both shapes).
     this.history.forEach((m, i) => {
-      const c = (m as any).content;
-      const isSyntheticInjection = typeof c === 'string'
-        && c.startsWith('<project-rule ');
-      if ((m as any).role === 'user' && !isSyntheticInjection) userIdx.push(i);
+      if ((m as any).role === 'user' && !isHistoryOnlyUserMessage(m as any)) userIdx.push(i);
     });
     return userIdx.length < 2 ? 0 : userIdx[userIdx.length - 2];
   }

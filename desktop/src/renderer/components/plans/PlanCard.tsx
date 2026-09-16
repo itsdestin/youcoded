@@ -397,10 +397,11 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
 
       {/* The card's one error slot (Task 5b, error-message-standards): the
           host's own reason with Retry; the bridge's general "Couldn't update
-          the plan" (no known cause) also gets Report bug. Never a bare red
+          the plan" (no known cause) also gets Report bug and Diagnose
+          (5b review). Never a bare red
           sentence (design guide §4.7). */}
       {error && (error === PLAN_UNREADABLE
-        ? <ErrorState variant="inline" message={error} onReportBug={() => report(error, false)} onRetry={retry} />
+        ? <ErrorState variant="inline" message={error} onReportBug={() => report(error, false)} onDiagnose={() => report(error, true)} onRetry={retry} />
         : <ErrorState variant="inline" message={error} onRetry={retry} />)}
       {/* "Plans aren't available here" is why the buttons are disabled, not a
           failure: a quiet note beside them (design guide §4.7 "Disabled"). */}

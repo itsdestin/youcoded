@@ -2,7 +2,7 @@
 // Real filesystem journal + real PlanBudget; only the specialists themselves
 // are fakes (a scripted runner). Every assertion about money or phases is read
 // back from the journal file, because resume reads nothing else.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
@@ -632,6 +632,19 @@ describe('pausing, stopping and interruption settle before anything is visible',
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
     expect((await plan()).paused!.kind).toBe(kind);
+  });
+
+  it('5b review: an attempt-exhausted refusal is a budget pause even when no attempt is named', async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    const fence = await seed(record(TWO_STEP));
+    vi.spyOn(budget, 'reserveAttempts').mockResolvedValueOnce({ ok: false, reason: 'attempt-exhausted', detail: 'used up' } as any);
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(runner.launches).toHaveLength(0);
+    expect(p.paused).toMatchObject({ kind: 'budget', reason: 'used up' });
+    expect(p.paused!.attemptId).toBeUndefined();
   });
 
   it('a wave that does not fit the ceiling pauses with the budget detail and launches nothing', async () => {

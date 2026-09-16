@@ -692,7 +692,9 @@ export class PlanExecutor implements PlanExecutorHooks {
       const shortfall = !exhausted && 'shortfallTokens' in reserved ? reserved.shortfallTokens : undefined;
       this.requestHalt(run, {
         kind: 'pause', stepId: step.id, reason: reserved.detail,
-        why: exhausted ? 'budget'
+        // 5b review: attempt-exhausted is a budget pause even when the
+        // spent attempt can't be named here.
+        why: exhausted || reserved.reason === 'attempt-exhausted' ? 'budget'
           : shortfall !== undefined ? 'ceiling-shortfall'
           : reserved.reason === 'local-pool' ? 'local-pool'
           : reserved.reason === 'invalid' ? 'unexpected-error'

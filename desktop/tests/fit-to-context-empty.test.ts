@@ -102,6 +102,20 @@ describe('fitToContext — never returns an empty message list', () => {
     expect(roles[0]).toBe('user');
   });
 
+  it('5b review: salvage keeps the REAL user turn, never a history-only note after it', () => {
+    // A plan Comment's follow-up turn is the user's words followed by a
+    // model-only <plan-comment> note. That note is not what started the
+    // exchange; picking it would drop the user's actual words.
+    const s = session(32_768);
+    const [user, call, result] = oversizedReadHistory(100_000);
+    const fitted = (s as any).fitToContext([
+      user,
+      { role: 'user', content: '<plan-comment>\nAnswer with propose_plan.\n</plan-comment>' },
+      call, result,
+    ] as ModelMessage[]) as ModelMessage[];
+    expect(fitted[0]).toEqual(user);
+  });
+
   it('salvage TELLS the model the output was cut, and actually shrinks it', () => {
     // Without the notice a model reads a hard-cut file as complete and answers
     // confidently from a fragment.
