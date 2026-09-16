@@ -2177,12 +2177,12 @@ export class HarnessSession extends EventEmitter {
    *  must stay byte-identical to what the composer built. The paths therefore
    *  remain in the text AND the pixels are attached — the model gets both, and
    *  the bubble still resolves. */
-  async send(text: string, attachments: string[] = []): Promise<void> {
+  async send(text: string, attachments: string[] = [], opts?: { historyNote?: string }): Promise<void> {
     // Attachments ride the persisted event (paths only — events carry no binary)
     // so rebuildHistory can restore the pixels on resume. Emitted only when
     // present to keep the no-attachment event byte-identical to before (#290
     // follow-up fix 2).
-    return this.beginTurn(text, () => this.emitEvent('user-message', attachments.length ? { text, attachments } : { text }), attachments);
+    return this.beginTurn(text, () => this.emitEvent('user-message', attachments.length ? { text, attachments } : { text }), attachments, opts?.historyNote);
   }
 
   /** Task 4 (native specialists, background execution) — inject a background
@@ -2326,7 +2326,12 @@ export class HarnessSession extends EventEmitter {
   /** The turn driver. `emit` names how this turn ENTERED the conversation — a
    *  typed message, or a skill invocation — which is the only thing that differs
    *  between send() and runSkill(). Everything downstream is identical. */
-  private async beginTurn(text: string, emit: () => string, attachments: string[] = []): Promise<void> {
+  /** `historyNote` (plans 5b follow-up): an instruction for the MODEL only,
+   *  pushed as its own user message right after the visible one. History-only
+   *  like a steer — no transcript event, so the emit surface stays frozen and
+   *  the chat shows only what the user wrote. Like a steer it is not rebuilt
+   *  on resume; it only has to steer the turn it rides. */
+  private async beginTurn(text: string, emit: () => string, attachments: string[] = [], historyNote?: string): Promise<void> {
     // Re-entrancy guard: a non-null abort means a turn is already streaming.
     // Throw loudly rather than corrupt the single-slot turn state (see the
     // class-level CONCURRENCY PRECONDITION note).
@@ -2348,6 +2353,10 @@ export class HarnessSession extends EventEmitter {
     // Both shapes descend from the SAME event — its text, and (for the image
     // parts) the attachment paths it carries.
     this.capture.recordEvent(enteringEventUuid);
+    if (historyNote) {
+      this.history.push({ role: 'user', content: historyNote });
+      this.capture.mutated();   // history-only, exactly like a steer
+    }
     this.abort = new AbortController();
     this.turnEverParked = false;   // cleared at the start of every turn — see field WHY
     this.lastStepPromptTokens = 0;   // a new turn always begins with a full prefill

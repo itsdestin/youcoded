@@ -20,8 +20,9 @@ import { planDisplay } from '../src/renderer/components/plans/PlanCard';
 const S = 's1';
 const CARD = 'call-plan';
 
-// The executor's exact pause sentences (plan-executor.ts). tests/plan-pause.test.ts
-// pins that these templates still exist in the backend source.
+// The executor's pause sentences (plan-executor.ts). The card no longer reads
+// them — it reads `paused.kind` and its facts (5b follow-up) — they are here
+// so each fixture looks like what the host really sends.
 const UNKNOWN_REASON = 'A specialist in step "s1" was cut off, and it isn\'t known whether its last action (Bash) finished. Press Continue to let it pick up from what it recorded.';
 const CAP_REASON = 'The repeated steps ran 3 times without meeting their stop condition ("every auth test passes"). Ask the assistant to revise the plan.';
 
@@ -42,11 +43,15 @@ function plan(over: Partial<PlanView> = {}): PlanView {
   };
 }
 
-function paused(reason: string, extra: Partial<PlanView> = {}, minimumAddTokens?: number): PlanView {
+type PauseFacts = Omit<NonNullable<PlanView['paused']>, 'stepId' | 'reason'>;
+const UNKNOWN: PauseFacts = { kind: 'unknown-outcome', tool: 'Bash' };
+const CAP: PauseFacts = { kind: 'iteration-cap', repeat: { rounds: 3, until: 'every auth test passes' } };
+
+function paused(reason: string, extra: Partial<PlanView> = {}, minimumAddTokens?: number, facts: PauseFacts = { kind: 'budget' }): PlanView {
   return plan({
     status: 'paused', usedTokens: 4000,
     steps: [{ ...plan().steps[0], status: 'paused', done: 1, usedTokens: 4000 }],
-    paused: { stepId: 's1', reason, ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}) },
+    paused: { stepId: 's1', reason, ...facts, ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}) },
     ...extra,
   });
 }
@@ -138,7 +143,7 @@ describe('2. a failed card explains itself', () => {
 describe('3. an unknown-outcome pause warns before Continue', () => {
   it('names the action in plain words, warns it may repeat, and offers Stop and Continue', async () => {
     const plans = bridge({ resume: vi.fn().mockResolvedValue({ ok: true, plan: plan({ status: 'running', seq: 2 }) }) });
-    render(<ChatProvider><Card initial={paused(UNKNOWN_REASON)} /></ChatProvider>);
+    render(<ChatProvider><Card initial={paused(UNKNOWN_REASON, {}, undefined, UNKNOWN)} /></ChatProvider>);
     const reason = screen.getByTestId('plan-paused-reason');
     expect(reason).toHaveTextContent('Paused — a specialist in step 1 stopped while running a command, and it isn\'t known whether that finished.');
     expect(screen.getByTestId('plan-paused-warning')).toHaveTextContent('Continue may run it again. Check first whether it already happened.');
@@ -152,23 +157,23 @@ describe('3. an unknown-outcome pause warns before Continue', () => {
   it('keeps the cut-off note the backend appended', () => {
     bridge();
     const note = '1 other specialist in step "s1" was cut off mid-request, and it isn\'t known whether that request finished; Continue lets it pick up from what it recorded.';
-    render(<ChatProvider><Card initial={paused(`${UNKNOWN_REASON} ${note}`)} /></ChatProvider>);
+    render(<ChatProvider><Card initial={paused(`${UNKNOWN_REASON} ${note}`, {}, undefined, { ...UNKNOWN, note })} /></ChatProvider>);
     expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent(note);
   });
 
   it('the header says to check before continuing', () => {
-    expect(planDisplay({}, paused(UNKNOWN_REASON)).detail).toBe('paused — check before continuing');
+    expect(planDisplay({}, paused(UNKNOWN_REASON, {}, undefined, UNKNOWN)).detail).toBe('paused — check before continuing');
   });
 });
 
 describe('5. an iteration-cap pause offers only Stop', () => {
   it('says the rounds ran out, suggests a revised plan, and has no Add budget or Continue', () => {
     bridge();
-    render(<ChatProvider><Card initial={paused(CAP_REASON, { paused: { stepId: 'loop', reason: CAP_REASON } })} /></ChatProvider>);
+    render(<ChatProvider><Card initial={paused(CAP_REASON, { paused: { stepId: 'loop', reason: CAP_REASON, ...CAP } })} /></ChatProvider>);
     expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent('Paused — the repeated steps ran 3 times without meeting their goal ("every auth test passes").');
     expect(screen.getByTestId('plan-paused-warning')).toHaveTextContent('To keep going, ask the assistant for a revised plan.');
     expect(buttons().filter((b) => ['Stop', 'Add budget', 'Continue'].includes(b))).toEqual(['Stop']);
-    expect(planDisplay({}, paused(CAP_REASON)).detail).toBe('paused — needs a revised plan');
+    expect(planDisplay({}, paused(CAP_REASON, {}, undefined, CAP)).detail).toBe('paused — needs a revised plan');
   });
 });
 
@@ -282,8 +287,13 @@ describe('9. a specialist stopped before it started', () => {
       status: 'stopped',
       steps: [{ ...plan().steps[0], status: 'skipped', children: [
         child({ childId: 'kid-a', status: 'completed', endedAt: 61_001, report: { text: 'done', status: 'completed', timestamp: 2 } }),
-        child({ childId: 'kid-b', title: 'Idris the Reviewer', status: 'interrupted', endedAt: 30_001, segments: [{ type: 'text', id: 't', content: 'reading' }] }),
-        child({ childId: 'kid-c', title: 'Mara the Reviewer', status: 'interrupted', endedAt: 1_001 }),
+        child({ childId: 'kid-b', title: 'Idris the Reviewer', status: 'interrupted', phase: 'response-persisted', endedAt: 30_001, segments: [{ type: 'text', id: 't', content: 'reading' }] }),
+        child({ childId: 'kid-c', title: 'Mara the Reviewer', status: 'interrupted', phase: 'prepared', endedAt: 1_001 }),
+        // 5b follow-up: its request WAS sent, it just showed nothing yet —
+        // not "Not started" (tokens may have been spent).
+        child({ childId: 'kid-d', title: 'Tobin the Reviewer', status: 'interrupted', phase: 'request-sent', endedAt: 1_001 }),
+        // No phase at all (an older journal): never guessed as not started.
+        child({ childId: 'kid-e', title: 'Juno the Reviewer', status: 'interrupted', endedAt: 1_001 }),
       ] }],
     });
     render(<ChatProvider><Card initial={stopped} /></ChatProvider>);
@@ -293,6 +303,9 @@ describe('9. a specialist stopped before it started', () => {
     expect(rows[2]).not.toHaveTextContent('pick this back up');
     // A specialist that did work keeps its ordinary stopped line.
     expect(rows[1]).toHaveTextContent('Stopped after');
+    expect(rows[3]).not.toHaveTextContent('Not started');
+    expect(rows[3]).toHaveTextContent('Stopped after');
+    expect(rows[4]).not.toHaveTextContent('Not started');
   });
 });
 

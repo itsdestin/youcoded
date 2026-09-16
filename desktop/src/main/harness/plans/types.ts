@@ -9,7 +9,7 @@
 // both the TypeScript type and that check, so the two can never drift.
 import { z } from 'zod';
 import { PlanDocumentSchema } from './schema';
-import type { PlanView } from '../../../shared/types';
+import { PLAN_PAUSE_KINDS, type PlanView } from '../../../shared/types';
 
 export const PLAN_JOURNAL_VERSION = 1 as const;
 
@@ -167,6 +167,13 @@ const PlanRecordSchema = z.object({
      *  limit only — even if the step has unfinished specialists — because an
      *  allowance that grows with the limit could never make the wave fit. */
     ceilingShortfall: z.literal(true).optional(),
+    /** 5b follow-up: why it paused, and the facts the card words it from
+     *  (shared/types.ts PLAN_PAUSE_KINDS). Optional so a journal written
+     *  before these fields still reads. */
+    kind: z.enum(PLAN_PAUSE_KINDS).optional(),
+    tool: z.string().min(1).optional(),
+    repeat: z.object({ rounds: nonNegativeInt, until: z.string() }).strict().optional(),
+    note: z.string().min(1).optional(),
   }).strict().optional(),
   /** Task 3: every Add budget, in order. A tranche without attemptId is
    *  waiting for the step's next attempt and is applied when it is reserved. */

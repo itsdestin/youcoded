@@ -1,7 +1,7 @@
 import type { PlanView } from '../../../shared/types';
 
 /**
- * Specialists plans, Task 5b — which kind of pause is this?
+ * Specialists plans, Task 5b — which kind of pause gets its own card?
  *
  * Two pauses need a different card from the ordinary "reached its limit" one:
  *  - unknown outcome: a specialist was cut off after starting an action that
@@ -11,29 +11,28 @@ import type { PlanView } from '../../../shared/types';
  *    Continue cannot help (the executor pauses again at once), so the card
  *    offers only Stop and suggests asking for a revised plan.
  *
- * WHY read the backend's sentence: PlanView.paused carries only
- * { stepId, reason, minimumAddTokens } — no kind and no tool name (a question
- * for the product owner in the Task 5b report). Until it does, the two
- * executor templates are the only signal. tests/plan-pause.test.ts pins those
- * templates in plan-executor.ts, so a wording change there fails a test
- * rather than quietly downgrading these cards to ordinary pauses.
+ * WHY the executor's `paused.kind` (5b follow-up) and not its sentence: the
+ * card used to recognise these two by matching the reason text, which broke
+ * silently on any rewording. The executor now records the kind and the facts
+ * the card words the pause from (`tool`, `repeat`, `note`).
+ *
+ * No sentence fallback for a journal without `kind`: plans have not shipped,
+ * so such a journal only exists on a development machine, and there the pause
+ * simply shows as an ordinary one with the host's own reason — true, just
+ * less specific. A pause whose facts are missing is treated the same way,
+ * rather than printing a sentence with a blank in it.
  */
 export type PauseKind =
   | { kind: 'unknown-outcome'; tool: string; rest: string }
   | { kind: 'iteration-cap'; rounds: number; until: string }
   | { kind: 'other' };
 
-// Only the "its last action (<tool>)" form: an unanswered REQUEST (no tool)
-// changes nothing outside the conversation, so it keeps the ordinary card.
-const UNKNOWN_OUTCOME = /^A specialist in step "[^"]*" was cut off, and it isn't known whether its last action \((.+?)\) finished\. Press Continue to let it pick up from what it recorded\.\s*([\s\S]*)$/;
-const ITERATION_CAP = /^The repeated steps ran (\d+) times without meeting their stop condition \("([\s\S]*)"\)\. Ask the assistant to revise the plan\.$/;
-
 export function classifyPause(paused: PlanView['paused']): PauseKind {
-  if (!paused) return { kind: 'other' };
-  const reason = paused.reason.trim();
-  const unknown = UNKNOWN_OUTCOME.exec(reason);
-  if (unknown) return { kind: 'unknown-outcome', tool: unknown[1], rest: unknown[2].trim() };
-  const cap = ITERATION_CAP.exec(reason);
-  if (cap) return { kind: 'iteration-cap', rounds: Number(cap[1]), until: cap[2] };
+  if (paused?.kind === 'unknown-outcome' && paused.tool) {
+    return { kind: 'unknown-outcome', tool: paused.tool, rest: paused.note ?? '' };
+  }
+  if (paused?.kind === 'iteration-cap' && paused.repeat) {
+    return { kind: 'iteration-cap', rounds: paused.repeat.rounds, until: paused.repeat.until };
+  }
   return { kind: 'other' };
 }

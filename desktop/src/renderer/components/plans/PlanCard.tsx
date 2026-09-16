@@ -543,13 +543,13 @@ function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessio
   const asking = hasNestedAsk(tool);
   const [open, setOpen] = useState(asking);
   useEffect(() => { if (asking) setOpen(true); }, [asking]);
-  // Task 5b: a specialist that Stop caught before it did anything — no
-  // report, no step count, and no activity at all — never started, so "the
-  // assistant can pick this back up" would describe work that never existed.
-  // WHY inferred: the plan record doesn't say whether its first request was
-  // sent (a question in the Task 5b report). With no activity, nothing it
-  // could have done is visible, so "Not started" is what the user can check.
-  const notStarted = child.status === 'interrupted' && !child.report && child.steps === undefined && !(child.segments?.length);
+  // Task 5b: a specialist that Stop caught before its first request was ever
+  // sent never started, so "the assistant can pick this back up" would
+  // describe work that never existed. 5b follow-up: decided from the
+  // journal's attempt phase (`prepared` = nothing sent), not guessed from
+  // missing activity — a specialist whose request was out but had shown
+  // nothing yet may already have spent tokens. No phase → never "Not started".
+  const notStarted = child.status === 'interrupted' && child.phase === 'prepared';
   const glyph = child.status === 'running' ? <BrailleSpinner size="sm" />
     : child.status === 'completed' ? <CheckIcon className="w-3 h-3 text-fg-dim" />
     : child.status === 'failed' ? <FailIcon className="w-3 h-3 text-destructive-fg" />

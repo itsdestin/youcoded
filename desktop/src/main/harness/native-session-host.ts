@@ -105,7 +105,9 @@ const NOOP_REMEMBERED_STORE: RememberedRuleStore = {
 // turnId (plans Task 4): a host-minted id for a turn the HOST queued (a plan
 // Comment's follow-up). propose_plan reads it to link a revision; model input
 // can never supply it.
-type SendUnit = { text: string; attachments: string[]; turnId?: string };
+// historyNote (plans 5b follow-up): model-only text that rides this turn —
+// see HarnessSession.send. Never shown in the chat.
+type SendUnit = { text: string; attachments: string[]; turnId?: string; historyNote?: string };
 
 const SEND_QUEUE_LIMIT = 10;
 
@@ -288,7 +290,7 @@ interface LiveEntry {
   // `attachments` are absolute composer file paths; image ones become image
   // parts on the user message. Carried through the QUEUE too, or a message sent
   // while a turn was in flight would silently lose its pictures.
-  queue: { id: string; text: string; attachments: string[]; turnId?: string }[];
+  queue: (SendUnit & { id: string })[];
   // True from dispatch until runTurns finishes the last queued turn. Host-owned
   // (HarnessSession's in-flight state is private); safe because Node is single-threaded.
   inFlight: boolean;
@@ -2889,7 +2891,7 @@ export class NativeSessionHost extends EventEmitter {
    * the instant the session exists, so the message the user typed is never
    * thrown away — which is the real harm; better wording alone still loses it.
    */
-  private startingSends = new Map<string, { id: string; text: string; attachments: string[]; turnId?: string }[]>();
+  private startingSends = new Map<string, (SendUnit & { id: string })[]>();
 
   /** Mark an id as being built. Called at the TOP of create() and resume(), so
    *  the window a pre-live send can fall into is covered from its first tick. */
@@ -2900,7 +2902,7 @@ export class NativeSessionHost extends EventEmitter {
   /** Stop holding sends for an id, returning whatever was held. Called by wire()
    *  on success, and by create()/resume() when they give up — a message held for
    *  a session that never came up must not sit in memory forever. */
-  private endStarting(sessionId: string): { id: string; text: string; attachments: string[]; turnId?: string }[] {
+  private endStarting(sessionId: string): (SendUnit & { id: string })[] {
     const held = this.startingSends.get(sessionId) ?? [];
     this.startingSends.delete(sessionId);
     return held;
@@ -3064,7 +3066,7 @@ export class NativeSessionHost extends EventEmitter {
     if (held.length > 0) {
       const [first, ...rest] = held;
       entry.queue.push(...rest);
-      this.sendTurn(sessionId, first.text, first.attachments, first.turnId);
+      this.sendTurn(sessionId, first.text, first.attachments, first.turnId, first.historyNote);
     }
   }
 
@@ -3757,7 +3759,10 @@ export class NativeSessionHost extends EventEmitter {
 
   /** send(), plus an optional host turn id carried through the queue (plans
    *  Task 4: a Comment's follow-up turn). Same never-throws contract. */
-  private sendTurn(sessionId: string, text: string, attachments: string[], turnId?: string): NativeSendResult {
+  private sendTurn(sessionId: string, text: string, attachments: string[], turnId?: string, historyNote?: string): NativeSendResult {
+    // One spread for every place this turn is held, so the note can't be
+    // dropped on one of the three paths (starting, queued, sent now).
+    const extra = { ...(turnId !== undefined ? { turnId } : {}), ...(historyNote ? { historyNote } : {}) };
     const entry = this.live.get(sessionId);
     if (!entry) {
       // Not live YET is not the same as not live any more. A session still being
@@ -3769,7 +3774,7 @@ export class NativeSessionHost extends EventEmitter {
       if (held) {
         if (held.length >= SEND_QUEUE_LIMIT) return { status: 'failed', reason: 'starting' };
         const queueId = randomUUID();
-        held.push({ id: queueId, text, attachments, ...(turnId !== undefined ? { turnId } : {}) });
+        held.push({ id: queueId, text, attachments, ...extra });
         return { status: 'queued', queueId };
       }
       return { status: 'failed', reason: 'not-live' };
@@ -3779,7 +3784,7 @@ export class NativeSessionHost extends EventEmitter {
       // Task 11: mint a stable id per queued entry so the renderer can target
       // this exact message later with removeQueued() (Cancel/Edit before send).
       const queueId = randomUUID();
-      entry.queue.push({ id: queueId, text, attachments, ...(turnId !== undefined ? { turnId } : {}) });
+      entry.queue.push({ id: queueId, text, attachments, ...extra });
       return { status: 'queued', queueId };
     }
     entry.inFlight = true;
@@ -3796,7 +3801,7 @@ export class NativeSessionHost extends EventEmitter {
     // its send() so this promise never rejects — .then(resolve, resolve) is
     // belt-and-suspenders against a future throw path.
     entry.running = new Promise<void>((resolve) => {
-      setImmediate(() => { void this.runTurns(sessionId, entry, { text, attachments, ...(turnId !== undefined ? { turnId } : {}) }).then(resolve, resolve); });
+      setImmediate(() => { void this.runTurns(sessionId, entry, { text, attachments, ...extra }).then(resolve, resolve); });
     });
     return { status: 'sent' };
   }
@@ -3898,7 +3903,7 @@ export class NativeSessionHost extends EventEmitter {
         try {
           if (entry.cancelledBeforeSend) break;
           if (typeof next === 'function') await next();
-          else await entry.session.send(next.text, next.attachments);
+          else await entry.session.send(next.text, next.attachments, next.historyNote ? { historyNote: next.historyNote } : undefined);
         } catch (err) {
           log('ERROR', 'NativeSessionHost', 'send failed', { sessionId, error: String(err) });
         } finally {
@@ -4662,8 +4667,8 @@ export class NativeSessionHost extends EventEmitter {
       resolveRoute: (binding) => this.resolveContextAndProfile(binding),
       maxConcurrent: (sessionId) => this.maxSpecialistsFor(sessionId),
       readChildEvents: (childId, cwd) => this.store.readEvents(childId, cwd),
-      queueTurn: (sessionId, text, turnId) => {
-        const res = this.sendTurn(sessionId, text, [], turnId);
+      queueTurn: (sessionId, text, turnId, historyNote) => {
+        const res = this.sendTurn(sessionId, text, [], turnId, historyNote);
         if (res.status === 'failed') {
           throw new Error(res.reason === 'queue-full'
             ? 'too many messages are already waiting in this conversation'

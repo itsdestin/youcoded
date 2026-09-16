@@ -28,6 +28,7 @@ import type { PlanStepV1 } from './schema';
 import { PlanFenceError, PlanJournalUnreadableError, type PlanJournal } from './plan-journal';
 import type { PlanBudget, ReserveMember } from './plan-budget';
 import type { PlanChildStop } from './budget-adapter';
+import type { PlanPauseKind } from '../../../shared/types';
 import type { PlanExecutorHooks } from './plan-service';
 import type { PlanAttemptRecord, PlanRecord, PlanRef, PlanStepRecord } from './types';
 import type { TranscriptEvent } from '../../../shared/types';
@@ -226,7 +227,12 @@ export function parseRepeatDecision(text: string): { ok: true; report: string; s
 type HaltRequest =
   | { kind: 'complete' }
   /** minimumAddTokens: known up front (a ceiling shortfall, review item 1). */
-  | { kind: 'pause'; stepId: string; reason: string; attemptId?: string; minimumAddTokens?: number; ceilingShortfall?: true }
+  /** why/tool/repeat (5b follow-up): the facts the card words the pause
+   *  from, so it never has to read `reason`. Every pause names its `why`. */
+  | {
+    kind: 'pause'; why: PlanPauseKind; stepId: string; reason: string; attemptId?: string;
+    minimumAddTokens?: number; ceilingShortfall?: true; tool?: string; repeat?: { rounds: number; until: string };
+  }
   /** finalize: PlanService's "stopped" edit, applied in the SAME write that
    *  drops the lease (review item 8). */
   | { kind: 'stop'; finalize?: (plan: PlanRecord) => void; applied?: boolean }
@@ -453,7 +459,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       if (!this.onJournalError(run, e)) {
         // Never a guessed cause: the real message, in a sentence the card can show.
         this.requestHalt(run, {
-          kind: 'pause',
+          kind: 'pause', why: 'unexpected-error',
           stepId: await this.currentStepId(run),
           reason: `The plan stopped because of an unexpected problem: ${errorText(e)}`,
         });
@@ -549,6 +555,9 @@ export class PlanExecutor implements PlanExecutorHooks {
       });
       return {
         kind: 'pause', stepId, attemptId,
+        ...(verdict.kind === 'dangling-effect'
+          ? { why: 'unknown-outcome' as const, tool: verdict.tool }
+          : { why: 'unknown-request' as const }),
         reason: `A specialist in step "${stepId}" was cut off, and it isn't known whether ${what} finished. `
           + 'Press Continue to let it pick up from what it recorded.',
       };
@@ -594,7 +603,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       if (run.halt) return;
       const decision = await this.decisionFor(run, finalLeaf, iteration);
       if (!decision.ok) {
-        this.requestHalt(run, { kind: 'pause', stepId: finalLeaf.id, reason: decision.detail });
+        this.requestHalt(run, { kind: 'pause', why: 'invalid-report', stepId: finalLeaf.id, reason: decision.detail });
         return;
       }
       if (decision.satisfied) {
@@ -604,7 +613,8 @@ export class PlanExecutor implements PlanExecutorHooks {
     }
     // Reaching the cap is not success (design §3): pause for replanning.
     this.requestHalt(run, {
-      kind: 'pause', stepId: step.id,
+      kind: 'pause', why: 'iteration-cap', stepId: step.id,
+      repeat: { rounds: step.max_iterations!, until: step.until ?? '' },
       reason: `The repeated steps ran ${step.max_iterations} times without meeting their stop condition ("${step.until}"). `
         + 'Ask the assistant to revise the plan.',
     });
@@ -656,7 +666,7 @@ export class PlanExecutor implements PlanExecutorHooks {
     const rec = plan.steps.find((s) => s.id === step.id)!;
     const refusal = await this.runner.launchRefusal?.(run.ref, plan, step.specialist);
     if (refusal) {
-      this.requestHalt(run, { kind: 'pause', stepId: step.id, reason: refusal });
+      this.requestHalt(run, { kind: 'pause', why: 'launch-failed', stepId: step.id, reason: refusal });
       return;
     }
     const members: ReserveMember[] = items.map((itemIndex) => {
@@ -682,6 +692,11 @@ export class PlanExecutor implements PlanExecutorHooks {
       const shortfall = !exhausted && 'shortfallTokens' in reserved ? reserved.shortfallTokens : undefined;
       this.requestHalt(run, {
         kind: 'pause', stepId: step.id, reason: reserved.detail,
+        why: exhausted ? 'budget'
+          : shortfall !== undefined ? 'ceiling-shortfall'
+          : reserved.reason === 'local-pool' ? 'local-pool'
+          : reserved.reason === 'invalid' ? 'unexpected-error'
+          : 'plan-limit',
         ...(exhausted ? { attemptId: exhausted } : {}),
         ...(shortfall !== undefined ? { minimumAddTokens: shortfall, ceilingShortfall: true as const } : {}),
       });
@@ -727,7 +742,7 @@ export class PlanExecutor implements PlanExecutorHooks {
         if (this.onJournalError(run, e)) return;
         if (run.halt) return;
         this.requestHalt(run, {
-          kind: 'pause', stepId: step.id, attemptId,
+          kind: 'pause', why: 'launch-failed', stepId: step.id, attemptId,
           reason: `A specialist in step "${step.id}" couldn't start: ${errorText(e)}`,
         });
       }
@@ -744,7 +759,7 @@ export class PlanExecutor implements PlanExecutorHooks {
           } catch (e) {
             // WHY: an unexpected throw here must still end the wave (a pause
             // with the real message), or the plan would wait forever.
-            this.requestHalt(run, { kind: 'pause', stepId: step.id, attemptId: child.attemptId, reason: `The plan stopped because of an unexpected problem: ${errorText(e)}` });
+            this.requestHalt(run, { kind: 'pause', why: 'unexpected-error', stepId: step.id, attemptId: child.attemptId, reason: `The plan stopped because of an unexpected problem: ${errorText(e)}` });
           }
           if (--remaining === 0) resolve();
         });
@@ -767,7 +782,7 @@ export class PlanExecutor implements PlanExecutorHooks {
           if (halt) this.requestHalt(run, halt);
         } catch (e) {
           if (!this.onJournalError(run, e)) {
-            this.requestHalt(run, { kind: 'pause', stepId: step.id, attemptId: child.attemptId, reason: `A specialist's result couldn't be saved: ${errorText(e)}` });
+            this.requestHalt(run, { kind: 'pause', why: 'unexpected-error', stepId: step.id, attemptId: child.attemptId, reason: `A specialist's result couldn't be saved: ${errorText(e)}` });
           }
         }
       })();
@@ -776,15 +791,20 @@ export class PlanExecutor implements PlanExecutorHooks {
     }
     if (run.halt) return;
     if (outcome.kind === 'stopped') {
-      this.requestHalt(run, { kind: 'pause', stepId: step.id, attemptId: child.attemptId, reason: outcome.stop.detail });
+      this.requestHalt(run, {
+        kind: 'pause', stepId: step.id, attemptId: child.attemptId, reason: outcome.stop.detail,
+        // Only running out is fixed by Add budget; a refused or broken
+        // request is not a matter of size.
+        why: outcome.stop.kind === 'exhausted' ? 'budget' : 'budget-refused',
+      });
     } else if (outcome.kind === 'failed') {
       this.requestHalt(run, {
-        kind: 'pause', stepId: step.id, attemptId: child.attemptId,
+        kind: 'pause', why: 'specialist-error', stepId: step.id, attemptId: child.attemptId,
         reason: `A specialist in step "${step.id}" stopped with an error: ${outcome.detail}`,
       });
     } else {
       this.requestHalt(run, {
-        kind: 'pause', stepId: step.id, attemptId: child.attemptId,
+        kind: 'pause', why: 'specialist-stopped', stepId: step.id, attemptId: child.attemptId,
         reason: `A specialist in step "${step.id}" was stopped before it finished.`,
       });
     }
@@ -815,7 +835,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       reportText: report,
       spentTokens: attempt.spentTokens,
     });
-    return failure ? { kind: 'pause', stepId: step.id, reason: failure } : undefined;
+    return failure ? { kind: 'pause', why: 'invalid-report', stepId: step.id, reason: failure } : undefined;
   }
 
   /** The brief for one item: the declared task, plus — for verify/combine
@@ -977,8 +997,13 @@ export class PlanExecutor implements PlanExecutorHooks {
         for (const s of p.steps) if (s.status === 'running') s.status = 'paused';
         if (final.kind === 'pause') {
           p.status = 'paused';
+          const note = cutOffNote(cutOffOthers);
           p.paused = {
             stepId: final.stepId, reason: withCutOffNote(final.reason, cutOffOthers),
+            kind: final.why,
+            ...(final.tool ? { tool: final.tool } : {}),
+            ...(final.repeat ? { repeat: final.repeat } : {}),
+            ...(note ? { note } : {}),
             ...(final.attemptId ? { attemptId: final.attemptId } : {}),
             ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}),
             ...(final.ceilingShortfall ? { ceilingShortfall: true as const } : {}),

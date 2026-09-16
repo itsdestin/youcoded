@@ -389,6 +389,9 @@ describe('durable completion and resume', () => {
     expect(p.lease).toBeUndefined();
     expect(p.paused).toMatchObject({ stepId: 's1', attemptId: 'p2' });
     expect(p.paused!.reason).toMatch(/isn't known whether/);
+    // 5b follow-up: a cut-off REQUEST (no action named) is its own kind.
+    expect(p.paused).toMatchObject({ kind: 'unknown-request' });
+    expect(p.paused!.tool).toBeUndefined();
     const a = p.steps[0].attempts[1];
     expect(a).toMatchObject({ phase: 'ambiguous', ambiguityReported: true, spentTokens: 1000, reservedTokens: 0 });
 
@@ -429,6 +432,8 @@ describe('durable completion and resume', () => {
     const p = await plan();
     expect(p.status).toBe('paused');
     expect(p.paused!.reason).toContain('Write');
+    // 5b follow-up: the card reads the kind and the tool, never the sentence.
+    expect(p.paused).toMatchObject({ kind: 'unknown-outcome', tool: 'Write' });
     expect(p.steps[0].attempts[1]).toMatchObject({ phase: 'ambiguous', ambiguityReported: true, spentTokens: 300 });
   });
 
@@ -504,6 +509,7 @@ describe('repeat', () => {
     expect(p.status).toBe('paused');
     expect(p.paused!.stepId).toBe('check');
     expect(p.paused!.reason).toMatch(/repeatSatisfied/);
+    expect(p.paused!.kind).toBe('invalid-report');
     expect(p.steps.find((s) => s.id === 'check')!.attempts[0]).toMatchObject({ phase: 'committed', terminal: 'failed' });
     expect(runner.launches).toHaveLength(2);
   });
@@ -521,6 +527,8 @@ describe('repeat', () => {
     expect(runner.launches).toHaveLength(4);
     expect(p.status).toBe('paused');
     expect(p.paused!.reason).toMatch(/2 times/);
+    // 5b follow-up: the card words this pause from these facts.
+    expect(p.paused).toMatchObject({ kind: 'iteration-cap', repeat: { rounds: 2, until: doc.steps.find((x) => x.kind === 'repeat')!.until } });
     // Every attempt spent its whole allowance and the ceiling still held.
     expect(p.usedTokens).toBe(p.ceilingTokens);
     // Continue does not run a third round.
@@ -588,6 +596,12 @@ describe('pausing, stopping and interruption settle before anything is visible',
     expect(p.paused!.reason).toBe('A specialist in step "s1" stopped with an error: the provider returned an error. '
       + '2 other specialists in step "s1" were cut off mid-request, and it isn\'t known whether those requests finished; '
       + 'Continue lets them pick up from what they recorded.');
+    // 5b follow-up: the kind, and the cut-off note on its own for the card.
+    expect(p.paused).toMatchObject({
+      kind: 'specialist-error',
+      note: '2 other specialists in step "s1" were cut off mid-request, and it isn\'t known whether those requests finished; '
+        + 'Continue lets them pick up from what they recorded.',
+    });
     // the sibling that honoured the abort settled itself
     expect(byBrief('Do quick')).toMatchObject({ phase: 'response-persisted', spentTokens: 1000 });
     expect(p.steps[1].attempts).toHaveLength(0);
@@ -605,7 +619,19 @@ describe('pausing, stopping and interruption settle before anything is visible',
     const p = await plan();
     const l = runner.launches.find((x) => x.brief === 'Review a')!;
     expect(p.status).toBe('paused');
-    expect(p.paused).toEqual({ stepId: 's1', attemptId: l.attemptId, reason: 'This specialist has used its whole budget.' });
+    expect(p.paused).toEqual({ stepId: 's1', attemptId: l.attemptId, reason: 'This specialist has used its whole budget.', kind: 'budget' });
+  });
+
+  it.each([
+    ['a refused request', { kind: 'stopped', stop: { kind: 'refused', detail: 'nothing was sent' } }, 'budget-refused'],
+    ['a stopped specialist', { kind: 'interrupted' }, 'specialist-stopped'],
+  ] as const)('5b follow-up: %s pauses with its own kind', async (_name, outcome, kind) => {
+    const runner = new FakeRunner((l) => (l.brief === 'Review a' ? async () => outcome as any : completes('ok')));
+    const fence = await seed(record(TWO_STEP));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect((await plan()).paused!.kind).toBe(kind);
   });
 
   it('a wave that does not fit the ceiling pauses with the budget detail and launches nothing', async () => {
@@ -618,6 +644,7 @@ describe('pausing, stopping and interruption settle before anything is visible',
     expect(runner.launches).toHaveLength(0);
     expect(p.status).toBe('paused');
     expect(p.paused!.reason).toMatch(/needs 2,000 tokens/);
+    expect(p.paused!.kind).toBe('ceiling-shortfall');
   });
 
   it('Stop follows the same bounded settle ordering and leaves nothing held', async () => {
@@ -871,7 +898,7 @@ describe('a specialist whose budget route cannot be used', () => {
     const p = await plan();
     expect(runner.launches).toHaveLength(0);
     expect(p.steps[0].attempts).toHaveLength(0);
-    expect(p).toMatchObject({ status: 'paused', paused: { stepId: 's1', reason: runner.refusal } });
+    expect(p).toMatchObject({ status: 'paused', paused: { stepId: 's1', reason: runner.refusal, kind: 'launch-failed' } });
   });
 });
 
