@@ -678,7 +678,13 @@ export class PlanExecutor implements PlanExecutorHooks {
       for (const child of wave) {
         void child.handle.outcome.then(async (outcome) => {
           child.outcome = outcome;
-          await this.onOutcome(run, step, child);
+          try {
+            await this.onOutcome(run, step, child);
+          } catch (e) {
+            // WHY: an unexpected throw here must still end the wave (a pause
+            // with the real message), or the plan would wait forever.
+            this.requestHalt(run, { kind: 'pause', stepId: step.id, attemptId: child.attemptId, reason: `The plan stopped because of an unexpected problem: ${errorText(e)}` });
+          }
           if (--remaining === 0) resolve();
         });
       }
