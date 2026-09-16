@@ -169,6 +169,32 @@ describe('occupancy after a history rewrite outside a turn', () => {
     expect(session.contextUsedTokens).toBe(ev.data.contextUsedAfter);
   });
 
+  // Review finding, 2026-09-16. `_contextUsedTokens` MEANS "a measured
+  // prompt-token count": its other writer is guarded on `lastInputTokens > 0`,
+  // so a usage-silent provider never sets it. Latching an estimate here would
+  // make it permanent and, since this method can only subtract, monotonically
+  // shrinking — and `planCompaction` reads it through the turn loop, only
+  // re-estimating when handed 0. A frozen sub-trigger number would stop
+  // compaction firing for the rest of the session.
+  it('leaves an UNMEASURED session unmeasured — a rewrite must not latch an estimate', () => {
+    const { session } = seeded({ contextLength: 40_000, seedBulkHistoryTokens: 8000 });
+    expect((session as any)._contextUsedTokens).toBeNull();      // nothing measured yet
+
+    expect(session.clearHistory()).toEqual({ ok: true });
+
+    // The field is still null, so the accessor keeps ESTIMATING from live
+    // history rather than serving a frozen figure…
+    expect((session as any)._contextUsedTokens).toBeNull();
+    const afterClear = session.contextUsedTokens!;
+
+    // …which is what lets it track history GROWING again. A latched estimate
+    // could only ever shrink from here.
+    session.seedHistory(Array.from({ length: 12 }, (_, i) => (
+      { role: i % 2 === 0 ? 'user' : 'assistant', content: 'y'.repeat(4000) } as any
+    )));
+    expect(session.contextUsedTokens!).toBeGreaterThan(afterClear);
+  });
+
   it('never reports a negative window, however badly the estimator overshoots', async () => {
     // A session whose measured reading is far SMALLER than its estimated history
     // (a provider reporting a heavily cached prompt, say). The subtraction must

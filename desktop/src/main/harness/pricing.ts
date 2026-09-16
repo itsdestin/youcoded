@@ -51,17 +51,31 @@ export function isFreePricing(pricing: ModelPricing | null | undefined): boolean
  *  modelling removes. When no cache rate is published, that portion stays at the
  *  full input rate — the honest fallback, since we don't know the discount.
  *
- *  Fix (2026-09-16): only READS were subtracted. `inputTokens` is the SDK's
- *  `inputTokens.total`, which is noCache + cacheRead + cacheWrite
- *  (`ai/dist/index.js` → asLanguageModelUsage, over @ai-sdk/anthropic's
- *  convertAnthropicUsage), so every cache-creation token was billed at the input
- *  rate and then AGAIN at the write premium — 2.25x instead of 1.25x on
- *  Anthropic. It landed on exactly the turns that establish a cache: the first
- *  turn of a session, and every turn after a compaction, a /clear or a model
- *  swap. Both Math.min clamps bound the subtraction by what the prompt actually
- *  contains, so a provider that reports its cache counts OUTSIDE inputTokens
- *  (rather than as a breakdown of it) can never drive the billable prompt
- *  negative. */
+ *  Fix (2026-09-16): only READS were subtracted, so every cache-creation token
+ *  was billed at the input rate and then AGAIN at the write premium — 2.25x
+ *  instead of 1.25x on Anthropic, on exactly the turns that establish a cache
+ *  (the first of a session, and every one after a compaction, a /clear or a
+ *  model swap).
+ *
+ *  BOTH providers that reach here report cache counts as a BREAKDOWN of the
+ *  prompt, not as extras alongside it:
+ *    - Anthropic: `inputTokens` is the SDK's `inputTokens.total` = noCache +
+ *      cacheRead + cacheWrite (`ai` → asLanguageModelUsage, over
+ *      @ai-sdk/anthropic's convertAnthropicUsage).
+ *    - OpenRouter: writes arrive as `usage.prompt_tokens_details.cache_write_tokens`
+ *      (openRouterCostExtractor below), and `prompt_tokens_details` is by
+ *      definition a breakdown of `prompt_tokens` — the same relationship
+ *      `cached_tokens` already has to it.
+ *  Were a third provider ever to report them as extras, the per-turn AND
+ *  per-session provider-cost comparison below is the net that catches it.
+ *
+ *  The clamps make the arithmetic total-safe against a malformed report: both
+ *  the amount SUBTRACTED from the prompt and the amount CHARGED at the cache
+ *  rate are bounded by what the prompt actually contains, so a provider claiming
+ *  more cached tokens than prompt tokens can neither drive the billable prompt
+ *  negative nor bill more than the whole prompt at the dearest rate. Reads and
+ *  writes are treated identically here — the read side has always worked this
+ *  way. */
 export function costForUsage(usage: PricedUsage, pricing: ModelPricing | null | undefined): number | null {
   if (!pricing) return null;
   if (isFreePricing(pricing)) return null;   // free to run — not a $0.00 bill
@@ -74,7 +88,11 @@ export function costForUsage(usage: PricedUsage, pricing: ModelPricing | null | 
     (uncachedIn / 1e6) * pricing.in
     + (cachedRead / 1e6) * (pricing.cacheRead ?? pricing.in)
     + (usage.outputTokens / 1e6) * pricing.out
-    + (pricing.cacheWrite != null ? (usage.cacheCreationTokens / 1e6) * pricing.cacheWrite : 0);
+    // `cachedWrite`, not the raw count — the same clamped quantity that came OUT
+    // of the prompt goes back in at the write rate, exactly as `cachedRead` does
+    // above. Charging the raw count against a clamped subtraction would bill
+    // tokens the prompt was never credited with (review finding, 2026-09-16).
+    + (cachedWrite / 1e6) * (pricing.cacheWrite ?? 0);
   return Math.max(0, cost);
 }
 

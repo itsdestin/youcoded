@@ -58,12 +58,26 @@ describe('costForUsage', () => {
     expect(costForUsage(u, { in: 3, out: 15 })).toBeCloseTo(3, 10);
   });
 
-  it('never bills a negative prompt when a provider reports cache counts outside inputTokens', () => {
-    // Some OpenAI-compatible endpoints report cache figures alongside the prompt
-    // rather than as a breakdown of it. The two clamps bound the subtraction by
-    // what the prompt actually contains.
+  // Review finding 2026-09-16: this used to assert only `>= 0`, which
+  // `costForUsage`'s own trailing `Math.max(0, cost)` guarantees whatever the
+  // clamps do — so it could not go red and pinned nothing. Both halves of the
+  // clamp are asserted by exact value instead.
+  it('bounds a malformed cache report by the prompt, on BOTH the subtraction and the charge', () => {
+    // 5,000 written tokens claimed against a 1,000-token prompt. Only 1,000 can
+    // come out of the prompt, so only 1,000 may go back in at the write rate:
+    // charging the raw 5,000 would bill tokens the prompt was never credited
+    // with, and would exceed the whole prompt priced at the dearest rate.
+    const u = { inputTokens: 1_000, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 5_000 };
+    const cost = costForUsage(u, { in: 3, out: 15, cacheWrite: 3.75 })!;
+    expect(cost).toBeCloseTo((1_000 / 1e6) * 3.75, 10);          // 0.00375, not 0.01875
+    expect(cost).toBeLessThanOrEqual((1_000 / 1e6) * 3.75);
+  });
+
+  it('never bills a negative prompt when reads and writes together overrun it', () => {
     const u = { inputTokens: 100, outputTokens: 0, cacheReadTokens: 5_000, cacheCreationTokens: 5_000 };
-    expect(costForUsage(u, { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 })).toBeGreaterThanOrEqual(0);
+    // Reads take the whole prompt, leaving nothing for writes to claim.
+    expect(costForUsage(u, { in: 3, out: 15, cacheRead: 0.3, cacheWrite: 3.75 }))
+      .toBeCloseTo((100 / 1e6) * 0.3, 10);
   });
 
   it('falls back to the full input rate when no cache rate is published', () => {

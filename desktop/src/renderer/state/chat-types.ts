@@ -543,8 +543,9 @@ export type ChatAction =
       type: 'NATIVE_SESSION_ERROR';
       sessionId: string;
       message: string;
-      /** The failing event's uuid, for the totals dedup below. Optional because
-       *  one dispatcher (the buddy feed) has no event to hand. */
+      /** The failing event's uuid, for the totals dedup in the reducer. Optional
+       *  because the two non-App dispatchers — the workbench fixture loader and
+       *  a renderer test — raise this condition without an event to name. */
       uuid?: string;
       /** What the failed turn had already spent — same contract as
        *  TRANSCRIPT_INTERRUPT's. */

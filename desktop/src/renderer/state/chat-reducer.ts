@@ -2738,6 +2738,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // broke — the scratch replay accumulates the page's usage and it would
         // otherwise be thrown away, so a resumed session showed no totals at all.
         totals: mergeTotals(session.totals, pageSess.totals),
+        // NAMED deliberately, not left to the `...session` spread: pages are
+        // PREPENDED, so an OLDER page can carry a compaction whose re-based
+        // occupancy predates the live one. The live value always wins. Adding
+        // `pageSess.contextUsedOverride` here would read as a consistency fix and
+        // would silently roll the context gauge backwards.
+        contextUsedOverride: session.contextUsedOverride,
         history: { cursor: action.cursor, hasMore: action.hasMore, loading: false },
       });
       return next;
@@ -2844,16 +2850,20 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const totals = alreadyCounted || !action.usage
         ? session.totals
         : addTurnUsage(session.totals, action.usage);
+      // A re-delivered rewrite must not roll the gauge back either: by the time
+      // it arrives again a later turn may have measured the window for real, and
+      // TRANSCRIPT_TURN_COMPLETE cleared this override on purpose. The uuid is
+      // recorded for EVERY rewrite, not only billing ones, so /clear gets the
+      // same protection as /compact.
+      const override = alreadyCounted ? session.contextUsedOverride : action.contextUsedTokens;
       // Nothing to change → return the ORIGINAL state so the useSyncExternalStore
       // snapshot keeps its object identity (session-totals.ts's contract).
-      if (totals === session.totals && session.contextUsedOverride === action.contextUsedTokens) return state;
+      if (totals === session.totals && alreadyCounted) return state;
       next.set(action.sessionId, {
         ...session,
         totals,
-        // Marked seen only when this event actually billed something — a /clear
-        // carries no usage, so there is nothing for a re-delivery to double.
-        seenUuids: totals === session.totals ? session.seenUuids : new Set(session.seenUuids).add(action.uuid),
-        contextUsedOverride: action.contextUsedTokens,
+        seenUuids: alreadyCounted ? session.seenUuids : new Set(session.seenUuids).add(action.uuid),
+        contextUsedOverride: override,
       });
       return next;
     }

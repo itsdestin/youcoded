@@ -1093,18 +1093,34 @@ export class HarnessSession extends EventEmitter {
    *  Falls back to the plain estimate when nothing has been measured yet — the
    *  same fallback the emit site and the accessor already use for a
    *  usage-silent provider. */
-  private reprojectContextUsed(estimateBefore: number): number {
+  private reprojectContextUsed(estimateBefore: number | null): number {
     const estimateAfter = this.estimateContextTokens();
     const measured = this._contextUsedTokens;
+    // WHY this returns WITHOUT writing the field (review finding, 2026-09-16):
+    // `_contextUsedTokens` means "a measured prompt-token count", and its only
+    // other writer is guarded on `lastInputTokens > 0`. A usage-silent provider
+    // — the local servers this estimate exists for — never sets it, so latching
+    // an estimate here would make it permanent AND monotonically shrinking (this
+    // method can only subtract). `planCompaction` reads it through the turn loop
+    // and only re-estimates when handed 0, so a frozen sub-trigger number would
+    // stop compaction firing for the rest of the session. The accessor already
+    // falls back to this same estimate, so leaving the field null costs nothing.
+    if (measured === null || estimateBefore === null) return estimateAfter;
     // Both Math.max guards are for a shrink that reads as a GROWTH (an estimator
     // quirk on a rewrite that replaced a span with a longer summary): clamp the
     // delta at 0 rather than inflating the measured figure, and clamp the result
     // at 0 rather than reporting a negative window.
-    const projected = measured === null
-      ? estimateAfter
-      : Math.max(0, measured - Math.max(0, estimateBefore - estimateAfter));
+    const projected = Math.max(0, measured - Math.max(0, estimateBefore - estimateAfter));
     this._contextUsedTokens = projected;
     return projected;
+  }
+
+  /** The reading `reprojectContextUsed` measures a rewrite against, or null when
+   *  there is no measurement to re-base — in which case the walk is skipped
+   *  entirely. That is the common case on a small local window, which prunes on
+   *  nearly every step, so this is also where the cost of the walk is avoided. */
+  private rewriteBaseline(): number | null {
+    return this._contextUsedTokens === null ? null : this.estimateContextTokens();
   }
 
   /** The summary call's own usage, priced the way a turn's is. Money is priced
@@ -1662,10 +1678,9 @@ export class HarnessSession extends EventEmitter {
     const cfg = this.compactionConfig();
     const decision = planCompaction(this.history, cfg, lastInputTokens);
     if (decision.action === 'none') return;
-    // Read BEFORE any mutation below — reprojectContextUsed needs the old estimate
-    // to size what this rewrite removed. Both exits from here rewrite history.
-    const estimateBefore = this.estimateContextTokens();
     if (decision.action === 'prune') {
+      // Read BEFORE the mutation — reprojectContextUsed sizes the rewrite against it.
+      const estimateBefore = this.rewriteBaseline();
       this.commitPrune(pruneToolOutputs(this.history, cfg));
       // No event: a pure prune only ever runs INSIDE the turn loop, and the
       // turn-complete a few steps later re-measures the window for the UI. This
@@ -1701,6 +1716,11 @@ export class HarnessSession extends EventEmitter {
     try { generated = await this.generateSummary(model, span, aiTools); } catch { generated = { text: '' }; }
     const summary = generated.text;
     if (!summary.trim()) return;                          // FAIL-SAFE: no summary → history untouched
+    // Taken HERE, not at the top: every bail-out above (`cut <= 0`, the thrash
+    // guard, an empty summary) returns without touching history, and commitPrune
+    // below is this path's first mutation — so a walk of the whole history is
+    // spent only on the compactions that actually happen.
+    const estimateBefore = this.rewriteBaseline();
     this.commitPrune(pruned);
     // WHY the history swap happens BEFORE the emit (2026-09-16): the event now
     // carries the window's occupancy AFTER this rewrite, and that number cannot
@@ -1892,7 +1912,7 @@ export class HarnessSession extends EventEmitter {
       // compaction refused as 'nothing-to-compact' or 'summary-failed' has still
       // pruned, and leaving the old figure standing would report a window this
       // session no longer has. See reprojectContextUsed for why it subtracts.
-      const estimateBeforePrune = this.estimateContextTokens();
+      const estimateBeforePrune = this.rewriteBaseline();
       const beforePrune = this.history;
       this.history = pruneToolOutputs(this.history, cfg);
       // Same per-message identity check as maybeCompact's prune — see its WHY.
@@ -1932,7 +1952,7 @@ export class HarnessSession extends EventEmitter {
       // /compact path discards the summarized span exactly the same way, so
       // the dedupe cache must be cleared here too or it keeps vouching for
       // images this summary just removed.
-      const estimateBeforeSummary = this.estimateContextTokens();
+      const estimateBeforeSummary = this.rewriteBaseline();
       this.shownImages.clear();
       this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
       const contextUsedAfter = this.reprojectContextUsed(estimateBeforeSummary);
@@ -1966,7 +1986,7 @@ export class HarnessSession extends EventEmitter {
    *  refusal) as compactNow. */
   clearHistory(): { ok: true } | { ok: false; reason: 'turn-in-flight' } {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
-    const estimateBefore = this.estimateContextTokens();
+    const estimateBefore = this.rewriteBaseline();
     this.history = [];
     // What the model still holds after the barrier: the system prompt and the
     // tool schemas, not the conversation. Without this the status bar kept

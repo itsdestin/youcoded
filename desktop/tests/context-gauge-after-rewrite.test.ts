@@ -174,6 +174,61 @@ describe('page replay carries the bookkeeping a resumed session would otherwise 
     expect(pageEventToAction(ev({ type: 'compact-summary', uuid: 'cs-2', data: { summary: 'cc summary' } }))).toBeNull();
   });
 
+  // Review finding, 2026-09-16: the protection here is that HISTORY_PAGE_LOADED
+  // does NOT take the scratch replay's override. That was an omission rather
+  // than a mechanism, and nothing drove the action, so a later "consistency fix"
+  // adding `contextUsedOverride: pageSess.contextUsedOverride` would have rolled
+  // the gauge backwards in silence.
+  it('an OLDER page’s compaction cannot roll the live gauge backwards', () => {
+    let state = init();
+    // Live: an old compaction, then a turn that measured the window for real.
+    state = run(state, {
+      type: 'NATIVE_HISTORY_REWRITTEN', sessionId: SESSION, uuid: 'old-compact', contextUsedTokens: 12_000,
+    });
+    state = run(state, {
+      type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'turn-live', timestamp: 3,
+      stopReason: 'end_turn', model: 'm', anthropicRequestId: null, usage: TURN_USAGE,
+    } as ChatAction);
+    expect(sess(state).contextUsedOverride).toBeNull();
+
+    // A page of OLDER history arrives and is prepended. It contains that same
+    // compaction, plus a specialist's spend that SHOULD still be counted.
+    state = run(state, {
+      type: 'HISTORY_PAGE_LOADED', sessionId: SESSION, cursor: null, hasMore: false,
+      events: [
+        { type: 'compact-summary', sessionId: SESSION, uuid: 'older-compact', timestamp: 1,
+          data: { summary: 's', contextUsedAfter: 4_000 } },
+        { type: 'subagent-usage', sessionId: SESSION, uuid: 'older-spec', timestamp: 2,
+          data: { usage: { inputTokens: 700, outputTokens: 20, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0.01 }, parentAgentToolUseId: 't', agentId: 'a' } },
+      ],
+    } as unknown as ChatAction);
+
+    // The gauge keeps the LIVE answer (a real measurement)…
+    expect(sess(state).contextUsedOverride).toBeNull();
+    // …while the page's bookkeeping still lands: the live turn's 60,000 plus the
+    // 700 the older page's specialist spent.
+    expect(sess(state).totals.inputTokens).toBe(60_700);
+    expect(sess(state).totals.specialistRuns).toBe(1);
+  });
+
+  it('a re-delivered rewrite does not roll back a newer measurement', () => {
+    let state = init();
+    state = run(state, {
+      type: 'NATIVE_HISTORY_REWRITTEN', sessionId: SESSION, uuid: 'c1', contextUsedTokens: 12_000,
+    });
+    state = run(state, {
+      type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'turn-x', timestamp: 2,
+      stopReason: 'end_turn', model: 'm', anthropicRequestId: null, usage: TURN_USAGE,
+    } as ChatAction);
+    expect(sess(state).contextUsedOverride).toBeNull();
+
+    // The same compaction event again (a re-dock replay). Its figure is stale now.
+    state = run(state, {
+      type: 'NATIVE_HISTORY_REWRITTEN', sessionId: SESSION, uuid: 'c1', contextUsedTokens: 12_000,
+    });
+    expect(sess(state).contextUsedOverride).toBeNull();
+  });
+
   it('carries an interrupted turn’s usage, deduped against the live stream', () => {
     const action = pageEventToAction(ev({
       type: 'user-interrupt', uuid: 'int-1',
