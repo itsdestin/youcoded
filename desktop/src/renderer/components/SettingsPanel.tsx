@@ -33,7 +33,7 @@ import { formatVersionLine } from '../../shared/version-line';
 import type { BuddyHelperStatus } from '../../shared/types';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
-import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, Callout, StatusStrip, ErrorState, FieldError } from './ui';
+import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError } from './ui';
 import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
@@ -1724,10 +1724,25 @@ function RemoteButton(props: RemoteButtonProps) {
   return (
     <>
       <SettingRow
-        // Status indicator dot — green when remote + Tailscale VPN fully active, gray otherwise
-        icon={<div className={`w-2.5 h-2.5 rounded-full ${isFullyConnected ? 'bg-green-400' : 'bg-fg-muted/40'}`} />}
+        // WHY: the icon slot holds the same 16px outline icon as every other
+        // settings row (a phone with signal waves — "reach this computer from
+        // your phone"); the status dot moved down next to the status line it
+        // describes (Destin, 2026-09-16).
+        icon={
+          <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4" y="5" width="10" height="16" rx="2" />
+            <line x1="8.5" y1="17.5" x2="9.5" y2="17.5" />
+            <path d="M17 7.5a3.5 3.5 0 0 1 0 5" />
+            <path d="M19.5 5a7 7 0 0 1 0 10" />
+          </svg>
+        }
         title="Remote Access"
-        description={subtitle}
+        // Status dot — green when remote + Tailscale VPN fully active, gray otherwise
+        description={
+          <RowStatus dotClassName={isFullyConnected ? 'bg-green-400' : 'bg-fg-muted/40'}>
+            {subtitle}
+          </RowStatus>
+        }
         onClick={() => setOpen(true)}
       />
 
