@@ -93,6 +93,8 @@ class FakeRunner implements PlanRunner {
     return this.verdicts.get(childId) ?? { kind: 'resumable', briefDelivered: false };
   }
   onUnreadable(_ref: PlanRef, planId: string, detail: string): void { this.unreadable.push(`${planId}:${detail}`); }
+  refusal: string | undefined = undefined;
+  async launchRefusal(): Promise<string | undefined> { return this.refusal; }
   minimumAsked: string[] = [];
   minimum: number | undefined = undefined;
   async minimumAddTokens(_ref: PlanRef, _plan: PlanRecord, attemptId: string): Promise<number | undefined> {
@@ -810,5 +812,20 @@ describe('what a specialist transcript proves', () => {
       ev('turn-complete', { stopReason: 'plan_budget_exhausted' }),
       ev('user-message', { text: PLAN_RESTART_BRIEF }),
     ])).toEqual({ kind: 'resumable', briefDelivered: true });
+  });
+});
+
+describe('a specialist whose budget route cannot be used', () => {
+  it('pauses with the real reason before anything is reserved or launched', async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    runner.refusal = 'Plan budgets are switched off for this model after a request went over its limit: x';
+    const fence = await seed(record(TWO_STEP));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(runner.launches).toHaveLength(0);
+    expect(p.steps[0].attempts).toHaveLength(0);
+    expect(p).toMatchObject({ status: 'paused', paused: { stepId: 's1', reason: runner.refusal } });
   });
 });

@@ -305,6 +305,13 @@ export class PlanService {
       if (!this.deps.executor) return unsupported("Running plans isn't available in this version of YouCoded.");
       const { ref, plan } = await this.loadPlan(sessionId, planId);
       this.requireStatus(plan, ['paused', 'interrupted']);
+      // Task 4 (Task 3 obligation): a request through one of this plan's
+      // routes broke its certified bound, so nothing more may go through it.
+      // The gate would refuse at send time; the card says why before that.
+      const disabled = plan.disabledAdapters?.[0];
+      if (disabled) {
+        throw new PlanActionRefused(`Plan budgets are switched off for this model after a request went over its limit: ${disabled.detail}`);
+      }
       await this.assertNoDrift(ref, plan);
       return { ok: true, plan: await this.startRun(ref, planId, ['paused', 'interrupted'], () => {}) };
     });

@@ -114,6 +114,10 @@ export interface PlanRunner {
    *  request (its fresh resume prompt, plus any soft-limit overshoot), or
    *  undefined when it can't be worked out. */
   minimumAddTokens?(ref: PlanRef, plan: PlanRecord, attemptId: string): Promise<number | undefined>;
+  /** Why `specialist` cannot run right now (no budget adapter for its route,
+   *  or that adapter was switched off), or undefined. Asked BEFORE its wave is
+   *  reserved, so a refusal never holds any budget (Task 3 obligation). */
+  launchRefusal?(ref: PlanRef, plan: PlanRecord, specialist: string): Promise<string | undefined>;
 }
 
 /** Tools whose call changes nothing outside the conversation. A call to any
@@ -604,6 +608,11 @@ export class PlanExecutor implements PlanExecutorHooks {
   private async runWave(run: ActiveRun, step: PlanStepV1, iteration: number, items: number[], finalLeaf: boolean): Promise<void> {
     let plan = await this.load(run);
     const rec = plan.steps.find((s) => s.id === step.id)!;
+    const refusal = await this.runner.launchRefusal?.(run.ref, plan, step.specialist);
+    if (refusal) {
+      this.requestHalt(run, { kind: 'pause', stepId: step.id, reason: refusal });
+      return;
+    }
     const members: ReserveMember[] = items.map((itemIndex) => {
       const latest = latestAttempt(rec, itemIndex, iteration);
       return latest && !isCommitted(latest)

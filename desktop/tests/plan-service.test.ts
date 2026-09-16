@@ -417,6 +417,19 @@ describe('result discriminants', () => {
     expect(addTokens).toHaveBeenCalledTimes(1);
   });
 
+  it('Continue refuses up front when a budget route was switched off for this plan (Task 4)', async () => {
+    const view = await propose();
+    await journal.mutate(REF, (file) => {
+      const p = file.plans[0];
+      p.status = 'paused';
+      p.paused = { stepId: 's1', reason: 'over' };
+      p.disabledAdapters = [{ adapterId: 'generic:openai', detail: 'a request read 900 tokens of input, more than the 800 measured for it' }];
+    });
+    const res = await service.resume(SID, view.planId);
+    expect(res).toEqual({ ok: false, error: expect.stringContaining('more than the 800 measured for it') });
+    expect(executor.start).not.toHaveBeenCalled();
+  });
+
   it('settings results use the same three forms', () => {
     const forms: Array<PlanAutoApproveRead | PlanSettingsWriteResult> = [
       { ok: true, underTokens: 0 }, { ok: true }, { ok: false, error: 'x' }, { ok: false, unsupported: true, error: 'y' },

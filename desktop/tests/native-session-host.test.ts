@@ -5673,6 +5673,17 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(planEvents[planEvents.length - 1].plan.status).toBe('interrupted');
   });
 
+  it('handing the conversation to another device interrupts its running plans', async () => {
+    const planId = await proposeOne();
+    childReply = () => 'hang';
+    await host.approvePlan(SID, planId);
+    await waitFor(() => childCalls.length === 2, 'both specialists to send');
+    await host.quiesce(SID);
+    expect(journalFile().plans[0]).toMatchObject({ status: 'interrupted' });
+    expect(journalFile().plans[0].lease).toBeUndefined();
+    expect(liveChildren()).toHaveLength(0);
+  });
+
   it('app quit interrupts running plans', async () => {
     const planId = await proposeOne();
     childReply = () => 'hang';
