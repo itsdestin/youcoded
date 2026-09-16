@@ -1,139 +1,191 @@
-// ConversationPreview — read-only transcript preview shown in the shared centered
-// detail overlay (Task 3.2). Loads a session's message history via the
-// project:conversation-history IPC (which does NOT launch Claude — it parses the
-// JSONL transcript on disk) and renders it via the shared ConversationTranscript
-// bubble list (markdown-rendered, no filepath chips — see that component).
+// ConversationPreview — a past conversation opened from Project View's
+// Conversations tab, in the centered detail overlay.
 //
-// IMPORTANT: This component NEVER spawns a Claude process. Only the explicit
-// "Resume in Claude" button leads to a live session, and that is handled entirely
-// by the parent via the `onResume` prop. "Open full transcript" just re-fetches
-// the same read-only history with `all: true`.
-import { useEffect, useState } from 'react';
-import type { PastSession, HistoryMessage } from '../../../shared/types';
+// Laid out like the Resume browser's preview (Destin, 2026-09-16: "resume in
+// claude should just say resume, and should allow the user to pick the model.
+// the date banner should be at the bottom. we should have some of the same
+// tag/complete/rename/other options shown in resume browser, in similar
+// styling"):
+//   header — the name (click to rename), the tag button, the Complete button
+//   body   — SessionPreviewPane, the same preview every surface shows
+//   foot   — an action card: tags, the details line with the date, then the
+//            Resume browser's own model picker, switches and Resume button
+//            (ResumeOptionsForm)
+//
+// IMPORTANT: This component NEVER spawns a Claude process by itself. Only the
+// Resume button leads to a live session, through the parent's `onResume`.
+import { useMemo, useRef, useState, useEffect } from 'react';
+import type { PastSession } from '../../../shared/types';
 import { ProjectDetailOverlay } from './ProjectDetailOverlay';
-import ConversationTranscript from './ConversationTranscript';
-import { TOOL_BTN_ACCENT, TOOL_BTN_NEUTRAL, PlayIcon } from './detail-tool-icons';
-// Compact relative-time for the meta strip (shared util).
-import { formatRelativeTime as relTime } from '../../utils/format-time';
+import SessionPreviewPane from '../SessionPreviewPane';
+import SessionRenameDialog from '../SessionRenameDialog';
+import { Button, ErrorState } from '../ui';
+import { TagGlyph } from '../tags/glyphs';
+import { TagNoteEditor } from '../tags/TagNoteEditor';
+import { PRIORITY_TAG, PRIORITY_HINT } from '../tags/built-in-tags';
+import { SessionCardTags, SessionCardMeta, CompleteToggle } from '../SessionCardDetails';
+import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from '../ResumeOptions';
+import { usePreviewMeta } from '../../hooks/usePreviewMeta';
+import { useTagRegistry } from '../../hooks/useTagRegistry';
+import { namingApi } from '../assistant-settings/naming-api';
+import { useRenamedSessions } from '../assistant-settings/use-renamed-sessions';
+import { COPY } from '../../../shared/chatsearch-refs';
 
 interface ConversationPreviewProps {
-  project: { path: string };
   session: PastSession;
   onClose: () => void;
-  onResume: (session: PastSession) => void;
+  onResume: ResumeHandler;
+  defaultModel?: string;
+  defaultSkipPermissions?: boolean;
 }
 
-export function ConversationPreview({ project, session, onClose, onResume }: ConversationPreviewProps) {
-  const [messages, setMessages] = useState<HistoryMessage[]>([]);
-  const [loading, setLoading] = useState(true);
-  // `all` flips to true once the user clicks "Open full transcript"; we re-fetch
-  // with count=0/all=true and disable the button so a second click is a no-op.
-  const [all, setAll] = useState(false);
+export function ConversationPreview({ session, onClose, onResume, defaultModel, defaultSkipPermissions }: ConversationPreviewProps) {
+  const registry = useTagRegistry();
+  // Tags, note, Priority and Complete are read for THIS conversation: the
+  // Projects list does not carry tags or notes, so the row alone would show
+  // none and a tag toggle would start from a wrong picture.
+  const meta = usePreviewMeta(session.sessionId);
+  const options = useResumeOptions(defaultModel, defaultSkipPermissions);
+  const [renaming, setRenaming] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const sheetRef = useRef<HTMLDivElement>(null);
 
-  // Load the (preview-length) history on mount and whenever the session changes.
-  // A `cancelled` flag guards against a late response from a previous session
-  // overwriting the current one (the overlay can be reused for a new session
-  // without unmounting if the parent swaps `session` in place).
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setAll(false);
-    setMessages([]);
-    (async () => {
-      try {
-        const res = await (window.claude as any).project.conversationHistory(
-          project.path, session.sessionId, 20, false,
-        );
-        if (cancelled) return;
-        setMessages(res?.ok ? (res.messages ?? []) : []);
-      } catch {
-        if (!cancelled) setMessages([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [session.sessionId, project.path]);
+  const sources = useMemo(() => ({ [session.sessionId]: session.name }), [session.sessionId, session.name]);
+  const renamed = useRenamedSessions(sources);
+  const name = renamed[session.sessionId] ?? session.name ?? '';
 
-  // "Open full transcript" — re-fetch the same read-only history with all=true.
-  // Still no Claude launch; this just reads more lines from the same JSONL.
-  const loadFullTranscript = async () => {
-    setLoading(true);
-    try {
-      const res = await (window.claude as any).project.conversationHistory(
-        project.path, session.sessionId, 0, true,
-      );
-      setMessages(res?.ok ? (res.messages ?? []) : []);
-      setAll(true);
-    } catch {
-      /* leave current messages in place on failure */
-    } finally {
-      setLoading(false);
-    }
+  // The row as the card parts draw it, with what the meta read found. Until
+  // that read lands, the list's own flags stand in.
+  const row: PastSession = {
+    ...session,
+    name,
+    flags: meta.loading ? session.flags : { ...session.flags, ...meta.flags },
+    tags: meta.tags,
+    note: meta.note || undefined,
   };
 
-  // project:list-conversations deliberately carries NO total message count (the
-  // preview is a bounded head-read — counting would mean parsing every
-  // transcript). So until "Open full transcript", the meta labels what's shown
-  // as a preview slice rather than implying the loaded count is the total.
-  const shownCount = messages.length;
-  // Top-of-list hint on a preview slice: older messages exist above the cut.
-  const showOlderHint = !all && shownCount > 0;
+  // Start the model picker on the model this conversation last used.
+  useEffect(() => {
+    options.resetFor(session);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resetFor is redefined every render; the row is what changes.
+  }, [session.sessionId]);
 
-  // Header tools: Resume (accent) + Open full transcript (neutral).
+  // Click-away closes the tags/note sheet, as the side panel's does.
+  useEffect(() => {
+    if (!sheetOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (sheetRef.current && !sheetRef.current.contains(e.target as Node)) setSheetOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [sheetOpen]);
+
+  // The name renames on click, dotted-underlined with a pencil — the Resume
+  // card's own title control. Without the naming service it is plain text.
+  const title = namingApi() ? (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="group inline-flex max-w-full items-center justify-start gap-1.5 min-w-0 -ml-2 px-2 py-1 rounded-md cursor-text hover:bg-well transition-colors"
+      aria-label={`Rename ${name || COPY.untitled}`}
+      aria-haspopup="dialog"
+      onClick={() => setRenaming(true)}
+    >
+      <span className="truncate font-semibold text-fg decoration-dotted underline-offset-[3px] underline decoration-fg-muted">{name || 'Untitled'}</span>
+      <span className="text-fg-muted shrink-0">
+        <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+        </svg>
+      </span>
+    </Button>
+  ) : (name || 'Untitled');
+
+  // Tag and Complete, in the Resume card's order: Complete — the one that
+  // changes what the Resume list shows — outermost.
   const tools = (
-    <>
-      <button type="button" className={TOOL_BTN_ACCENT} onClick={() => onResume(session)}>
-        <PlayIcon size={13} />
-        Resume in Claude
+    <div ref={sheetRef} className="relative flex items-center">
+      <button
+        type="button"
+        onClick={() => setSheetOpen((o) => !o)}
+        aria-label={`Organize ${name || COPY.untitled}`}
+        aria-haspopup="dialog"
+        aria-expanded={sheetOpen}
+        className={`px-1 py-1.5 rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          sheetOpen ? 'text-fg' : 'text-fg-faint hover:text-fg-2'
+        }`}
+      >
+        <TagGlyph className="w-4 h-4" />
       </button>
-      <button type="button" className={TOOL_BTN_NEUTRAL} onClick={loadFullTranscript} disabled={all}>
-        {all ? 'Showing full transcript' : 'Open full transcript'}
-      </button>
-    </>
-  );
-
-  // Meta strip: "last N messages · 2d ago · read-only preview" (labelled as a
-  // slice until the full transcript is loaded — the true total isn't known).
-  const meta = (
-    <>
-      <span>{all ? `${shownCount} messages` : `last ${shownCount} messages`}</span>
-      <span className="text-fg-faint">·</span>
-      <span>{relTime(session.lastModified)}</span>
-      <span className="text-fg-faint">·</span>
-      <span>read-only preview</span>
-    </>
+      <CompleteToggle
+        done={!!row.flags?.complete}
+        name={name || COPY.untitled}
+        onToggle={(next) => void meta.toggleFlag('complete', next)}
+        className="px-1 py-1.5"
+      />
+      {sheetOpen && (
+        <div className="layer-surface absolute right-0 top-full mt-2 w-[280px] p-2 z-30" role="dialog" aria-label={COPY.tagsAndNoteLabel}>
+          {/* An unreadable note is reported, never opened as an empty editor —
+              a save writes the whole note (code review 2026-09-11, F1). */}
+          {meta.unreadable ? (
+            <ErrorState
+              variant="inline"
+              message={`Couldn't load this conversation's tags and note: ${meta.unreadable}`}
+              onRetry={meta.reload}
+            />
+          ) : (
+            <TagNoteEditor
+              appliedIds={new Set(meta.tags)}
+              onToggleTag={(id, next) => void meta.toggleTag(id, next)}
+              registry={registry}
+              note={meta.note}
+              onNote={(text) => void meta.saveNote(text)}
+              builtIns={[{
+                tag: PRIORITY_TAG,
+                hint: PRIORITY_HINT,
+                applied: !!row.flags?.priority,
+                onToggle: (next) => void meta.toggleFlag('priority', next),
+              }]}
+            />
+          )}
+        </div>
+      )}
+    </div>
   );
 
   return (
-    <ProjectDetailOverlay title={session.name || 'Untitled'} onClose={onClose} tools={tools} meta={meta}>
-      {/* Message list */}
-      <div className="px-5 py-4">
-        {loading ? (
-          <p className="text-sm text-fg-muted">Loading…</p>
-        ) : messages.length === 0 ? (
-          <p className="text-sm text-fg-muted">No messages to preview.</p>
-        ) : (
-          // Bubbles mirror the real chat view: user on the RIGHT in accent
-          // (UserMessage.tsx), Claude on the LEFT in inset (AssistantTurnBubble.tsx)
-          // — same rounding + max-widths, so the preview reads as the same
-          // conversation the user remembers. No role captions; the sides carry
-          // that, like the live chat. Rendered by the same ConversationTranscript
-          // the Session Drawer's SessionPreviewPane uses, so both surfaces agree
-          // on markdown rendering and gap markers.
-          <ConversationTranscript
-            messages={messages}
-            scrollToEndKey={loading}
-            olderHint={showOlderHint ? (
-              // The "there's more above" hint sits at the TOP — that's the OLDER
-              // side now that the preview anchors to the latest message.
-              <div className="text-center text-[11.5px] text-fg-muted py-2">
-                — showing the last {shownCount} messages — use "Open full transcript" for everything —
+    <>
+      <ProjectDetailOverlay title={title} onClose={onClose} tools={tools}>
+        <div className="flex h-full min-h-0 flex-col preview-backdrop">
+          <div className="min-h-0 flex-1">
+            <SessionPreviewPane
+              provider={session.provider === 'native' ? 'native' : 'claude'}
+              id={session.sessionId}
+              title={name}
+              projectSlug={session.projectSlug}
+              backdrop={false}
+            />
+          </div>
+          {/* The Resume browser's action card, with the conversation's tags and
+              details line (and so its date) on top — the date's new home. */}
+          <div className="shrink-0 p-3 pt-0">
+            <div className="rounded-lg border border-edge bg-panel shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
+              <div className="px-3 pt-2.5">
+                <SessionCardTags session={row} tagsById={registry.byId} className="mb-1" />
+                <SessionCardMeta session={row} showProject={false} />
               </div>
-            ) : null}
-          />
-        )}
-      </div>
-    </ProjectDetailOverlay>
+              <ResumeOptionsForm
+                session={row}
+                options={options}
+                onResume={() => { void options.resume(row, onResume); }}
+                flush
+              />
+            </div>
+          </div>
+        </div>
+      </ProjectDetailOverlay>
+      {renaming && <SessionRenameDialog id={session.sessionId} name={name} onClose={() => setRenaming(false)} />}
+      {options.dialog}
+    </>
   );
 }

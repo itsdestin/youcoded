@@ -100,7 +100,7 @@ describe('HarnessSession hardening — interrupt-during-tool-execute', () => {
       { command: 'echo hi' } as any,
       {
         sessionId: 's', cwd: process.cwd(), signal: ctrl.signal,
-        readRegistry: new Map<string, number>(), todos: [],
+        readRegistry: new Map<string, string>(), todos: [],
       } as any,
     );
     expect(res.isError).toBe(true);

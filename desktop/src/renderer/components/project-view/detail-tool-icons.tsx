@@ -7,11 +7,11 @@ import React from 'react';
 
 // Accent primary action (Edit / Save / Resume / Confirm).
 export const TOOL_BTN_ACCENT =
-  'px-3 py-1.5 rounded-md bg-accent text-on-accent text-[12.5px] inline-flex items-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50';
+  'px-3 py-1.5 rounded-md bg-accent text-on-accent text-xs inline-flex items-center gap-1.5 hover:opacity-90 transition-opacity disabled:opacity-50';
 
 // Neutral bordered secondary (Reveal / Copy path / Cancel / Open transcript / Exclude).
 export const TOOL_BTN_NEUTRAL =
-  'px-3 py-1.5 rounded-md bg-inset text-fg-2 hover:text-fg border border-edge-dim hover:border-edge text-[12.5px] inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-default';
+  'px-3 py-1.5 rounded-md bg-inset text-fg-2 hover:text-fg border border-edge-dim hover:border-edge text-xs inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 disabled:cursor-default';
 
 function Svg({ size = 13, children }: { size?: number; children: React.ReactNode }) {
   return (

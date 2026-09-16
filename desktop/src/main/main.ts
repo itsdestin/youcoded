@@ -22,6 +22,7 @@ for (const stream of [process.stdout, process.stderr]) {
 import os from 'os';
 import fs from 'fs';
 import { SessionManager } from './session-manager';
+import { resolveNoFolderCwd } from './no-folder';
 import { HookRelay } from './hook-relay';
 import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
@@ -293,6 +294,9 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   // The installed app serves the phone its built copy; a dev window serves live code unless
   // run-dev.sh --phone-build made a fresh copy (see choosePhonePageSource).
   serveBuiltPage: app.isPackaged || process.env.YOUCODED_REMOTE_BUILT === '1',
+  // The "No folder" sentinel → the app-owned empty folder, exactly as the desktop's
+  // own session:create does in ipc-handlers.ts (2026-09-16, remote-access.md).
+  prepareCreate: (payload) => resolveNoFolderCwd(payload, app.getPath('userData')),
   // The phone's / menu: the same list the desktop's commands:list handler returns.
   listCommands: () => commandProvider.getCommands(),
   requestSnapshot: () => requestMergedChatSnapshot({
@@ -616,6 +620,20 @@ const debouncedBroadcastAttention = (() => {
     t = setTimeout(recomputeAndBroadcastAttention, 100);
   };
 })();
+
+/** Called by ipc-handlers.ts on session-exit. WHY (2026-09-16, per-session-maps
+ *  investigation): a session's entry in every window's attention report was
+ *  only ever removed when THAT renderer volunteered `{ clear: true }`; a
+ *  session that died without one (crash, takeover, window reload mid-turn)
+ *  kept its last state in the aggregate for the life of the process, and a
+ *  "needs you" state there kept the buddy's attention signal lit. */
+export function forgetSessionAttention(sessionId: string): void {
+  let mutated = false;
+  for (const byWin of attentionReports.values()) {
+    if (byWin.delete(sessionId)) mutated = true;
+  }
+  if (mutated) debouncedBroadcastAttention();
+}
 
 // Shared BrowserWindow factory — used for the primary window AND for peer
 // windows spawned by the detach subsystem. Keeps webPreferences, security
@@ -1034,10 +1052,8 @@ function createWindow(firstRunManager?: FirstRunManager) {
   // installs share a hostname (the dev instance + built app dogfood gate).
   const requester = createRequesterTakeover({
     leaseClient,
-    // AWAITABLE sync (not the fire-and-forget syncSpacesSyncNow): the requester
-    // pulls the holder's final turn right after this, so the pull must not run
-    // until the push it depends on has actually landed. Bounded so a slow network
-    // can't wedge the resume.
+    // Waits for the push to land (the requester pulls the holder's final turn
+    // right after this), bounded so a slow network can't wedge the resume.
     syncNow: () => syncSpacesSyncNowAwaited('personal', HANDOFF_SYNC_TIMEOUT_MS),
     materializeOne: (id) => materializeOne(id),
     forceAcquire: (id) => hubLeaseRequest('force-acquire', id, deviceIdentity!.id),

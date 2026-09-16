@@ -283,6 +283,26 @@ export interface TranscriptEvent {
     // shared across event types. Writers: turn-complete (the turn's requests)
     // and, since 2026-09-10, a native compact-summary (the summary call's OWN
     // bill, which is a separate request and used to vanish from every total).
+    /** Native runtime only — `compact-summary` and `context-clear`: tokens
+     *  OCCUPYING the window once that history rewrite has landed, and (compaction
+     *  only) what it occupied just before.
+     *
+     *  WHY they exist as their OWN fields rather than inside `usage` above: that
+     *  `usage` block is the summarize REQUEST's bill, a different measurement
+     *  entirely, and `usage.contextUsedTokens` on a turn-complete is a MEASURED
+     *  prompt count. These two are the measured count re-based by the estimated
+     *  size of what the rewrite removed (harness-session.ts →
+     *  reprojectContextUsed), because a rewrite outside a turn never gets a fresh
+     *  reading from the provider. Keeping them separate stops a reader treating
+     *  an estimate-adjusted figure as a measurement.
+     *
+     *  Consumers: the status bar's native context gauge re-bases on
+     *  `contextUsedAfter` (the chip otherwise showed the PRE-compaction window
+     *  until the next message), and the compaction marker subtracts the pair to
+     *  say how much was actually freed. `contextUsedBefore` is absent when the
+     *  session had never measured a window at all. */
+    contextUsedAfter?: number;
+    contextUsedBefore?: number;
     /** Model ID used for the completing turn (e.g. "claude-opus-4-7"). */
     model?: string;
     /** Anthropic API request id from the JSONL line's top-level `requestId`. */

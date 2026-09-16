@@ -648,7 +648,6 @@ describe('artifact IPC parity', () => {
 describe('project:* channel parity', () => {
   const CHANNEL_TO_CONST: Record<string, string> = {
     'project:list-conversations': 'PROJECT_IPC.LIST_CONVERSATIONS',
-    'project:conversation-history': 'PROJECT_IPC.CONVERSATION_HISTORY',
     'project:repo-info': 'PROJECT_IPC.REPO_INFO',
     'project:list-context': 'PROJECT_IPC.LIST_CONTEXT',
     'project:read-context-file': 'PROJECT_IPC.READ_CONTEXT_FILE',

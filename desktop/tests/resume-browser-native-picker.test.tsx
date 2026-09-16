@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vite
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import ResumeBrowser from '../src/renderer/components/ResumeBrowser';
+import { previewPage } from './helpers/preview-page';
 
 // jsdom does not implement ResizeObserver; stub it so useScrollFade (the
 // session list's scroll-fade hook) can mount without throwing.
@@ -197,7 +198,7 @@ describe('ResumeBrowser — native resume model selector (Task 6)', () => {
         lastUsedModel: { modelId: 'claude-x', providerType: 'anthropic', providerLabel: 'Anthropic' } }),
     ]);
     (window as any).claude.chatsearch = {
-      read: vi.fn(async () => ({ ok: true, messages: [{ role: 'user', content: 'hello', timestamp: 1, seq: 0, droppedToolCalls: 0 }], hasMore: false })),
+      read: vi.fn(async (req: { id: string }) => previewPage(req.id, ['hello'])),
     };
     render(<ResumeBrowser open={true} onClose={() => {}} onResume={() => {}} />);
 

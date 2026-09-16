@@ -13,8 +13,8 @@ import React from 'react';
  * don't get reintroduced as "improvements".
  */
 
-export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'on-accent';
-export type ButtonSize = 'sm' | 'md' | 'lg' | 'icon' | 'icon-sm';
+export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-outline' | 'on-accent' | 'raised';
+export type ButtonSize = 'sm' | 'md' | 'lg' | 'xl' | 'icon' | 'icon-sm' | 'icon-xs';
 
 /** The one focus ring — every interactive control shares it (design rule 4),
  *  so it lives here and Toggle/Checkbox/Radio/Select/SegmentedTabs import it.
@@ -32,8 +32,9 @@ export const FOCUS_RING =
 /** Always applied.
  *  rounded-lg is the one control radius (12px built-in / 24px on big-radius
  *  packs, since --radius-lg is a theme token). Rejected: sm, md, full-everywhere.
- *  Pills survive only as a documented exception (first-run hero CTAs), via
- *  className override. */
+ *  Pills survive only as a documented exception (first-run hero CTAs), as the
+ *  xl size — which is why a size may replace the base radius and weight (see
+ *  buttonClasses). */
 const BUTTON_BASE =
   'inline-flex items-center justify-center gap-1.5 font-medium rounded-lg transition-colors ' +
   'disabled:opacity-50 disabled:cursor-not-allowed ' +
@@ -66,28 +67,39 @@ const BUTTON_VARIANT: Record<ButtonVariant, string> = {
   // black-on-black. Both roles derive from --on-accent instead, so the whole
   // control tracks whatever a theme pack sets the accent to.
   'on-accent': 'text-on-accent/80 hover:text-on-accent hover:bg-on-accent/15',
+  // A small control that sits ON a picture or chip (the × on an attachment
+  // thumbnail): a solid panel fill and outline so it stays visible over any image.
+  // Added 2026-09-16 — the attachment chip hand-restyled a ghost button into this.
+  raised: 'bg-panel border border-edge text-fg-2 hover:bg-edge',
 };
 
 /** sm  — inline row actions (EngineCard, provider rows, chips)
  *  md  — forms, popup footers, most actions
  *  lg  — page-level CTAs (sign-in, marketplace hero)
+ *  xl  — the first-run sign-in pills: the one documented pill exception, so its
+ *      radius and weight REPLACE the base ones (rounded-full, semibold). Added
+ *      2026-09-16; five buttons hand-set exactly these classes before it existed.
  *  icon— icon-only square; aria-label is required by the type signature
  *  icon-sm — the same, on a chip-height bar where a 28px square would set the
  *      bar's height instead of sitting inside it (ViewToggleHint). The glyph
  *      shrinks with it, so the rounded hover fill still reads as a container
- *      around the glyph rather than a tile behind it. */
+ *      around the glyph rather than a tile behind it.
+ *  icon-xs — a 16px round glyph button on a thumbnail or chip (attachment ×).
+ *      Visually tiny, so it always gets the touch-size hit area below. */
 const BUTTON_SIZE: Record<ButtonSize, string> = {
   sm: 'text-2xs px-2.5 py-1',
   md: 'text-xs px-3 py-1.5',
   lg: 'text-sm px-4 py-2',
+  xl: 'text-base px-6 py-3 font-semibold rounded-full',
   icon: 'w-7 h-7 p-0',
   'icon-sm': 'w-5 h-5 p-0',
+  'icon-xs': 'w-4 h-4 p-0 rounded-full text-3xs leading-none',
 };
 
 /** sm (~22px tall) and icon (28px) are under the ~44dp touch guideline, and this
  *  renderer is also the Android UI. `.coarse-hit` expands the tap target on
  *  touch devices only — no visual change. See globals.css. */
-const NEEDS_COARSE_HIT: ReadonlySet<ButtonSize> = new Set<ButtonSize>(['sm', 'icon', 'icon-sm']);
+const NEEDS_COARSE_HIT: ReadonlySet<ButtonSize> = new Set<ButtonSize>(['sm', 'icon', 'icon-sm', 'icon-xs']);
 
 type NativeButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement>;
 
@@ -98,8 +110,8 @@ type CommonProps = NativeButtonProps & {
 /** Icon buttons have no text, so aria-label isn't optional — the type enforces
  *  what a lint rule otherwise would (design rule 16). */
 type SizeProps =
-  | { size?: Exclude<ButtonSize, 'icon' | 'icon-sm'> }
-  | { size: 'icon' | 'icon-sm'; 'aria-label': string };
+  | { size?: Exclude<ButtonSize, 'icon' | 'icon-sm' | 'icon-xs'> }
+  | { size: 'icon' | 'icon-sm' | 'icon-xs'; 'aria-label': string };
 
 export type ButtonProps = CommonProps & SizeProps;
 
@@ -186,14 +198,15 @@ export function buttonClasses(
   size: ButtonSize = 'md',
   className = '',
 ): string {
-  const base = [
-    BUTTON_BASE,
-    BUTTON_VARIANT[variant],
-    BUTTON_SIZE[size],
-    NEEDS_COARSE_HIT.has(size) ? 'coarse-hit' : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
+  // WHY the size is merged over base+variant instead of simply appended: Tailwind
+  // picks between two competing classes by CSS source order, not class order, so a
+  // size carrying its own radius or weight (xl's rounded-full / font-semibold,
+  // icon-xs's rounded-full) would otherwise lose to the base rounded-lg /
+  // font-medium and silently render wrong. Sizes without those classes are unaffected.
+  const base = mergeClasses(
+    `${BUTTON_BASE} ${BUTTON_VARIANT[variant]}`,
+    [BUTTON_SIZE[size], NEEDS_COARSE_HIT.has(size) ? 'coarse-hit' : ''].filter(Boolean).join(' '),
+  );
 
   return mergeClasses(base, className).trim();
 }

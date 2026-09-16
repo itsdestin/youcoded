@@ -90,6 +90,11 @@ export interface UsageSnapshotSession {
   timeline: ReadonlyArray<{ kind: string; turnId?: string }>;
   assistantTurns: ReadonlyMap<string, { usage?: TurnUsage | null }>;
   totals?: SessionTotals;
+  /** Occupancy re-based by a /compact or /clear — see ChatSessionState's field.
+   *  Read here for the same reason the bar reads it: without it the card would
+   *  keep quoting the pre-compaction window, and the two surfaces would once
+   *  again disagree about the same session. */
+  contextUsedOverride?: number | null;
 }
 
 export interface UsageSnapshotInput {
@@ -160,7 +165,7 @@ export function buildUsageSnapshot(input: UsageSnapshotInput): UsageSnapshot | n
   // same last-completed-turn usage. Two surfaces, one formula: a native session
   // at 61% used to show a pill on the bar and NO context row on the card.
   const nativeUsage = isNative ? lastTurnUsage(session) : null;
-  const nativeChips = selectNativeStatusChips(nativeUsage, nativeUsage?.contextLength);
+  const nativeChips = selectNativeStatusChips(nativeUsage, nativeUsage?.contextLength, session?.contextUsedOverride);
 
   // `totals` is now present for EVERY session (it used to be native-only), and
   // a brand-new session's is emptyTotals() — all zeros. Its mere existence is

@@ -184,12 +184,12 @@ describe('artifact viewer context menu', () => {
 });
 
 // A3 (2026-08-26 preview-header spec): a previewed past conversation
-// (SessionPreviewPane, via ConversationTranscript) marks its scroll container
+// (SessionPreviewPane) marks its scroll container
 // with data-conversation-id/-title instead of .chat-scroll — see the WHY
 // comment on the guard in build-menu.ts. This mirrors that DOM shape by hand
 // (the way mountViewer() above mirrors the artifact viewer's), rather than
 // mounting the real component tree, to keep the guard's contract pinned
-// independent of ConversationTranscript's own markup.
+// independent of SessionPreviewPane's own markup.
 function mountBubble(opts: {
   // 'chat-scroll' = live chat's real marker. 'preview' = the transcript's
   // data-attribute marker. 'none' = neither — the positive control.

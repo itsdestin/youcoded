@@ -902,6 +902,43 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
+    // Fix 2026-09-16: the post-turn re-read's guard asked about the helper CAP
+    // alone and returned before applying the re-read contextLength. At create the
+    // model is usually not resident, so the window came from the model-less
+    // /props branch — the configured -c, which the server may have clamped down
+    // for VRAM. This refresh is the one chance to replace that guess with the
+    // engine's real n_ctx, and it was skipped whenever the cap happened to match,
+    // leaving the context gauge's DENOMINATOR wrong for the whole session — and
+    // wrong optimistically, so the window looked roomier than it was.
+    it('applies a corrected context window after the first turn even when the helper cap is unchanged', async () => {
+      let reads = 0;
+      const lateWindow = async (b: any) => {
+        const first = reads++ === 0;
+        return b.providerId === 'local'
+          // Cap: unknown first (→ the one-helper floor), then 1 — the SAME cap,
+          // which is what used to make the whole reading get dropped. Window:
+          // the configured 32k guess first, then the engine's real 8k.
+          ? { contextLength: first ? 32_768 : 8192, totalSlots: first ? null : 1 }
+          : { contextLength: 200_000, totalSlots: null };
+      };
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, lateWindow as any, providerTypeFor as any, async () => null);
+      await h.create({ sessionId: 'local-window', cwd: root, binding: { providerId: 'local', modelId: 'qwen3.6-35b-moe-q4' } });
+      const entry = (h as any).live.get('local-window');
+      expect(entry.session.contextWindowTokens).toBe(32_768);
+      const capBefore = entry.session.profileSnapshot.maxConcurrentSpecialists;
+
+      h.send('local-window', 'hi');
+      await entry.running;
+      await h.drain('local-window');
+
+      expect(reads).toBe(2);
+      // The cap genuinely did not move — so this pins the WINDOW, not a cap
+      // change smuggling the window along with it.
+      expect(entry.session.profileSnapshot.maxConcurrentSpecialists).toBe(capBefore);
+      expect(entry.session.contextWindowTokens).toBe(8192);
+      await h.destroyAll();
+    });
+
     // Review 2026-09-16: a picker swap that lands WHILE the post-turn re-read
     // is in the air must win — the stale reading is for the model the user
     // just left and must not put the session back on it.

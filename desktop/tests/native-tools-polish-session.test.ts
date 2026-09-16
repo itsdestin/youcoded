@@ -17,7 +17,7 @@ function seeded(session: any): any {
     { role: 'user', content: 'USER-B ' + 'y'.repeat(7_000) },
     { role: 'assistant', content: 'ok' },
   ]);
-  session.servedReads.set('/x/a.txt|1|2000', { mtimeMs: 1, callIndex: 1, from: 1, to: 3 });
+  session.servedReads.set('/x/a.txt|1|2000', { mtimeMs: 1, fingerprint: '0:x', callIndex: 1, from: 1, to: 3 });
   expect(session.servedReads.size).toBe(1);
   return session;
 }

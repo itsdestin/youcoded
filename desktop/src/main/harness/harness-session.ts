@@ -184,7 +184,7 @@ import { mcpToolsFor, estimateToolSchemaTokens } from './mcp/mcp-tools';
 import type { ReadyServer } from './mcp/mcp-manager';
 import {
   costForUsage, providerCostFromMetadata, costDisagreement,
-  COST_DISAGREEMENT_THRESHOLD, addComparableTurn, sessionCostDisagreement,
+  COST_DISAGREEMENT_THRESHOLD, addComparableTurn, sessionCostDisagreement, modelCostDisagreements,
   NO_SESSION_COST_TOTALS, COST_GAP_RELOG_FACTOR,
   type ModelPricing, type SessionCostTotals,
 } from './pricing';
@@ -696,6 +696,9 @@ export class HarnessSession extends EventEmitter {
    *  materially WORSE (COST_GAP_RELOG_FACTOR), which is a different fault
    *  rather than a repeat of the reported one. */
   private lastLoggedSessionCostGap: number | null = null;
+  /** The same relog ladder, per model — see `SessionCostTotals.byModel` for
+   *  why the session line alone goes deaf across a model swap (2026-09-16). */
+  private lastLoggedModelCostGap = new Map<string, number>();
   binding: ModelBinding;
   /** Identity stamped by the provider factory (provider/model/non-secret account).
    * A refreshed account can change this without a host setBinding call. */
@@ -717,7 +720,7 @@ export class HarnessSession extends EventEmitter {
   // Tool runtime state (Task 9). readRegistry + todos are per-SESSION runtime
   // state — NOT persisted transcript. seedHistory() clears both on resume.
   private toolByName: Map<string, NativeTool>;
-  private readRegistry = new Map<string, number>();  // canonical path → mtimeMs at last Read
+  private readRegistry = new Map<string, string>();  // canonical path → content fingerprint at last Read (tools/file-fingerprint.ts)
   /** G-11 (2026-08-26 tools investigation) — what Read has already served this
    *  session (`path|offset|limit` → mtime + which call). Read answers a repeat
    *  of an unchanged slice with "the content you already have is current"
@@ -1046,12 +1049,97 @@ export class HarnessSession extends EventEmitter {
   /** Effective system prompt: the assembled one (Task 11) or the harness's own. */
   private get systemText(): string { return this.opts.systemPrompt ?? this.opts.harness.systemPrompt; }
 
-  /** Chars/4 estimate of everything the model currently holds — system prompt plus
-   *  the whole history. ONLY a fallback for when the provider reports no usage;
-   *  a measured prompt-token count is always preferred. */
+  /** Chars/4 estimate of everything the model currently holds — system prompt,
+   *  the attached tool schemas, and the whole history. ONLY a fallback for when
+   *  the provider reports no usage; a measured prompt-token count is always
+   *  preferred.
+   *
+   *  Fix (2026-09-16): the tool schemas were missing. They ride EVERY request —
+   *  the full CORE_TOOLS suite plus whatever MCP tools are attached — and this
+   *  class already prices them elsewhere (syncMcpTools budgets servers with the
+   *  same estimator), so leaving them out was an omission, not a simplification.
+   *  It mattered in the two places this estimate is the ANSWER rather than a
+   *  budget: the turn-complete fallback for a provider that reports no prompt
+   *  tokens (small local servers — the smallest windows, where being optimistic
+   *  hurts most), and the occupancy left after a /clear, which is the system
+   *  prompt and the tool schemas and nothing else. */
   private estimateContextTokens(): number {
     return Math.ceil(this.systemText.length / APPROX_CHARS_PER_TOKEN)
+      + estimateToolSchemaTokens([...this.toolByName.values()])
       + messagesTokens(this.history);   // binary-aware — see message-size.ts
+  }
+
+  /** Re-base `_contextUsedTokens` after a HISTORY-ONLY rewrite (compaction,
+   *  /clear) and return the new figure. `estimateBefore` must be
+   *  estimateContextTokens() read BEFORE the rewrite.
+   *
+   *  WHY this exists: the occupancy figure is otherwise only ever written by a
+   *  completed step, so a rewrite that runs outside a turn — the /compact button
+   *  and /clear both do — left the last measured reading standing. The status bar
+   *  then showed the PRE-compaction window until the user happened to send
+   *  another message; after /clear, where real occupancy drops to roughly the
+   *  system prompt, it could sit at "3% remaining" indefinitely (Destin,
+   *  2026-09-16).
+   *
+   *  WHY a subtraction and not a fresh estimate: the standing reading is a REAL
+   *  prompt-token count from the provider, while estimateContextTokens() is
+   *  chars/4 and wrong by a content-dependent factor (code and JSON tokenize
+   *  far denser than prose). Re-estimating the WHOLE window would throw the
+   *  measurement away and make the chip jump by that factor even when nothing
+   *  much was removed. The one quantity we genuinely cannot measure is how much
+   *  this rewrite took out, so estimate only THAT and subtract it: the fixed
+   *  costs (system prompt, tool schemas) sit in both estimates and cancel, and
+   *  the factor applies to the delta alone. The next completed turn overwrites
+   *  the whole figure with a fresh measurement regardless.
+   *
+   *  Falls back to the plain estimate when nothing has been measured yet — the
+   *  same fallback the emit site and the accessor already use for a
+   *  usage-silent provider. */
+  private reprojectContextUsed(estimateBefore: number | null): number {
+    const estimateAfter = this.estimateContextTokens();
+    const measured = this._contextUsedTokens;
+    // WHY this returns WITHOUT writing the field (review finding, 2026-09-16):
+    // `_contextUsedTokens` means "a measured prompt-token count", and its only
+    // other writer is guarded on `lastInputTokens > 0`. A usage-silent provider
+    // — the local servers this estimate exists for — never sets it, so latching
+    // an estimate here would make it permanent AND monotonically shrinking (this
+    // method can only subtract). `planCompaction` reads it through the turn loop
+    // and only re-estimates when handed 0, so a frozen sub-trigger number would
+    // stop compaction firing for the rest of the session. The accessor already
+    // falls back to this same estimate, so leaving the field null costs nothing.
+    if (measured === null || estimateBefore === null) return estimateAfter;
+    // Both Math.max guards are for a shrink that reads as a GROWTH (an estimator
+    // quirk on a rewrite that replaced a span with a longer summary): clamp the
+    // delta at 0 rather than inflating the measured figure, and clamp the result
+    // at 0 rather than reporting a negative window.
+    const projected = Math.max(0, measured - Math.max(0, estimateBefore - estimateAfter));
+    this._contextUsedTokens = projected;
+    return projected;
+  }
+
+  /** The reading `reprojectContextUsed` measures a rewrite against, or null when
+   *  there is no measurement to re-base — in which case the walk is skipped
+   *  entirely. That is the common case on a small local window, which prunes on
+   *  nearly every step, so this is also where the cost of the walk is avoided. */
+  private rewriteBaseline(): number | null {
+    return this._contextUsedTokens === null ? null : this.estimateContextTokens();
+  }
+
+  /** The summary call's own usage, priced the way a turn's is. Money is priced
+   *  HERE, in main, at the model that ran the request — the renderer sums
+   *  dollars and never multiplies tokens by a rate itself (rule
+   *  status-bar-relevance → "Cost is checked against the provider"). Without
+   *  this the compact-summary event shipped raw tokens that no total could
+   *  legitimately price, which is why the summarize call's spend was invisible. */
+  private priceSummaryUsage(u: StepUsage): StepUsage & { costUsd: number | null; free: boolean } {
+    return {
+      ...u,
+      // Identical shape to the turn-complete emit: `free` WINS over any rate
+      // card, so a local engine whose model id happens to carry a published
+      // rate never ships a bill for a request that cost nothing to run.
+      costUsd: this.opts.free ? null : costForUsage(u, this.opts.pricing),
+      free: this.opts.free ?? false,
+    };
   }
 
   /** Returns the uuid it minted so a caller that ALSO changes history can record
@@ -1592,7 +1680,17 @@ export class HarnessSession extends EventEmitter {
     const cfg = this.compactionConfig();
     const decision = planCompaction(this.history, cfg, lastInputTokens);
     if (decision.action === 'none') return;
-    if (decision.action === 'prune') { this.commitPrune(pruneToolOutputs(this.history, cfg)); return; }
+    if (decision.action === 'prune') {
+      // Read BEFORE the mutation — reprojectContextUsed sizes the rewrite against it.
+      const estimateBefore = this.rewriteBaseline();
+      this.commitPrune(pruneToolOutputs(this.history, cfg));
+      // No event: a pure prune only ever runs INSIDE the turn loop, and the
+      // turn-complete a few steps later re-measures the window for the UI. This
+      // keeps the IN-PROCESS figure honest in the meantime — it sizes a
+      // specialist's report against the parent's headroom (see the field's WHY).
+      this.reprojectContextUsed(estimateBefore);
+      return;
+    }
     // Summarize. Decide whether a summary will actually run BEFORE touching
     // anything. The cut depends only on message roles; the thrash guard is
     // measured on the span AS THE MODEL WILL READ IT — the unpruned front of the
@@ -1620,15 +1718,19 @@ export class HarnessSession extends EventEmitter {
     try { generated = await this.generateSummary(model, span, aiTools); } catch { generated = { text: '' }; }
     const summary = generated.text;
     if (!summary.trim()) return;                          // FAIL-SAFE: no summary → history untouched
+    // Taken HERE, not at the top: every bail-out above (`cut <= 0`, the thrash
+    // guard, an empty summary) returns without touching history, and commitPrune
+    // below is this path's first mutation — so a walk of the whole history is
+    // spent only on the compactions that actually happen.
+    const estimateBefore = this.rewriteBaseline();
     this.commitPrune(pruned);
-    // Existing frozen event (no new type). `summary` is the canonical field the
-    // renderer reads (types.ts / App.tsx / BubbleFeed.tsx). `autoCompaction` tags
-    // this as a SPONTANEOUS native compaction so the renderer surfaces the marker
-    // even though the manual-/compact `compactionPending` flag was never set —
-    // CC's own compact-summary events never carry it, so the manual path is
-    // untouched. `usage` is the summary call's own bill (see generateSummary).
-    const summaryUuid = this.emitEvent('compact-summary', { summary, autoCompaction: true, ...(generated.usage ? { usage: generated.usage } : {}) });
-    this.prefixMoved = true;   // the next request starts with the summary — a known full miss
+    // WHY the history swap happens BEFORE the emit (2026-09-16): the event now
+    // carries the window's occupancy AFTER this rewrite, and that number cannot
+    // be read off a history the rewrite has not landed in yet. emitEvent is
+    // synchronous, so announcing first would hand every listener a figure for a
+    // conversation that no longer exists. Nothing between the old positions read
+    // `this.history`, so the move is otherwise inert.
+    //
     // Fix 2 (2026-08-11): the summarized-away span can still contain a
     // delivered image. pruneToolOutputs collapses 'content' (image) outputs too,
     // but only ones OUTSIDE its own token-budget protected window — commitPrune
@@ -1640,6 +1742,24 @@ export class HarnessSession extends EventEmitter {
     // automatically at the trigger instead of only on an explicit /clear.
     this.shownImages.clear();
     this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
+    const contextUsedBefore = this._contextUsedTokens;
+    const contextUsedAfter = this.reprojectContextUsed(estimateBefore);
+    // Existing frozen event (no new type). `summary` is the canonical field the
+    // renderer reads (types.ts / App.tsx / BubbleFeed.tsx). `autoCompaction` tags
+    // this as a SPONTANEOUS native compaction so the renderer surfaces the marker
+    // even though the manual-/compact `compactionPending` flag was never set —
+    // CC's own compact-summary events never carry it, so the manual path is
+    // untouched. `usage` is the summary call's own bill (see generateSummary),
+    // priced here so it can be totalled. The two context figures let the status
+    // bar re-base its gauge and the marker say what was actually freed.
+    const summaryUuid = this.emitEvent('compact-summary', {
+      summary,
+      autoCompaction: true,
+      contextUsedAfter,
+      ...(contextUsedBefore === null ? {} : { contextUsedBefore }),
+      ...(generated.usage ? { usage: this.priceSummaryUsage(generated.usage) } : {}),
+    });
+    this.prefixMoved = true;   // the next request starts with the summary — a known full miss
     // The new leading message IS that event's summary text, so the uuid enters
     // BOTH lists: the transformation says how history was rewritten, while the
     // accepted list is what the store turns into content references. Without the
@@ -1785,12 +1905,23 @@ export class HarnessSession extends EventEmitter {
       // diff as maybeCompact's prune call — see its comment for why this is
       // keyed on an actual count decrease, not on whether summarize runs next.
       const imagesBeforePrune = countImageOutputs(this.history);
+      // The window as it stood when the user pressed Compact — the marker's
+      // "freed N tokens" measures against THIS, so it is read before the prune
+      // rather than between the prune and the summary.
+      const contextUsedBefore = this._contextUsedTokens;
+      // Re-based in TWO stages (prune, then summary), each against its own
+      // estimate, because the refusal returns below sit between them: a
+      // compaction refused as 'nothing-to-compact' or 'summary-failed' has still
+      // pruned, and leaving the old figure standing would report a window this
+      // session no longer has. See reprojectContextUsed for why it subtracts.
+      const estimateBeforePrune = this.rewriteBaseline();
       const beforePrune = this.history;
       this.history = pruneToolOutputs(this.history, cfg);
       // Same per-message identity check as maybeCompact's prune — see its WHY.
       if (this.history.some((m, i) => m !== beforePrune[i])) { this.capture.markPruned(); this.prefixMoved = true; }
       if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
       this.servedReads.clear(); // G-11: same reasoning as maybeCompact — prune may have cut a served Read
+      this.reprojectContextUsed(estimateBeforePrune);
       const cut = this.summarizeCutIndex();
       // <2 user turns means there is no boundary we can cut on without risking
       // splitting a tool-call/result pair, so there is genuinely nothing to do.
@@ -1815,14 +1946,25 @@ export class HarnessSession extends EventEmitter {
       // the PRUNED history in place rather than discarding anything. The user
       // still gets a real (if smaller) reduction, and never a lost conversation.
       if (!summary.trim()) return { ok: false, reason: 'summary-failed' };
-      const summaryUuid = this.emitEvent('compact-summary', { summary, ...(generated.usage ? { usage: generated.usage } : {}) });
-      this.prefixMoved = true;   // same as the auto path: the next request is a known full miss
+      // Commit the new history BEFORE announcing it, for the same reason as the
+      // automatic path: the event carries the occupancy this rewrite leaves
+      // behind, and emitEvent runs its listeners synchronously.
+      //
       // Fix 2 (2026-08-11): same reasoning as maybeCompact above — the manual
       // /compact path discards the summarized span exactly the same way, so
       // the dedupe cache must be cleared here too or it keeps vouching for
       // images this summary just removed.
+      const estimateBeforeSummary = this.rewriteBaseline();
       this.shownImages.clear();
       this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
+      const contextUsedAfter = this.reprojectContextUsed(estimateBeforeSummary);
+      const summaryUuid = this.emitEvent('compact-summary', {
+        summary,
+        contextUsedAfter,
+        ...(contextUsedBefore === null ? {} : { contextUsedBefore }),
+        ...(generated.usage ? { usage: this.priceSummaryUsage(generated.usage) } : {}),
+      });
+      this.prefixMoved = true;   // same as the auto path: the next request is a known full miss
       this.capture.recordEvent(summaryUuid);   // same reasoning as maybeCompact's
       this.capture.markSummary(summaryUuid);
       return { ok: true };
@@ -1846,7 +1988,13 @@ export class HarnessSession extends EventEmitter {
    *  refusal) as compactNow. */
   clearHistory(): { ok: true } | { ok: false; reason: 'turn-in-flight' } {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
+    const estimateBefore = this.rewriteBaseline();
     this.history = [];
+    // What the model still holds after the barrier: the system prompt and the
+    // tool schemas, not the conversation. Without this the status bar kept
+    // showing the pre-clear window — the sharpest form of the staleness, since
+    // /clear is exactly when a user looks at the chip to confirm it worked.
+    const contextUsedAfter = this.reprojectContextUsed(estimateBefore);
     this.prefixMoved = true;   // the next request shares nothing with the last one — a known full miss
     // No seed: the accepted list empties AND takes the next revision, so a
     // checkpoint published before the clear can never be restored over it.
@@ -1865,7 +2013,7 @@ export class HarnessSession extends EventEmitter {
     // client — learns the conversation was cleared. On replay this same event
     // resets the visible timeline, keeping what the user sees after a restart
     // identical to what they saw when they cleared.
-    this.emitEvent('context-clear', {});
+    this.emitEvent('context-clear', { contextUsedAfter });
     return { ok: true };
   }
 
@@ -2200,6 +2348,43 @@ export class HarnessSession extends EventEmitter {
 
     const startedAt = Date.now();
     const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, expectedRebuild: false };
+    // Set the instant this turn's usage ships, so no second exit can report the
+    // SAME tokens again — turn-complete's own emit can throw (a transcript-event
+    // listener is the host's persistence wire), which lands in the catch below.
+    let usageReported = false;
+    /** This turn's spend so far, priced, for an exit that will never reach
+     *  turn-complete — an interrupt or a provider error.
+     *
+     *  WHY (fix 2026-09-16): `turn-complete` is the only event that carried
+     *  usage, and every abandoned exit `return`s before it. A five-step turn that
+     *  read 300k tokens and wrote 8k before the user pressed Stop therefore
+     *  contributed ZERO to In/Out/Cached/Cost — requests that were completed and
+     *  billed. Pressing Stop is ordinary working style, not an edge case, so the
+     *  chip drifted arbitrarily low for anyone who does it.
+     *
+     *  Reports only what whole STEPS reported: the in-flight step's own usage is
+     *  deliberately not awaited on the interrupt path (consumeStep returns zeros
+     *  rather than risk a promise that never settles), and the already-summed
+     *  prior steps are what this recovers. The provider-cost self-check is
+     *  untouched — an abandoned turn still enters neither side of it, so the
+     *  comparison stays honest.
+     *
+     *  Returns NO key at all when nothing was measured: a fabricated zero would
+     *  read as "we checked and this turn was free" (docs/error-message-standards). */
+    const abandonedTurnUsage = (): Pick<TranscriptEvent['data'], 'usage'> => {
+      if (usageReported) return {};
+      usageReported = true;
+      const anyTokens = turnUsage.inputTokens > 0 || turnUsage.outputTokens > 0
+        || turnUsage.cacheReadTokens > 0 || turnUsage.cacheCreationTokens > 0;
+      if (!anyTokens) return {};
+      return {
+        usage: {
+          ...turnUsage,
+          costUsd: turnFree ? null : costForUsage(turnUsage, turnPricing),
+          free: turnFree ?? false,
+        },
+      };
+    };
     // WHY snapshot the rate card and the model id HERE, at turn start: a model
     // swap (setBinding) while this turn is still streaming used to re-price
     // every token the OLD model had already produced at the NEW model's rate,
@@ -2370,7 +2555,7 @@ export class HarnessSession extends EventEmitter {
           } else {
             this.capture.abandonAttempt(step.attempt);   // nothing was pushed
           }
-          this.emitEvent('user-interrupt', {});
+          this.emitEvent('user-interrupt', abandonedTurnUsage());
           return;
         }
 
@@ -2521,7 +2706,7 @@ export class HarnessSession extends EventEmitter {
               resultParts.push(this.toolResultPart(rem, CANCELED_TOOL_TEXT));
             }
             this.history.push({ role: 'tool', content: resultParts });
-            this.emitEvent('user-interrupt', {});
+            this.emitEvent('user-interrupt', abandonedTurnUsage());
             return;
           }
           // The user dismissed a question → end the turn ORDERLY. Record THIS
@@ -2574,7 +2759,7 @@ export class HarnessSession extends EventEmitter {
         // turn with stopReason 'max_steps'; canceled is an interrupt.
         if (maxSteps !== undefined && stepsSinceApproval >= maxSteps) {
           const d = await this.opts.askUser?.({ sessionId: this.opts.sessionId, toolName: 'max_steps', toolInput: { steps: stepsSinceApproval }, denyListed: false });
-          if (d?.behavior === 'canceled') { this.emitEvent('user-interrupt', {}); return; }
+          if (d?.behavior === 'canceled') { this.emitEvent('user-interrupt', abandonedTurnUsage()); return; }
           if (d?.behavior !== 'allow') { stopReason = 'max_steps'; break turnLoop; }
           stepsSinceApproval = 0;
         }
@@ -2620,7 +2805,7 @@ export class HarnessSession extends EventEmitter {
       // provider with a silent one never puts part of a bill next to all of
       // our arithmetic. Same rules as above: diagnostic only, no UI, and the
       // message states what was observed without naming a cause.
-      this.sessionCostTotals = addComparableTurn(this.sessionCostTotals, costUsd, providerCostUsd);
+      this.sessionCostTotals = addComparableTurn(this.sessionCostTotals, costUsd, providerCostUsd, turnModelId);
       const sessionCostGap = sessionCostDisagreement(this.sessionCostTotals);
       // Logged the first time the sums cross the threshold, and again only once
       // the gap has multiplied since the last line — see the field and
@@ -2641,6 +2826,28 @@ export class HarnessSession extends EventEmitter {
           relativeGap: Number(sessionCostGap.toFixed(4)),
         });
       }
+      // ...and once more PER MODEL, so a mis-priced cheap model is not hidden
+      // behind a correctly-priced one that ran most of the session (the
+      // dilution the session sum cannot see — `SessionCostTotals.byModel`).
+      // Only once a SECOND model has entered the pair: on a single-model
+      // session the per-model figures ARE the session figures, and the line
+      // above already said it. Same ladder, kept per model, same
+      // diagnostic-only posture.
+      const multiModel = Object.keys(this.sessionCostTotals.byModel).length > 1;
+      for (const { modelId, gap, totals } of multiModel ? modelCostDisagreements(this.sessionCostTotals) : []) {
+        const last = this.lastLoggedModelCostGap.get(modelId);
+        if (last !== undefined && gap < last * COST_GAP_RELOG_FACTOR) continue;
+        this.lastLoggedModelCostGap.set(modelId, gap);
+        log('WARN', 'HarnessSession', 'our cost figures and the provider’s own disagree for one of this session’s models', {
+          sessionId: this.opts.sessionId,
+          model: modelId,
+          comparableTurns: totals.turns,
+          ourCostUsd: totals.ourUsd,
+          providerCostUsd: totals.theirUsd,
+          relativeGap: Number(gap.toFixed(4)),
+        });
+      }
+      usageReported = true;   // whatever happens after this, these tokens are reported
       this.emitEvent('turn-complete', {
         // The model that RAN this turn — snapshotted at turn start (see
         // turnModelId), so a swap that landed mid-stream is not credited here.
@@ -2700,9 +2907,10 @@ export class HarnessSession extends EventEmitter {
         this.capture.abandonAttempt(this.lastAttempt);
       }
       if (this.interrupted || err?.name === 'AbortError' || this.abort?.signal.aborted) {
-        this.emitEvent('user-interrupt', {});
+        this.emitEvent('user-interrupt', abandonedTurnUsage());
       } else {
-        this.emitEvent('session-error', { text: describeProviderError(err) });
+        // An errored turn spent the same real tokens an interrupted one did.
+        this.emitEvent('session-error', { text: describeProviderError(err), ...abandonedTurnUsage() });
       }
     } finally {
       this.abort = null;

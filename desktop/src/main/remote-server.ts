@@ -355,6 +355,13 @@ export class RemoteServer {
       /** Serve the built copy of the app when one exists (see choosePhonePageSource). main.ts
        *  passes app.isPackaged or run-dev.sh --phone-build; the default keeps the old behaviour. */
       serveBuiltPage?: boolean;
+      /** The same rewrite the desktop's own session:create applies before the session
+       *  manager sees a cwd — today the "No folder" sentinel → the app-owned empty folder.
+       *  WHY (2026-09-16, remote-access.md): the phone's session:create went straight to
+       *  createSession, so a "No folder" conversation started from a phone opened in the
+       *  home folder instead of the private place the desktop gives it. main.ts wires it;
+       *  tests that pass nothing get the payload untouched. */
+      prepareCreate?: <T extends { cwd?: string }>(payload: T) => T;
     },
   ) {
     this.devices = new RemoteDeviceStore();
@@ -364,11 +371,13 @@ export class RemoteServer {
     this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
     this.onAppearanceBroadcast = opts?.onAppearanceBroadcast ?? (() => {});
     this.listCommands = opts?.listCommands ?? null;
+    this.prepareCreate = opts?.prepareCreate ?? ((p) => p);
     this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
   }
   private serveBuiltPage: boolean;
   private listCommands: (() => Promise<unknown[]>) | null;
+  private prepareCreate: <T extends { cwd?: string }>(payload: T) => T;
   private listThemes: () => string[];
 
   /** One line per connection event in the host's log. WHY (2026-09-11 phone pass): an empty
@@ -460,12 +469,21 @@ export class RemoteServer {
   setSessionMetaWiring(w: {
     resolve: (sessionId: string) => string;
     canWrite: (sessionId: string, resolved: string) => boolean;
+    /** Refresh the DESKTOP window that owns the session (ipc-handlers backs it
+     *  with sendForSession + SESSION_META_CHANGED). WHY (2026-09-16, sync.md):
+     *  a tag or note set from a phone reached every OTHER remote client through
+     *  the broadcast below, but the open desktop window kept the old value until
+     *  some unrelated event refreshed it — this server has no path to a window
+     *  of its own, so the wiring has to carry one. Optional so older wirings
+     *  and tests keep working. */
+    notify?: (sessionId: string, payload: Record<string, unknown>) => void;
   }): void {
     this.sessionMetaWiring = w;
   }
   private sessionMetaWiring?: {
     resolve: (sessionId: string) => string;
     canWrite: (sessionId: string, resolved: string) => boolean;
+    notify?: (sessionId: string, payload: Record<string, unknown>) => void;
   };
 
   /** Session naming, injected from ipc-handlers so a remote client runs the
@@ -1725,7 +1743,7 @@ export class RemoteServer {
           this.respond(client.ws, type, id, { ok: false, error: 'A terminal session can only be opened from the app itself.' });
           break;
         }
-        const info = this.sessionManager.createSession(payload);
+        const info = this.sessionManager.createSession(this.prepareCreate(payload));
         this.respond(client.ws, type, id, info);
         // session:created broadcast is handled by the onSessionCreated event listener
         break;
@@ -2181,6 +2199,8 @@ export class RemoteServer {
         // to the originating client is a harmless refetch (consumers ignore
         // the payload and refetch meta).
         this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, flag: tagFlagKey(tagId), value: !!payload?.value } });
+        // ...and the desktop window that owns it — see setSessionMetaWiring's notify.
+        this.sessionMetaWiring?.notify?.(resolved, { flag: tagFlagKey(tagId), value: !!payload?.value });
         this.respond(client.ws, type, id, { ok: true });
         break;
       }
@@ -2260,6 +2280,8 @@ export class RemoteServer {
         emitConversationMetaChanged();
         // Same parity gap as session:set-tag above — see that comment.
         this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, note: text } });
+        // ...and the desktop window that owns it — see setSessionMetaWiring's notify.
+        this.sessionMetaWiring?.notify?.(resolved, { note: text });
         this.respond(client.ws, type, id, { ok: true });
         break;
       }

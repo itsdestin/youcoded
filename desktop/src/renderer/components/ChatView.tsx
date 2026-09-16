@@ -1339,6 +1339,9 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     anthropicRequestId={lastTurnRequestId}
                     errorMessage={state.errorMessage}
                     stalledSince={state.stalledSince}
+                    // Native sessions get the stuck line without the
+                    // "check Terminal view" pointer — they have no Terminal.
+                    provider={provider}
                     // Provider-config errors (missing/disabled key) show an
                     // "Open Settings" button that deep-links to Model Providers.
                     onOpenProviderSettings={onOpenProviderSettings}

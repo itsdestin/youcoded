@@ -164,6 +164,15 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
   // awaiting hubRequest (its resumed schedule() would otherwise leak a second
   // heartbeat loop, double-renewing).
   const gen = new Map<string, number>();
+  // WHY (2026-09-16, sync.md): acquire() awaits the hub, and a release() that
+  // runs during that await — open a conversation and close it within a second —
+  // used to be undone the moment the reply landed: acquire() re-held the session
+  // and re-armed the 30 s heartbeat, so the app kept telling other devices the
+  // conversation was in use until restart. The renew path already re-checks
+  // `held` after every await; acquire could not, because it is the call that
+  // SETS `held`. A per-session release counter, read before and after the
+  // await, is what tells a late reply that the caller has moved on.
+  const releaseSeq = new Map<string, number>();
 
   // ---- lease-file helpers (all best-effort, all try/caught, all OFF the event loop) ----
   //
@@ -367,9 +376,20 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       // handed over this second call is a no-op, and otherwise it releases the
       // slot with no write.
       try {
+        const releasesBefore = releaseSeq.get(sessionId) ?? 0;
         let res: LeaseResult | null = null;
         try { res = await opts.hubRequest('acquire', sessionId, opts.deviceId); }
         catch { res = null; } // never throw from acquire
+
+        if ((releaseSeq.get(sessionId) ?? 0) !== releasesBefore) {
+          // Released while the hub was thinking. Hold nothing, write nothing,
+          // and — because the hub may have granted the lease AFTER it processed
+          // that release — tell it once more, best-effort, that we do not want
+          // it. The reply is handed back unchanged for the caller's record; the
+          // session it was for is already gone.
+          void opts.hubRequest('release', sessionId, opts.deviceId).catch(() => { /* best-effort */ });
+          return res ?? { ok: true, op: 'acquire', sessionId, holder: null };
+        }
 
         if (res && !res.ok) {
           // Someone else holds it. Don't start a timer, don't write a file — the
@@ -413,6 +433,7 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       // delete against a later write.
       stopTimer(sessionId);
       held.delete(sessionId);
+      releaseSeq.set(sessionId, (releaseSeq.get(sessionId) ?? 0) + 1); // see releaseSeq's WHY
       await deleteLeaseFile(sessionId);
       try { await opts.hubRequest('release', sessionId, opts.deviceId); } catch { /* best-effort */ }
     },

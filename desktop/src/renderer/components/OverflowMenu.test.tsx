@@ -107,7 +107,7 @@ describe('OverflowMenu', () => {
 
   it('surfaces a pending challenge on the ||| button', () => {
     const { container } = renderMenu({ challengePending: true });
-    expect(container.querySelector('.bg-orange-400')).toBeTruthy();
+    expect(container.querySelector('.bg-amber-700')).toBeTruthy();
   });
 
   it('prefers the danger badge over a pending challenge', () => {

@@ -83,7 +83,7 @@ function ReasoningSection({ content }: { content: string }) {
         <span className="italic">{expanded ? 'Hide reasoning' : 'Show reasoning'}</span>
       </button>
       {expanded && (
-        <div className="mt-1 pl-2 border-l-2 border-edge-dim text-[12.5px] text-fg-dim">
+        <div className="mt-1 pl-2 border-l-2 border-edge-dim text-xs text-fg-dim">
           <MarkdownContent content={content} />
         </div>
       )}
@@ -116,7 +116,7 @@ function TurnMetadataStrip({ turn }: { turn: AssistantTurn }) {
 
   return (
     <div
-      className="text-[10.5px] text-fg-muted mt-1 pl-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono select-text"
+      className="text-3xs text-fg-muted mt-1 pl-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono select-text"
       title="Per-turn metadata from transcript"
     >
       {/* Fix: `<synthetic>` is CC's placeholder for a notice it wrote itself
@@ -183,7 +183,7 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
         className="w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors"
       >
         {askingCount > 0 ? (
-          <QuestionIcon className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+          <QuestionIcon className="w-3.5 h-3.5 shrink-0 text-amber-700" />
         ) : runningCount > 0 ? (
           <BrailleSpinner size="sm" />
         ) : latestToolFailed ? (
@@ -201,7 +201,7 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
               suffix only fires once the group has fully settled (Q3a). */}
           {runningCount === 0 && failedCount > 0 && ` — ${failedCount} failed`}
           {runningCount === 0 && stoppedCount > 0 && ` — ${stoppedCount} stopped`}
-          {askingCount > 0 && <span className="text-amber-500">{` — ${askingCount} waiting on you`}</span>}
+          {askingCount > 0 && <span className="text-amber-700">{` — ${askingCount} waiting on you`}</span>}
         </span>
         <ChevronIcon className="w-3.5 h-3.5 shrink-0 text-fg-muted" expanded={expanded} />
       </button>

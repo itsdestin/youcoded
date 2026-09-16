@@ -297,7 +297,7 @@ export default function UsageCard({ snapshot: s }: Props) {
         {/* Lines changed — only if non-zero, to avoid clutter on conversational sessions */}
         {showLines && (
           <div className="mt-3 pt-3 border-t border-edge-dim text-xs text-fg-muted">
-            <span className="text-green-500 tabular-nums">+{s.linesAdded ?? 0}</span>
+            <span className="text-green-400 tabular-nums">+{s.linesAdded ?? 0}</span>
             {' / '}
             <span className="text-red-500 tabular-nums">−{s.linesRemoved ?? 0}</span>
             {' lines changed'}

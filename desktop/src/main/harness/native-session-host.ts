@@ -1814,6 +1814,19 @@ export class NativeSessionHost extends EventEmitter {
           interrupted = true;
           break;
         case 'compact-summary':
+          // The child's OWN summarize request. Counted here for the same reason
+          // turn-complete is: this accumulator is the only route a specialist's
+          // spend has into the parent's totals (emitSubagentUsage below), and a
+          // child's compact-summary is not in SUBAGENT_DISPLAY_TYPES, so it never
+          // reaches the parent's stream either — the tokens were billed and
+          // counted absolutely nowhere. Not an edge case: the wrap-up steer just
+          // below exists precisely because a small local window compacts a
+          // specialist run repeatedly (fix 2026-09-16).
+          if (event.data.usage) {
+            const c = event.data.usage;
+            usage.inputTokens += c.inputTokens; usage.outputTokens += c.outputTokens;
+            usage.cacheReadTokens += c.cacheReadTokens; usage.cacheCreationTokens += c.cacheCreationTokens;
+          }
           if (event.data.autoCompaction) {
             autoCompactionCount += 1;
             if (autoCompactionCount === 2 && !steered) {
@@ -2440,12 +2453,21 @@ export class NativeSessionHost extends EventEmitter {
   }
 
   /** LiveEntry.refreshSlotsAfterTurn's action: re-read the engine now that a
-   *  turn has run (and so loaded the model), and if the helper cap it yields
-   *  differs from the one the session started with, re-apply the profile
-   *  through the same-binding refresh path setBinding already supports.
+   *  turn has run (and so loaded the model), and if EITHER the helper cap or the
+   *  real context window it yields differs from what the session started with,
+   *  re-apply through the same-binding refresh path setBinding already supports.
    *  Nothing else about the session moves; a still-unknown reading leaves
    *  the flag set for the next turn. Never throws — a failed status read
-   *  must not end a turn's delivery pass. */
+   *  must not end a turn's delivery pass.
+   *
+   *  Fix (2026-09-16): the guard asked about the helper cap ALONE and returned
+   *  before applying `r.contextLength`. At session start the model is usually not
+   *  resident, so the window came from the model-less `/props` branch — the
+   *  configured `-c`, which the server may have clamped down for VRAM. This
+   *  refresh is the one chance to replace that guess with the engine's real
+   *  `n_ctx`, and it was skipped whenever the cap happened to match, leaving the
+   *  context gauge's DENOMINATOR wrong for the whole session — always
+   *  optimistically, so the window looked roomier than it was. */
   private async refreshLocalSlots(sessionId: string, entry: LiveEntry): Promise<void> {
     try {
       const binding = entry.session.binding;
@@ -2459,7 +2481,9 @@ export class NativeSessionHost extends EventEmitter {
       if (now.providerId !== binding.providerId || now.modelId !== binding.modelId) return;
       if (r.slotsUnknown) return;
       entry.refreshSlotsAfterTurn = false;
-      if (r.profile.maxConcurrentSpecialists === entry.session.profileSnapshot.maxConcurrentSpecialists) return;
+      const capUnchanged = r.profile.maxConcurrentSpecialists === entry.session.profileSnapshot.maxConcurrentSpecialists;
+      const windowUnchanged = r.contextLength === entry.session.contextWindowTokens;
+      if (capUnchanged && windowUnchanged) return;
       entry.session.setBinding(binding, r.contextLength, r.profile, r.pricing, r.free);
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'could not re-read the local engine\u2019s slot count after the turn — helper cap unchanged', { sessionId, error: String((err as any)?.message ?? err) });
@@ -4606,6 +4630,13 @@ export class NativeSessionHost extends EventEmitter {
     // still be reserved from an in-flight Task call this destroy() interrupted).
     this.specialistSlots.delete(sessionId);
     this.activeWriterChild.delete(sessionId);
+    // WHY (2026-09-16, per-session-maps investigation): the lifetime spawn
+    // counter is a runaway-loop backstop for ONE conversation's run; the
+    // conversation is gone, so the count is too (a resume in the same app run
+    // starts fresh, exactly as an app restart always did).
+    this.specialistSpawnCounts.delete(sessionId);
+    // (The childApprovedAsks sweep that sat here went away with the map itself:
+    // helper asks no longer time out, so there are no late approvals to park.)
     this.releaseModel(sessionId, modelId); // last session gone → unload it (#1)
     // Release THIS generation's MCP lease (Task 6), LAST — orthogonal to the
     // transcript/live-map teardown above (releasing never touches either), so

@@ -47,7 +47,7 @@ const EYEBROW = 'block text-3xs font-medium text-fg-muted tracking-wider upperca
 /** Dot + neutral text is the app's badge shape (design guide G-14): the colour
  *  never carries meaning on its own, the words beside it do. */
 function Dot({ ok }: { ok: boolean }) {
-  return <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${ok ? 'bg-green-500' : 'bg-amber-500'}`} aria-hidden />;
+  return <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${ok ? 'bg-green-400' : 'bg-amber-700'}`} aria-hidden />;
 }
 
 /** A context window as its NAMEPLATE — "1M", "200k", "16k".
