@@ -527,3 +527,29 @@ describe('soft limit — no reply cap (decision 5)', () => {
     expect(adapterDisabledReason('soft-adapter')).toBeDefined();
   });
 });
+
+describe('soft plans stop at the PLAN limit, not just the attempt limit (round 3)', () => {
+  it('a sibling cannot reserve once another reply pushed the plan past its ceiling', async () => {
+    // Ceiling 2,000 = exactly the two s1 attempts; no dollar ceiling.
+    await seed(record({ ceilingTokens: 2000, ceilingUsd: null }));
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }, { stepId: 's1', itemIndex: 1 }]);
+    if (!r.ok) throw new Error(r.detail);
+    const [a, b] = r.attempts.map((x) => budget.requestGate(REF, 'p1', fence, 's1', x.attemptId, SOFT));
+    await a.reserve({ inputBoundTokens: 100 });
+    // A overshoots by far more than its own 1,000: the plan is now past 2,000.
+    expect(await a.settle({ kind: 'reported', tokens: 2500, usage: usageOf(100, 2400) })).toMatchObject({ kind: 'limit-reached' });
+    expect((await plan()).usedTokens).toBe(2500);
+    // B still holds its own 1,000, but the plan's limit is gone: nothing is sent.
+    expect(await b.reserve({ inputBoundTokens: 100 })).toMatchObject({ ok: false, kind: 'exhausted' });
+    expect((await attempt('s1', r.attempts[1].attemptId)).phase).toBe('prepared');
+  });
+
+  it('the same holds for a dollar limit that was passed', async () => {
+    await seed(record());
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    await journal.mutateFenced(REF, 'p1', fence, (p) => { p.usedUsd = p.ceilingUsd! + 0.01; });
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', r.attempts[0].attemptId, SOFT);
+    expect(await gate.reserve({ inputBoundTokens: 100 })).toMatchObject({ ok: false, kind: 'exhausted' });
+  });
+});

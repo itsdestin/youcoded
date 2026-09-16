@@ -324,6 +324,15 @@ export class PlanBudget {
             if (attempt.phase === 'request-sent' || attempt.phase === 'ambiguous') {
               return refused("This specialist's previous request hasn't been accounted for, so nothing more was sent.");
             }
+            // Plan-wide stop (review round 3). WHY: on a soft route one reply
+            // may overshoot, and a running sibling still holds its own
+            // allowance — without this it could keep sending (and overshoot
+            // again) after the PLAN's limit is already gone. On capped routes
+            // spending can never pass the ceiling, so this is inert there.
+            if (plan.usedTokens >= plan.ceilingTokens
+              || (plan.ceilingUsd !== null && (plan.usedUsd ?? 0) >= plan.ceilingUsd - USD_EPSILON)) {
+              return { ok: false, kind: 'exhausted', detail: "The plan has used its whole budget." };
+            }
             const left = allowanceLeft(attempt);
             if (left <= 0) return { ok: false, kind: 'exhausted', detail: 'This specialist has used its whole budget.' };
             // WHY exact equality: the held amount IS the authorization. A paused
