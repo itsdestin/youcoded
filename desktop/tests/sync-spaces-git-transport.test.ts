@@ -79,6 +79,85 @@ describe('GitTransport specifics', () => {
     await h.cleanup();
   });
 
+  // 2026-09-16 incident: a second app copy syncing the same folder raced the
+  // unstage step, so 50–107 MB transcripts got COMMITTED locally. Every push
+  // then carried a blob GitHub refuses (>100 MiB) and the device stopped
+  // uploading for 9 days. Whatever let a file in, push must never send it.
+  describe('an oversize file already committed locally never leaves the device', () => {
+    const gitIn = (space: SyncSpace, args: string[]) => execFileSync('git', args, {
+      cwd: space.root, encoding: 'utf8',
+      env: { ...process.env, GIT_DIR: path.join(space.root, '.youcoded', 'sync.git'), GIT_WORK_TREE: space.root },
+    });
+    // Bypasses the transport's own add/unstage — the shape a lost race leaves behind.
+    const commitRaw = (space: SyncSpace, msg: string) => { gitIn(space, ['add', '-A']); gitIn(space, ['commit', '-qm', msg]); };
+    const remoteBlobSizes = (bare: string) => execFileSync('sh', ['-c',
+      `git --git-dir="${bare}" rev-list --objects --no-object-names --all | git --git-dir="${bare}" cat-file --batch-check='%(objecttype) %(objectsize)' | awk '$1=="blob"{print $2}'`,
+    ], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number);
+    // Largest blob GitHub holds. Throws on an empty remote so a broken probe
+    // can never pass as "nothing too big" (Math.max() of nothing is -Infinity).
+    const largestRemoteBlob = (bare: string) => {
+      const sizes = remoteBlobSizes(bare);
+      if (!sizes.length) throw new Error('remote has no blobs — probe is broken');
+      return Math.max(...sizes);
+    };
+    const bareOf = (space: SyncSpace) => gitIn(space, ['remote', 'get-url', 'origin']).trim();
+
+    it('drops the oversize version, still pushes the rest, keeps the file on disk and reports it', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'chat.jsonl'), 'tiny');
+      await small.push(a, 'base'); // published at a legal size
+      fs.writeFileSync(path.join(a.root, 'chat.jsonl'), 'x'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'note.md'), 'hello');
+      commitRaw(a, 'leaked');
+      const r = await small.push(a, 'next');
+      expect(r.pushed).toBe(true);
+      expect(r.oversize).toEqual(['chat.jsonl']);
+      expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
+      // A second device receives note.md, and the last LEGAL chat.jsonl.
+      const b = await h.makeDeviceSpace();
+      await h.transport.pull(b);
+      expect(fs.readFileSync(path.join(b.root, 'note.md'), 'utf8')).toBe('hello');
+      expect(fs.readFileSync(path.join(b.root, 'chat.jsonl'), 'utf8')).toBe('tiny');
+      // Nothing on this device was touched.
+      expect(fs.readFileSync(path.join(a.root, 'chat.jsonl'), 'utf8')).toBe('x'.repeat(11));
+      await h.cleanup();
+    });
+
+    it('drops an oversize blob that only exists in an intermediate unpublished commit', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'ok.md'), 'fine');
+      await small.push(a, 'base');
+      fs.writeFileSync(path.join(a.root, 'dump.bin'), 'x'.repeat(11));
+      commitRaw(a, 'leaked');
+      fs.rmSync(path.join(a.root, 'dump.bin'));
+      fs.writeFileSync(path.join(a.root, 'ok.md'), 'fine again');
+      commitRaw(a, 'deleted it later');
+      const r = await small.push(a, 'next');
+      expect(r.pushed).toBe(true);
+      expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
+      await h.cleanup();
+    });
+
+    it('also holds on the very first push, before GitHub has any history', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'big.bin'), 'x'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'ok.md'), 'fine');
+      commitRaw(a, 'leaked before any push');
+      const r = await small.push(a, 'first');
+      expect(r.pushed).toBe(true);
+      expect(r.oversize).toEqual(['big.bin']);
+      expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
+      expect(fs.existsSync(path.join(a.root, 'big.bin'))).toBe(true);
+      await h.cleanup();
+    });
+  });
+
   it('a merge that cannot complete surfaces an error instead of silently reporting no update', async () => {
     const h = await makeHarness();
     const a = await h.makeDeviceSpace();

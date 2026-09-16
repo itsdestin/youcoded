@@ -169,6 +169,52 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     await engine.stop();
   });
 
+  // "Try again" awaits this promise to show "Syncing…". Resolving before the
+  // follow-up ran made the button look dead (2026-09-16).
+  it('a request made mid-sync resolves only after the follow-up sync it queued has finished', async () => {
+    const t = fakeTransport();
+    let releaseFirstPull!: () => void;
+    let firstPull = true;
+    t.pull = vi.fn(async (s: SyncSpace) => {
+      t.pulls.push(s.id);
+      if (firstPull) {
+        firstPull = false;
+        await new Promise<void>(r => { releaseFirstPull = r; });
+      }
+      return { updated: false, conflictCopies: [] };
+    });
+    const engine = new SpaceSyncEngine(t, { debounceMs: 60_000, pollMs: 0, onEvent: () => {} });
+    const space: SyncSpace = { id: 'project:x', kind: 'project', root: tmp };
+    await engine.addSpace(space);
+    const first = engine.syncSpace(space);
+    await vi.waitFor(() => expect(t.pulls.length).toBe(1), { timeout: WAIT_MS });
+    let retryDone = false;
+    const retry = engine.syncSpace(space).then(() => { retryDone = true; });
+    releaseFirstPull();
+    await first;
+    await retry;
+    expect(retryDone).toBe(true);
+    // By the time the retry resolved, its own sync had pushed.
+    expect(t.pushes.length).toBe(2);
+    await engine.stop();
+  });
+
+  it('reports each over-limit file once per launch, not on every sync', async () => {
+    const t = fakeTransport();
+    t.push = vi.fn(async (s: SyncSpace) => { t.pushes.push(s.id); return { pushed: true, oversize: ['chat.jsonl'] }; });
+    const events: SpaceSyncEvent[] = [];
+    const engine = new SpaceSyncEngine(t, { debounceMs: 60_000, pollMs: 0, onEvent: e => events.push(e) });
+    const space: SyncSpace = { id: 'personal', kind: 'personal', root: tmp };
+    await engine.addSpace(space);
+    await engine.syncSpace(space);
+    await engine.syncSpace(space);
+    t.push = vi.fn(async () => ({ pushed: true, oversize: ['chat.jsonl', 'other.jsonl'] }));
+    await engine.syncSpace(space);
+    const reports = events.filter(e => e.type === 'oversize') as Array<Extract<SpaceSyncEvent, { type: 'oversize' }>>;
+    expect(reports.map(r => r.files)).toEqual([['chat.jsonl'], ['other.jsonl']]);
+    await engine.stop();
+  });
+
   it('warns ONCE per launch when the hidden history exceeds the size threshold', async () => {
     const t = fakeTransport();
     (t as any).maybeGc = vi.fn(async () => {});
