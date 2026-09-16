@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  ShellRegistry, MAX_EXPLICIT_RUNNING, RING_LINES, WIRE_TAIL_LINES, READ_MAX_BYTES, LONG_RUN_NOTICE_MS,
+  ShellRegistry, MAX_EXPLICIT_RUNNING, RING_LINES, WIRE_TAIL_LINES, READ_MAX_BYTES, LONG_RUN_NOTICE_MS, EXIT_DRAIN_GRACE_MS,
   formatElapsed, formatFinishedNotice, formatLongRunningNotice, stateText, spawnDetached,
 } from '../src/main/harness/shell-registry';
 import { spillRoot, sweepOldSpillFiles } from '../src/main/harness/tools/spill-paths';
@@ -198,6 +198,60 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     await r.run.exited;
     expect(r.run.tail).toEqual(['p 1', 'p 2', 'p 3']);
     expect(r.run.partial).toBe('');
+  });
+
+  it('output written in the last instant before exit is never lost (settles on close, not exit)', async () => {
+    // WHY twenty runs: the loss is a race between the child's `exit` event and the
+    // last stdout chunk. One run passes most of the time; twenty make the old
+    // exit-based settle fail reliably on a 2-core runner, and cost under a second.
+    for (let i = 0; i < 20; i++) {
+      const r = reg.start(startSpec(`printf 'p 1\\rp 2\\rp 3\\n'`, dir, `tu-drain-${i}`));
+      if (!r.ok) throw new Error('start failed');
+      await r.run.exited;
+      expect(r.run.tail).toEqual(['p 1', 'p 2', 'p 3']);
+      expect(r.run.partial).toBe('');
+    }
+  });
+
+  it('a chunk delivered AFTER the exit event still lands in the tail (the exact CI order, staged)', async () => {
+    // WHY a staged child: the real race needs a slow runner and never fired on the
+    // 32-core dev machine. Node's documented order is exit → last data → close;
+    // this fake replays it deterministically, so the fix is proven everywhere.
+    const { EventEmitter } = await import('events');
+    const child: any = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.exitCode = null; child.signalCode = null; child.pid = 999_999_999;
+    child.kill = () => true;
+    // What the finished notice quotes is the tail AT the exit event — snapshot it there.
+    let atExit: string[] | null = null;
+    reg.on('exit', (r) => { if (r.toolUseId === 'tu-staged') atExit = [...r.tail]; });
+    const run = reg.adopt({ toolUseId: 'tu-staged', command: 'x', cwd: dir, child, startedAt: Date.now(), seedLog: null, recent: '', logPath: null, logStream: null, captureEnv: false });
+    child.stdout.emit('data', 'p 1\n');
+    child.exitCode = 0;
+    child.emit('exit', 0, null);
+    child.stdout.emit('data', 'p 2\n');
+    child.emit('close', 0, null);
+    await run.exited;
+    expect(atExit).toEqual(['p 1', 'p 2']);
+    expect(run.exitCode).toBe(0);
+  });
+
+  it('a grandchild holding stdout open cannot hold the run open past the grace', async () => {
+    // `sleep 30 &` inherits the pipe; with a pure `close` settle the run would
+    // wait the full 30 s for it. WHY no clock assertion (test-suite-hygiene: never
+    // wall clock): the proof is that the run settled while the grandchild that
+    // holds the pipe is STILL alive — only the EXIT_DRAIN_GRACE_MS timer can do that.
+    const r = reg.start(startSpec('sleep 30 & echo $!; echo done', dir, 'tu-grace'));
+    if (!r.ok) throw new Error('start failed');
+    await r.run.exited;
+    const pid = Number(r.run.tail[0]);
+    try {
+      expect(r.run.tail).toEqual([String(pid), 'done']);
+      expect(alive(pid)).toBe(true);
+    } finally {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
   });
 
   it('read() is bounded: a huge log returns only the last READ_MAX_BYTES, and says nothing false about it', async () => {

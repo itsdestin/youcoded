@@ -46,3 +46,15 @@ function withDefaultTimeout<F extends (cb: never, options?: number | WaitOptions
 
 vi.waitFor = withDefaultTimeout(vi.waitFor);
 vi.waitUntil = withDefaultTimeout(vi.waitUntil);
+
+// The same budget for @testing-library's `waitFor` / `findBy*`, which keep their
+// OWN 1,000ms default (`asyncUtilTimeout`) that the wrapper above never touches.
+// WHY (2026-09-16): resume-browser-native-picker.test.tsx failed twice in full
+// local runs at load average 56 — `waitFor(… toHaveTextContent('GPT-5'))` gave
+// up after one second while the file took 7.7s, and passed 3/3 alone. 206 test
+// files use the library; one setting covers them all. Explicit `{ timeout }`
+// still wins. Only in jsdom files, so node-environment files never load React DOM.
+if (typeof globalThis.window !== 'undefined') {
+  const { configure } = await import('@testing-library/react');
+  configure({ asyncUtilTimeout: DEFAULT_WAIT_FOR_MS });
+}

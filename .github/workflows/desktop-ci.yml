@@ -25,7 +25,8 @@ on:
   # given branch protection with `build` as a required check, docs-only PRs
   # will sit unmergeable forever waiting for a run that never starts. Turning
   # protection on means dropping this filter, or making the required check a
-  # tiny always-runs job. Master is unprotected as of 2026-09-04.
+  # tiny always-runs job. Master was unprotected until 2026-09-16 (see below
+  # and the `docs-only` job).
   #
   # 2026-09-16 (CI/test health review, Destin's deck answers Q-1 and Q-2): the
   # `paths-ignore` filters are GONE, replaced by the `changes` job below, so a
@@ -74,6 +75,24 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
           echo "changed files outside docs/: $(git diff --name-only "$range" | grep -vc '^docs/' || true)"
+
+  # Stand-in for the required check on a docs-only change. WHY (2026-09-16,
+  # probe PR #492): master requires `build (ubuntu-latest)`, but a SKIPPED
+  # matrix job never expands its matrix — it reports as plain `build`, so the
+  # required context never appeared and a docs-only PR sat BLOCKED. This job
+  # carries the same display name and runs ONLY when `build` is skipped, so
+  # exactly one `build (ubuntu-latest)` result exists on every PR. If `changes`
+  # itself fails, both are skipped and the PR stays blocked — fail closed.
+  docs-only:
+    needs: changes
+    if: needs.changes.outputs.code == 'false'
+    name: build (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: echo "docs-only change — nothing under desktop/ to build or test"
 
   build:
     needs: changes

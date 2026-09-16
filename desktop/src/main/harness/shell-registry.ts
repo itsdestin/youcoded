@@ -19,6 +19,11 @@ import { ENV_SENTINEL, normalizeNewlines, stripAnsi, stripSentinelLines } from '
 export const MAX_EXPLICIT_RUNNING = 5;
 /** Lines kept main-side per run — enough for the 50-line finished notice with margin. */
 export const RING_LINES = 200;
+/** After a child's `exit`, how long to wait for its stdio `close` before settling
+ *  the run anyway. WHY: `exit` fires before the last stdout chunk is delivered, so
+ *  settling on it lost the final line of output (macOS CI, 2026-09-16). Settling on
+ *  `close` alone would hang on `sleep 100 &` — a grandchild keeps the pipe open. */
+export const EXIT_DRAIN_GRACE_MS = 200;
 /** Lines sent to the card per 'change' event (review G: the wire is a phone on cellular). */
 export const WIRE_TAIL_LINES = 40;
 /** Lines quoted in the finished notice (spec §4.4). */
@@ -331,7 +336,22 @@ export class ShellRegistry extends EventEmitter {
       this.ingest(run, `Failed to start shell: ${err.message}\n`, true);
       this.onExit(run, null, null);
     });
-    spec.child.on('exit', (code, signal) => this.onExit(run, code, signal));
+    spec.child.on('exit', (code, signal) => {
+      // WHY not onExit here directly: see EXIT_DRAIN_GRACE_MS. `close` arrives after
+      // the pipes drain; the timer covers a grandchild that never lets them close.
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        this.onExit(run, code, signal);
+      };
+      if (!spec.child.stdout && !spec.child.stderr) { settle(); return; } // nothing to drain
+      spec.child.once('close', settle);
+      timer = setTimeout(settle, EXIT_DRAIN_GRACE_MS);
+      timer.unref();
+    });
     // Adopted after it already died (a race with the time limit) — settle now.
     if (spec.child.exitCode !== null || spec.child.signalCode !== null) this.onExit(run, spec.child.exitCode, spec.child.signalCode);
     else this.emitChangeNow(run);
