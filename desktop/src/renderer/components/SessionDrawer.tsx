@@ -1252,7 +1252,7 @@ export function GitFooterEntry({
     <>
       {conflicted && (
         <Tooltip text="This file has merge conflicts">
-        <span className="font-medium text-amber-400">
+        <span className="font-medium text-amber-700">
           Conflict
         </span>
         </Tooltip>

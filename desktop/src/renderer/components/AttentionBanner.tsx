@@ -198,7 +198,7 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
         )}
       </div>
       {showRequestId && (
-        <div className="text-[10.5px] text-fg-muted font-mono mt-1 select-text">
+        <div className="text-3xs text-fg-muted font-mono mt-1 select-text">
           Request ID: {anthropicRequestId}
         </div>
       )}

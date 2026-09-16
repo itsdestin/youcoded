@@ -452,7 +452,7 @@ export function ProjectHero({
             is far too long for a menu row, so it lands here where the sync
             state it's about is already on screen. */}
         {confirmingStop && (
-          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-[#DD4444]/40 px-3 py-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-red-400/40 px-3 py-2">
             <span className="text-2xs text-fg-dim max-w-[22rem]">
               Stop syncing “{shownName}”? The folder stays on all your devices, but changes will no longer sync between them. This can’t be undone from here.
             </span>
@@ -542,8 +542,8 @@ export function ProjectHero({
                     use in this project (sync-spaces.md). */}
                 <span
                   className={`w-2 h-2 rounded-full shrink-0 ${
-                    sync!.dot.color === 'green' ? 'bg-[#44A05C]'
-                    : sync!.dot.color === 'red' ? 'bg-[#DD4444]'
+                    sync!.dot.color === 'green' ? 'bg-green-400'
+                    : sync!.dot.color === 'red' ? 'bg-red-400'
                     : 'bg-fg-faint'
                   }`}
                 />
@@ -617,7 +617,7 @@ export function ProjectHero({
                 role="menuitem"
                 onClick={menu.choose(item.onClick)}
                 className={`coarse-roomy w-full text-left px-3 py-2 text-sm-tight transition-colors hover:bg-inset ${
-                  item.danger ? 'text-[#DD4444]' : 'text-fg-2 hover:text-fg'
+                  item.danger ? 'text-red-400' : 'text-fg-2 hover:text-fg'
                 }`}
               >
                 {item.label}
@@ -647,8 +647,8 @@ export function ProjectHero({
                 so it must restate it with the same visual language. */}
             <span
               className={`w-2 h-2 rounded-full shrink-0 ${
-                sync!.dot.color === 'green' ? 'bg-[#44A05C]'
-                : sync!.dot.color === 'red' ? 'bg-[#DD4444]'
+                sync!.dot.color === 'green' ? 'bg-green-400'
+                : sync!.dot.color === 'red' ? 'bg-red-400'
                 : 'bg-fg-faint'
               }`}
             />

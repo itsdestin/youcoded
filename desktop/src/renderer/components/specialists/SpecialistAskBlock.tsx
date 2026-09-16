@@ -90,7 +90,7 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
         </p>
       )}
       {segment.askHeld && (
-        <p className={`${note} text-amber-500`} data-testid="nested-ask-held">
+        <p className={`${note} text-amber-700`} data-testid="nested-ask-held">
           {/* Two branches (Task 12): a still-running helper was already told
               to carry on, so "Yes" is a follow-up it will pick up mid-run.
               A finished helper cannot resume — "Yes" instead reaches the

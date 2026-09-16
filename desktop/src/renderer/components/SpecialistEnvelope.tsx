@@ -151,7 +151,7 @@ export function SpecialistEnvelope({ input, definition, targetTitle, targetRunni
         {capability && <li>{capability}</li>}
         <li>{modelLine}</li>
       </ul>
-      {trust && <div className="text-amber-500">{trust}</div>}
+      {trust && <div className="text-amber-700">{trust}</div>}
       <div className="text-fg-muted">{footer}</div>
     </div>
   );

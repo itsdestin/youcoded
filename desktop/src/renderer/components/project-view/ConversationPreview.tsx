@@ -127,7 +127,7 @@ export function ConversationPreview({ project, session, onClose, onResume }: Con
             olderHint={showOlderHint ? (
               // The "there's more above" hint sits at the TOP — that's the OLDER
               // side now that the preview anchors to the latest message.
-              <div className="text-center text-[11.5px] text-fg-muted py-2">
+              <div className="text-center text-xs text-fg-muted py-2">
                 — showing the last {shownCount} messages — use "Open full transcript" for everything —
               </div>
             ) : null}

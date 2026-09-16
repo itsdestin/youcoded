@@ -211,7 +211,7 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
                   )}
                 </div>
               )
-              : <div className="py-2 text-center text-[11.5px] text-fg-muted">— {COPY.startOfConversation} —</div>} />
+              : <div className="py-2 text-center text-xs text-fg-muted">— {COPY.startOfConversation} —</div>} />
         )}
       </div>
       <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />

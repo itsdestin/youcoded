@@ -181,14 +181,14 @@ function primaryLabelForState(state: SyncDisplayState, loading: boolean): string
 function badgeForState(state: SyncDisplayState): React.ReactNode {
   if (state.kind === 'failing') {
     return (
-      <span className="px-1.5 py-0.5 rounded-full bg-[#DD4444]/15 text-[#DD4444] text-4xs font-medium shrink-0">
+      <span className="px-1.5 py-0.5 rounded-full bg-red-400/15 text-red-400 text-4xs font-medium shrink-0">
         {state.warningCount}
       </span>
     );
   }
   if (state.kind === 'attention') {
     return (
-      <span className="px-1.5 py-0.5 rounded-full bg-[#FF9800]/15 text-[#FF9800] text-4xs font-medium shrink-0">
+      <span className="px-1.5 py-0.5 rounded-full bg-amber-700/15 text-amber-700 text-4xs font-medium shrink-0">
         {state.warningCount}
       </span>
     );
@@ -1074,11 +1074,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               const dot =
                 hk === 'setup' ? 'bg-blue-400 animate-pulse' :
                 hk === 'off' ? 'bg-fg-muted/40' :
-                hk === 'waiting-github' ? 'bg-[#FF9800]' :
+                hk === 'waiting-github' ? 'bg-amber-700' :
                 hk === 'error' ? 'bg-red-500' :
                 hk === 'hydrating' ? 'bg-blue-400 animate-pulse' :
                 hk === 'syncing' ? 'bg-blue-400 animate-pulse' :
-                'bg-green-500';
+                'bg-green-400';
 
               const title =
                 hk === 'setup' ? 'Setting up…' :
@@ -1290,7 +1290,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   {enabled && !errorMsg && (
                     <div className="border-t border-edge-dim px-3 py-2.5 space-y-2">
                       {conflict && (
-                        <p className="text-xs text-amber-600">
+                        <p className="text-xs text-amber-700">
                           Some files had conflicting edits — the other device's copy was kept alongside yours
                           (look for "(from …)" files).
                         </p>
@@ -1358,7 +1358,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         // Status light: blue in-flight / red error / green healthy / gray paused-or-disconnected.
                         const lightClass = inFlight ? 'bg-blue-400 animate-pulse'
                           : b.lastError ? 'bg-red-500 ring-2 ring-red-500/25'
-                          : (b.syncEnabled && b.connected) ? 'bg-green-500 ring-2 ring-green-500/25'
+                          : (b.syncEnabled && b.connected) ? 'bg-green-400 ring-2 ring-green-400/25'
                           : 'bg-fg-muted/40';
                         const failure = uploadFailure[b.id];
                         return (
@@ -1366,7 +1366,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           <div
                             className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
                               b.lastError ? 'border-red-500/20 bg-red-500/5' :
-                              b.syncEnabled && b.connected ? 'border-green-500/20 bg-green-500/5' :
+                              b.syncEnabled && b.connected ? 'border-green-400/20 bg-green-400/5' :
                               'border-edge bg-inset/30'
                             }`}
                           >
@@ -1384,7 +1384,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                  'Never backed up'}
                               </div>
                               {isPending && !actionFeedback[b.id] && (
-                                <span className="text-4xs font-medium text-amber-400">Changes pending upload</span>
+                                <span className="text-4xs font-medium text-amber-700">Changes pending upload</span>
                               )}
                               {actionFeedback[b.id] && (
                                 <span className={`text-4xs font-medium ${
@@ -1502,7 +1502,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       className={`rounded-lg border px-3 py-2 ${
                         w.level === 'danger'
                           ? 'border-red-500/30 bg-red-500/5'
-                          : 'border-amber-500/30 bg-amber-500/5'
+                          : 'border-amber-700/30 bg-amber-700/5'
                       }`}
                     >
                       <div className="text-xs font-medium text-fg">{w.title}</div>
@@ -1588,8 +1588,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         {logLines.map((line, i) => {
                           try {
                             const entry = JSON.parse(line);
-                            const levelColor = entry.level === 'ERROR' ? 'text-[#DD4444]'
-                              : entry.level === 'WARN' ? 'text-[#FF9800]'
+                            const levelColor = entry.level === 'ERROR' ? 'text-red-400'
+                              : entry.level === 'WARN' ? 'text-amber-700'
                               : 'text-fg-dim';
                             return (
                               <div key={i} className="py-0.5">

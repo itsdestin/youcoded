@@ -512,7 +512,7 @@ export function FilesTab({
         {/* In flat mode (search / type filter) show the file's folder for
             context; in folder view the breadcrumb already gives location, so
             show the kind instead. */}
-        <span className="px-2.5 pb-2.5 text-[10.5px] text-fg-muted shrink-0 truncate">
+        <span className="px-2.5 pb-2.5 text-3xs text-fg-muted shrink-0 truncate">
           {flat && a.path.includes('/')
             ? a.path.slice(0, a.path.lastIndexOf('/'))
             : kindLabel(a.path)}
@@ -564,8 +564,8 @@ export function FilesTab({
             deleted
           </span>
         )}
-        <span className="max-sm:hidden shrink-0 w-32 truncate text-[10.5px] text-fg-muted">{secondary}</span>
-        <span className="max-sm:hidden shrink-0 w-20 text-right text-[10.5px] text-fg-muted">
+        <span className="max-sm:hidden shrink-0 w-32 truncate text-3xs text-fg-muted">{secondary}</span>
+        <span className="max-sm:hidden shrink-0 w-20 text-right text-3xs text-fg-muted">
           {relTime(a.lastModified)}
         </span>
       </button>
@@ -582,7 +582,7 @@ export function FilesTab({
     >
       <span className="shrink-0 text-accent"><FolderCardIcon size={15} strokeWidth={1.5} /></span>
       <span className="flex-1 min-w-0 truncate text-xs font-mono text-fg-2">{f.name}</span>
-      <span className="max-sm:hidden shrink-0 w-32 truncate text-[10.5px] text-fg-muted">
+      <span className="max-sm:hidden shrink-0 w-32 truncate text-3xs text-fg-muted">
         {f.count} file{f.count === 1 ? '' : 's'}
       </span>
       {/* A folder has no single modified time — the column stays empty rather
@@ -737,7 +737,7 @@ export function FilesTab({
                 </div>
               )}
               {searching && !noSearchResults && (
-                <div className={`${fullW} text-[10.5px] uppercase tracking-wider text-fg-muted mb-0.5 px-0.5`}>
+                <div className={`${fullW} text-3xs uppercase tracking-wider text-fg-muted mb-0.5 px-0.5`}>
                   Matches by file name ({flatResults.length})
                 </div>
               )}
@@ -752,7 +752,7 @@ export function FilesTab({
                 const capped = contentTruncated || displayCapped;
                 return (
                   <div className={`${fullW} min-w-0`}>
-                    <div className="text-[10.5px] uppercase tracking-wider text-fg-muted mt-2 mb-1.5 px-0.5">
+                    <div className="text-3xs uppercase tracking-wider text-fg-muted mt-2 mb-1.5 px-0.5">
                       Matches by file contents ({shownRows}{capped ? '+' : ''})
                     </div>
                     <div className="flex flex-col gap-2">
@@ -785,7 +785,7 @@ export function FilesTab({
                                 title={`${group.path}:${hit.line}`}
                               >
                                 <span className="text-2xs font-mono text-fg-muted shrink-0 w-8 text-right">{hit.line}</span>
-                                <span className="text-[11.5px] font-mono text-fg-dim truncate min-w-0 flex-1">{hit.text}</span>
+                                <span className="text-xs font-mono text-fg-dim truncate min-w-0 flex-1">{hit.text}</span>
                               </button>
                             ))}
                           </div>
@@ -875,7 +875,7 @@ export function FilesTab({
                           <span className="text-accent shrink-0"><FolderCardIcon size={13} strokeWidth={1.5} /></span>
                           <span className="truncate">{f.name}</span>
                         </div>
-                        <div className="text-[10.5px] text-fg-muted pl-[20px]">
+                        <div className="text-3xs text-fg-muted pl-[20px]">
                           {f.count} file{f.count === 1 ? '' : 's'}
                         </div>
                       </div>

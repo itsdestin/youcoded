@@ -1725,7 +1725,7 @@ function RemoteButton(props: RemoteButtonProps) {
     <>
       <SettingRow
         // Status indicator dot — green when remote + Tailscale VPN fully active, gray otherwise
-        icon={<div className={`w-2.5 h-2.5 rounded-full ${isFullyConnected ? 'bg-green-500' : 'bg-fg-muted/40'}`} />}
+        icon={<div className={`w-2.5 h-2.5 rounded-full ${isFullyConnected ? 'bg-green-400' : 'bg-fg-muted/40'}`} />}
         title="Remote Access"
         description={subtitle}
         onClick={() => setOpen(true)}
@@ -1940,7 +1940,7 @@ function RemoteButton(props: RemoteButtonProps) {
                           Changing the password disconnects every device; each reconnects with the new one.
                         </p>
                         {config?.weakPassword && passwordStatus !== 'too-short' && (
-                          <p className="text-3xs text-amber-400 mt-1">
+                          <p className="text-3xs text-amber-700 mt-1">
                             Your current password is short. Consider setting a longer one.
                           </p>
                         )}
@@ -2004,7 +2004,7 @@ function RemoteButton(props: RemoteButtonProps) {
                             <SettingRow
                               key={row.id}
                               variant="item"
-                              icon={<span className={`w-2 h-2 rounded-full shrink-0 ${row.online ? 'bg-green-500' : 'bg-fg-faint'}`} />}
+                              icon={<span className={`w-2 h-2 rounded-full shrink-0 ${row.online ? 'bg-green-400' : 'bg-fg-faint'}`} />}
                               title={row.name}
                               description={revoking === row.id
                                 ? 'Unpair this device? It must pair again to reconnect.'
@@ -2410,7 +2410,7 @@ function ConnectToDesktopButton() {
 
               {/* Connected banner */}
               {remoteConnected && (
-                <div className="bg-green-500/10 border border-green-500/25 rounded-lg p-3">
+                <div className="bg-green-400/10 border border-green-400/25 rounded-lg p-3">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
                     <span className="text-xs text-green-400 font-medium">
