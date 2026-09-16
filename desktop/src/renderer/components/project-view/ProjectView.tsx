@@ -26,9 +26,8 @@ import type { ContextFile, ContextGroup, ContextScope } from '../../../shared/pr
 import type { FileTypeGroup } from '../../../shared/artifacts/categorization';
 import type { FileSortKey, FileViewMode } from './tabs/FilesTab';
 
-// Enriched session shape returned by project:list-conversations (preview only —
-// see project-conversations.ts for why there's no message count).
-type ConversationSummary = PastSession & { preview?: string };
+// One project:list-conversations row — a plain past session.
+type ConversationSummary = PastSession;
 import { FilesTab } from './tabs/FilesTab';
 import { ConversationsTab } from './tabs/ConversationsTab';
 import { ContextTab } from './tabs/ContextTab';

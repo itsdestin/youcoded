@@ -101,15 +101,18 @@ export function useResumeOptions(defaultModel?: string, defaultSkipPermissions?:
 
 export type ResumeOptionsApi = ReturnType<typeof useResumeOptions>;
 
-export function ResumeOptionsForm({ session: s, options, onResume, flush }: {
+export function ResumeOptionsForm({ session: s, options, onResume, flush, allowNewWindow = true }: {
   session: PastSession;
   options: ResumeOptionsApi;
   onResume: () => void;
+  /** False where a resume always opens a tab — the side panel's, whose resume
+   *  goes through chat search's path (Destin: "just new tab in session"). */
+  allowNewWindow?: boolean;
   /** Drop the top hairline — for a host that draws its own border above. */
   flush?: boolean;
 }) {
   // Launch in new window — hidden on remote/Android (single-window).
-  const detachAvailable = typeof (window as any).claude?.detach?.openDetached === 'function';
+  const detachAvailable = allowNewWindow && typeof (window as any).claude?.detach?.openDetached === 'function';
   const dangerous = s.provider !== 'native' && options.dangerous;
   // A native row stays disabled until a model binding exists (manual pick or a
   // prefill auto-select) — never resume with no binding to launch.

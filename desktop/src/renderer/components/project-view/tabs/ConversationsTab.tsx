@@ -6,17 +6,11 @@
 //
 // Each row is drawn like a Resume browser card (Destin, 2026-09-16): the same
 // inset surface and border, bold title, tag row and dotted details line
-// (SessionCardDetails.tsx, shared with ResumeBrowser.tsx), plus this page's one
-// extra — the conversation's first prompt, which is what tells two
-// same-titled rows apart. No ●◐○ status glyphs.
+// (SessionCardDetails.tsx, shared with ResumeBrowser.tsx). No first-message
+// line: the Resume browser has none (Destin, 2026-09-16). No ●◐○ status glyphs.
 import type { PastSession } from '../../../../shared/types';
 import { SessionCardTags, SessionCardMeta } from '../../SessionCardDetails';
 import { useTagRegistry } from '../../../hooks/useTagRegistry';
-
-// Enriched session shape returned by project:list-conversations.
-interface ConversationSummary extends PastSession {
-  preview?: string;
-}
 
 // The shared empty-state primitive (design guide G-18): every empty list goes
 // through it rather than a bare muted paragraph. No action here on purpose —
@@ -26,7 +20,7 @@ import { EmptyState } from '../../ui';
 
 interface ConversationsTabProps {
   // Lifted, cached list from ProjectView. null = still loading for this project.
-  conversations: ConversationSummary[] | null;
+  conversations: PastSession[] | null;
   onOpenPreview: (session: PastSession) => void;
 }
 
@@ -68,9 +62,6 @@ export function ConversationsTab({ conversations, onOpenPreview }: Conversations
               >
                 <span className="block py-1 text-sm-tight font-semibold text-fg truncate">{title}</span>
                 <SessionCardTags session={c} tagsById={registry.byId} />
-                {c.preview ? (
-                  <span className="block text-xs text-fg-dim truncate mt-0.5 mb-1">{c.preview}</span>
-                ) : null}
                 {/* No project in the trail: this whole page is one project. */}
                 <SessionCardMeta session={c} showProject={false} />
               </button>

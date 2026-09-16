@@ -1383,8 +1383,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   // The action card at the FOOT of the sheet, in the place a real
   // conversation puts its message box: this is where you act on what you just
-  // read. Its contents are `renderExpandedOptions` verbatim — the same block the
-  // expanded card in the list and ResumeOptionsPopover already draw — because
+  // read. Its contents are `renderExpandedOptions` verbatim — ResumeOptionsForm,
+  // the same block the expanded card in the list, the Projects preview and the
+  // side panel's preview draw — because
   // Destin's ruling on the switches was "this should look like it does in our
   // other existing new/resume surfaces", and re-styling them here is exactly how
   // three surfaces drift apart. `flush` only drops the top hairline, which would

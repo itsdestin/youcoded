@@ -1887,18 +1887,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // conversations beat's one-result search.
   const conversationsIn = (projectPath: string) => {
     const past = store.getState().past
-      .filter((p) => p.projectPath === projectPath)
-      // `preview` is the conversation's FIRST message on the real list
-      // (project-conversations.ts) — the same opening line the fake preview
-      // pane starts from. It used to read "Session in <folder>", which Destin
-      // reasonably asked about (2026-09-16): nothing real ever says that.
-      .map((p) => ({ ...p, preview: (studentSwitch ? STUDENT_TURNS : CHAT_TURNS)[0][0] }));
+      .filter((p) => p.projectPath === projectPath);
     if (!studentSwitch) return past;
     const live = store.getState().sessions
       .filter((x: any) => x.cwd === projectPath && !past.some((p) => p.name === x.name))
       .map((x: any) => ({
         sessionId: x.id, name: x.name, projectSlug: projectPath.split('/').pop()!, projectPath,
-        lastModified: Date.now() - 30 * 60_000, size: 2048, provider: x.provider, preview: 'Open in a tab right now',
+        lastModified: Date.now() - 30 * 60_000, size: 2048, provider: x.provider,
       }));
     return [...live, ...past];
   };

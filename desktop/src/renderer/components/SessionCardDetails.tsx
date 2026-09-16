@@ -122,7 +122,9 @@ export function SessionCardMeta({ session: s, showProject }: { session: PastSess
                 <span className="truncate">{formatModelId(s.lastUsedModel.modelId)}</span>
               </span>
             ) : null,
-            <span key="size" className="shrink-0">{formatSize(s.size)}</span>,
+            // Size only when known: the side panel's conversation comes from the
+            // search index, which does not record it (0), and "0B" would be a lie.
+            s.size > 0 ? <span key="size" className="shrink-0">{formatSize(s.size)}</span> : null,
           ]
             .filter(Boolean)
             // Separators go between surviving segments, so a missing project or
