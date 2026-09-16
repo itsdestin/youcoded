@@ -15,7 +15,9 @@ afterEach(() => { cleanup(); state.attention = false; state.reducedEffects = fal
 
 it.each([false, true])('preserves a docked rig through repeated attention changes (reduced effects: %s)', (reducedEffects) => {
   state.reducedEffects = reducedEffects;
-  const overlayDrive = { dock: { mode: 'peeking' as const, edge: 'left' }, onDragMove: vi.fn(), onDragEnd: vi.fn(), onTap: vi.fn() };
+  // 'docked' (out of the edge), not 'peeking': a tucked-in buddy never bounces
+  // for attention (buddy-peek-attention.test.tsx), so only here does it toggle.
+  const overlayDrive = { dock: { mode: 'docked' as const, edge: 'left' }, onDragMove: vi.fn(), onDragEnd: vi.fn(), onTap: vi.fn() };
   const view = render(<BuddyMascot overlayDrive={overlayDrive} />);
   const svg = view.container.querySelector('.mascot-lean svg');
   expect(svg).not.toBeNull();

@@ -1,3 +1,9 @@
+// WHY moduleResolution "bundler" (was "node", i.e. node10): node10 is deprecated
+// in TypeScript 6 and REMOVED in TypeScript 7. tsgo (the fast type check in
+// scripts/verify.sh) and oxlint's type-aware engine are both built on TypeScript
+// 7 and refuse this file outright while it says "node". TypeScript 6 is the first
+// version that allows "bundler" alongside `module: commonjs`, so the build keeps
+// emitting CommonJS unchanged — resolution only decides where types are looked up.
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -11,7 +17,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "jsx": "react-jsx",
-    "moduleResolution": "node"
+    "moduleResolution": "bundler"
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

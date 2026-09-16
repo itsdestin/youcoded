@@ -22,7 +22,7 @@
 //
 // THE EXCLUDE LIST IS TECHNICAL DEBT, NOT A DESIGN. These 57 files hold the 201
 // errors this gate found on the day it was written; they are excluded so the gate
-// ships GREEN (see eslint.config.mjs's green-gate rule — a gate with known
+// ships GREEN (see .oxlintrc.json's green-gate rule — a gate with known
 // violations trains everyone to ignore it), NOT because they are exempt. Deleting
 // a line here and fixing that file is the intended way to pay it down, and
 // `scripts/verify.sh` prints the remaining count on every run so it cannot go

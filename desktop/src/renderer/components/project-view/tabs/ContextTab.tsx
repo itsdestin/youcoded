@@ -123,7 +123,7 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
               <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">
                 {meta.label}
               </span>
-              <span className="text-[11.5px] text-fg-muted min-w-0">{meta.desc}</span>
+              <span className="text-xs text-fg-muted min-w-0">{meta.desc}</span>
               <button
                 type="button"
                 className="ml-auto shrink-0 w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-muted hover:text-fg hover:bg-inset transition-colors"
@@ -152,7 +152,7 @@ export function ContextTab({ groups, onEditFile, onOpenInfo }: ContextTabProps) 
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
-                        <span className="text-[13.5px] font-medium font-mono text-fg truncate">{f.label}</span>
+                        <span className="text-sm font-medium font-mono text-fg truncate">{f.label}</span>
                         {/* Plain-text load badge — subtle pill, never a glyph. */}
                         <span className="inline-flex items-center text-3xs text-fg-dim bg-well border border-edge-dim rounded-full px-2 py-0.5 shrink-0">
                           {timingLabel(f)}

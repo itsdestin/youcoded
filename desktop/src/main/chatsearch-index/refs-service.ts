@@ -141,7 +141,6 @@ export async function readConversation(req: ChatsearchReadRequest): Promise<Chat
     {
       provider: req.provider,
       id: req.id,
-      tail: Number(req.tail) || 40,
       ...(req.before !== undefined ? { before: Number(req.before) } : {}),
     },
     {

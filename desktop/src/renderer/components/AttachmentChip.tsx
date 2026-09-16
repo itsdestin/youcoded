@@ -145,12 +145,15 @@ export function AttachmentChip({ path, name, onRemove, imageSrc }: Props) {
           (no hover-only opacity) with a panel fill + border so it stays
           legible over a photo. Still owed a `.coarse-hit` pass: 16px is well
           under the ~44dp touch guideline and this renderer is the Android UI. */}
+      {/* WHY variant/size instead of a className restyle (2026-09-16): the design
+          check flagged this as a ghost button rebuilt by hand. raised + icon-xs are
+          the same look as shared styles; icon-xs keeps the touch-size hit area. */}
       <Button
-        variant="ghost"
-        size="icon"
+        variant="raised"
+        size="icon-xs"
         aria-label={`Remove ${label}`}
         onClick={onRemove}
-        className="absolute top-1 right-1 w-4 h-4 rounded-full bg-panel border border-edge text-fg-2 hover:bg-edge text-3xs leading-none"
+        className="absolute top-1 right-1"
       >
         ×
       </Button>

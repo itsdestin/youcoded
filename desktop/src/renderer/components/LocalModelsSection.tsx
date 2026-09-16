@@ -498,7 +498,7 @@ export function RepoCard({
               </p>
             )}
             {loadState === 'error' && quants === null && (
-              <p className="text-3xs text-amber-500 mt-0.5">Couldn't reach Hugging Face — expand to retry</p>
+              <p className="text-3xs text-amber-700 mt-0.5">Couldn't reach Hugging Face — expand to retry</p>
             )}
           </div>
           <svg className={`w-4 h-4 mt-0.5 text-fg-muted transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
@@ -520,7 +520,7 @@ export function RepoCard({
         <div className="mt-2 pl-5">
           {loadState === 'loading' && <p className="text-3xs text-fg-muted px-1">Loading versions…</p>}
           {loadState === 'error' && (
-            <button onClick={() => void loadQuants()} className="text-3xs text-amber-500 hover:underline px-1">
+            <button onClick={() => void loadQuants()} className="text-3xs text-amber-700 hover:underline px-1">
               Couldn't reach Hugging Face — tap to retry
             </button>
           )}
