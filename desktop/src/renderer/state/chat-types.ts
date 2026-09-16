@@ -331,6 +331,23 @@ export interface SessionChatState {
    */
   compactionPending: { startedAt: number; beforeContextTokens: number | null } | null;
   /**
+   * Native sessions only. Tokens occupying the model's window after the last
+   * HISTORY REWRITE that happened outside a turn — a /compact or a /clear.
+   *
+   * WHY it exists: the native context gauge is derived from the usage stamped on
+   * the last COMPLETED turn, and neither of those two runs a turn. The chip
+   * therefore kept showing the pre-compaction window until the user happened to
+   * send another message, and after /clear it could sit at "3% remaining" over an
+   * empty conversation (Destin, 2026-09-16). The harness re-bases its own figure
+   * and ships it on the rewrite's event; this holds it until a real measurement
+   * replaces it.
+   *
+   * Cleared by TRANSCRIPT_TURN_COMPLETE: a completed turn carries a MEASURED
+   * prompt-token count, which always beats a re-based one, so the override must
+   * not outlive the first turn after the rewrite.
+   */
+  contextUsedOverride: number | null;
+  /**
    * Native (local-model) sessions only. Residency of the session's bound model,
    * pushed from main (native:model-state). Drives ChatView's ModelLoadingBar:
    * 'sleeping'/'unloaded' → "Model unloaded to save memory · [Reload Model]";
@@ -422,6 +439,7 @@ export function createSessionChatState(): SessionChatState {
     lastOutputAt: null,
     lastBufferActivityAt: 0,
     compactionPending: null,
+    contextUsedOverride: null,
     modelState: null,
     modelInfo: null,
     modelLoadedBytes: null,
@@ -525,6 +543,12 @@ export type ChatAction =
       type: 'NATIVE_SESSION_ERROR';
       sessionId: string;
       message: string;
+      /** The failing event's uuid, for the totals dedup below. Optional because
+       *  one dispatcher (the buddy feed) has no event to hand. */
+      uuid?: string;
+      /** What the failed turn had already spent — same contract as
+       *  TRANSCRIPT_INTERRUPT's. */
+      usage?: TurnUsage;
     }
   | {
       // Step 3 (2026-08-17, broadened): the session's STARTING context, reported
@@ -816,6 +840,11 @@ export type ChatAction =
       uuid: string;
       timestamp: number;
       kind: 'plain' | 'tool-use';
+      /** Native runtime only: what the abandoned turn had already spent, priced
+       *  in main. Folded into session totals (never onto the turn) — see the
+       *  reducer case. Absent for a Claude Code interrupt and for a turn that
+       *  measured nothing. */
+      usage?: TurnUsage;
     }
   // Perf cycle 2 — paged history. HISTORY_LOADED (whole-file replay behind a
   // "See previous messages" button) is retired; a page is fetched automatically
@@ -873,12 +902,39 @@ export type ChatAction =
       sessionId: string;
       markerId: string;
       afterContextTokens: number | null;
+      // Native sessions only. The Claude Code path leaves this undefined and the
+      // reducer falls back to compactionPending.beforeContextTokens, which is
+      // read from CC's statusline — a figure a native session never writes, so
+      // before this field a native compaction could only ever say "Conversation
+      // compacted" and never how much it freed.
+      beforeContextTokens?: number | null;
       aborted?: boolean;       // true when watchdog fires — marker text differs
       summary?: string;        // Full compaction summary, surfaced as expandable section under the marker
       // Native spontaneous compaction (no manual /compact): there is no
       // compactionPending flag to satisfy the stale-event guard, so this bypasses
       // it to insert the marker. CC's paths never set it.
       auto?: boolean;
+    }
+  // A native HISTORY REWRITE that ran outside a turn — /compact or /clear.
+  //
+  // Separate from COMPACTION_COMPLETE on purpose: that action draws the timeline
+  // MARKER and is gated on `compactionPending || auto`, while this one carries
+  // the two facts that must land whether or not a marker is drawn — the window's
+  // new occupancy, and the summarize request's own bill. Folding them in would
+  // make a compaction whose marker guard happened not to fire silently lose both.
+  | {
+      type: 'NATIVE_HISTORY_REWRITTEN';
+      sessionId: string;
+      /** The rewrite event's uuid — the totals add below is NOT idempotent, and
+       *  a re-dock replay re-delivers the event (same reasoning as
+       *  turn-complete's `alreadyCounted` guard). */
+      uuid: string;
+      /** Tokens occupying the window after the rewrite; null when the harness
+       *  had no figure to report. */
+      contextUsedTokens: number | null;
+      /** The summarize call's OWN usage, already priced in main. Absent on
+       *  /clear (no model call) and on a summary whose usage never settled. */
+      usage?: TurnUsage;
     }
   // /copy picker for multi-block turns
   | {
@@ -926,6 +982,11 @@ export interface SerializedSessionChatState {
   stalledSince?: number | null;
   lastBufferActivityAt: number;
   compactionPending: { startedAt: number; beforeContextTokens: number | null } | null;
+  // Optional so a pre-field snapshot from an older host still deserializes.
+  // Serialized because it is a fact about the SESSION's window, not about one
+  // client's view: a phone that reconnects after the desktop compacted must see
+  // the same re-based gauge, not the pre-compaction one.
+  contextUsedOverride?: number | null;
   modelState?: import('../../shared/engine-types').EngineModelState | null;
   modelInfo?: { modelId: string; sizeBytes: number | null } | null;
   modelLoadedBytes?: number | null;
@@ -986,6 +1047,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         stalledSince: s.stalledSince,
         lastBufferActivityAt: s.lastBufferActivityAt,
         compactionPending: s.compactionPending,
+        contextUsedOverride: s.contextUsedOverride,
         modelState: s.modelState,
         modelInfo: s.modelInfo,
         modelLoadedBytes: s.modelLoadedBytes,
@@ -1035,6 +1097,7 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       lastOutputAt: null,
       lastBufferActivityAt: ser.lastBufferActivityAt,
       compactionPending: ser.compactionPending,
+      contextUsedOverride: ser.contextUsedOverride ?? null,
       // Older hosts predate these — default null so a pre-field snapshot hydrates.
       modelState: ser.modelState ?? null,
       modelInfo: ser.modelInfo ?? null,

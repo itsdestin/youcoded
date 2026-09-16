@@ -60,7 +60,7 @@ import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
 import { useSessionAttention, mergePeerSessionStatuses } from './hooks/useSessionAttention';
 import { useAttentionSummary } from './hooks/useAttentionSummary';
 import { useActiveSessionModel } from './hooks/useActiveSessionModel';
-import { useNativeSessionUsage, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
+import { useNativeSessionUsage, useNativeContextOverride, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
 import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
 import { useZoomControls } from './hooks/useZoomControls';
 import { useChromeMeasurements } from './hooks/useChromeMeasurements';
@@ -1395,6 +1395,10 @@ function AppInner() {
             uuid: event.uuid,
             timestamp: event.timestamp,
             kind: event.data.kind,
+            // Native only: what the abandoned turn already spent. No
+            // turn-complete follows an interrupt, so this event is the only
+            // place those tokens can be counted from.
+            usage: event.data.usage,
           });
           break;
         case 'assistant-text':
@@ -1563,6 +1567,10 @@ function AppInner() {
             type: 'NATIVE_SESSION_ERROR',
             sessionId: event.sessionId,
             message: event.data.text ?? 'The model request failed.',
+            // Same reasoning as the interrupt above: a turn that died mid-flight
+            // still spent what its completed steps spent.
+            uuid: event.uuid,
+            usage: event.data.usage,
           });
           break;
         case 'skill-invoked':
@@ -1594,8 +1602,32 @@ function AppInner() {
             markerId: `clear-${event.uuid}`,
             timestamp: event.timestamp,
           });
+          // The barrier drops the whole conversation from the model's window, so
+          // the gauge has to move with it — no turn runs to re-measure, and the
+          // pre-clear reading would otherwise stand over an empty conversation.
+          if (event.data.contextUsedAfter !== undefined) {
+            dispatch({
+              type: 'NATIVE_HISTORY_REWRITTEN',
+              sessionId: event.sessionId,
+              uuid: event.uuid,
+              contextUsedTokens: event.data.contextUsedAfter,
+            });
+          }
           break;
         case 'compact-summary': {
+          // Bookkeeping first, and OUTSIDE the marker guard below: the window
+          // this rewrite left behind and the summarize call's own bill are true
+          // whether or not this window draws a marker for it. Folding them into
+          // COMPACTION_COMPLETE would lose both whenever that guard didn't fire.
+          if (event.data.contextUsedAfter !== undefined || event.data.usage) {
+            dispatch({
+              type: 'NATIVE_HISTORY_REWRITTEN',
+              sessionId: event.sessionId,
+              uuid: event.uuid,
+              contextUsedTokens: event.data.contextUsedAfter ?? null,
+              usage: event.data.usage,
+            });
+          }
           // Canonical compaction-complete signal — fired by the transcript
           // watcher when Claude Code writes an isCompactSummary entry. Works
           // for both in-session /compact (appends to same JSONL, so shrink
@@ -1606,12 +1638,19 @@ function AppInner() {
           // the user must still see a marker since ~all their history was just
           // summarized away. Render it in that case too, bypassing the guard.
           if (sessionState?.compactionPending || event.data.autoCompaction) {
+            // The harness's own pair wins where it exists. `sessionStatsMap` is
+            // Claude Code's statusline, which a NATIVE session never writes — so
+            // before these two fields a native compaction could only ever say
+            // "Conversation compacted", never how much it freed, and a
+            // spontaneous one could not even fall back (no COMPACTION_PENDING
+            // ran to record a "before").
             const contextTokens = statusData.sessionStatsMap[event.sessionId]?.contextTokens ?? null;
             dispatch({
               type: 'COMPACTION_COMPLETE',
               sessionId: event.sessionId,
               markerId: `compact-done-${Date.now()}`,
-              afterContextTokens: contextTokens,
+              afterContextTokens: event.data.contextUsedAfter ?? contextTokens,
+              beforeContextTokens: event.data.contextUsedBefore,
               // Forward the summary text so the SystemMarker can offer
               // click-to-expand (replaces the dead "ctrl+o to see full summary"
               // affordance from CC's TUI, which never worked inside YouCoded).
@@ -3102,6 +3141,10 @@ function AppInner() {
   // the memo no longer compiles and a ref would never re-render the chips. It is
   // re-expressed here as a cached store selector, mirroring useActiveSessionModel.
   const nativeStatusUsage = useNativeSessionUsage(isNativeSession ? sessionId : null);
+  // Set by a /compact or /clear, which rewrite history without running a turn —
+  // so the usage above stays at its PRE-rewrite reading until the next message.
+  // selectNativeStatusChips prefers this; the next turn-complete clears it.
+  const nativeContextOverride = useNativeContextOverride(isNativeSession ? sessionId : null);
   // NOT gated on isNativeSession — CC turns carry usage too (the transcript
   // watcher stamps it), and the reuse chip serves both runtimes.
   const turnsWithUsage = useTurnsWithUsage(sessionId);
@@ -3773,6 +3816,7 @@ function AppInner() {
                   onOpenOpenTasks={() => setOpenTasksPopupOpen(true)}
                   nativeUsage={nativeStatusUsage}
                   nativeContextLength={nativeStatusUsage?.contextLength ?? null}
+                  nativeContextOverride={nativeContextOverride}
                   turnsWithUsage={turnsWithUsage}
                   nativeTotals={sessionTotals}
                 />

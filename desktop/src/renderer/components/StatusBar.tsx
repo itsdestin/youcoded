@@ -207,6 +207,16 @@ export interface NativeStatusChips {
 export function selectNativeStatusChips(
   usage: NativeUsageInput | undefined | null,
   contextLength: number | undefined | null,
+  /** Occupancy after a history rewrite that ran OUTSIDE a turn (/compact,
+   *  /clear). Those never produce a turn, so the usage above is the
+   *  PRE-rewrite reading and would leave the gauge showing a window the session
+   *  no longer has. Supplied by the harness on the rewrite's own event; cleared
+   *  by the next completed turn, whose measurement supersedes it.
+   *
+   *  Taken as a parameter rather than read from state so this stays the ONE
+   *  derivation both the status bar and the /usage card call — the two resolving
+   *  context separately is exactly how they came to disagree before. */
+  contextUsedOverride?: number | null,
 ): NativeStatusChips | null {
   if (!usage) return null;
   const tokensPerSecond = usage.tokensPerSecond ?? 0;
@@ -215,7 +225,13 @@ export function selectNativeStatusChips(
   // every step of the turn, which both re-counted history per step AND reset to
   // near-zero each turn (Destin, 2026-07-28). Older records carry no
   // contextUsedTokens; the in+out sum is the closest thing they have.
-  const contextUsedTokens = usage.contextUsedTokens ?? (usage.inputTokens + usage.outputTokens);
+  //
+  // The override wins where it exists, for the reason in its doc above. `?? `
+  // and not a truthiness check: 0 is a legitimate post-/clear reading on a
+  // session with no system prompt, and must not fall through to the stale turn.
+  const contextUsedTokens = contextUsedOverride
+    ?? usage.contextUsedTokens
+    ?? (usage.inputTokens + usage.outputTokens);
   // contextPct is REMAINING context. Falsy contextLength (unknown window) → null
   // so we never fabricate a percentage; the token + speed chips remain valid.
   let contextPct: number | null = null;
@@ -428,6 +444,10 @@ interface Props {
    *  main, Task 4/5) carried on the same usage payload. null when unknown → the
    *  context % chip is omitted but tokens + speed still render. */
   nativeContextLength?: number | null;
+  /** Native sessions only: occupancy re-based by a /compact or /clear, which run
+   *  outside any turn. Passed straight to `selectNativeStatusChips` — see its
+   *  parameter docs for why it wins over the last turn's reading. */
+  nativeContextOverride?: number | null;
   /** Completed turns carrying usage, saturating at 2 (any provider). Lets the
    *  reuse chip say "New" on a session's first turn instead of a red 0%, which
    *  is the same number meaning two very different things. Absent → treated as
@@ -943,7 +963,7 @@ export default function StatusBar({
   permissionMode, onCyclePermission, fast, effort, onOpenModelPicker,
   sessionId, onDispatch,
   openTasksCounts, onOpenOpenTasks,
-  nativeUsage, nativeContextLength, turnsWithUsage, nativeTotals,
+  nativeUsage, nativeContextLength, nativeContextOverride, turnsWithUsage, nativeTotals,
 }: Props) {
   const { usage, updateStatus, contextPercent, gitBranch, sessionStats, syncWarnings } = statusData;
 
@@ -981,7 +1001,7 @@ export default function StatusBar({
   // completed at least one turn; CC/idle sessions get null and render nothing
   // extra. Fed the session's real context window (resolved in main) so the
   // context % is accurate for the local model, not a hardcoded guess.
-  const nativeChips = selectNativeStatusChips(nativeUsage, nativeContextLength);
+  const nativeChips = selectNativeStatusChips(nativeUsage, nativeContextLength, nativeContextOverride);
 
   // In/Out are SESSION TOTALS for both runtimes. They used to come from the last
   // completed turn, which made one label mean two different measurements

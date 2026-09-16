@@ -11,11 +11,17 @@ import type { ChatAction } from './chat-types';
  *  - heartbeats (`assistant-thinking` with no text), `session-error`,
  *    `replay-complete` and the native progress events are LIVE conditions. A
  *    page is history; replaying "the model is thinking" from disk would park a
- *    turn that finished hours ago.
- *  - `compact-summary` maps to nothing, matching what the old whole-file replay
+ *    turn that finished hours ago. Accepted consequence: a failed turn's usage
+ *    (carried on `session-error` since 2026-09-16) does not replay, so a resumed
+ *    session's totals are short by it. Replaying the event to recover the tokens
+ *    would also re-raise an error banner for a failure the user already saw and
+ *    moved past, which is the worse trade. The INTERRUPT path has no such
+ *    conflict and does replay.
+ *  - `compact-summary` draws no MARKER, matching what the old whole-file replay
  *    did: App only dispatches COMPACTION_COMPLETE when `compactionPending` is
  *    set (i.e. the user just ran /compact in THIS window) or the compaction was
- *    spontaneous — neither is true for a page.
+ *    spontaneous — neither is true for a page. Its bookkeeping half DOES replay;
+ *    see the case below.
  *
  * WHY a second mapping instead of reusing App's switch: App's cases are wired
  * into rAF batching and read live state (`chatStateMapRef`, `statusData`), so
@@ -47,6 +53,9 @@ export function pageEventToAction(event: TranscriptEvent): ChatAction | null {
         uuid: event.uuid,
         timestamp: event.timestamp,
         kind: (d as any).kind,
+        // Replayed like turn-complete's usage, and deduped the same way, so a
+        // resumed session's totals include the turns the user interrupted.
+        usage: d.usage,
       } as ChatAction;
     case 'assistant-text':
       return {
@@ -132,6 +141,44 @@ export function pageEventToAction(event: TranscriptEvent): ChatAction | null {
         sessionId: event.sessionId,
         markerId: `clear-${event.uuid}`,
         timestamp: event.timestamp,
+      } as ChatAction;
+    case 'subagent-usage':
+      // A delegated run's whole spend. Pure bookkeeping — no timeline, no turn
+      // state — so unlike the live conditions above it is perfectly replayable.
+      //
+      // Fix (2026-09-16): this case was MISSING, so every specialist's tokens
+      // and dollars vanished from a session's totals the moment its history came
+      // from a page instead of the live stream — i.e. on every resume and every
+      // reopen. The comment on App.tsx's live case still claimed it "replays
+      // from the parent's record on resume like any other persisted event",
+      // which was true until paging replaced whole-file replay. The reducer
+      // dedups on uuid, and HISTORY_PAGE_LOADED seeds the scratch state with the
+      // live seenUuids, so a page that overlaps the live stream cannot
+      // double-count.
+      return {
+        type: 'TRANSCRIPT_SUBAGENT_USAGE',
+        sessionId: event.sessionId,
+        uuid: event.uuid,
+        timestamp: event.timestamp,
+        usage: d.usage ?? null,
+        parentAgentToolUseId: d.parentAgentToolUseId,
+        agentId: (d as any).agentId,
+      } as ChatAction;
+    case 'compact-summary':
+      // No marker (see the header): App only draws one for a compaction that
+      // happened in THIS window. But the summarize call's own bill and the
+      // window it left behind are facts about the record, so they replay — the
+      // totals otherwise shrank every time a compacted session was reopened.
+      // The re-based occupancy is discarded by HISTORY_PAGE_LOADED's explicit
+      // merge (the live session's own value wins), which is what stops an OLDER
+      // page's compaction from stomping the current gauge.
+      if (d.contextUsedAfter === undefined && !d.usage) return null;
+      return {
+        type: 'NATIVE_HISTORY_REWRITTEN',
+        sessionId: event.sessionId,
+        uuid: event.uuid,
+        contextUsedTokens: d.contextUsedAfter ?? null,
+        usage: d.usage,
       } as ChatAction;
     default:
       return null;

@@ -1084,8 +1084,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'NATIVE_SESSION_ERROR': {
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // Same reasoning as TRANSCRIPT_INTERRUPT's: a turn that died on a provider
+      // error still spent whatever its completed steps spent, and turn-complete —
+      // the only event that used to carry usage — never fires for it. Totals
+      // only; never stamped on the turn (see that case for why).
+      const totals = action.usage && action.uuid && !session.seenUuids.has(action.uuid)
+        ? addTurnUsage(session.totals, action.usage)
+        : session.totals;
       next.set(action.sessionId, {
         ...session,
+        totals,
+        seenUuids: totals === session.totals || !action.uuid
+          ? session.seenUuids
+          : new Set(session.seenUuids).add(action.uuid),
         ...endTurn(session, action.message),
         attentionState: 'error',
         errorMessage: action.message,
@@ -2072,7 +2083,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // many times the watcher re-delivers it.
       const totals = alreadyCounted ? session.totals : addTurnUsage(session.totals, action.usage ?? {});
 
-      next.set(action.sessionId, { ...session, timeline, seenUuids, totals, ...endTurn(session, undefined, assistantTurns) });
+      // A completed turn carries a MEASURED prompt-token count, which always
+      // beats the re-based figure a /compact or /clear left behind — so drop the
+      // override here rather than letting it outlive the measurement that
+      // supersedes it. Written unconditionally: this is one assignment of null on
+      // an object literal that is being rebuilt anyway.
+      next.set(action.sessionId, { ...session, timeline, seenUuids, totals, contextUsedOverride: null, ...endTurn(session, undefined, assistantTurns) });
       return next;
     }
 
@@ -2149,8 +2165,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         }
       }
 
+      // The tokens this turn had already spent. Bookkeeping ONLY — deliberately
+      // not stamped onto the turn's own `usage`, because an abandoned turn has no
+      // contextUsedTokens and the context gauge would fall back to summing every
+      // step's prompt, which re-counts the history once per step (the exact
+      // number StatusBar's WHY warns about). Totals take the sum; the gauge keeps
+      // the last MEASURED occupancy.
+      const totals = action.usage && !session.seenUuids.has(action.uuid)
+        ? addTurnUsage(session.totals, action.usage)
+        : session.totals;
       next.set(action.sessionId, {
         ...session,
+        totals,
+        seenUuids: totals === session.totals ? session.seenUuids : new Set(session.seenUuids).add(action.uuid),
         ...endTurn(session, 'Turn interrupted', assistantTurns),
       });
       return next;
@@ -2762,7 +2789,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // the manual/CC path the guard still drops stale/spurious events (notably CC
       // resume-from-summary, which must NOT insert a marker).
       if (!session.compactionPending && !action.auto) return state; // Stale event — ignore
-      const before = session.compactionPending?.beforeContextTokens ?? null;
+      // The harness's own figure wins where it exists: it is the only source a
+      // NATIVE session has, and it measures the same window the chip does. The
+      // compactionPending fallback is Claude Code's statusline reading, captured
+      // when the user typed /compact.
+      const before = action.beforeContextTokens ?? session.compactionPending?.beforeContextTokens ?? null;
       const after = action.afterContextTokens;
       let label: string;
       if (action.aborted) {
@@ -2795,6 +2826,34 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           },
         ],
         compactionPending: null,
+      });
+      return next;
+    }
+
+    // A native /compact or /clear landed: re-base the context gauge and count
+    // what the summarize request itself cost. Both facts come off the same
+    // transcript event; neither has anywhere else to arrive from, because no turn
+    // completes for either action.
+    case 'NATIVE_HISTORY_REWRITTEN': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      // addTurnUsage is not idempotent, so a re-delivered event must not bill the
+      // summary twice. The override is idempotent (the same number either way)
+      // and is applied regardless.
+      const alreadyCounted = session.seenUuids.has(action.uuid);
+      const totals = alreadyCounted || !action.usage
+        ? session.totals
+        : addTurnUsage(session.totals, action.usage);
+      // Nothing to change → return the ORIGINAL state so the useSyncExternalStore
+      // snapshot keeps its object identity (session-totals.ts's contract).
+      if (totals === session.totals && session.contextUsedOverride === action.contextUsedTokens) return state;
+      next.set(action.sessionId, {
+        ...session,
+        totals,
+        // Marked seen only when this event actually billed something — a /clear
+        // carries no usage, so there is nothing for a re-delivery to double.
+        seenUuids: totals === session.totals ? session.seenUuids : new Set(session.seenUuids).add(action.uuid),
+        contextUsedOverride: action.contextUsedTokens,
       });
       return next;
     }
