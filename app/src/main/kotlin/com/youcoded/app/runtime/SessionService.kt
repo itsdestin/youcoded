@@ -4088,7 +4088,6 @@ class SessionService : Service() {
             // Reply not-implemented so the shared React UI can degrade to an
             // "available on desktop" state instead of timing out.
             "project:list-conversations",
-            "project:conversation-history",
             "project:repo-info",
             "project:list-context",
             "project:read-context-file",

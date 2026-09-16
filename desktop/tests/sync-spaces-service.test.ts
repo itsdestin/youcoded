@@ -4,7 +4,9 @@
 // All collaborators are mocked — this tests ONLY the composition root's
 // transition chaining, not the engine/transport themselves.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import fs from 'fs';
 import os from 'os';
+import path from 'path';
 
 // vi.mock factories are hoisted above imports, so shared fake state must be
 // created via vi.hoisted for the factories to close over it.
@@ -274,6 +276,47 @@ describe('sync-spaces service transition serialization', () => {
     expect(engine.syncSpace.mock.calls.length).toBeGreaterThan(1);
   });
 
+  // The Sync panel's "Syncing…" lasts exactly as long as this promise. It used
+  // to resolve before any sync ran, so "Try again" looked dead (2026-09-16).
+  it('syncSpacesSyncNow resolves only after the syncs it started have finished', async () => {
+    const svc = await enabledMultiSpaceService();
+    const engine = h.engines[0];
+    let releaseSync!: () => void;
+    engine.syncSpace = vi.fn((space: { id: string }) =>
+      space.id === 'project:beta'
+        ? new Promise<void>((r) => { releaseSync = r; })
+        : Promise.resolve()) as any;
+    let resolved = false;
+    const p = svc.syncSpacesSyncNow().then(() => { resolved = true; });
+    await vi.waitFor(() => expect(releaseSync).toBeTypeOf('function'));
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    releaseSync();
+    await p;
+    expect(resolved).toBe(true);
+  });
+
+  // Over-limit files used to be skipped with no word anywhere (2026-09-16).
+  it('status lists reported over-limit files while they are still over the limit', async () => {
+    const svc = await enabledMultiSpaceService();
+    const sizes: Record<string, number> = {
+      [path.join('/fake/personal', 'Conversations/a.jsonl')]: 60 * 1024 * 1024,
+      [path.join('/fake/personal', 'Conversations/b.jsonl')]: 10, // shrank since it was reported
+    };
+    const stat = vi.spyOn(fs, 'statSync').mockImplementation(((p: string) => {
+      if (!(p in sizes)) throw new Error('ENOENT'); // deleted since it was reported
+      return { size: sizes[p] };
+    }) as any);
+    try {
+      h.onEvent!({ type: 'oversize', spaceId: 'personal', files: ['Conversations/a.jsonl', 'Conversations/b.jsonl', 'Conversations/gone.jsonl'] });
+      const st = await svc.syncSpacesStatus();
+      expect(st.oversize).toEqual([{ spaceId: 'personal', files: ['Conversations/a.jsonl'] }]);
+      expect(st.oversizeLimitMb).toBe(50);
+    } finally {
+      stat.mockRestore();
+    }
+  });
+
   // ---- Awaitable sync variant (2026-07-18 takeover mirror-before-release fix) ----
   // syncSpacesSyncNowAwaited backs the takeover handoff barrier: it must NOT resolve
   // until the targeted space's push settles (unlike fire-and-forget syncSpacesSyncNow).
@@ -441,6 +484,17 @@ describe('sync-spaces service transition serialization', () => {
   // 2. a listener that THROWS does not break other listeners or the window/
   //    remote/hub fan-outs (assert a second listener still fires and the event
   //    still lands in recentEvents).
+
+  // The Settings gear refreshes on events; turning sync off used to emit none,
+  // so a red dot outlived the sync it described (2026-09-16 review F6).
+  it('turning sync off emits an event so status-driven UI refreshes', async () => {
+    const svc = await enabledMultiSpaceService();
+    const received: any[] = [];
+    const unsub = svc.onSyncSpacesEvent((e: any) => received.push(e));
+    await svc.syncSpacesEnable(false);
+    unsub();
+    expect(received.map((e) => e.type)).toContain('projects-changed');
+  });
 
   it('onSyncSpacesEvent delivers stamped events; unsubscribe stops delivery', async () => {
     const svc = await enabledMultiSpaceService();

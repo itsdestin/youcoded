@@ -146,7 +146,7 @@ function TopicPage({ data }: { data: TopicPageData }) {
         </span>
         <div className="min-w-0">
           <h3 className="text-lg font-semibold text-fg leading-tight font-mono">{data.heading}</h3>
-          <p className="text-[12.5px] text-fg-muted mt-0.5">{data.tag}</p>
+          <p className="text-xs text-fg-muted mt-0.5">{data.tag}</p>
         </div>
       </div>
 
@@ -155,7 +155,7 @@ function TopicPage({ data }: { data: TopicPageData }) {
         {data.facts.map(([label, value]) => (
           <div key={label}>
             <MicroLabel>{label}</MicroLabel>
-            <div className="text-[12.5px] text-fg-2 mt-0.5">{value}</div>
+            <div className="text-xs text-fg-2 mt-0.5">{value}</div>
           </div>
         ))}
       </div>
@@ -172,7 +172,7 @@ function TopicPage({ data }: { data: TopicPageData }) {
       {data.example && (
         <>
           <MicroLabel>Example</MicroLabel>
-          <pre className="bg-inset border border-edge-dim rounded-lg p-3 text-[11.5px] font-mono text-fg-2 overflow-x-auto whitespace-pre leading-relaxed mt-1.5 mb-0">
+          <pre className="bg-inset border border-edge-dim rounded-lg p-3 text-xs font-mono text-fg-2 overflow-x-auto whitespace-pre leading-relaxed mt-1.5 mb-0">
             {data.example}
           </pre>
         </>
@@ -305,7 +305,7 @@ function OverviewPage() {
   return (
     <div>
       <h3 className="text-lg font-semibold text-fg leading-tight">How context works</h3>
-      <p className="text-[12.5px] text-fg-muted mt-0.5 mb-4">
+      <p className="text-xs text-fg-muted mt-0.5 mb-4">
         Everything Claude reads before it starts — and which wins when they disagree.
       </p>
       <p className="text-sm-tight text-fg-2 leading-relaxed mb-3.5">
@@ -324,15 +324,15 @@ function OverviewPage() {
                   <Icon size={17} />
                 </span>
                 <div className="min-w-0 flex-1">
-                  <div className="text-[13.5px] font-medium text-fg">{l.label}</div>
+                  <div className="text-sm font-medium text-fg">{l.label}</div>
                   <div className="font-mono text-2xs text-fg-muted truncate">{l.path}</div>
                 </div>
-                <div className="text-[11.5px] text-fg-dim text-right shrink-0 max-w-[210px]">
+                <div className="text-xs text-fg-dim text-right shrink-0 max-w-52.5">
                   {l.timing}
                 </div>
               </div>
               {i < OVERVIEW_LAYERS.length - 1 && (
-                <div className="pl-[30px] text-fg-faint text-xs leading-none py-0.5">↓</div>
+                <div className="pl-7.5 text-fg-faint text-xs leading-none py-0.5">↓</div>
               )}
             </React.Fragment>
           );
@@ -340,7 +340,7 @@ function OverviewPage() {
       </div>
 
       {/* "More specific wins" precedence callout */}
-      <div className="mt-4 flex gap-2.5 p-3 rounded-lg bg-inset border border-edge-dim text-[12.5px] text-fg-2 leading-relaxed">
+      <div className="mt-4 flex gap-2.5 p-3 rounded-lg bg-inset border border-edge-dim text-xs text-fg-2 leading-relaxed">
         <span className="text-fg-dim shrink-0 mt-px">
           <InfoIcon size={16} />
         </span>

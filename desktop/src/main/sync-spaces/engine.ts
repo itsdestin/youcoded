@@ -71,6 +71,11 @@ export class SpaceSyncEngine {
   // corruption in the same run means something deeper than crash damage —
   // surface it instead of thrashing repair/fail loops at poll cadence.
   private healedSpaces = new Set<string>();
+  // Over-cap files already reported this launch, per space. A tracked file
+  // that grew past the cap is re-detected on EVERY sync (every ~2 min), and
+  // re-emitting it each time pushed useful events out of the service's
+  // last-50 buffer. The service keeps the full list for display.
+  private reportedOversize = new Map<string, Set<string>>();
   private onEvent: (e: SpaceSyncEvent) => void;
 
   constructor(private transport: SyncTransport, opts: EngineOpts) {
@@ -145,7 +150,17 @@ export class SpaceSyncEngine {
     if (!st) return;
     // Single-flight: if a sync is already running, flag exactly ONE follow-up
     // rerun (the finally block below fires it) — extra requests coalesce.
-    if (st.syncing) { st.rerun = true; return; }
+    // The caller still waits for THAT follow-up, not just the run in flight:
+    // "Try again" / "Sync now" await this promise to show "Syncing…", and
+    // returning early made the button look like it did nothing (2026-09-16).
+    if (st.syncing) {
+      st.rerun = true;
+      await st.current;
+      // The finished run's finally block has started the follow-up by now.
+      const followUp = this.states.get(space.id)?.current;
+      if (followUp) await followUp;
+      return;
+    }
     st.syncing = true;
     // Keep the whole pull+push chain as a promise on the state so stop() can
     // await an in-flight sync instead of resolving with git still running.
@@ -175,7 +190,13 @@ export class SpaceSyncEngine {
         // downstream (conversation materialize sweep, project discovery,
         // conflict notice) ever reacts to them.
         if (push.conflictCopies?.length) this.onEvent({ type: 'conflict', spaceId: space.id, copies: push.conflictCopies });
-        if (push.oversize.length) this.onEvent({ type: 'oversize', spaceId: space.id, files: push.oversize });
+        const reported = this.reportedOversize.get(space.id) ?? new Set<string>();
+        const fresh = push.oversize.filter(f => !reported.has(f));
+        if (fresh.length) {
+          for (const f of fresh) reported.add(f);
+          this.reportedOversize.set(space.id, reported);
+          this.onEvent({ type: 'oversize', spaceId: space.id, files: fresh });
+        }
         // `contacted`: did THIS cycle reach GitHub at all? An offline cycle
         // completes silently (spec §13) and still emits 'synced' so the panel's
         // state machine sees the cycle end — but the service must not stamp

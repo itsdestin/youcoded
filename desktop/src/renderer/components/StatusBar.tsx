@@ -461,8 +461,8 @@ interface Props {
 
 
 const warnStyles = {
-  danger: 'bg-[#DD4444]/15 text-[#DD4444] border-[#DD4444]/25',
-  warn: 'bg-[#FF9800]/15 text-[#FF9800] border-[#FF9800]/25',
+  danger: 'bg-red-400/15 text-red-400 border-red-400/25',
+  warn: 'bg-amber-700/15 text-amber-700 border-amber-700/25',
 };
 
 // --- Widget visibility system ---
@@ -1124,7 +1124,7 @@ export default function StatusBar({
         <Tooltip text="Fast mode on — click to configure">
         <button
           onClick={onOpenModelPicker}
-          className="flex items-center px-1.5 py-0.5 rounded-sm border border-yellow-500/40 bg-yellow-500/15 text-yellow-500 cursor-pointer hover:brightness-125 transition-colors"
+          className="flex items-center px-1.5 py-0.5 rounded-sm border border-amber-700/40 bg-amber-700/15 text-amber-700 cursor-pointer hover:brightness-125 transition-colors"
           aria-label="Fast mode on"
         >
           <FastIcon className="w-3 h-3" />
@@ -1460,7 +1460,7 @@ export default function StatusBar({
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
             <span className="text-fg-muted">Cached:</span>
-            <span className="text-[#4CAF50]">{formatTokens(cr)}</span>
+            <span className="text-green-400">{formatTokens(cr)}</span>
           </span>
           </Tooltip>
         );
@@ -1508,7 +1508,7 @@ export default function StatusBar({
             <span className="text-fg-muted">Reuse:</span>
             {display.kind === 'first-turn' && <span className="text-fg-muted">New</span>}
             {display.kind === 'percent' && (
-              <span className={display.pct >= 80 ? 'text-[#4CAF50]' : display.pct >= 50 ? 'text-[#FF9800]' : 'text-[#DD4444]'}>
+              <span className={display.pct >= 80 ? 'text-green-400' : display.pct >= 50 ? 'text-amber-700' : 'text-red-400'}>
                 {display.pct}%
               </span>
             )}
@@ -1572,8 +1572,8 @@ export default function StatusBar({
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
-            <span className="text-[#4CAF50]">+{added ?? 0}</span>
-            <span className="text-[#DD4444]">-{removed ?? 0}</span>
+            <span className="text-green-400">+{added ?? 0}</span>
+            <span className="text-red-400">-{removed ?? 0}</span>
             <span className="text-fg-muted hidden sm:inline">lines</span>
           </span>
           </Tooltip>
@@ -1681,7 +1681,7 @@ export default function StatusBar({
           }`}
         >
           {updateStatus.update_available ? (
-            <span className="text-[#EAB308] font-medium">
+            <span className="text-amber-700 font-medium">
               v{updateStatus.latest} — Update Available
             </span>
           ) : (
