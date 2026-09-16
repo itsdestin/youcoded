@@ -1660,6 +1660,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // stopped.
   const plansAutoApprove = { underTokens: 0 };
   const nextPlan = (planId: string, mutate: (p: PlanView) => PlanView) => {
+    // Task 5b: `?scenario=refused` answers every card button with a refusal
+    // that carries no reason, like every other refused write here (`write`
+    // above). The card's bridge turns that into its general "Couldn't update
+    // the plan" line, so the review deck can show the card's error slot.
+    if (store.refuseWrites) return { ok: false as const };
     const cur = PLANS.get(planId);
     if (!cur) return { ok: false as const, error: 'That plan is no longer on this conversation.' };
     const next = mutate({ ...cur, seq: (cur.seq ?? 0) + 1 });
