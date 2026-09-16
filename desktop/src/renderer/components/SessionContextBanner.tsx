@@ -68,11 +68,11 @@ export function SessionContextBanner({ context, onOpen }: Props) {
       onClick={onOpen}
       className={`group w-full flex items-center gap-2 px-3 py-2 rounded-lg border text-left cursor-pointer transition-colors ${FOCUS_RING} ${
         trimmed
-          ? 'border-amber-500/40 bg-amber-500/10 text-fg-2 hover:bg-amber-500/15'
+          ? 'border-amber-700/40 bg-amber-700/10 text-fg-2 hover:bg-amber-700/15'
           : 'border-edge-dim bg-inset/50 text-fg-2 hover:bg-inset'
       }`}
     >
-      <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${trimmed ? 'bg-amber-500' : 'bg-green-500'}`} aria-hidden />
+      <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${trimmed ? 'bg-amber-700' : 'bg-green-400'}`} aria-hidden />
       <span className="text-xs leading-snug min-w-0 flex-1">
         {trimmed
           ? 'This model’s context window is small, so some rules and skills were left out'

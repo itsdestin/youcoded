@@ -197,7 +197,7 @@ export function GitReviewView({
                 {uncommitted.conflicted && (
                   <Tooltip text="This file has merge conflicts. Edit the file to fix the marked sections, then commit.">
                   <span
-                    className="text-3xs font-medium text-amber-400 bg-amber-500/10 border border-amber-500/25 rounded px-1 py-px shrink-0"
+                    className="text-3xs font-medium text-amber-700 bg-amber-700/10 border border-amber-700/25 rounded px-1 py-px shrink-0"
                   >
                     Conflict
                   </span>

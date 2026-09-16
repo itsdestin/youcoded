@@ -145,9 +145,9 @@ export function UnifiedDiff({
           const lineNum = row.kind === 'del' ? String(row.oldN) : String(row.newN);
           const rowClass =
             row.kind === 'del'
-              ? 'bg-red-600/10 border-l-[3px] border-red-500'
+              ? 'bg-red-400/10 border-l-[3px] border-red-500'
               : row.kind === 'add'
-                ? 'bg-green-600/10 border-l-[3px] border-green-400'
+                ? 'bg-green-400/10 border-l-[3px] border-green-400'
                 : 'border-l-[3px] border-transparent';
           const glyph = row.kind === 'del' ? '−' : row.kind === 'add' ? '+' : ' ';
           const glyphClass =

@@ -94,7 +94,10 @@ describe('Callout', () => {
  * list of known-bad recipes is the same correction K1 needed after a
  * known-orderings grep found 3 of its 6 violations.
  */
-const TINT = /bg-(amber-500|accent|destructive|red-500|green-500|emerald-500)\/(10|5)\b/g;
+// amber-700 / green-400 / red-400 are the app's own status colors (globals.css @theme).
+// The 2026-09-16 design-check pass moved stock tints onto them; without them here every
+// migrated block vanished from this guard's count instead of still being checked.
+const TINT = /bg-(amber-500|amber-700|accent|destructive|red-500|red-400|green-500|green-400|emerald-500)\/(10|5)\b/g;
 
 /**
  * Tinted blocks in scope that are NOT callouts, counted per file.
@@ -110,6 +113,11 @@ const TINT = /bg-(amber-500|accent|destructive|red-500|green-500|emerald-500)\/(
  */
 const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   'Button.tsx': { count: 1, why: "danger-outline's hover fill — a control's own state" },
+  // A REAL hand-rolled warning callout, found 2026-09-16: it wrote its amber as a raw
+  // #FF9800, which this pattern could not see, until the design-check pass moved it onto
+  // the status amber (same colour). Moving it onto <Callout tone="warning"> changes its
+  // look, so it waits for its own review — filed in docs/roadmap (youcoded-dev).
+  'ModelPickerPopup.tsx': { count: 1, why: "Fast mode's \u26a0 Billed Per Token box — a hand-rolled warning callout, follow-up filed" },
   'ThemeShareSheet.tsx': { count: 1, why: 'an <a> styled as a button — it has a hover fill' },
   'AssistantTurnBubble.tsx': { count: 1, why: 'the Plan card in the chat timeline — not a menu surface at all' },
   'SessionContextBanner.tsx': {

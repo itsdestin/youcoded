@@ -397,7 +397,7 @@ function ProviderRow({ provider, onChanged }: { provider: ProviderStatus; onChan
       {/* Inline result — green-ish tone for ok, destructive for a failure.
           Plain words only. */}
       {note && (
-        <p className={`text-3xs mt-2 ${note.tone === 'ok' ? 'text-green-600' : 'text-red-500'}`}>
+        <p className={`text-3xs mt-2 ${note.tone === 'ok' ? 'text-green-400' : 'text-red-500'}`}>
           {note.text}
         </p>
       )}

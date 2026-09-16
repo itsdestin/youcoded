@@ -58,7 +58,7 @@ export default function OverflowMenu({
   // something needs attention. Danger (red) outranks challenge (orange)
   // outranks info (blue) — same precedence the cog uses on its own.
   const badgeColor = settingsDangerBadge ? 'bg-red-500'
-    : challengePending ? 'bg-orange-400'
+    : challengePending ? 'bg-amber-700'
     : settingsBadge ? 'bg-blue-500'
     : null;
 

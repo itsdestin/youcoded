@@ -588,7 +588,7 @@ function ConnectOpenRouterModal({
           />
 
           {note && (
-            <p className={`text-3xs ${note.tone === 'ok' ? 'text-green-600' : 'text-red-500'}`}>{note.text}</p>
+            <p className={`text-3xs ${note.tone === 'ok' ? 'text-green-400' : 'text-red-500'}`}>{note.text}</p>
           )}
 
           <div className="flex gap-2 pt-1">
@@ -778,7 +778,7 @@ export function SearchProvidersBlock({ withHeader = true, card = false }: { with
                 </div>
                 {row.hasKey ? (
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="text-3xs font-medium text-green-600">Key saved</span>
+                    <span className="text-3xs font-medium text-green-400">Key saved</span>
                     {/* danger-outline per spec change 68: "Remove" reads the same
                         everywhere. This one was the neutral half of the
                         ProvidersSection(red)-vs-here(neutral) contradiction; it

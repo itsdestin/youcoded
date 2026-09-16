@@ -1,0 +1,150 @@
+{
+  // oxlint — the bug-finding gate. NOT a style gate. (`npm run lint`)
+  //
+  // WHY THIS EXISTS: for most of this project's life there was no linter at all.
+  // tsc, vitest, knip and the ast-grep scan were all green while three real
+  // defects shipped, because none of those tools can see the classes below:
+  //
+  //   * a runtime `import` of a package that is in NO dependency field, working
+  //     only by npm hoisting it out of another package's tree
+  //   * a React hook called after an early `return`, which throws "Rendered more
+  //     hooks than during the previous render" the moment the guard is reachable
+  //   * a floating promise in the main process, which under Node's default
+  //     --unhandled-rejections=throw kills the app and every open session
+  //
+  // Everything here is therefore a rule that catches a BUG. No formatting, naming
+  // or stylistic rules — those cost review time and catch nothing.
+  //
+  // WHY OXLINT, NOT ESLINT (2026-09-14): this is the ESLint config it replaced,
+  // ported rule-for-rule. Same rules, same file scopes, same verdict — proven on a
+  // fixture with one deliberate violation per rule, where both linters reported
+  // the identical 26 rule/line pairs, including every must-NOT-fire case (`== null`,
+  // a floating promise outside main, type-aware rules in tests). The whole tree
+  // lints in under 1s where ESLint took ~16-19s. Type-aware rules run through
+  // tsgolint (TypeScript 7), which is why tsconfig.json uses "bundler" resolution.
+  // Existing `eslint-disable` comments are honored by oxlint as-is.
+  //
+  // THE GREEN-GATE RULE: every rule below is at zero on the tree. A gate that
+  // ships with known violations trains everyone to ignore it. To adopt a deferred
+  // rule (bottom of this file), drive it to zero in the same commit that enables it.
+  //
+  // Every default category is OFF so this runs exactly the listed rules.
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript"],
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  // Build output: absent in a fresh worktree, present after `npm run build`, so an
+  // unignored dist/ would make the gate pass on a clean tree and fail on a
+  // developer's.
+  "ignorePatterns": ["dist/**", "release/**"],
+  "overrides": [
+    {
+      "files": ["src/**/*.ts", "src/**/*.tsx"],
+      "rules": {
+        // ---- React correctness ----
+        // Caught SessionDrawer's three hooks sitting below `if (!drawerOpen) return null`.
+        "react/rules-of-hooks": "error",
+
+        // ---- Impossible / dead code ----
+        "no-self-compare": "error",
+        "no-constant-binary-expression": "error",
+        "no-dupe-else-if": "error",
+        "no-duplicate-case": "error",
+        "no-unsafe-negation": "error",
+        "no-unreachable-loop": "error",
+        "no-compare-neg-zero": "error",
+        "use-isnan": "error",
+        "valid-typeof": "error",
+        "no-loss-of-precision": "error",
+
+        // ---- Silent-wrong-answer traps ----
+        // A .map/.filter/.reduce callback that forgets to return yields undefined.
+        "array-callback-return": "error",
+        "no-sparse-arrays": "error",
+        "no-return-assign": "error",
+        "no-fallthrough": "error",
+        "default-case-last": "error",
+        // A '${...}' inside a plain quoted string is nearly always a missing backtick.
+        "no-template-curly-in-string": "error",
+        // `x == null` stays legal: the idiomatic both-checks-at-once form.
+        "eqeqeq": ["error", "always", { "null": "ignore" }],
+
+        // ---- Async traps ----
+        "no-async-promise-executor": "error",
+        "typescript/no-for-in-array": "error",
+        "typescript/no-array-delete": "error",
+        "typescript/no-implied-eval": "error"
+      }
+    },
+    {
+      // Main-process only. A floating promise in the renderer is a dropped UI
+      // update; in main it can terminate the process and every open session.
+      "files": ["src/main/**/*.ts"],
+      "rules": {
+        "typescript/no-floating-promises": "error"
+      }
+    },
+    {
+      // The test tree: the syntactic rules only. Type-aware rules stay off here
+      // because tsconfig.tests.json still EXCLUDES files with type errors, and a
+      // type-aware rule on a file outside the project is a config error dressed up
+      // as a finding. Add them once that exclude list is empty.
+      "files": ["tests/**/*.ts", "tests/**/*.tsx"],
+      "rules": {
+        "react/rules-of-hooks": "error",
+        "no-self-compare": "error",
+        "no-constant-binary-expression": "error",
+        "no-dupe-else-if": "error",
+        "no-duplicate-case": "error",
+        "no-unsafe-negation": "error",
+        "no-unreachable-loop": "error",
+        "no-compare-neg-zero": "error",
+        "use-isnan": "error",
+        "valid-typeof": "error",
+        "no-loss-of-precision": "error",
+        "array-callback-return": "error",
+        "no-sparse-arrays": "error",
+        "no-return-assign": "error",
+        "no-fallthrough": "error",
+        "default-case-last": "error",
+        "no-template-curly-in-string": "error",
+        "eqeqeq": ["error", "always", { "null": "ignore" }],
+        "no-async-promise-executor": "error"
+      }
+    }
+  ]
+
+  // ---------------------------------------------------------------------------
+  // DEFERRED RULES — measured, not guessed
+  //
+  // These all fire today, so enabling one means paying down its count first.
+  // Counts are from an ESLint run on 2026-08-06 (all / src/main only), kept so
+  // the next session can price the work; re-measure under oxlint before relying
+  // on an exact number (oxlint names in brackets).
+  //
+  //   no-unnecessary-condition        631 / 224   mostly TS not narrowing across
+  //   [typescript/no-unnecessary-condition]       callbacks + deliberate defensive
+  //                                               checks at IPC boundaries. Adopt last.
+  //   require-await                   152 /  93   largely async-for-interface-shape.
+  //   no-unnecessary-type-assertion   138 /  41
+  //   return-await                    111 / 106   stylistic, but affects stack traces.
+  //   no-floating-promises (renderer)  79 /   0   real, but each needs a judgement
+  //                                               call about the right recovery.
+  //   react-hooks/exhaustive-deps      43 /   0   HIGHEST VALUE of the deferred set:
+  //   [react/exhaustive-deps]                     stale-closure bugs. Spot-checked hits
+  //                                               were correctly hand-maintained, so
+  //                                               expect false positives; adopt file-by-file.
+  //   no-promise-executor-return       26 /  24   all `new Promise(r => setTimeout(r, ms))`.
+  //   require-atomic-updates           21 /  13   all inspected were correct guards.
+  //   no-cond-assign                   14 /   4   all idiomatic `while ((m = re.exec(s)))`.
+  //   no-base-to-string                13 /  10   `unknown` values interpolated into
+  //                                               strings; ToolCard.tsx is chat-visible.
+  // ---------------------------------------------------------------------------
+}
