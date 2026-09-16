@@ -1003,7 +1003,9 @@ budget|frontier|parent`, `reportBudgetTokens`) + a system-prompt body, in
 mapped tools, never declared. A Claude Code agent file (`~/.claude/agents/*.md` or
 `<cwd>/.claude/agents/*.md`) maps through the same pipeline — see the mapping table below. Ids are
 unique across all three folders; built-in ids are reserved and a collision is skipped with a
-warning rather than shadowing anything. At most 20 non-built-in specialists are offered to the
+warning rather than shadowing anything; the first loaded wins, in the order built-in > personal >
+Claude Code user > Claude Code project (`catalog.ts` `resolveOffered`), and each file-defined
+description is cut to 300 characters (`MAX_DESCRIPTION_CHARS`, `limits.ts`). At most 20 non-built-in specialists are offered to the
 model per cwd (load order); the catalog is re-read only at conversation open, at turn start when a
 per-file fingerprint changed, or on Settings Refresh — there is no directory watcher.
 
