@@ -21,6 +21,7 @@ import { ChatProvider, useChatDispatch, useChatState } from '../src/renderer/sta
 import type { PlanView, PlanChildView } from '../src/shared/types';
 import type { ChatAction } from '../src/renderer/state/chat-types';
 import { resetPlanSupportForTests } from '../src/renderer/components/plans/plan-bridge';
+import { planDisplay } from '../src/renderer/components/plans/PlanCard';
 
 const S = 's1';
 const CARD = 'call-plan';
@@ -188,7 +189,11 @@ describe('D. the Specialists chip lists a plan\'s working specialists, grouped u
     const toggle = planToggle();
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(toggle).toHaveTextContent('Review two files');
-    expect(toggle).toHaveTextContent('0 of 2 steps');
+    // Review fix: the row carries the card header's own status phrase, so the
+    // two can never disagree ("step 1 of 2", not a finished count).
+    expect(toggle).toHaveTextContent('step 1 of 2');
+    expect(toggle).toHaveTextContent(planDisplay({}, running()).detail);
+    expect(toggle).not.toHaveTextContent('0 of 2');
     expect(toggle).not.toHaveTextContent('needs you');
     expect(screen.queryByTestId('helper-card-kid-a')).toBeNull();
     fireEvent.click(toggle);
@@ -223,6 +228,50 @@ describe('D. the Specialists chip lists a plan\'s working specialists, grouped u
     fireEvent.click(screen.getByTestId('specialists-chip'));
     const cards = within(screen.getByTestId('plan-group-plan-1')).getAllByTestId(/^helper-card-kid-/);
     expect(cards.map((c) => c.getAttribute('data-testid'))).toEqual(['helper-card-kid-b', 'helper-card-kid-a']);
+  });
+
+  it('a paused plan\'s row says what the card header says', () => {
+    const pausedPlan = running({ status: 'paused', paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget' } });
+    render(<ChatProvider><Card initial={pausedPlan} extra={ASKS} withCard={false} /></ChatProvider>);
+    fireEvent.click(screen.getByTestId('specialists-chip'));
+    expect(planToggle()).toHaveTextContent('paused — reached its limit');
+    expect(planToggle()).toHaveTextContent(planDisplay({}, pausedPlan).detail);
+  });
+
+  it('several plans at once: the one with an asking specialist first, then in conversation order', () => {
+    const mk = (n: number, title: string): PlanView => ({
+      ...running(), planId: `plan-${n}`, toolUseId: `card-${n}`, title,
+      steps: running().steps.map((st) => ({ ...st, children: st.children?.map((c) => ({ ...c, childId: `${c.childId}-${n}`, parentToolCallId: `card-${n}` })) })),
+    });
+    const plans = [mk(1, 'First plan'), mk(2, 'Second plan'), mk(3, 'Third plan')];
+    const askThird: ChatAction = {
+      type: 'PERMISSION_REQUEST', sessionId: S, toolName: 'Bash', input: { command: 'npm test' }, requestId: 'req-3',
+      specialist: { childId: 'kid-b-3', agentType: 'reviewer', title: 'Idris the Reviewer', parentToolCallId: 'card-3', plan: { planId: 'plan-3', stepId: 's1', attemptId: 'a3' } },
+    };
+    function Many() {
+      const dispatch = useChatDispatch();
+      useEffect(() => {
+        dispatch({ type: 'SESSION_INIT', sessionId: S });
+        plans.forEach((p, i) => {
+          dispatch({ type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: `u${i}`, toolUseId: p.toolUseId, toolName: 'propose_plan', toolInput: {} });
+          dispatch({ type: 'PLAN_CHANGED', sessionId: S, plan: p });
+        });
+        dispatch(askThird);
+      }, [dispatch]);
+      return <SpecialistsChip sessionId={S} />;
+    }
+    render(<ChatProvider><Many /></ChatProvider>);
+    const chip = screen.getByTestId('specialists-chip');
+    expect(chip).toHaveTextContent('1 needs you');
+    fireEvent.click(chip);
+    const rows = screen.getAllByTestId(/^plan-group-plan-/).map((g) => g.getAttribute('data-testid'));
+    expect(rows).toEqual(['plan-group-plan-3', 'plan-group-plan-1', 'plan-group-plan-2']);
+    // Only the asking plan opens itself.
+    const toggles = screen.getAllByTestId('plan-group-toggle').map((t) => within(t).getAllByRole('button')[0].getAttribute('aria-expanded'));
+    expect(toggles).toEqual(['true', 'false', 'false']);
+    // Each plan's specialists stay under their own plan.
+    expect(within(screen.getByTestId('plan-group-plan-3')).getByTestId('helper-card-kid-b-3')).toBeInTheDocument();
+    expect(within(screen.getByTestId('plan-group-plan-3')).queryByTestId('helper-card-kid-b-1')).toBeNull();
   });
 
   it('finished, stopped and failed plans are not listed (and alone draw no chip)', () => {

@@ -1,6 +1,7 @@
 import { useCallback, useRef, useEffect, useState, useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
 import { isPlanCard, planChildCard, planWithActivity } from '../components/plans/plan-activity';
+import { planStatusPhrase } from '../components/plans/plan-status';
 import type { SpecialistRunView, ToolCallState, SpecialistDefinitionView, DelegatedModelsView, SubagentSegment, SpecialistsListResult } from '../../shared/types';
 
 // Specialists 1c — narrow selectors over the chat store. A Task card carries
@@ -77,8 +78,9 @@ export interface PlanGroupView {
   /** The plan card, for "show in chat". */
   toolUseId: string;
   title: string;
-  stepsDone: number;
-  stepsTotal: number;
+  /** The card header's own status phrase ("step 1 of 3", "paused — …"),
+   *  so the row and the card always say the same thing (Task 8 review). */
+  status: string;
   /** Specialists of this plan with an open ask. */
   needsYou: number;
   /** The rows under the plan: askers first, then the working ones. */
@@ -241,10 +243,10 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
         // Askers first: they are the reason to open the popup at all.
         rows.sort((a, b) => (a.group === b.group ? 0 : a.group === 'needs-you' ? -1 : 1));
         helpers.push(...rows);
-        const stepsDone = record.steps.filter((st) => st.status === 'done').length;
+        const status = planStatusPhrase(record);
         const needsYou = rows.filter((r) => r.group === 'needs-you').length;
-        plans.push({ planId: record.planId, toolUseId: id, title: record.title, stepsDone, stepsTotal: record.steps.length, needsYou, helpers: rows });
-        keyParts.push(['plan-group', record.planId, record.title, stepsDone, record.steps.length].join(':'));
+        plans.push({ planId: record.planId, toolUseId: id, title: record.title, status, needsYou, helpers: rows });
+        keyParts.push(['plan-group', record.planId, record.title, status].join(':'));
         continue;
       }
       // A native hire brings its own ledger record; a Claude Code subagent has

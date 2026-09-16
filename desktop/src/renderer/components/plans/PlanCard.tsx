@@ -7,6 +7,7 @@ import { BugReportPopup } from '../development/BugReportPopup';
 import type { ReportContext } from '../development/ReportDesign';
 import { toolActionLabel } from '../../utils/tool-group-summary';
 import { classifyPause } from './plan-pause';
+import { planStatusPhrase } from './plan-status';
 import BrailleSpinner from '../BrailleSpinner';
 import { SpecialistActions } from '../specialists/SpecialistActions';
 import { RunStatusLine, formatElapsed } from '../specialists/RunStatusLine';
@@ -51,30 +52,8 @@ export function planDisplay(input: Record<string, unknown>, plan?: PlanView): { 
   const title = plan?.title || asString(input.title) || 'a plan';
   const label = `Plan: ${title}`;
   if (!plan) return { label, detail: '' };
-  const total = plan.steps.length;
-  const done = plan.steps.filter((s) => s.status === 'done').length;
-  const detail =
-    // The writing clock is live, so the header renders <PlanWritingDetail>
-    // instead of this static string (Destin, round 1, P-4: one line, like every
-    // other collapsed tool card).
-    plan.status === 'writing' ? ''
-    : plan.status === 'proposed' ? 'waiting for your approval'
-    : plan.status === 'running' ? `step ${Math.min(done + 1, total)} of ${total}`
-    // Task 5b: two pauses are not about the limit, and the header must not
-    // say they are (plan-pause.ts explains how they are told apart).
-    : plan.status === 'paused' ? pausedDetail(plan)
-    : plan.status === 'interrupted' ? `interrupted — ${done} of ${total} steps done`
-    : plan.status === 'completed' ? `finished in ${formatElapsed((plan.endedAt ?? 0) - (plan.startedAt ?? 0))}`
-    : plan.status === 'stopped' ? (plan.revisedBy ? 'revised — see the new plan below' : `stopped — ${done} of ${total} steps done`)
-    : 'failed';
-  return { label, detail };
-}
-
-function pausedDetail(plan: PlanView): string {
-  const kind = classifyPause(plan.paused).kind;
-  return kind === 'unknown-outcome' ? 'paused — check before continuing'
-    : kind === 'iteration-cap' ? 'paused — needs a revised plan'
-    : 'paused — reached its limit';
+  // Task 8 review: shared with the Specialists chip's plan row (plan-status.ts).
+  return { label, detail: planStatusPhrase(plan) };
 }
 
 /** The header glyph. A proposed plan wears the question mark every ask wears. */

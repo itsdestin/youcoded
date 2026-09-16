@@ -129,8 +129,8 @@ function SpecialistManager({ summary, sessionId, onJump }: { summary: Specialist
 
 /**
  * Task 8 (review 6, Q6-2): one plan — a one-line foldable row (the app's
- * expand-in-place SettingRow, design guide G-22) with the plan's title, how
- * many steps are done, and "N needs you" when a specialist asks. Opening it
+ * expand-in-place SettingRow, design guide G-22) with the plan's title, the
+ * card header's own status phrase ("step 1 of 3"), and "N needs you" when a specialist asks. Opening it
  * shows the plan's working and asking specialists with the SAME card an
  * ordinary specialist gets. A plan with an asking specialist starts open, and
  * opens itself when an ask arrives, so the buttons are never behind a fold.
@@ -150,7 +150,7 @@ function PlanGroup({ group, sessionId, onJump }: { group: PlanGroupView; session
           onClick={() => setOpen(v => !v)}
           accessory={
             <span className="shrink-0 flex items-center gap-2 text-2xs text-fg-muted tabular-nums">
-              <span>{group.stepsDone} of {group.stepsTotal} steps</span>
+              <span>{group.status}</span>
               {asking && (
                 // The same amber "waiting on you" words the chip uses.
                 <span className="inline-flex items-center gap-1 text-amber-500"><QuestionIcon className="w-3 h-3" />{group.needsYou} need{group.needsYou === 1 ? 's' : ''} you</span>
