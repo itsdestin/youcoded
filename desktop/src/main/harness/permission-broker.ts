@@ -282,8 +282,17 @@ export class PermissionBroker extends EventEmitter {
     return false;
   }
 
-  cancelSession(sessionId: string): void {
+  /** `ownOnly` (Stop): cancel only the session's OWN asks, not asks routed to
+   *  it by specialist children. WHY: Stop leaves background helpers running
+   *  (NativeSessionHost.interrupt), and a helper's ask has no timeout — so a
+   *  Stop press used to quietly kill a background helper that was waiting for
+   *  approval. A foreground child's asks still go: interrupt() stops that
+   *  child, whose own cancelSession(childId) matches by raisedBy. */
+  cancelSession(sessionId: string, opts?: { ownOnly?: boolean }): void {
     for (const [id, entry] of [...this.pending]) {
+      // Skip only asks raised by SOMEONE ELSE: interrupt(childId) passes the
+      // child's own id, and that child's asks (raisedBy === childId) must go.
+      if (opts?.ownOnly && entry.raisedBy && entry.raisedBy !== sessionId) continue;
       // `sessionId` is the card's HOME session (the parent, for a routed
       // ask); `raisedBy` is the specialist child that raised it. Either
       // being torn down cancels the ask — a child can no longer act on an

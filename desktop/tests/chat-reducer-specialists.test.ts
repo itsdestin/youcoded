@@ -351,6 +351,30 @@ describe('SPECIALIST_RUN_CHANGED — ask plumbing (pinning existing behavior)', 
   });
 });
 
+// A helper's ask whose Task card isn't loaded must not bind to the PARENT's
+// running tool of the same name (a card naming one command while its buttons
+// approve another). With no timeout, such a mis-binding would never end.
+describe('PERMISSION_REQUEST — a helper ask with no Task card', () => {
+  it('gets its own card instead of taking over the parent\'s running Bash', () => {
+    let state = initState();
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-parent-bash',
+      toolUseId: 'parent-bash', toolName: 'Bash', toolInput: { command: 'npm test' },
+    });
+    state = dispatch(state, {
+      type: 'PERMISSION_REQUEST', sessionId: SESSION, toolName: 'Bash',
+      input: { command: 'rm -rf dist' }, requestId: 'req-helper',
+      specialist: { childId: 'child-x', agentType: 'worker', title: 'Wren', parentToolCallId: 'task-not-loaded' },
+    });
+    const calls = state.get(SESSION)!.toolCalls;
+    expect(calls.get('parent-bash')!.status).toBe('running');
+    expect(calls.get('parent-bash')!.requestId).toBeUndefined();
+    const own = [...calls.values()].find((t) => t.requestId === 'req-helper')!;
+    expect(own.toolUseId).not.toBe('parent-bash');
+    expect(own.specialist?.title).toBe('Wren');
+  });
+});
+
 describe('SPECIALIST_RUN_CHANGED — a note lands WHERE it happened in the Activity trail, not at the bottom', () => {
   // Investigation 2026-09-01 (specialist-notes-not-interleaved): the ledger
   // always resends the FULL notes array, and reconcileNoteSegments used to

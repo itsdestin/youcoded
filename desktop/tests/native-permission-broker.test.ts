@@ -154,6 +154,24 @@ describe('PermissionBroker', () => {
     expect(broker.isWaitingOnUser('child-1')).toBe(false);
   });
 
+  // Stop leaves background helpers running; their waiting asks must survive it.
+  it('cancelSession(parent, ownOnly) keeps routed asks; the child\'s own id still cancels them', async () => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', (e) => emitted.push(e));
+    let childDone = false;
+    const child = broker.ask({ sessionId: 'parent-1', toolName: 'Bash', toolInput: {}, denyListed: true, raisedBy: 'child-1' });
+    void child.then(() => { childDone = true; });
+    const own = broker.ask({ sessionId: 'parent-1', toolName: 'Write', toolInput: {}, denyListed: false });
+    broker.cancelSession('parent-1', { ownOnly: true });
+    await expect(own).resolves.toMatchObject({ behavior: 'canceled' });
+    await Promise.resolve();
+    expect(childDone).toBe(false);
+    expect(broker.isWaitingOnUser('child-1')).toBe(true);
+    broker.cancelSession('child-1', { ownOnly: true }); // a foreground child's interrupt
+    await expect(child).resolves.toMatchObject({ behavior: 'canceled' });
+  });
+
   it('cancelSession(childId) cancels a routed ask (raisedBy match)', async () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];

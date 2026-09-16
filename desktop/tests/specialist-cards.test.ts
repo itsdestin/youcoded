@@ -1,5 +1,5 @@
-// Pins how a helper's waiting request is found for the bottom-of-chat cards,
-// the floater strip and the red session dot. Before 2026-09-16 those only
+// Pins the pure finder behind the bottom-of-chat cards, the floater strip and
+// the red session dot (their wiring is not rendered here). Before 2026-09-16 those only
 // looked at the main assistant's own tools in the active turn, so a helper's
 // request — often in a background hire's card several turns up — told the user
 // nothing (the "still pending on their screen" phantom approval).
@@ -52,5 +52,14 @@ describe('helperAsksOf', () => {
       ['r1', 'Wren the Whistling Worker'],
       ['r2', 'Nadia the Rambling Researcher'],
     ]);
+  });
+
+  it('skips a request that already has its own top-level card, so it never shows twice', () => {
+    const topLevel: ToolCallState = { toolUseId: 'perm-r1', toolName: 'Bash', input: {}, status: 'awaiting-approval', requestId: 'r1' };
+    const calls = new Map<string, ToolCallState>([
+      ['perm-r1', topLevel],
+      ['t1', task('t1', [seg('c1', 'awaiting-approval', 'r1'), seg('c2', 'awaiting-approval', 'r2')])],
+    ]);
+    expect(helperAsksOf(calls).map((a) => a.requestId)).toEqual(['r2']);
   });
 });

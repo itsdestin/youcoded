@@ -53,6 +53,8 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
   const buttons = (
     <PermissionButtons
       requestId={requestId}
+      // Helper requests are click-only — see PermissionButtons.noKeyboard.
+      noKeyboard
       denyListed={segment.denyListed}
       permissionMode={segment.permissionMode}
       command={typeof segment.input?.command === 'string' ? (segment.input.command as string) : undefined}

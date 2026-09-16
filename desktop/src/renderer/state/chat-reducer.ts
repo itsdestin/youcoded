@@ -2311,6 +2311,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       let nameMatchId: string | null = null;
       const wantedInput = action.input ? stableStringify(action.input) : null;
       for (const [id, tool] of toolCalls) {
+        // A helper's ask with no Task card to nest under must never bind to one
+        // of the PARENT's running tools by name (the consent bug the specialist
+        // branch above exists to prevent) — it gets the synthetic card below.
+        if (action.specialist) break;
         if (tool.status !== 'running') continue;
         if (tool.toolName === action.toolName) {
           if (nameMatchId === null) nameMatchId = id;

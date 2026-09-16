@@ -509,7 +509,7 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, suppressAlwaysAllow, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, suppressAlwaysAllow, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false, noKeyboard = false }: {
   requestId: string;
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
@@ -546,6 +546,12 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
   onResponded?: () => void;
   onFailed?: () => void;
+  /** Click/tap only — no global arrow/Enter handling. WHY: every card's Enter
+   *  listener is window-wide and the first one registered wins, so with a
+   *  helper's request sitting beside the main assistant's, Enter meant for one
+   *  could approve the other (a deny-listed helper command included). Helper
+   *  requests therefore always take an explicit click. */
+  noKeyboard?: boolean;
 }) {
   const [responding, setResponding] = useState(false);
   // Native asks carry NO CC permission_suggestions, but Always-allow must still
@@ -670,7 +676,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // and while this card's chat is not the one on screen.
   const keysLive = useCardKeysLive();
   useEffect(() => {
-    if (responding || confirmingAlways || !keysLive) return;
+    if (responding || confirmingAlways || !keysLive || noKeyboard) return;
     const handler = (e: KeyboardEvent) => {
       // WHY: InputBar sends on an Enter that reaches the page body and marks it
       // handled. That one keypress is the message, not an answer to this card.
@@ -692,7 +698,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [responding, confirmingAlways, keysLive, focusIdx, count]);
+  }, [responding, confirmingAlways, keysLive, noKeyboard, focusIdx, count]);
 
   const pad = isAndroid() ? 'py-2' : 'py-1';
   const ring = 'ring-2 ring-white/40';
@@ -1520,6 +1526,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         ) : (
           <PermissionButtons
             requestId={tool.requestId}
+            // A helper's request is click-only — see PermissionButtons.noKeyboard.
+            noKeyboard={!!tool.specialist}
             suggestions={tool.permissionSuggestions}
             denyListed={tool.denyListed}
             permissionMode={tool.permissionMode}

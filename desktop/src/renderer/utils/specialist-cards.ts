@@ -48,10 +48,19 @@ export function segmentToToolState(segment: ToolSegment): ToolCallState {
  */
 export function helperAsksOf(toolCalls: Map<string, ToolCallState>): ToolCallState[] {
   const out: ToolCallState[] = [];
+  // A request can ALSO be a top-level card: the reducer mints one when the
+  // helper's Task card isn't loaded yet, and it lingers after the Task card
+  // arrives (e.g. older history paged in). That card is already shown at the
+  // bottom — skip its nested twin so one request never shows twice.
+  const topLevel = new Set<string>();
+  for (const t of toolCalls.values()) {
+    if (t.status === 'awaiting-approval' && t.requestId) topLevel.add(t.requestId);
+  }
   for (const [id, card] of toolCalls) {
     if (!hasNestedAsk(card)) continue;
     for (const seg of card.subagentSegments!) {
       if (seg.type !== 'tool' || seg.status !== 'awaiting-approval' || !seg.requestId) continue;
+      if (topLevel.has(seg.requestId)) continue;
       out.push({
         ...segmentToToolState(seg),
         specialist: {

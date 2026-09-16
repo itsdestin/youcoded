@@ -4266,7 +4266,8 @@ export class NativeSessionHost extends EventEmitter {
     // Cancel pending asks FIRST (resolve them 'canceled') so a loop paused on a
     // permission await unwinds cleanly before the stream is aborted underneath
     // it (spec pending-ask ruling). Also expires the renderer's approval cards.
-    this.broker.cancelSession(sessionId);
+    // ownOnly: a background helper's routed ask survives Stop, like the helper.
+    this.broker.cancelSession(sessionId, { ownOnly: true });
     entry?.session.interrupt();
     // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
     // Root sessions only: a child's own deliveries go to its parent, not to it.
