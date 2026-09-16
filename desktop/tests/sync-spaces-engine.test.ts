@@ -221,9 +221,37 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     const synced = events.find(e => e.type === 'synced') as Extract<SpaceSyncEvent, { type: 'synced' }>;
     expect(synced).toBeDefined();
     expect(synced.updated).toBe(true);
+    // A transport that never says whether it reached the remote is read as
+    // contact — the pre-2026-09-16 behaviour, kept for fakes and future transports.
+    expect(synced.contacted).toBe(true);
     const conflict = events.find(e => e.type === 'conflict') as Extract<SpaceSyncEvent, { type: 'conflict' }>;
     expect(conflict).toBeDefined();
     expect(conflict.copies).toEqual(['doc (from Other, 2026-07-15).md']);
+    await engine.stop();
+  });
+
+  // 2026-09-16 (docs/roadmap/sync.md, "Last synced just now while offline for
+  // days"): an offline cycle still completes and emits 'synced' — the panel's
+  // state machine needs the cycle end — but carries contacted:false, which is
+  // what service.broadcast() reads before stamping recency.
+  it("an offline cycle emits 'synced' with contacted:false; any contact makes it true", async () => {
+    const t = fakeTransport();
+    (t.pull as any).mockImplementation(async () => ({ updated: false, conflictCopies: [], contacted: false }));
+    (t.push as any).mockImplementation(async () => ({ pushed: false, oversize: [], contacted: false }));
+    const events: SpaceSyncEvent[] = [];
+    const engine = new SpaceSyncEngine(t, { debounceMs: 50, pollMs: 0, onEvent: e => events.push(e) });
+    const space: SyncSpace = { id: 'personal', kind: 'personal', root: tmp };
+    await engine.addSpace(space);
+    await engine.syncSpace(space);
+    const offline = events.find(e => e.type === 'synced') as Extract<SpaceSyncEvent, { type: 'synced' }>;
+    expect(offline).toBeDefined();
+    expect(offline.contacted).toBe(false);
+    // The push's recovery pull reached origin even though the pull did not.
+    events.length = 0;
+    (t.push as any).mockImplementation(async () => ({ pushed: false, oversize: [], contacted: true }));
+    await engine.syncSpace(space);
+    const back = events.find(e => e.type === 'synced') as Extract<SpaceSyncEvent, { type: 'synced' }>;
+    expect(back.contacted).toBe(true);
     await engine.stop();
   });
 

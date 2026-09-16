@@ -6,8 +6,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  ShellRegistry, MAX_EXPLICIT_RUNNING, RING_LINES, WIRE_TAIL_LINES, READ_MAX_BYTES,
-  formatElapsed, formatFinishedNotice, stateText, spawnDetached,
+  ShellRegistry, MAX_EXPLICIT_RUNNING, RING_LINES, WIRE_TAIL_LINES, READ_MAX_BYTES, LONG_RUN_NOTICE_MS,
+  formatElapsed, formatFinishedNotice, formatLongRunningNotice, stateText, spawnDetached,
 } from '../src/main/harness/shell-registry';
 import { spillRoot, sweepOldSpillFiles } from '../src/main/harness/tools/spill-paths';
 import { CWD_SENTINEL, ENV_SENTINEL, stripSentinelLines, normalizeNewlines } from '../src/main/harness/tools/shell-text';
@@ -238,5 +238,66 @@ describe('spill retention sweep (moved out of bash.ts so background logs are swe
     expect(fs.existsSync(old)).toBe(false);
     expect(fs.existsSync(fresh)).toBe(true);
     fs.rmSync(sess, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+  });
+});
+
+// 2026-09-16 (docs/roadmap/native-harness.md → tools): the proactive half of
+// the anti-poll rule. A run still going at the 5- and 15-minute marks is
+// announced once per mark; the host turns the event into an idle-boundary
+// notice. Marks are a test seam here so the suite does not wait five minutes.
+describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
+  let dir: string;
+  let reg: ShellRegistry;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shell-reg-long-')); reg = new ShellRegistry(`t-${path.basename(dir)}`, { longRunNoticeMs: [60, 140] }); });
+  afterEach(async () => { await reg.killAll('app-quit', { graceMs: 0 }); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); });
+
+  it('the production marks are 5 and 15 minutes', () => {
+    expect(LONG_RUN_NOTICE_MS).toEqual([5 * 60_000, 15 * 60_000]);
+  });
+
+  it('the notice names the run, how long it has run, and what to do — and says not to poll', () => {
+    const text = formatLongRunningNotice({ shellId: 'sh-9c10', command: './gradlew assembleDebug' }, 5 * 60_000);
+    expect(text).toMatch(/^\[Background command sh-9c10 has been running for 5m\]\n\$ \.\/gradlew assembleDebug\n/);
+    expect(text).toContain('ignore this message');
+    expect(text).toContain('BashOutput');
+    expect(text).toContain('KillShell');
+    expect(text).toContain('do not poll');
+  });
+
+  it.skipIf(!posix)('a run still going at each mark emits long-running once per mark, elapsed measured from its own start', async () => {
+    const marks: Array<{ shellId: string; ms: number }> = [];
+    reg.on('long-running', (run, ms) => marks.push({ shellId: run.shellId, ms }));
+    const r = reg.start(startSpec('sleep 5', dir));
+    if (!r.ok) throw new Error('start failed');
+    await waitFor(() => marks.length === 2);
+    expect(marks.map((m) => m.shellId)).toEqual([r.run.shellId, r.run.shellId]);
+    expect(marks[0].ms).toBeGreaterThanOrEqual(60);
+    expect(marks[1].ms).toBeGreaterThanOrEqual(140);
+    expect(r.run.status).toBe('running');
+  });
+
+  it.skipIf(!posix)('a run that finishes before a mark emits nothing, and its pending marks are cleared on exit', async () => {
+    const marks: number[] = [];
+    reg.on('long-running', (_run, ms) => marks.push(ms));
+    const r = reg.start(startSpec('echo hi', dir));
+    if (!r.ok) throw new Error('start failed');
+    expect(r.run.longRunTimers).toHaveLength(2);
+    await r.run.exited;
+    // The exit path clears the timers — the structural guard that nothing can
+    // fire later for a run that is no longer running.
+    expect(r.run.longRunTimers).toHaveLength(0);
+    expect(marks).toHaveLength(0);
+  });
+
+  it.skipIf(!posix)('an adopted hand-off counts the time it already ran in the foreground', async () => {
+    const marks: number[] = [];
+    reg.on('long-running', (_run, ms) => marks.push(ms));
+    const child = spawnDetached('/bin/bash', ['-c', 'sleep 5'], { cwd: dir, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Started 100 ms ago as far as the run is concerned: the 60 ms mark is
+    // already past (fires at once), the 140 ms mark is 40 ms away.
+    reg.adopt({ toolUseId: 'tu-adopt', command: 'sleep 5', cwd: dir, child, startedAt: Date.now() - 100, seedLog: null, recent: '', logPath: null, logStream: null, captureEnv: false });
+    await waitFor(() => marks.length === 2);
+    expect(marks[0]).toBeGreaterThanOrEqual(100);
+    expect(marks[1]).toBeGreaterThanOrEqual(140);
   });
 });

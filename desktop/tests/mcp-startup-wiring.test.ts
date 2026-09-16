@@ -395,6 +395,36 @@ describe('pricingFor (Task 11)', () => {
     expect(modelCatalogGetSpy).not.toHaveBeenCalled();
   });
 
+  // 2026-09-16 (docs/roadmap/local-models.md): the price lookup only ever
+  // reads the binding's own provider's rows, so handing the catalog the whole
+  // registry built and threw away every other provider's list on every hosted
+  // create/resume/swap — the same waste the vision closure already avoids.
+  it("hands the catalog ONLY the binding's own provider, never the whole registry", async () => {
+    fs.mkdirSync(path.join(testHome, '.youcoded'), { recursive: true });
+    fs.writeFileSync(
+      path.join(testHome, '.youcoded', 'providers.json'),
+      JSON.stringify({ v: 1, providers: [
+        { id: 'or-a', type: 'openrouter', label: 'OpenRouter A', enabled: true },
+        { id: 'or-b', type: 'openrouter', label: 'OpenRouter B', enabled: true },
+        { id: 'anthropic-test', type: 'anthropic', label: 'Anthropic', enabled: true },
+      ] }),
+    );
+
+    const { registerIpcHandlers } = await import('../src/main/ipc-handlers');
+    registerIpcHandlers(
+      makeMockIpcMain() as any,
+      makeMockSessionManager() as any,
+      { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
+      makeMockSkillProvider() as any,
+    );
+
+    const pricingFor = capturedCtorArgs![5] as (binding: { providerId: string; modelId: string }) => Promise<unknown>;
+    await pricingFor({ providerId: 'or-b', modelId: 'x' });
+    expect(modelCatalogGetSpy).toHaveBeenCalledTimes(1);
+    const handed = modelCatalogGetSpy.mock.calls[0][0] as Array<{ id: string }>;
+    expect(handed.map((p) => p.id)).toEqual(['or-b']);
+  });
+
   it('returns null — not a guessed zero — for a metered model the catalog does not list', async () => {
     fs.mkdirSync(path.join(testHome, '.youcoded'), { recursive: true });
     fs.writeFileSync(

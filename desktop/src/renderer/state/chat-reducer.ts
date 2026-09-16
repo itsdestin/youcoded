@@ -1424,8 +1424,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // launching Task card is not on this timeline (older sessions, a report
       // replayed without its card).
       // G-1: a shell-complete turn carries the OTHER meta shape and is folded
-      // into its Bash card above — never into a specialist card.
-      if (action.injected && action.injectedMeta && action.injectedMeta.kind !== 'shell') {
+      // into its Bash card above — never into a specialist card. A
+      // shell-running mark (2026-09-16) has no card to fold into either; only
+      // the specialist shape (kind undefined) is looked up here.
+      if (action.injected && action.injectedMeta && action.injectedMeta.kind === undefined) {
         const cardId = findSpecialistCard(session.toolCalls, {
           parentToolCallId: action.injectedMeta.parentToolCallId,
           childId: action.injectedMeta.childId,

@@ -1585,8 +1585,11 @@ export class RemoteServer {
    *  uuid dedup in the reducer does not cover the native harness's per-delta text, so
    *  these must not be replayed on top of a snapshot that already holds them. */
   private static isTranscriptShaped(type: string): boolean {
+    // native:permission-mode is excluded because the chip's mode is App state,
+    // not chat state — the snapshot never holds it, so skipping it here would
+    // leave a reconnecting phone's chip on a stale mode.
     return type === 'transcript:event' || type === 'transcript:shrink'
-      || (type.startsWith('native:') && type !== 'native:shell-event');
+      || (type.startsWith('native:') && type !== 'native:shell-event' && type !== 'native:permission-mode');
   }
 
   /**

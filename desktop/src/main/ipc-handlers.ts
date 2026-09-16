@@ -2769,7 +2769,14 @@ export function registerIpcHandlers(
       const providers = await providerRegistry.list();
       const p = providers.find((x) => x.id === binding.providerId);
       if (p?.type === 'local-engine') return null;
-      const models = await modelCatalog.get(providers);
+      // `[p]`, not `providers` — the same narrowing the vision closure above
+      // already has, for the same reason: this lookup only ever reads the
+      // binding's own provider's rows, so handing over the whole list built
+      // and threw away every OTHER provider's catalog on every hosted
+      // create/resume/swap (measured 2026-09-05 while fixing the local half).
+      // A provider missing from the registry is caught below: `p` undefined
+      // means no rows, and the lookup falls through to null as before.
+      const models = await modelCatalog.get(p ? [p] : []);
       const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
       return hit?.pricing ?? null;
     },
@@ -3317,6 +3324,16 @@ export function registerIpcHandlers(
   // (getPermissionMode falls back to 'ask' for an unknown/non-live id).
   ipcMain.handle(IPC.NATIVE_GET_PERMISSION_MODE, async (_e, sessionId: string) =>
     nativeHost.getPermissionMode(sessionId));
+  // Push every seeded or changed mode to each window showing the session AND
+  // every phone. WHY: the get above can answer before a starting session has
+  // its mode, and a change made in one window or on the phone used to reach
+  // only the caller — so chips elsewhere could show a stricter mode than the
+  // session was really running on. The host emits from ONE place (seedMode /
+  // setPermissionMode), so both the IPC and the remote set paths are covered.
+  nativeHost.on('permission-mode', (e: { sessionId: string; mode: NativePermissionMode }) => {
+    sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
+    remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e });
+  });
   ipcMain.handle(IPC.NATIVE_GET_CONTEXT_PREFERENCES, () => {
     if (process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
     return contextSettings.read();

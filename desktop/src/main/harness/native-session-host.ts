@@ -17,7 +17,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
-import { ShellRegistry, formatFinishedNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
+import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
@@ -46,6 +46,7 @@ import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION,
 import { DelegationLedger, OWNER, RAW_REPORT_CAP_CHARS, isOwnerAlive, toRunView, type DelegationRecord } from './specialists/delegation-ledger';
 import { DelegatedModels, delegatedModelsView, type DelegatedTier } from './specialists/delegated-models';
 import type { NativeHome } from '../native-home';
+import { PermissionModeStore } from './permission-mode-store';
 import { computeReportBudget } from './specialists/report-budget';
 import { truncateOutput, composeNotice } from './tools/truncate';
 import { APPROX_CHARS_PER_TOKEN } from './message-size';
@@ -242,6 +243,13 @@ export interface SpecialistRunResult {
 interface LiveEntry {
   session: HarnessSession;
   cwd: string;
+  // 2026-09-16 (docs/roadmap/local-models.md): a LOCAL model's helper cap is
+  // read from the engine's slot count, and asking about a model that is not
+  // loaded yet would load it — so at create/resume/swap the reading is
+  // usually "unknown" and the profile falls to the one-helper floor. The
+  // first real send loads the model; this flag asks runTurns to re-read the
+  // slots once after a turn and re-apply the profile if the cap changed.
+  refreshSlotsAfterTurn?: boolean;
   // This generation's MCP lease (undefined when no manager is wired, or when
   // acquireMcp() caught a whole-registry failure). It lives HERE, on the live
   // entry, rather than in a sessionId-keyed map on the host.
@@ -353,11 +361,13 @@ export class NativeSessionHost extends EventEmitter {
   // as native transcript events (which is the SAME channel CC hook events ride).
   private broker = new PermissionBroker();
 
-  // Per-session permission mode (spec §2.4 layer 2). In-memory, per session,
-  // default 'ask' — NOT persisted (a fresh app session starts back at 'ask').
-  // decide() reads this fresh on every tool, so setPermissionMode() takes effect
-  // on the NEXT gated call without disturbing an in-flight ask.
+  // Per-session permission mode (spec §2.4 layer 2). decide() reads this fresh
+  // on every tool, so setPermissionMode() takes effect on the NEXT gated call
+  // without disturbing an in-flight ask. Seeded by create()/resume() through
+  // seedMode(); a user's explicit choice is also saved to modeStore so a resume
+  // restores it instead of silently falling back to the preset default.
   private modeFor = new Map<string, NativePermissionMode>();
+  private modeStore?: PermissionModeStore;
 
   // Per-session in-memory copy of "Always allow" rules remembered THIS session.
   // WHY memory is the source of session-truth: the disk persist (PermissionStore)
@@ -1575,8 +1585,28 @@ export class NativeSessionHost extends EventEmitter {
     // 'specialists-event'): sendForSession + remote buffer/broadcast live there.
     registry.on('change', (run: ShellRunView) => this.emit('shell-event', { sessionId, run } satisfies ShellEvent));
     registry.on('exit', (run: ShellRun) => this.onShellExit(sessionId, registry, run));
+    registry.on('long-running', (run: ShellRun, elapsedMs: number) => this.onShellLongRunning(sessionId, run, elapsedMs));
     this.shellRegistries.set(sessionId, registry);
     return registry;
+  }
+
+  /** The proactive half of the anti-poll rule (LONG_RUN_NOTICE_MS): a run
+   *  that is STILL going at the 5- and 15-minute marks is reported once each,
+   *  through the same idle-boundary lane as a finished notice — never
+   *  mid-turn. Its meta is the 'shell-running' kind, NOT 'shell': this is not
+   *  a completion, so the reducer must never fold it into a Bash card as one;
+   *  runNotice labels it `injected: 'shell-running'`, which the renderer shows
+   *  as a plain "System message" note. Re-checked at delivery (drainDeliveries)
+   *  too: a run that finished while this sat queued behind a busy turn is
+   *  dropped rather than announced as still running. */
+  private onShellLongRunning(sessionId: string, run: ShellRun, elapsedMs: number): void {
+    if (run.status !== 'running') return;
+    this.queueHostNotice(
+      sessionId,
+      formatLongRunningNotice(run, elapsedMs),
+      { kind: 'shell-running', runs: [{ shellId: run.shellId, toolUseId: run.toolUseId, elapsedMs }] },
+      'a background command was still running after its conversation was closed — the notice has nowhere left to be delivered',
+    );
   }
 
   /** G-1 (spec §4.4): a finished run becomes a notice at the next idle
@@ -2267,6 +2297,7 @@ export class NativeSessionHost extends EventEmitter {
       : undefined;
     this.nativeHome = nativeHome;
     this.delegatedModels = nativeHome ? new DelegatedModels(nativeHome) : undefined;
+    this.modeStore = nativeHome ? new PermissionModeStore(nativeHome) : undefined;
   }
 
   /** Route a renderer/remote permission response to the broker. Returns false
@@ -2327,7 +2358,31 @@ export class NativeSessionHost extends EventEmitter {
       throw new Error(`Unknown native permission mode: ${String(mode)} (expected one of ${VALID.join(', ')}).`);
     }
     this.modeFor.set(sessionId, mode);
+    this.emitMode(sessionId);
+    // Remember the choice so a resume restores it (see seedMode). Best-effort:
+    // the mode is already live in memory, so a failed save only means a later
+    // resume starts from the preset default — which the chip will show.
+    this.modeStore?.set(sessionId, () => this.modeFor.get(sessionId) ?? mode).catch((err) => {
+      log('WARN', 'NativeSessionHost', 'could not save the permission mode; a resume will start from the preset default', { sessionId, error: String(err) });
+    });
     return mode;
+  }
+
+  /** Give a starting session its mode, then tell every window and the phone.
+   *  An explicit setPermissionMode that landed first always wins.
+   *  WHY the push: the renderer's chip used to only PULL the mode when
+   *  session:created arrived, which is sent at this handler's first await —
+   *  before create()/resume() got here — so it read the 'ask' fallback and
+   *  kept it (a fresh Coder session showed ASK FIRST while running auto-edit).
+   *  The push lands after the real value exists and always overwrites. */
+  private seedMode(sessionId: string, fallback: NativePermissionMode): void {
+    if (!this.modeFor.has(sessionId)) this.modeFor.set(sessionId, fallback);
+    this.emitMode(sessionId);
+  }
+
+  private emitMode(sessionId: string): void {
+    const mode = this.modeFor.get(sessionId);
+    if (mode) this.emit('permission-mode', { sessionId, mode });
   }
 
   /** Revoke ONE remembered "Always allow": disk first, then every live session's
@@ -2452,7 +2507,7 @@ export class NativeSessionHost extends EventEmitter {
    *  ceiling (Task 5's registry clamp); the profile is resolved from the binding's
    *  provider type + model id + that clamped context. An unknown provider type
    *  falls back to 'openrouter' — the cloud-safe default (full posture). */
-  private async resolveContextAndProfile(binding: ModelBinding): Promise<{ contextLength: number | null; profile: CapabilityProfile; pricing: ModelPricing | null; free: boolean }> {
+  private async resolveContextAndProfile(binding: ModelBinding): Promise<{ contextLength: number | null; profile: CapabilityProfile; pricing: ModelPricing | null; free: boolean; slotsUnknown: boolean }> {
     // Fix pass 2 (Task 13): ONE call gets both the context window and the
     // engine's real slot count — see the contextAndSlotsFor constructor
     // param's comment for why this replaces two separately-injected closures
@@ -2495,7 +2550,38 @@ export class NativeSessionHost extends EventEmitter {
     // `type` is post-fallback, so a provider we could not identify counts as
     // metered — we never claim free without knowing it.
     const free = type === 'local-engine' || isFreePricing(pricing);
-    return { contextLength, profile, pricing, free };
+    // `slotsUnknown`: a local model whose engine reading answered nothing —
+    // the model was not loaded when asked (engine-manager's status-first
+    // read never loads one). LiveEntry.refreshSlotsAfterTurn's WHY.
+    const slotsUnknown = type === 'local-engine' && totalSlots == null;
+    return { contextLength, profile, pricing, free, slotsUnknown };
+  }
+
+  /** LiveEntry.refreshSlotsAfterTurn's action: re-read the engine now that a
+   *  turn has run (and so loaded the model), and if the helper cap it yields
+   *  differs from the one the session started with, re-apply the profile
+   *  through the same-binding refresh path setBinding already supports.
+   *  Nothing else about the session moves; a still-unknown reading leaves
+   *  the flag set for the next turn. Never throws — a failed status read
+   *  must not end a turn's delivery pass. */
+  private async refreshLocalSlots(sessionId: string, entry: LiveEntry): Promise<void> {
+    try {
+      const binding = entry.session.binding;
+      const r = await this.resolveContextAndProfile(binding);
+      if (this.live.get(sessionId) !== entry) return;   // destroyed while we asked
+      // A picker swap landed while we were asking (host setBinding has no
+      // in-flight gate): the reading is for the OLD model and setBinding
+      // already set the flag for the new one — applying it here would put
+      // the session back on the model the user just left (review, 2026-09-16).
+      const now = entry.session.binding;
+      if (now.providerId !== binding.providerId || now.modelId !== binding.modelId) return;
+      if (r.slotsUnknown) return;
+      entry.refreshSlotsAfterTurn = false;
+      if (r.profile.maxConcurrentSpecialists === entry.session.profileSnapshot.maxConcurrentSpecialists) return;
+      entry.session.setBinding(binding, r.contextLength, r.profile, r.pricing, r.free);
+    } catch (err) {
+      log('WARN', 'NativeSessionHost', 'could not re-read the local engine\u2019s slot count after the turn — helper cap unchanged', { sessionId, error: String((err as any)?.message ?? err) });
+    }
   }
 
   /** Tool + permission + prompt wiring shared by create() and resume(). Both v1
@@ -3087,7 +3173,7 @@ export class NativeSessionHost extends EventEmitter {
     const harness = stepGuard === null
       ? preset.manifest
       : { ...preset.manifest, limits: { ...preset.manifest.limits, maxSteps: stepGuard } };
-    const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(opts.binding);
+    const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(opts.binding);
     await this.store.create({
       v: 1,
       sessionId: opts.sessionId,
@@ -3099,7 +3185,7 @@ export class NativeSessionHost extends EventEmitter {
     });
     // The preset seeds the STARTING mode; an explicit setPermissionMode always
     // wins — modeFor is never overwritten here (plan decision 3).
-    if (!this.modeFor.has(opts.sessionId)) this.modeFor.set(opts.sessionId, preset.defaultMode);
+    this.seedMode(opts.sessionId, preset.defaultMode);
     // Task 4 (plan 1c) — read this project folder's specialist catalog BEFORE
     // toolWiring() ever calls this.specialistCatalog.roster(cwd) below: that
     // call reads live in-memory state, and roster()'s own contract says it
@@ -3133,6 +3219,7 @@ export class NativeSessionHost extends EventEmitter {
     }
     this.presetIdFor.set(opts.sessionId, preset.manifest.id);
     this.wire(opts.sessionId, opts.cwd, session, mcpLease);
+    if (slotsUnknown) this.live.get(opts.sessionId)!.refreshSlotsAfterTurn = true;
   }
 
   /** Mint a SPECIALIST CHILD of a live session (plan 1a, spec §1/§5).
@@ -3563,10 +3650,12 @@ export class NativeSessionHost extends EventEmitter {
     // the header. Profiling header.binding here would size the context window and
     // tool posture for the wrong model on every overridden resume.
     const binding = bindingOverride ?? header.binding;
-    const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
-    // Seed the STARTING mode from the resolved preset unless the caller already
-    // set one for this id (an explicit setPermissionMode always wins).
-    if (!this.modeFor.has(sessionId)) this.modeFor.set(sessionId, preset.defaultMode);
+    const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(binding);
+    // Seed the STARTING mode: the user's saved choice for this conversation,
+    // else the preset default (an explicit setPermissionMode always wins).
+    // WHY the saved choice: without it, "Ask first" on a Coder conversation
+    // silently became Auto-edit again after every resume.
+    this.seedMode(sessionId, this.modeStore?.get(sessionId) ?? preset.defaultMode);
     // Task 4 (plan 1c) — same reasoning as create()'s own call: awaited BEFORE
     // toolWiring() reads this.specialistCatalog.roster(cwd) below, so a
     // resumed session's first turn never ships an empty roster either.
@@ -3613,6 +3702,7 @@ export class NativeSessionHost extends EventEmitter {
     }
     this.presetIdFor.set(sessionId, preset.manifest.id);
     this.wire(sessionId, cwd, session, mcpLease);
+    if (slotsUnknown) this.live.get(sessionId)!.refreshSlotsAfterTurn = true;
     // Task 9 — AFTER wire(), not before: reconcileDelegations's own
     // queueDelivery() call needs this.live.get(sessionId) to already resolve
     // (it reads/sets `entry.inFlight` to kick an immediate delivery pass when
@@ -3791,6 +3881,19 @@ export class NativeSessionHost extends EventEmitter {
         }
         // Destroy() may have removed/replaced the entry mid-turn — stop draining then.
         if (this.live.get(sessionId) !== entry) return;
+        // A local model is loaded by now (a real turn just ran): re-read the
+        // helper cap the engine could not answer at create/resume/swap. INSIDE
+        // the drain loop, before the shift below, on purpose — a message
+        // queued while this await is in the air is picked up by that shift,
+        // whereas an await placed after the loop (first cut, 2026-09-16)
+        // stranded such a message until the next send, since inFlight was
+        // still true and nothing re-read the queue. Root sessions only (a
+        // child's roster is fixed at spawn); never after a delivery-only pass,
+        // which loads nothing.
+        if (entry.refreshSlotsAfterTurn && !entry.parentSessionId && typeof next !== 'function') {
+          await this.refreshLocalSlots(sessionId, entry);
+          if (this.live.get(sessionId) !== entry) return;
+        }
         // .text: queue entries are {id, text} (Task 11) — the id only matters to
         // removeQueued(); shift() here is what makes a removed entry unreachable.
         next = entry.queue.shift();
@@ -3838,12 +3941,24 @@ export class NativeSessionHost extends EventEmitter {
         // builds finishing during one busy turn must not cost three turns.
         // Specialist follow-ups keep their one-per-turn shape.
         const head = notices[0];
-        const headIsShell = head.meta?.kind === 'shell';
-        const batch = headIsShell ? notices.filter((n) => n.meta?.kind === 'shell') : [head];
+        // A still-running mark (2026-09-16) is only true while the run is
+        // still running: one that finished while the mark waited behind a
+        // busy turn is dropped here — its finished notice, queued behind it,
+        // says the truth. Otherwise the model would be told "still running"
+        // right above a card that already says it exited, and answer it.
+        if (head.meta?.kind === 'shell-running') {
+          const reg = this.shellRegistries.get(sessionId);
+          if (!head.meta.runs.some((r) => reg?.get(r.shellId)?.status === 'running')) { notices.shift(); continue; }
+        }
+        const headKind = head.meta?.kind;
+        const batched = headKind === 'shell' || headKind === 'shell-running';
+        const batch = batched ? notices.filter((n) => n.meta?.kind === headKind) : [head];
         const text = batch.map((n) => n.text).join('\n\n');
-        const meta: InjectedMeta | undefined = headIsShell
+        const meta: InjectedMeta | undefined = headKind === 'shell'
           ? { kind: 'shell', runs: batch.flatMap((n) => (n.meta?.kind === 'shell' ? n.meta.runs : [])) }
-          : head.meta;
+          : headKind === 'shell-running'
+            ? { kind: 'shell-running', runs: batch.flatMap((n) => (n.meta?.kind === 'shell-running' ? n.meta.runs : [])) }
+            : head.meta;
         try {
           await this.deliverNotice(entry, mode, text, meta);
         } catch (err) {
@@ -4335,8 +4450,9 @@ export class NativeSessionHost extends EventEmitter {
     // Re-resolve BOTH context + profile on a swap: a cloud → small-local swap
     // (or vice versa) crosses capability tiers, so the driver must pick up the
     // new doom-loop window / tool posture on the next turn.
-    const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
+    const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(binding);
     entry.session.setBinding(binding, contextLength, profile, pricing, free);
+    entry.refreshSlotsAfterTurn = slotsUnknown;
     // Cache Stage 4: a model swap changes the assembled prefix (and, for a
     // ChatGPT account swap, the identity the ciphertext was accepted under),
     // so the old checkpoint must be fenced now rather than left eligible.
@@ -4588,10 +4704,14 @@ export class NativeSessionHost extends EventEmitter {
     // is tearing down that parent, nothing is ever coming back to read it.
     this.pendingHostNotices.delete(sessionId);
     // Drop per-session runtime state so it can't leak and so a destroy→resume of
-    // the SAME sessionId within one app run starts clean: mode resets to the
-    // default 'ask', and the in-memory remembered rules fall back to the disk
-    // record (never carried across a teardown).
-    this.modeFor.delete(sessionId);
+    // the SAME sessionId within one app run starts clean: the in-memory
+    // remembered rules fall back to the disk record (never carried across a
+    // teardown).
+    // modeFor is deliberately KEPT (one short string per conversation): the
+    // user's chosen mode must survive a close/resume, and the saved copy
+    // (modeStore) is written in the background, so a resume right after a
+    // change could otherwise read the old value. After an app restart,
+    // resume() reads the saved copy instead.
     this.rememberedFor.delete(sessionId);
     this.presetIdFor.delete(sessionId);
     // Task 6 — drop this parent's specialist bookkeeping too, so a slot/writer

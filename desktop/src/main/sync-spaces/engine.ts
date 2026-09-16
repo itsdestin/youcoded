@@ -176,7 +176,14 @@ export class SpaceSyncEngine {
         // conflict notice) ever reacts to them.
         if (push.conflictCopies?.length) this.onEvent({ type: 'conflict', spaceId: space.id, copies: push.conflictCopies });
         if (push.oversize.length) this.onEvent({ type: 'oversize', spaceId: space.id, files: push.oversize });
-        this.onEvent({ type: 'synced', spaceId: space.id, pushed: push.pushed, updated: pull.updated || !!push.updated });
+        // `contacted`: did THIS cycle reach GitHub at all? An offline cycle
+        // completes silently (spec §13) and still emits 'synced' so the panel's
+        // state machine sees the cycle end — but the service must not stamp
+        // "last synced" from it, or a device offline for days reads "Synced
+        // just now" every 120 s poll. A transport that does not report contact
+        // is read as contact (the pre-2026-09-16 behaviour).
+        const contacted = (pull.contacted ?? true) || (push.contacted ?? true);
+        this.onEvent({ type: 'synced', spaceId: space.id, pushed: push.pushed, updated: pull.updated || !!push.updated, contacted });
         // Post-sync maintenance (spec §7). Wrapped so a repack/probe failure can
         // NEVER break a sync — the sync already succeeded above.
         try {

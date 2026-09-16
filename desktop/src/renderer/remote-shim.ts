@@ -1079,6 +1079,10 @@ function handleMessage(data: string, generation: number): void {
       // WHY: native.onModelState subscribers (ChatView banner) listen here.
       dispatchEvent('native:model-state', payload);
       break;
+    case 'native:permission-mode':
+      // WHY: native.onPermissionMode subscribers (the status-bar chip) listen here.
+      dispatchEvent('native:permission-mode', payload);
+      break;
     case 'system:back':
       // Android hardware back press → routed to useDismissTop via the
       // window.claude.system.onBack subscriber registered in App.tsx. No
@@ -2921,6 +2925,11 @@ export function installShim(): void {
         const handler: Callback = (payload: any) => cb(payload);
         addListener('native:model-state', handler);
         return () => removeListener('native:model-state', handler);
+      },
+      onPermissionMode: (cb: (e: { sessionId: string; mode: string }) => void) => {
+        const handler: Callback = (payload: any) => cb(payload);
+        addListener('native:permission-mode', handler);
+        return () => removeListener('native:permission-mode', handler);
       },
     },
     // Provider registry — WS transport. upsert sends the config as the whole

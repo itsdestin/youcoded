@@ -956,6 +956,18 @@ describe('native:*/provider:* channel parity', () => {
     const src = read('src', 'main', 'remote-server.ts');
     expect(src, "native:get-permission-mode missing from remote-server.ts").toContain(`'native:get-permission-mode'`);
   });
+  // The mode push (push-only, so no Kotlin or remote-server request case): the
+  // chip in every window and on every phone depends on receiving it.
+  it('native:permission-mode push is sent by main and consumed by preload + remote-shim', () => {
+    expect(read('src', 'main', 'preload.ts')).toContain(`NATIVE_PERMISSION_MODE: 'native:permission-mode'`);
+    expect(read('src', 'main', 'preload.ts')).toContain('onPermissionMode:');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    expect(shim).toContain(`case 'native:permission-mode':`);
+    expect(shim).toContain('onPermissionMode:');
+    const main = read('src', 'main', 'ipc-handlers.ts');
+    expect(main).toContain('sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e)');
+    expect(main).toContain('remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e })');
+  });
   it.each(['native:get-step-guard', 'native:set-step-guard'])('%s is answered by remote-server', (channel) => {
     const src = read('src', 'main', 'remote-server.ts');
     const caseBlock = src.slice(src.indexOf(`case '${channel}'`));
