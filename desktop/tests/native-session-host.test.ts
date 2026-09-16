@@ -4,6 +4,7 @@ import { NativeHome } from '../src/main/native-home';
 import { SessionStore } from '../src/main/harness/session-store';
 import { NativeSessionHost, SUBAGENT_DISPLAY_TYPES, mergeChildEvents } from '../src/main/harness/native-session-host';
 import { PermissionStore } from '../src/main/harness/permission-store';
+import { PermissionModeStore } from '../src/main/harness/permission-mode-store';
 import { nativeStoreSlug } from '../src/main/slug-encoding';
 import { CROSS_PROJECT_SLUG } from '../src/shared/permission-types';
 import type { PermissionRule } from '../src/shared/permission-types';
@@ -1583,6 +1584,77 @@ describe('NativeSessionHost', () => {
       await h.create({ sessionId: 's3', cwd: root, binding, presetId: 'coder' });
       h.setPermissionMode('s3', 'ask');
       expect(h.getPermissionMode('s3')).toBe('ask');
+      await h.destroyAll();
+    });
+
+    // The reported bug: "Ask first" on a Coder conversation silently came back
+    // as Auto-edit after a resume or an app restart, while the chip still said
+    // ASK FIRST. A fresh host stands in for the restart.
+    const hostWithHome = () => new NativeSessionHost(
+      new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null, undefined,
+      undefined, undefined, undefined, undefined, undefined, new NativeHome(root),
+    );
+
+    it('a resume restores the mode the user chose, not the preset default', async () => {
+      const h = hostWithHome();
+      await h.create({ sessionId: 'kept', cwd: root, binding, presetId: 'coder' });
+      h.setPermissionMode('kept', 'ask');
+      const saved = new PermissionModeStore(new NativeHome(root));
+      await vi.waitFor(() => expect(saved.get('kept')).toBe('ask'));
+      await h.destroyAll();
+
+      const restarted = hostWithHome();
+      expect(await restarted.resume('kept', root)).toBe(true);
+      expect(restarted.getPermissionMode('kept')).toBe('ask');
+      await restarted.destroyAll();
+    });
+
+    // No saved-file store here (no NativeHome passed), so only the in-memory
+    // copy can carry the choice across close → reopen in one app run.
+    it('a close and reopen in the same app run keeps the chosen mode in memory', async () => {
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null);
+      await h.create({ sessionId: 'mem', cwd: root, binding, presetId: 'coder' });
+      h.setPermissionMode('mem', 'ask');
+      await h.destroy('mem');
+      expect(await h.resume('mem', root)).toBe(true);
+      expect(h.getPermissionMode('mem')).toBe('ask');
+      await h.destroyAll();
+    });
+
+    it('rapid changes save the latest mode, whatever order the saves finish in', async () => {
+      const saved = new PermissionModeStore(new NativeHome(root));
+      let current: 'ask' | 'full-auto' = 'full-auto';
+      const first = saved.set('rapid', () => current);   // started while on full-auto
+      current = 'ask';                                    // the user moved on
+      await Promise.all([first, saved.set('rapid', () => current)]);
+      expect(saved.get('rapid')).toBe('ask');
+    });
+
+    it('a resume with nothing saved starts from the preset default', async () => {
+      const h = hostWithHome();
+      await h.create({ sessionId: 'unsaved', cwd: root, binding, presetId: 'coder' });
+      await h.destroyAll();
+      const restarted = hostWithHome();
+      expect(await restarted.resume('unsaved', root)).toBe(true);
+      expect(restarted.getPermissionMode('unsaved')).toBe('auto-edit');
+      await restarted.destroyAll();
+    });
+
+    // The chip used to read the mode before create() had set it and keep the
+    // 'ask' fallback; the push is what corrects it, so it must carry the REAL
+    // mode, and every change must be pushed too.
+    it('pushes the real mode when a session starts, resumes, or changes', async () => {
+      const h = hostWithHome();
+      const pushed: Array<{ sessionId: string; mode: string }> = [];
+      h.on('permission-mode', (e) => pushed.push(e));
+      await h.create({ sessionId: 'p1', cwd: root, binding, presetId: 'coder' });
+      expect(pushed).toEqual([{ sessionId: 'p1', mode: 'auto-edit' }]);
+      h.setPermissionMode('p1', 'full-auto');
+      expect(pushed.at(-1)).toEqual({ sessionId: 'p1', mode: 'full-auto' });
+      await h.destroy('p1');
+      pushed.length = 0;
+      expect(await h.resume('p1', root)).toBe(true);
+      expect(pushed).toEqual([{ sessionId: 'p1', mode: 'full-auto' }]);
       await h.destroyAll();
     });
   });

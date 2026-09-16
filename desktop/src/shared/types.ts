@@ -2043,6 +2043,10 @@ export const IPC = {
   // Read the session's current native permission mode. Seeds the StatusBar chip
   // on create/resume so a fresh Coder session shows AUTO EDIT (not the default ASK).
   NATIVE_GET_PERMISSION_MODE: 'native:get-permission-mode',
+  // push → { sessionId, mode } whenever a session's mode is seeded or changed,
+  // to every window showing it and every phone. The get above can answer
+  // before a starting session has its mode; this push corrects it.
+  NATIVE_PERMISSION_MODE: 'native:permission-mode',
   NATIVE_GET_CONTEXT_PREFERENCES: 'native:get-context-preferences',
   NATIVE_SET_CONTEXT_PREFERENCES: 'native:set-context-preferences',
   NATIVE_GET_STEP_GUARD: 'native:get-step-guard',
