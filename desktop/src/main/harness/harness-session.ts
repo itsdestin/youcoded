@@ -646,6 +646,17 @@ export interface AcceptedHistorySnapshot {
 // resolves would corrupt turn state. Callers MUST serialize sends per session
 // (NativeSessionHost does). send() hard-throws on overlap so a wiring bug
 // surfaces loudly instead of silently scrambling history.
+/** The `injected` label a host notice carries (G-1): the discriminant tells
+ *  the renderer which card folds this turn — a Task card (specialist
+ *  report), a Bash card (shell-complete), or no card at all (a still-running
+ *  mark, shown as a plain system note). One function so runNotice and
+ *  spliceNotice can never disagree. */
+function injectedLabel(meta?: InjectedMeta): string {
+  if (meta?.kind === 'shell') return 'shell-complete';
+  if (meta?.kind === 'shell-running') return 'shell-running';
+  return 'specialist-report';
+}
+
 export class HarnessSession extends EventEmitter {
   private history: ModelMessage[] = [];
   private abort: AbortController | null = null;
@@ -2039,7 +2050,7 @@ export class HarnessSession extends EventEmitter {
   async runNotice(text: string, meta?: InjectedMeta): Promise<void> {
     // G-1: the discriminant tells the renderer which card folds this turn —
     // a Task card (specialist report) or a Bash card (shell-complete).
-    const injected = meta?.kind === 'shell' ? 'shell-complete' : 'specialist-report';
+    const injected = injectedLabel(meta);
     return this.beginTurn(text, () => this.emitEvent('user-message', {
       text, injected,
       // Structured header data for the renderer's SpecialistReportCard —
@@ -2062,7 +2073,7 @@ export class HarnessSession extends EventEmitter {
     if (this.abort) {
       throw new Error('HarnessSession: spliceNotice called while a turn is in flight — callers must only splice at an idle boundary.');
     }
-    const injected = meta?.kind === 'shell' ? 'shell-complete' : 'specialist-report';
+    const injected = injectedLabel(meta);
     const uuid = this.emitEvent('user-message', { text, injected, ...(meta ? { injectedMeta: meta } : {}) });
     this.history.push({ role: 'user', content: text });
     // WHY (cache Stage 4): this push is exactly beginTurn's user push — the
@@ -2190,6 +2201,19 @@ export class HarnessSession extends EventEmitter {
 
     const startedAt = Date.now();
     const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, expectedRebuild: false };
+    // WHY snapshot the rate card and the model id HERE, at turn start: a model
+    // swap (setBinding) while this turn is still streaming used to re-price
+    // every token the OLD model had already produced at the NEW model's rate,
+    // and label the turn with the new model's name — measured 2026-08-27 as a
+    // $7 turn reported as $70. The model that actually ran this turn was
+    // resolved once at the top of send() (this.binding, below), so its price
+    // is fixed the same way. setBinding's own doc ("next turn uses the new
+    // binding") and the pricing field's ("a turn is never repriced
+    // retroactively") describe exactly this.
+    const turnPricing = this.opts.pricing;
+    const turnFree = this.opts.free;
+    const turnModelId = this.binding.modelId;
+    const turnContextLength = this.opts.contextLength;   // same reason: the gauge is for the window this turn ran in
     // The PROVIDER's own bill for this turn, summed over the same steps
     // turnUsage covers, so the two figures are comparable.
     //
@@ -2563,7 +2587,7 @@ export class HarnessSession extends EventEmitter {
       const seconds = Math.max((generationMs || (Date.now() - startedAt)) / 1000, 0.001);
       // Hoisted out of the emit below so the same number can be checked against
       // the provider's own before it ships.
-      const costUsd = this.opts.free ? null : costForUsage(turnUsage, this.opts.pricing);
+      const costUsd = turnFree ? null : costForUsage(turnUsage, turnPricing);
       // Published ONLY when every counted step reported one — see the counters'
       // declaration for why a partially-covered turn reports nothing.
       const providerCostUsd = stepsCounted > 0 && stepsWithProviderCost === stepsCounted
@@ -2582,7 +2606,7 @@ export class HarnessSession extends EventEmitter {
       if (costGap !== null && costGap > COST_DISAGREEMENT_THRESHOLD) {
         log('WARN', 'HarnessSession', 'our cost figure and the provider\u2019s own disagree for this turn', {
           sessionId: this.opts.sessionId,
-          model: this.binding.modelId,
+          model: turnModelId,
           ourCostUsd: costUsd,
           providerCostUsd,
           relativeGap: Number(costGap.toFixed(4)),
@@ -2619,7 +2643,9 @@ export class HarnessSession extends EventEmitter {
         });
       }
       this.emitEvent('turn-complete', {
-        model: this.binding.modelId,
+        // The model that RAN this turn — snapshotted at turn start (see
+        // turnModelId), so a swap that landed mid-stream is not credited here.
+        model: turnModelId,
         stopReason,
         // Carry the session's REAL context window (Task 4/5) on the usage payload so
         // the renderer's StatusBar can compute context % without a separate IPC. It's
@@ -2628,7 +2654,7 @@ export class HarnessSession extends EventEmitter {
         usage: {
           ...turnUsage,
           tokensPerSecond: Math.round(turnUsage.outputTokens / seconds),
-          contextLength: this.opts.contextLength ?? null,
+          contextLength: turnContextLength ?? null,
           // How full the window actually is — NOT the same as turnUsage (see the
           // lastOutputTokens declaration). Falls back to a chars/4 estimate when
           // the provider reports nothing, so a server that ignores

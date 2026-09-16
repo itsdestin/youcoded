@@ -215,6 +215,9 @@ describe('the cut line', () => {
     server.broadcast({ type: 'native:model-state', payload: { sessionId: 's1', state: 'x' } });
     server.broadcast({ type: 'transcript:shrink', payload: { sessionId: 's1', keep: 3 } });
     server.broadcast({ type: 'native:shell-event', payload: { sessionId: 's1', run: { shellId: 'sh1' } } });
+    // The chip's mode is not chat state — the snapshot never holds it — so it
+    // must survive the cut line or a reconnecting phone shows a stale mode.
+    server.broadcast({ type: 'native:permission-mode', payload: { sessionId: 's1', mode: 'auto-edit' } });
     const restoring = server.handleMessage(client, ready(1));
     await tick();
     server.broadcast({ type: 'native:model-state', payload: { sessionId: 's1', state: 'y' } });
@@ -224,6 +227,7 @@ describe('the cut line', () => {
     expect(ws.types()).not.toContain('transcript:shrink');
     expect(ws.ofType('native:model-state').map((f) => f.payload.state)).toEqual(['y']);
     expect(ws.ofType('native:shell-event')).toHaveLength(1);
+    expect(ws.ofType('native:permission-mode').map((f) => f.payload.mode)).toEqual(['auto-edit']);
   });
 
   it('the cut line survives an overflow that shifts the queue', async () => {

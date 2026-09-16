@@ -48,7 +48,9 @@ export default React.memo(function SpecialistReportCard({ message, injected, met
   // G-1: `meta` is now a union; this card renders the SPECIALIST shape. A
   // shell-complete turn only reaches it when its Bash card is not on the
   // timeline (the reducer folds it otherwise) — then it degrades to prose.
-  const spec = meta?.kind === 'shell' ? undefined : meta;
+  // A shell-running mark (2026-09-16) ALWAYS degrades to prose: it is a
+  // still-running note, not a report, and has no title/status to draw.
+  const spec = meta?.kind === 'shell' || meta?.kind === 'shell-running' ? undefined : meta;
   const { first, rest } = splitPreamble(message.content);
   const failed = spec ? spec.status === 'failed' : /^\[Background specialist failed\]/.test(first);
   const label = spec

@@ -212,6 +212,32 @@ function matchPermissionMode(mode?: string | null): PermissionMode | 'unknown' {
   return VALID_PERMISSION_MODES.includes(mode as PermissionMode) ? (mode as PermissionMode) : 'unknown';
 }
 
+const VALID_NATIVE_MODES: NativePermissionMode[] = ['ask', 'auto-edit', 'full-auto'];
+type SetNativeModes = React.Dispatch<React.SetStateAction<Map<string, NativePermissionMode | 'unknown'>>>;
+
+// Ask the host for a native session's current mode and seed the chip, unless
+// something (a push, a click) already set it. WHY one helper: this used to run
+// only on session:created, so a reloaded window or a reconnecting phone — which
+// learn their sessions from the session list instead — never asked and showed
+// the 'ask' fallback whatever the session was really running on.
+function seedNativeMode(sessionId: string, set: SetNativeModes): void {
+  const get = (window as any).claude?.native?.getPermissionMode;
+  if (!get) return;
+  (get(sessionId) as Promise<string>).then((mode) => {
+    // Unrecognized response → 'unknown', not a silent 'ask' guess: an
+    // older/remote host that answered with something we don't understand
+    // could actually be sitting on 'full-auto', and showing 'ASK FIRST'
+    // in that case would understate what the session is allowed to do.
+    set((prev) => prev.has(sessionId) ? prev : new Map(prev).set(
+      sessionId, VALID_NATIVE_MODES.includes(mode as NativePermissionMode) ? (mode as NativePermissionMode) : 'unknown',
+    ));
+  }).catch(() => {
+    // getPermissionMode unavailable (remote/older host) — we genuinely
+    // don't know the mode, so say so instead of defaulting to 'ask'.
+    set((prev) => prev.has(sessionId) ? prev : new Map(prev).set(sessionId, 'unknown'));
+  });
+}
+
 function AppInner() {
   // Dev-only: count AppInner's OWN re-renders (the tranche-1 metric — see
   // AppInnerProfiler). No-dep effect → runs once per AppInner commit; when
@@ -1125,6 +1151,20 @@ function AppInner() {
     return unsubscribe;
   }, []);
 
+  // The host pushes a native session's permission mode whenever it is seeded
+  // or changed — from this window, another window or a phone. ALWAYS applied
+  // (no has() guard): it is the authoritative value, and it is what corrects a
+  // chip that read the 'ask' fallback before the session had its real mode.
+  useEffect(() => {
+    const off = window.claude.native?.onPermissionMode?.((e) => {
+      if (!e?.sessionId || !VALID_NATIVE_MODES.includes(e.mode as NativePermissionMode)) return;
+      setNativePermissionModes((prev) => prev.get(e.sessionId) === e.mode
+        ? prev
+        : new Map(prev).set(e.sessionId, e.mode as NativePermissionMode));
+    });
+    return off;
+  }, []);
+
   // Native local-model residency → per-session ModelLoadingBar (2026-07-14).
   // Main joins per-model engine state with session→model and pushes each native
   // session its bound model's state (loaded/loading/sleeping/unloaded).
@@ -1201,22 +1241,9 @@ function AppInner() {
       // fetch async and validate against the known modes, mirroring
       // cycleNativePermission's guard. Fires for both fresh + resumed native
       // sessions (both flow through session:created). Skip if already seeded.
-      if (info.provider === 'native' && (window as any).claude?.native?.getPermissionMode) {
-        (window.claude.native as any).getPermissionMode(info.id).then((mode: string) => {
-          const VALID: NativePermissionMode[] = ['ask', 'auto-edit', 'full-auto'];
-          // Unrecognized response → 'unknown', not a silent 'ask' guess: an
-          // older/remote host that answered with something we don't understand
-          // could actually be sitting on 'full-auto', and showing 'ASK FIRST'
-          // in that case would understate what the session is allowed to do.
-          setNativePermissionModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(
-            info.id, VALID.includes(mode as NativePermissionMode) ? (mode as NativePermissionMode) : 'unknown',
-          ));
-        }).catch(() => {
-          // getPermissionMode unavailable (remote/older host) — we genuinely
-          // don't know the mode, so say so instead of defaulting to 'ask'.
-          setNativePermissionModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, 'unknown'));
-        });
-      }
+      // This read can land before the host has the real mode; the
+      // native:permission-mode push below corrects it.
+      if (info.provider === 'native') seedNativeMode(info.id, setNativePermissionModes);
     });
 
     const destroyedHandler = window.claude.on.sessionDestroyed((id: string, exitCode: number = 0, focusSessionId?: string | null) => {
@@ -2058,6 +2085,9 @@ function AppInner() {
         // handlers attached (e.g. a remote reconnect) — session:created never
         // fired for them, so this is the only place their model gets seeded.
         setSessionModels((sm) => sm.has(s.id) ? sm : new Map(sm).set(s.id, matchModelAlias(s.model)));
+        // Same reason for the native permission chip, which otherwise showed
+        // the 'ask' fallback after a reload whatever the real mode was.
+        if (s.provider === 'native') seedNativeMode(s.id, setNativePermissionModes);
       }
 
       // Pure updater — dedup against whatever session:created already added.
@@ -2256,6 +2286,8 @@ function AppInner() {
           setViewModes((vm) => new Map(vm).set(s.id, 'chat'));
           setPermissionModes((pm) => new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
           setSessionModels((sm) => new Map(sm).set(s.id, matchModelAlias(s.model)));
+          // A new computer's sessions: ask each native one for its real mode.
+          if (s.provider === 'native') seedNativeMode(s.id, setNativePermissionModes);
         }
         // Never over a place already on screen: this reply can land after the hydrate chose
         // one (T4 review, 7).

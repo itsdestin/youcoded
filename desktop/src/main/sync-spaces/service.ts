@@ -55,17 +55,15 @@ let lastSyncByDevice: Record<string, number> = {};
 // (the status:data push) — the two paths SyncPanel reads recency from.
 export function getLastSyncByDevice(): Record<string, number> { return lastSyncByDevice; }
 
-/** Max persisted last-COMPLETED-sync-CYCLE across this device's spaces (ms), or
- *  null when sync is off / has never completed a cycle. NOT "last successful
- *  sync": corruption and auth failures now THROW (spec §1) and correctly stop
- *  this from advancing, but a cycle that completes without shipping anything
- *  still stamps it — the engine emits 'synced' after pull+push regardless of
- *  push.pushed, and git-transport's offline path is silent-by-design (a failed
- *  retry push whose stderr matches isNetworkFailureStderr falls through
- *  without throwing, returning {pushed:false}). So a device offline for days,
- *  or hitting a lock-contended cycle, still advances this value every ~120s
- *  poll with nothing actually synced. Read it as "sync last ran", not "sync
- *  last succeeded". */
+/** Max persisted last-sync-that-REACHED-GitHub across this device's spaces
+ *  (ms), or null when sync is off / has never contacted the remote. Since
+ *  2026-09-16 broadcast() stamps the per-space marker only from a 'synced'
+ *  event whose `contacted` is not false — an offline cycle (git-transport's
+ *  silent-by-design network failure, spec §13) completes and emits, but no
+ *  longer advances this. Corruption and auth failures THROW (spec §1) and
+ *  never reach it either. Still the MAX across spaces: one healthy space and
+ *  two broken ones read as the healthy one's time — a separate decision
+ *  (docs/roadmap/sync.md), left as it was. */
 export function getSelfLastSyncEpochMs(): number | null {
   if (!manager || !roots) return null;
   let max: number | null = null;
@@ -181,14 +179,16 @@ function broadcast(e: SpaceSyncEvent): void {
     for (const f of stamped.files) set.add(f);
     oversizeBySpace.set(stamped.spaceId, set);
   }
-  // Persist "this space has actually synced" evidence. Safe to key on the bare
-  // 'synced' type: the engine now refuses to emit it for a space with no
-  // remote (it provisions or errors instead), so every 'synced' that reaches
-  // here really completed a pull+push against GitHub. The panel gates its
-  // green "All synced" on this marker — recentEvents alone is per-boot and
-  // can't distinguish "synced before" from "never synced".
+  // Persist "this space has actually synced" evidence. The engine refuses to
+  // emit 'synced' for a space with no remote (it provisions or errors
+  // instead), and since 2026-09-16 the event also says whether the cycle
+  // REACHED GitHub: an offline cycle completes silently by design (spec §13)
+  // and still emits 'synced', but stamping recency from it is what made a
+  // device offline for days read "Synced just now" every poll. So the marker
+  // — which feeds "Last synced" on the self device row and the Settings row,
+  // and gates the panel's green "All synced" — moves only on contact.
   try {
-    if (stamped.type === 'synced' && stamped.at) manager?.recordSyncSuccess(stamped.spaceId, stamped.at);
+    if (stamped.type === 'synced' && stamped.at && stamped.contacted !== false) manager?.recordSyncSuccess(stamped.spaceId, stamped.at);
   } catch { /* a failed marker write must never block event delivery */ }
   for (const w of BrowserWindow.getAllWindows()) {
     try { w.webContents.send('syncspaces:event', stamped); } catch { /* window closing */ }

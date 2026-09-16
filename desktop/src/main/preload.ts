@@ -390,6 +390,7 @@ const IPC = {
   NATIVE_SET_BINDING: 'native:set-binding',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   NATIVE_GET_PERMISSION_MODE: 'native:get-permission-mode',
+  NATIVE_PERMISSION_MODE: 'native:permission-mode',
   NATIVE_GET_CONTEXT_PREFERENCES: 'native:get-context-preferences',
   NATIVE_SET_CONTEXT_PREFERENCES: 'native:set-context-preferences',
   NATIVE_GET_STEP_GUARD: 'native:get-step-guard',
@@ -1521,6 +1522,13 @@ contextBridge.exposeInMainWorld('claude', {
       const listener = (_e: unknown, s: unknown) => cb(s);
       ipcRenderer.on(IPC.NATIVE_MODEL_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.NATIVE_MODEL_STATE, listener);
+    },
+    // Push: a session's permission mode was seeded or changed (any window,
+    // any phone). The chip always takes this value — see the App.tsx listener.
+    onPermissionMode: (cb: (e: { sessionId: string; mode: string }) => void) => {
+      const listener = (_e: unknown, e: { sessionId: string; mode: string }) => cb(e);
+      ipcRenderer.on(IPC.NATIVE_PERMISSION_MODE, listener);
+      return () => ipcRenderer.removeListener(IPC.NATIVE_PERMISSION_MODE, listener);
     },
   },
   // Provider registry — CRUD + connection test + model catalog for native

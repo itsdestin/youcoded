@@ -13,7 +13,10 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import type { TranscriptEvent } from '../src/shared/types';
-import { makeSession, scriptModel, fakeTool } from './helpers/harness-fakes';
+import { makeSession, scriptModel, fakeTool, makeOpts } from './helpers/harness-fakes';
+import { HarnessSession } from '../src/main/harness/harness-session';
+import { textChunks, toolCallChunk, finishChunk, stream, scriptedModel } from './helpers/scripted-model';
+import type { PermissionDecision } from '../src/shared/permission-types';
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
 import { BashTool } from '../src/main/harness/tools/bash';
 
@@ -135,5 +138,47 @@ describe('HarnessSession hardening — model-swap re-resolves the capability pro
     // takes effect only on the NEXT send(). (The profile fields read live inside
     // runOneTool — e.g. doomLoopThreshold — are the intentional exception, but the
     // MODEL itself is turn-stable.)
+  });
+});
+
+// 2026-09-16 (docs/roadmap/native-harness.md → cost): swapping models while a
+// turn was still streaming used to re-price every token the OLD model had
+// already produced at the NEW model's rate and label the turn with the new
+// model's name — measured 2026-08-27 as a $7 turn reported as $70. The rate
+// card and model id are now snapshotted at turn start.
+describe('HarnessSession hardening — a mid-turn model swap never re-prices the running turn', () => {
+  const ALLOW: PermissionDecision = { action: 'allow', denyListed: false };
+
+  it('turn-complete carries the rate card and model that STARTED the turn, while the swap still takes for the next one', async () => {
+    let session!: HarnessSession;
+    // The swap lands from INSIDE the turn — a tool call between two model
+    // steps — which is exactly the window the old code re-priced.
+    const swap = fakeTool('Swap', {
+      schema: z.object({}),
+      onExecute: () => {
+        session.setBinding({ providerId: 'openrouter', modelId: 'm-dear' }, undefined, undefined, { in: 10, out: 10 }, false);
+        return { text: 'swapped' };
+      },
+    });
+    const model = scriptedModel([
+      stream(toolCallChunk('c1', 'Swap', {}), finishChunk('tool-calls', 100, 100)),
+      stream(...textChunks('b', 'done'), finishChunk('stop', 100, 100)),
+    ]);
+    session = new HarnessSession(
+      makeOpts({ tools: [swap], decide: async () => ALLOW, pricing: { in: 1, out: 1 }, free: false }),
+      async () => model as any,
+    );
+    const events: TranscriptEvent[] = [];
+    session.on('transcript-event', (e: TranscriptEvent) => events.push(e));
+    await session.send('go');
+
+    const done = events.find((e) => e.type === 'turn-complete')!;
+    expect(done).toBeDefined();
+    // 400 tokens at $1/M (the card the turn started on) — NOT at $10/M.
+    expect(done.data.usage?.costUsd).toBeCloseTo(400 / 1e6, 12);
+    expect(done.data.model).toBe('m');
+    // The swap itself was honoured: the NEXT turn runs on the new binding.
+    expect(session.binding.modelId).toBe('m-dear');
+    expect((session as any).opts.pricing).toEqual({ in: 10, out: 10 });
   });
 });

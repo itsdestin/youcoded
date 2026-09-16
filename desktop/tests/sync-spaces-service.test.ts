@@ -361,6 +361,19 @@ describe('sync-spaces service transition serialization', () => {
     expect(engine.syncSpace.mock.calls[0][0].id).toBe('project:alpha');
   });
 
+  it("an offline 'synced' (contacted:false) is broadcast but does NOT move last-synced", async () => {
+    const svc = await enabledMultiSpaceService();
+    h.onEvent!({ type: 'synced', spaceId: 'project:beta', pushed: false, updated: false, contacted: false });
+    let st = await svc.syncSpacesStatus();
+    // The event still reaches the panel (the cycle did end)...
+    expect(st.recentEvents.some((x: any) => x.spaceId === 'project:beta' && x.type === 'synced')).toBe(true);
+    // ...but "Last synced" evidence stays where it was: nothing was reached.
+    expect(svc.getSelfLastSyncEpochMs()).toBeNull();
+    h.onEvent!({ type: 'synced', spaceId: 'project:beta', pushed: false, updated: false, contacted: true });
+    st = await svc.syncSpacesStatus();
+    expect(svc.getSelfLastSyncEpochMs()).toEqual(expect.any(Number));
+  });
+
   it('broadcast stamps events with an `at` timestamp', async () => {
     const svc = await enabledMultiSpaceService();
     // Fire the engine's onEvent hook (= service.broadcast) the way the real
