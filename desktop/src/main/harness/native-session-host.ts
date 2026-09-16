@@ -4664,6 +4664,11 @@ export class NativeSessionHost extends EventEmitter {
     return this.store.list().map((r) => ({ ...r, provider: 'native' as const }));
   }
 
+  /** list() with the disk reads off the main thread (2026-09-16 C6). */
+  async listAsync(): Promise<(NativeSessionListEntry & { provider: 'native' })[]> {
+    return (await this.store.listAsync()).map((r) => ({ ...r, provider: 'native' as const }));
+  }
+
   /** Cascade-cancel: interrupt then destroy every live specialist child of this
    *  session. Called from destroy() and quiesce(). Reads the in-memory
    *  childrenOf map only — teardown never does disk I/O to find its children.

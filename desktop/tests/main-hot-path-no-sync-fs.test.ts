@@ -60,6 +60,17 @@ describe('hot main-process paths use fs.promises', () => {
     expect(methodBody(host, 'isLive(')).not.toMatch(/readEvents|getHistory/);
   });
 
+  it('the Resume list (per click: every native session file listed and head-read)', () => {
+    const home = read('native-home.ts');
+    expect(methodBody(home, 'async listSessionFilesAsync(')).not.toMatch(SYNC_FS);
+    expect(methodBody(home, 'async readSessionHeadAsync(')).not.toMatch(SYNC_FS);
+    const store = read('harness/session-store.ts');
+    expect(methodBody(store, 'async listAsync(')).not.toMatch(/readSessionHead\(|listSessionFiles\(/);
+    // The IPC and remote list handlers must use the async form.
+    expect(read('ipc-handlers.ts')).not.toMatch(/nativeHost\.list\(\)/);
+    expect(read('remote-server.ts')).not.toMatch(/nativeHost\.list\(\)/);
+  });
+
   it('the three per-session polls: status push (10 s), topic name (2 s), transcript safety poll (2 s)', () => {
     const ipc = read('ipc-handlers.ts');
     expect(methodBody(ipc, 'async function buildStatusData(')).not.toMatch(SYNC_FS);

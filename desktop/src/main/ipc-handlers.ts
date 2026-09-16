@@ -1850,7 +1850,7 @@ export function registerIpcHandlers(
     // registry; passing it in (rather than session-browser.ts reading disk
     // itself) keeps NativeSessionHost the one source of truth for what native
     // sessions exist.
-    return listPastSessions(activeIds, nativeHost.list());
+    return listPastSessions(activeIds, await nativeHost.listAsync());
   });
 
   ipcMain.handle(IPC.SESSION_HISTORY, async (
@@ -3373,7 +3373,7 @@ export function registerIpcHandlers(
   });
   ipcMain.handle(IPC.NATIVE_GET_STEP_GUARD, () => stepGuardSettings.read());
   ipcMain.handle(IPC.NATIVE_SET_STEP_GUARD, async (_e, value: number | null) => stepGuardSettings.update(value));
-  ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.list());
+  ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.listAsync());
   // G-1: the Bash card's Stop button, on every surface.
   ipcMain.handle(IPC.NATIVE_KILL_SHELL, (_e, { sessionId, shellId }: { sessionId: string; shellId: string }) => nativeHost.killShell(sessionId, shellId));
   // "What the assistant was given" — one file's text, read when the user opens
