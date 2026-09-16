@@ -1,5 +1,6 @@
 import { useCallback, useRef, useEffect, useState, useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
+import { isPlanCard, planChildCard, planWithActivity } from '../components/plans/plan-activity';
 import type { SpecialistRunView, ToolCallState, SpecialistDefinitionView, DelegatedModelsView, SubagentSegment, SpecialistsListResult } from '../../shared/types';
 
 // Specialists 1c — narrow selectors over the chat store. A Task card carries
@@ -182,6 +183,29 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
     const helpers: HelperView[] = [];
     const keyParts: string[] = [];
     for (const [id, tool] of session.toolCalls) {
+      // Task 5b: a plan's specialists have no card of their own, so the loop
+      // below never sees them. One that is WAITING ON THE USER is listed
+      // here, so the chip says "needs you" and its popup can answer the ask
+      // even when the plan card is scrolled out of view — the same signal an
+      // ordinary specialist's ask gets. Working or finished plan specialists
+      // are left out on purpose: the plan card is their progress surface
+      // (contract R2), and listing them would change the chip for every plan.
+      if (tool.plan && isPlanCard(tool)) {
+        for (const kid of planWithActivity(tool.plan, tool.subagentSegments).steps.flatMap((st) => st.children ?? [])) {
+          const kidTools: AskSegment[] = [];
+          for (const seg of kid.segments ?? []) if (seg.type === 'tool') kidTools.push(seg);
+          const asks = kidTools.filter(t => t.status === 'awaiting-approval' && !!t.requestId);
+          if (asks.length === 0) continue;
+          helpers.push({
+            run: kid, parentToolCallId: id, tool: planChildCard(kid), asks, toolCalls: kidTools.length,
+            group: 'needs-you', kind: 'native',
+          });
+          keyParts.push(['plan', kid.childId, kid.status, kid.title, kidTools.length,
+            kidTools.slice(-4).map(t => `${t.toolUseId}:${t.status}${t.askHeld ? 'h' : ''}${t.response ? t.response.length : ''}`).join('+'),
+            asks.map(a => a.requestId).join('+')].join(':'));
+        }
+        continue;
+      }
       // A native hire brings its own ledger record; a Claude Code subagent has
       // none, so one is derived from its Agent card (see ccRunFromCard). Both
       // then flow through the SAME grouping and key below — the popup renders

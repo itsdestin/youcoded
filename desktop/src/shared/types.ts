@@ -708,10 +708,42 @@ export interface PlanChildView extends SpecialistRunView {
    *  specialist served. (Its display copies and routed asks are filed in this
    *  row by `childId` — Task 5a.) */
   planAttempt?: { stepId: string; attemptId: string; itemIndex: number; iteration: number };
+  /** 5b follow-up: the attempt's journal phase — `prepared` means this
+   *  specialist's first request was never sent. */
+  phase?: PlanAttemptPhase;
   prompt?: string;
   segments?: SubagentSegment[];
   report?: SpecialistReportView;
 }
+
+/**
+ * Why a plan paused (5b follow-up). Written by the executor at every pause
+ * site, so the card picks its words and buttons from a fact instead of from
+ * the reason sentence:
+ *  - budget: a specialist used its whole allowance (Add budget helps);
+ *  - ceiling-shortfall: the plan's limit is too small for the next wave;
+ *  - plan-limit: the dollar limit, with no token amount that would fix it;
+ *  - local-pool: local specialists need more context than the engine has;
+ *  - budget-refused: a request could not be budgeted or broke its bound;
+ *  - launch-failed: a specialist could not start;
+ *  - unknown-outcome: cut off after an action that may have changed things
+ *    (`tool` names it); unknown-request: cut off mid-request only;
+ *  - iteration-cap: a repeat used all its rounds (`repeat` says how many);
+ *  - invalid-report: a report was missing or not in the required form;
+ *  - specialist-error / specialist-stopped: the specialist failed / was
+ *    stopped before it finished;
+ *  - unexpected-error: anything else, with the real message in `reason`.
+ */
+export const PLAN_PAUSE_KINDS = [
+  'budget', 'ceiling-shortfall', 'plan-limit', 'local-pool', 'budget-refused', 'launch-failed',
+  'unknown-outcome', 'unknown-request', 'iteration-cap', 'invalid-report',
+  'specialist-error', 'specialist-stopped', 'unexpected-error',
+] as const;
+export type PlanPauseKind = (typeof PLAN_PAUSE_KINDS)[number];
+
+/** Where one plan specialist's attempt stands (the journal's attempt phase):
+ *  `prepared` means its first request was never sent. */
+export type PlanAttemptPhase = 'prepared' | 'request-sent' | 'response-persisted' | 'committed' | 'ambiguous';
 
 export interface PlanView {
   planId: string;
@@ -735,7 +767,19 @@ export interface PlanView {
    *  `minimumAddTokens` (Task 4): the smallest Add budget that lets the paused
    *  specialist continue — a smaller amount would pause again on Continue.
    *  Wording belongs to the card (Task 5). */
-  paused?: { stepId: string; reason: string; minimumAddTokens?: number };
+  paused?: {
+    stepId: string; reason: string; minimumAddTokens?: number;
+    /** 5b follow-up: why it paused. Absent only on journals written before
+     *  the field existed; the card then treats the pause as an ordinary one. */
+    kind?: PlanPauseKind;
+    /** unknown-outcome: the tool whose result was never recorded. */
+    tool?: string;
+    /** iteration-cap: how many rounds ran, and the stop condition. */
+    repeat?: { rounds: number; until: string };
+    /** The note about OTHER specialists cut off mid-request, when the pause
+     *  added one (it is also appended to `reason`). */
+    note?: string;
+  };
   /** The plan this one revises (after a Comment) — the old card greys out. */
   revisionOf?: string;
   /** Set on the OLD plan once a Comment produced a new one: the card greys out

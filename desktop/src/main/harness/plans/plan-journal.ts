@@ -206,6 +206,9 @@ function childView(plan: PlanRecord, step: PlanStepV1, stepStatus: string, a: Pl
     status,
     startedAt: a.startedAt ?? plan.startedAt ?? plan.createdAt,
     planAttempt: { stepId: step.id, attemptId: a.attemptId, itemIndex: a.itemIndex, iteration: a.iteration },
+    // 5b follow-up: `prepared` = its first request was never sent, the one
+    // fact that lets the card say "Not started" without guessing.
+    phase: a.phase,
   };
   if (a.completedAt !== undefined) view.endedAt = a.completedAt;
   if (binding) view.model = { label: binding.modelId };
@@ -280,6 +283,11 @@ export function projectPlan(plan: PlanRecord): PlanView {
   if (plan.paused) {
     view.paused = { stepId: plan.paused.stepId, reason: plan.paused.reason };
     if (plan.paused.minimumAddTokens !== undefined) view.paused.minimumAddTokens = plan.paused.minimumAddTokens;
+    // 5b follow-up: why it paused, so the card never reads `reason` for it.
+    if (plan.paused.kind) view.paused.kind = plan.paused.kind;
+    if (plan.paused.tool) view.paused.tool = plan.paused.tool;
+    if (plan.paused.repeat) view.paused.repeat = { ...plan.paused.repeat };
+    if (plan.paused.note) view.paused.note = plan.paused.note;
   }
   if (plan.revisionOf) view.revisionOf = plan.revisionOf;
   if (plan.revisedBy) view.revisedBy = plan.revisedBy;

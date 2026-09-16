@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PlanView, PlanStepView, PlanChildView, ToolCallState } from '../../../shared/types';
 import { useChatDispatch } from '../../state/chat-context';
-import { Button, StatusStrip, Textarea, TextInput } from '../ui';
+import { Button, ErrorState, FieldError, StatusStrip, Textarea, TextInput } from '../ui';
 import { CheckIcon, FailIcon, StoppedIcon, ChevronIcon } from '../Icons';
+import { BugReportPopup } from '../development/BugReportPopup';
+import type { ReportContext } from '../development/ReportDesign';
+import { toolActionLabel } from '../../utils/tool-group-summary';
+import { classifyPause } from './plan-pause';
 import BrailleSpinner from '../BrailleSpinner';
 import { SpecialistActions } from '../specialists/SpecialistActions';
 import { RunStatusLine, formatElapsed } from '../specialists/RunStatusLine';
@@ -13,8 +17,8 @@ import { AgentSections } from '../tool-views/ToolBody';
 import { asString } from '../../utils/tool-input';
 import { hasNestedAsk } from '../../utils/specialist-cards';
 import type { SubagentSegment } from '../../../shared/types';
-import { planAction, usePlanUnsupported } from './plan-bridge';
-import { planWithActivity } from './plan-activity';
+import { PLAN_UNREADABLE, planAction, usePlanUnsupported } from './plan-bridge';
+import { planChildCard, planWithActivity } from './plan-activity';
 
 /**
  * Specialists stage two — the PLAN CARD (designed 2026-09-05; since Task 5a
@@ -56,12 +60,21 @@ export function planDisplay(input: Record<string, unknown>, plan?: PlanView): { 
     plan.status === 'writing' ? ''
     : plan.status === 'proposed' ? 'waiting for your approval'
     : plan.status === 'running' ? `step ${Math.min(done + 1, total)} of ${total}`
-    : plan.status === 'paused' ? 'paused — reached its limit'
+    // Task 5b: two pauses are not about the limit, and the header must not
+    // say they are (plan-pause.ts explains how they are told apart).
+    : plan.status === 'paused' ? pausedDetail(plan)
     : plan.status === 'interrupted' ? `interrupted — ${done} of ${total} steps done`
     : plan.status === 'completed' ? `finished in ${formatElapsed((plan.endedAt ?? 0) - (plan.startedAt ?? 0))}`
     : plan.status === 'stopped' ? (plan.revisedBy ? 'revised — see the new plan below' : `stopped — ${done} of ${total} steps done`)
     : 'failed';
   return { label, detail };
+}
+
+function pausedDetail(plan: PlanView): string {
+  const kind = classifyPause(plan.paused).kind;
+  return kind === 'unknown-outcome' ? 'paused — check before continuing'
+    : kind === 'iteration-cap' ? 'paused — needs a revised plan'
+    : 'paused — reached its limit';
 }
 
 /** The header glyph. A proposed plan wears the question mark every ask wears. */
@@ -95,9 +108,12 @@ function ceiling(plan: PlanView): string {
   // UX run 1, U9/U21: the dollar figure is the part a student understands, so it
   // leads when the model has a price; the token limit always follows (spec §4).
   // "specialists run on" says whose model this is — the chat may be on another.
+  // Task 5b (decision 5): a limit that one reply can overshoot is not exact,
+  // so its token figure says "about" too — an honest worst case, not a cap.
+  const t = `${plan.approximateLimit ? 'about ' : ''}${tokens(plan.ceilingTokens)}`;
   return plan.ceilingUsd == null
-    ? `Up to ${tokens(plan.ceilingTokens)} · specialists run on ${plan.model.label}, which has no published price`
-    : `Up to about ${usd(plan.ceilingUsd)} (${tokens(plan.ceilingTokens)}) · specialists run on ${plan.model.label}`;
+    ? `Up to ${t} · specialists run on ${plan.model.label}, which has no published price`
+    : `Up to about ${usd(plan.ceilingUsd)} (${t}) · specialists run on ${plan.model.label}`;
 }
 
 function spent(plan: PlanView): string {
@@ -108,8 +124,20 @@ function spent(plan: PlanView): string {
 /** "of the $0.12 limit" / "of the 40,000-token limit" — one word, "limit", for the
  *  cap everywhere on the card (UX run 1, U8: budget/cap/ceiling were four words for one idea). */
 function limit(plan: PlanView): string {
+  // Task 5b: "the about-42,000-token limit" does not read; an approximate
+  // limit is phrased "the limit of about …" instead.
+  if (plan.approximateLimit) {
+    return plan.ceilingUsd == null
+      ? `the limit of about ${tokens(plan.ceilingTokens)}`
+      : `the limit of about ${usd(plan.ceilingUsd)} (about ${tokens(plan.ceilingTokens)})`;
+  }
   return plan.ceilingUsd == null ? `the ${tokens(plan.ceilingTokens)} limit` : `the ${usd(plan.ceilingUsd)} limit (${tokens(plan.ceilingTokens)})`;
 }
+
+/** Task 5b (decision 5): the one line that says why an approximate limit is
+ *  approximate. Only ChatGPT sends replies without a cap today — pinned by
+ *  tests/plan-pause.test.ts, so this sentence cannot silently become false. */
+const APPROXIMATE_NOTE = 'On ChatGPT, one reply can run past this limit before the plan pauses.';
 
 // ---- the block ---------------------------------------------------------------
 
@@ -131,10 +159,25 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const [adding, setAdding] = useState(false);
   // UX run 1, U18: default to the paused step's own per-specialist cap (a
   // sensible size for one more pass), shown with a thousands comma.
-  const pausedStep = plan.steps.find((st) => st.id === plan.paused?.stepId);
-  const [extra, setExtra] = useState(String(pausedStep?.budgetTokens ?? 10000));
+  // Task 5b: when the host says a smaller amount would only pause again
+  // (`minimumAddTokens`), the field starts AT that minimum instead.
+  const pausedIndex = plan.steps.findIndex((st) => st.id === plan.paused?.stepId);
+  const pausedStep = pausedIndex >= 0 ? plan.steps[pausedIndex] : undefined;
+  const minimum = plan.paused?.minimumAddTokens;
+  const [extra, setExtra] = useState(String(minimum ?? pausedStep?.budgetTokens ?? 10000));
+  // A later push can raise or set the minimum while the card is open: never
+  // leave the field below the new floor.
+  useEffect(() => {
+    if (minimum !== undefined) setExtra((v) => (Number(v) < minimum ? String(minimum) : v));
+  }, [minimum]);
+  const belowMinimum = minimum !== undefined && (Number(extra) || 0) < minimum;
+  const pause = classifyPause(plan.paused);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Task 5b: the card's error line offers Retry (error-message-standards:
+  // every error has an action). Retry repeats the button that failed.
+  const lastAction = useRef<(() => void) | null>(null);
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   // Task 5a: a device or host that can't run plans (asked once per window, or
   // learned from a button's answer) keeps every control disabled and says why
   // in the card's own error line. Nothing is retried or shown in advance.
@@ -154,25 +197,46 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // Every button makes one bridge call and lands ONLY the record the host
   // returned (the same record its plans:event push carries) — so the card
   // never invents a state on its own. Returns whether the host accepted.
-  const act = async (name: string, fn: Parameters<typeof planAction>[0]): Promise<boolean> => {
-    if (!sessionId || unsupported !== null || inFlight.current) return false;
+  // Task 5b: answers the landed record (or null) so Add budget can decide
+  // whether the plan still needs a Continue.
+  const act = async (name: string, fn: Parameters<typeof planAction>[0]): Promise<PlanView | null> => {
+    if (!sessionId || unsupported !== null || inFlight.current) return null;
     inFlight.current = true;
     setBusy(name); setError(null);
     try {
       const res = await planAction(fn);
-      if (res.ok) { dispatch({ type: 'PLAN_CHANGED', sessionId, plan: res.plan }); return true; }
+      if (res.ok) { dispatch({ type: 'PLAN_CHANGED', sessionId, plan: res.plan }); return res.plan; }
       if (res.unsupported) setAnsweredUnsupported(res.error);
       else setError(res.error);
-      return false;
+      return null;
     } finally { inFlight.current = false; setBusy(null); }
   };
   const id = sessionId ?? '';
-  const approve = () => act('approve', (b) => b.approve(id, plan.planId));
+  const approve = () => { lastAction.current = approve; return act('approve', (b) => b.approve(id, plan.planId)); };
   // A refused note or amount stays where it was typed, so it can be sent again.
-  const sendComment = () => act('comment', (b) => b.comment(id, plan.planId, comment.trim())).then((ok) => { if (ok) { setComment(''); setCommenting(false); } });
-  const addBudget = () => act('budget', (b) => b.addBudget(id, plan.planId, Number(extra) || 0)).then((ok) => { if (ok) setAdding(false); });
-  const cont = () => act('continue', (b) => b.resume(id, plan.planId));
-  const stop = () => act('stop', (b) => b.stop(id, plan.planId));
+  const sendComment = () => { lastAction.current = sendComment; return act('comment', (b) => b.comment(id, plan.planId, comment.trim())).then((ok) => { if (ok) { setComment(''); setCommenting(false); } }); };
+  const addBudget = async () => {
+    // Task 5b: an amount under the host's minimum is refused here, before
+    // anything is sent — the host would refuse it anyway.
+    if (belowMinimum) return;
+    lastAction.current = addBudget;
+    const landed = await act('budget', (b) => b.addBudget(id, plan.planId, Number(extra) || 0));
+    if (!landed) return;
+    setAdding(false);
+    // Task 5b: the real host only raises the limit and leaves the plan
+    // paused; the control's button says Continue (R8: "continues from where
+    // the plan stopped"), so the card presses Continue for the user. An
+    // answer that already runs the plan (the workbench fake) is not resumed
+    // a second time.
+    // Retry after THIS step must only continue — repeating addBudget would
+    // add the tokens twice.
+    if (landed.status === 'paused') { lastAction.current = cont; await act('continue', (b) => b.resume(id, plan.planId)); }
+  };
+  const cont = () => { lastAction.current = cont; return act('continue', (b) => b.resume(id, plan.planId)); };
+  const stop = () => { lastAction.current = stop; return act('stop', (b) => b.stop(id, plan.planId)); };
+  const retry = () => { void lastAction.current?.(); };
+  // Report bug / Diagnose open the app's ticket screen with the real text.
+  const report = (errorText: string, diagnose: boolean) => setReportContext({ surface: 'a plan card', error: errorText, ...(diagnose ? { diagnose } : {}) });
 
   const specialists = plan.steps.reduce((n, s) => n + s.fanOut, 0);
   const done = plan.steps.filter((s) => s.status === 'done').length;
@@ -187,7 +251,11 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
           </ol>
 
           {/* ONE ceiling line (Q-2). While the plan moves it becomes "spent of".
-              A running plan's Stop shares this row (Destin, round 2). */}
+              A running plan's Stop shares this row (Destin, round 2).
+              Task 5b: a failed card salvaged from a damaged file has no steps
+              and a 0 limit — printing "of the 0 tokens limit" says nothing true,
+              so that card shows only its reason. */}
+          {plan.steps.length > 0 && (
           <div className="flex items-center justify-between gap-3 flex-wrap" data-testid="plan-ceiling">
           <span className="text-xs text-fg-dim min-w-0">
             {plan.status === 'proposed' || revised
@@ -203,6 +271,26 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               <Button size="sm" variant="danger-outline" className="shrink-0" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop the plan'}</Button>
             )}
           </div>
+          )}
+
+          {/* Task 5b (decision 5): only while the limit still matters — before
+              approval and while the plan can still spend. */}
+          {plan.approximateLimit && hasControls && (
+            <div className="text-2xs text-fg-muted" data-testid="plan-approximate-note">{APPROXIMATE_NOTE}</div>
+          )}
+
+          {/* Task 5b (decision 6): a failed plan says why, in the reader's own
+              words, with the two actions for a failure the user cannot fix
+              from here (error-message-standards §2). No reason → no block:
+              nothing is invented. */}
+          {plan.status === 'failed' && plan.failure?.detail && (
+            <ErrorState
+              variant="inline"
+              message={plan.failure.detail}
+              onReportBug={() => report(plan.failure!.detail, false)}
+              onDiagnose={() => report(plan.failure!.detail, true)}
+            />
+          )}
 
           {plan.autoApproved && (
             <div className="text-2xs text-fg-muted">Ran without asking — under the limit you set in Settings.</div>
@@ -221,7 +309,16 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               action={!adding ? (
                 <div className="flex items-center gap-2 shrink-0">
                   <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
-                  <Button size="sm" variant="primary" onClick={() => setAdding(true)} disabled={blocked}>Add budget</Button>
+                  {/* Task 5b: the button that answers THIS pause. An unknown
+                      outcome is resolved by Continue (Task 4: pressing it is
+                      the explicit recovery); a used-up repeat can't be helped
+                      by budget or Continue (the executor pauses again), so it
+                      gets Stop alone; every other pause keeps Add budget. */}
+                  {pause.kind === 'unknown-outcome' ? (
+                    <Button size="sm" variant="primary" onClick={cont} disabled={blocked}>{busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
+                  ) : pause.kind === 'iteration-cap' ? null : (
+                    <Button size="sm" variant="primary" onClick={() => setAdding(true)} disabled={blocked}>Add budget</Button>
+                  )}
                 </div>
               ) : (
                 <div className="flex items-center gap-2 shrink-0" data-testid="plan-add-budget">
@@ -229,11 +326,21 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                   <TextInput size="sm" inputMode="numeric" value={Number(extra) ? Number(extra).toLocaleString() : extra} onChange={(e) => setExtra(e.target.value.replace(/[^0-9]/g, ''))} className="w-20" aria-label="Tokens to allow" />
                   <span className="text-xs text-fg-dim">tokens{plan.ceilingUsd != null && plan.ceilingTokens > 0 ? ` (${usd((Number(extra) || 0) * (plan.ceilingUsd / plan.ceilingTokens))})` : ''}</span>
                   <Button size="sm" variant="ghost" onClick={() => setAdding(false)} disabled={blocked}>Cancel</Button>
-                  <Button size="sm" variant="primary" onClick={addBudget} disabled={blocked || !(Number(extra) > 0)}>{busy === 'budget' ? 'Continuing…' : 'Continue'}</Button>
+                  <Button size="sm" variant="primary" onClick={addBudget} disabled={blocked || !(Number(extra) > 0) || belowMinimum}>{busy === 'budget' || busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
                 </div>
               )}
             >
-              <span data-testid="plan-paused-reason">Paused — {plan.paused.reason}</span>
+              <PausedReason plan={plan} pause={pause} stepNumber={pausedIndex + 1} />
+              {/* Task 5b: the smallest amount that lets the plan go on, while
+                  the amount is being chosen. Below it, the same words turn into
+                  the field's error and Continue stays disabled. */}
+              {adding && minimum !== undefined && (
+                <span className="block mt-0.5" data-testid="plan-add-minimum">
+                  {belowMinimum
+                    ? <FieldError size="2xs">Add at least {tokens(minimum)} to continue.</FieldError>
+                    : <span className="text-2xs text-fg-muted">Add at least {tokens(minimum)} to continue.</span>}
+                </span>
+              )}
             </StatusStrip>
           )}
 
@@ -288,9 +395,59 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             </div>
           )}
 
-      {(error ?? (hasControls ? unsupported : null)) && <div className="text-xs text-destructive-fg">{error ?? unsupported}</div>}
+      {/* The card's one error slot (Task 5b, error-message-standards): the
+          host's own reason with Retry; the bridge's general "Couldn't update
+          the plan" (no known cause) also gets Report bug and Diagnose
+          (5b review). Never a bare red
+          sentence (design guide §4.7). */}
+      {error && (error === PLAN_UNREADABLE
+        ? <ErrorState variant="inline" message={error} onReportBug={() => report(error, false)} onDiagnose={() => report(error, true)} onRetry={retry} />
+        : <ErrorState variant="inline" message={error} onRetry={retry} />)}
+      {/* "Plans aren't available here" is why the buttons are disabled, not a
+          failure: a quiet note beside them (design guide §4.7 "Disabled"). */}
+      {!error && hasControls && unsupported && <div className="text-2xs text-fg-muted">{unsupported}</div>}
+      <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
     </div>
   );
+}
+
+/**
+ * Task 5b — the paused pill's words. An ordinary pause shows the host's own
+ * reason as signed. The two pauses plan-pause.ts recognises get plain words
+ * instead of the executor's sentence (which names internal step ids and the
+ * raw tool name), plus one line on what to do next.
+ */
+function PausedReason({ plan, pause, stepNumber }: { plan: PlanView; pause: ReturnType<typeof classifyPause>; stepNumber: number }) {
+  if (pause.kind === 'unknown-outcome') {
+    // "Running a command" → "running a command": the same plain verb the chat
+    // uses for that tool everywhere else.
+    const doing = toolActionLabel(pause.tool, true);
+    const verb = doing.charAt(0).toLowerCase() + doing.slice(1);
+    const where = stepNumber > 0 ? ` in step ${stepNumber}` : '';
+    return (
+      <>
+        <span data-testid="plan-paused-reason">
+          Paused — a specialist{where} stopped while {verb}, and it isn't known whether that finished.{pause.rest ? ` ${pause.rest}` : ''}
+        </span>
+        <span className="block mt-0.5 font-medium text-fg" data-testid="plan-paused-warning">
+          Continue may run it again. Check first whether it already happened.
+        </span>
+      </>
+    );
+  }
+  if (pause.kind === 'iteration-cap') {
+    return (
+      <>
+        <span data-testid="plan-paused-reason">
+          Paused — the repeated steps ran {pause.rounds} times without meeting their goal ("{pause.until}").
+        </span>
+        <span className="block mt-0.5" data-testid="plan-paused-warning">
+          To keep going, ask the assistant for a revised plan.
+        </span>
+      </>
+    );
+  }
+  return <span data-testid="plan-paused-reason">Paused — {plan.paused?.reason}</span>;
 }
 
 /** The header's own detail while the plan is being written: a live clock, so the
@@ -380,24 +537,25 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
  * per specialist, so there is no tool card to hang them on.
  */
 function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessionId?: string }) {
-  const tool = useMemo<ToolCallState>(() => ({
-    toolUseId: child.childId,
-    toolName: 'Task',
-    input: { agent: child.agentType, description: child.description, prompt: child.prompt },
-    status: child.status === 'running' ? 'running' : 'complete',
-    specialistRun: child,
-    specialistReport: child.report,
-    subagentSegments: child.segments,
-  }), [child]);
+  const tool = useMemo<ToolCallState>(() => planChildCard(child), [child]);
   // Task 5a: this specialist's ask is answered inside its Activity, so the row
   // opens when one arrives (Activity itself opens for it — AgentSections).
   // Opens once per ask; the user can still fold it afterwards.
   const asking = hasNestedAsk(tool);
   const [open, setOpen] = useState(asking);
   useEffect(() => { if (asking) setOpen(true); }, [asking]);
+  // Task 5b: a specialist that Stop caught before its first request was ever
+  // sent never started, so "the assistant can pick this back up" would
+  // describe work that never existed. 5b follow-up: decided from the
+  // journal's attempt phase (`prepared` = nothing sent), not guessed from
+  // missing activity — a specialist whose request was out but had shown
+  // nothing yet may already have spent tokens. No phase → never "Not started".
+  const notStarted = child.status === 'interrupted' && child.phase === 'prepared';
   const glyph = child.status === 'running' ? <BrailleSpinner size="sm" />
     : child.status === 'completed' ? <CheckIcon className="w-3 h-3 text-fg-dim" />
     : child.status === 'failed' ? <FailIcon className="w-3 h-3 text-destructive-fg" />
+    // The same empty circle a step that hasn't started wears.
+    : notStarted ? <span className="inline-block w-3 h-3 rounded-full border border-edge" aria-label="not started" />
     : <StoppedIcon className="w-3 h-3 text-fg-muted" />;
   return (
     <div className="border border-edge rounded-md overflow-hidden bg-inset/60" data-testid="plan-child">
@@ -406,7 +564,11 @@ function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessio
         <span className="shrink-0 inline-flex w-3 justify-center">{glyph}</span>
         <span aria-hidden="true" className="w-px h-3 bg-edge shrink-0" />
         <span className="text-xs font-medium text-fg-2 shrink-0">{child.title}</span>
-        <div className="min-w-0 flex-1 truncate"><RunStatusLine run={child} report={child.report} /></div>
+        <div className="min-w-0 flex-1 truncate">
+          {notStarted
+            ? <div className="text-xs text-fg-muted" data-testid="specialist-status-line">Not started</div>
+            : <RunStatusLine run={child} report={child.report} />}
+        </div>
         <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
       </button>
       {open && (

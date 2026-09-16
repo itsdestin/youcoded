@@ -179,6 +179,55 @@ describe('mutation chokepoint', () => {
   });
 });
 
+describe('5b follow-up: pause facts and attempt phase reach the card', () => {
+  const attempt = (attemptId: string, phase: 'prepared' | 'request-sent', childId: string) => ({
+    attemptId, itemIndex: 0, iteration: 0, childId, childTitle: childId, startedAt: 30,
+    baseTokens: 1000, addedTokens: 0, reservedTokens: 0, spentTokens: 0, phase,
+  });
+
+  it('the pause kind, tool, rounds and note survive the strict re-read and are projected', async () => {
+    await seed(record('p1', {
+      status: 'paused',
+      paused: {
+        stepId: 's1', reason: 'r', attemptId: 'a1', kind: 'unknown-outcome', tool: 'Bash',
+        repeat: { rounds: 3, until: 'tests pass' }, note: '1 other specialist was cut off.',
+      },
+    }));
+    const rec = (await journal.get(REF, 'p1'))!;
+    expect(projectPlan(rec).paused).toEqual({
+      stepId: 's1', reason: 'r', kind: 'unknown-outcome', tool: 'Bash',
+      repeat: { rounds: 3, until: 'tests pass' }, note: '1 other specialist was cut off.',
+    });
+  });
+
+  it('a pause kind the app does not know makes the journal unreadable (strict schema)', async () => {
+    fs.mkdirSync(path.dirname(filePath()), { recursive: true });
+    const bad = record('p1', { status: 'paused', paused: { stepId: 's1', reason: 'r' } });
+    (bad.paused as any).kind = 'made-up';
+    fs.writeFileSync(filePath(), JSON.stringify({ v: 1, plans: [bad] }));
+    expect((await journal.read(REF)).kind).toBe('invalid');
+  });
+
+  it('a journal written before the kind existed still reads, with no kind on the card', async () => {
+    await seed(record('p1', { status: 'paused', paused: { stepId: 's1', reason: 'r' } }));
+    expect(projectPlan((await journal.get(REF, 'p1'))!).paused).toEqual({ stepId: 's1', reason: 'r' });
+  });
+
+  it('each specialist row carries its attempt phase: prepared (never sent) vs request-sent', () => {
+    const view = projectPlan(record('p1', {
+      status: 'stopped',
+      steps: [
+        { id: 's1', status: 'skipped', attempts: [attempt('a1', 'prepared', 'kid-1'), attempt('a2', 'request-sent', 'kid-2')] },
+        ...['s2', 'loop', 'fix'].map((id) => ({ id, status: 'pending' as const, attempts: [] })),
+      ],
+    }));
+    expect(view.steps[0].children!.map((c) => [c.childId, c.status, c.phase])).toEqual([
+      ['kid-1', 'interrupted', 'prepared'],
+      ['kid-2', 'interrupted', 'request-sent'],
+    ]);
+  });
+});
+
 describe('repeat projection', () => {
   it('labels every repeat-body row as repeat, and the rows still sum to the ceiling', () => {
     const doc: PlanDocumentV1 = {

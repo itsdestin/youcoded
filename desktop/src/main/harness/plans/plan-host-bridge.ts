@@ -9,6 +9,7 @@
 // specialist runs on, what its fixed starting cost is, what a transcript
 // proves after a crash, how much Add budget is enough — live here, next to the
 // rest of the plan code, where they can be read and tested together.
+import { PLAN_COMMENT_TAG } from '../history-only';
 import { createHash } from 'crypto';
 import type { CatalogModel, ModelBinding } from '../../../shared/provider-types';
 import type { PlanView, TranscriptEvent } from '../../../shared/types';
@@ -84,7 +85,8 @@ export interface PlanHostPort {
   maxConcurrent(sessionId: string): number;
   readChildEvents(childId: string, cwd: string): TranscriptEvent[];
   /** Queue a user turn carrying a host turn id; throws with the real reason. */
-  queueTurn(sessionId: string, text: string, turnId: string): void;
+  /** `historyNote`: shown to the model only, never in the chat (5b follow-up). */
+  queueTurn(sessionId: string, text: string, turnId: string, historyNote?: string): void;
   currentTurnId(sessionId: string): string | undefined;
   /** Mint (or rebuild) a plan specialist, holding a specialist slot. */
   startChild(input: PlanChildStart): Promise<PlanChildHandle>;
@@ -177,7 +179,7 @@ export class PlanHostBridge {
       sessionCwd: (sessionId) => port.rootCwd(sessionId),
       resolveManifest: (input) => this.resolveManifest(input),
       queueCommentTurn: ({ sessionId, turnId, text }) => {
-        port.queueTurn(sessionId, commentTurnText(text), turnId);
+        port.queueTurn(sessionId, commentTurnText(text), turnId, COMMENT_MODEL_NOTE);
       },
       executor: this.executor,
       budget: { addTokens: (input) => this.budget.addTokens(input) },
@@ -491,8 +493,17 @@ export class PlanHostBridge {
   }
 }
 
+/** 5b follow-up: what the MODEL is also told with a Comment's follow-up turn.
+ *  History-only (HarnessSession `historyNote`): the chat shows only
+ *  commentTurnText, while the model is pointed at the one tool that answers. */
+export const COMMENT_MODEL_NOTE = `${PLAN_COMMENT_TAG}\nThe user's message above is feedback on the plan you proposed. `
+  + 'Answer it by calling propose_plan with a revised plan that addresses it.\n</plan-comment>';
+
 /** The follow-up turn a Comment queues (design §2). The user's own words come
- *  first; the instruction after them tells the assistant what to do next. */
+ *  first; the instruction after them tells the assistant what to do next.
+ *  Task 5b: this text shows in the chat as the USER's own message, so it is
+ *  short and plain — no tool name. The model is told which tool to use by
+ *  COMMENT_MODEL_NOTE, which only it sees. */
 export function commentTurnText(comment: string): string {
-  return `${comment}\n\n(Comment on your proposed plan: revise the plan to address this and propose the new version with propose_plan.)`;
+  return `${comment}\n\n(Feedback on your plan: please revise it and propose it again.)`;
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import { NativeHome } from '../src/main/native-home';
+import { commentTurnText, COMMENT_MODEL_NOTE } from '../src/main/harness/plans/plan-host-bridge';
 import { SessionStore } from '../src/main/harness/session-store';
 import { NativeSessionHost, SUBAGENT_DISPLAY_TYPES, mergeChildEvents } from '../src/main/harness/native-session-host';
 import { PermissionStore } from '../src/main/harness/permission-store';
@@ -5529,6 +5530,8 @@ describe('specialists plans in the native host (Task 4)', () => {
   let root: string;
   let host: NativeSessionHost;
   let parentSteps: any[][];
+  // 5b follow-up: what the parent model was actually sent, per request.
+  let parentPrompts: string[] = [];
   let childReply: (prompt: string, call: number) => Reply;
   let childCalls: Array<{ prompt: string; maxOutputTokens: unknown; maxRetries?: unknown }>;
   let events: any[];
@@ -5559,7 +5562,10 @@ describe('specialists plans in the native host (Task 4)', () => {
       }) as any;
     }
     return new MockLanguageModelV4({
-      doStream: async () => ({ stream: simulateReadableStream({ chunks: parentSteps.shift() ?? textStep('ok') }) }),
+      doStream: async (call: any) => {
+        parentPrompts.push(JSON.stringify(call.prompt));
+        return { stream: simulateReadableStream({ chunks: parentSteps.shift() ?? textStep('ok') }) };
+      },
     }) as any;
   };
 
@@ -5599,7 +5605,7 @@ describe('specialists plans in the native host (Task 4)', () => {
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-plans-'));
-    events = []; planEvents = []; childCalls = []; parentSteps = [];
+    events = []; planEvents = []; childCalls = []; parentSteps = []; parentPrompts = [];
     childReply = (prompt) => ({ chunks: [...textChunks('r', prompt.includes('Combine') ? 'COMBINED' : `REPORT for ${prompt.includes('a.ts') ? 'a' : 'b'}`), finishChunk('stop', 10, 5)] });
     host = makeHost();
   });
@@ -5886,6 +5892,13 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(oldPlan.revisedBy).toBe(newPlan.planId);
     const comment = events.find((e) => e.type === 'user-message' && String(e.data.text).includes('Only review a.ts please'));
     expect(comment).toBeTruthy();
+    // 5b follow-up: the chat shows only the plain follow-up; the model is also
+    // told, history-only, to answer with propose_plan.
+    expect(comment.data.text).toBe(commentTurnText('Only review a.ts please'));
+    expect(JSON.stringify(events)).not.toContain('propose_plan with');
+    const revising = parentPrompts.find((p) => p.includes('Only review a.ts please'))!;
+    expect(revising).toContain(JSON.stringify(COMMENT_MODEL_NOTE).slice(1, -1));
+    expect(COMMENT_MODEL_NOTE).toContain('propose_plan');
   });
 
   it('a running plan whose journal becomes unreadable shows a failed card one step newer than the last one shown', async () => {

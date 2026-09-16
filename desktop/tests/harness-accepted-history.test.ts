@@ -188,6 +188,30 @@ describe('HarnessSession accepted history', () => {
     });
   });
 
+  it('5b follow-up: a history-only note rides a turn — the transcript shows only the text, the model sees both', async () => {
+    // A plan Comment's follow-up turn: the user sees their plain words; the
+    // model is also told to answer with propose_plan. The note is history,
+    // never a transcript event, and is reported like a steer (revision bump,
+    // no uuid) so the accepted-history capture stays honest.
+    const baseline = makeSession({ model: scriptModel([{ text: 'ok' }]) });
+    await baseline.send('Also check the tests.');
+    const plain = baseline.acceptedHistory();
+
+    const session = makeSession({ model: scriptModel([{ text: 'ok' }]) });
+    const events = collect(session);
+    await session.send('Also check the tests.', [], { historyNote: '<plan-comment>Use propose_plan.</plan-comment>' });
+    const users = events.filter((e) => e.type === 'user-message');
+    expect(users.map((e) => e.data.text)).toEqual(['Also check the tests.']);
+    expect(JSON.stringify(events)).not.toContain('propose_plan');
+    const accepted = session.acceptedHistory();
+    expect(accepted.messages.slice(0, 2)).toEqual([
+      { role: 'user', content: 'Also check the tests.' },
+      { role: 'user', content: '<plan-comment>Use propose_plan.</plan-comment>' },
+    ]);
+    expect(accepted.eventUuids).toHaveLength(plain.eventUuids.length);
+    expect(accepted.revision).toBe(plain.revision + 1);
+  });
+
   it('a prune records a pruned transformation; a summary records the compact-summary uuid', async () => {
     // A tool result big enough to be worth pruning (20k chars = 5k tokens),
     // followed by enough newer text to push it OUT of the protected recent

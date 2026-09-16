@@ -151,6 +151,28 @@ describe('driver compaction', () => {
   });
 });
 
+describe('5b review: a plan Comment note is not a turn', () => {
+  it('the cut never separates a Comment from its history-only <plan-comment> note', async () => {
+    // Three real turns; the second is a plan Comment with its model-only note.
+    // Counting the note as a turn would cut AT the note, summarizing the
+    // Comment away while keeping the note that refers to it.
+    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) });
+    session.seedHistory([
+      { role: 'user', content: 'USER-A: plan the review' } as any,
+      { role: 'assistant', content: 'proposed' } as any,
+      { role: 'user', content: 'USER-B: only review a.ts' } as any,
+      { role: 'user', content: '<plan-comment>\nAnswer with propose_plan.\n</plan-comment>' } as any,
+      { role: 'assistant', content: 'revised' } as any,
+      { role: 'user', content: 'USER-C: thanks' } as any,
+    ]);
+    expect(await session.compactNow()).toEqual({ ok: true });
+    const history = (session as any).history as any[];
+    expect(history[1].content).toBe('USER-B: only review a.ts');
+    expect(history[2].content).toContain('<plan-comment>');
+    expect(JSON.stringify(history)).not.toContain('USER-A');
+  });
+});
+
 // Cross-task interaction (2026-08-11): guard (a) above means pruneToolOutputs
 // can now itself collapse an image-bearing tool output, not just summarize.
 // The shownImages dedupe cache (harness-session.ts) must not keep vouching for
