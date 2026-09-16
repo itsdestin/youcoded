@@ -5507,3 +5507,292 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     expect(views.some((v) => v.sessionId === 'e2e' && v.run.shellId === shellId && v.run.toolUseId === res.data.toolUseId)).toBe(true);
   }, 20_000);
 });
+
+// ---------------------------------------------------------------------------
+// Specialists plans, Task 4 — the plan executor wired into the real host.
+// Real SessionStore/NativeHome/journal; only the models are scripted.
+// ---------------------------------------------------------------------------
+describe('specialists plans in the native host (Task 4)', () => {
+  const SID = 'plan-root';
+  const PARENT = { providerId: 'openrouter', modelId: 'parent-model' };
+  const CHILD = 'deepseek/deepseek-v4-flash-0731';
+  const CATALOG: CatalogModel[] = [{ id: CHILD, providerId: 'openrouter', label: 'DeepSeek Flash' }];
+  const DOC = {
+    goal: 'Review two files',
+    steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 2000, items: ['a.ts', 'b.ts'] },
+      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 2000, of: 's1' },
+    ],
+  };
+  type Reply = { chunks: any[] } | 'hang';
+
+  let root: string;
+  let host: NativeSessionHost;
+  let parentSteps: any[][];
+  let childReply: (prompt: string, call: number) => Reply;
+  let childCalls: Array<{ prompt: string; maxOutputTokens: unknown; maxRetries?: unknown }>;
+  let events: any[];
+  let planEvents: any[];
+
+  const proposeStep = (id: string, doc: unknown = DOC) => stream(toolCallChunk(id, 'propose_plan', doc), finishChunk('tool-calls'));
+  const textStep = (t: string) => stream(...textChunks(`t${Math.random()}`, t), finishChunk('stop'));
+
+  const planFactory = async (binding: { modelId: string }) => {
+    if (binding.modelId === CHILD) {
+      return new MockLanguageModelV4({
+        doStream: async (options: any) => {
+          const prompt = JSON.stringify(options.prompt);
+          childCalls.push({ prompt, maxOutputTokens: options.maxOutputTokens });
+          const reply = childReply(prompt, childCalls.length);
+          if (reply === 'hang') {
+            return {
+              stream: new ReadableStream({
+                start(c) {
+                  c.enqueue({ type: 'stream-start', warnings: [] });
+                  options.abortSignal?.addEventListener('abort', () => c.error(new DOMException('aborted', 'AbortError')));
+                },
+              }),
+            };
+          }
+          return { stream: simulateReadableStream({ chunks: stream(...reply.chunks) }) };
+        },
+      }) as any;
+    }
+    return new MockLanguageModelV4({
+      doStream: async () => ({ stream: simulateReadableStream({ chunks: parentSteps.shift() ?? textStep('ok') }) }),
+    }) as any;
+  };
+
+  function makeHost(opts: { heartbeatMs?: number } = {}): NativeSessionHost {
+    const home = new NativeHome(root);
+    const h = new NativeSessionHost(
+      new SessionStore(home), planFactory as any, NO_CONTEXT, async () => 'openrouter', async () => null,
+      async () => ({ in: 1, out: 2 }), undefined, undefined,
+      { modelCatalog: async () => CATALOG },
+      undefined, undefined, home, undefined, undefined, undefined, {},
+      { settleDeadlineMs: 60, heartbeatMs: opts.heartbeatMs ?? 5_000, slotPollMs: 5 },
+    );
+    h.on('transcript-event', (e) => events.push(e));
+    h.on('plans-event', (e) => planEvents.push(e));
+    return h;
+  }
+
+  const journalFile = () => JSON.parse(fs.readFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), 'utf8'));
+  const waitFor = async (cond: () => boolean | Promise<boolean>, what: string) => {
+    for (let i = 0; i < POLL_TRIES; i++) {
+      if (await cond()) return;
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error(`timed out waiting for ${what}`);
+  };
+  const planStatus = () => { try { return journalFile().plans.map((p: any) => p.status); } catch { return []; } };
+  const liveChildren = () => [...(host as any).live.values()].filter((e: any) => e.parentSessionId === SID);
+
+  async function proposeOne(): Promise<string> {
+    await host.create({ sessionId: SID, cwd: root, binding: PARENT });
+    parentSteps = [proposeStep('call-plan'), textStep('Here is the plan.')];
+    host.send(SID, 'Plan the review');
+    await waitFor(() => planStatus().includes('proposed'), 'the proposal');
+    await waitFor(() => host.isIdle(SID), 'the proposing turn to end');
+    return journalFile().plans[0].planId;
+  }
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-plans-'));
+    events = []; planEvents = []; childCalls = []; parentSteps = [];
+    childReply = (prompt) => ({ chunks: [...textChunks('r', prompt.includes('Combine') ? 'COMBINED' : `REPORT for ${prompt.includes('a.ts') ? 'a' : 'b'}`), finishChunk('stop', 10, 5)] });
+    host = makeHost();
+  });
+  afterEach(async () => { await host.destroyAll(); rmHostRoot(root); });
+
+  it('propose_plan is backed by the plan service with a manifest from the automatic specialist model resolver', async () => {
+    const planId = await proposeOne();
+    const rec = journalFile().plans[0];
+    expect(rec.toolUseId).toBe('call-plan');
+    const reviewer = rec.manifest.specialists.reviewer;
+    expect(reviewer.binding).toEqual({ providerId: 'openrouter', modelId: CHILD });
+    expect(reviewer.pricing).toEqual({ kind: 'priced', rates: { in: 1, out: 2 } });
+    // setupBound over the exact child prompt + tools: at least the fixed framing.
+    expect(reviewer.setupTokens).toBeGreaterThan(1024 + 64);
+    expect(rec.ceilingTokens).toBe(3 * (2000 + reviewer.setupTokens));
+    expect(rec.manifest.modelLabel).toBe(CHILD);
+    const result = events.find((e) => e.type === 'tool-result' && e.data.toolUseId === 'call-plan');
+    expect(result.data.plan).toMatchObject({ planId, status: 'proposed' });
+    expect(planEvents.some((e) => e.sessionId === SID && e.plan.planId === planId && e.plan.status === 'proposed')).toBe(true);
+    // Hydration reads the journal.
+    expect((await host.planViewsFor(SID)).map((v) => [v.planId, v.status])).toEqual([[planId, 'proposed']]);
+  });
+
+  it('approve runs every step as plan specialists and completes', async () => {
+    const planId = await proposeOne();
+    const res = await host.approvePlan(SID, planId);
+    expect(res).toMatchObject({ ok: true, plan: { status: 'running' } });
+    await waitFor(() => planStatus()[0] === 'completed', 'completion');
+    expect(childCalls).toHaveLength(3);
+    // Plan-child mode: every request is capped by its reservation.
+    for (const c of childCalls) expect(typeof c.maxOutputTokens).toBe('number');
+    const combine = childCalls.find((c) => c.prompt.includes('Combine the reviews'))!;
+    expect(combine.prompt).toContain('REPORT for a');
+    expect(combine.prompt).toContain('REPORT for b');
+    const rec = journalFile().plans[0];
+    expect(rec.usedTokens).toBe(45);
+    expect(rec.lease).toBeUndefined();
+    const childIds: string[] = rec.steps.flatMap((s: any) => s.attempts.map((a: any) => a.childId));
+    expect(childIds).toHaveLength(3);
+    // Ordinary durable specialist sessions…
+    const store = new SessionStore(new NativeHome(root));
+    for (const id of childIds) expect(store.readHeader(id, root)).toMatchObject({ sessionKind: 'specialist', parentSessionId: SID, agentType: 'reviewer' });
+    // …never wired as conversations (no namer/feeder) and never shown as Task-card copies.
+    expect(events.some((e) => childIds.includes(e.sessionId))).toBe(false);
+    expect(events.some((e) => e.type !== 'subagent-usage' && childIds.includes(e.data?.agentId))).toBe(false);
+    // Their spend still reaches the parent's totals.
+    expect(events.filter((e) => e.type === 'subagent-usage' && e.sessionId === SID)).toHaveLength(3);
+    // Nothing is left running, and the 30-per-conversation spawn budget is untouched.
+    expect(liveChildren()).toHaveLength(0);
+    for (let i = 0; i < SPECIALIST_SPAWN_BUDGET_PER_SESSION; i++) expect(host.trySpendSpecialistSpawnBudget(SID)).toBe(true);
+    const done = planEvents.filter((e) => e.plan.planId === planId).map((e) => e.plan.status);
+    expect(done[done.length - 1]).toBe('completed');
+  });
+
+  it('Stop on the parent turn leaves plan specialists running; closing the conversation interrupts the plan', async () => {
+    const planId = await proposeOne();
+    childReply = () => 'hang';
+    await host.approvePlan(SID, planId);
+    await waitFor(() => childCalls.length === 2, 'both specialists to send');
+    host.interrupt(SID);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(liveChildren()).toHaveLength(2);
+    expect(planStatus()[0]).toBe('running');
+
+    await host.destroy(SID);
+    const rec = journalFile().plans[0];
+    expect(rec.status).toBe('interrupted');
+    expect(rec.lease).toBeUndefined();
+    expect(rec.steps[0].attempts.reduce((n: number, a: any) => n + a.reservedTokens, 0)).toBe(0);
+    expect((host as any).live.size).toBe(0);
+    expect(planEvents[planEvents.length - 1].plan.status).toBe('interrupted');
+  });
+
+  it('app quit interrupts running plans', async () => {
+    const planId = await proposeOne();
+    childReply = () => 'hang';
+    await host.approvePlan(SID, planId);
+    await waitFor(() => childCalls.length === 2, 'both specialists to send');
+    await host.destroyAll();
+    expect(journalFile().plans[0]).toMatchObject({ status: 'interrupted' });
+    expect((host as any).live.size).toBe(0);
+  });
+
+  it('reopening recovers a stale running plan as interrupted, starts nothing, and rechecks a live-looking lease when it expires', async () => {
+    const planId = await proposeOne();
+    await host.destroyAll();
+    const { spawnSync } = await import('child_process');
+    const deadPid = spawnSync(process.execPath, ['-e', '0']).pid!;
+    const file = journalFile();
+    const p = file.plans[0];
+    p.status = 'running';
+    p.fenceEpoch = 1;
+    p.lease = { instanceId: 'another-window', pid: deadPid, heartbeatAt: Date.now(), expiresAt: Date.now() + 300, epoch: 1, fence: '1:x' };
+    p.steps[0].attempts.push({ attemptId: 'a1', itemIndex: 0, iteration: 0, childId: 'gone', baseTokens: 3000, addedTokens: 0, reservedTokens: 3000, spentTokens: 0, phase: 'prepared' });
+    fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), JSON.stringify(file));
+
+    host = makeHost();
+    expect(await host.resume(SID, root)).toBe(true);
+    // Not yet expired: another window might still own it.
+    expect(journalFile().plans[0].status).toBe('running');
+    await waitFor(() => journalFile().plans[0].status === 'interrupted', 'the recheck at lease expiry');
+    const rec = journalFile().plans[0];
+    expect(rec.lease).toBeUndefined();
+    expect(rec.steps[0].attempts[0].reservedTokens).toBe(0);
+    expect(childCalls).toHaveLength(0);
+    expect(liveChildren()).toHaveLength(0);
+    expect((await host.planViewsFor(SID))[0]).toMatchObject({ planId, status: 'interrupted' });
+  });
+
+  it('a Comment queues a follow-up turn whose new proposal is linked as the revision', async () => {
+    const planId = await proposeOne();
+    parentSteps = [proposeStep('call-plan-2', { ...DOC, goal: 'Review only a.ts' }), textStep('Revised.')];
+    const res = await host.commentOnPlan(SID, planId, 'Only review a.ts please');
+    expect(res).toMatchObject({ ok: true, plan: { status: 'stopped' } });
+    await waitFor(() => journalFile().plans.length === 2, 'the revised proposal');
+    const [oldPlan, newPlan] = journalFile().plans;
+    expect(newPlan.revisionOf).toBe(oldPlan.planId);
+    expect(oldPlan.revisedBy).toBe(newPlan.planId);
+    const comment = events.find((e) => e.type === 'user-message' && String(e.data.text).includes('Only review a.ts please'));
+    expect(comment).toBeTruthy();
+  });
+
+  it('a running plan whose journal becomes unreadable shows a failed card one step newer than the last one shown', async () => {
+    host = makeHost({ heartbeatMs: 20 });
+    const planId = await proposeOne();
+    childReply = () => 'hang';
+    await host.approvePlan(SID, planId);
+    await waitFor(() => childCalls.length === 2, 'both specialists to send');
+    const lastSeq = Math.max(...planEvents.filter((e) => e.plan.planId === planId).map((e) => e.plan.seq));
+    fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), '{ not json');
+    await waitFor(() => planEvents.some((e) => e.plan.planId === planId && e.plan.status === 'failed'), 'the failed card');
+    const failed = planEvents.find((e) => e.plan.planId === planId && e.plan.status === 'failed');
+    expect(failed.plan.seq).toBe(lastSeq + 1);
+    expect(failed.plan.failure.detail).toMatch(/not valid JSON/);
+    await waitFor(() => liveChildren().length === 0, 'the specialists to be torn down');
+  });
+
+  it('a budget pause records the smallest Add budget that lets the specialist continue, and smaller amounts are refused', async () => {
+    const small = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, items: ['a.ts'] }] };
+    await host.create({ sessionId: SID, cwd: root, binding: PARENT });
+    parentSteps = [proposeStep('call-small', small), textStep('ok')];
+    host.send(SID, 'Plan it');
+    await waitFor(() => planStatus().includes('proposed'), 'the proposal');
+    const rec0 = journalFile().plans[0];
+    const allowance = 500 + rec0.manifest.specialists.reviewer.setupTokens;
+    // First request: a tool call that uses all but 5 tokens of the allowance.
+    childReply = (_prompt, call) => (call === 1
+      ? { chunks: [toolCallChunk('read-1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 1, allowance - 6)] }
+      : { chunks: [...textChunks('x', 'never'), finishChunk('stop', 1, 1)] });
+    await host.approvePlan(SID, rec0.planId);
+    await waitFor(() => planStatus()[0] === 'paused', 'the budget pause');
+    const rec = journalFile().plans[0];
+    expect(childCalls).toHaveLength(1);
+    expect(rec.paused.attemptId).toBe(rec.steps[0].attempts[0].attemptId);
+    const minimum = rec.paused.minimumAddTokens;
+    expect(minimum).toBeGreaterThan(5);
+    const view = (await host.planViewsFor(SID))[0];
+    expect(view.paused).toMatchObject({ minimumAddTokens: minimum });
+    expect(await host.addPlanBudget(SID, rec.planId, minimum - 1)).toMatchObject({ ok: false, error: expect.stringContaining(minimum.toLocaleString('en-US')) });
+    expect(await host.addPlanBudget(SID, rec.planId, minimum)).toMatchObject({ ok: true });
+    // …and Continue can now send the restarted specialist's request.
+    childReply = () => ({ chunks: [...textChunks('y', 'REPORT a'), finishChunk('stop', 1, 1)] });
+    expect(await host.resumePlan(SID, rec.planId)).toMatchObject({ ok: true });
+    await waitFor(() => planStatus()[0] === 'completed', 'completion after the top-up');
+    expect(childCalls).toHaveLength(2);
+  });
+
+  it('exposes the seven plan actions, reporting unsupported when the host has no home to keep plans in', async () => {
+    const bare = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null);
+    for (const r of [
+      await bare.approvePlan(SID, 'p'), await bare.commentOnPlan(SID, 'p', 'x'), await bare.addPlanBudget(SID, 'p', 1),
+      await bare.resumePlan(SID, 'p'), await bare.stopPlan(SID, 'p'), await bare.getPlanAutoApprove(), await bare.setPlanAutoApprove(5),
+    ]) {
+      expect(r).toMatchObject({ ok: false, unsupported: true });
+    }
+    expect(await bare.planViewsFor(SID)).toEqual([]);
+    expect(await host.getPlanAutoApprove()).toEqual({ ok: true, underTokens: 0 });
+    expect(await host.setPlanAutoApprove(10)).toEqual({ ok: true });
+    expect(await host.getPlanAutoApprove()).toEqual({ ok: true, underTokens: 10 });
+    await bare.destroyAll();
+  });
+
+  it('Stop on a running plan settles its specialists before the card says stopped', async () => {
+    const planId = await proposeOne();
+    childReply = () => 'hang';
+    await host.approvePlan(SID, planId);
+    await waitFor(() => childCalls.length === 2, 'both specialists to send');
+    const res = await host.stopPlan(SID, planId);
+    expect(res).toMatchObject({ ok: true, plan: { status: 'stopped' } });
+    expect(liveChildren()).toHaveLength(0);
+    const rec = journalFile().plans[0];
+    expect(rec.lease).toBeUndefined();
+    expect(rec.steps[0].attempts.reduce((n: number, a: any) => n + a.reservedTokens, 0)).toBe(0);
+    expect(rec.steps.map((s: any) => s.status)).toEqual(['skipped', 'skipped']);
+  });
+});

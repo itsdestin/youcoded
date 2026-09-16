@@ -423,3 +423,31 @@ describe('review round 2 — route checks, soft limit, no thinking budget', () =
     },
   );
 });
+
+describe('plan measurements the host needs (Task 4)', () => {
+  it('planSetupRequest is exactly the system prompt and tool list the first request is bounded with', async () => {
+    const gate = fakeGate();
+    const { model } = recordingModel(gate, [completing(...textChunks('a', 'done'), finishChunk('stop'))]);
+    const { session } = planSession(gate, model);
+    const setup = await session.planSetupRequest();
+    await session.send('Review a.ts');
+    expect(setup).toEqual({ system: gate.bounds[0].system, tools: gate.bounds[0].tools });
+  });
+
+  it('planNextRequestBound measures the next request with the new user turn, without sending or changing history', async () => {
+    const gate = fakeGate({ bound: genericInputBound });
+    const { model, calls } = recordingModel(gate, [
+      completing(...textChunks('a', 'first'), finishChunk('stop')),
+      completing(...textChunks('b', 'second'), finishChunk('stop')),
+    ]);
+    const { session, events } = planSession(gate, model);
+    await session.send('Review a.ts');
+    const before = events.length;
+    const predicted = await session.planNextRequestBound(gate.adapter, 'Continue please');
+    expect(calls).toHaveLength(1);
+    expect(events).toHaveLength(before);
+    await session.send('Continue please');
+    const actual = Number(gate.log.filter((l) => l.startsWith('reserve:'))[1].split(':')[1]);
+    expect(predicted).toEqual({ ok: true, tokens: actual });
+  });
+});

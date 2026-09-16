@@ -16,7 +16,7 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
-import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
+import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText, PlanView } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
@@ -62,6 +62,12 @@ import { log } from '../logger';
 // mirror — see slug-encoding.ts.
 import { nativeStoreSlug } from '../slug-encoding';
 import type { McpLease } from './mcp/mcp-manager';
+// Specialists plans (Task 4): the plan journal/budget/executor/service live
+// behind one bridge; this file only supplies the session mechanics.
+import { PlanHostBridge, type PlanChildStart, type PlanHostBridgeOptions, type PlanRoute } from './plans/plan-host-bridge';
+import type { PlanChildHandle, PlanChildOutcome } from './plans/plan-executor';
+import type { PlanChildRequestGate } from './plans/budget-adapter';
+import type { PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult } from './plans/types';
 
 export interface CreateNativeSessionOpts {
   sessionId: string;
@@ -96,7 +102,10 @@ const NOOP_REMEMBERED_STORE: RememberedRuleStore = {
 // input the user has no way to know is piling up unseen.
 /** One unit of work for the turn drain: the message text plus any composer
  *  attachments that must ride with it. */
-type SendUnit = { text: string; attachments: string[] };
+// turnId (plans Task 4): a host-minted id for a turn the HOST queued (a plan
+// Comment's follow-up). propose_plan reads it to link a revision; model input
+// can never supply it.
+type SendUnit = { text: string; attachments: string[]; turnId?: string };
 
 const SEND_QUEUE_LIMIT = 10;
 
@@ -274,7 +283,7 @@ interface LiveEntry {
   // `attachments` are absolute composer file paths; image ones become image
   // parts on the user message. Carried through the QUEUE too, or a message sent
   // while a turn was in flight would silently lose its pictures.
-  queue: { id: string; text: string; attachments: string[] }[];
+  queue: { id: string; text: string; attachments: string[]; turnId?: string }[];
   // True from dispatch until runTurns finishes the last queued turn. Host-owned
   // (HarnessSession's in-flight state is private); safe because Node is single-threaded.
   inFlight: boolean;
@@ -302,6 +311,13 @@ interface LiveEntry {
   // silently, right before that next user message, so the model still sees
   // them — as context for what the user asked, not as a reason to speak.
   holdDeliveries?: boolean;
+  // Specialists plans (Task 4): set only on a plan's specialist — which plan,
+  // step and attempt it serves. A plan specialist is driven by the plan
+  // executor, not by its parent's turn: the Stop button on the parent does not
+  // reach it (the plan has its own Stop), and it has no delegation-ledger row.
+  plan?: { planId: string; stepId: string; attemptId: string };
+  // The host turn id of the turn running right now (SendUnit.turnId).
+  currentTurnId?: string;
 }
 
 /** The transcript events that END a turn — the moments a session's model
@@ -543,6 +559,12 @@ export class NativeSessionHost extends EventEmitter {
   // (their sessions never see ToolServices.models), and ipc-handlers.ts
   // always injects the shared nativeHome in production.
   private delegatedModels?: DelegatedModels;
+
+  // Specialists plans (Task 4) — journal, budget, executor and service behind
+  // one bridge (plans/plan-host-bridge.ts). undefined under the same "no
+  // NativeHome" condition as `ledger`: every plan action then answers
+  // `unsupported` rather than pretending to work.
+  private plans?: PlanHostBridge;
 
   /** Task 13 — the parent's own resolved CapabilityProfile now carries its
    *  concurrency ceiling (maxConcurrentSpecialists): the spec's flat hosted
@@ -2240,6 +2262,10 @@ export class NativeSessionHost extends EventEmitter {
       acceptedHistory?: AcceptedHistoryStore;
       continuationIdentityFor?: (binding: ModelBinding) => string;
     } = {},
+    // Specialists plans (Task 4): test hooks for the executor's timings and
+    // the wait for a free specialist slot. Optional + LAST like the others;
+    // production uses the executor's defaults.
+    private planOptions: PlanHostBridgeOptions & { slotPollMs?: number } = {},
   ) {
     super();
     // Re-emit broker asks/expirations so ipc-handlers can forward them to the
@@ -2271,6 +2297,10 @@ export class NativeSessionHost extends EventEmitter {
     this.nativeHome = nativeHome;
     this.delegatedModels = nativeHome ? new DelegatedModels(nativeHome) : undefined;
     this.modeStore = nativeHome ? new PermissionModeStore(nativeHome) : undefined;
+    // Plans need a home for their journal, exactly like the delegation
+    // ledger; a bare test host (or a build without one) answers every plan
+    // action "unsupported" instead of pretending.
+    this.plans = nativeHome ? this.buildPlanBridge(nativeHome) : undefined;
   }
 
   /** Route a renderer/remote permission response to the broker. Returns false
@@ -2480,7 +2510,7 @@ export class NativeSessionHost extends EventEmitter {
    *  ceiling (Task 5's registry clamp); the profile is resolved from the binding's
    *  provider type + model id + that clamped context. An unknown provider type
    *  falls back to 'openrouter' — the cloud-safe default (full posture). */
-  private async resolveContextAndProfile(binding: ModelBinding): Promise<{ contextLength: number | null; profile: CapabilityProfile; pricing: ModelPricing | null; free: boolean; providerType: ProfileProviderType; providerBaseUrl?: string }> {
+  private async resolveContextAndProfile(binding: ModelBinding): Promise<{ contextLength: number | null; totalSlots: number | null; profile: CapabilityProfile; pricing: ModelPricing | null; free: boolean; providerType: ProfileProviderType; providerBaseUrl?: string }> {
     // Fix pass 2 (Task 13): ONE call gets both the context window and the
     // engine's real slot count — see the contextAndSlotsFor constructor
     // param's comment for why this replaces two separately-injected closures
@@ -2525,7 +2555,7 @@ export class NativeSessionHost extends EventEmitter {
     // `type` is post-fallback, so a provider we could not identify counts as
     // metered — we never claim free without knowing it.
     const free = type === 'local-engine' || isFreePricing(pricing);
-    return { contextLength, profile, pricing, free, providerType: type, ...(providerBaseUrl ? { providerBaseUrl } : {}) };
+    return { contextLength, totalSlots: totalSlots ?? null, profile, pricing, free, providerType: type, ...(providerBaseUrl ? { providerBaseUrl } : {}) };
   }
 
   /** Tool + permission + prompt wiring shared by create() and resume(). Both v1
@@ -2640,6 +2670,11 @@ export class NativeSessionHost extends EventEmitter {
         // worked fully even before this fix pass.
         ...(this.delegatedModels
           ? { models: { designated: this.delegatedModels, catalog: this.toolServices?.modelCatalog ?? (async () => null) } }
+          : {}),
+        // Specialists plans (Task 4): propose_plan journals through the plan
+        // service, with THIS host's current turn id (never model input).
+        ...(this.plans
+          ? { plans: { propose: (proposal) => this.plans!.propose(sessionId, proposal) } }
           : {}),
       },
       // WHY assembleSystemPrompt is called synchronously here: it shells out to
@@ -2838,7 +2873,7 @@ export class NativeSessionHost extends EventEmitter {
    * the instant the session exists, so the message the user typed is never
    * thrown away — which is the real harm; better wording alone still loses it.
    */
-  private startingSends = new Map<string, { id: string; text: string; attachments: string[] }[]>();
+  private startingSends = new Map<string, { id: string; text: string; attachments: string[]; turnId?: string }[]>();
 
   /** Mark an id as being built. Called at the TOP of create() and resume(), so
    *  the window a pre-live send can fall into is covered from its first tick. */
@@ -2849,7 +2884,7 @@ export class NativeSessionHost extends EventEmitter {
   /** Stop holding sends for an id, returning whatever was held. Called by wire()
    *  on success, and by create()/resume() when they give up — a message held for
    *  a session that never came up must not sit in memory forever. */
-  private endStarting(sessionId: string): { id: string; text: string; attachments: string[] }[] {
+  private endStarting(sessionId: string): { id: string; text: string; attachments: string[]; turnId?: string }[] {
     const held = this.startingSends.get(sessionId) ?? [];
     this.startingSends.delete(sessionId);
     return held;
@@ -3013,7 +3048,7 @@ export class NativeSessionHost extends EventEmitter {
     if (held.length > 0) {
       const [first, ...rest] = held;
       entry.queue.push(...rest);
-      this.send(sessionId, first.text, first.attachments);
+      this.sendTurn(sessionId, first.text, first.attachments, first.turnId);
     }
   }
 
@@ -3193,6 +3228,9 @@ export class NativeSessionHost extends EventEmitter {
     // requested. Absent (the pre-Task-14 default) means no override was
     // requested — falls back to the parent's own binding below, unchanged.
     binding?: ModelBinding;
+    // Specialists plans (Task 4): mint a PLAN specialist — the same ordinary
+    // durable specialist session, plus its budget gate/route and plan tag.
+    plan?: { gate: PlanChildRequestGate; providerType: ProfileProviderType; tag: NonNullable<LiveEntry['plan']> };
   }): Promise<{ childId: string; title: string }> {
     const parent = this.live.get(parentId);
     // A child with no live parent has nobody to report to and nobody to tear it
@@ -3237,6 +3275,7 @@ export class NativeSessionHost extends EventEmitter {
     // never existed.
     const session = this.buildSpecialistSession(
       parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent,
+      opts.plan ? { plan: opts.plan } : {},
     );
 
     // `title` was drawn earlier (before this session was built — see that
@@ -3264,7 +3303,7 @@ export class NativeSessionHost extends EventEmitter {
     // gets the persistence half only; the display half (stamped COPIES of the
     // display-safe events per isSubagentDisplayEvent, emitted under the
     // PARENT's id) is Task 7.
-    this.wireChildLive(parentId, childId, workDir, session, binding, opts.parentToolCallId);
+    this.wireChildLive(parentId, childId, workDir, session, binding, opts.parentToolCallId, opts.plan ? { plan: opts.plan.tag } : {});
     return { childId, title };
   }
 
@@ -3285,11 +3324,17 @@ export class NativeSessionHost extends EventEmitter {
     // ring up real money through a metered specialist (spec §5).
     pricing: ModelPricing | null, free: boolean,
     parentToolCallId: string, preset: ResolvedPreset, parent: LiveEntry,
+    // Specialists plans (Task 4): a plan's specialist is this SAME
+    // construction plus its budget gate and provider route (plan-child mode,
+    // harness-session.ts). `probe` builds one only to measure a request, so it
+    // gets no background-command registry (nothing may ever run in it).
+    extra: { plan?: { gate: PlanChildRequestGate; providerType: ProfileProviderType }; probe?: boolean } = {},
   ): HarnessSession {
     const allowed = new Set(specialist.allowedTools);
     return new HarnessSession(
       {
         sessionId: childId, cwd: workDir, binding, contextLength, profile, pricing, free,
+        ...(extra.plan ? { planChild: extra.plan.gate, providerType: extra.plan.providerType } : {}),
 // WHY: specialist work is bounded by its narrow tool set, parent-managed
         // lifecycle controls, and the delegation spawn backstop—not an arbitrary
         // per-child action count, so root limits never flow into a child.
@@ -3302,7 +3347,7 @@ export class NativeSessionHost extends EventEmitter {
         tools: CORE_TOOLS.filter((t) => allowed.has(t.name) || (allowed.has('Bash') && (t.name === 'BashOutput' || t.name === 'KillShell'))),
         // G-1: children get their OWN registry; their runs die with the child
         // under 'conversation-closed' when destroyChildrenOf tears them down.
-        shells: this.shellsFor(childId),
+        ...(extra.probe ? {} : { shells: this.shellsFor(childId) }),
         // COLD START (spec §1): the specialist body replaces the preset body, and
         // the <env> block describes the CHILD's work directory. Nothing from the
         // parent's conversation crosses over — the brief in the first user turn
@@ -3403,10 +3448,12 @@ export class NativeSessionHost extends EventEmitter {
    *  emitted under the PARENT's id, below. */
   private wireChildLive(
     parentId: string, childId: string, workDir: string, session: HarnessSession, binding: ModelBinding, parentToolCallId: string,
+    opts: { plan?: NonNullable<LiveEntry['plan']> } = {},
   ): void {
     const entry: LiveEntry = {
       session, cwd: workDir, appendChain: Promise.resolve(), queue: [], inFlight: false,
       parentSessionId: parentId,
+      ...(opts.plan ? { plan: opts.plan } : {}),
     };
     this.live.set(childId, entry);
     this.retainModel(childId, binding.modelId);
@@ -3441,6 +3488,11 @@ export class NativeSessionHost extends EventEmitter {
       // The original is never mutated — the persisted event above and this copy
       // are two different objects on purpose.
       if (!isSubagentDisplayEvent(event)) return;
+      // Specialists plans (Task 4): a plan specialist has no Task card to
+      // nest under — its progress is the plan card (plans-event). Stamped
+      // copies would be attached to the propose_plan card, which the signed
+      // card design does not show, so none are emitted.
+      if (opts.plan) return;
       this.emit('transcript-event', {
         ...event,
         sessionId: parentId,
@@ -3653,6 +3705,9 @@ export class NativeSessionHost extends EventEmitter {
     // reconcileDelegations already guards every fallible step internally, so
     // it is not wrapped in a try/catch here on top of that.
     await this.reconcileDelegations(sessionId, cwd);
+    // Specialists plans (Task 4): a plan left running by a crash becomes
+    // interrupted and owns nothing; nothing restarts until Continue.
+    await this.plans?.recover(sessionId, cwd);
     return true;
   }
 
@@ -3680,6 +3735,12 @@ export class NativeSessionHost extends EventEmitter {
    *  calls it re-entrantly (inFlight gates that), so the only remaining throw
    *  surface is a provider-factory rejection, which runTurns catches. */
   send(sessionId: string, text: string, attachments: string[] = []): NativeSendResult {
+    return this.sendTurn(sessionId, text, attachments);
+  }
+
+  /** send(), plus an optional host turn id carried through the queue (plans
+   *  Task 4: a Comment's follow-up turn). Same never-throws contract. */
+  private sendTurn(sessionId: string, text: string, attachments: string[], turnId?: string): NativeSendResult {
     const entry = this.live.get(sessionId);
     if (!entry) {
       // Not live YET is not the same as not live any more. A session still being
@@ -3691,7 +3752,7 @@ export class NativeSessionHost extends EventEmitter {
       if (held) {
         if (held.length >= SEND_QUEUE_LIMIT) return { status: 'failed', reason: 'starting' };
         const queueId = randomUUID();
-        held.push({ id: queueId, text, attachments });
+        held.push({ id: queueId, text, attachments, ...(turnId !== undefined ? { turnId } : {}) });
         return { status: 'queued', queueId };
       }
       return { status: 'failed', reason: 'not-live' };
@@ -3701,7 +3762,7 @@ export class NativeSessionHost extends EventEmitter {
       // Task 11: mint a stable id per queued entry so the renderer can target
       // this exact message later with removeQueued() (Cancel/Edit before send).
       const queueId = randomUUID();
-      entry.queue.push({ id: queueId, text, attachments });
+      entry.queue.push({ id: queueId, text, attachments, ...(turnId !== undefined ? { turnId } : {}) });
       return { status: 'queued', queueId };
     }
     entry.inFlight = true;
@@ -3718,7 +3779,7 @@ export class NativeSessionHost extends EventEmitter {
     // its send() so this promise never rejects — .then(resolve, resolve) is
     // belt-and-suspenders against a future throw path.
     entry.running = new Promise<void>((resolve) => {
-      setImmediate(() => { void this.runTurns(sessionId, entry, { text, attachments }).then(resolve, resolve); });
+      setImmediate(() => { void this.runTurns(sessionId, entry, { text, attachments, ...(turnId !== undefined ? { turnId } : {}) }).then(resolve, resolve); });
     });
     return { status: 'sent' };
   }
@@ -3815,11 +3876,15 @@ export class NativeSessionHost extends EventEmitter {
           await this.drainDeliveries(sessionId, entry, 'splice');
           if (this.live.get(sessionId) !== entry) return;
         }
+        // Plans (Task 4): the turn id propose_plan reads for this turn.
+        entry.currentTurnId = typeof next === 'function' ? undefined : next.turnId;
         try {
           if (typeof next === 'function') await next();
           else await entry.session.send(next.text, next.attachments);
         } catch (err) {
           log('ERROR', 'NativeSessionHost', 'send failed', { sessionId, error: String(err) });
+        } finally {
+          entry.currentTurnId = undefined;
         }
         // Destroy() may have removed/replaced the entry mid-turn — stop draining then.
         if (this.live.get(sessionId) !== entry) return;
@@ -4292,6 +4357,8 @@ export class NativeSessionHost extends EventEmitter {
     for (const childId of this.childrenOf.get(sessionId) ?? []) {
       const rec = records.find((r) => r.childId === childId);
       if (rec?.background) continue; // still working — the Stop button doesn't touch it
+      // A plan's specialist belongs to the plan, which has its own Stop.
+      if (this.live.get(childId)?.plan) continue;
       this.interrupt(childId);
     }
     const entry = this.live.get(sessionId);
@@ -4346,6 +4413,9 @@ export class NativeSessionHost extends EventEmitter {
     const entry = this.live.get(sessionId);
     if (!entry) return;
     entry.queue.length = 0;                        // (1) no post-flush turn can start
+    // (1a) Plans (Task 4): this conversation is moving elsewhere — its running
+    // plans settle into interrupted journal state before their specialists go.
+    if (!entry.parentSessionId) await this.plans?.interruptSession(sessionId);
     // (1b) Tear down specialist children before quiescing this session: a
     // running child keeps appending to ITS file and keeps the parent's Task call
     // pending, both of which contradict what quiesce promises the caller (no
@@ -4501,6 +4571,232 @@ export class NativeSessionHost extends EventEmitter {
     return this.store.list().map((r) => ({ ...r, provider: 'native' as const }));
   }
 
+  // ---- Specialists plans (Task 4) -----------------------------------------
+  // The seven card/settings actions Tasks 5–6 route here (desktop IPC and the
+  // remote server call the SAME methods), the journal projections for
+  // hydration, and the session mechanics the plan bridge borrows. Every plan
+  // change is pushed as a 'plans-event' ({ sessionId, plan: PlanView }).
+
+  private static readonly PLANS_UNSUPPORTED = { ok: false as const, unsupported: true as const, error: "Plans aren't available in this session." };
+
+  approvePlan(sessionId: string, planId: string): Promise<PlanActionResult> {
+    return this.plans?.approve(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+  commentOnPlan(sessionId: string, planId: string, text: string): Promise<PlanActionResult> {
+    return this.plans?.comment(sessionId, planId, text) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+  addPlanBudget(sessionId: string, planId: string, tokens: number): Promise<PlanActionResult> {
+    return this.plans?.addBudget(sessionId, planId, tokens) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+  resumePlan(sessionId: string, planId: string): Promise<PlanActionResult> {
+    return this.plans?.resume(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+  stopPlan(sessionId: string, planId: string): Promise<PlanActionResult> {
+    return this.plans?.stop(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+  getPlanAutoApprove(): Promise<PlanAutoApproveRead> {
+    return this.plans?.getAutoApprove() ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+  setPlanAutoApprove(underTokens: unknown): Promise<PlanSettingsWriteResult> {
+    return this.plans?.setAutoApprove(underTokens) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+
+  /** Hydration (design §5): the current card projections, read from the plan
+   *  journal of a LIVE root session. Local Electron's sendLiveOnlyState pushes
+   *  these as plans:event after the first transcript page (Task 6 wires it). */
+  planViewsFor(sessionId: string): Promise<PlanView[]> {
+    return this.plans?.views(sessionId) ?? Promise.resolve([]);
+  }
+
+  private buildPlanBridge(home: NativeHome): PlanHostBridge {
+    return new PlanHostBridge({
+      home,
+      emit: (event) => this.emit('plans-event', event),
+      rootCwd: (sessionId) => {
+        const e = this.live.get(sessionId);
+        return e && !e.parentSessionId ? e.cwd : undefined;
+      },
+      parentBinding: (sessionId) => this.live.get(sessionId)?.session.binding,
+      // What the permission fingerprint covers: the conversation's preset and
+      // its current mode. WHY not the remembered rules: they change with every
+      // "Always allow" and would make approved plans fail for no reason.
+      permissionState: (sessionId) => ({ preset: this.presetIdFor.get(sessionId) ?? null, mode: this.modeFor.get(sessionId) ?? 'ask' }),
+      roster: (cwd) => this.specialistCatalog.roster(cwd),
+      ...(this.delegatedModels ? { designated: this.delegatedModels } : {}),
+      catalog: async () => (await this.toolServices?.modelCatalog?.()) ?? null,
+      resolveRoute: (binding) => this.resolveContextAndProfile(binding),
+      maxConcurrent: (sessionId) => this.maxSpecialistsFor(sessionId),
+      readChildEvents: (childId, cwd) => this.store.readEvents(childId, cwd),
+      queueTurn: (sessionId, text, turnId) => {
+        const res = this.sendTurn(sessionId, text, [], turnId);
+        if (res.status === 'failed') {
+          throw new Error(res.reason === 'queue-full'
+            ? 'too many messages are already waiting in this conversation'
+            : "this conversation isn't running right now");
+        }
+      },
+      currentTurnId: (sessionId) => this.live.get(sessionId)?.currentTurnId,
+      startChild: (input) => this.startPlanChild(input),
+      probeSession: (input) => this.planProbeSession(input),
+    }, this.planOptions);
+  }
+
+  /** Wait for a free specialist slot (max four, one writer) for a plan
+   *  specialist. WHY wait rather than fail: the parent's own Task specialists
+   *  may hold slots for a while; the plan's budget is already reserved and
+   *  simply waits its turn. Plan specialists never spend the 30-per-
+   *  conversation spawn budget (decision 2) — the user approved the card. */
+  private async waitForPlanSlot(parentId: string, writer: boolean, signal: AbortSignal): Promise<SpecialistReservation> {
+    const pollMs = this.planOptions.slotPollMs ?? 250;
+    for (;;) {
+      if (signal.aborted) throw new Error('the plan stopped before this specialist could start');
+      if (!this.live.has(parentId)) throw new Error("the conversation that owns this plan isn't open");
+      const r = this.reserveSpecialist(parentId, { writer });
+      if (r.ok) return r.token;
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(done, pollMs);
+        function done() { clearTimeout(timer); signal.removeEventListener('abort', done); resolve(); }
+        signal.addEventListener('abort', done, { once: true });
+      });
+    }
+  }
+
+  /** Mint a plan specialist through the ordinary specialist path (createChild),
+   *  or rebuild an existing one from its own transcript for a safe restart,
+   *  then journal its id BEFORE its first request and send the brief. */
+  private async startPlanChild(input: PlanChildStart): Promise<PlanChildHandle> {
+    const parent = this.live.get(input.parentId);
+    if (!parent || parent.parentSessionId) throw new Error("the conversation that owns this plan isn't open");
+    const token = await this.waitForPlanSlot(input.parentId, input.specialist.charter !== 'read-only', input.signal);
+    let childId: string | undefined;
+    try {
+      const plan = { gate: input.gate, providerType: input.providerType, tag: input.tag };
+      if (input.resumeChildId) {
+        const resumeId = input.resumeChildId;
+        if (this.live.has(resumeId)) await this.destroy(resumeId);
+        const header = this.store.readHeader(resumeId, parent.cwd);
+        if (!header) throw new Error("this specialist's saved conversation couldn't be read");
+        const route = await this.resolveContextAndProfile(input.binding);
+        const session = this.buildSpecialistSession(
+          input.parentId, resumeId, parent.cwd, header.title ?? input.specialist.displayName, input.specialist, input.binding,
+          route.contextLength, route.profile, route.pricing, route.free, input.parentToolCallId,
+          resolvePreset(this.presetIdFor.get(input.parentId)), parent, { plan },
+        );
+        // Cold state from the specialist's OWN transcript (same as a Task resume).
+        this.seedResumedHistory(resumeId, parent.cwd, session);
+        this.wireChildLive(input.parentId, resumeId, parent.cwd, session, input.binding, input.parentToolCallId, { plan: input.tag });
+        childId = resumeId;
+      } else {
+        ({ childId } = await this.createChild(input.parentId, {
+          specialist: input.specialist, prompt: input.brief, workDir: parent.cwd,
+          parentToolCallId: input.parentToolCallId, binding: input.binding, plan,
+        }));
+      }
+      this.bindReservation(token, childId);
+      await input.recordChild(childId);
+    } catch (err) {
+      if (childId) {
+        try { await this.destroy(childId); } catch (destroyErr) {
+          log('ERROR', 'NativeSessionHost', 'plan specialist teardown failed after a failed start', { childId, error: String(destroyErr) });
+        }
+      }
+      this.releaseReservation(token);
+      throw err;
+    }
+    return this.runPlanChild(input, childId, token);
+  }
+
+  /** Drive a plan specialist's ONE turn and report how it ended. Unlike a Task
+   *  specialist there is no reminder turn: every request must be one the plan
+   *  reserved, and a missing report is the executor's to judge. */
+  private runPlanChild(input: PlanChildStart, childId: string, token: SpecialistReservation): PlanChildHandle {
+    const entry = this.live.get(childId)!;
+    const { pricing, free } = entry.session.priceCard;
+    const modelId = entry.session.binding.modelId;
+    let report = '';
+    let errorText: string | null = null;
+    let interrupted = false;
+    const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const onEvent = (event: TranscriptEvent) => {
+      if (event.type === 'assistant-text') report += String(event.data.text ?? '');
+      else if (event.type === 'tool-use') report = '';
+      else if (event.type === 'session-error') errorText = String(event.data.text ?? '').trim() || 'the specialist stopped with an error';
+      else if (event.type === 'user-interrupt') interrupted = true;
+      else if (event.type === 'turn-complete' && event.data.usage) {
+        const u = event.data.usage;
+        usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
+        usage.cacheReadTokens += u.cacheReadTokens; usage.cacheCreationTokens += u.cacheCreationTokens;
+      }
+    };
+    entry.session.on('transcript-event', onEvent);
+    let disposed = false;
+    let markDisposed!: () => void;
+    const disposedSignal = new Promise<void>((r) => { markDisposed = r; });
+    const outcome = (async (): Promise<PlanChildOutcome> => {
+      try {
+        const res = this.send(childId, input.brief);
+        if (res.status !== 'sent') return { kind: 'failed', detail: `the specialist couldn't start its turn (${res.status})` };
+        await Promise.race([entry.running, disposedSignal]);
+        const stop = input.budgetStop();
+        if (stop) return { kind: 'stopped', stop };
+        if (disposed || interrupted) return { kind: 'interrupted' };
+        if (errorText) return { kind: 'failed', detail: errorText };
+        return { kind: 'completed', report: report.trim() };
+      } catch (err: any) {
+        return { kind: 'failed', detail: err?.message ?? String(err) };
+      } finally {
+        entry.session.off('transcript-event', onEvent);
+        // The specialist's spend is the conversation's spend (same event a
+        // Task specialist reports; bookkeeping only, no card).
+        if (usage.inputTokens + usage.outputTokens > 0) {
+          try {
+            this.live.get(input.parentId)?.session.emitSubagentUsage({
+              usage: { ...usage, costUsd: free ? null : costForUsage(usage, pricing), free },
+              model: modelId, parentAgentToolUseId: input.parentToolCallId, agentId: childId,
+            });
+          } catch (err) {
+            log('ERROR', 'NativeSessionHost', "failed to report a plan specialist's spend to its conversation", { childId, error: String(err) });
+          }
+        }
+      }
+    })();
+    let disposing: Promise<void> | undefined;
+    return {
+      childId,
+      outcome,
+      abort: () => { this.interrupt(childId); },
+      dispose: () => (disposing ??= (async () => {
+        disposed = true;
+        markDisposed();
+        try { await this.destroy(childId); } catch (err) {
+          log('ERROR', 'NativeSessionHost', 'plan specialist teardown failed', { childId, error: String(err) });
+        } finally {
+          this.releaseReservation(token);
+        }
+      })()),
+    };
+  }
+
+  /** An unwired plan-specialist session used only to MEASURE a request
+   *  (setup cost at proposal, the next request's bound for the minimum Add
+   *  budget). Never registered, never sends, no background commands. */
+  private planProbeSession(input: {
+    parentId: string; specialist: SpecialistDefinition; binding: ModelBinding; route: PlanRoute;
+    gate: PlanChildRequestGate; historyFromChildId?: string;
+  }): { session: HarnessSession; dispose(): void } {
+    const parent = this.live.get(input.parentId);
+    if (!parent) throw new Error("the conversation that owns this plan isn't open");
+    const id = input.historyFromChildId ?? `plan-measure-${randomUUID()}`;
+    const session = this.buildSpecialistSession(
+      input.parentId, id, parent.cwd, input.specialist.displayName, input.specialist, input.binding,
+      input.route.contextLength, input.route.profile, input.route.pricing, input.route.free, '',
+      resolvePreset(this.presetIdFor.get(input.parentId)), parent,
+      { plan: { gate: input.gate, providerType: input.route.providerType }, probe: true },
+    );
+    if (input.historyFromChildId) this.seedResumedHistory(input.historyFromChildId, parent.cwd, session);
+    return { session, dispose: () => session.destroy() };
+  }
+
   /** Cascade-cancel: interrupt then destroy every live specialist child of this
    *  session. Called from destroy() and quiesce(). Reads the in-memory
    *  childrenOf map only — teardown never does disk I/O to find its children.
@@ -4539,7 +4835,8 @@ export class NativeSessionHost extends EventEmitter {
       // lock-contended ledger write must never make an unrelated caller's
       // teardown appear to hang. .catch(log) turns a failed write into a log
       // line instead of an unhandled rejection.
-      if (this.ledger && parentCwd) {
+      // Plan specialists have no ledger row (the plan journal is theirs).
+      if (this.ledger && parentCwd && !this.live.get(childId)?.plan) {
         this.ledger.updateUnlessCompleted(parentCwd, sessionId, childId, { status: 'interrupted', endedAt: Date.now() })
           .catch((e) => log('ERROR', 'NativeSessionHost', 'failed to record an interrupted delegation', { childId, parentId: sessionId, error: String(e) }));
       }
@@ -4567,6 +4864,11 @@ export class NativeSessionHost extends EventEmitter {
     // A session torn down while it was still starting has nowhere to deliver a
     // held message, so drop it here rather than leave it stranded in memory.
     this.endStarting(sessionId);
+    // Plans (Task 4): a ROOT conversation's running plans settle into
+    // recoverable `interrupted` state first — bounded, and before their
+    // specialists are torn down below, so the journal never shows a running
+    // plan with nothing behind it.
+    if (!entry?.parentSessionId) await this.plans?.interruptSession(sessionId);
     // Specialist children go next, and unconditionally — before the not-live
     // early return, because a child must never outlive its parent even if the
     // parent's own entry is already gone (a double destroy, or a teardown
@@ -4652,6 +4954,9 @@ export class NativeSessionHost extends EventEmitter {
     // Cancel every pending ask up front (covers asks whose session is no longer
     // live, which the per-session destroy loop below would miss).
     this.broker.cancelAll();
+    // Plans (Task 4): every running plan becomes interrupted (in parallel,
+    // each bounded by the settle deadline) before any session is destroyed.
+    await this.plans?.interruptAll();
     for (const id of [...this.live.keys()]) {
       // keepShells: the app-quit sweep below kills EVERY registry with the
       // honest reason, including orphans from earlier takeovers that no live

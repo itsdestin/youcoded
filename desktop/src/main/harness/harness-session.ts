@@ -179,7 +179,7 @@ import { createProposePlanTool, failedPlanProjection, stoppedPlanProjection, wri
 import { isPlanEligible } from './plans/eligibility';
 import {
   authoritativeTokens,
-  type PlanChildRequestGate, type PlanChildStop, type PlanWireTool,
+  type PlanChildRequestGate, type PlanChildStop, type PlanWireTool, type PlanBudgetAdapter, type InputBoundResult,
 } from './plans/budget-adapter';
 import { ModelSearchTool } from './tools/model-search';
 import { BUILTIN_ROSTER, type SpecialistRoster } from './specialists/registry';
@@ -3061,11 +3061,30 @@ export class HarnessSession extends EventEmitter {
   /** The request copy a plan specialist sends (Task 3): the fitted history,
    *  without saved reasoning, with every image replaced by a named placeholder.
    *  `this.history` itself is never changed here. */
-  private planWireMessages(): ModelMessage[] {
-    return adaptForWire(withoutContinuationParts(this.fitToContext(this.history)).messages, {
+  private planWireMessages(history: ModelMessage[] = this.history): ModelMessage[] {
+    return adaptForWire(withoutContinuationParts(this.fitToContext(history)).messages, {
       nativeImageToolResults: false,
       supportsVision: false,
     });
+  }
+
+  /** Task 4 (decision 4): this specialist's exact fixed starting request —
+   *  the system prompt and tool schemas its first plan request is bounded
+   *  with. The host measures it with `setupBound` when a plan is proposed.
+   *  Read-only: buildAiTools only (idempotently) syncs the tool set. */
+  async planSetupRequest(): Promise<{ system: string; tools: PlanWireTool[] }> {
+    return { system: this.systemText, tools: await planWireTools(this.buildAiTools()) };
+  }
+
+  /** Task 4: the certified bound of the request a new user turn `userText`
+   *  would send next, measured exactly as runPlanStep measures it — without
+   *  sending anything or touching history. The host uses it to tell the user
+   *  the smallest Add budget that lets a paused specialist continue. (A
+   *  project-rule injection at that turn's start is not predicted; the host
+   *  adds a margin for it.) */
+  async planNextRequestBound(adapter: PlanBudgetAdapter, userText: string): Promise<InputBoundResult> {
+    const messages = this.planWireMessages([...this.history, { role: 'user', content: userText }]);
+    return adapter.inputBound({ system: this.systemText, messages, tools: await planWireTools(this.buildAiTools()) });
   }
 
   /**
