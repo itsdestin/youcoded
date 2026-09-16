@@ -85,4 +85,16 @@ describe('SubagentIndex', () => {
     aged.recordParentAgentToolUse('toolu_A', 'Find bug', 'Explore');
     expect(aged.tryFlushPending('agent1')?.parentToolUseId).toBe('toolu_A');
   });
+
+  // 2026-09-16 (per-session-maps investigation): parents whose subagent never
+  // materialised used to accumulate for the life of the session. The queue is
+  // capped; the OLDEST unmatched parent is the one dropped.
+  it('caps the unmatched-parent queue, dropping the oldest first', () => {
+    for (let i = 0; i < 300; i++) idx.recordParentAgentToolUse(`toolu_${i}`, `job ${i}`, 'Explore');
+    // The first 44 (300 - 256) are gone; the 45th onward still bind.
+    expect(idx.bindSubagent('a0', { description: 'job 0', agentType: 'Explore' })).toBeNull();
+    expect(idx.bindSubagent('a43', { description: 'job 43', agentType: 'Explore' })).toBeNull();
+    expect(idx.bindSubagent('a44', { description: 'job 44', agentType: 'Explore' })).toBe('toolu_44');
+    expect(idx.bindSubagent('a299', { description: 'job 299', agentType: 'Explore' })).toBe('toolu_299');
+  });
 });

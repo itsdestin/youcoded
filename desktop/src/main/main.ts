@@ -617,6 +617,20 @@ const debouncedBroadcastAttention = (() => {
   };
 })();
 
+/** Called by ipc-handlers.ts on session-exit. WHY (2026-09-16, per-session-maps
+ *  investigation): a session's entry in every window's attention report was
+ *  only ever removed when THAT renderer volunteered `{ clear: true }`; a
+ *  session that died without one (crash, takeover, window reload mid-turn)
+ *  kept its last state in the aggregate for the life of the process, and a
+ *  "needs you" state there kept the buddy's attention signal lit. */
+export function forgetSessionAttention(sessionId: string): void {
+  let mutated = false;
+  for (const byWin of attentionReports.values()) {
+    if (byWin.delete(sessionId)) mutated = true;
+  }
+  if (mutated) debouncedBroadcastAttention();
+}
+
 // Shared BrowserWindow factory — used for the primary window AND for peer
 // windows spawned by the detach subsystem. Keeps webPreferences, security
 // hardening, and fullscreen relay consistent across every window so renderers
