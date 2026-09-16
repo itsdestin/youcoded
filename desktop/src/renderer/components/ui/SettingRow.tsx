@@ -41,18 +41,22 @@ export type SettingRowVariant = 'nav' | 'item';
 /**
  * A status dot leading a row's description ("● Last synced just now").
  *
- * WHY flex, not an inline-block dot: `align-middle` centers on the font's
- * x-height, which put the dot visibly below the text's middle (Destin,
- * 2026-09-16). Flex centers the dot on the text's line box instead; the text
- * keeps its own `truncate` because the parent <p>'s ellipsis stops applying
- * once its child is a flex box.
+ * WHY the margin math: Destin wants the dot centred on the capital letters
+ * ("center aligned with the D"). Neither `align-middle` (x-height middle) nor
+ * flex centering (line-box middle) gets there — both left the dot 1.5px low.
+ * An empty inline-block sits with its bottom edge on the text baseline, so a
+ * bottom margin of (cap height − dot size) / 2 puts its centre at exactly half
+ * the cap height, in whatever font the user picked. `cap` is Chromium 118+,
+ * which both Electron and the Android WebView exceed.
  */
+const DOT_ON_CAPS: React.CSSProperties = { marginBottom: 'calc((1cap - 0.375rem) / 2)' };
+
 export function RowStatus({ dotClassName, children }: { dotClassName: string; children: React.ReactNode }) {
   return (
-    <span className="flex items-center gap-1.5 min-w-0">
-      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotClassName}`} />
-      <span className="truncate">{children}</span>
-    </span>
+    <>
+      <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 ${dotClassName}`} style={DOT_ON_CAPS} />
+      {children}
+    </>
   );
 }
 
