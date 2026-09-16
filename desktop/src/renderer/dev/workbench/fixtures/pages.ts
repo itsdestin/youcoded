@@ -293,6 +293,9 @@ const PAINT_HTML = `<!doctype html>
     { t:'rect', c:'#2f9e5b', w:6, a:.8, p:[[760,380],[960,520]] },
     { t:'line', c:'#d63a3a', w:4, a:1, p:[[140,600],[980,600]] }
   ];
+  // The seed was drawn for an 1100-wide paper; scale it to whatever width the
+  // paper actually got (a narrower window, the rail open) so nothing is cut off.
+  (function(){ var k = paper.getBoundingClientRect().width / 1100; if (k > 0 && k !== 1) ops.forEach(function(o){ o.w = Math.max(2, o.w * k); o.p = o.p.map(function(q){ return [q[0]*k, q[1]*k]; }); }); })();
   window.onresize = fit; dot(); fit();
 </script>
 </body></html>`;

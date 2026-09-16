@@ -29,7 +29,7 @@ const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith(
 // connection authenticates, long after this module loaded, so a constant read
 // 'local' for ever and a phone browser got Minimize / Maximize / Close buttons
 // that squeezed the conversation name to one letter (tester U10, 2026-09-10).
-const showCaptionButtons = () => typeof navigator !== 'undefined'
+export const showCaptionButtons = () => typeof navigator !== 'undefined'
   && !isMac
   && !isAndroid()
   && !isRemoteMode();
@@ -44,7 +44,9 @@ const toggleOnLeft = typeof navigator !== 'undefined'
   && !navigator.platform.startsWith('Mac')
   && !isAndroid();
 
-function CaptionButtons() {
+/** Exported for the Pages view's own frame (PageHost.tsx), which keeps the
+ *  window buttons where the app's header keeps them. */
+export function CaptionButtons() {
   const claude = (window as any).claude;
   // Android has no OS window controls in-app. A RENDER-time check is needed on
   // top of the bridge check: the workbench declares `__PLATFORM__` only after the
@@ -89,7 +91,7 @@ function CaptionButtons() {
  *  light position in sync as the header height / window left-edge / chrome
  *  style changes. A MutationObserver on body's data-chrome-style / -header-style
  *  attrs covers the case where chrome radius changes without a size change. */
-function MacTrafficLights({ headerRef }: { headerRef: React.RefObject<HTMLDivElement | null> }) {
+export function MacTrafficLights({ headerRef }: { headerRef: React.RefObject<HTMLDivElement | null> }) {
   const pillRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {

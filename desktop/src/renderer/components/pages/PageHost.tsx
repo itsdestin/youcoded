@@ -11,45 +11,35 @@
 // theme changes. The frame's srcDoc never changes after load, so a theme
 // switch keeps whatever the page was doing (scope §2).
 //
-// Opened by PAGE_OPENED (from a card or a pinned button); renders nothing
-// while no page is open. Sits above the library (z-50 over its z-40) so a page
-// opened from the library returns to the library on back, and a pinned page
-// opened from the header returns to chat.
+// THE PAGE VIEW'S OWN FRAME (shell deck round 3, 2026-09-16). Destin picked
+// the side-panel layout and described the frame: "a similar style [to the app
+// frame], but a unique frame built for page view. keep exit/maximize/minimize,
+// but put the back to chat option where the games/files panels would be, a
+// page name where the session browser would be, and the new side panel
+// instead of the settings/project panel options." The rail "should list all
+// pages, with the pin icon next to them. a centered manage pages button at the
+// bottom of this panel will open the full page management screen. esc/back to
+// chat should still be its own option at the top right. the rail should be
+// collapsible with a button at the top left." So:
 //
-// LAYOUT CHOICE (shell deck round 2, 2026-09-16). Destin: "i don't think i
-// want a header in that style. i think i want to hide the pinned/edit tags
-// things. i think i may want pages to be arranged with a side panel instead of
-// a top header? please give me a few different options/styles". Four layouts
-// are drawn here for the round-3 Choice deck, picked by `?pageLayout=` in the
-// workbench URL:
-//   bar       — a slim bar: back, icon, name; page actions behind ⋯
-//   frameless — no bar at all; a floating back pill and a floating ⋯
-//   rail      — a side panel: back, the page, your pinned pages, all pages;
-//               page actions at the bottom of the panel
-//   frame     — the page sits inside the app's own frame, under the top bar
-//               (which keeps the Pages and pinned buttons), like the chat does
-// The knob is workbench-only: the built app reads no query string here, so it
-// always gets the default. Once a layout is chosen the other three go.
+//   ┌ [☰ rail]            ◷ Page name · Edit in chat        [‹ Back to chat] [– □ ×] ┐
+//   │ rail: every page, grouped, pin beside each │  the page, in a rounded pane   │
+//   │ … [ Manage pages ]                         │                                 │
+//
+// Opened by PAGE_OPENED (from a card, a pinned button, or a rail row); renders
+// nothing while no page is open. Sits above the library (z-50 over its z-40)
+// so Manage pages can open the library on top, and Back returns to chat.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
-import { useAnchoredMenu } from '../../hooks/useAnchoredMenu';
-import { Button, CloseButton, LoadingState, ErrorState, Tooltip } from '../ui';
+import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
+import { CaptionButtons, MacTrafficLights, showCaptionButtons } from '../HeaderBar';
 import type { PageDocument, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
-import { PageGlyph, PagesIcon } from './page-icons';
+import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned } from './use-pages';
 import { PAGE_KIT_CSS } from './page-kit';
 import { PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
-
-type Layout = 'bar' | 'frameless' | 'rail' | 'frame';
-const DEFAULT_LAYOUT: Layout = 'bar';
-function pickLayout(): Layout {
-  if (typeof location === 'undefined') return DEFAULT_LAYOUT;
-  const v = new URLSearchParams(location.search).get('pageLayout');
-  return v === 'frameless' || v === 'rail' || v === 'frame' || v === 'bar' ? v : DEFAULT_LAYOUT;
-}
 
 interface PageHostProps {
   /** Opens the creator on THIS page: a conversation that edits it. Owned by App. */
@@ -64,12 +54,16 @@ type Load =
 export function PageHost({ onEditInChat }: PageHostProps) {
   const { state, dispatch } = useArtifact();
   const pageId = state.openPageId;
-  const close = () => dispatch({ type: 'PAGE_CLOSED' });
-  useEscClose(pageId !== null, close);
+  // Back to chat closes the page AND the library beneath it: the rail's
+  // Manage pages opens the library over the page, but Esc/Back from the page
+  // itself means "I am done with pages".
+  const backToChat = () => { dispatch({ type: 'PAGE_CLOSED' }); dispatch({ type: 'PAGES_VIEW_CLOSED' }); };
+  useEscClose(pageId !== null && !state.pagesViewOpen, backToChat);
   const { pages } = usePages();
   const summary = pages.find((p) => p.id === pageId) ?? null;
   const pinnedCount = pages.filter((p) => p.pinned).length;
-  const layout = useMemo(pickLayout, []);
+  const [railOpen, setRailOpen] = useState(true);
+  const headerRef = useRef<HTMLDivElement>(null);
 
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -108,210 +102,160 @@ export function PageHost({ onEditInChat }: PageHostProps) {
   const title = useMemo(() => summary?.name ?? (load.state === 'ready' ? load.page.name : 'Page'), [summary, load]);
   if (pageId === null) return null;
 
-  const pinned = summary?.pinned ?? false;
-  const cannotPin = !pinned && pinnedCount >= MAX_PINNED_PAGES;
-  const togglePin = () => { if (summary) void setPagePinned(summary.id, !pinned); };
-  const edit = () => onEditInChat(pageId);
-  const openLibrary = () => dispatch({ type: 'PAGES_VIEW_OPENED' });
-  const homeLabel = summary ? (summary.home.kind === 'personal' ? 'Personal' : summary.home.name) : '';
-
-  const body = (
-    <>
-      {load.state === 'loading' && <LoadingState what={title} verb="Opening" />}
-      {load.state === 'failed' && (
-        <div className="p-6 max-w-[34rem] mx-auto">
-          <ErrorState message={load.failure.message} onRetry={() => dispatch({ type: 'PAGE_OPENED', pageId })} />
-        </div>
-      )}
-      {load.state === 'ready' && (
-        <iframe
-          ref={frameRef}
-          srcDoc={load.doc}
-          sandbox="allow-scripts allow-popups allow-forms"
-          className="absolute inset-0 w-full h-full border-0 bg-canvas"
-          title={title}
-        />
-      )}
-    </>
-  );
-
-  const menu = (
-    <PageMenu
-      pinned={pinned}
-      cannotPin={cannotPin}
-      onTogglePin={togglePin}
-      onEdit={edit}
-      onLibrary={openLibrary}
-    />
-  );
-
-  if (layout === 'frameless') {
-    // No bar: two floating pills over the page's own top corners.
-    return (
-      <div className="fixed inset-0 bg-canvas z-50">
-        <div className="absolute inset-0">{body}</div>
-        <div className="absolute top-2 left-2 flex items-center gap-1">
-          <Button variant="ghost" size="sm" onClick={close} className="panel-glass bg-panel/80 border border-edge rounded-full px-2.5" aria-label="Back">
-            ‹ Back
-          </Button>
-        </div>
-        <div className="absolute top-2 right-2">{menu}</div>
-      </div>
-    );
+  const personal = pages.filter((p) => p.home.kind === 'personal');
+  const byProject = new Map<string, PageSummary[]>();
+  for (const p of pages) {
+    if (p.home.kind !== 'project') continue;
+    const list = byProject.get(p.home.name) ?? [];
+    list.push(p);
+    byProject.set(p.home.name, list);
   }
 
-  if (layout === 'frame') {
-    // Inside the app's frame: the top bar stays (Pages + pinned buttons keep
-    // working), the page takes the pane the chat normally fills.
-    return (
+  return (
+    <div className="fixed inset-0 bg-panel z-50 flex flex-col">
+      {/* The page view's own header: same band, same drag region and window
+          buttons as the app's header; different contents. */}
       <div
-        className="fixed z-40 flex flex-col"
-        style={{ top: 'var(--top-chrome-height, 2.5rem)', left: 'var(--frame-edge, 0px)', right: 'var(--frame-edge, 0px)', bottom: 'var(--frame-edge, 0px)' }}
+        ref={headerRef}
+        className="header-bar !relative flex items-center h-10 px-2 sm:px-3 shrink-0 select-none bg-panel border-b border-edge"
+        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <div className="relative flex-1 min-h-0 rounded-xl overflow-hidden border border-edge bg-canvas">
-          {body}
-          <div className="absolute top-2 left-2">
-            <Button variant="ghost" size="sm" onClick={close} className="panel-glass bg-panel/80 border border-edge rounded-full px-2.5" aria-label="Back to chat">
-              ‹ Chat
-            </Button>
-          </div>
-          <div className="absolute top-2 right-2">{menu}</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (layout === 'rail') {
-    const pinnedPages = pages.filter((p) => p.pinned);
-    return (
-      <div className="fixed inset-0 bg-canvas z-50 flex">
-        <aside className="w-60 shrink-0 bg-panel border-r border-edge flex flex-col select-none">
-          <div className="px-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={close} className="w-full justify-start text-fg-2" aria-label="Back to chat">
-              ‹ Back to chat
-            </Button>
-          </div>
-          <div className="px-4 pt-4 pb-3 flex items-start gap-3 border-b border-edge-dim">
-            <span className="shrink-0 w-9 h-9 rounded-md bg-inset border border-edge-dim flex items-center justify-center text-fg-2">
-              {summary && <PageGlyph icon={summary.icon} className="w-5 h-5" />}
-            </span>
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-fg truncate">{title}</div>
-              <div className="text-2xs text-fg-muted">{homeLabel}</div>
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto py-3">
-            <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-4 pb-1">Pinned</div>
-            {pinnedPages.map((p) => (
-              <RailRow key={p.id} page={p} current={p.id === pageId} onClick={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
-            ))}
-            {pinnedPages.length === 0 && <div className="px-4 py-2 text-xs text-fg-muted">No pinned pages yet</div>}
+        <MacTrafficLights headerRef={headerRef} />
+        <div className="flex items-center gap-1 sm:gap-2 flex-1 basis-0">
+          <Tooltip text={railOpen ? 'Hide the pages panel' : 'Show the pages panel'} placement="bottom">
             <button
               type="button"
-              onClick={openLibrary}
-              className="mt-2 w-full flex items-center gap-3 px-4 py-2 text-sm text-fg-2 hover:text-fg hover:bg-inset text-left"
+              className="relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg"
+              onClick={() => setRailOpen((o) => !o)}
+              aria-label={railOpen ? 'Hide pages panel' : 'Show pages panel'}
+              aria-pressed={railOpen}
             >
-              <PagesIcon className="w-4 h-4 shrink-0" />
-              <span className="flex-1">All pages</span>
-              <span className="text-fg-faint">›</span>
+              <RailToggleIcon open={railOpen} />
             </button>
-          </div>
-          <div className="border-t border-edge-dim p-2 flex flex-col gap-1">
-            <Button variant="ghost" size="sm" onClick={togglePin} disabled={cannotPin} className="w-full justify-start text-fg-2" aria-pressed={pinned}>
-              {pinned ? 'Unpin from the top bar' : 'Pin to the top bar'}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={edit} className="w-full justify-start text-fg-2">
-              Edit in chat
-            </Button>
-          </div>
-        </aside>
-        <div className="relative flex-1 min-w-0">{body}</div>
+          </Tooltip>
+        </div>
+        {/* Centre: the page's name where the session strip would be, with the
+            creator's entry point beside it. */}
+        <div className="flex items-center justify-center gap-2 min-w-0 shrink">
+          {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
+          <span className="text-sm font-medium text-fg truncate">{title}</span>
+          <Button variant="ghost" size="sm" onClick={() => onEditInChat(pageId)} className="shrink-0 text-fg-muted hover:text-fg px-2 hidden sm:inline-flex">
+            Edit in chat
+          </Button>
+        </div>
+        <div className="flex items-center justify-end gap-1 sm:gap-2 flex-1 basis-0">
+          <Button variant="ghost" size="sm" onClick={backToChat} className="shrink-0 text-fg-2 px-2" aria-label="Back to chat">
+            <span className="hidden sm:inline">Esc · </span>Back to chat
+          </Button>
+          {showCaptionButtons() && <CaptionButtons />}
+        </div>
       </div>
-    );
-  }
 
-  // 'bar' — the slim bar: back, icon, name; actions behind ⋯.
-  return (
-    <div className="fixed inset-0 bg-canvas z-50 flex flex-col">
-      <header className="flex items-center gap-2 px-3 py-1.5 border-b border-edge shrink-0 select-none">
-        <Button variant="ghost" size="sm" onClick={close} className="hidden sm:inline-flex shrink-0 text-fg-2 px-2" aria-label="Back">
-          ‹ Back
-        </Button>
-        <CloseButton onClick={close} label="Exit page" className="sm:hidden shrink-0" />
-        {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
-        <h2 className="text-sm font-medium text-fg min-w-0 truncate">{title}</h2>
-        {summary && <span className="text-2xs text-fg-muted shrink-0 hidden sm:inline">{homeLabel}</span>}
-        <div className="flex-1" />
-        {menu}
-      </header>
-      <div className="flex-1 min-h-0 relative">{body}</div>
+      <div className="flex-1 min-h-0 flex">
+        {railOpen && (
+          <aside className="w-60 shrink-0 flex flex-col select-none border-r border-edge">
+            <div className="flex-1 overflow-y-auto py-2">
+              {personal.length > 0 && (
+                <RailGroup label="Personal">
+                  {personal.map((p) => (
+                    <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
+                      onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
+                  ))}
+                </RailGroup>
+              )}
+              {[...byProject.entries()].map(([name, list]) => (
+                <RailGroup key={name} label={name}>
+                  {list.map((p) => (
+                    <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
+                      onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
+                  ))}
+                </RailGroup>
+              ))}
+              {pages.length === 0 && <div className="px-4 py-3 text-xs text-fg-muted">No pages yet</div>}
+            </div>
+            <div className="p-3 border-t border-edge-dim flex justify-center">
+              <Button variant="secondary" size="sm" onClick={() => dispatch({ type: 'PAGES_VIEW_OPENED' })} className="w-full justify-center">
+                <PagesIcon className="w-3.5 h-3.5" />
+                Manage pages
+              </Button>
+            </div>
+          </aside>
+        )}
+        {/* The page, in a rounded pane inset by the frame edge — the page
+            view's own take on the chat frame. */}
+        <div className="flex-1 min-w-0 p-[var(--frame-edge,10px)] pl-0">
+          <div className="relative w-full h-full rounded-xl overflow-hidden border border-edge bg-canvas">
+            {load.state === 'loading' && <LoadingState what={title} verb="Opening" />}
+            {load.state === 'failed' && (
+              <div className="p-6 max-w-[34rem] mx-auto">
+                <ErrorState message={load.failure.message} onRetry={() => dispatch({ type: 'PAGE_OPENED', pageId })} />
+              </div>
+            )}
+            {load.state === 'ready' && (
+              <iframe
+                ref={frameRef}
+                srcDoc={load.doc}
+                sandbox="allow-scripts allow-popups allow-forms"
+                className="absolute inset-0 w-full h-full border-0 bg-canvas"
+                title={title}
+              />
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function RailRow({ page, current, onClick }: { page: PageSummary; current: boolean; onClick: () => void }) {
+function RailGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-current={current ? 'page' : undefined}
-      className={`w-full flex items-center gap-3 px-4 py-2 text-sm text-left hover:bg-inset ${current ? 'bg-inset text-fg' : 'text-fg-2 hover:text-fg'}`}
-    >
-      <PageGlyph icon={page.icon} className="w-4 h-4 shrink-0" />
-      <span className="flex-1 min-w-0 truncate">{page.name}</span>
-    </button>
+    <div className="pb-2">
+      <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-4 pt-2 pb-1">{label}</div>
+      {children}
+    </div>
   );
 }
 
-/** The ⋯ menu that holds a page's actions: pin, edit, all pages. Same menu
- *  anatomy as the header's ||| menu (guide G-21). */
-function PageMenu({ pinned, cannotPin, onTogglePin, onEdit, onLibrary }: {
-  pinned: boolean; cannotPin: boolean; onTogglePin: () => void; onEdit: () => void; onLibrary: () => void;
-}) {
-  const { open, toggle, anchorRef, menuRef, pos, choose } = useAnchoredMenu<HTMLButtonElement>(208, 'right');
-  const rows = [
-    { key: 'pin', label: cannotPin ? `Up to ${MAX_PINNED_PAGES} pinned pages` : pinned ? 'Unpin from the top bar' : 'Pin to the top bar', onClick: choose(onTogglePin), disabled: cannotPin },
-    { key: 'edit', label: 'Edit in chat', onClick: choose(onEdit), disabled: false },
-    { key: 'library', label: 'All pages', onClick: choose(onLibrary), disabled: false },
-  ];
+/** One page in the rail: glyph, name, and its pin at the right. The row opens
+ *  the page; the pin is its own control and stops the row's click. */
+function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; current: boolean; pinFull: boolean; onOpen: () => void }) {
+  const cannotPin = !page.pinned && pinFull;
   return (
-    <>
-      <Tooltip text="Page options" placement="bottom">
+    <div
+      role="button"
+      tabIndex={0}
+      data-rail-page={page.id}
+      aria-current={current ? 'page' : undefined}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
+      className={`group w-full flex items-center gap-3 pl-4 pr-2 py-1.5 text-sm text-left cursor-pointer ${current ? 'bg-inset text-fg' : 'text-fg-2 hover:text-fg hover:bg-inset/60'}`}
+    >
+      <PageGlyph icon={page.icon} className="w-4 h-4 shrink-0" />
+      <span className="flex-1 min-w-0 truncate">{page.name}</span>
+      <Tooltip text={cannotPin ? `Up to ${MAX_PINNED_PAGES} pinned pages` : page.pinned ? 'Unpin from the top bar' : 'Pin to the top bar'} placement="bottom">
         <Button
-          ref={anchorRef}
-          size="icon"
+          size="icon-sm"
           variant="ghost"
-          aria-label="Page options"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          onClick={toggle}
-          className="panel-glass bg-panel/80 border border-edge rounded-full text-fg-2"
+          aria-label={page.pinned ? `Unpin ${page.name}` : `Pin ${page.name}`}
+          aria-pressed={page.pinned}
+          disabled={cannotPin}
+          onClick={(e) => { e.stopPropagation(); void setPagePinned(page.id, !page.pinned); }}
+          className={page.pinned ? 'text-fg' : 'text-fg-faint group-hover:text-fg-muted'}
         >
-          <span aria-hidden="true" className="text-base leading-none">⋯</span>
+          <PinGlyph filled={page.pinned} />
         </Button>
       </Tooltip>
-      {open && pos && createPortal(
-        <div
-          ref={menuRef}
-          role="menu"
-          className="glass-overlay overlay-no-drag fixed w-52 bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden py-1"
-          style={{ top: pos.top, left: pos.left }}
-        >
-          {rows.map((r) => (
-            <button
-              key={r.key}
-              type="button"
-              role="menuitem"
-              onClick={r.onClick}
-              disabled={r.disabled}
-              className="coarse-roomy w-full flex items-center gap-3 px-3 py-2.5 text-sm text-left transition-colors text-fg-2 hover:text-fg hover:bg-inset disabled:opacity-50"
-            >
-              <span className="flex-1 min-w-0 truncate">{r.label}</span>
-            </button>
-          ))}
-        </div>,
-        document.body,
-      )}
-    </>
+    </div>
+  );
+}
+
+/** A panel-with-left-sidebar glyph; the sidebar fills when the rail is open. */
+function RailToggleIcon({ open }: { open: boolean }) {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <rect x="3" y="5" width="18" height="14" rx="2" strokeWidth={2} />
+      <path d="M9 5v14" strokeWidth={2} />
+      {open && <rect x="3" y="5" width="6" height="14" rx="1" fill="currentColor" stroke="none" />}
+    </svg>
   );
 }

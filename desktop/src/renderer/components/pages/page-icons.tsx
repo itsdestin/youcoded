@@ -33,3 +33,15 @@ export function PagesIcon({ className = 'w-4 h-4' }: { className?: string }) {
     </svg>
   );
 }
+
+/** A push-pin, upright. Round 1 of the shell deck (2026-09-16): the first
+ *  glyph, a tilted pin, read as "a little odd" — this one is the familiar
+ *  upright shape, filled when the page is pinned. */
+export function PinGlyph({ filled }: { filled: boolean }) {
+  return (
+    <svg className="w-4 h-4" viewBox="0 0 24 24" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M12 17v5M9 10.76a2 2 0 01-1.11 1.79l-1.78.9A2 2 0 005 15.24V16a1 1 0 001 1h12a1 1 0 001-1v-.76a2 2 0 00-1.11-1.79l-1.78-.9A2 2 0 0115 10.76V7a1 1 0 011-1 2 2 0 000-4H8a2 2 0 000 4 1 1 0 011 1z" />
+    </svg>
+  );
+}
