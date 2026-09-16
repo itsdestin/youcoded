@@ -294,8 +294,17 @@ function errorText(e: unknown): string {
 function cutOffNote(cut: Array<{ stepId: string }>): string {
   if (cut.length === 0) return '';
   const steps = [...new Set(cut.map((c) => `"${c.stepId}"`))].join(', ');
-  const who = cut.length === 1 ? `1 other specialist in step ${steps} was` : `${cut.length} other specialists in step${steps.includes(',') ? 's' : ''} ${steps} were`;
-  return ` ${who} cut off mid-request, and it isn't known whether that request finished; Continue lets ${cut.length === 1 ? 'it' : 'them'} pick up from what ${cut.length === 1 ? 'it' : 'they'} recorded.`;
+  const one = cut.length === 1;
+  const who = one ? `1 other specialist in step ${steps} was` : `${cut.length} other specialists in step${steps.includes(',') ? 's' : ''} ${steps} were`;
+  return `${who} cut off mid-request, and it isn't known whether ${one ? 'that request' : 'those requests'} finished; `
+    + `Continue lets ${one ? 'it' : 'them'} pick up from what ${one ? 'it' : 'they'} recorded.`;
+}
+
+/** Join the pause's own reason and the cut-off note as two sentences. */
+function withCutOffNote(reason: string, cut: Array<{ stepId: string }>): string {
+  const note = cutOffNote(cut);
+  if (!note) return reason;
+  return `${/[.!?]$/.test(reason.trim()) ? reason.trim() : `${reason.trim()}.`} ${note}`;
 }
 
 export class PlanExecutor implements PlanExecutorHooks {
@@ -969,7 +978,7 @@ export class PlanExecutor implements PlanExecutorHooks {
         if (final.kind === 'pause') {
           p.status = 'paused';
           p.paused = {
-            stepId: final.stepId, reason: final.reason + cutOffNote(cutOffOthers),
+            stepId: final.stepId, reason: withCutOffNote(final.reason, cutOffOthers),
             ...(final.attemptId ? { attemptId: final.attemptId } : {}),
             ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}),
           };

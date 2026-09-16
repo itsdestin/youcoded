@@ -63,7 +63,8 @@ const completes = (report: string, input = 100, output = 50): Script => async ({
 const hangs = (honorsAbort: boolean): Script => async ({ gate, signal }) => {
   await gate.reserve({ inputBoundTokens: 100 });
   if (!honorsAbort) return new Promise<PlanChildOutcome>(() => {});
-  await new Promise<void>((res) => signal.addEventListener('abort', () => res(), { once: true }));
+  // An abort that already happened counts too (a launch can land after the halt).
+  if (!signal.aborted) await new Promise<void>((res) => signal.addEventListener('abort', () => res(), { once: true }));
   await gate.settle({ kind: 'unknown', why: 'interrupted' });
   return { kind: 'interrupted' };
 };
@@ -584,7 +585,9 @@ describe('pausing, stopping and interruption settle before anything is visible',
     // pause, so Continue does not pause again for each of them.
     expect(byBrief('Do stuck1').ambiguityReported).toBe(true);
     expect(byBrief('Do stuck2').ambiguityReported).toBe(true);
-    expect(p.paused!.reason).toMatch(/2 other specialists in step "s1" were cut off/);
+    expect(p.paused!.reason).toBe('A specialist in step "s1" stopped with an error: the provider returned an error. '
+      + '2 other specialists in step "s1" were cut off mid-request, and it isn\'t known whether those requests finished; '
+      + 'Continue lets them pick up from what they recorded.');
     // the sibling that honoured the abort settled itself
     expect(byBrief('Do quick')).toMatchObject({ phase: 'response-persisted', spentTokens: 1000 });
     expect(p.steps[1].attempts).toHaveLength(0);

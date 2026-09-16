@@ -4712,6 +4712,9 @@ export class NativeSessionHost extends EventEmitter {
       }
       this.bindReservation(token, childId);
       await input.recordChild(childId, { title });
+      // The plan may have stopped while this specialist was being created; a
+      // turn started now would be a request nobody will wait for.
+      if (input.signal.aborted) throw new Error('the plan stopped before this specialist could start');
     } catch (err) {
       if (childId) {
         try { await this.destroy(childId); } catch (destroyErr) {
@@ -4782,7 +4785,10 @@ export class NativeSessionHost extends EventEmitter {
     return {
       childId,
       outcome,
-      abort: () => { this.interrupt(childId); },
+      // WHY twice: send() starts the turn one macrotask later, and an
+      // interrupt before that moment has no turn to stop. The second call
+      // lands after the turn exists.
+      abort: () => { this.interrupt(childId); setImmediate(() => { if (this.live.has(childId)) this.interrupt(childId); }); },
       dispose: () => (disposing ??= (async () => {
         disposed = true;
         markDisposed();

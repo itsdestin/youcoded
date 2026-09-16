@@ -5700,6 +5700,20 @@ describe('specialists plans in the native host (Task 4)', () => {
     await waitFor(() => planStatus()[0] === 'completed', 'completion');
   });
 
+  it('a plan that stops while a specialist is being created never lets it send', async () => {
+    await host.create({ sessionId: SID, cwd: root, binding: PARENT });
+    const ac = new AbortController();
+    const gate = { adapter: { id: 'g', providerType: 'openrouter', capsOutput: true, inputBound: () => ({ ok: true, tokens: 1 }) }, reserve: async () => ({ ok: true, maxOutputTokens: 10 }), settle: async () => ({ kind: 'ok', chargedTokens: 1 }) };
+    await expect((host as any).startPlanChild({
+      parentId: SID, specialist: resolveSpecialist('reviewer'), binding: { providerId: 'openrouter', modelId: CHILD }, providerType: 'openrouter',
+      gate, parentToolCallId: 'call-x', signal: ac.signal, tag: { planId: 'p', stepId: 's', attemptId: 'a' },
+      recordChild: async () => { ac.abort(); }, brief: 'Review a.ts', budgetStop: () => undefined,
+    })).rejects.toThrow(/stopped before this specialist could start/);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(childCalls).toHaveLength(0);
+    expect(liveChildren()).toHaveLength(0);
+  });
+
   it('review item 9: the model\'s task_id surface cannot reach a plan specialist; the card\'s own actions can', async () => {
     const planId = await proposeOne();
     childReply = () => 'hang';
