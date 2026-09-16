@@ -163,6 +163,32 @@ describe('card actions land only what the host answered', () => {
     expect(plans.resume).not.toHaveBeenCalled();
   });
 
+  it('a card with no controls never shows the unsupported line', async () => {
+    const plans = bridge({ getAutoApprove: vi.fn().mockResolvedValue({ ok: false, unsupported: true, error: "Plans aren't available on the phone." }) });
+    for (const done of [plan({ status: 'completed', seq: 2 }), plan({ status: 'failed', seq: 2 }), plan({ status: 'stopped', revisedBy: 'plan-2', seq: 2 })]) {
+      const { unmount } = render(<ChatProvider><Card initial={done} /></ChatProvider>);
+      await waitFor(() => expect(plans.getAutoApprove).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText("Plans aren't available on the phone.")).toBeNull();
+      unmount();
+    }
+  });
+
+  it('a second press while a call is out sends nothing more (double Enter)', async () => {
+    let finish!: (v: unknown) => void;
+    const plans = bridge({ comment: vi.fn(() => new Promise((r) => { finish = r; })) });
+    render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+    const box = screen.getByPlaceholderText('What should change?');
+    fireEvent.change(box, { target: { value: 'fewer steps' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    expect(plans.comment).toHaveBeenCalledTimes(1);
+    finish({ ok: true, plan: plan({ status: 'stopped', revisedBy: 'plan-2', seq: 2 }) });
+    await waitFor(() => expect(status()).toBe('stopped'));
+    expect(plans.comment).toHaveBeenCalledTimes(1);
+  });
+
   it('a bridge without plans at all is the same as unsupported, not a crash', async () => {
     (window as any).claude = {};
     render(<ChatProvider><Card initial={plan()} /></ChatProvider>);

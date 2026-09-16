@@ -184,10 +184,9 @@ export function mergeChildEvents(
   parentId: string,
   parentEvents: TranscriptEvent[],
   // Task 5a: a structural record (not DelegationRecord) so a PLAN specialist —
-  // which has no ledger row — can be replayed through the same splice. `plan`
-  // is the identity its live copies carry (wireChildLive), stamped the same way.
+  // which has no ledger row — can be replayed through the same splice.
   children: Array<{
-    record: Pick<DelegationRecord, 'parentToolCallId' | 'childId'> & { plan?: { planId: string; stepId: string; attemptId: string } };
+    record: Pick<DelegationRecord, 'parentToolCallId' | 'childId'>;
     events: TranscriptEvent[];
   }>,
 ): TranscriptEvent[] {
@@ -200,10 +199,7 @@ export function mergeChildEvents(
       .map((e) => ({
         ...e,
         sessionId: parentId,
-        data: {
-          ...e.data, parentAgentToolUseId: record.parentToolCallId, agentId: record.childId,
-          ...(record.plan ? { planChild: { ...record.plan } } : {}),
-        },
+        data: { ...e.data, parentAgentToolUseId: record.parentToolCallId, agentId: record.childId },
       } satisfies TranscriptEvent));
     merged.splice(idx + 1, 0, ...stamped);
   }
@@ -3510,16 +3506,14 @@ export class NativeSessionHost extends EventEmitter {
       // are two different objects on purpose.
       if (!isSubagentDisplayEvent(event)) return;
       // Specialists plans (Task 4, review item 6): a plan specialist's copy
-      // rides under the plan's propose_plan call and carries its plan identity,
-      // so the renderer can place it in that specialist's row of the plan card
-      // (PlanStepView.children) rather than in a Task card that doesn't exist.
+      // rides under the plan's propose_plan call (parentToolCallId) and names
+      // the specialist (agentId); the renderer files it in that specialist's
+      // row of the plan card (PlanStepView.children). Task 5a review: no extra
+      // plan stamp — nothing reads one, and an unread field only drifts.
       this.emit('transcript-event', {
         ...event,
         sessionId: parentId,
-        data: {
-          ...event.data, parentAgentToolUseId: parentToolCallId, agentId: childId,
-          ...(opts.plan ? { planChild: { planId: opts.plan.planId, stepId: opts.plan.stepId, attemptId: opts.plan.attemptId } } : {}),
-        },
+        data: { ...event.data, parentAgentToolUseId: parentToolCallId, agentId: childId },
       } satisfies TranscriptEvent);
     });
   }
@@ -4536,14 +4530,15 @@ export class NativeSessionHost extends EventEmitter {
       }
     }
     // Task 5a: plan specialists have no ledger row, so their rows' past
-    // activity comes from the plan journal — same splice, same stamps as live.
+    // activity comes from the plan journal — same splice, same stamps as live
+    // (parentAgentToolUseId = the propose_plan call, agentId = the specialist).
     // childTranscriptSources never throws (a damaged journal yields none).
     const planChildren = this.plans?.childTranscriptSources(sessionId) ?? [];
     if (records.length === 0 && planChildren.length === 0) return parentEvents;
     const children = [
       ...records.map((record) => ({ record, events: this.store.readEvents(record.childId, record.workDir) })),
       ...planChildren.map((c) => ({
-        record: { parentToolCallId: c.parentToolCallId, childId: c.childId, plan: c.plan },
+        record: { parentToolCallId: c.parentToolCallId, childId: c.childId },
         events: this.store.readEvents(c.childId, c.cwd),
       })),
     ];

@@ -3244,7 +3244,10 @@ export function registerIpcHandlers(
   // page FIRST and then this, so the replay-complete marker cannot reap tool
   // cards before the page that creates them has been applied.
   ipcMain.handle(IPC.SESSION_REPLAY_LIVE_STATE, (evt, { sessionId }: { sessionId: string }) => {
-    sendLiveOnlyState(evt.sender, sessionId, nativeHost.getHistory(sessionId) !== null);
+    // Task 5a review: isNative answers the same question (a live native
+    // session) without reading and merging the whole transcript — this now
+    // runs after every first page, not just on handoff.
+    sendLiveOnlyState(evt.sender, sessionId, nativeHost.isNative(sessionId));
   });
 
   // --- Native runtime IPC (Phase 1 Plan A) ---

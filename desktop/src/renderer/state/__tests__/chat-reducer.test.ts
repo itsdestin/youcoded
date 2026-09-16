@@ -896,7 +896,10 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE', () => {
     // died, and claiming success for work that may never have run is the
     // misleading-success failure error-message-standards.md exists to prevent.
     expect(tool.status).toBe('failed');
-    expect(tool.error).toMatch(/closed/i);
+    // Task 5a review: states only what is known. This replay now also runs
+    // after a plain renderer reload, when the session itself kept running, so
+    // "the session was closed" would be a guess.
+    expect(tool.error).toBe('Stopped before it finished');
     // The replayed turn is over; nothing is in flight.
     expect(state.get('sess-1')!.isThinking).toBe(false);
   });
@@ -919,6 +922,29 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE', () => {
     const tool = state.get('sess-1')!.toolCalls.get('plan-writing')!;
     expect(tool.status).toBe('failed');
     expect(tool.plan).toMatchObject({ status: 'failed', seq: 1 });
+  });
+
+  // Task 5a review: the replay now runs on every first page (start-up, resume,
+  // reload), so it can land on a session already showing an error. Ending the
+  // replayed turn must not wipe that banner or unblock the input gate.
+  it('keeps an error or ended-session state the replay did not set', () => {
+    for (const setUp of [
+      { type: 'NATIVE_SESSION_ERROR', sessionId: 'sess-1', message: 'The provider refused the request.' },
+      { type: 'SESSION_PROCESS_EXITED', sessionId: 'sess-1', exitCode: 1 },
+    ] as any[]) {
+      let state = initState();
+      state = chatReducer(state, {
+        type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sess-1', uuid: 'u-x', toolUseId: 'toolu_x', toolName: 'Bash', toolInput: { command: 'ls' },
+      } as any);
+      state = chatReducer(state, setUp);
+      const before = state.get('sess-1')!;
+      expect(before.attentionState).not.toBe('ok');
+      state = chatReducer(state, { type: 'TRANSCRIPT_REPLAY_COMPLETE', sessionId: 'sess-1', sessionIdle: true } as any);
+      const after = state.get('sess-1')!;
+      expect(after.attentionState).toBe(before.attentionState);
+      expect(after.errorMessage).toBe(before.errorMessage);
+      expect(after.toolCalls.get('toolu_x')!.status).toBe('failed');
+    }
   });
 
   it('leaves a completed replayed tool alone', () => {

@@ -5644,15 +5644,18 @@ describe('specialists plans in the native host (Task 4)', () => {
     for (const id of childIds) expect(store.readHeader(id, root)).toMatchObject({ sessionKind: 'specialist', parentSessionId: SID, agentType: 'reviewer' });
     // …never wired as conversations (no namer/feeder)…
     expect(events.some((e) => childIds.includes(e.sessionId))).toBe(false);
-    // …and (review item 6) their display copies carry the plan identity, so the
-    // renderer can place them in that specialist's row of the plan card.
+    // …and (review item 6) their display copies ride the plan's card, naming
+    // the specialist, so the renderer can place them in that specialist's row.
+    // Task 5a review: no separate plan stamp — the renderer keys rows by
+    // agentId on a propose_plan card, and an unused field would only drift.
     const copies = events.filter((e) => e.type !== 'subagent-usage' && childIds.includes(e.data?.agentId));
     expect(copies.length).toBeGreaterThan(0);
     for (const c of copies) {
       expect(c.sessionId).toBe(SID);
       expect(c.data.parentAgentToolUseId).toBe('call-plan');
       const attempt = rec.steps.flatMap((st: any) => st.attempts.map((a: any) => ({ ...a, stepId: st.id }))).find((a: any) => a.childId === c.data.agentId);
-      expect(c.data.planChild).toEqual({ planId, stepId: attempt.stepId, attemptId: attempt.attemptId });
+      expect(attempt).toBeTruthy();
+      expect(c.data).not.toHaveProperty('planChild');
     }
     // The plan card's rows list their specialists from the journal.
     const view = (await host.planViewsFor(SID))[0];
@@ -5696,13 +5699,14 @@ describe('specialists plans in the native host (Task 4)', () => {
       const a = attempts.find((x: any) => x.childId === e.data.agentId);
       expect(e.sessionId).toBe(SID);
       expect(e.data.parentAgentToolUseId).toBe('call-plan');
-      expect(e.data.planChild).toEqual({ planId, stepId: a.stepId, attemptId: a.attemptId });
+      expect(a).toBeTruthy();
+      expect(e.data).not.toHaveProperty('planChild');
       // After the card they belong to — the reducer drops a child event whose card is not there yet.
       expect(history.indexOf(e)).toBeGreaterThan(planIdx);
     }
     // The page a restarted window loads carries them too.
     const page = host.getHistoryPage(SID, null)!;
-    expect(page.events.filter((e) => e.data?.planChild).length).toBe(replayed.length);
+    expect(page.events.filter((e) => attempts.some((a: any) => a.childId === e.data?.agentId) && e.type !== 'subagent-usage').length).toBe(replayed.length);
   });
 
   it('review item 6: a plan specialist\'s routed ask carries the plan, step and specialist identity', async () => {

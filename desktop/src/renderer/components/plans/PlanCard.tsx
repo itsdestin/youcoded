@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PlanView, PlanStepView, PlanChildView, ToolCallState } from '../../../shared/types';
 import { useChatDispatch } from '../../state/chat-context';
 import { Button, StatusStrip, Textarea, TextInput } from '../ui';
@@ -143,12 +143,20 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const unsupported = answeredUnsupported ?? probedUnsupported?.error ?? null;
   const blocked = busy !== null || unsupported !== null;
   const revised = plan.status === 'stopped' && !!plan.revisedBy;
+  // Only a card that offers buttons explains why they are disabled; a
+  // finished, failed or revised card has nothing to refuse (Task 5a review).
+  const hasControls = !revised && (plan.status === 'proposed' || plan.status === 'running' || plan.status === 'paused' || plan.status === 'interrupted');
+  // Task 5a review: `busy` is React state and does not update between two
+  // presses in the same tick (double Enter in the comment box sent the note
+  // twice). A ref closes that gap: one call at a time per card.
+  const inFlight = useRef(false);
 
   // Every button makes one bridge call and lands ONLY the record the host
   // returned (the same record its plans:event push carries) — so the card
   // never invents a state on its own. Returns whether the host accepted.
   const act = async (name: string, fn: Parameters<typeof planAction>[0]): Promise<boolean> => {
-    if (!sessionId || unsupported !== null) return false;
+    if (!sessionId || unsupported !== null || inFlight.current) return false;
+    inFlight.current = true;
     setBusy(name); setError(null);
     try {
       const res = await planAction(fn);
@@ -156,7 +164,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
       if (res.unsupported) setAnsweredUnsupported(res.error);
       else setError(res.error);
       return false;
-    } finally { setBusy(null); }
+    } finally { inFlight.current = false; setBusy(null); }
   };
   const id = sessionId ?? '';
   const approve = () => act('approve', (b) => b.approve(id, plan.planId));
@@ -280,7 +288,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             </div>
           )}
 
-      {(error ?? unsupported) && <div className="text-xs text-destructive-fg">{error ?? unsupported}</div>}
+      {(error ?? (hasControls ? unsupported : null)) && <div className="text-xs text-destructive-fg">{error ?? unsupported}</div>}
     </div>
   );
 }
