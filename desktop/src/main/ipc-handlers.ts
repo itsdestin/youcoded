@@ -3990,6 +3990,10 @@ export function registerIpcHandlers(
   remoteServer?.setSessionMetaWiring({
     resolve: (sessionId: string) => sessionIdMap.get(sessionId) || sessionId,
     canWrite: canWriteStoreRecord,
+    // The desktop half of a phone-originated tag/note: the same push the ipcMain
+    // handlers make after their own write (2026-09-16, sync.md).
+    notify: (sessionId: string, payload: Record<string, unknown>) =>
+      sendForSession(sessionId, IPC.SESSION_META_CHANGED, sessionId, payload),
   });
 
   // Provider bucket to READ a resolved session's meta from. 'native' when

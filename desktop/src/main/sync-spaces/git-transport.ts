@@ -335,7 +335,16 @@ export class GitTransport implements SyncTransport {
 
   async hasRemote(space: SyncSpace): Promise<boolean> {
     const r = await this.git(space, ['remote', 'get-url', 'origin']);
-    return r.code === 0;
+    if (r.code === 0) return true;
+    // WHY (2026-09-16, sync.md): a repo damaged badly enough that git refuses to
+    // open it (zero-byte HEAD, truncated config) also cannot answer this probe,
+    // and "no remote" was the only reading it got. The engine then went to
+    // provision a remote FIRST — which offline or signed-out throws "Not
+    // connected to GitHub" every cycle before any corruption-guarded op runs —
+    // so a crashed repo on an offline device never reached the repair that
+    // needs no network at all. Classify corruption here, where it first shows.
+    this.throwIfCorrupt(space, 'remote get-url', r);
+    return false;
   }
 
   async setRemote(space: SyncSpace, url: string): Promise<void> {

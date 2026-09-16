@@ -22,6 +22,7 @@ for (const stream of [process.stdout, process.stderr]) {
 import os from 'os';
 import fs from 'fs';
 import { SessionManager } from './session-manager';
+import { resolveNoFolderCwd } from './no-folder';
 import { HookRelay } from './hook-relay';
 import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
@@ -293,6 +294,9 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   // The installed app serves the phone its built copy; a dev window serves live code unless
   // run-dev.sh --phone-build made a fresh copy (see choosePhonePageSource).
   serveBuiltPage: app.isPackaged || process.env.YOUCODED_REMOTE_BUILT === '1',
+  // The "No folder" sentinel → the app-owned empty folder, exactly as the desktop's
+  // own session:create does in ipc-handlers.ts (2026-09-16, remote-access.md).
+  prepareCreate: (payload) => resolveNoFolderCwd(payload, app.getPath('userData')),
   // The phone's / menu: the same list the desktop's commands:list handler returns.
   listCommands: () => commandProvider.getCommands(),
   requestSnapshot: () => requestMergedChatSnapshot({
