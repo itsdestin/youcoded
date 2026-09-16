@@ -33,7 +33,7 @@ import { formatVersionLine } from '../../shared/version-line';
 import type { BuddyHelperStatus } from '../../shared/types';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
-import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, Callout, StatusStrip, ErrorState, FieldError } from './ui';
+import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError } from './ui';
 import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
@@ -1737,12 +1737,11 @@ function RemoteButton(props: RemoteButtonProps) {
           </svg>
         }
         title="Remote Access"
+        // Status dot — green when remote + Tailscale VPN fully active, gray otherwise
         description={
-          <>
-            {/* Status dot — green when remote + Tailscale VPN fully active, gray otherwise */}
-            <span className={`inline-block w-1.5 h-1.5 rounded-full align-middle mr-1.5 ${isFullyConnected ? 'bg-green-400' : 'bg-fg-muted/40'}`} />
+          <RowStatus dotClassName={isFullyConnected ? 'bg-green-400' : 'bg-fg-muted/40'}>
             {subtitle}
-          </>
+          </RowStatus>
         }
         onClick={() => setOpen(true)}
       />

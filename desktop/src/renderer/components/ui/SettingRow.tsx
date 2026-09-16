@@ -38,6 +38,24 @@ import { Radio } from './Radio';
 
 export type SettingRowVariant = 'nav' | 'item';
 
+/**
+ * A status dot leading a row's description ("● Last synced just now").
+ *
+ * WHY flex, not an inline-block dot: `align-middle` centers on the font's
+ * x-height, which put the dot visibly below the text's middle (Destin,
+ * 2026-09-16). Flex centers the dot on the text's line box instead; the text
+ * keeps its own `truncate` because the parent <p>'s ellipsis stops applying
+ * once its child is a flex box.
+ */
+export function RowStatus({ dotClassName, children }: { dotClassName: string; children: React.ReactNode }) {
+  return (
+    <span className="flex items-center gap-1.5 min-w-0">
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotClassName}`} />
+      <span className="truncate">{children}</span>
+    </span>
+  );
+}
+
 const DENSITY: Record<SettingRowVariant, { title: string; desc: string }> = {
   nav: { title: 'text-sm', desc: 'text-2xs' },
   item: { title: 'text-xs', desc: 'text-3xs' },

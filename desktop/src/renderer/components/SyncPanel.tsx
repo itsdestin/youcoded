@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow } from './ui';
+import { Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow, RowStatus } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
@@ -422,10 +422,9 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
         }
         title="Backup & Sync"
         description={
-          <>
-            <span className={`inline-block w-1.5 h-1.5 rounded-full align-middle mr-1.5 ${dotColor}`} />
+          <RowStatus dotClassName={dotColor}>
             {counts ? `${primaryLabel} \u00B7 ${counts}` : primaryLabel}
-          </>
+          </RowStatus>
         }
         accessory={badge}
         onClick={() => setOpen(true)}
