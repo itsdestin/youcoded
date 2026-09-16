@@ -30,7 +30,7 @@ import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
 import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
-import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions } from './prompt-assembly';
+import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions, gitSnapshotAsync } from './prompt-assembly';
 import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
@@ -944,8 +944,9 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
     const title = header.title ?? record.title;
 
+    const gitSnapshot = await gitSnapshotAsync(workDir);
     const session = this.buildSpecialistSession(
-      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent,
+      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
     );
     // Cold state rebuilt from the child's OWN transcript — seedHistory resets
     // readRegistry + todos too (the same reset-on-resume contract root
@@ -2635,7 +2636,7 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
+  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
@@ -2741,12 +2742,13 @@ export class NativeSessionHost extends EventEmitter {
           ? { models: { designated: this.delegatedModels, catalog: this.toolServices?.modelCatalog ?? (async () => null) } }
           : {}),
       },
-      // WHY assembleSystemPrompt is called synchronously here: it shells out to
-      // git twice (execFileSync, 3s timeout each → ~6s worst case). It runs ONCE
-      // per session create/resume — NEVER on the per-turn send() path — so the
-      // accepted sync cost sits off the hot loop. Threading an await through here
-      // would ripple through every construction site for no per-turn benefit
-      // (Task 11 review ruling — the sync cost is deliberate and bounded).
+      // The git line is PRECOMPUTED: `gitSnapshot` came from gitSnapshotAsync,
+      // awaited by the caller off the main thread (2026-09-16 C3). Until then
+      // assembleSystemPromptParts shelled out to git twice, synchronously (two
+      // 3 s timeouts, ~6 s worst case) — accepted as "once per session create
+      // or resume", but the specialist path spawns a helper mid-turn with the
+      // same call, so every helper froze the whole app for it. Passing the
+      // string keeps the prompt byte-stable and this function synchronous.
       // profile.promptVariant selects the capability-steering overlay (local-small only in v1).
       // hasTools mirrors buildAiTools()'s gate: a tool-less profile (supportsTools === false)
       // gets NO tools attached, so the prompt must also drop the tool-guidance line + overlay.
@@ -2763,7 +2765,7 @@ export class NativeSessionHost extends EventEmitter {
       // timeouts) and could land on a different date or branch than the prompt the
       // model actually got. presetName is label-only and reaches no model.
       ...(() => {
-        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name });
+        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name, gitSnapshot });
         return { promptParts, systemPrompt: promptParts.map((p) => p.text).join('\n\n') };
       })(),
     };
@@ -3236,6 +3238,9 @@ export class NativeSessionHost extends EventEmitter {
     // this cwd. Awaited here so no session ever ships the model an empty
     // roster on its very first turn.
     await this.specialistCatalog.ensureFresh(opts.cwd);
+    // The <env> git line, read off the main thread before anything is built
+    // (2026-09-16 C3). Never throws (a non-repo answers a fixed string).
+    const gitSnapshot = await gitSnapshotAsync(opts.cwd);
     // Acquire this session's MCP servers (Task 6) BEFORE constructing the
     // session, so mcpServers is available for the very first buildAiTools().
     const mcpLease = await this.acquireMcp(opts.sessionId);
@@ -3253,7 +3258,7 @@ export class NativeSessionHost extends EventEmitter {
       session = new HarnessSession(
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile) },
+          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot) },
         this.modelFactory,
       );
     } catch (err) {
@@ -3331,12 +3336,13 @@ export class NativeSessionHost extends EventEmitter {
     takenNames.add(name);
 
     // Build the session BEFORE writing the header: everything inside
-    // buildSpecialistSession is fallible synchronous work (assembleSystemPrompt
-    // shells out to git, buildTriggerIndex walks the tree), and a throw after
-    // the header write would leave a session file on disk for a child that
-    // never existed.
+    // buildSpecialistSession is fallible synchronous work (buildTriggerIndex
+    // walks the tree), and a throw after the header write would leave a
+    // session file on disk for a child that never existed. The git line is
+    // awaited first, off the main thread (C3) — it never throws.
+    const gitSnapshot = await gitSnapshotAsync(workDir);
     const session = this.buildSpecialistSession(
-      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent,
+      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
     );
 
     // `title` was drawn earlier (before this session was built — see that
@@ -3385,6 +3391,8 @@ export class NativeSessionHost extends EventEmitter {
     // ring up real money through a metered specialist (spec §5).
     pricing: ModelPricing | null, free: boolean,
     parentToolCallId: string, preset: ResolvedPreset, parent: LiveEntry,
+    // The child's <env> git line, awaited by the caller off the main thread (C3).
+    gitSnapshot: string,
   ): HarnessSession {
     const allowed = new Set(specialist.allowedTools);
     return new HarnessSession(
@@ -3408,7 +3416,7 @@ export class NativeSessionHost extends EventEmitter {
         // parent's conversation crosses over — the brief in the first user turn
         // is the entire context the child gets.
         systemPrompt: assembleSystemPrompt({
-          presetBody: specialist.systemPrompt, cwd: workDir, appVersion: this.appVersion,
+          presetBody: specialist.systemPrompt, cwd: workDir, appVersion: this.appVersion, gitSnapshot,
           promptVariant: profile.promptVariant, hasTools: profile.supportsTools,
           instructionBudgetTokens: profile.injectionBudgetTokens,
           // audience 'parent': the shared doctrine's writing-for-the-user block is
@@ -3711,6 +3719,8 @@ export class NativeSessionHost extends EventEmitter {
     // structurally — this acquire() mints its own lease, and the outgoing
     // destroy() can only release the lease on the LiveEntry it captured. See
     // McpLease in mcp-manager.ts.
+    // The <env> git line, off the main thread, before the session is built (C3).
+    const gitSnapshot = await gitSnapshotAsync(cwd);
     const mcpLease = await this.acquireMcp(sessionId);
     const mcpServers = mcpLease?.servers;
     const harness = header.stepGuard === undefined
@@ -3729,7 +3739,7 @@ export class NativeSessionHost extends EventEmitter {
         // `binding` (not header.binding) — same override reason as above.
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(sessionId, cwd, preset, profile) },
+          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot) },
         this.modelFactory,
       );
       // Full history rebuild (spec §2.5): rebuildHistory reconstructs the assistant
