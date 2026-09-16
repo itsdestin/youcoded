@@ -1,6 +1,13 @@
 import { HookEvent } from '../../shared/types';
 import { ChatAction } from './chat-types';
 
+function planIdentity(v: unknown): { planId: string; stepId: string; attemptId: string } | undefined {
+  const o = v as Record<string, unknown> | undefined;
+  return o && typeof o.planId === 'string' && typeof o.stepId === 'string' && typeof o.attemptId === 'string'
+    ? { planId: o.planId, stepId: o.stepId, attemptId: o.attemptId }
+    : undefined;
+}
+
 /**
  * Maps a HookEvent into a ChatAction. Now only handles permission events —
  * all other chat state comes from the transcript watcher.
@@ -43,6 +50,10 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
             agentType: typeof rawSpecialist.agentType === 'string' ? rawSpecialist.agentType : 'specialist',
             title: typeof rawSpecialist.title === 'string' ? rawSpecialist.title : 'A specialist',
             parentToolCallId: typeof rawSpecialist.parentToolCallId === 'string' ? rawSpecialist.parentToolCallId : undefined,
+            // Task 5a: a plan specialist's ask names its plan/step/attempt
+            // (child-ask-router). Kept only when whole — a partial identity is
+            // dropped rather than guessed; the row is still found by childId.
+            ...(planIdentity(rawSpecialist.plan) ? { plan: planIdentity(rawSpecialist.plan) } : {}),
           }
         : undefined;
 

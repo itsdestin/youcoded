@@ -523,7 +523,7 @@ export interface StructuredPatchHunk {
  * background hire looks exactly like a foreground one). CC subagents still
  * never hit the ask flow; their segments never take that status.
  */
-export type SubagentSegment =
+export type SubagentSegment = (
   | {
       type: 'text';
       id: string;
@@ -589,7 +589,16 @@ export type SubagentSegment =
       partId?: string;
       /** See the 'text' variant's `timestamp` — same field, same one reason. */
       timestamp?: number;
-    };
+    }
+) & {
+  /** Specialists plans, Task 5a: which PLAN specialist this row belongs to.
+   *  A Task card has one specialist, so its segments never need it; a plan
+   *  card has many, and they all ride the same card (so every existing ask
+   *  path — answer, expiry, resolution, the remote snapshot's open-ask list —
+   *  keeps working unchanged). The plan card files each segment under the
+   *  row whose `childId` matches. Absent on every Task/Agent segment. */
+  childId?: string;
+};
 
 /** Specialists 1c — one mid-run steering message, kept on the ledger record so
  *  a card replay (reattach, restart) shows the same steer history the live
@@ -747,6 +756,25 @@ export interface PlanView {
   /** Decision 6: why a failed plan failed — the real reason, never a guess. */
   failure?: { detail: string };
 }
+
+/**
+ * Specialists plans, Task 5a — what every plan card/settings call answers
+ * (the host's PlanService forms, design §5). Declared here so the shared
+ * renderer can type `window.claude.plans` without importing main-process code;
+ * main's plans/types.ts re-exports these.
+ * WHY three forms: the renderer must tell "this device can't run plans"
+ * (disable, never retry) from "this attempt failed" (show the real reason).
+ * Nothing here ever implies success before the host said so.
+ */
+export type PlanUnsupported = { ok: false; unsupported: true; error: string };
+export type PlanFailure = { ok: false; unsupported?: undefined; error: string };
+export type PlanActionResult = { ok: true; plan: PlanView } | PlanFailure | PlanUnsupported;
+export type PlanAutoApproveRead = { ok: true; underTokens: number } | PlanFailure | PlanUnsupported;
+export type PlanSettingsWriteResult = { ok: true } | PlanFailure | PlanUnsupported;
+
+/** The `plans:event` push: one plan card changed (a journal write, or the
+ *  failed card for an unreadable journal). Latest `plan.seq` wins. */
+export interface PlansEvent { sessionId: string; plan: PlanView }
 
 /** A background specialist's delivered report, folded into its Task card. */
 export interface SpecialistReportView {

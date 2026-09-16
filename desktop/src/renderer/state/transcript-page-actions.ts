@@ -72,6 +72,8 @@ export function pageEventToAction(event: TranscriptEvent): ChatAction | null {
         timestamp: event.timestamp,
         partId: d.partId,
         parentAgentToolUseId: d.parentAgentToolUseId,
+        // Task 5a — MUST mirror App.tsx (plan card rows are filed by it).
+        agentId: d.agentId,
       } as ChatAction;
     case 'tool-use':
       return {

@@ -1516,6 +1516,8 @@ function AppInner() {
               // Specialists 1c: a child's stamped reasoning routes into its
               // Task card, not the parent's bubble. MUST mirror BubbleFeed.tsx.
               parentAgentToolUseId: event.data.parentAgentToolUseId,
+              // Task 5a: which specialist — a plan card files rows by it.
+              agentId: event.data.agentId,
             });
           } else {
             // Argument-generation progress: draw/update the preparing tool card.

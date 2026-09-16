@@ -612,6 +612,9 @@ export type ChatAction =
       // into the launching Task card as a 'thinking' segment instead of the
       // parent's own reasoning bubble.
       parentAgentToolUseId?: string;
+      // Task 5a: which specialist thought it — a plan card holds several, and
+      // files each row by this id (text/tool events already carry it).
+      agentId?: string;
     }
   | {
       type: 'PERMISSION_REQUEST';
@@ -624,7 +627,13 @@ export type ChatAction =
       // this (parent) session by child-ask-router. The reducer nests it under
       // the launching Task card (found by parentToolCallId, else by childId)
       // instead of minting a top-level card. Absent on the parent's own asks.
-      specialist?: { childId: string; agentType: string; title: string; parentToolCallId?: string };
+      // Specialists plans (Task 4 item 6 / Task 5a): a PLAN specialist's ask also
+      // names its plan, step and attempt; the reducer files it under that
+      // specialist's row on the plan card (parentToolCallId = propose_plan call).
+      specialist?: {
+        childId: string; agentType: string; title: string; parentToolCallId?: string;
+        plan?: { planId: string; stepId: string; attemptId: string };
+      };
       // Native broker only: winning rule came from the destructive deny-list →
       // ToolCard shows the consequence-gated "Always allow" warning. Task 13.
       denyListed?: boolean;

@@ -5,6 +5,8 @@ import {
   deserializeChatState,
 } from '../chat-types';
 import type { ChatState, ToolCallState } from '../chat-types';
+import { chatReducer } from '../chat-reducer';
+import type { PlanView } from '../../../shared/types';
 
 describe('chat state serialization', () => {
   it('round-trips an empty ChatState', () => {
@@ -113,5 +115,49 @@ describe('chat state serialization', () => {
     const restored = deserializeChatState(legacy).get('session-a')!;
     expect(restored.seenUuids).toBeInstanceOf(Set);
     expect(restored.seenUuids.size).toBe(0);
+  });
+  // Specialists plans, Task 5a: a remote client learns a plan card's state from
+  // the JSON chat:hydrate snapshot (no parallel plan replay), then keeps
+  // receiving plans:event and the stamped specialist events live. Both halves
+  // must survive the hop: the record and the per-specialist rows, and a delta
+  // after the snapshot must still land on the hydrated card.
+  it('round-trips a plan card through JSON chat:hydrate, and later deltas still land', () => {
+    const plan = (over: Partial<PlanView>): PlanView => ({
+      planId: 'plan-1', toolUseId: 'call-plan', title: 'Review', status: 'running', seq: 4,
+      steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 1, budgetTokens: 2000, status: 'running',
+        children: [{ childId: 'kid', parentToolCallId: 'call-plan', agentType: 'reviewer', title: 'Kid', background: false, status: 'running', startedAt: 1,
+          planAttempt: { stepId: 's1', attemptId: 'a1', itemIndex: 0, iteration: 0 } }] }],
+      ceilingTokens: 2000, ceilingUsd: null, model: { label: 'm' }, paused: undefined,
+      ...over,
+    });
+    const act = (s: ChatState, ...a: any[]) => a.reduce((acc, x) => chatReducer(acc, x), s);
+    let host: ChatState = act(new Map(),
+      { type: 'SESSION_INIT', sessionId: 'sa' },
+      { type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sa', uuid: 'u1', toolUseId: 'call-plan', toolName: 'propose_plan', toolInput: {} },
+      { type: 'PLAN_CHANGED', sessionId: 'sa', plan: plan({}) },
+      { type: 'TRANSCRIPT_TOOL_USE', sessionId: 'sa', uuid: 'c1', toolUseId: 'call_0', toolName: 'Bash', toolInput: { command: 'rm -rf build' }, timestamp: 5, parentAgentToolUseId: 'call-plan', agentId: 'kid' },
+      { type: 'PERMISSION_REQUEST', sessionId: 'sa', toolName: 'Bash', input: { command: 'rm -rf build' }, requestId: 'req',
+        specialist: { childId: 'kid', agentType: 'reviewer', title: 'Kid', parentToolCallId: 'call-plan', plan: { planId: 'plan-1', stepId: 's1', attemptId: 'a1' } } },
+    );
+    const json = JSON.stringify(serializeChatState(host));
+    let phone: ChatState = act(new Map(), { type: 'HYDRATE_CHAT_STATE', sessions: JSON.parse(json) });
+    const card = () => phone.get('sa')!.toolCalls.get('call-plan')!;
+    expect(card().plan).toEqual(host.get('sa')!.toolCalls.get('call-plan')!.plan);
+    expect(card().subagentSegments).toEqual([
+      expect.objectContaining({ childId: 'kid', toolUseId: 'call_0', status: 'awaiting-approval', requestId: 'req' }),
+    ]);
+    // Post-snapshot deltas: a stale record is refused, a newer one lands, the
+    // ask is answered, and more of the specialist's work arrives in its row.
+    phone = act(phone,
+      { type: 'PLAN_CHANGED', sessionId: 'sa', plan: plan({ status: 'proposed', seq: 2 }) },
+      { type: 'PLAN_CHANGED', sessionId: 'sa', plan: plan({ status: 'paused', seq: 5, paused: { stepId: 's1', reason: 'reached its limit' } }) },
+      { type: 'PERMISSION_RESPONDED', sessionId: 'sa', requestId: 'req' },
+      { type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: 'sa', uuid: 't1', text: 'done', timestamp: 6, partId: 'p', parentAgentToolUseId: 'call-plan', agentId: 'kid' },
+    );
+    expect(card().plan).toMatchObject({ status: 'paused', seq: 5 });
+    expect(card().subagentSegments).toEqual([
+      expect.objectContaining({ childId: 'kid', toolUseId: 'call_0', status: 'running' }),
+      expect.objectContaining({ childId: 'kid', type: 'text', content: 'done' }),
+    ]);
   });
 });

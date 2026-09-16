@@ -234,6 +234,8 @@ export function BubbleFeed({ sessionId }: Props) {
               partId: event.data.partId,
               // Specialists 1c — MUST mirror App.tsx.
               parentAgentToolUseId: event.data.parentAgentToolUseId,
+              // Task 5a — MUST mirror App.tsx (plan card rows are filed by it).
+              agentId: event.data.agentId,
             });
           } else {
             // Preparing tool card — the buddy feed renders tool cards too, so

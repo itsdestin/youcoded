@@ -228,9 +228,8 @@ export interface PlanEvent {
 // WHY three explicit forms: the renderer must be able to tell "this device
 // cannot do plans" (hide/disable, no retry) from "this attempt failed"
 // (show the real error). Nothing here ever implies success optimistically.
-export type PlanUnsupported = { ok: false; unsupported: true; error: string };
-export type PlanFailure = { ok: false; unsupported?: undefined; error: string };
-
-export type PlanActionResult = { ok: true; plan: PlanView } | PlanFailure | PlanUnsupported;
-export type PlanAutoApproveRead = { ok: true; underTokens: number } | PlanFailure | PlanUnsupported;
-export type PlanSettingsWriteResult = { ok: true } | PlanFailure | PlanUnsupported;
+// Task 5a: the forms now live in shared/types.ts (the renderer types its
+// bridge with them); re-exported so main keeps one definition.
+export type {
+  PlanUnsupported, PlanFailure, PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult,
+} from '../../../shared/types';

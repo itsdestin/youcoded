@@ -11,7 +11,7 @@ import {
   abnormalStopReason,
   SerializedChatState,
 } from './chat-types';
-import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
+import { PlanView, SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 
@@ -428,6 +428,25 @@ function endTurn(
   };
 }
 
+/** Task 5a: the propose_plan card — its specialists' rows are keyed by child. */
+function isPlanCard(tool: ToolCallState): boolean {
+  return tool.toolName === 'propose_plan';
+}
+
+/**
+ * Task 5a: the plan record a card should keep when another arrives on a
+ * propose_plan tool event. The journal stamps every visible change with a
+ * higher `seq`, so a replayed proposal-time projection (older seq) or a
+ * re-emitted tool-use with no record at all must never rewind or wipe a card
+ * that already moved on. Equal seq takes the incoming record (a writing shell
+ * refreshing itself; the reaped writing card at seq 1 meeting the real one).
+ */
+function newerPlan(cur: PlanView | undefined, incoming: PlanView | undefined): PlanView | undefined {
+  if (!incoming) return cur;
+  if (!cur || cur.seq === undefined || incoming.seq === undefined) return incoming;
+  return incoming.seq >= cur.seq ? incoming : cur;
+}
+
 /**
  * Route a subagent-originated transcript event into the parent Agent
  * tool's `subagentSegments`. Returns the original state when the parent
@@ -448,6 +467,17 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
   if (!session) return state;
   const parent = session.toolCalls.get(parentId);
   if (!parent) return state;
+  // Task 5a: a plan card holds MANY specialists, so every row it keeps is
+  // filed by the child that produced it (`childId` on the segment) and every
+  // match below stays inside that child's rows — local models reuse ids like
+  // `call_0` and part ids across children. An event that names no child can't
+  // be placed in any row; it is dropped rather than piled up unrendered.
+  // A Task card has one specialist: `own` is undefined there and every
+  // segment's childId is undefined too, so its matching is unchanged.
+  const own = isPlanCard(parent) ? action.agentId : undefined;
+  if (isPlanCard(parent) && !own) return state;
+  const mine = (s: SubagentSegment) => s.childId === own;
+  const tag = own ? { childId: own } : {};
 
   // Fix (external review, 2026-08-13): a subagent event used to skip the
   // seenUuids dedup every other replay-fed entry point passes (see
@@ -493,7 +523,7 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
     // with this partId, not the last segment — a note stamped later than this
     // text can sit behind it (insertByTime below), and "last segment" would
     // then start a second bubble for the same stream.
-    const lastIdx = lastIndexWhere(segments, s => s.type === 'text' && s.partId === action.partId);
+    const lastIdx = lastIndexWhere(segments, s => mine(s) && s.type === 'text' && s.partId === action.partId);
     const last = action.partId && lastIdx >= 0 ? segments[lastIdx] : null;
     if (last && last.type === 'text') {
       segments[lastIdx] = { ...last, content: last.content + action.text };
@@ -504,6 +534,7 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
       return state;
     } else {
       insertByTime(segments, {
+        ...tag,
         type: 'text',
         id: `sa-text-${action.uuid}`,
         content: action.text,
@@ -518,7 +549,7 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
     // Specialists 1c: a child's reasoning lands in ITS card as a 'thinking'
     // segment (coalesced by partId like text), never in the parent's own
     // reasoning bubble — which is where an unstamped dispatch used to send it.
-    const lastIdx = lastIndexWhere(segments, s => s.type === 'thinking' && s.partId === action.partId); // as for text above
+    const lastIdx = lastIndexWhere(segments, s => mine(s) && s.type === 'thinking' && s.partId === action.partId); // as for text above
     const last = action.partId && lastIdx >= 0 ? segments[lastIdx] : null;
     if (last && last.type === 'thinking') {
       segments[lastIdx] = { ...last, content: last.content + action.text };
@@ -526,6 +557,7 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
       return state; // as for text above
     } else {
       insertByTime(segments, {
+        ...tag,
         type: 'thinking',
         id: `sa-think-${action.uuid}`,
         content: action.text,
@@ -535,9 +567,10 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
     }
   } else if (action.type === 'TRANSCRIPT_TOOL_USE') {
     const existingIdx = segments.findIndex(
-      s => s.type === 'tool' && s.toolUseId === action.toolUseId,
+      s => mine(s) && s.type === 'tool' && s.toolUseId === action.toolUseId,
     );
     const next: SubagentSegment = {
+      ...tag,
       type: 'tool',
       id: `sa-tool-${action.toolUseId}`,
       toolUseId: action.toolUseId,
@@ -569,7 +602,7 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
       let reclaimIdx = -1;
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i];
-        if (seg.type !== 'tool' || !seg.id.startsWith('sa-perm-')) continue;
+        if (!mine(seg) || seg.type !== 'tool' || !seg.id.startsWith('sa-perm-')) continue;
         if (seg.toolName !== action.toolName || seg.status !== 'awaiting-approval') continue;
         if (incoming !== null && stableStringify(seg.input) === incoming) { reclaimIdx = i; break; }
         if (reclaimIdx === -1) reclaimIdx = i;
@@ -592,7 +625,7 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
     }
   } else if (action.type === 'TRANSCRIPT_TOOL_RESULT') {
     const idx = segments.findIndex(
-      s => s.type === 'tool' && s.toolUseId === action.toolUseId,
+      s => mine(s) && s.type === 'tool' && s.toolUseId === action.toolUseId,
     );
     if (idx >= 0 && segments[idx].type === 'tool') {
       const existing = segments[idx] as Extract<SubagentSegment, { type: 'tool' }>;
@@ -1839,11 +1872,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             permissionMode: superseded.permissionMode,
           }
         : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
+      // Task 5a: a re-emitted propose_plan tool-use keeps a newer plan record.
+      const keptPlan = newerPlan(superseded?.plan, action.plan);
       toolCalls.set(action.toolUseId, {
         toolUseId: action.toolUseId,
         toolName: action.toolName,
         input: action.toolInput,
-        ...(action.plan ? { plan: action.plan } : {}),
+        ...(keptPlan ? { plan: keptPlan } : {}),
         ...carriedAsk,
       });
 
@@ -1892,16 +1927,18 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // Carry structuredPatch onto the tool state so DiffView can render
         // with absolute file line numbers (Claude Code ships it pre-computed).
         const patch = action.structuredPatch;
+        // Task 5a: a replayed result's proposal-time record never rewinds a newer one.
+        const keptPlan = newerPlan(existing.plan, action.plan);
         if (action.isError) {
           toolCalls.set(action.toolUseId, {
             ...existing, status: 'failed', error: action.result,
-            ...(action.plan ? { plan: action.plan } : {}),
+            ...(keptPlan ? { plan: keptPlan } : {}),
             ...(patch ? { structuredPatch: patch } : {}),
           });
         } else {
           toolCalls.set(action.toolUseId, {
             ...existing, status: 'complete', response: action.result,
-            ...(action.plan ? { plan: action.plan } : {}),
+            ...(keptPlan ? { plan: keptPlan } : {}),
             ...(patch ? { structuredPatch: patch } : {}),
           });
         }
@@ -2227,11 +2264,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           const card = session.toolCalls.get(cardId)!;
           const segs = card.subagentSegments ? [...card.subagentSegments] : [];
           if (segs.some(s => s.type === 'tool' && s.requestId === action.requestId)) return state;
+          // Task 5a: on a plan card the ask binds only among the ASKING
+          // specialist's own rows — a sibling running the same command must
+          // never show buttons for an ask it did not raise (consent bug).
+          const askOwner = isPlanCard(card) ? action.specialist.childId : undefined;
           const wanted = action.input ? stableStringify(action.input) : null;
           let inputIdx = -1;
           let nameIdx = -1;
           for (let i = 0; i < segs.length; i++) {
             const seg = segs[i];
+            if (seg.childId !== askOwner) continue;
             if (seg.type !== 'tool' || seg.status !== 'running' || seg.toolName !== action.toolName) continue;
             if (nameIdx === -1) nameIdx = i;
             if (wanted !== null && stableStringify(seg.input) === wanted) { inputIdx = i; break; }
@@ -2254,6 +2296,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             };
           } else {
             segs.push({
+              ...(askOwner ? { childId: askOwner } : {}),
               type: 'tool',
               id: `sa-perm-${action.requestId}`,
               toolUseId: `sa-perm-${action.requestId}`,
