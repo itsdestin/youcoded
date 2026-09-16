@@ -89,10 +89,8 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   // first-party default rig. Flat art is the legacy tier: it gets the
   // wrapper-level effects below but no limb trailing / blink / peek hands.
   const rigUrl = activeTheme?.mascot?.rig ?? null;
-  const variantMascot = useThemeMascot(attention ? 'shocked' : 'idle');
-  const welcomeMascot = useThemeMascot('welcome');
-  const flatMascot = variantMascot ?? welcomeMascot;
-  const useRig = !!rigUrl || !flatMascot;
+  // (Flat-art variant is picked further down, once `peeking` is known — a
+  // tucked-in buddy shows no notification art either.)
 
   // Dock/peek state pushed from main (buddy:mascot-state). The sink/lean
   // transforms are data-attr driven via buddy.css so they CSS-transition.
@@ -147,14 +145,11 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   const hoverArmedRef = useRef(true);
   const onPointerEnter = useCallback(() => {
     if (dock.mode !== 'peeking') return;
-    // Already out for attention (see `peeking` below) — a swing-out whip here
-    // would jerk an upright buddy sideways for no reason.
-    if (attention) return;
     if (!hoverArmedRef.current) return; // still holding the post-drag/press state
     // Side peeks whip upright through the lean on the way out; top/bottom slide.
     if (dock.edge === 'left' || dock.edge === 'right') triggerSwing(dock.edge);
     setHopping(true);
-  }, [dock.mode, dock.edge, attention, triggerSwing]);
+  }, [dock.mode, dock.edge, triggerSwing]);
   const onPointerLeave = useCallback(() => {
     hoverArmedRef.current = true; // a real leave — the next enter is a genuine hover
     setHopping(false);
@@ -171,23 +166,30 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   // pose dropped, grip mittens gone. Everything downstream reads `peeking`
   // rather than dock.mode so the three can't disagree mid-hop.
   //
-  // Attention does the same, and must: the pose below lets attention win
-  // ('shocked'), so if the sink, lean and mittens still followed dock.mode he
-  // drew BOTH at once — raised arms flailing out of a body sunk and tipped into
-  // the edge, between the edge-pinned grip hands (Destin 2026-09-11: "I can see
-  // both the docked pose and the notification pose overlapping"). Main's own
-  // pop-out can't be relied on to arrive first: the attention broadcast lands a
-  // message ahead of it, and a buddy dragged onto an edge while something
-  // already needs you stays 'peeking' in main until attention next changes.
-  // Window position is flush to the edge in both states, so only this differs.
-  const peeking = dock.mode === 'peeking' && !hopping && !attention;
+  const peeking = dock.mode === 'peeking' && !hopping;
   const sidePeek = peeking && (dock.edge === 'left' || dock.edge === 'right');
+  // WHY tucked-in beats the notification pose: the two must never draw at once
+  // (Destin 2026-09-11: "I can see both the docked pose and the notification
+  // pose overlapping" — shocked arms flailing out of a body sunk into the edge).
+  // The first fix let attention win and pulled him out of the edge, which meant
+  // he could no longer be put away while something needed you (Destin
+  // 2026-09-16: "i want it to dock still and drop the notification pose when
+  // docked"). So a tucked-in buddy shows only the tuck; the shocked pose and
+  // its bounce play whenever he is out — popped out by main when a
+  // notification arrives, hovered out, or dragged free. Main's pop-out lands a
+  // message after the attention broadcast, so a fresh notification shows one
+  // frame of the tuck and then swings out — never both at once.
+  const showAttention = attention && !peeking;
+  const variantMascot = useThemeMascot(showAttention ? 'shocked' : 'idle');
+  const welcomeMascot = useThemeMascot('welcome');
+  const flatMascot = variantMascot ?? welcomeMascot;
+  const useRig = !!rigUrl || !flatMascot;
   // Resting = 'idle' (open-eyed welcome face); the rig-authored chevron-eye
   // face lives in 'pressed', shown only while held (Destin 2026-07-16).
-  const pose: PoseName = attention
-    ? 'shocked'
-    : peeking
-      ? (dock.edge === 'left' ? 'peek-left' : dock.edge === 'right' ? 'peek-right' : 'peek')
+  const pose: PoseName = peeking
+    ? (dock.edge === 'left' ? 'peek-left' : dock.edge === 'right' ? 'peek-right' : 'peek')
+    : showAttention
+      ? 'shocked'
       : grabbed
         ? 'pressed'
         : 'idle';
@@ -400,7 +402,6 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
         // kept him pinned in the sunk position and only the pose changed (Destin
         // 2026-07-17: "swaps between peek and idle despite staying in the same
         // position"). The 380ms transform+rotate transitions carry the move.
-        // Attention releases it the same way (see `peeking` above).
         data-dock-mode={dock.mode === 'peeking' && !peeking ? 'free' : dock.mode}
         data-dock-edge={dock.edge ?? ''}
         data-swing={swing ?? ''}
@@ -413,7 +414,7 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
         <div className="mascot-lean" style={{ width: '100%', height: '100%' }}>
           {/* WHY: toggling the class restarts the attention bounce without a key
               remount throwing away the rig's springs and the host PeekHands observes. */}
-          <div className={attention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
+          <div className={showAttention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
             {useRig ? (
               <div ref={rigHostRef} style={{ width: '100%', height: '100%' }}>
                 <MascotRig svgUrl={rigUrl} pose={pose} motionRef={motionRef} reducedEffects={reducedEffects} />

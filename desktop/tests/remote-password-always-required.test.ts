@@ -26,7 +26,9 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 it('no code anywhere lets an address stand in for the password', () => {
-  // WHY fileURLToPath: URL.pathname on Windows is `/D:/a/…`, which join() turns into `D:\D:\a\…` (ENOENT).
+  // fileURLToPath, not `.pathname`: on Windows the pathname of a file URL is
+  // `/D:/a/…`, and joining that yields `D:\D:\a\…` → ENOENT (the red Windows
+  // CI leg, dev-workspace.md; fixed 2026-09-16).
   const base = fileURLToPath(new URL('..', import.meta.url));
   const offenders: string[] = [];
   for (const root of ROOTS) {

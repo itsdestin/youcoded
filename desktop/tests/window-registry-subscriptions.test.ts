@@ -54,6 +54,16 @@ describe('WindowRegistry subscriptions', () => {
     expect(count).toBe(2);
   });
 
+  it('releaseSession drops the dead session’s subscriber set, not just its owner', () => {
+    // A buddy window subscribes without owning; before 2026-09-16 the set
+    // outlived the session until the buddy window itself closed.
+    reg.subscribe('sess-1', 200);
+    reg.assignSession('sess-1', 100);
+    reg.releaseSession('sess-1');
+    expect(reg.getSubscribers('sess-1')).toEqual(new Set());
+    expect(reg.getOwner('sess-1')).toBeUndefined();
+  });
+
   it('subscribe throws when the window is not registered', () => {
     expect(() => reg.subscribe('sess-1', 999)).toThrow(/unknown window 999/);
   });

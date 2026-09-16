@@ -57,7 +57,7 @@ export function CapabilityList({ catalog }: { catalog: CatalogMeta }) {
             <div className="text-xs text-fg-dim">The automatic check flagged:</div>
             {catalog.scan.findings.map((f, i) => (
               <div key={i} className="flex items-start gap-2 text-fg-2">
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 mt-2 shrink-0" aria-hidden />
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-700 mt-2 shrink-0" aria-hidden />
                 <span>{f}</span>
               </div>
             ))}

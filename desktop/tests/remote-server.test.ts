@@ -241,6 +241,18 @@ describe('RemoteServer and the shell provider', () => {
     expect(shellSessionManager.createSession).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-09-16 (remote-access.md): the phone's create used to reach the session
+  // manager with the "No folder" sentinel untouched, so such a session opened in
+  // the home folder. main.ts hands the same rewrite the desktop's handler uses.
+  it('applies the host’s create rewrite (the No-folder swap) before the session manager sees the payload', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig, undefined, {
+      prepareCreate: (p: any) => (p.cwd === '__no_folder__' ? { ...p, cwd: '/private/no-folder' } : p),
+    });
+    await drive(server, { type: 'session:create', id: 'c3', payload: { name: 'x', cwd: '__no_folder__', skipPermissions: false } });
+    expect(shellSessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/private/no-folder' }));
+  });
+
   it('refuses a run-in-terminal command carrying a carriage return', async () => {
     // The whole property: the app does not APPEND a carriage return, but a `\r`
     // already inside the string is the same keypress — measured on real bash,

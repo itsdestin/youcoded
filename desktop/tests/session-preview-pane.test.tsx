@@ -10,64 +10,94 @@
 // assertions live at the drawer level: tests/session-drawer-preview-header.test.tsx.
 // This suite covers what's still the pane's own job: loading/paging/error
 // states and the read-only/lane caption line.
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react';
 import SessionPreviewPane from '../src/renderer/components/SessionPreviewPane';
-import { COPY } from '../src/shared/chatsearch-refs';
+import { COPY, previewSessionKey } from '../src/shared/chatsearch-refs';
+import type { TranscriptEvent } from '../src/shared/types';
 
-// jsdom does not implement scrollIntoView; the ConversationTranscript this
-// pane renders calls it to jump to the newest message. Every real browser has
-// it — this is a test-environment gap (see tests/ui-primitives.test.tsx).
-beforeAll(() => {
-  Element.prototype.scrollIntoView = vi.fn();
+// jsdom has no IntersectionObserver, and scrolling up to the top is what loads
+// an older page. This stand-in records what is observed so a test can say
+// "the reader reached the top" — the one signal the pane pages on.
+let observers: { cb: IntersectionObserverCallback; disconnected: boolean }[] = [];
+class FakeIO {
+  private rec: { cb: IntersectionObserverCallback; disconnected: boolean };
+  constructor(cb: IntersectionObserverCallback) { this.rec = { cb, disconnected: false }; observers.push(this.rec); }
+  observe() {}
+  disconnect() { this.rec.disconnected = true; }
+}
+async function reachTop() {
+  // Wait for the pane to start watching (an effect after the render the
+  // caller already saw), rather than assuming it has.
+  await waitFor(() => expect(observers.filter((o) => !o.disconnected).length).toBeGreaterThan(0));
+  const live = observers.filter((o) => !o.disconnected);
+  act(() => { for (const o of live) o.cb([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver); });
+}
+
+// One user turn per `n`: the user's words and the assistant's reply. Real
+// transcript events, as chatsearch:read now returns them.
+function turn(id: string, n: number): TranscriptEvent[] {
+  const sessionId = previewSessionKey(id);
+  return [
+    { type: 'user-message', sessionId, uuid: `u${n}`, timestamp: n, data: { text: `ask${n}` } },
+    { type: 'assistant-text', sessionId, uuid: `a${n}`, timestamp: n, data: { text: `reply${n}` } },
+    { type: 'turn-complete', sessionId, uuid: `c${n}`, timestamp: n, data: {} },
+  ] as TranscriptEvent[];
+}
+const page = (id: string, ns: number[], before: number | null) => ({
+  ok: true, events: ns.flatMap((n) => turn(id, n)),
+  cursor: before === null ? null : { path: '/x.jsonl', offset: before, sizeAtRead: 1 },
+  hasMore: before !== null,
 });
 
-const msg = (seq: number) => ({ role: seq % 2 ? 'assistant' : 'user', content: `m${seq}`, timestamp: seq, seq, droppedToolCalls: 0 });
-// A title most tests don't care about — the pane takes it as a required prop
-// now (Fix: SessionDrawer resolves it once and threads it down; the pane no
-// longer re-resolves the same id itself).
+// A title most tests don't care about — the pane takes it as a required prop.
 const TITLE = 'A conversation';
-beforeEach(() => { (window as any).claude = { chatsearch: { read: vi.fn() } }; });
-// This suite has no globals-mode auto-cleanup (vitest.config.ts doesn't set
-// test.globals), and several tests below reuse the same seq numbers (e.g.
-// msg(58)/msg(59) for both the happy-path and load-older-failure cases) —
-// without an explicit unmount between tests, a later test's queries can match
-// a still-mounted DOM tree from an earlier one.
-afterEach(cleanup);
+beforeEach(() => {
+  observers = [];
+  (globalThis as any).IntersectionObserver = FakeIO;
+  (window as any).claude = { chatsearch: { read: vi.fn() } };
+});
+afterEach(() => {
+  cleanup();
+  delete (globalThis as any).IntersectionObserver;
+});
 
 describe('SessionPreviewPane', () => {
-  it('loads the newest slice and offers Load older while hasMore', async () => {
-    (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: true, messages: [msg(58), msg(59)], hasMore: true });
-    render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
-    expect(await screen.findByText('m59')).toBeTruthy();
-    expect((window as any).claude.chatsearch.read).toHaveBeenCalledWith({ provider: 'claude', id: 'abc', tail: 40 });
-    (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: true, messages: [msg(56), msg(57)], hasMore: false });
-    fireEvent.click(screen.getByRole('button', { name: COPY.loadOlder }));
-    await waitFor(() => expect(screen.getByText('m56')).toBeTruthy());
-    expect((window as any).claude.chatsearch.read).toHaveBeenLastCalledWith({ provider: 'claude', id: 'abc', tail: 40, before: 58 });
-    expect(screen.queryByRole('button', { name: COPY.loadOlder })).toBeNull();
-    expect(screen.getByText(new RegExp(COPY.startOfConversation))).toBeTruthy();
+  it('draws the newest page with the chat\'s own bubbles, and loads the older page when the reader reaches the top', async () => {
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [58, 59], 500));
+    const { container } = render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
+    expect(await screen.findByText('ask59')).toBeTruthy();
+    expect(screen.getByText('reply59')).toBeTruthy();
+    // The chat's own components, not a lookalike: theme packs style these hooks.
+    expect(container.querySelectorAll('.user-bubble')).toHaveLength(2);
+    expect(container.querySelector('.assistant-bubble')).toBeTruthy();
+    expect((window as any).claude.chatsearch.read).toHaveBeenCalledWith({ provider: 'claude', id: 'abc' });
+
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [56, 57], null));
+    await reachTop();
+    await waitFor(() => expect(screen.getByText('ask56')).toBeTruthy());
+    expect((window as any).claude.chatsearch.read).toHaveBeenLastCalledWith({ provider: 'claude', id: 'abc', before: 500 });
+    // Older above newer, as in the chat.
+    const asks = [...container.querySelectorAll('.user-bubble')].map((b) => b.textContent);
+    expect(asks.map((t) => t?.match(/ask\d\d/)?.[0])).toEqual(['ask56', 'ask57', 'ask58', 'ask59']);
+    // The beginning of the conversation: nothing left to page.
+    expect(container.querySelector('[data-history-sentinel]')).toBeNull();
   });
 
   // Case (a) — docs/error-message-standards.md: the backend gave a real
   // reason, so it's shown verbatim, paired with Retry, and nothing is
   // invented on top of it.
-  it('surfaces the real error verbatim with a Retry, and never renders an empty list as an empty conversation', async () => {
+  it('surfaces the real error verbatim with a Retry', async () => {
     (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: false, error: 'EACCES: permission denied, open /x.jsonl' });
     render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
     expect(await screen.findByText(/EACCES: permission denied/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
-    // Case (b)'s two-action card must NOT also be showing.
     expect(screen.queryByRole('button', { name: 'Report bug' })).toBeNull();
   });
 
-  // Case (b) — docs/error-message-standards.md: chatsearch:read answered
-  // { ok: false } with no `error` field. The old code filled that gap with a
-  // hardcoded guess ('Unknown error reading the transcript'), asserting a
-  // cause ("the read failed") nobody verified — the guard this pins is
-  // tests/status-strip-authority.test.tsx's "no user-facing error falls back
-  // to a hardcoded cause". The honest answer is the general two-action card:
-  // no invented message, Report bug / Diagnose with the assistant instead.
+  // Case (b): chatsearch:read answered { ok: false } with no `error`. The
+  // honest answer is the general two-action card, never an invented cause
+  // (tests/status-strip-authority.test.tsx guards the same line).
   it('a failure with no error string shows the general card, not a fabricated cause', async () => {
     (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: false });
     render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
@@ -75,112 +105,83 @@ describe('SessionPreviewPane', () => {
     expect(screen.getByText(COPY.errReadUnknownExplainer)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Report bug' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Diagnose with the assistant' })).toBeTruthy();
-    // No invented cause anywhere on the card, and no Retry (that affordance
-    // belongs to case (a) only).
-    expect(screen.queryByText('Unknown error reading the transcript')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
   it('labels the lane for humans', async () => {
-    (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: true, messages: [msg(1)], hasMore: false });
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [1], null));
     render(<SessionPreviewPane provider="native" id="abc" title={TITLE} />);
     expect(await screen.findByText(/YouCoded assistant/)).toBeTruthy();
     expect(screen.queryByText(/\bnative\b/)).toBeNull();
   });
 
-  // Fix 1 pin: the drawer can be reused for a second conversation before the
-  // first one's read resolves (the swap-without-unmount case documented on
-  // SessionPreviewPane's genRef). A late response from the FIRST request must
-  // never overwrite the SECOND conversation's messages.
+  // The drawer reuses the pane for a second conversation before the first
+  // one's read resolves; a late answer for the FIRST must never land.
   it('a late response for a superseded conversation never overwrites the one now on screen', async () => {
     let resolveFirst!: (v: any) => void;
-    const firstRead = new Promise((res) => { resolveFirst = res; });
-    (window as any).claude.chatsearch.read.mockImplementationOnce(() => firstRead);
+    (window as any).claude.chatsearch.read.mockImplementationOnce(() => new Promise((res) => { resolveFirst = res; }));
     const { rerender } = render(<SessionPreviewPane provider="claude" id="first" title="First" />);
-
-    (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: true, messages: [msg(10)], hasMore: false });
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('second', [10], null));
     rerender(<SessionPreviewPane provider="claude" id="second" title="Second" />);
-    // Positive control: the SECOND conversation's message is the one that renders.
-    expect(await screen.findByText('m10')).toBeTruthy();
-
-    // Now the stale FIRST request resolves. It must be dropped, not rendered.
-    resolveFirst({ ok: true, messages: [msg(99)], hasMore: false });
-    await waitFor(() => expect(screen.queryByText('m99')).toBeNull());
-    expect(screen.getByText('m10')).toBeTruthy();
+    expect(await screen.findByText('ask10')).toBeTruthy();
+    await act(async () => { resolveFirst(page('first', [99], null)); });
+    expect(screen.queryByText('ask99')).toBeNull();
+    expect(screen.getByText('ask10')).toBeTruthy();
   });
 
-  // Fix 2, half A: the FIRST load has nothing behind it yet, so its failure is
-  // correctly a full-pane error. (Already covered above by "surfaces the real
-  // error…" — restated here as the explicit positive control for half B.)
-  it('a first-load failure shows the full-pane error with the real message and no messages', async () => {
+  it('a first-load failure shows the full-pane error and no messages', async () => {
     (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: false, error: 'ENOENT: no such file, open /y.jsonl' });
-    render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
+    const { container } = render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
     expect(await screen.findByText(/ENOENT: no such file/)).toBeTruthy();
-    expect(screen.queryByText(/^m\d+$/)).toBeNull();
+    expect(container.querySelector('.user-bubble')).toBeNull();
   });
 
-  // Fix 2, half B: a failed "Load older" must be non-destructive — the
-  // messages already on screen stay, and the failure surfaces near the
-  // paging control instead of replacing the pane.
-  it('a failed Load older keeps the loaded messages on screen and surfaces the error near the control', async () => {
-    (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: true, messages: [msg(58), msg(59)], hasMore: true });
+  // A failed older page is non-destructive: what is on screen stays, the error
+  // shows at the top, and Retry asks for the SAME older page.
+  it('a failed older page keeps the loaded messages and Retry asks for that same page', async () => {
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [58, 59], 500));
     render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
-    expect(await screen.findByText('m59')).toBeTruthy();
+    expect(await screen.findByText('ask59')).toBeTruthy();
 
     (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: false, error: 'ETIMEDOUT reading older page' });
-    fireEvent.click(screen.getByRole('button', { name: COPY.loadOlder }));
+    await reachTop();
     expect(await screen.findByText(/ETIMEDOUT reading older page/)).toBeTruthy();
-    // Non-destructive: both original messages are still rendered alongside the error.
-    expect(screen.getByText('m58')).toBeTruthy();
-    expect(screen.getByText('m59')).toBeTruthy();
+    expect(screen.getByText('ask58')).toBeTruthy();
+    // No paging while the error shows — the top is still in view, and
+    // re-arming would retry in a loop.
+    expect(observers.filter((o) => !o.disconnected)).toHaveLength(0);
 
-    // Retry retries the SAME backwards page (messages[0] is still seq 58 — it
-    // was never overwritten), not the newest slice.
-    (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: true, messages: [msg(56), msg(57)], hasMore: false });
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [56, 57], null));
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(screen.getByText('m56')).toBeTruthy());
-    expect(screen.getByText('m57')).toBeTruthy();
-    expect(screen.getByText('m59')).toBeTruthy();
-    expect(screen.getByText(new RegExp(COPY.startOfConversation))).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('ask56')).toBeTruthy());
+    expect((window as any).claude.chatsearch.read).toHaveBeenLastCalledWith({ provider: 'claude', id: 'abc', before: 500 });
+    expect(screen.getByText('ask59')).toBeTruthy();
   });
 
-  // Same case (b) honesty as the full-pane case above, but for the "Load
-  // older" page specifically — the empty-string sentinel must not collapse
-  // into "no error happened" (see olderError's WHY comment in the pane).
-  it('a failed Load older with no error string shows the general card, not the "Load older" button reappearing silently', async () => {
-    (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: true, messages: [msg(58), msg(59)], hasMore: true });
+  it('a failed older page with no error string shows the general card', async () => {
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [58, 59], 500));
     render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
-    expect(await screen.findByText('m59')).toBeTruthy();
-
+    expect(await screen.findByText('ask59')).toBeTruthy();
     (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: false });
-    fireEvent.click(screen.getByRole('button', { name: COPY.loadOlder }));
+    await reachTop();
     expect(await screen.findByText(COPY.errReadUnknownTitle)).toBeTruthy();
-    // The failure must not silently look like success — the paging button
-    // must not have quietly come back.
-    expect(screen.queryByRole('button', { name: COPY.loadOlder })).toBeNull();
+    expect(screen.getByText('ask58')).toBeTruthy();
   });
 
-  // A3: SessionDrawer resolves the previewed id once for its own header
-  // (Resume eligibility, tags) and threads that title down as a prop — the
-  // pane just stamps it, alongside the id it already has, into
-  // ConversationTranscript's data attributes, which is what the right-click
-  // "Ask about this" scaffold reads (build-menu.ts).
+  // A3: the right-click "Ask about this" scaffold (build-menu.ts) reads the
+  // conversation's id and title off the transcript container.
   it('stamps the title prop and id onto the transcript, for the right-click scaffold to read', async () => {
-    (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: true, messages: [msg(1)], hasMore: false });
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [1], null));
     const { container } = render(<SessionPreviewPane provider="claude" id="abc" title="Debugging sync" />);
-    await screen.findByText('m1');
+    await screen.findByText('ask1');
     expect(container.querySelector('[data-conversation-id]')?.getAttribute('data-conversation-id')).toBe('abc');
     expect(container.querySelector('[data-conversation-id]')?.getAttribute('data-conversation-title')).toBe('Debugging sync');
   });
 
-  // Positive control for the above: an empty title (untitled conversation)
-  // still stamps the id and an empty title attribute — never undefined/stale
-  // — same convention chatsearch:resolve used ('' means untitled).
   it('stamps an empty title as-is for an untitled conversation', async () => {
-    (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: true, messages: [msg(1)], hasMore: false });
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [1], null));
     const { container } = render(<SessionPreviewPane provider="claude" id="abc" title="" />);
-    await screen.findByText('m1');
-    expect(container.querySelector('[data-conversation-id]')?.getAttribute('data-conversation-id')).toBe('abc');
+    await screen.findByText('ask1');
     expect(container.querySelector('[data-conversation-id]')?.getAttribute('data-conversation-title')).toBe('');
   });
 });

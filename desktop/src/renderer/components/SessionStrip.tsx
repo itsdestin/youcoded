@@ -2412,7 +2412,7 @@ export default function SessionStrip({
                             )}
                           </span>
                           {s.permissionMode === 'bypass' && (
-                            <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-[#DD4444]/20 text-[#DD4444]">
+                            <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-red-400/20 text-red-400">
                               DANGER
                             </span>
                           )}
@@ -2461,7 +2461,7 @@ export default function SessionStrip({
                       // isn't competing with the still-open session menu above it.
                       onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) { setMenuOpen(false); onCloseSession(s.id, s.name); } }}
                       onPointerDown={(e) => e.stopPropagation()}
-                      className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-[#DD4444] hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
+                      className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-red-400 hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -2551,7 +2551,7 @@ export default function SessionStrip({
                               <span className="flex items-center gap-2 min-w-0">
                                 <span className="flex-1 min-w-0"><SessionName name={s.name} /></span>
                                 {s.permissionMode === 'bypass' && (
-                                  <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-[#DD4444]/20 text-[#DD4444]">
+                                  <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-red-400/20 text-red-400">
                                     DANGER
                                   </span>
                                 )}
@@ -2594,7 +2594,7 @@ export default function SessionStrip({
                               setMenuOpen(false);
                               onCloseSession(s.id, s.name);
                             }}
-                            className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-[#DD4444] hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
+                            className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-red-400 hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
                           >
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

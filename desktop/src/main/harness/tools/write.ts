@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { defineTool } from './registry';
 import { canonicalize, resolveP } from './guards';
 import { toHunks, preserveFormat } from './edit';
+import { fingerprintOf } from './file-fingerprint';
 
 // G-10 (2026-08-26 tools investigation): the single most common small-model
 // failure in a full-file Write is a placeholder comment standing in for code
@@ -53,7 +54,7 @@ export const WriteTool = defineTool({
   description:
     'Create a new file or fully overwrite an existing one. Overwriting requires that the file '
     + 'have been Read or Written by you in this session, and not have changed on disk since — '
-    + 'those tools record the file\'s modification time, which is what detects a stale overwrite. '
+    + 'those tools record the file\'s contents, which is what detects a stale overwrite. '
     + 'Creating a file that does not exist yet needs no prior Read. '
     + 'Always write the complete file — a placeholder like "// ... rest of code ..." is refused; '
     + 'use Edit to change part of an existing file.',
@@ -65,15 +66,15 @@ export const WriteTool = defineTool({
     const abs = resolveP(args.file_path, ctx.cwd);
     const canonical = canonicalize(args.file_path, ctx.cwd);
     const exists = fs.existsSync(abs);
-    const readMtime = ctx.readRegistry.get(canonical);
-    if (exists && readMtime === undefined) {
+    const readFingerprint = ctx.readRegistry.get(canonical);
+    if (exists && readFingerprint === undefined) {
       // D-4: mirrors Edit — the registry resets on resume, so name resume as a
       // cause or the model argues with a refusal its memory says is wrong.
       return {
         text: `Write rejected: ${args.file_path} already exists and you have not Read it in this session `
           + '(this also happens after a session resume — earlier reads are forgotten), '
           + 'so you would be replacing content you have not seen. Read it first (a cat/grep does not count '
-          + '— the Read tool records the file\'s modification time, which is what detects a later change), '
+          + '— the Read tool records the file\'s contents, which is what detects a later change), '
           + 'then retry.',
         isError: true,
       };
@@ -84,24 +85,20 @@ export const WriteTool = defineTool({
     // even if the file changed on disk in the interim. Opus 5's transcript
     // demonstrated it concretely: it Read config/settings.toml at tool-call 11,
     // then Wrote over the whole file at tool-call 38 -- 27 calls later, with no
-    // intervening touch tracked -- and got no complaint. Edit already guards
-    // this exact gap with an mtime comparison (below); mirroring it here (rather
-    // than inventing a second mechanism) keeps Write and Edit internally
-    // consistent, since both tools share the same "read it first" contract.
-    // A content hash (SHA-256, as Gemini CLI's Edit does; raw byte comparison,
-    // as OpenCode V2's writeIfUnchanged does) is genuinely more robust than
-    // mtime -- a `touch`/checkout can bump mtime with unchanged bytes (a false
-    // positive mtime would wrongly reject) and some filesystems' clock
-    // resolution can miss a true same-second change (a false negative mtime
-    // would wrongly allow) -- see
-    // docs/active/investigations/2026-08-10-harness-mutation-safety-prior-art.md
-    // item 1. That's a deliberately DEFERRED improvement: it should replace
-    // mtime in BOTH Write and Edit together, not one tool at a time, or we'd
-    // trade one guard inconsistency for a subtler one.
-    if (exists && fs.statSync(abs).mtimeMs !== readMtime) {
+    // intervening touch tracked -- and got no complaint. Edit guards this exact
+    // gap; mirroring it here (rather than inventing a second mechanism) keeps
+    // Write and Edit internally consistent, since both tools share the same
+    // "read it first" contract.
+    // 2026-09-16: the comparison moved from mtime to a content fingerprint in
+    // BOTH tools at once (the deferred improvement the earlier version of this
+    // comment promised) — see tools/file-fingerprint.ts for the two ways mtime
+    // lied. The existing bytes are read once here and reused below for the
+    // format-preserving rewrite, so the check costs no extra I/O.
+    const oldBuf = exists ? fs.readFileSync(abs) : null;
+    if (oldBuf && fingerprintOf(oldBuf) !== readFingerprint) {
       return {
         text: `Write rejected: ${args.file_path} changed on disk since you last Read or Wrote it `
-          + '(its modification time no longer matches), so you would be overwriting changes you have '
+          + '(its contents no longer match what you read), so you would be overwriting changes you have '
           + 'not seen. Read it again, then retry.',
         isError: true,
       };
@@ -120,14 +117,14 @@ export const WriteTool = defineTool({
         isError: true,
       };
     }
-    const old = exists ? fs.readFileSync(abs, 'utf8') : '';
+    const old = oldBuf ? oldBuf.toString('utf8') : '';
     // D-5: an existing file keeps its line endings and BOM (Edit already did
     // this; Write silently converted CRLF → LF). A brand-new file is written
     // exactly as given — there is no existing format to preserve.
     const final = exists ? preserveFormat(old, args.content) : args.content;
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, final);
-    ctx.readRegistry.set(canonical, fs.statSync(abs).mtimeMs);
+    ctx.readRegistry.set(canonical, fingerprintOf(final));
     // Diff in LF/no-BOM space, as Edit does, so the card shows the real change
     // rather than a whole-file \r\n churn on a CRLF file.
     const lf = (s: string) => (s.charCodeAt(0) === 0xfeff ? s.slice(1) : s).replace(/\r\n/g, '\n');

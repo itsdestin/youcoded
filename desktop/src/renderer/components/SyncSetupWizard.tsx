@@ -442,9 +442,10 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
                   <div className="text-xs text-fg font-medium">Create a new private repository</div>
                   {repoMode === 'create' && (
                     <div className="mt-1.5">
-                      {/* Shared FIELD surface (spec change 20). This input sits inside
-                          the radio's <label>, so without an explicit aria-label a screen
-                          reader would announce the radio's whole sentence as its name. */}
+                      {/* Shared FIELD surface (spec change 20). The box is a sibling of the
+                          radio, not inside its label (so clicking into it no longer flips
+                          the radio — sync.md, closed 2026-09-16); the explicit aria-label
+                          stays so a screen reader names it rather than the radio's sentence. */}
                       <TextInput
                         value={repoName}
                         onChange={(e) => setRepoName(e.target.value)}
@@ -594,7 +595,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
         <WizardHeader title="Setup Complete" onClose={onClose} />
         <div className="flex-1 flex flex-col items-center justify-center px-4 py-8 text-center">
           {/* Animated checkmark */}
-          <div className="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center mb-4">
+          <div className="w-16 h-16 rounded-full bg-green-400/10 flex items-center justify-center mb-4">
             <span className="text-green-400 text-3xl">{'\u2713'}</span>
           </div>
           <div className="text-fg font-medium text-sm mb-2">Backup added</div>
@@ -1044,12 +1045,12 @@ function AuthStep({
             <div className="text-fg-dim text-2xs mb-6 max-w-xs space-y-2">
               <div>A browser window will open for you to sign in. After you sign in, come back here — it'll update automatically.</div>
               {isReconnect && backendType === 'drive' && (
-                <div className="text-amber-400 text-3xs pt-1">
+                <div className="text-amber-700 text-3xs pt-1">
                   Important: sign in with the <strong>same Google account</strong> you originally connected. Picking a different account would start a new backup instead of restoring the existing one.
                 </div>
               )}
               {isAdditionalDrive && (
-                <div className="text-amber-400 text-3xs pt-1">
+                <div className="text-amber-700 text-3xs pt-1">
                   Tip: make sure you pick the <strong>other</strong> Google account (e.g., work vs. personal vs. school) in the browser — not the same one you already connected. You may need to sign out of Google in your browser first, or use an incognito window.
                 </div>
               )}

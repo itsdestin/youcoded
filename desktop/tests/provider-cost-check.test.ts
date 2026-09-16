@@ -20,7 +20,7 @@ import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import {
   providerCostFromMetadata, costDisagreement,
   COST_DISAGREEMENT_THRESHOLD, COST_COMPARE_FLOOR_USD,
-  addComparableTurn, sessionCostDisagreement, NO_SESSION_COST_TOTALS,
+  addComparableTurn, sessionCostDisagreement, modelCostDisagreements, NO_SESSION_COST_TOTALS,
   COST_GAP_RELOG_FACTOR,
 } from '../src/main/harness/pricing';
 
@@ -204,24 +204,24 @@ describe('costDisagreement', () => {
 describe('the session pair — both sums always cover the same turns', () => {
   it('folds a turn in only when BOTH figures exist, and then into both sides', () => {
     let t = addComparableTurn(NO_SESSION_COST_TOTALS, 2, 3);
-    expect(t).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1 });
+    expect(t).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1, byModel: {} });
     t = addComparableTurn(t, 100, undefined);   // provider reported nothing
-    expect(t).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1 });
+    expect(t).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1, byModel: {} });
     t = addComparableTurn(t, null, 100);        // no published rate of ours
-    expect(t).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1 });
+    expect(t).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1, byModel: {} });
     t = addComparableTurn(t, undefined, 100);   // a free turn
-    expect(t).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1 });
+    expect(t).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1, byModel: {} });
   });
 
   it('counts a reported zero — it is a reading, not a silence', () => {
-    expect(addComparableTurn(NO_SESSION_COST_TOTALS, 0, 0)).toEqual({ ourUsd: 0, theirUsd: 0, turns: 1 });
+    expect(addComparableTurn(NO_SESSION_COST_TOTALS, 0, 0)).toEqual({ ourUsd: 0, theirUsd: 0, turns: 1, byModel: {} });
   });
 
   it('never mutates the totals it was handed', () => {
-    const start = addComparableTurn(NO_SESSION_COST_TOTALS, 2, 3);
-    addComparableTurn(start, 5, 5);
-    expect(start).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1 });
-    expect(NO_SESSION_COST_TOTALS).toEqual({ ourUsd: 0, theirUsd: 0, turns: 0 });
+    const start = addComparableTurn(NO_SESSION_COST_TOTALS, 2, 3, 'm-a');
+    addComparableTurn(start, 5, 5, 'm-a');
+    expect(start).toEqual({ ourUsd: 2, theirUsd: 3, turns: 1, byModel: { 'm-a': { ourUsd: 2, theirUsd: 3, turns: 1 } } });
+    expect(NO_SESSION_COST_TOTALS).toEqual({ ourUsd: 0, theirUsd: 0, turns: 0, byModel: {} });
   });
 
   it('is null when nothing was ever comparable — a 0 there would read as agreement', () => {
@@ -229,7 +229,36 @@ describe('the session pair — both sums always cover the same turns', () => {
   });
 
   it('is null while the running total is still under the floor', () => {
-    expect(sessionCostDisagreement({ ourUsd: 0.0004, theirUsd: 0.0002, turns: 1 })).toBeNull();
+    expect(sessionCostDisagreement({ ourUsd: 0.0004, theirUsd: 0.0002, turns: 1, byModel: {} })).toBeNull();
+  });
+
+  // 2026-09-16 — closing the dilution finding
+  // (docs/active/investigations/2026-09-01-cost-self-check-dilutes-across-model-swap.md):
+  // the session sum stays quiet when a correctly-priced model ran most of the
+  // turns, so the per-model pair is what catches the mis-priced one.
+  it('reports a mis-priced model on its own even when the session sum agrees', () => {
+    let t = NO_SESSION_COST_TOTALS;
+    for (let i = 0; i < 100; i++) t = addComparableTurn(t, 0.01, 0.01, 'model-a');   // exact match
+    for (let i = 0; i < 2; i++) t = addComparableTurn(t, 0.004, 0.002, 'model-b');   // we report double
+    // The whole session: 1.008 vs 1.004 — well under the 5% threshold. Silent.
+    expect(sessionCostDisagreement(t)!).toBeLessThan(0.01);
+    // model-b on its own: 0.008 vs 0.004 (above the floor) — a 100% gap.
+    const found = modelCostDisagreements(t);
+    expect(found.map((f) => f.modelId)).toEqual(['model-b']);
+    expect(found[0].gap).toBeCloseTo(1, 6);
+    expect(found[0].totals).toEqual({ ourUsd: 0.008, theirUsd: 0.004, turns: 2 });
+  });
+
+  it('stays silent per model while that model’s own pair is under the floor, or agrees', () => {
+    let t = addComparableTurn(NO_SESSION_COST_TOTALS, 0.0004, 0.0002, 'cheap'); // under the floor
+    t = addComparableTurn(t, 1, 1, 'fine');                                       // agrees
+    expect(modelCostDisagreements(t)).toEqual([]);
+  });
+
+  it('a turn with no model id still enters the session pair, just not a per-model one', () => {
+    const t = addComparableTurn(NO_SESSION_COST_TOTALS, 2, 3);
+    expect(t.turns).toBe(1);
+    expect(t.byModel).toEqual({});
   });
 
   it('compares once the SUM crosses the floor, where no single turn ever could', () => {

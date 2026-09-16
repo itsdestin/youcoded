@@ -16,7 +16,7 @@ import { HarnessSession } from '../src/main/harness/harness-session';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { PermissionDecision } from '../src/shared/permission-types';
 import { textChunks, toolCallChunk, finishChunk, stream, scriptedModel } from './helpers/scripted-model';
-import { makeOpts, fakeTool } from './helpers/harness-fakes';
+import { makeOpts, fakeTool, makeSession, scriptModel } from './helpers/harness-fakes';
 
 const ALLOW: PermissionDecision = { action: 'allow', denyListed: false };
 
@@ -93,5 +93,116 @@ describe('turn-complete usage — occupancy vs turn total', () => {
     const usage = usageOf(events);
     expect(session.contextUsedTokens).not.toBeNull();
     expect(session.contextUsedTokens).toBe(usage.contextUsedTokens);
+  });
+
+  // The estimate is the ANSWER (not merely a budget) in two places: the fallback
+  // above, and the occupancy left behind by a history rewrite. Tool schemas ride
+  // every request, so leaving them out understated both — always optimistically,
+  // and worst on the small local models that have the least room.
+  it('the estimate counts the tool schemas, not just the system prompt and history', async () => {
+    const model = scriptedModel([stream(...textChunks('a', 'hi'), finishChunk('stop', 0, 0))]);
+    const bare = new HarnessSession(makeOpts({ tools: [] }), async () => model as any);
+    const armed = new HarnessSession(
+      makeOpts({ tools: [fakeTool('Read'), fakeTool('Glob'), fakeTool('Bash')] }),
+      async () => model as any,
+    );
+    // Same empty history and the same system prompt — the ONLY difference is the
+    // attached tool set, so any gap is the schemas being counted.
+    expect(armed.contextUsedTokens!).toBeGreaterThan(bare.contextUsedTokens!);
+  });
+});
+
+// A history rewrite that runs OUTSIDE a turn — the /compact button, /clear — gets
+// no fresh reading from the provider, so before 2026-09-16 the last measured
+// occupancy simply stood. The status bar kept showing the pre-compaction window
+// until the user happened to send another message; after /clear it could sit at
+// "3% remaining" over an empty conversation (Destin, 2026-09-16).
+describe('occupancy after a history rewrite outside a turn', () => {
+  /** A session plus the events it emits. Each test then plants a MEASURED
+   *  reading directly, because what is under test is how a rewrite re-bases an
+   *  existing measurement — driving a real turn just to obtain one would make
+   *  the anchor an artifact of the scripted model's token counts. */
+  function seeded(over: Parameters<typeof makeSession>[0] = {}) {
+    const events: any[] = [];
+    const session = makeSession({ ...over, onEvent: (e) => events.push(e) });
+    return { session, events };
+  }
+
+  it('compactNow ships the window it left behind, and a before to measure it against', async () => {
+    const { session, events } = seeded({
+      contextLength: 40_000,
+      seedBulkHistoryTokens: 8000,
+      model: scriptModel([{ text: 'SUMMARY: they discussed X.' }]),
+    });
+    // A real measured reading first — 20,000 prompt tokens is the thing the
+    // re-based figure must be anchored to, rather than thrown away.
+    (session as any)._contextUsedTokens = 20_000;
+
+    expect(await session.compactNow()).toEqual({ ok: true });
+
+    const ev = events.find((e) => e.type === 'compact-summary');
+    expect(ev).toBeDefined();
+    expect(ev.data.contextUsedBefore).toBe(20_000);
+    // Re-based, not re-estimated: the measurement is kept and only the ESTIMATED
+    // size of what was removed is subtracted. ~8,000 tokens of bulk history went
+    // into the summary, so the result must land well below the before and well
+    // above zero — a fresh chars/4 estimate of the whole window would instead
+    // return a number unrelated to the 20,000 that was actually measured.
+    expect(ev.data.contextUsedAfter).toBeLessThan(20_000);
+    expect(ev.data.contextUsedAfter).toBeGreaterThan(0);
+    // And the session's own accessor agrees with what it told the UI.
+    expect(session.contextUsedTokens).toBe(ev.data.contextUsedAfter);
+  });
+
+  it('clearHistory ships an occupancy that reflects an empty conversation', async () => {
+    const { session, events } = seeded({ contextLength: 40_000, seedBulkHistoryTokens: 8000 });
+    (session as any)._contextUsedTokens = 20_000;
+
+    expect(session.clearHistory()).toEqual({ ok: true });
+
+    const ev = events.find((e) => e.type === 'context-clear');
+    expect(ev).toBeDefined();
+    // The barrier drops the whole conversation, so nearly all of the ~8,000
+    // estimated tokens of history come off the measured 20,000.
+    expect(ev.data.contextUsedAfter).toBeLessThan(14_000);
+    expect(ev.data.contextUsedAfter).toBeGreaterThanOrEqual(0);
+    expect(session.contextUsedTokens).toBe(ev.data.contextUsedAfter);
+  });
+
+  // Review finding, 2026-09-16. `_contextUsedTokens` MEANS "a measured
+  // prompt-token count": its other writer is guarded on `lastInputTokens > 0`,
+  // so a usage-silent provider never sets it. Latching an estimate here would
+  // make it permanent and, since this method can only subtract, monotonically
+  // shrinking — and `planCompaction` reads it through the turn loop, only
+  // re-estimating when handed 0. A frozen sub-trigger number would stop
+  // compaction firing for the rest of the session.
+  it('leaves an UNMEASURED session unmeasured — a rewrite must not latch an estimate', () => {
+    const { session } = seeded({ contextLength: 40_000, seedBulkHistoryTokens: 8000 });
+    expect((session as any)._contextUsedTokens).toBeNull();      // nothing measured yet
+
+    expect(session.clearHistory()).toEqual({ ok: true });
+
+    // The field is still null, so the accessor keeps ESTIMATING from live
+    // history rather than serving a frozen figure…
+    expect((session as any)._contextUsedTokens).toBeNull();
+    const afterClear = session.contextUsedTokens!;
+
+    // …which is what lets it track history GROWING again. A latched estimate
+    // could only ever shrink from here.
+    session.seedHistory(Array.from({ length: 12 }, (_, i) => (
+      { role: i % 2 === 0 ? 'user' : 'assistant', content: 'y'.repeat(4000) } as any
+    )));
+    expect(session.contextUsedTokens!).toBeGreaterThan(afterClear);
+  });
+
+  it('never reports a negative window, however badly the estimator overshoots', async () => {
+    // A session whose measured reading is far SMALLER than its estimated history
+    // (a provider reporting a heavily cached prompt, say). The subtraction must
+    // clamp rather than produce a negative occupancy — which would render as a
+    // window more than 100% free.
+    const { session } = seeded({ contextLength: 40_000, seedBulkHistoryTokens: 8000 });
+    (session as any)._contextUsedTokens = 10;
+    expect(session.clearHistory()).toEqual({ ok: true });
+    expect(session.contextUsedTokens).toBeGreaterThanOrEqual(0);
   });
 });

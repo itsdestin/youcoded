@@ -111,6 +111,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Type check BOTH trees (src + tests) with tsgo, TypeScript 7's native
+      # compiler: ~3s together, where tsc took ~27s. Until now CI type-checked
+      # src only as a side effect of `npm run build`, Linux-only and after the
+      # tests — and never checked tests/ at all. Runs first so a type error
+      # fails in seconds instead of after the suite. The build below still
+      # compiles with TypeScript 6 (`tsc`), so an emit-only difference between
+      # the two compilers cannot ship unnoticed.
+      - name: Type check (tsgo)
+        run: npm run typecheck
+
       - name: Run tests
         run: npm test
 
@@ -128,8 +138,8 @@ jobs:
       # of an undeclared package shipped — none of those tools can see those
       # classes. Every enabled rule is at zero on the tree, so this fails only on
       # a NEW defect. Rule set and the measured cost of each deferred rule:
-      # desktop/eslint.config.mjs.
-      - name: Lint (eslint)
+      # desktop/.oxlintrc.json (oxlint replaced ESLint 2026-09-14, same rules).
+      - name: Lint (oxlint)
         run: npm run lint
 
       # Must run BEFORE the build — electron-builder's deb/rpm/pacman packagers

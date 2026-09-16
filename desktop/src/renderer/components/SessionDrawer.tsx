@@ -40,10 +40,12 @@ import { useResolvedConversations } from '../hooks/useResolvedConversations';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { usePreviewMeta } from '../hooks/usePreviewMeta';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
-import { resumeBlockedReason } from './tool-views/SessionRefActions';
-import ResumeOptionsPopover from './tool-views/ResumeOptionsPopover';
-import { ChatResumeIcon } from './Icons';
+import { resumeBlockedReason, requestResume } from './tool-views/SessionRefActions';
 import { TagGlyph } from './tags/glyphs';
+import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
+import { SessionCardTags, SessionCardMeta, CompleteToggle } from './SessionCardDetails';
+import { useResumeOptions, ResumeOptionsForm } from './ResumeOptions';
+import type { PastSession } from '../../shared/types';
 import { triggerTip } from './guide/tips';
 import { TagNoteEditor } from './tags/TagNoteEditor';
 
@@ -196,10 +198,6 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // The tags tip's moment: the first time the drawer is on screen with the
   // Organize button that opens the tag editor (guide/tips.ts).
   useEffect(() => { if (activePreview) triggerTip('tags'); }, [activePreview]);
-  // The Resume options popover (M-header). Its own click-away/Escape live in
-  // ResumeOptionsPopover; this side only owns open/closed and the anchor.
-  const [resumeSheetOpen, setResumeSheetOpen] = useState(false);
-  const resumeSheetWrapRef = useRef<HTMLDivElement>(null);
   // The same two session defaults the Resume Browser is handed by App. Read
   // here rather than threaded through the drawer's props: the drawer is
   // rendered from three places (chat, terminal, expanded) and none of them
@@ -222,28 +220,50 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [previewSheetOpen]);
-  useEffect(() => { setResumeSheetOpen(false); }, [activePreview?.id]);
   // Sheet must not survive a preview swap/close — reopening on a DIFFERENT
   // conversation's Preview click must not silently show the outgoing one's
   // still-open tag sheet.
   useEffect(() => { setPreviewSheetOpen(false); }, [activePreview?.id]);
 
-  // Resume's enabled/disabled state and tooltip (spec A2). `previewRow` is
-  // only a resumable `Ok` conversation once `chatsearch:resolve` answers
-  // 'ok' — every other status (still loading, unknown, ambiguous) disables
-  // Resume with a copy-book reason rather than a raw id or a blank button.
-  const previewNative = activePreview?.provider === 'native';
+  // The resume card at the foot of the preview (2026-09-16: Destin asked the
+  // side panel to match the Projects preview, which carries the Resume
+  // browser's own action card). `previewRow` is only a resumable `Ok`
+  // conversation once `chatsearch:resolve` answers 'ok'; until then — or when
+  // it cannot be resumed here — the card says why in words instead of offering
+  // a Resume button (spec A2's reasons, same copy).
   const previewOk = previewRow && previewRow.status === 'ok' ? previewRow : null;
   const previewBlockedReason = previewOk ? resumeBlockedReason(previewOk) : null;
-  const previewResumeDisabled = !previewOk || !!previewBlockedReason;
-  const previewResumeTitle = previewOk
-    ? (previewBlockedReason ?? (previewNative ? COPY.resumeNativeHint : COPY.resumeHint))
+  const previewNotReadyReason = previewOk
+    ? previewBlockedReason
     : previewRow?.status === 'ambiguous'
       ? COPY.ambiguousId(previewRow.candidates.length)
       : previewRow?.status === 'unknown'
         ? COPY.unknownId
         : previewResolved.loading ? COPY.lookingUp(1) : COPY.unknownId;
-  const previewResumeLabel = previewNative ? COPY.resumeNative : COPY.resume;
+  // The conversation in the shape the card parts take. The search index does
+  // not record a file size (0 → not shown) or the last model, so the details
+  // line is the date; tags, note and flags come from the meta store.
+  const previewCard: PastSession | null = previewOk && activePreview ? {
+    sessionId: previewOk.id,
+    name: activePreview.title || previewOk.title,
+    projectSlug: previewOk.projectSlug,
+    projectPath: previewOk.projectPath,
+    lastModified: Date.parse(previewOk.lastActive) || 0,
+    size: 0,
+    provider: previewOk.provider,
+    flags: previewMeta.loading ? { complete: previewOk.complete } : previewMeta.flags,
+    tags: previewMeta.tags,
+    note: previewMeta.note || undefined,
+    missingProject: previewOk.missingProject,
+    notSyncedYet: previewOk.notSyncedYet,
+  } : null;
+  const previewResume = useResumeOptions(sessionDefaults.model, sessionDefaults.skipPermissions);
+  // Fresh choices for each previewed conversation, from the Settings defaults
+  // once they have loaded.
+  useEffect(() => {
+    previewResume.resetFor(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- resetFor is redefined every render.
+  }, [activePreview?.id, sessionDefaults.model, sessionDefaults.skipPermissions]);
   // Live external-change events while the drawer is actually visible — the
   // watcher in main is refcounted, so open drawers on the same project share one.
   // (Subscribed below, after listRetry exists: a reconnect re-lists through it.)
@@ -977,10 +997,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           </div>
         ) : null}
         <div className="flex-1" />
-        {/* Resume + tag/note sheet (spec A4): `☰ list · title · (spacer) ·
-            Resume · 🏷 tag · ⛶ expand · ✕ close`. Both are `activePreview`-
-            only — a real artifact never shows them, and the file-only icons
-            below stay `active &&`-gated exactly as before. */}
+        {/* Tag/note sheet and Complete: `☰ list · title · (spacer) · 🏷 tag ·
+            ✓ complete · ⛶ expand · ✕ close`. Resume moved to the card at the
+            foot of the preview (2026-09-16). Both are `activePreview`-only — a
+            real artifact never shows them, and the file-only icons below stay
+            `active &&`-gated exactly as before. */}
         {activePreview && (
           <>
             <div ref={previewSheetWrapRef} className="relative">
@@ -1028,11 +1049,26 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                       registry={previewTagRegistry}
                       note={previewMeta.note}
                       onNote={previewMeta.saveNote}
+                      // Priority as a built-in tag, as in the Resume browser
+                      // and the Projects preview.
+                      builtIns={[{
+                        tag: PRIORITY_TAG,
+                        hint: PRIORITY_HINT,
+                        applied: !!previewMeta.flags.priority,
+                        onToggle: (next) => void previewMeta.toggleFlag('priority', next),
+                      }]}
                     />
                   )}
                 </div>
               )}
             </div>
+            {/* Complete, beside the tag button — the Resume browser's pair. */}
+            <CompleteToggle
+              done={previewCard ? !!previewCard.flags?.complete : !!previewMeta.flags.complete}
+              name={activePreview.title || COPY.untitled}
+              onToggle={(next) => void previewMeta.toggleFlag('complete', next)}
+              className="w-7 h-7 inline-flex items-center justify-center shrink-0"
+            />
           </>
         )}
         {/* Edit/Save moved to the floating button at the bottom-right of the
@@ -1045,40 +1081,6 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             screen — so it is not offered there (tester U6, 2026-09-10). */}
         {!narrowViewport && (
           <IconBtn name={expanded ? 'shrink' : 'expand'} title={expanded ? 'Shrink panel' : 'Expand panel'} active={expanded} onClick={() => dispatch({ type: 'DRAWER_EXPAND_TOGGLED' })} />
-        )}
-        {/* Resume sits between expand and close — Destin, 2026-08-27 gate
-            (M-header): "i want resume to be between expand and X button."
-            It no longer resumes on click; it opens the options popover below,
-            which is where the model / skip-permissions choice and the final
-            confirm live. */}
-        {activePreview && (
-          <div ref={resumeSheetWrapRef} className="relative">
-            <Tooltip text={previewResumeTitle}>
-            <Button
-              variant="primary"
-              size="sm"
-              disabled={previewResumeDisabled}
-              // Narrow (<640px, checked at 390px): the label collapses to a
-              // chat bubble with a play triangle — Destin (M-narrow) on the
-              // plain forward arrow that used to sit here. Icon-only means the
-              // accessible name moves to aria-label.
-              aria-label={narrowViewport ? previewResumeLabel : undefined}
-              aria-haspopup="dialog"
-              aria-expanded={resumeSheetOpen}
-              onClick={previewOk && !previewBlockedReason ? () => setResumeSheetOpen((v) => !v) : undefined}
-            >
-              {narrowViewport ? <ChatResumeIcon className="w-3.5 h-3.5" /> : previewResumeLabel}
-            </Button>
-            </Tooltip>
-            {resumeSheetOpen && previewOk && (
-              <ResumeOptionsPopover
-                conversation={previewOk}
-                defaultModel={sessionDefaults.model}
-                defaultSkipPermissions={sessionDefaults.skipPermissions}
-                onClose={() => setResumeSheetOpen(false)}
-              />
-            )}
-          </div>
         )}
         <IconBtn name="close" title="Close" onClick={() => guardUnsaved(() => dispatch({ type: 'DRAWER_CLOSED', sessionId }))} />
       </div>
@@ -1107,16 +1109,48 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             // strip, and git review don't apply to a read-only transcript.
             // Title + close now live in the top bar above (same slot a file
             // uses), so the pane itself no longer takes title/onClose props.
-            <SessionPreviewPane
-              provider={activePreview.provider}
-              id={activePreview.id}
-              // Fix: this drawer already has the title (activePreview.title,
-              // set when the preview was opened — same value the top bar and
-              // the Organize aria-label above use) — thread it down instead
-              // of making the pane re-resolve the same id a second time just
-              // to get the same string back.
-              title={activePreview.title}
-            />
+            // The Projects preview's layout: the conversation over one tinted
+            // surface, the Resume browser's action card at the foot.
+            <div className="flex h-full min-h-0 flex-col preview-backdrop">
+              <div className="min-h-0 flex-1">
+                <SessionPreviewPane
+                  provider={activePreview.provider}
+                  id={activePreview.id}
+                  // This drawer already has the title (set when the preview
+                  // was opened) — no second resolve for the same string.
+                  title={activePreview.title}
+                  backdrop={false}
+                />
+              </div>
+              <div className="shrink-0 p-3 pt-0">
+                <div className="rounded-lg border border-edge bg-panel shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
+                  {previewCard && (
+                    <div className="px-3 pt-2.5">
+                      <SessionCardTags session={previewCard} tagsById={previewTagRegistry.byId} className="mb-1" />
+                      <SessionCardMeta session={previewCard} showProject />
+                    </div>
+                  )}
+                  {previewCard && !previewNotReadyReason ? (
+                    <ResumeOptionsForm
+                      session={previewCard}
+                      options={previewResume}
+                      allowNewWindow={false}
+                      flush
+                      onResume={() => {
+                        // App resumes through the same event chat search's own
+                        // Resume sends, with the choices made here.
+                        void previewResume.resume(previewCard, (_id, _slug, _path, model, dangerous, _nw, _provider, binding) => {
+                          requestResume(previewOk!, { model, dangerous, binding });
+                        });
+                      }}
+                    />
+                  ) : (
+                    // Why there is no Resume here, in words (spec A2's copy).
+                    <div className="px-3 py-2.5 text-2xs text-fg-muted">{previewNotReadyReason}</div>
+                  )}
+                </div>
+              </div>
+            </div>
           ) : gitReviewOpen && active ? (
             // Standard top bar (above) stays; find bar, content, edit cluster, and
             // the metadata strip below are all swapped out while review is open
@@ -1252,7 +1286,7 @@ export function GitFooterEntry({
     <>
       {conflicted && (
         <Tooltip text="This file has merge conflicts">
-        <span className="font-medium text-amber-400">
+        <span className="font-medium text-amber-700">
           Conflict
         </span>
         </Tooltip>

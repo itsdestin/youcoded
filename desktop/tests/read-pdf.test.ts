@@ -109,8 +109,10 @@ describe('Read: PDF text layer (ledger G-6)', () => {
   it('records the read in readRegistry exactly as a text read does', async () => {
     const p = writePdf('notes.pdf', ['Some notes text here']);
     await ReadTool.execute({ file_path: 'notes.pdf' }, ctx);
-    const mtime = fs.statSync(p).mtimeMs;
-    expect([...ctx.readRegistry.values()]).toContain(mtime);
+    // Since 2026-09-16 the registry holds a content fingerprint, not an mtime —
+    // the same one a text Read of the same bytes would record.
+    const { fingerprintFile } = await import('../src/main/harness/tools/file-fingerprint');
+    expect([...ctx.readRegistry.values()]).toContain(fingerprintFile(p));
   });
 
   it('honours a pages range and declares bounds for the pages after it', async () => {

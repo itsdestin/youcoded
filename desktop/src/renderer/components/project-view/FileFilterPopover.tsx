@@ -108,11 +108,11 @@ export function FileFilterPopover({
       aria-label="File filters"
     >
       <div className="flex items-center justify-between">
-        <span className="text-[12.5px] font-medium text-fg">Filters</span>
+        <span className="text-xs font-medium text-fg">Filters</span>
         {filtersActive && (
           <button
             type="button"
-            className="text-[11.5px] text-fg-2 hover:text-fg transition-colors"
+            className="text-xs text-fg-2 hover:text-fg transition-colors"
             onClick={clear}
           >
             Clear

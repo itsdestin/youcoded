@@ -82,6 +82,36 @@ describe('lease-client', () => {
     expect(hubRequest).toHaveBeenCalledWith('renew', 's1', DEVICE_ID);
   });
 
+  // 2026-09-16 (sync.md): open a conversation and close it within a second. The
+  // release lands while acquire is still waiting on the hub; when the reply
+  // arrives the session must NOT come back as held with a live heartbeat.
+  it('a release that lands while acquire is still waiting on the hub wins — nothing is held afterwards', async () => {
+    let answerAcquire!: (r: LeaseResult) => void;
+    hubRequest.mockImplementation((op: string, sid: string) => {
+      if (op === 'acquire') return new Promise<LeaseResult>((resolve) => { answerAcquire = resolve; });
+      return Promise.resolve(okResult(op, sid, 0));
+    });
+    const acquiring = client.acquire('s1');
+    await Promise.resolve();                 // let acquire reach its hub await
+    // The tab closes. release() clears the local hold SYNCHRONOUSLY and then
+    // waits for its file delete, which queues behind acquire's reserved slot —
+    // so it can only finish once the hub has answered, exactly as in the app.
+    const releasing = client.release('s1');
+    answerAcquire(okResult('acquire', 's1', Date.now() + 300_000));
+    await acquiring;
+    await releasing;
+
+    expect(client.isHeld('s1')).toBe(false);
+    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+    // The hub may have granted the lease after it processed the release, so it
+    // is told again — best-effort — that this device does not want it.
+    expect(hubRequest.mock.calls.filter(([op]) => op === 'release')).toHaveLength(2);
+    // And no heartbeat re-armed itself for a session that is gone.
+    hubRequest.mockClear();
+    await vi.advanceTimersByTimeAsync(RENEW_MS * 2);
+    expect(hubRequest).not.toHaveBeenCalledWith('renew', 's1', DEVICE_ID);
+  });
+
   it('release stops the timer, deletes the file, and calls the hub', async () => {
     hubRequest.mockResolvedValue(okResult('acquire', 's1', Date.now() + 300_000));
     await client.acquire('s1');

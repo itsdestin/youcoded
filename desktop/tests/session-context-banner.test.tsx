@@ -50,6 +50,6 @@ describe('the whole row opens the panel', () => {
     const cut: SessionContext = { ...fits, skillsOffered: false, skills: [{ id: 'a', label: 'a' }] };
     render(<SessionContextBanner context={cut} onOpen={vi.fn()} />);
     expect(screen.getByText(/were left out/)).toBeInTheDocument();
-    expect(screen.getByRole('button').className).toContain('border-amber-500/40');
+    expect(screen.getByRole('button').className).toContain('border-amber-700/40');
   });
 });
