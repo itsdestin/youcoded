@@ -68,6 +68,15 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
       return { type: 'PERMISSION_HELD', sessionId, requestId };
     }
 
+    // Remote access batch 2 (§7): the broker/relay's "this ask is no longer open"
+    // signal. Until batch 2 it was a host-side purge only; a phone that never
+    // saw the answer kept live-looking Yes/No buttons on a dead question.
+    case 'PermissionResolved': {
+      const requestId = payload._requestId as string;
+      if (!requestId) return null;
+      return { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId, requestId };
+    }
+
     case 'PermissionExpired': {
       const requestId = payload._requestId as string;
       if (!requestId) return null;

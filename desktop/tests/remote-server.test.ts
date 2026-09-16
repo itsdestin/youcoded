@@ -20,14 +20,39 @@ vi.mock('ws', async () => {
 // listenBehavior lets a test turn the next listen() into a bind failure
 // (EADDRINUSE) instead of a success, so the start-failure path is exercised
 // rather than assumed.
-const listenBehavior: { mode: 'ok' | 'error'; calls: number } = { mode: 'ok', calls: 0 };
+const listenBehavior: { mode: 'ok' | 'error'; calls: number; boundHost: string | null } =
+  { mode: 'ok', calls: 0, boundHost: null };
+
+// Remote access refuses to start without a private address to listen on, so every start()
+// test needs one. Real detection shells out to the tailscale binary.
+vi.mock('../src/main/remote-config', async () => {
+  const actual = await vi.importActual<typeof import('../src/main/remote-config')>('../src/main/remote-config');
+  return {
+    ...actual,
+    RemoteConfig: Object.assign(
+      function RemoteConfigStub() { /* tests pass their own config object */ } as unknown as typeof actual.RemoteConfig,
+      actual.RemoteConfig,
+      {
+        detectTailscale: vi.fn(async () => ({
+          installed: true, connected: true, ip: '100.64.0.1',
+          hostname: 'test-host', url: 'http://test-host:9900',
+        })),
+      },
+    ),
+  };
+});
 
 vi.mock('http', async () => {
   const { EventEmitter: EE } = await import('events');
   function createServer(_handler?: any) {
     const emitter: any = new EE();
     return Object.assign(emitter, {
-      listen: vi.fn((_port: number, cb?: () => void) => {
+      // Signature matches net.Server: (port, host?, cb?). The server now names a host —
+      // the Tailscale address — so a mock that assumed (port, cb) would silently never
+      // call back and every start() test would hang.
+      listen: vi.fn((_port: number, hostOrCb?: string | (() => void), maybeCb?: () => void) => {
+        const cb = typeof hostOrCb === 'function' ? hostOrCb : maybeCb;
+        listenBehavior.boundHost = typeof hostOrCb === 'string' ? hostOrCb : null;
         listenBehavior.calls++;
         if (listenBehavior.mode === 'error') {
           const err: any = new Error('listen EADDRINUSE: address already in use :::9900');
@@ -76,6 +101,16 @@ vi.mock('../src/main/session-browser', async (importOriginal) => ({
   ...mockSessionBrowser,
 }));
 
+/**
+ * Drive the restore sequence for a bare socket, the way the old-client fallback or a
+ * `client:ready` would: a restoring client record around the socket, then restoreClient.
+ * (Batch 2 replaced `replayBuffers(ws)` + its 500 ms timer with this.)
+ */
+async function restore(server: any, ws: any) {
+  const client = { id: 'test', ws, deviceId: 'd', ip: '', connectedAt: 0, phase: 'restoring', queue: [] };
+  await server.restoreClient(client, { reconnect: false, replayBuffers: true });
+}
+
 describe('RemoteServer', () => {
   let mockSessionManager: any;
   let mockHookRelay: any;
@@ -99,10 +134,37 @@ describe('RemoteServer', () => {
       enabled: true,
       port: 9900,
       passwordHash: '$2b$10$fakehash',
-      trustTailscale: false,
       verifyPassword: vi.fn(async (pw: string) => pw === 'correct'),
-      isTailscaleIp: vi.fn(() => false),
     };
+  });
+
+  it('round-trips context defaults and refuses unsupported or failed saves', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    const sent: any[] = [];
+    const ws = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    const request = async (type: string, payload = {}) => {
+      await server.handleMessage({ ws }, JSON.stringify({ type, id: 'context', payload }));
+      return sent.pop()?.payload;
+    };
+    expect(await request('native:get-context-preferences')).toMatchObject({ ok: false });
+    expect(await request('native:set-context-preferences', { patch: { chatgpt: 'long' } })).toMatchObject({ ok: false });
+    const contextSettings = {
+      read: vi.fn(() => ({ openrouter: 'long', chatgpt: 'standard' })),
+      update: vi.fn(async () => ({ openrouter: 'long', chatgpt: 'long' })),
+    };
+    server.setNativeRuntime({ contextSettings });
+    expect(await request('native:get-context-preferences')).toEqual({ openrouter: 'long', chatgpt: 'standard' });
+    expect(await request('native:set-context-preferences', { patch: { chatgpt: 'long' } })).toEqual({ openrouter: 'long', chatgpt: 'long' });
+    expect(contextSettings.update).toHaveBeenCalledWith({ chatgpt: 'long' });
+    contextSettings.update.mockRejectedValueOnce(new Error('lock held'));
+    expect(await request('native:set-context-preferences', { patch: { chatgpt: 'standard' } })).toEqual({ ok: false, error: 'lock held' });
+    vi.stubEnv('YOUCODED_NATIVE', '0');
+    try {
+      expect(await request('native:get-context-preferences')).toMatchObject({ ok: false });
+      expect(await request('native:set-context-preferences', { patch: {} })).toMatchObject({ ok: false });
+      expect(contextSettings.update).toHaveBeenCalledTimes(2);
+    } finally { vi.unstubAllEnvs(); }
   });
 
   it('can be instantiated', async () => {
@@ -115,7 +177,10 @@ describe('RemoteServer', () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
     await server.start();
+    // Batch 2 (T2 re-review): a relay expiry must reach the host buffer while it runs.
+    expect(mockHookRelay.listenerCount('permission-expired')).toBe(1);
     server.stop();
+    expect(mockHookRelay.listenerCount('permission-expired')).toBe(0);
   });
 
   it('does not start when config.enabled is false', async () => {
@@ -125,6 +190,185 @@ describe('RemoteServer', () => {
     await server.start();
     // Should not throw, just no-op
     server.stop();
+  });
+});
+
+// A remote client is a browser on the network. Before the shell provider
+// existed, the worst a hostile `session:create` payload could reach was Claude
+// Code's own TUI, which asks before it acts; a shell asks nothing.
+describe('RemoteServer and the shell provider', () => {
+  let shellSessionManager: any;
+  let shellHookRelay: any;
+  let shellConfig: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listenBehavior.mode = 'ok';
+    shellSessionManager = Object.assign(new EventEmitter(), {
+      listSessions: vi.fn(() => []),
+      createSession: vi.fn(() => ({ id: '1', name: 'fish', cwd: '/tmp', status: 'active' })),
+      destroySession: vi.fn(() => true),
+      sendInput: vi.fn(),
+      resizeSession: vi.fn(),
+    });
+    shellHookRelay = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
+    shellConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+  });
+
+  /** Drive handleMessage directly with a fake authenticated client. */
+  function drive(server: any, msg: any) {
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    return server.handleMessage({ ws }, JSON.stringify(msg)).then(() => sent);
+  }
+
+  it('refuses session:create for a shell, which would be a bare shell on the host', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    const sent = await drive(server, {
+      type: 'session:create', id: 'c1',
+      payload: { name: 'x', cwd: '/', skipPermissions: false, provider: 'shell' },
+    });
+    expect(shellSessionManager.createSession).not.toHaveBeenCalled();
+    expect(sent[0].payload.ok).toBe(false);
+    expect(sent[0].payload.error).toMatch(/only be opened from the app itself/);
+  });
+
+  it('still creates an ordinary session', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    await drive(server, { type: 'session:create', id: 'c2', payload: { name: 'x', cwd: '/tmp', skipPermissions: false } });
+    expect(shellSessionManager.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a run-in-terminal command carrying a carriage return', async () => {
+    // The whole property: the app does not APPEND a carriage return, but a `\r`
+    // already inside the string is the same keypress — measured on real bash,
+    // zsh and fish, this runs both halves with nobody at the keyboard.
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    const sent = await drive(server, {
+      type: 'engine:run-in-terminal', id: 'r1', payload: { command: 'echo a\recho b' },
+    });
+    expect(shellSessionManager.createSession).not.toHaveBeenCalled();
+    expect(sent[0].payload.ok).toBe(false);
+    expect(sent[0].payload.error).toMatch(/carriage return/);
+  });
+
+  it('accepts an ordinary install command, semicolon and all', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    const sent = await drive(server, {
+      type: 'engine:run-in-terminal', id: 'r2', payload: { command: 'sudo pacman -S rocm; echo done' },
+    });
+    expect(shellSessionManager.createSession).toHaveBeenCalledTimes(1);
+    const opts = shellSessionManager.createSession.mock.calls[0][0];
+    expect(opts.provider).toBe('shell');
+    expect(opts.initialCommand).toBe('sudo pacman -S rocm; echo done');
+    expect(sent[0].payload).toEqual({ sessionId: '1' });
+  });
+});
+
+// A remote client's save has to arrive at main as the SAME patch it sent.
+// Two ways it silently did not, both of which look like a working save on
+// screen: passing the whole envelope instead of `payload.patch`, and dropping
+// the argument. Main then changes nothing, returns the settings unchanged, and
+// the dialog renders that as success — the user toggles "Keep loaded" on,
+// reopens the dialog, and it is off again with no error anywhere.
+describe('RemoteServer carries a per-model settings save end to end', () => {
+  let sm: any; let hr: any; let cfg: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listenBehavior.mode = 'ok';
+    sm = Object.assign(new EventEmitter(), {
+      listSessions: vi.fn(() => []), createSession: vi.fn(), destroySession: vi.fn(),
+      sendInput: vi.fn(), resizeSession: vi.fn(),
+    });
+    hr = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
+    cfg = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+  });
+
+  function drive(server: any, msg: any) {
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    return server.handleMessage({ ws }, JSON.stringify(msg)).then(() => sent);
+  }
+
+  /** Only the three members these cases touch. */
+  function fakeRuntime(engineManager: any, modelManager: any = {}) {
+    return { nativeHost: {}, providerRegistry: {}, modelCatalog: {}, engineManager, modelManager,
+      searchKeyStore: {}, searchService: {}, permissionStore: {}, specialistCatalog: {} } as any;
+  }
+
+  it('passes the patch itself, not the message envelope', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(sm, hr, cfg);
+    const setModelSettings = vi.fn(async () => ({ contextLength: null, keepLoaded: true, gpuLayers: 'auto', extraFlags: '', memoryWarningDismissed: null }));
+    server.setNativeRuntime(fakeRuntime({ setModelSettings }));
+
+    const sent = await drive(server, {
+      type: 'models:set-settings', id: 's1',
+      payload: { modelId: 'alpha', patch: { keepLoaded: true } },
+    });
+
+    expect(setModelSettings).toHaveBeenCalledWith('alpha', { keepLoaded: true });
+    expect(sent[0].payload).toMatchObject({ keepLoaded: true });
+  });
+
+  it('reads one model\u2019s settings by id and hands back the stored record', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(sm, hr, cfg);
+    const modelSettings = vi.fn(() => ({
+      contextLength: 8_192, keepLoaded: false, gpuLayers: 'auto', extraFlags: '',
+      memoryWarningDismissed: null, pendingApply: true, lastLoadError: 'out of device memory',
+    }));
+    server.setNativeRuntime(fakeRuntime({ modelSettings }));
+
+    const sent = await drive(server, { type: 'models:settings', id: 's2', payload: { modelId: 'alpha' } });
+
+    expect(modelSettings).toHaveBeenCalledWith('alpha');
+    // The two fields T23's dialog draws must survive the remote hop too.
+    expect(sent[0].payload).toMatchObject({ pendingApply: true, lastLoadError: 'out of device memory' });
+  });
+
+  it('answers a REFUSED save as a failure, which the shim re-throws', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(sm, hr, cfg);
+    server.setNativeRuntime(fakeRuntime({
+      setModelSettings: vi.fn(async () => { throw new Error('Context length must be at least 1024 tokens.'); }),
+    }));
+
+    const sent = await drive(server, {
+      type: 'models:set-settings', id: 's3', payload: { modelId: 'alpha', patch: { contextLength: 512 } },
+    });
+
+    expect(sent[0].payload).toEqual({ ok: false, error: 'Context length must be at least 1024 tokens.' });
+  });
+
+  it('answers nothing, not a made-up settings record, when there is no engine', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(sm, hr, cfg);
+    // No native runtime. A fabricated record here would put invented defaults in
+    // the settings dialog and let the user "save" them onto a machine with no
+    // engine config to save to.
+    const sent = await drive(server, { type: 'models:settings', id: 's5', payload: { modelId: 'alpha' } });
+    expect(sent[0].payload).toBeNull();
+
+    const saved = await drive(server, {
+      type: 'models:set-settings', id: 's6', payload: { modelId: 'alpha', patch: { keepLoaded: true } },
+    });
+    expect(saved[0].payload).toBeNull();
+  });
+
+  it('does not report a download that never started when there is no engine', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(sm, hr, cfg);
+    // No native runtime at all — the state a remote client hits before the
+    // engine stack is wired. `{ downloadId: '' }` here would be a fake success:
+    // the row would show a download that never begins and never ends.
+    const sent = await drive(server, { type: 'models:add-vision', id: 's4', payload: { modelId: 'alpha' } });
+    expect(sent[0].payload).toBeNull();
   });
 });
 
@@ -144,9 +388,7 @@ describe('RemoteServer auth flow', () => {
       enabled: true,
       port: 9900,
       passwordHash: null,
-      trustTailscale: false,
       verifyPassword: vi.fn(async () => false),
-      isTailscaleIp: vi.fn(() => false),
     };
     const { RemoteServer } = await import('../src/main/remote-server');
     const server = new RemoteServer(mockSessionManager, mockHookRelay, config);
@@ -182,9 +424,7 @@ describe('RemoteServer runtime start/stop', () => {
       enabled: true,
       port: 9900,
       passwordHash: '$2b$10$fakehash',
-      trustTailscale: false,
       verifyPassword: vi.fn(async () => false),
-      isTailscaleIp: vi.fn(() => false),
     };
   });
 
@@ -236,6 +476,28 @@ describe('RemoteServer runtime start/stop', () => {
     expect(server.isRunning()).toBe(false);
   });
 
+  it('stops meaning stopped, even after a start that failed', async () => {
+    // The reason was cleared only by a successful listen, and stop() skipped its own
+    // status emit whenever the reason was set. So one failed start left the panel reading
+    // "Not running: <that reason>" for the rest of the process — including after the user
+    // had switched remote access off, which is a state the server was genuinely in.
+    listenBehavior.mode = 'error';
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+
+    await expect(server.start()).rejects.toThrow(/EADDRINUSE/);
+    expect(server.getStatus().state).toBe('failed');
+
+    const seen: string[] = [];
+    server.onStatusChange(st => seen.push(st.state));
+    server.stop();
+
+    expect(server.getStatus().state).toBe('stopped');
+    expect(server.getStatus().reason).toBeUndefined();
+    // And the panel is told, rather than being left on the stale answer until it reopens.
+    expect(seen).toContain('stopped');
+  });
+
   it('leaves no subscriptions behind after a failed start', async () => {
     listenBehavior.mode = 'error';
     const { RemoteServer } = await import('../src/main/remote-server');
@@ -248,6 +510,8 @@ describe('RemoteServer runtime start/stop', () => {
     expect(mockSessionManager.listenerCount('pty-output')).toBe(0);
     expect(mockSessionManager.listenerCount('session-exit')).toBe(0);
     expect(mockHookRelay.listenerCount('hook-event')).toBe(0);
+    // Batch 2 (T2 review, 7): the relay-expiry listener is subscribed with the others.
+    expect(mockHookRelay.listenerCount('permission-expired')).toBe(0);
   });
 
   it('does not start when config.enabled is false', async () => {
@@ -274,7 +538,7 @@ describe('RemoteServer unhandled channels', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   /** Drive handleMessage directly with a fake authenticated client and collect
@@ -284,6 +548,40 @@ describe('RemoteServer unhandled channels', () => {
     const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
     return server.handleMessage({ ws }, JSON.stringify(msg)).then(() => sent);
   }
+
+  it('answers remote:status over the socket a browser actually uses', async () => {
+    // This channel reached preload, the shim, the desktop IPC handlers and Android, and
+    // not this host. The shim rejects on `unsupported`, and the panel asks for status in
+    // the same Promise.all as the config, the Tailscale info and the device list — so the
+    // whole Remote Access screen opened blank on a phone, and every reconnect re-asked.
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    const sent = await sendAndCollect(server, { type: 'remote:status', id: 'req-status', payload: {} });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].payload.unsupported).toBeUndefined();
+    expect(sent[0].payload.state).toBe('stopped');
+    expect(sent[0].payload.port).toBe(9900);
+  });
+
+  it('answers about this device\u2019s requests and nobody else\u2019s', async () => {
+    // Request ids carry the device that made them. Without the check, any paired device
+    // could ask the host whether another device's action had run.
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    server.noteCompleted('phone-a:1:7');
+    server.noteCompleted('phone-b:1:9');
+
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    await server.handleMessage({ ws, deviceId: 'phone-a' }, JSON.stringify({
+      type: 'remote:request-outcome', id: 'req-o', payload: { ids: ['phone-a:1:7', 'phone-b:1:9'] },
+    }));
+
+    expect(sent[0].payload.outcomes['phone-a:1:7']).toBe('completed');
+    // Not a lie — the host genuinely will not say. Unknown is what a client shows as
+    // "we could not tell", which is the honest answer to a question that isn't its own.
+    expect(sent[0].payload.outcomes['phone-b:1:9']).toBe('unknown');
+  });
 
   it('answers an unknown channel instead of dropping it', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
@@ -378,7 +676,7 @@ describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function sendAndCollect(server: any, msg: any) {
@@ -467,7 +765,7 @@ describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
       expect(sent[0].payload).toEqual({ tags: ['tag_n'], note: 'from peer', supported: true });
     });
 
-    it('falls back to an empty-but-supported result when no Conversation Store is up', async () => {
+    it('reports the tags and note as unreadable when no Conversation Store is up', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
       mockConversationsService.getConversationStore.mockReturnValue(null);
@@ -476,7 +774,10 @@ describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
         type: 'session:get-meta', id: 'r3', payload: { sessionId: 'x' },
       });
 
-      expect(sent[0].payload).toEqual({ tags: [], note: '', supported: true });
+      // Was `{ tags: [], note: '', supported: true }` — identical to a conversation with no
+      // note, which the close prompt showed as "No note" and then overwrote (error inventory
+      // 2026-09-10, false message 12). With no store the tags and note are unknown, not none.
+      expect(sent[0].payload).toEqual({ tags: [], note: '', supported: true, unreadable: expect.any(String) });
     });
   });
 
@@ -767,7 +1068,7 @@ describe('RemoteServer account bridge', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function sendAndCollect(server: any, msg: any) {
@@ -815,7 +1116,7 @@ describe('RemoteServer account bridge', () => {
       const { frames, ws } = fakeWs();
 
       server.broadcastStatusData({ contextMap: { s1: 42 }, gitBranchMap: { s1: 'main' }, usage: { x: 1 } });
-      await server.replayBuffers(ws);
+      await restore(server, ws);
 
       const status = frames.filter((m) => m.type === 'status:data');
       expect(status).toHaveLength(1);
@@ -830,7 +1131,7 @@ describe('RemoteServer account bridge', () => {
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
       const { frames, ws } = fakeWs();
 
-      await server.replayBuffers(ws);
+      await restore(server, ws);
 
       expect(frames.some((m) => m.type === 'status:data')).toBe(false);
     });
@@ -850,7 +1151,7 @@ describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function fakeWs() {
@@ -858,12 +1159,10 @@ describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
     return { frames, ws: { readyState: 1, send: (raw: string) => frames.push(JSON.parse(raw)) } as any };
   }
 
-  // replayBuffers delays PTY/hook/run replay by 500ms (see its own comment —
-  // gives the client's reducer time to process SESSION_INIT first), so a
-  // test asserting on that replay has to wait past it, same as a real client.
+  // The restore replays PTY/hook/run buffers in the same pass as the hydrate
+  // (batch 2 removed the 500 ms guess — the phone says when it is ready).
   async function replayAndWait(server: any, ws: any) {
-    await server.replayBuffers(ws);
-    await new Promise((r) => setTimeout(r, 600));
+    await restore(server, ws);
   }
 
   it('a new client receives the latest specialists:event {kind:"run"} per child, not an append-only log', async () => {
@@ -1010,7 +1309,7 @@ describe('RemoteServer transcript:read-meta path containment', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-rs-transcript-'));
     // Point os.homedir() at the tmp dir so the handler's ~/.claude/projects
     // containment root lives inside the fixture, not the real home.
@@ -1075,7 +1374,7 @@ describe('RemoteServer transcript:read-meta malformed payloads', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   /** Drive handleMessage directly with a fake authenticated client and collect
@@ -1133,7 +1432,7 @@ describe('RemoteServer session:history id validation', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-rs-history-'));
     // Point os.homedir() at the tmp dir so the handler's ~/.claude/projects
     // probe root lives inside the fixture, not the real home. A slug dir must
@@ -1203,5 +1502,169 @@ describe('RemoteServer session:history id validation', () => {
     expect(mockSessionBrowser.loadHistory).toHaveBeenCalledWith('abc-123', 'my-project', 5, undefined);
     expect(sent).toHaveLength(1);
     expect(sent[0].payload).toEqual({ events: [] });
+  });
+});
+
+// Perf regression (2026-09-01 investigation, "PTY replay buffer: a 4 MB string
+// copy on every chunk, client or no client"). The rolling PTY buffer used to be
+// ONE string per session: `buf += data` then `buf.slice(...)`, so once a busy
+// session filled the 4 MB cap every further chunk re-allocated and copied ~4 MB —
+// unconditionally, because the remote server is always on. It is now an array of
+// chunks joined only at connect time. These tests pin the two things that must NOT
+// change (the replayed tail, and the live broadcast) alongside the new bounds.
+describe('RemoteServer replay buffers stay bounded and replay the same tail', () => {
+  // Mirrors the module constants; they are not exported, and hard-coding them here
+  // means a change to either one shows up as a failing test rather than silently
+  // re-scaling the assertions.
+  const PTY_CAP = 4 * 1024 * 1024;
+  const HOOK_CAP = 10_000;
+
+  let mockSessionManager: any;
+  let mockHookRelay: any;
+  let mockConfig: any;
+
+  beforeEach(() => {
+    mockSessionManager = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []) });
+    mockHookRelay = new EventEmitter();
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+  });
+
+  function fakeWs() {
+    const frames: any[] = [];
+    return { frames, ws: { readyState: 1, send: (raw: string) => frames.push(JSON.parse(raw)) } as any };
+  }
+
+  // Same restore the Task 9 suite above drives.
+  async function replayAndWait(server: any, ws: any) {
+    await restore(server, ws);
+  }
+
+  async function newServer() {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    return new RemoteServer(mockSessionManager, mockHookRelay, mockConfig) as any;
+  }
+
+  it('never lets a session buffer exceed the 4 MB cap, however the output is chopped up', async () => {
+    const server = await newServer();
+    // 100 x 64 KiB = 6.25 MiB pushed through a 4 MiB cap.
+    const chunk = 64 * 1024;
+    for (let i = 0; i < 100; i++) {
+      server.onPtyOutput('s1', String.fromCharCode(97 + (i % 26)).repeat(chunk));
+    }
+    const buf = server.ptyBuffers.get('s1');
+    expect(buf.length).toBeLessThanOrEqual(PTY_CAP);
+    // The running counter must agree with what is actually stored, or the trim
+    // loop would drift and the cap would stop meaning anything.
+    expect(buf.length).toBe(buf.chunks.join('').length);
+  });
+
+  it('replays the tail of the output, not the head', async () => {
+    const server = await newServer();
+    const chunk = 64 * 1024; // divides the cap exactly, so the tail is exact
+    let full = '';
+    for (let i = 0; i < 100; i++) {
+      const data = String.fromCharCode(97 + (i % 26)).repeat(chunk);
+      full += data;
+      server.onPtyOutput('s1', data);
+    }
+
+    const { frames, ws } = fakeWs();
+    await replayAndWait(server, ws);
+
+    const pty = frames.filter((m) => m.type === 'pty:output' && m.payload.sessionId === 's1');
+    expect(pty).toHaveLength(1);
+    expect(pty[0].payload.data).toBe(full.slice(-PTY_CAP));
+  });
+
+  it('trims on a chunk boundary when the chunks do not divide the cap evenly', async () => {
+    const server = await newServer();
+    const chunk = 100_000; // does not divide 4 MiB
+    let full = '';
+    for (let i = 0; i < 60; i++) {
+      const data = String.fromCharCode(97 + (i % 26)).repeat(chunk);
+      full += data;
+      server.onPtyOutput('s1', data);
+    }
+
+    const { frames, ws } = fakeWs();
+    await replayAndWait(server, ws);
+    const replayed = frames.find((m) => m.type === 'pty:output').payload.data;
+
+    // Still a suffix of everything written, still under the cap — but because whole
+    // chunks are dropped rather than cutting mid-chunk, it can be up to one chunk
+    // shorter than the old string buffer would have been. That is expected.
+    expect(full.endsWith(replayed)).toBe(true);
+    expect(replayed.length).toBeLessThanOrEqual(PTY_CAP);
+    expect(replayed.length).toBeGreaterThan(PTY_CAP - chunk);
+  });
+
+  it('caps a single chunk that is bigger than the whole buffer', async () => {
+    const server = await newServer();
+    const huge = 'z'.repeat(PTY_CAP + 5000);
+    server.onPtyOutput('s1', huge);
+    const buf = server.ptyBuffers.get('s1');
+    expect(buf.length).toBe(PTY_CAP);
+    expect(buf.chunks.join('')).toBe(huge.slice(-PTY_CAP));
+  });
+
+  it('does not accumulate array entries for empty output, or for one-character output', async () => {
+    const server = await newServer();
+    for (let i = 0; i < 100; i++) server.onPtyOutput('s1', '');
+    expect(server.ptyBuffers.get('s1').chunks).toHaveLength(0);
+    expect(server.ptyBuffers.get('s1').length).toBe(0);
+
+    // 20,000 single keystrokes must not become 20,000 array entries — they are
+    // coalesced into ~4 KB chunks (see PTY_CHUNK_COALESCE_BELOW).
+    for (let i = 0; i < 20_000; i++) server.onPtyOutput('s1', 'x');
+    const buf = server.ptyBuffers.get('s1');
+    expect(buf.length).toBe(20_000);
+    expect(buf.chunks.join('')).toBe('x'.repeat(20_000));
+    expect(buf.chunks.length).toBeLessThan(20);
+  });
+
+  it('still broadcasts every PTY chunk live to a connected client', async () => {
+    // Guards the pitfall this change sits next to: a broadcast nobody asked for is
+    // still load-bearing. Skipping the send is only ever allowed at ZERO clients.
+    const server = await newServer();
+    const sent: any[] = [];
+    server.clients.add({ id: 'c1', ws: { readyState: 1, send: (d: string) => sent.push(JSON.parse(d)) }, token: 't', ip: '1.2.3.4', connectedAt: 0 });
+
+    server.onPtyOutput('s1', 'hello');
+    server.onPtyOutput('s1', ''); // even an empty chunk is still forwarded, as before
+
+    expect(sent).toHaveLength(2);
+    // Batch 2: every live frame also carries the buffer epoch and the chunk's stream offset.
+    expect(sent[0]).toMatchObject({ type: 'pty:output', payload: { sessionId: 's1', data: 'hello', offset: 0 } });
+    expect(sent[1]).toMatchObject({ type: 'pty:output', payload: { sessionId: 's1', data: '', offset: 5 } });
+  });
+
+  it('broadcast() does no work at all when no client is connected', async () => {
+    const server = await newServer();
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      server.broadcast({ type: 'pty:output', payload: { sessionId: 's1', data: 'x' } });
+      // Not even the serialization: that was the per-chunk cost paid by every user
+      // who never opens remote access.
+      expect(stringify).not.toHaveBeenCalled();
+
+      const sent: string[] = [];
+      server.clients.add({ id: 'c1', ws: { readyState: 1, send: (d: string) => sent.push(d) }, token: 't', ip: '1.2.3.4', connectedAt: 0 });
+      server.broadcast({ type: 'pty:output', payload: { sessionId: 's1', data: 'x' } });
+      expect(stringify).toHaveBeenCalledTimes(1);
+      expect(sent).toHaveLength(1);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it('bounds the hook-event buffer at 10,000 events and keeps the newest ones', async () => {
+    const server = await newServer();
+    for (let i = 0; i < HOOK_CAP + 500; i++) {
+      server.bufferHookEvent({ sessionId: 's1', type: 'Notification', payload: { n: i }, timestamp: 0 });
+    }
+    const buf = server.hookBuffers.get('s1');
+    expect(buf).toHaveLength(HOOK_CAP);
+    expect(buf[0].payload.n).toBe(500);              // oldest 500 dropped
+    expect(buf[buf.length - 1].payload.n).toBe(HOOK_CAP + 499); // newest kept
   });
 });

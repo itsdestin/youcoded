@@ -251,6 +251,13 @@ export function projectToClaudeJson(
     // already filters disabled ones, but a disabled entry must never be
     // projected even if a future caller passes list() by mistake.
     if (server.enabled === false) continue;
+    if (server.credentialError) {
+      // WHY: keep a previously working projection and its ownership while the
+      // wallet is inaccessible; never publish partial credentials or adopt an
+      // unowned entry. Independent servers still reconcile normally.
+      if (previouslyOwned.includes(server.id) && Object.prototype.hasOwnProperty.call(mcpServers, server.id)) nowOwned.push(server.id);
+      continue;
+    }
     // A server synced from another device without its matching secret is
     // "needs setup" (McpRegistry.resolveEntry's missingSecrets) — projecting
     // it would hand Claude Code a command/header missing a required value,

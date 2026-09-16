@@ -6,94 +6,126 @@ import path from 'path';
 // Preload can't import from shared/types due to Electron sandbox restrictions,
 // so channel names are duplicated. This test catches drift.
 
+// The two IPC constant maps and how they are compared.
+//
+// preload.ts cannot import shared/types.ts (Electron's sandbox), so the channel
+// map is written out TWICE and the two copies are kept identical by this file.
+//
+// Fixed 2026-09-04 (linux-buddy-helper design §11): this test used to
+// console.warn when a constant was in one map and not the other, which means it
+// could not catch the mistake it exists to catch — a channel added to one copy
+// and forgotten in the other. It now FAILS, against a recorded baseline of the
+// drift that already existed on the day the check was tightened. Adding to that
+// baseline is not the way to make a new failure go away: add the constant to the
+// other map.
+const readSource = (...parts: string[]) => fs.readFileSync(path.join(__dirname, '..', ...parts), 'utf8');
+
+/**
+ * NAME → channel string for one map.
+ *
+ * Anchored to the start of a line and to a CONSTANT-shaped name, because the old
+ * `(\w+)\s*:` pattern also matched ordinary words inside the maps' comments
+ * ("Task 1:", "push:"), which put ~30 non-existent constants into the comparison
+ * and is part of why it could never have been made to fail.
+ */
+function ipcConstants(source: string, decl: RegExp): Map<string, string> {
+  // Anchored to the block's `} as const;` terminator at line start: a `[^}]+`
+  // body stops at the FIRST `}`, which occurs inside a mid-block comment
+  // ("Caller passes a {x,y} offset") and silently truncated the map to a third
+  // of its keys.
+  const block = source.match(decl);
+  const out = new Map<string, string>();
+  if (!block) return out;
+  const entry = /^\s*([A-Z][A-Z0-9_]*)\s*:\s*'([^']+)'/gm;
+  let m: RegExpExecArray | null;
+  while ((m = entry.exec(block[1])) !== null) out.set(m[1], m[2]);
+  return out;
+}
+
+// The drift that already existed on 2026-09-04, measured, not guessed. Every
+// name here is a constant one map carries and the other does not. Most are
+// namespaces preload owns end-to-end (account:, social:, marketplace:) or that
+// main owns end-to-end (specialists:, permissions:, search:).
+const PRELOAD_ONLY_ON_2026_09_04 = [
+  'ACCOUNT_DELETE', 'ACCOUNT_EXPORT', 'ACCOUNT_POLL', 'ACCOUNT_REFRESH', 'ACCOUNT_SET_HANDLE',
+  'ACCOUNT_SIGNED_IN', 'ACCOUNT_SIGN_OUT', 'ACCOUNT_START', 'ACCOUNT_UPDATE_PROFILE',
+  'ACCOUNT_USER', 'ANALYTICS_GET_OPT_IN', 'ANALYTICS_SET_OPT_IN', 'APPEARANCE_GET',
+  'APPEARANCE_SET', 'CHAT_EXPORT_SNAPSHOT', 'CHAT_SNAPSHOT_RESPONSE', 'DEFAULTS_GET',
+  'DEFAULTS_SET', 'MARKETPLACE_COMMENT', 'MARKETPLACE_INSTALL', 'MARKETPLACE_RATE',
+  'MARKETPLACE_RATE_DELETE', 'MARKETPLACE_REPORT', 'MARKETPLACE_THEME_LIKE',
+  'MARKETPLACE_THUMB', 'MARKETPLACE_THUMB_GET', 'MODEL_GET_PREFERENCE', 'MODEL_READ_LAST',
+  'MODEL_SET_PREFERENCE', 'MODES_GET', 'MODES_SET', 'PTY_RAW_BYTES',
+  'REMOTE_ATTENTION_CHANGED', 'SETTINGS_GET', 'SETTINGS_SET', 'SOCIAL_ACCEPT_REQUEST',
+  'SOCIAL_BLOCK', 'SOCIAL_CANCEL_REQUEST', 'SOCIAL_DECLINE_REQUEST', 'SOCIAL_LIST_BLOCKS',
+  'SOCIAL_LIST_FRIENDS', 'SOCIAL_LIST_REQUESTS', 'SOCIAL_LOOKUP_HANDLE',
+  'SOCIAL_PRESENCE_CONNECT', 'SOCIAL_PRESENCE_DISCONNECT', 'SOCIAL_PRESENCE_EVENT',
+  'SOCIAL_PRESENCE_SEND', 'SOCIAL_SEND_REQUEST', 'SOCIAL_UNBLOCK', 'SOCIAL_UNFRIEND',
+];
+const TYPES_ONLY_ON_2026_09_04 = [
+  'FS_READ_HEAD', 'NATIVE_SUPPORTED', 'PERMISSIONS_LIST', 'PERMISSIONS_REMOVE',
+  'PERMISSIONS_REMOVE_PROJECT', 'SEARCH_LIST', 'SEARCH_REMOVE_KEY', 'SEARCH_SET_KEY',
+  'SEARCH_TEST', 'SPECIALISTS_DELEGATED_GET', 'SPECIALISTS_DELEGATED_SET',
+  'SPECIALISTS_EVENT', 'SPECIALISTS_INTERRUPT', 'SPECIALISTS_LIST', 'SPECIALISTS_STEER',
+];
+
 describe('IPC channel consistency', () => {
-  test('preload channel names match shared/types.ts', () => {
-    const preloadSource = fs.readFileSync(
-      path.join(__dirname, '../src/main/preload.ts'), 'utf8'
-    );
-    const typesSource = fs.readFileSync(
-      path.join(__dirname, '../src/shared/types.ts'), 'utf8'
-    );
+  const preloadSource = readSource('src', 'main', 'preload.ts');
+  const typesSource = readSource('src', 'shared', 'types.ts');
+  const preloadIpc = ipcConstants(preloadSource, /const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
+  const typesIpc = ipcConstants(typesSource, /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
 
-    // Extract channel strings from preload (pattern: 'channel-name' in ipcRenderer calls)
-    const preloadChannels = new Set<string>();
-    const ipcPattern = /ipcRenderer\.\w+\('([^']+)'/g;
-    let match;
-    while ((match = ipcPattern.exec(preloadSource)) !== null) {
-      preloadChannels.add(match[1]);
+  // Without this, every assertion below passes vacuously the moment one of the
+  // two extractions stops matching — which has happened here before.
+  test('both IPC maps were actually parsed', () => {
+    expect(preloadIpc.size).toBeGreaterThan(250);
+    expect(typesIpc.size).toBeGreaterThan(250);
+    expect(preloadIpc.get('BUDDY_SHOW')).toBe('buddy:show');
+    expect(typesIpc.get('BUDDY_SHOW')).toBe('buddy:show');
+  });
+
+  test('a constant in both maps has the same channel string in both', () => {
+    const mismatched = [...preloadIpc]
+      .filter(([name, value]) => typesIpc.has(name) && typesIpc.get(name) !== value)
+      .map(([name, value]) => `${name}: preload '${value}' vs types '${typesIpc.get(name)}'`);
+    expect(mismatched).toEqual([]);
+  });
+
+  test('no constant is added to one map and forgotten in the other', () => {
+    const preloadOnly = [...preloadIpc.keys()].filter((n) => !typesIpc.has(n)).sort();
+    const typesOnly = [...typesIpc.keys()].filter((n) => !preloadIpc.has(n)).sort();
+    // Compared as ARRAYS so a failure names the exact constant that drifted.
+    // SUBSET-PLUS-CAP, not equality (B4 review, F4). Equality pins BOTH
+    // directions: fixing a legitimate piece of drift — adding one of the
+    // types-only constants to preload — would turn this red until someone
+    // hand-edited the baseline, and the failure would be a raw array diff that
+    // does not say which direction is the good one. This way a fix passes
+    // silently, a NEW one-sided constant fails and names itself, and quietly
+    // appending to the baseline no longer works: the count is a hard number that
+    // has to be edited too, which is a visible change in review.
+    const strays = preloadOnly.filter((n) => !PRELOAD_ONLY_ON_2026_09_04.includes(n));
+    expect(strays, 'new preload-only channel constant(s); add them to shared/types.ts too').toEqual([]);
+    expect(preloadOnly.length).toBeLessThanOrEqual(PRELOAD_ONLY_ON_2026_09_04.length);
+    const typesStrays = typesOnly.filter((n) => !TYPES_ONLY_ON_2026_09_04.includes(n));
+    expect(typesStrays, 'new types-only channel constant(s); add them to preload.ts too').toEqual([]);
+    expect(typesOnly.length).toBeLessThanOrEqual(TYPES_ONLY_ON_2026_09_04.length);
+  });
+
+  // Channel strings preload passes to ipcRenderer directly, without going
+  // through its map at all. Measured 2026-09-04: 59 of these exist and are
+  // legitimate (artifacts:*, git:*, project:*, sync:* are reached this way), so
+  // this stays a report rather than an assertion — the constant-map checks
+  // above are the ones that had to become real.
+  test('inline ipcRenderer channel strings are reported, not asserted', () => {
+    const inline = new Set<string>();
+    const pattern = /ipcRenderer\.\w+\('([^']+)'/g;
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(preloadSource)) !== null) inline.add(m[1]);
+    const known = new Set([...typesIpc.values(), ...preloadIpc.values()]);
+    const unlisted = [...inline].filter((ch) => !known.has(ch) && !ch.includes(':output:'));
+    if (unlisted.length > 0) {
+      console.warn('preload.ts calls these channels without a map entry:', unlisted);
     }
-
-    // Also extract channels from the preload IPC constant object.
-    // Anchor the capture to the block's `} as const;` terminator at line start —
-    // the old `[^}]+` pattern stopped at the FIRST `}`, which occurs inside a
-    // mid-block comment ("Caller passes a {x,y} offset"), silently truncating
-    // the extracted block to ~1/3 of its keys and skipping the parity check
-    // for everything after it.
-    const preloadIpcBlock = preloadSource.match(/const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
-    if (preloadIpcBlock) {
-      const constPattern = /:\s*'([^']+)'/g;
-      while ((match = constPattern.exec(preloadIpcBlock[1])) !== null) {
-        preloadChannels.add(match[1]);
-      }
-    }
-
-    // Extract channel strings from types.ts IPC object. Same terminator-anchored
-    // pattern as the preload extraction above — the types block has no stray `}`
-    // today, but a future comment containing one would silently truncate it too.
-    const typesChannels = new Set<string>();
-    const typesIpcBlock = typesSource.match(/export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
-    if (typesIpcBlock) {
-      const typesPattern = /:\s*'([^']+)'/g;
-      while ((match = typesPattern.exec(typesIpcBlock[1])) !== null) {
-        typesChannels.add(match[1]);
-      }
-    }
-
-    // Every preload channel should exist in types (or be a dynamic/ad-hoc channel)
-    const missing = [...preloadChannels].filter(ch =>
-      !typesChannels.has(ch) && !ch.includes(':output:')
-    );
-
-    // This is informational — log drift rather than hard-fail, since preload
-    // may legitimately have channels not in the IPC enum (dynamic channels, etc.)
-    if (missing.length > 0) {
-      console.warn('Channels in preload.ts but not in shared/types.ts:', missing);
-    }
-
-    // Both files should define the same core IPC constant object keys
-    const preloadIpcKeys = new Set<string>();
-    if (preloadIpcBlock) {
-      const keyPattern = /(\w+)\s*:/g;
-      while ((match = keyPattern.exec(preloadIpcBlock[1])) !== null) {
-        preloadIpcKeys.add(match[1]);
-      }
-    }
-
-    const typesIpcKeys = new Set<string>();
-    if (typesIpcBlock) {
-      const keyPattern = /(\w+)\s*:/g;
-      while ((match = keyPattern.exec(typesIpcBlock[1])) !== null) {
-        typesIpcKeys.add(match[1]);
-      }
-    }
-
-    // Channels defined in preload's IPC object should all exist in types' IPC object
-    const missingKeys = [...preloadIpcKeys].filter(k => !typesIpcKeys.has(k));
-    if (missingKeys.length > 0) {
-      console.warn('IPC keys in preload but not in types:', missingKeys);
-    }
-
-    // Verify that the channel values match for shared keys
-    for (const key of preloadIpcKeys) {
-      if (!typesIpcKeys.has(key)) continue;
-
-      const preloadVal = preloadIpcBlock?.[1].match(new RegExp(`${key}\\s*:\\s*'([^']+)'`));
-      const typesVal = typesIpcBlock?.[1].match(new RegExp(`${key}\\s*:\\s*'([^']+)'`));
-
-      if (preloadVal && typesVal) {
-        expect(preloadVal[1]).toBe(typesVal[1]);
-      }
-    }
+    expect(inline.size).toBeGreaterThan(0);
   });
 });
 
@@ -101,15 +133,49 @@ describe('IPC channel consistency', () => {
 // Settings → Development feature. All three platforms must carry identical
 // type strings.
 describe('dev:* channel parity', () => {
-  const NEW_TYPES = [
-    'dev:log-tail',
-    'dev:diagnostics',
-    'dev:summarize-issue',
-    'dev:submit-issue',
-    'dev:install-workspace',
-    'dev:install-progress',
-    'dev:open-session-in',
-  ];
+  // WHY derived, not hand-listed (2026-09-10): this was a fixed array, so the two
+  // channels added for managed workspace setup escaped every assertion below
+  // silently — the suite stayed green while the new channels were on no platform
+  // but desktop. The list now comes from shared/types.ts, so a dev:* channel
+  // cannot be added without this test having an opinion about it.
+  const ALL_DEV_TYPES = [...ipcConstants(
+    readSource('src', 'shared', 'types.ts'),
+    /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/,
+  ).values()].filter(v => v.startsWith('dev:'));
+
+  // Desktop-only by decision, not by omission: setting up a development workspace
+  // needs git and a shell on the machine the app runs on. Remote already answers
+  // "Developer tools isn't available via remote access yet"
+  // (renderer/remote-unsupported.ts maps the whole 'dev:' namespace), and Android
+  // has no shell to clone into. Adding one here is a deliberate act.
+  const DESKTOP_ONLY = new Set(['dev:setup-workspace', 'dev:setup-status', 'dev:setup-clear']);
+  const NEW_TYPES = ALL_DEV_TYPES.filter(t => !DESKTOP_ONLY.has(t));
+
+  // WHY the previous version of this test was deleted (code review C9): it asserted
+  // `NEW_TYPES.includes(t) || DESKTOP_ONLY.has(t)`, and NEW_TYPES is DEFINED as
+  // ALL_DEV_TYPES minus DESKTOP_ONLY — so it was true for every possible input,
+  // including the undecided channel its own comment claimed to catch. Worse, when it
+  // was "proven" by adding a dummy channel, four tests went red and none of them was
+  // this one; the pre-existing parity tests did all the work.
+  //
+  // What actually needs asserting is the thing C6 got wrong in the shipped code:
+  // desktop-only must be a REFUSAL, not an omission. The renderer's `dev` namespace
+  // in remote-shim.ts is HAND-BUILT, so a channel merely left out of it is
+  // `undefined`, and calling it throws "…is not a function" — which a phone user then
+  // reads as the explanation for why setup failed.
+  it('a desktop-only dev channel is refused on remote, never merely missing', () => {
+    const preload = readSource('src', 'main', 'preload.ts');
+    const shim = readSource('src', 'renderer', 'remote-shim.ts');
+    const unsupported = readSource('src', 'renderer', 'remote-unsupported.ts');
+    for (const t of DESKTOP_ONLY) {
+      expect(preload, `${t} must exist on desktop`).toContain(`'${t}'`);
+      // Present in the shim = it reaches invoke(), so the server answers
+      // `unsupported` and the shim rejects with a message plainMessage can read.
+      expect(shim, `${t} must route through the shim so remote REFUSES it`).toContain(`'${t}'`);
+    }
+    // …and the namespace has a plain-language name, or the refusal is a channel id.
+    expect(unsupported).toContain("'dev:'");
+  });
 
   it('all dev:* types are declared in preload.ts', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
@@ -517,6 +583,8 @@ describe('artifact IPC parity', () => {
     WATCH_PROJECT: 'artifacts:watch-project',
     UNWATCH_PROJECT: 'artifacts:unwatch-project',
     SEARCH_CONTENT: 'artifacts:search-content',
+    // One tapped chat path resolved on the host (read-service.ts resolveArtifactPath).
+    RESOLVE_PATH: 'artifacts:resolve-path',
   }).reduce<Record<string, string>>((acc, [name, value]) => {
     acc[value] = `ARTIFACT_IPC.${name}`;
     return acc;
@@ -842,7 +910,8 @@ describe('native:*/provider:* channel parity', () => {
   const NEW_TYPES = [
     'native:send', 'native:interrupt', 'native:set-binding', 'native:set-permission-mode',
     // Task 14 — read-side mode fetch that seeds the chip on create/resume.
-    'native:get-permission-mode', 'native:sessions-list',
+    'native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:sessions-list',
+    'native:get-context-preferences', 'native:set-context-preferences',
     // Task 11 — cancel/edit a queued-but-not-yet-sent message.
     'native:queue-remove',
     // M3 item 2 — user-initiated /compact for a native session.
@@ -853,6 +922,10 @@ describe('native:*/provider:* channel parity', () => {
     'native:send': 'IPC.NATIVE_SEND', 'native:interrupt': 'IPC.NATIVE_INTERRUPT',
     'native:set-binding': 'IPC.NATIVE_SET_BINDING', 'native:set-permission-mode': 'IPC.NATIVE_SET_PERMISSION_MODE',
     'native:get-permission-mode': 'IPC.NATIVE_GET_PERMISSION_MODE',
+    'native:get-context-preferences': 'IPC.NATIVE_GET_CONTEXT_PREFERENCES',
+    'native:set-context-preferences': 'IPC.NATIVE_SET_CONTEXT_PREFERENCES',
+    'native:get-step-guard': 'IPC.NATIVE_GET_STEP_GUARD',
+    'native:set-step-guard': 'IPC.NATIVE_SET_STEP_GUARD',
     'native:sessions-list': 'IPC.NATIVE_SESSIONS_LIST',
     'native:queue-remove': 'IPC.NATIVE_QUEUE_REMOVE',
     'native:compact': 'IPC.NATIVE_COMPACT',
@@ -883,6 +956,23 @@ describe('native:*/provider:* channel parity', () => {
   it('native:get-permission-mode handled by remote-server.ts (WS case)', () => {
     const src = read('src', 'main', 'remote-server.ts');
     expect(src, "native:get-permission-mode missing from remote-server.ts").toContain(`'native:get-permission-mode'`);
+  });
+  // The mode push (push-only, so no Kotlin or remote-server request case): the
+  // chip in every window and on every phone depends on receiving it.
+  it('native:permission-mode push is sent by main and consumed by preload + remote-shim', () => {
+    expect(read('src', 'main', 'preload.ts')).toContain(`NATIVE_PERMISSION_MODE: 'native:permission-mode'`);
+    expect(read('src', 'main', 'preload.ts')).toContain('onPermissionMode:');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    expect(shim).toContain(`case 'native:permission-mode':`);
+    expect(shim).toContain('onPermissionMode:');
+    const main = read('src', 'main', 'ipc-handlers.ts');
+    expect(main).toContain('sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e)');
+    expect(main).toContain('remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e })');
+  });
+  it.each(['native:get-step-guard', 'native:set-step-guard'])('%s is answered by remote-server', (channel) => {
+    const src = read('src', 'main', 'remote-server.ts');
+    const caseBlock = src.slice(src.indexOf(`case '${channel}'`));
+    expect(caseBlock.slice(0, 500), `${channel} must send a response`).toContain('this.respond(');
   });
   it('native:send is answered by remote-server (request/response, not fire-and-forget)', () => {
     const src = read('src', 'main', 'remote-server.ts');
@@ -997,6 +1087,17 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
   const channels: Array<[string, string]> = [
     ['engine:set-backend', 'ENGINE_SET_BACKEND'],
     ['engine:set-context', 'ENGINE_SET_CONTEXT'],
+    // One write for every engine-wide setting (2026-09-05 local-engine upgrades §B).
+    // set-context above stays as its alias, so BOTH must be on every surface: a
+    // caller wired to the old channel keeps working, new UI uses the new one.
+    ['engine:set-config', 'ENGINE_SET_CONFIG'],
+    // Faster-engine prerequisites (2026-09-05 local-engine upgrades §A5).
+    ['engine:prereqs', 'ENGINE_PREREQS'],
+    // "Run in terminal" (2026-09-05 §A5/§F): opens a plain-shell session and
+    // types the set-up command onto its prompt. The remote client rides it too
+    // — the shell runs on the HOST — so it is on every surface, Android's stub
+    // included.
+    ['engine:run-in-terminal', 'ENGINE_RUN_IN_TERMINAL'],
     ['models:curated', 'MODELS_CURATED'],
     ['models:search', 'MODELS_SEARCH'],
     ['models:quants', 'MODELS_QUANTS'],
@@ -1008,27 +1109,127 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
     // models:orphaned-partials, whose listing folded into models:installed —
     // two lists over one directory could disagree, which was the bug.
     ['models:resume', 'MODELS_RESUME'],
+    // Per-model settings + vision (2026-09-05 local-engine upgrades §C/§E4).
+    // These read and write the HOST's engine config and model folder, so a
+    // remote browser gets the real answer and a phone gets a fast "desktop
+    // only" instead of a 30-second wait.
+    ['models:settings', 'MODELS_SETTINGS'],
+    ['models:set-settings', 'MODELS_SET_SETTINGS'],
+    ['models:add-vision', 'MODELS_ADD_VISION'],
     ['endpoints:detect', 'ENDPOINTS_DETECT'],
   ];
   const pushChannels = ['models:download-progress'];
 
-  it('preload exposes every channel (request + push)', () => {
+  // Both halves, deliberately: the channel NAME has to be declared, and the
+  // constant has to be USED. Checking the name alone passes on a constant
+  // nobody wired to a method, which is a channel the renderer cannot call —
+  // exactly the drift this file exists to catch.
+  it('preload declares AND wires every request-response channel', () => {
     const src = read('src', 'main', 'preload.ts');
-    for (const [ch] of channels) expect(src).toContain(`'${ch}'`);
+    for (const [ch, konst] of channels) {
+      expect(src).toContain(`'${ch}'`);
+      expect(src).toContain(`IPC.${konst}`);
+    }
     for (const ch of pushChannels) expect(src).toContain(`'${ch}'`);
   });
-  it('remote-shim exposes every channel (request + push)', () => {
+  // `invoke('name'`, not the bare name: every one of these is a request the
+  // remote client makes, and the bare name also matches a mention in a list
+  // (REJECT_ON_NOT_OK names three of them), which would keep this green with the
+  // method itself deleted.
+  it('remote-shim invokes every request-response channel', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
-    for (const [ch] of channels) expect(src).toContain(`'${ch}'`);
+    for (const [ch] of channels) expect(src).toContain(`invoke('${ch}'`);
     for (const ch of pushChannels) expect(src).toContain(`'${ch}'`);
   });
-  it('ipc-handlers registers every request-response channel via its IPC.* constant', () => {
+  // `ipcMain.handle(IPC.X`, not the bare constant: this is the surface where
+  // "registered" decides whether the feature works at all, and the bare name
+  // also matches a COMMENT. Proven, not assumed — replacing the whole
+  // add-vision handler with `// FIXME reinstate the IPC.MODELS_ADD_VISION
+  // handler` kept this test green until the call shape was required.
+  it('ipc-handlers registers every request-response channel via ipcMain.handle', () => {
     const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const [, konst] of channels) expect(src).toContain(`IPC.${konst}`);
+    for (const [, konst] of channels) expect(src).toContain(`ipcMain.handle(IPC.${konst}`);
   });
+  // On a line that is NOT commented out, for the same reason: commenting the
+  // Kotlin string leaves it in the file, so a bare text scan stays green while
+  // the phone falls through to "Unknown message" and the shared UI waits.
   it('SessionService.kt stubs every request-response channel', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
-    for (const [ch] of channels) expect(src).toContain(`"${ch}"`);
+    const live = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
+    for (const [ch] of channels) expect(live).toContain(`"${ch}"`);
+  });
+  // A dropped SECOND argument is invisible everywhere else: main receives an
+  // empty patch, changes nothing, returns the settings unchanged, and the dialog
+  // renders that as a save that worked — the user toggles "Keep loaded" on,
+  // reopens, and it is off again with no error. preload cannot be imported (it
+  // calls contextBridge at load), so the call shape is pinned as text.
+  it('preload forwards every argument of the two-argument channels', () => {
+    const src = read('src', 'main', 'preload.ts');
+    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, modelId, patch)');
+    expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, repo, quant)');
+  });
+  // Android NAMES these six — and only these six — as `unsupported` inside the
+  // not-implemented list; every other desktop-only channel listed there sends the
+  // plain not-implemented error. (Since 2026-09-10 the dispatcher's final `else`
+  // ALSO answers `unsupported`, for channels it has no branch for at all — that is
+  // the catch-all, not a seventh label, and it is pinned in
+  // android-honest-build.test.ts.)
+  //
+  // WHY the set has to be checked for EQUALITY and not just for presence: a
+  // Kotlin `when` branch runs from its FIRST comma-separated value down to the
+  // one carrying the `-> {`. Written into the middle of the long
+  // not-implemented list, this branch's `-> {` silently swallowed the eighteen
+  // native:* / provider:* channels above it — `provider:list` runs every time
+  // the model picker opens, so a phone doing no remote access started popping
+  // "provider:list isn't available via remote access yet." A presence-only
+  // check called that green, because the six were all still present.
+  it('SessionService.kt marks exactly the six local-engine channels unsupported', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+
+    // Walk the `when` the way Kotlin does: labels accumulate until a line
+    // carries `->`, and everything accumulated belongs to THAT branch.
+    const armOf = new Map<string, string>();
+    let pending: string[] = [];
+    for (const line of src.split('\n')) {
+      const t = line.trim();
+      if (t.startsWith('//')) continue;
+      const labels = [...t.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+      if (labels.length === 0) continue;
+      if (t.includes('->')) {
+        const terminator = labels[labels.length - 1];
+        for (const l of [...pending, ...labels]) if (!armOf.has(l)) armOf.set(l, terminator);
+        pending = [];
+      } else if (/^("[^"]+",\s*)+$/.test(t)) {
+        pending.push(...labels);
+      }
+    }
+
+    // Sanity: if the walk found nothing the equality below would pass vacuously.
+    expect(armOf.get('provider:list')).toBe('github:disconnect');
+
+    const six = [
+      'engine:prereqs', 'engine:run-in-terminal', 'engine:set-config',
+      'models:add-vision', 'models:set-settings', 'models:settings',
+    ];
+    const inTheArm = [...armOf.entries()]
+      .filter(([, terminator]) => terminator === 'models:add-vision')
+      .map(([ch]) => ch).sort();
+    expect(inTheArm).toEqual(six);
+
+    // …and the branch actually answers `unsupported`.
+    const arrow = src.indexOf('"models:add-vision" -> {');
+    expect(src.slice(arrow, arrow + 400)).toContain('.put("unsupported", true)');
+  });
+
+  // The FIFTH surface. remote-server.ts is where a remote browser's request
+  // actually lands, and it is the one surface the original four-surface check
+  // never looked at — a channel missing here answers nothing at all over the
+  // remote link, and nothing else in the suite would notice. Every channel in
+  // the list above is served here today, so there are no exemptions.
+  it('remote-server.ts answers every request-response channel (the fifth surface)', () => {
+    const src = read('src', 'main', 'remote-server.ts');
+    const missing = channels.map(([ch]) => ch).filter((ch) => !src.includes(`case '${ch}':`));
+    expect(missing).toEqual([]);
   });
 });
 
@@ -1130,6 +1331,11 @@ describe('native:* channel parity', () => {
     'native:get-permission-mode',
     'native:sessions-list',
     'native:kill-shell',
+    // "What the assistant was given" — the on-demand read of one file's text.
+    // The session-context PUSH is pinned separately below: a push has no
+    // ipc-handlers request arm and no Kotlin case, so it does not belong in a
+    // list whose three tests all assert one.
+    'native:session-context-text',
   ];
 
   it('every native:* channel is declared in preload.ts', () => {
@@ -1433,5 +1639,480 @@ describe('arcade:* channel parity', () => {
       expect(arg === '' || arg.startsWith('{'),
         `invoke('${t}') must pass an object literal or nothing, got: ${arg}`).toBe(true);
     }
+  });
+});
+
+// Regression net for the three Linux/KDE buddy helper channels
+// (docs/active/design/2026-09-04-linux-buddy-helper/, §4). Hand-written, like
+// every block above — this file does NOT pick a new channel up for free.
+//
+// THREE surfaces, not five, and that is deliberate. The blocks above assert
+// four or five because those features exist on Android and in the remote
+// browser too. The buddy does not: it is desktop-Electron only, SessionService.kt
+// contains no `buddy` string at all today (`buddy:show` / `buddy:hide` are not
+// stubbed there either), and remote-server.ts has no buddy entry. Adding either
+// would turn a three-channel feature into a platform-parity sweep, so the gap is
+// left exactly as wide as it already was — recorded here so a later reader sees
+// a decision rather than an oversight.
+describe('buddy:* helper channel parity', () => {
+  const TYPES = ['buddy:helper-status', 'buddy:install-helper', 'buddy:remove-helper'];
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+
+  it('declared in the shared/types.ts channel map', () => {
+    const src = read('src', 'shared', 'types.ts');
+    for (const t of TYPES) expect(src, `${t} missing from shared/types.ts`).toContain(`'${t}'`);
+  });
+
+  it("declared in preload.ts's duplicate of that map", () => {
+    const src = read('src', 'main', 'preload.ts');
+    for (const t of TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
+  });
+
+  it('handled in ipc-handlers.ts', () => {
+    const src = read('src', 'main', 'ipc-handlers.ts');
+    // Asserted through the constant, not the string: this file imports the map
+    // rather than writing channel names out, so a literal search would fail on
+    // correct code.
+    for (const name of ['BUDDY_HELPER_STATUS', 'BUDDY_INSTALL_HELPER', 'BUDDY_REMOVE_HELPER']) {
+      expect(src, `IPC.${name} has no handler in ipc-handlers.ts`).toContain(`IPC.${name}`);
+    }
+  });
+
+  it('exposed on the buddy API preload hands the renderer', () => {
+    const src = read('src', 'main', 'preload.ts');
+    for (const m of ['helperStatus', 'installHelper', 'removeHelper']) {
+      expect(src, `buddy.${m} is not exposed by preload.ts`).toContain(`${m}: (`);
+    }
+  });
+
+  it('answered by remote-shim.ts, so a remote browser cannot fall through', () => {
+    const src = read('src', 'renderer', 'remote-shim.ts');
+    // The shim answers these locally instead of sending them over the wire, so
+    // it never names the channel — the methods are what must exist.
+    for (const m of ['helperStatus', 'installHelper', 'removeHelper']) {
+      expect(src, `buddy.${m} is missing from remote-shim.ts`).toContain(`${m}: `);
+    }
+  });
+
+  it('has NO Android or remote-server arm, deliberately', () => {
+    // Pinned so the omission stays a decision. If the buddy ever grows an
+    // Android or remote presence, this test is the thing that has to change,
+    // and changing it is the prompt to add all three channels there properly.
+    const kt = read('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+    const remoteServer = read('src', 'main', 'remote-server.ts');
+    for (const t of TYPES) {
+      expect(kt, `${t} appeared in SessionService.kt — update this block`).not.toContain(`"${t}"`);
+      expect(remoteServer, `${t} appeared in remote-server.ts — update this block`).not.toContain(`'${t}'`);
+    }
+    // Sanity: the buddy really has no Android surface at all, which is the
+    // premise of the paragraph above. `buddy:show` predates this feature.
+    expect(kt).not.toContain('"buddy:show"');
+  });
+});
+
+// ── Voice prompting ──────────────────────────────────────────────────────────
+// Talking instead of typing (design 2026-09-05). This is the one feature whose
+// `window.claude` shape is deliberately NOT the same everywhere, so the parity
+// check here has to say WHICH surface gets which channel rather than demanding
+// all of them everywhere:
+//
+//   preload.ts          the desktop app       — every channel
+//   voice/voice-handlers.ts  the desktop's main process — every channel
+//   SessionService.kt   the Android app       — the five the phone can do,
+//                                               plus a not-implemented stub for
+//                                               the two that are desktop-only
+//   remote-shim.ts      Android's window.claude — the five, minus the two
+//                                               desktop-only ones
+//
+// A remote BROWSER tab gets no voice at all; that is a runtime decision (the
+// namespace is deleted at install time) and is pinned by
+// remote-shim-voice-gate.test.ts, not by a string search.
+describe('voice:* channel parity', () => {
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const preload = read('src', 'main', 'preload.ts');
+  const shim = read('src', 'renderer', 'remote-shim.ts');
+  const handlers = read('src', 'main', 'voice', 'voice-handlers.ts');
+  const kotlinPath = path.join(
+    __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+    'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
+  );
+
+  /** The five calls every surface that has a microphone can answer. */
+  const SHARED = ['voice:status', 'voice:download', 'voice:start', 'voice:stop', 'voice:cancel'];
+  /** Desktop-only: the phone's own recogniser owns the microphone (voice:audio)
+   *  and the Activity's permission launcher owns the permission question
+   *  (voice:mic-access). */
+  const DESKTOP_ONLY = ['voice:audio', 'voice:mic-access'];
+  const PUSH = 'voice:event';
+
+  it('preload.ts declares every voice channel', () => {
+    for (const t of [...SHARED, ...DESKTOP_ONLY, PUSH]) {
+      expect(preload, `${t} missing from preload.ts`).toContain(`'${t}'`);
+    }
+  });
+
+  it('voice-handlers.ts really registers an arm for every voice channel', () => {
+    // Fix (whole-branch review F5): this used to be `toContain("'voice:start'")`
+    // over the raw source, which the file's own CHANNELS list already satisfied
+    // — deleting every ipcMain.handle call left it green. Match the registration
+    // itself, so the test fails when the arm goes away rather than when a string
+    // does.
+    for (const t of SHARED) {
+      expect(handlers, `${t} has no ipcMain.handle in voice-handlers.ts`)
+        .toMatch(new RegExp(`ipcMain\\.handle\\('${t}'`));
+    }
+    // The permission question is a handle; the audio stream is a fire-and-forget
+    // `on` ten times a second, so it is registered the other way on purpose.
+    expect(handlers).toMatch(/ipcMain\.handle\('voice:mic-access'/);
+    expect(handlers).toMatch(/ipcMain\.on\(AUDIO_CHANNEL/);
+    // The push has no handler at all — it is sent TO the window.
+    expect(handlers).toMatch(/const EVENT_CHANNEL = 'voice:event'/);
+    expect(handlers).toMatch(/send\(EVENT_CHANNEL/);
+    // And every channel is on the list the double-registration guard clears.
+    for (const t of [...SHARED, 'voice:mic-access']) {
+      expect(handlers, `${t} missing from the CHANNELS clear-list`).toContain(`  '${t}',`);
+    }
+  });
+
+  it('remote-shim.ts carries the five shared channels and the push event', () => {
+    for (const t of [...SHARED, PUSH]) {
+      expect(shim, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
+    }
+  });
+
+  if (fs.existsSync(kotlinPath)) {
+    const kotlin = fs.readFileSync(kotlinPath, 'utf8');
+    it('SessionService.kt has a real arm for the four calls the phone answers', () => {
+      // voice:download is NOT here — a phone downloads no speech model — so it
+      // rides the not-implemented stub asserted below.
+      for (const t of ['voice:status', 'voice:start', 'voice:stop', 'voice:cancel']) {
+        expect(kotlin, `${t} has no real arm in SessionService.kt`).toContain(`"${t}" ->`);
+      }
+    });
+    it('SessionService.kt stubs the two desktop-only calls so the phone fails fast', () => {
+      // Listed WITHOUT the `->` arrow: they share the not-implemented-on-mobile
+      // fall-through. A missing entry means a 30-second timeout on the phone
+      // instead of an immediate, explained refusal.
+      for (const t of ['voice:download', 'voice:mic-access']) {
+        expect(kotlin, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
+      }
+    });
+    it('SessionService.kt pushes voice:event', () => {
+      expect(kotlin).toContain('"voice:event"');
+    });
+  } else {
+    it.skip('SessionService.kt not found — skipping Android voice parity', () => {});
+  }
+
+  // ── The two named exceptions to the parity rule ────────────────────────────
+  // .claude/rules/ipc-bridge.md keeps a CLOSED list of members that exist on one
+  // surface and not the other. These are two of them, asserted by name so that
+  // "adding them to the shim for symmetry" fails here with the reason attached
+  // rather than shipping a phone that fights its own recogniser for the mic.
+  //
+  // Scoped to the shim's `voice` block (indent 4, members at indent 6) rather
+  // than searched file-wide: a bare absence check would also pass if the whole
+  // namespace disappeared. Same brace scan the workbench contract test uses —
+  // which is also why the namespace must stay a plain `voice: {`, never a
+  // conditional spread.
+  const shimVoiceBlock = (() => {
+    const start = shim.search(/^ {4}voice: \{/m);
+    if (start < 0) return null;
+    const end = shim.indexOf('\n    },', start);
+    return end < 0 ? shim.slice(start) : shim.slice(start, end);
+  })();
+
+  it("remote-shim's voice namespace is findable at the indentation the scans assume", () => {
+    expect(shimVoiceBlock).not.toBeNull();
+    for (const m of ['status', 'download', 'start', 'stop', 'cancel', 'onEvent']) {
+      expect(shimVoiceBlock!, `voice.${m} missing from remote-shim.ts`)
+        .toMatch(new RegExp(`^ {6}${m}\\s*[:(]`, 'm'));
+    }
+  });
+
+  it('EXCEPTION: sendAudio is desktop-only — the phone\'s recogniser owns the microphone', () => {
+    expect(preload, 'sendAudio must exist on the desktop').toContain('sendAudio');
+    expect(shimVoiceBlock!, 'sendAudio must NOT be on the Android shim').not.toContain('sendAudio');
+    expect(shim, 'voice:audio must never be sent over the bridge').not.toContain("'voice:audio'");
+  });
+
+  it("EXCEPTION: micAccess is desktop-only — the Activity's launcher owns that question", () => {
+    expect(preload, 'micAccess must exist on the desktop').toContain('micAccess');
+    expect(shimVoiceBlock!, 'micAccess must NOT be on the Android shim').not.toContain('micAccess');
+    expect(shim, 'voice:mic-access must never be sent over the bridge').not.toContain("'voice:mic-access'");
+  });
+});
+
+// Five-surface parity for Sign in with ChatGPT (backend design 2026-09-05 §5,
+// §8). Shaped like the arcade block above, with one deliberate difference: the
+// Android assertion is "listed in the not-implemented fall-through", the
+// permissions:* / specialists:* precedent — the account, its encrypted tokens
+// and the 127.0.0.1:1455 sign-in listener all live in the DESKTOP main process,
+// and Android has no native runtime to hold any of that until M8. A REAL arm
+// there would be wrong, and a missing entry would make a phone's invoke hang
+// ~30 s instead of rejecting fast.
+describe('chatgpt:* channel parity', () => {
+  const TYPES = ['chatgpt:status', 'chatgpt:sign-in', 'chatgpt:cancel-sign-in', 'chatgpt:sign-out'];
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+
+  // Review T4 F2: a bare `toContain("'chatgpt:status'")` was satisfied by the
+  // IPC constants table alone, because this namespace invokes through IPC.*
+  // rather than a literal. Deleting all four methods from the exposed
+  // `chatgpt: { ... }` object shipped GREEN -- and every desktop user would then
+  // get "window.claude.chatgpt.status is not a function" the moment they opened
+  // the Settings card. Assert the actual invoke through the constant instead.
+  it('exposed in preload.ts', () => {
+    const src = read('src', 'main', 'preload.ts');
+    const CONSTS: Record<string, string> = {
+      'chatgpt:status': 'CHATGPT_STATUS',
+      'chatgpt:sign-in': 'CHATGPT_SIGN_IN',
+      'chatgpt:cancel-sign-in': 'CHATGPT_CANCEL_SIGN_IN',
+      'chatgpt:sign-out': 'CHATGPT_SIGN_OUT',
+    };
+    for (const t of TYPES) {
+      expect(src, t + ' missing from preload.ts').toContain("'" + t + "'");
+      expect(src, t + ' is only in the constants table -- preload never invokes it')
+        .toContain('ipcRenderer.invoke(IPC.' + CONSTS[t] + ')');
+    }
+  });
+
+  it('exposed in remote-shim.ts', () => {
+    const src = read('src', 'renderer', 'remote-shim.ts');
+    for (const t of TYPES) expect(src, `${t} missing from remote-shim.ts`).toContain(`'${t}'`);
+  });
+
+  it('registered in ipc-handlers.ts (through the IPC constants)', () => {
+    // The handlers use IPC.CHATGPT_* rather than string literals, so assert
+    // the constant exists in shared/types.ts AND the handler references it.
+    const types = read('src', 'shared', 'types.ts');
+    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    const constants: Record<string, string> = {
+      'chatgpt:status': 'CHATGPT_STATUS',
+      'chatgpt:sign-in': 'CHATGPT_SIGN_IN',
+      'chatgpt:cancel-sign-in': 'CHATGPT_CANCEL_SIGN_IN',
+      'chatgpt:sign-out': 'CHATGPT_SIGN_OUT',
+    };
+    for (const t of TYPES) {
+      expect(types, `${t} missing from shared/types.ts IPC`).toContain(`${constants[t]}: '${t}'`);
+      expect(handlers, `IPC.${constants[t]} has no ipcMain.handle in ipc-handlers.ts`).toContain(`ipcMain.handle(IPC.${constants[t]}`);
+    }
+  });
+
+  it('handled by remote-server.ts (WS case)', () => {
+    const src = read('src', 'main', 'remote-server.ts');
+    for (const t of TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`case '${t}'`);
+  });
+
+  it('is listed in the Android not-implemented fall-through, NOT a real arm', () => {
+    const kt = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'),
+      'utf8',
+    );
+    for (const t of TYPES) {
+      expect(kt, `${t} not listed in SessionService.kt`).toContain(`"${t}"`);
+      // `"channel" ->` is the real-arm marker (see the arcade block). Android
+      // cannot run the sign-in, so an arm here would be a fake, not a feature.
+      expect(kt, `${t} has a real arm in SessionService.kt — it must be a not-implemented stub`).not.toContain(`"${t}" ->`);
+    }
+  });
+
+  it('the preload flag and the mock/remote flags exist, so the renderer gate (=== true) is honest everywhere', () => {
+    // Review R1-9: a `supported` the renderer reads as `=== true` must be SET
+    // on every surface — undefined hides the card in the workbench and on the
+    // acceptance deck for a tooling reason.
+    expect(read('src', 'main', 'preload.ts')).toMatch(/chatgpt:\s*\{\s*supported: process\.env\.YOUCODED_CHATGPT !== '0'/);
+    expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts')).toMatch(/const chatgpt = \{[\s\S]*?supported: true,/);
+    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/chatgpt:\s*\{\s*supported: false,/);
+  });
+
+  it('the shim sends an OBJECT payload or nothing, never bare positional args', () => {
+    const src = read('src', 'renderer', 'remote-shim.ts');
+    for (const t of TYPES) {
+      const call = src.match(new RegExp(`invoke\\('${t}'(,\\s*([^)]*))?\\)`));
+      expect(call, `no invoke('${t}', ...) found in remote-shim.ts`).toBeTruthy();
+      const arg = (call![2] ?? '').trim();
+      expect(arg === '' || arg.startsWith('{'),
+        `invoke('${t}') must pass an object literal or nothing, got: ${arg}`).toBe(true);
+    }
+  });
+});
+
+// Five-surface parity for Claude Code's LIVE sign-in (2026-09-09). Shaped like
+// the chatgpt block above with ONE deliberate difference: Android gets a REAL
+// arm, not a not-implemented stub, because Bootstrap installs Claude Code into
+// the Termux prefix — the phone has its own login to report, and a stub would
+// leave a signed-in phone showing the same wrong "Sign in to use" this whole
+// channel was added to remove.
+describe('claude-code:status channel parity', () => {
+  const T = 'claude-code:status';
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+
+  it('exposed in preload.ts, through the constant (not just the constants table)', () => {
+    const src = read('src', 'main', 'preload.ts');
+    expect(src, `${T} missing from preload.ts`).toContain(`'${T}'`);
+    expect(src, 'preload never invokes CLAUDE_CODE_STATUS — the namespace would be a dead object')
+      .toContain('ipcRenderer.invoke(IPC.CLAUDE_CODE_STATUS');
+  });
+
+  it('exposed in remote-shim.ts', () => {
+    expect(read('src', 'renderer', 'remote-shim.ts'), `${T} missing from remote-shim.ts`).toContain(`'${T}'`);
+  });
+
+  it('registered in ipc-handlers.ts (through the IPC constant)', () => {
+    expect(read('src', 'shared', 'types.ts')).toContain(`CLAUDE_CODE_STATUS: '${T}'`);
+    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('ipcMain.handle(IPC.CLAUDE_CODE_STATUS');
+  });
+
+  it('handled by remote-server.ts (WS case)', () => {
+    expect(read('src', 'main', 'remote-server.ts'), `${T} missing from remote-server.ts`).toContain(`case '${T}'`);
+  });
+
+  it('has a REAL Android arm — the phone runs Claude Code too', () => {
+    const kt = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'),
+      'utf8',
+    );
+    expect(kt, `${T} has no arm in SessionService.kt`).toContain(`"${T}" ->`);
+  });
+
+  it('the workbench mock answers it, so no review shot greys out its own models', () => {
+    expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts'))
+      .toMatch(/const claudeCode = \{ status:/);
+  });
+
+  it('neither the model menu nor the Claude Code card reads the setup wizard again', () => {
+    // The original bug: both asked `firstRun.getState()` — a record of what
+    // happened during SETUP — and main answers that with a bare
+    // `{currentStep:'COMPLETE'}` on every launch after the first, carrying no
+    // auth fields at all. That bare answer is correct FOR THE WIZARD (it means
+    // "do not show me"), so main.ts is deliberately left alone; what must not
+    // come back is a sign-in reader pointed at it.
+    for (const f of [
+      ['src', 'renderer', 'components', 'model', 'availability.ts'],
+      ['src', 'renderer', 'components', 'ModelProvidersPopup.tsx'],
+    ]) {
+      // The bridge ACCESS, not the word — both files name the old signal in
+      // their comments so the next reader knows why it went.
+      expect(read(...f), `${f.join('/')} reaches window.claude.firstRun for a sign-in answer again`)
+        .not.toMatch(/\.firstRun[?.[]/);
+      expect(read(...f), `${f.join('/')} reads authComplete again`)
+        .not.toMatch(/authComplete\s*[=?.]/);
+    }
+  });
+
+  it('every surface that cannot answer degrades to "unknown", never to signed-out', () => {
+    // This is the invariant the whole change turns on. A surface answering
+    // {ok:false}, undefined, or a shape from a future version must NOT be read
+    // as "not signed in" — that greys out every Claude model on a working
+    // install, which is the bug being fixed.
+    const avail = read('src', 'renderer', 'components', 'model', 'availability.ts');
+    expect(avail, 'availability.ts must normalize an unrecognized status to unknown')
+      .toMatch(/return \{ state: 'unknown' \};/);
+    const server = read('src', 'main', 'remote-server.ts');
+    expect(server, 'remote-server must answer unknown when the runtime is not wired')
+      .toMatch(/claude-code:status[\s\S]{0,400}state: 'unknown'/);
+  });
+});
+
+// First-run local models (2026-09-14): Install Claude Code on demand. A desktop
+// action a phone must REFUSE (not resolve), and a remote desktop must run.
+describe('claude-code:install channel parity', () => {
+  const T = 'claude-code:install';
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+
+  it('exposed in preload.ts through the constant, and in remote-shim.ts', () => {
+    expect(read('src', 'main', 'preload.ts')).toContain('ipcRenderer.invoke(IPC.CLAUDE_CODE_INSTALL');
+    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('${T}')`);
+  });
+
+  it('registered in ipc-handlers.ts and remote-server.ts', () => {
+    expect(read('src', 'shared', 'types.ts')).toContain(`CLAUDE_CODE_INSTALL: '${T}'`);
+    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('ipcMain.handle(IPC.CLAUDE_CODE_INSTALL');
+    expect(read('src', 'main', 'remote-server.ts')).toContain(`case '${T}'`);
+  });
+
+  it('refused on Android, and the refusal reaches the caller as an error', () => {
+    const kt = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'),
+      'utf8',
+    );
+    expect(kt).toContain(`"${T}",`);
+    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/REJECT_ON_NOT_OK[\s\S]*'claude-code:install'/);
+  });
+});
+
+describe('first-run local channels', () => {
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+
+  it('every one is invoked by preload and answered by the remote shim', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    for (const [constName, method] of [
+      ['FIRST_RUN_LOCAL_SETUP', 'localSetup'],
+      ['FIRST_RUN_CONNECT_LOCAL_APP', 'connectLocalApp'],
+      ['FIRST_RUN_LOCAL_DOWNLOAD', 'localDownload'],
+      ['FIRST_RUN_RESUME_LOCAL_DOWNLOAD', 'resumeLocalDownload'],
+    ]) {
+      expect(preload, `${constName} never invoked by preload`).toContain(`ipcRenderer.invoke(IPC.${constName}`);
+      expect(shim, `${method} missing from remote-shim firstRun`).toMatch(new RegExp(`\\b${method}:`));
+    }
+  });
+
+  it('the band channels are registered for every launch, not only during setup', () => {
+    // The band above the message box is read AFTER setup finished, when main.ts
+    // registers no first-run handlers at all — so these two live in ipc-handlers.
+    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    expect(handlers).toContain('ipcMain.handle(IPC.FIRST_RUN_LOCAL_DOWNLOAD');
+    expect(handlers).toContain('ipcMain.handle(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD');
+  });
+
+  it('both first-run registrations wire the setup channels', () => {
+    const main = read('src', 'main', 'main.ts');
+    expect(main.match(/registerFirstRunLocalIpc\(/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// The kill switch and the lock-out guard are wiring, not channels: nothing else
+// in the suite reads main.ts, and both are one line whose deletion is silent.
+// Reviews T4 F1/F3 and T5 F1/F2 measured that each could be dropped with the
+// whole suite still green.
+describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+
+  it('the kill switch reaches the handlers, the background poll and the first-run arm', () => {
+    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    const main = read('src', 'main', 'main.ts');
+    // 1. The handlers, the provider row and the catalog.
+    expect(handlers, 'the kill switch no longer gates the user-facing handle')
+      .toMatch(/chatgptForUi[^\n]*process\.env\.YOUCODED_CHATGPT !== '0'/);
+    // 2. The background usage poll. WHY this one matters most: the poll
+    //    refreshes the token, and a rejected refresh deletes the saved sign-in -
+    //    so an ungated poll turns "turn the feature off" into "sign the user
+    //    out", the opposite of what the switch promises.
+    expect(main, 'ChatGptAuth is constructed without the pollUsage gate')
+      .toMatch(/pollUsage:\s*chatgptEnabled/);
+    expect(main, 'the kill switch is not read into chatgptEnabled')
+      .toMatch(/const chatgptEnabled = process\.env\.YOUCODED_CHATGPT !== '0'/);
+    // 3. The first-run arm, which would otherwise still open a browser tab and
+    //    bind port 1455 with the feature turned off.
+    expect(main, "the wizard's ChatGPT arm ignores the kill switch")
+      .toMatch(/mode === 'chatgpt' && chatgptEnabled/);
+  });
+
+  it('re-showing the setup wizard marks setup complete first, so it cannot strand an established install', () => {
+    const main = read('src', 'main', 'main.ts');
+    const i = main.indexOf("forceStep('AUTHENTICATE')");
+    expect(i, 'main.ts no longer re-shows the wizard - update this guard').toBeGreaterThan(0);
+    // The 400 characters before it must contain the completion mark. WHY:
+    // forceStep() writes 'AUTHENTICATE' to the state file and isFirstRun() reads
+    // exactly that - so without the mark, closing the window without signing in
+    // makes the NEXT launch take the early first-run branch, skip the
+    // provider-aware check entirely, and re-run the Node/Git/Claude installers
+    // against a working install. This branch removed the Skip link, so a failing
+    // installer there leaves the user with no way forward at all.
+    expect(main.slice(Math.max(0, i - 400), i), 'markSetupCompleted() must run before forceStep(AUTHENTICATE)')
+      .toContain('markSetupCompleted()');
   });
 });

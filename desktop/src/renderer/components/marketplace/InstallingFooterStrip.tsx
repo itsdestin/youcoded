@@ -1,7 +1,16 @@
-// Docked footer strip that lists in-flight skill/theme installs. Visible iff
-// installingIds.size > 0. Uses theme tokens (.layer-surface + accent accent)
-// so no hardcoded colors. Respects safe-area-inset-bottom for Android.
-import { useMarketplace, installTrackingKey } from '../../state/marketplace-context';
+// Docked footer strip that lists in-flight skill/theme installs, uninstalls and
+// updates. Visible iff something is in flight or recently failed. Uses theme tokens
+// (.layer-surface + accent) so no hardcoded colors. Respects safe-area-inset-bottom
+// for Android.
+import { useMarketplace, installTrackingKey, type InstallOp } from '../../state/marketplace-context';
+import { plainMessage } from '../../utils/ipc-error';
+
+// WHY a word per operation (error inventory 2026-09-10, false message 14): this strip
+// printed "Installing" and "Failed to install {label}" for every entry, so a failed
+// UNINSTALL or UPDATE was announced as a failed install of something the user was
+// removing or already had.
+const IN_FLIGHT: Record<InstallOp, string> = { install: 'Installing', uninstall: 'Uninstalling', update: 'Updating' };
+const FAILED: Record<InstallOp, string> = { install: "Couldn't install", uninstall: "Couldn't uninstall", update: "Couldn't update" };
 
 function labelForKey(
   key: string,
@@ -29,7 +38,9 @@ export default function InstallingFooterStrip() {
   const errorKeys = Array.from(mp.installError.keys()).filter(k => !mp.installingIds.has(k));
   if (keys.length === 0 && errorKeys.length === 0) return null;
 
-  const inflightLabels = keys.map(k => labelForKey(k, mp.skillEntries, mp.themeEntries));
+  const inflight = keys
+    .map(k => `${IN_FLIGHT[mp.installOps.get(k) ?? 'install']} ${labelForKey(k, mp.skillEntries, mp.themeEntries)}`)
+    .join(', ');
 
   return (
     <div
@@ -41,10 +52,7 @@ export default function InstallingFooterStrip() {
       {keys.length > 0 && (
         <div className="flex items-center gap-2 text-fg-2">
           <span className="inline-block w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-          <span>
-            Installing {keys.length > 1 ? `${keys.length}: ` : ''}
-            {inflightLabels.join(', ')}
-          </span>
+          <span>{inflight}</span>
         </div>
       )}
       {errorKeys.map(k => {
@@ -52,7 +60,7 @@ export default function InstallingFooterStrip() {
         const label = labelForKey(k, mp.skillEntries, mp.themeEntries);
         return (
           <div key={k} className="text-xs text-red-500 border border-red-500/40 bg-red-500/10 rounded px-2 py-1">
-            Failed to install {label}: {err.message}
+            {FAILED[err.op]} {label}: {plainMessage(err.message, 'no reason was given')}
           </div>
         );
       })}

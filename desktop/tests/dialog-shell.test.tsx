@@ -76,11 +76,14 @@ describe('Dialog shell', () => {
     // and each kind's width falls out of reading measure or a control floor.
     // The previous sm/md/lg/xl ladder was fitted to the old values instead,
     // which is how `lg` ended up at 560px -- a width nothing had ever used.
-    expect(Object.keys(DIALOG_WIDTHS).sort()).toEqual(['document', 'panel', 'prompt']);
+    expect(Object.keys(DIALOG_WIDTHS).sort()).toEqual(['document', 'panel', 'prompt', 'wide']);
     expect(DIALOG_WIDTHS).toEqual({
       prompt: 'min(340px, 88vw)',    // two action buttons side by side: 322px floor
       panel: 'min(420px, 88vw)',     // 59ch at text-2xs, 51ch beside a control
       document: 'min(600px, 88vw)',  // 67ch at text-sm — long-form measure
+      // Assistant settings (2026-09-05): a 176px page list beside a page that
+      // keeps `document` width. 92vw, not 88: a workspace, not a card.
+      wide: 'min(820px, 92vw)',
     });
   });
 
@@ -93,7 +96,12 @@ describe('Dialog shell', () => {
     for (const size of Object.keys(DIALOG_WIDTHS) as (keyof typeof DIALOG_WIDTHS)[]) {
       const w = Number(DIALOG_WIDTHS[size].match(/(\d+)px/)![1]);
       const h = Number(DIALOG_MAX_HEIGHTS[size].match(/(\d+)px/)![1]);
-      expect(h, `${size}: cap should be ${RATIO}x its ${w}px width`).toBe(Math.round(w * RATIO));
+      // `wide` is the one landscape dialog (a page list beside a page): 1.4x of
+      // 820 is taller than any laptop screen, so the viewport clamp would win
+      // everywhere and the number would be fiction. It is capped BELOW its
+      // width instead — see DIALOG_MAX_HEIGHTS.
+      if (size === 'wide') expect(h, 'wide: landscape, capped below its width').toBeLessThan(w);
+      else expect(h, `${size}: cap should be ${RATIO}x its ${w}px width`).toBe(Math.round(w * RATIO));
       // Always a constant scrim margin, never a viewport fraction.
       expect(DIALOG_MAX_HEIGHTS[size]).toContain('calc(100vh - 6rem)');
       expect(DIALOG_MAX_HEIGHTS[size]).not.toMatch(/\d+vh\)/);
@@ -180,6 +188,20 @@ const NOT_DIALOGS: Record<string, string> = {
   // translate(-50%, -50%) anywhere in the file, and it renders no <Scrim>. Same
   // shape as AnchorTip above — a bubble pinned to a control it points at.
   'ViewToggleHint.tsx': 'coach mark anchored to the chat/terminal toggle via computed coordinates',
+  // Evidence, not a class string: `pos` comes from getBoundingClientRect() of the
+  // mic button (its own triggerRef), the transform is translate(-100%, -100%) — up
+  // from the trigger's top edge, never -50%/-50% — and the file renders no <Scrim>.
+  // The same shape as AnchorTip and ViewToggleHint: a bubble pinned above the
+  // control it belongs to (the first-run download card, the download progress,
+  // the "no microphone" reason).
+  'VoiceButton.tsx': 'first-run / download / no-mic card anchored above the mic via computed coordinates',
+  // Evidence, not a class string: position comes from placeBubble() against the
+  // trigger's own getBoundingClientRect(), it is written as plain left/top with
+  // no translate anywhere in the file, and it renders no <Scrim> — it is
+  // `pointer-events-none`, so it cannot even be clicked. The same shape as
+  // AnchorTip, whose positioning it shares: a bubble pinned to the control it
+  // describes.
+  'Tooltip.tsx': 'hover hint anchored to its control via computed coordinates',
 };
 
 describe('dialog shell adoption', () => {

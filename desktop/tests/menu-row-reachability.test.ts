@@ -4,6 +4,8 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { RENDERER, stripComments } from './helpers/guard-scope';
 
+const modelPicker = stripComments(readFileSync(join(RENDERER, 'components', 'model', 'ModelPicker.tsx'), 'utf8'));
+
 // Guard: the two reference lists that used to hide rows from the user.
 //
 // Phase E of the 2026-08-25 UI review (P-7, P-8) found both:
@@ -61,8 +63,32 @@ describe('reference lists stay reachable', () => {
   it('a session name is one truncated line with the full name on hover', () => {
     const name = block(strip, 'function SessionName');
     expect(name).toMatch(/truncate/);
-    expect(name).toMatch(/title=\{name\}/);
+    expect(name).toMatch(/<Tooltip text=\{name\}>/);
     // The three-line clamp is what made the rows uneven.
     expect(name).not.toMatch(/WebkitLineClamp/);
+  });
+
+  it('the session menu gives its list the remaining screen height', () => {
+    // The footer contains the New Session path, so the list must flex and scroll
+    // before it can move below the viewport on a short display.
+    expect(strip).toMatch(/height: undefined/);
+    expect(strip).toMatch(/maxHeight: `min\(680px, \$\{belowTrigger\}\)`/);
+    expect(strip).toMatch(/maxHeight: 'var\(--session-menu-available-height\)'/);
+    expect(strip).toMatch(/var\(--vvp-offset, 0px\)/);
+    expect(strip).toMatch(/className="scroll-fade flex-1"/);
+    expect(strip).toMatch(/className="scroll-fade flex-1 py-1"/);
+  });
+
+  it('the model filter portal remains inside its session-menu host', () => {
+    // Both ModelPicker portals need this marker: its filter panel is a sibling
+    // of the main picker panel in document.body, not a descendant of it.
+    expect(modelPicker.match(/data-model-picker-portal=""/g)).toHaveLength(2);
+  });
+
+  it('opens a model panel upward when its trigger lacks room below', () => {
+    // A picker in New Session can sit at the bottom of an otherwise valid menu.
+    // It must use the room above rather than render its rows beyond the viewport.
+    expect(modelPicker).toMatch(/const opensUpward = spaceBelow < 180 && spaceAbove > spaceBelow/);
+    expect(modelPicker).toMatch(/opensUpward \? \{ bottom: window\.innerHeight - r\.top \+ gap \} : \{ top: r\.bottom \+ gap \}/);
   });
 });

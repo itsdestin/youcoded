@@ -21,6 +21,18 @@ export const CLAUDE_ALIASES = ['haiku', 'sonnet', 'opus[1m]', 'fable'] as const;
 export type ClaudeAlias = typeof CLAUDE_ALIASES[number];
 
 /**
+ * Human-facing name for each alias — the single source StatusBar's model chip
+ * AND the typed `/model <alias>` chat-timeline confirmation marker both read,
+ * so the two can never drift the way the header comment above describes.
+ */
+export const CLAUDE_ALIAS_LABELS: Record<ClaudeAlias, string> = {
+  haiku: 'Haiku',
+  sonnet: 'Sonnet',
+  'opus[1m]': 'Opus',
+  fable: 'Fable',
+};
+
+/**
  * True for Claude Code's bracketed placeholder model ids (`<synthetic>`).
  *
  * CC stamps these on assistant lines IT composed rather than a model — "You've

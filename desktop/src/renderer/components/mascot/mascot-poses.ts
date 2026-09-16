@@ -13,11 +13,63 @@ export type LimbId = (typeof LIMB_IDS)[number];
 // The tail springs like a limb (drag target = left-leg lean × 0.8) but has no
 // pose entries of its own today, so it stays out of LIMB_IDS.
 export type RigPartId = LimbId | 'rig-tail' | 'rig-body';
-export type FaceName = 'idle' | 'welcome' | 'curious' | 'shocked' | 'dizzy';
-export type PoseName = 'idle' | 'pressed' | 'welcome' | 'curious' | 'shocked' | 'dizzy' | 'flap' | 'peek' | 'peek-right' | 'peek-left';
+export type FaceName = 'idle' | 'welcome' | 'curious' | 'shocked' | 'dizzy' | 'happy' | 'shutdown';
 
-export interface PartPose { rotate?: number; tx?: number; ty?: number; hidden?: boolean; }
-export interface PoseDef { parts: Partial<Record<RigPartId, PartPose>>; face: FaceName; wave?: boolean; }
+/**
+ * What to show when a rig has no group for the face a pose wants.
+ *
+ * WHY THIS HAS TO EXIST (2026-09-05): `happy` and `shutdown` are new, and the
+ * four community rigs — Halftone, Kuromi, Strawberry Kitty, Golden Sunbreak —
+ * do not have them until they are redrawn. The face swap hides every group and
+ * shows the one that matches, so a missing group used to mean NO FACE AT ALL:
+ * a blank-faced buddy on somebody's installed theme, from an app update they
+ * did not ask for.
+ *
+ * Ordered nearest-first. Everything ends at `welcome`, which every rig in the
+ * contract has, and the swap falls through to whatever the rig does have if
+ * even that is missing.
+ */
+export const FACE_FALLBACK: Record<FaceName | 'blink', ReadonlyArray<FaceName | 'blink'>> = {
+  idle: ['welcome'],
+  welcome: ['idle'],
+  curious: ['welcome', 'idle'],
+  shocked: ['welcome', 'idle'],
+  dizzy: ['shocked', 'welcome', 'idle'],
+  blink: ['welcome', 'idle'],
+  // Pleased. A rig without it looks merely awake rather than pleased — a
+  // smaller loss than a blank face.
+  happy: ['welcome', 'idle'],
+  // Eyes shut for a whole sleep. `blink` is the closest thing every rig
+  // already ships, and it is closed eyes, which is the half that matters.
+  shutdown: ['blink', 'idle', 'welcome'],
+};
+export type PoseName =
+  | 'idle' | 'pressed' | 'welcome' | 'curious' | 'shocked' | 'dizzy' | 'flap'
+  | 'peek' | 'peek-right' | 'peek-left' | 'sleep';
+
+/**
+ * `scale` and the body:
+ *
+ * WHY these were added (2026-09-04). Every way of falling asleep starts with
+ * the body settling — sinking, squashing, or shrinking — and until now a pose
+ * could not move `rig-body` AT ALL: the type allowed it, `applyPose` skipped
+ * it by name, and the spring loop only ever drove limbs. So the film's own
+ * power-down (`sitTuck`: squat onto folded legs, arms turn under) was not
+ * reproducible by the shipped app on any theme, which is worth knowing before
+ * anyone tries to "just port it".
+ *
+ * The body is deliberately NOT spring-driven. Springs exist for the carried-
+ * soft-toy limb wobble; a body that overshoots on the way into a nap reads as
+ * a flinch. It gets a plain eased transition instead.
+ */
+export interface PartPose { rotate?: number; tx?: number; ty?: number; scale?: number; hidden?: boolean; }
+export interface PoseDef {
+  parts: Partial<Record<RigPartId, PartPose>>;
+  /** `blink` is allowed here so a pose can hold the eyes CLOSED — the blink
+   *  scheduler owns momentary blinks, a pose owns a sustained one (sleep). */
+  face: FaceName | 'blink';
+  wave?: boolean;
+}
 
 // Rotation values assume limbs drawn HANGING DOWN from their pivot (the
 // rig-contract convention, wecoded-themes/mascots/README.md).
@@ -60,6 +112,35 @@ export const POSES: Record<PoseName, PoseDef> = {
   // arms themselves are the grip, no mittens.)
   'peek-right': { parts: { 'rig-arm-left': { hidden: true }, 'rig-arm-right': { hidden: true }, 'rig-leg-left': { rotate: -10 } }, face: 'curious' },
   'peek-left':  { parts: { 'rig-arm-left': { hidden: true }, 'rig-arm-right': { hidden: true }, 'rig-leg-right': { rotate: 10 } }, face: 'curious' },
+
+  // Asleep. Destin picked this over two rounds (2026-09-04/05): the film's
+  // "loaf" body — he squats and shrinks a little — with the arms taken ALL THE
+  // WAY down and pulled in, so his outline becomes one clean shape with nothing
+  // sticking out. The rejected shapes and why are in the compare registry's
+  // `buddy-sleep` rounds; the decision is in
+  // docs/active/design/2026-09-04-mascot-restyle/.
+  //
+  // The arms are small nubs OUTSIDE the body silhouette (x 1-4 and 20-23,
+  // pivoting at y 9), which is why this is a TRANSLATION and not a rotation: a
+  // large rotation swings them up level with his face and reads as ears.
+  //
+  // `blink` as the pose's own face is what holds his eyes shut for the whole
+  // sleep — the blink scheduler owns momentary blinks, a pose owns a sustained
+  // one. Every rig already ships a rig-face-blink group, so no theme has to
+  // draw anything new to be able to sleep.
+  sleep: {
+    parts: {
+      'rig-body': { ty: 2.2, scale: 0.94 },
+      'rig-arm-left': { ty: 5, tx: 1.7 },
+      'rig-arm-right': { ty: 5, tx: -1.7 },
+      'rig-leg-left': { hidden: true },
+      'rig-leg-right': { hidden: true },
+    },
+    // `shutdown` is what Destin added this face FOR — eyes closed, and on a rig
+    // that has not drawn it yet FACE_FALLBACK lands on `blink`, which is the
+    // same closed eyes with a smile. No theme has to be redrawn to sleep.
+    face: 'shutdown',
+  },
 };
 
 /** Parse a data-pivot="x y" attribute (viewBox coordinates). */

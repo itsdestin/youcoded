@@ -49,6 +49,24 @@ describe('searchProjectContent (real ripgrep)', () => {
     await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
+  // The same private paths every other read hides. `--hidden` walks
+  // dot-directories, so without the sensitive globs a search for "BEGIN"
+  // printed the matching lines of .ssh/id_rsa and .env — and over remote
+  // access a phone can search (2026-09-10 review of batch 3 T6, finding 1).
+  it('never returns a hit from a sensitive path, even inside the root', async () => {
+    await fs.promises.mkdir(path.join(root, '.ssh'), { recursive: true });
+    await fs.promises.writeFile(path.join(root, '.ssh/id_rsa'), 'SECRET-MARKER-9\n');
+    await fs.promises.writeFile(path.join(root, '.env'), 'TOKEN=SECRET-MARKER-9\n');
+    await fs.promises.writeFile(path.join(root, '.env.local'), 'TOKEN=SECRET-MARKER-9\n');
+    await fs.promises.writeFile(path.join(root, '.netrc'), 'password SECRET-MARKER-9\n');
+    await fs.promises.mkdir(path.join(root, 'sub/.config/gh'), { recursive: true });
+    await fs.promises.writeFile(path.join(root, 'sub/.config/gh/hosts.yml'), 'oauth_token: SECRET-MARKER-9\n');
+    await fs.promises.writeFile(path.join(root, 'src/ok.ts'), '// SECRET-MARKER-9 in an ordinary file\n');
+    const res = await searchProjectContent(root, 'SECRET-MARKER-9');
+    expect(res.ok).toBe(true);
+    expect(res.hits.map((h) => h.path)).toEqual(['src/ok.ts']);
+  });
+
   it('finds matches with 1-indexed lines, case-insensitively, skipping node_modules and .youcoded', async () => {
     const res = await searchProjectContent(root, 'port 5223');
     expect(res.ok).toBe(true);

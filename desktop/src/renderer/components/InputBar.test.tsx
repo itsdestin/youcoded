@@ -6,6 +6,8 @@ import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-libra
 import { ChatProvider, useChatDispatch, useChatStore } from '../state/chat-context';
 import { SkillProvider } from '../state/skill-context';
 import InputBar, { InputBarHandle } from './InputBar';
+import { buildContextMenu } from './context-menu/build-menu';
+import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
 
 // jsdom (per this repo's vitest.config.ts) has no global setupFiles/polyfills —
 // useScrollFade (mounted unconditionally by InputBar's textarea) reaches for
@@ -30,6 +32,82 @@ function DispatchCapture() {
   capturedDispatch = useChatDispatch();
   return null;
 }
+
+describe('InputBar — context-menu image paste', () => {
+  const saveClipboardImage = vi.fn<() => Promise<string | null>>();
+
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    saveClipboardImage.mockReset();
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
+      session: { sendInput: vi.fn() },
+      dialog: { saveClipboardImage },
+      skills: {
+        list: vi.fn().mockResolvedValue([]),
+        getFavorites: vi.fn().mockResolvedValue([]),
+        getChips: vi.fn().mockResolvedValue([]),
+        getCuratedDefaults: vi.fn().mockResolvedValue([]),
+      },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    Object.defineProperty(document, 'execCommand', { value: undefined, configurable: true });
+  });
+
+  function renderComposer() {
+    render(
+      <ChatProvider>
+        <SkillProvider>
+          <InputBar sessionId="sess-1" provider="native" />
+        </SkillProvider>
+      </ChatProvider>,
+    );
+    return screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+  }
+
+  it('stages the saved image path as a visible attachment', async () => {
+    saveClipboardImage.mockResolvedValue('/tmp/context-paste.png');
+    renderComposer();
+
+    act(() => { window.dispatchEvent(new CustomEvent('youcoded:composer-paste-image')); });
+
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Remove context-paste.png' })).toBeInTheDocument();
+  });
+
+  it('quietly leaves attachments unchanged when saving returns null', async () => {
+    saveClipboardImage.mockResolvedValue(null);
+    renderComposer();
+
+    act(() => { window.dispatchEvent(new CustomEvent('youcoded:composer-paste-image')); });
+
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
+  });
+
+  it('keeps text precedence through the real composer menu and never invokes the image bridge', async () => {
+    const readText = vi.fn().mockResolvedValue('pasted words');
+    Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true });
+    const execCommand = vi.fn();
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true });
+    const textarea = renderComposer();
+    fireEvent.change(textarea, { target: { value: 'draft' } });
+    textarea.setSelectionRange(1, 4);
+    const paste = buildContextMenu(textarea)?.find((entry) => entry.type === 'item' && entry.id === 'paste');
+    textarea.setSelectionRange(0, 0);
+
+    await act(async () => { if (paste?.type === 'item') await paste.run(); });
+
+    expect(execCommand).toHaveBeenCalledWith('insertText', false, 'pasted words');
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([1, 4]);
+    expect(saveClipboardImage).not.toHaveBeenCalled();
+  });
+});
 
 describe('InputBar native send — failure keeps the draft (reviewer Critical fix)', () => {
   beforeEach(() => {
@@ -79,7 +157,7 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
       </ChatProvider>,
     );
 
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'hello world' } });
     expect(textarea.value).toBe('hello world');
 
@@ -119,7 +197,7 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
       </ChatProvider>,
     );
 
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'first message' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(textarea.value).toBe('');
@@ -155,17 +233,19 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
       </ChatProvider>,
     );
 
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'hello world' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(textarea.value).toBe('');
 
     rejectAck!(new Error('invoke rejected'));
 
-    // Falls back to the same undefined-result copy as the other failure branch.
+    // A rejected invoke is an UNANSWERED send, not a refused one: over remote access it
+    // is the timeout, and the request may still have run (error inventory 2026-09-10,
+    // false message 5). Same copy as an empty ack; the draft is still restored below.
     await waitFor(() => {
       expect(onToast).toHaveBeenCalledWith(
-        'The message could not be sent — no response from the session host.',
+        "YouCoded couldn't confirm your message was sent — check the conversation before sending it again.",
       );
     });
     await waitFor(() => {
@@ -283,6 +363,27 @@ describe('InputBar — stop button (Task 10 placement)', () => {
     expect((window as any).claude.session.sendInput).toHaveBeenCalledWith('sess-1', '\x1b');
   });
 
+  // Motion is separate from visibility (stop-button-alive questions deck Q-1/Q-2,
+  // 2026-09-10): the button glows only while the turn is really working, and holds
+  // still — but stays on screen — while stuck or while a permission card waits on you.
+  it('glows the stop button only while the turn is working', () => {
+    renderInputBar('claude');
+    const glowing = () => screen.getByRole('button', { name: 'Stop generating' }).classList.contains('stop-live');
+    act(() => { capturedDispatch!({ type: 'SESSION_INIT', sessionId: 'sess-1' }); });
+    act(() => {
+      capturedDispatch!({ type: 'USER_PROMPT', sessionId: 'sess-1', content: 'hi', timestamp: 1 });
+    });
+    expect(glowing()).toBe(true);
+    act(() => { capturedDispatch!({ type: 'ATTENTION_STATE_CHANGED', sessionId: 'sess-1', state: 'stuck' }); });
+    expect(glowing()).toBe(false);
+    act(() => { capturedDispatch!({ type: 'ATTENTION_STATE_CHANGED', sessionId: 'sess-1', state: 'ok' }); });
+    expect(glowing()).toBe(true);
+    act(() => {
+      capturedDispatch!({ type: 'PERMISSION_REQUEST', sessionId: 'sess-1', toolName: 'Bash', input: { command: 'ls' }, requestId: 'req-1' });
+    });
+    expect(glowing()).toBe(false);
+  });
+
   it('hides the stop button once the turn has ENDED (provider error)', () => {
     renderInputBar();
     act(() => { capturedDispatch!({ type: 'SESSION_INIT', sessionId: 'sess-1' }); });
@@ -361,21 +462,21 @@ describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
 
   it('hasDraft() is false for a whitespace-only draft (trimmed)', () => {
     const ref = renderWithRef();
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: '   ' } });
     expect(ref.current!.hasDraft()).toBe(false);
   });
 
   it('hasDraft() is true once the user has typed something', () => {
     const ref = renderWithRef();
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'a draft in progress' } });
     expect(ref.current!.hasDraft()).toBe(true);
   });
 
   it('fillDraft() replaces the composer content and focuses it', () => {
     const ref = renderWithRef();
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     act(() => { ref.current!.fillDraft('the edited queued message'); });
     expect(textarea.value).toBe('the edited queued message');
     expect(ref.current!.hasDraft()).toBe(true);
@@ -427,7 +528,7 @@ describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, n
     );
     act(() => { capturedDispatch!({ type: 'SESSION_INIT', sessionId: 'sess-1' }); });
 
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'queue me' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
@@ -440,5 +541,622 @@ describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, n
     expect(session.queuedMessages).toEqual([
       { queueId: 'q-99', content: 'queue me', timestamp: expect.any(Number) },
     ]);
+  });
+});
+
+// Voice prompting — the composer's last mile (T9).
+//
+// What these pin, in plain terms:
+//  - Dictated words land in the box beside anything already typed, and the
+//    newest, still-changing words are shown separately from the settled ones.
+//  - Typing while the mic is open ends dictation and what you typed wins.
+//  - Enter with the mic open STOPS the mic and sends nothing — but the Send
+//    button, and the "Send anyway" button after a blocked send, still send.
+//    That difference is the whole reason the guard sits on the two keyboard
+//    handlers rather than inside send() itself.
+//  - Holding the space bar in the box is walkie-talkie: 350 ms starts it,
+//    letting go stops it, and a quick tap inserts one space. Existing text is
+//    preserved. Losing the box — at ANY point in the hold, including the
+//    countdown before it arms — closes the mic,
+//    because that is where a microphone gets left open with nobody watching.
+describe('InputBar — voice prompting (T9)', () => {
+  let emit: (e: VoiceEvent) => void;
+  let voiceBridge: Record<string, any>;
+
+  function installVoice(status: VoiceReadiness = { state: 'ready', engine: 'Parakeet' }) {
+    const handlers = new Set<(e: VoiceEvent) => void>();
+    // No `sendAudio` / `micAccess`: this composer test is about what the box
+    // does with the words, so the hook takes its phone-shaped path and never
+    // reaches for a real microphone. The capture half is useVoiceInput's own test.
+    voiceBridge = {
+      status: vi.fn(async () => status),
+      download: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      onEvent: (cb: (e: VoiceEvent) => void) => { handlers.add(cb); return () => { handlers.delete(cb); }; },
+    };
+    emit = (e: VoiceEvent) => { act(() => { handlers.forEach((h) => h(e)); }); };
+    (window as any).claude.voice = voiceBridge;
+  }
+
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
+      session: { sendInput: vi.fn() },
+      skills: {
+        list: vi.fn().mockResolvedValue([]),
+        getFavorites: vi.fn().mockResolvedValue([]),
+        getChips: vi.fn().mockResolvedValue([]),
+        getCuratedDefaults: vi.fn().mockResolvedValue([]),
+      },
+    };
+    installVoice();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  async function renderComposer(props: Record<string, any> = {}) {
+    const provider = props.provider ?? 'native';
+    render(
+      <ChatProvider>
+        <SkillProvider>
+          <InputBar sessionId="sess-1" provider="native" {...props} />
+        </SkillProvider>
+      </ChatProvider>,
+    );
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    // The mic's label only becomes "Speak your message" once status() has
+    // answered, so this is also the wait for readiness to arrive.
+    await waitFor(() => screen.getByRole('button', { name: 'Speak your message' }));
+    return textarea;
+  }
+
+  /** Tap the mic and wait for the composer to say it is listening. */
+  async function startListening() {
+    fireEvent.click(screen.getByRole('button', { name: 'Speak your message' }));
+    await waitFor(() => screen.getByRole('button', { name: 'Stop listening' }));
+  }
+
+  it('merges dictation into the draft: settled words in the box, the newest ones beside them', async () => {
+    const textarea = await renderComposer();
+    await startListening();
+
+    emit({ type: 'partial', committed: 'Send him the notes.', tail: 'and ask about' });
+    // One value, two halves: the settled sentence plus the words still being
+    // reconsidered, which the mirror layer draws grey.
+    expect(textarea.value).toBe('Send him the notes. and ask about');
+
+    emit({ type: 'final', text: 'Send him the notes. And ask about Friday.' });
+    expect(textarea.value).toBe('Send him the notes. And ask about Friday. ');
+  });
+
+  it('dictation continues a half-typed draft instead of replacing it', async () => {
+    const textarea = await renderComposer();
+    fireEvent.change(textarea, { target: { value: 'Reply to Sam:' } });
+    await startListening();
+
+    emit({ type: 'partial', committed: 'tell him yes.', tail: '' });
+    expect(textarea.value).toBe('Reply to Sam: tell him yes.');
+  });
+
+  it('typing while the mic is open ends dictation and keeps every word already in the box', async () => {
+    // Fix (whole-branch review F4): this fired a whole-value REPLACEMENT — a
+    // change event no keystroke can produce — so it passed whether the grey
+    // words were kept or dropped, and it certified a comment that said the
+    // opposite of the code. A real keystroke appends to what is already
+    // rendered, which is the solid text AND the grey tail.
+    const textarea = await renderComposer();
+    await startListening();
+    emit({ type: 'partial', committed: 'book the room.', tail: 'for Tuesday' });
+    expect(textarea.value).toBe('book the room. for Tuesday');
+
+    // One character typed at the end of everything on screen.
+    fireEvent.change(textarea, { target: { value: 'book the room. for Tuesday!' } });
+
+    expect(voiceBridge.cancel).toHaveBeenCalledTimes(1);
+    // Nothing the user watched appear is taken away when they reach for the keyboard.
+    expect(textarea.value).toBe('book the room. for Tuesday!');
+
+    // And the words are solid now — a late partial cannot rewrite them.
+    emit({ type: 'partial', committed: 'book the rum.', tail: '' });
+    expect(textarea.value).toBe('book the room. for Tuesday!');
+  });
+
+  it('Enter stops the mic and sends NOTHING; a second Enter sends', async () => {
+    const textarea = await renderComposer();
+    await startListening();
+    emit({ type: 'partial', committed: 'book the room.', tail: '' });
+
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(voiceBridge.stop).toHaveBeenCalledTimes(1);
+    expect((window as any).claude.native.send).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('book the room.');
+
+    // The engine's last word arrives, the mic is closed, and Enter is Enter again.
+    emit({ type: 'final', text: 'Book the room.' });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect((window as any).claude.native.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('Enter pressed with the box unfocused also stops the mic (the window-level handler)', async () => {
+    await renderComposer();
+    await startListening();
+
+    // Same key, the other handler: this one fires when focus is anywhere else
+    // in the app, and it must make the same decision.
+    fireEvent.keyDown(document.body, { key: 'Enter' });
+    expect(voiceBridge.stop).toHaveBeenCalledTimes(1);
+    expect((window as any).claude.native.send).not.toHaveBeenCalled();
+  });
+
+  it('the Send BUTTON still sends while the mic is open — it never becomes a stop', async () => {
+    const textarea = await renderComposer();
+    fireEvent.change(textarea, { target: { value: 'send this now' } });
+    await startListening();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    expect((window as any).claude.native.send).toHaveBeenCalledTimes(1);
+    // It sends — but it does NOT leave the microphone open behind it. This used
+    // to assert `stop` was never called, which pinned exactly that bug: the
+    // message went, the mic stayed hot, and the next thing the engine said
+    // re-typed the whole utterance into the empty box.
+    expect(voiceBridge.cancel).toHaveBeenCalled();
+  });
+
+  // WHY: sending mid-sentence used to send the unsettled GREY words along with
+  // the message AND leave them in the box, so the user had to delete a copy of
+  // what they had just sent. Found reviewing T9, 2026-09-05.
+  it('sending takes the dictation with it — no leftovers, no second copy', async () => {
+    const textarea = await renderComposer();
+    await startListening();
+    emit({ type: 'partial', committed: 'Book the room.', tail: 'and tell' });
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toContain('Book the room.'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    expect((window as any).claude.native.send).toHaveBeenCalledTimes(1);
+    // The box is empty afterwards — not holding the grey remainder.
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe(''));
+    // And a late word from the engine cannot re-fill it, because the dictation
+    // was cancelled rather than left running.
+    emit({ type: 'partial', committed: 'Book the room.', tail: 'and tell Sam' });
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe(''));
+  });
+
+  // WHY: both Enter guards read "am I listening", so during the `finishing` beat —
+  // the last engine pass, seconds long — a second Enter fell through and sent,
+  // and the late words then re-filled the box. A stop-then-send double tap is the
+  // natural gesture, so this is the likely route into the bug above.
+  it('a second Enter during the finishing beat does not leave a duplicate draft', async () => {
+    const textarea = await renderComposer();
+    await startListening();
+    emit({ type: 'partial', committed: 'Book the room.', tail: '' });
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toContain('Book the room.'));
+
+    fireEvent.keyDown(textarea, { key: 'Enter' });          // stops the mic
+    fireEvent.keyDown(textarea, { key: 'Enter' });          // sends
+    await waitFor(() => expect((window as any).claude.native.send).toHaveBeenCalled());
+    emit({ type: 'final', text: 'Book the room.' });
+    await waitFor(() => expect((textarea as HTMLTextAreaElement).value).toBe(''));
+  });
+
+  it('the "Send anyway" retry still sends while the mic is open', async () => {
+    // The retry re-enters send() past the pending-prompt gate. If the Enter
+    // guard had been put inside send(), this button would silently stop the
+    // mic instead of sending — which is the failure this case exists to catch.
+    let retry: (() => void) | null = null;
+    const pendingSession = {
+      activeTurnToolIds: [],
+      toolCalls: new Map(),
+      timeline: [{ kind: 'prompt', prompt: { promptId: 'p-1', completed: false } }],
+    };
+    const textarea = await renderComposer({
+      provider: 'claude',
+      getSessionState: () => pendingSession as any,
+      onSendBlocked: (r: () => void) => { retry = r; },
+    });
+
+    fireEvent.change(textarea, { target: { value: 'push it through' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(retry).toBeTypeOf('function');
+    // Refused: the draft is still there.
+    expect(textarea.value).toBe('push it through');
+
+    await startListening();
+    const sendInput = (window as any).claude.session.sendInput;
+    sendInput.mockClear();
+    act(() => { retry!(); });
+
+    // One ESC (closing any live menu), then the message itself — a real send.
+    // (The Claude Code path writes the text on a timer, so wait for it.)
+    expect(sendInput).toHaveBeenCalledWith('sess-1', '\x1b');
+    await waitFor(() => {
+      expect(sendInput).toHaveBeenCalledWith('sess-1', expect.stringContaining('push it through'));
+    });
+    expect(voiceBridge.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe('InputBar — hold the space bar to talk (T9)', () => {
+  let voiceBridge: Record<string, any>;
+
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    voiceBridge = {
+      status: vi.fn(async () => ({ state: 'ready', engine: 'Parakeet' })),
+      download: vi.fn(async () => {}),
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
+      onEvent: (cb: (e: VoiceEvent) => void) => { holdHandlers.add(cb); return () => { holdHandlers.delete(cb); }; },
+    };
+    holdHandlers.clear();
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
+      session: { sendInput: vi.fn() },
+      skills: {
+        list: vi.fn().mockResolvedValue([]),
+        getFavorites: vi.fn().mockResolvedValue([]),
+        getChips: vi.fn().mockResolvedValue([]),
+        getCuratedDefaults: vi.fn().mockResolvedValue([]),
+      },
+      voice: voiceBridge,
+    };
+  });
+
+  /** Deliver an engine event to the composer under test. */
+  const holdHandlers = new Set<(e: VoiceEvent) => void>();
+  const emitHold = (e: VoiceEvent) => { act(() => { holdHandlers.forEach((h) => h(e)); }); };
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  let rerenderComposer: () => void;
+  async function renderComposer() {
+    const { rerender } = render(
+      <ChatProvider>
+        <SkillProvider>
+          <InputBar sessionId="sess-1" provider="native" />
+        </SkillProvider>
+      </ChatProvider>,
+    );
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    await waitFor(() => screen.getByRole('button', { name: 'Speak your message' }));
+    rerenderComposer = () => rerender(
+      <ChatProvider>
+        <SkillProvider>
+          <InputBar sessionId="sess-1" provider="native" compact />
+        </SkillProvider>
+      </ChatProvider>,
+    );
+    vi.useFakeTimers();
+    return textarea;
+  }
+
+  /** Let `ms` of held-down time pass, and let the mic's start settle. */
+  async function hold(ms: number) {
+    await act(async () => { vi.advanceTimersByTime(ms); });
+  }
+
+  it('holding the space bar starts the mic; letting go stops it', async () => {
+    const textarea = await renderComposer();
+    fireEvent.keyDown(textarea, { key: ' ' });
+    await hold(350);
+    expect(voiceBridge.start).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyUp(textarea, { key: ' ' });
+    expect(voiceBridge.stop).toHaveBeenCalledTimes(1);
+  });
+
+  // The one release path with no test: deleting the visibilitychange listener
+  // left the whole suite green, so a hold that survived the page being hidden
+  // would have gone unnoticed.
+  it('the page being hidden mid-hold closes the microphone', async () => {
+    const textarea = await renderComposer();
+    fireEvent.keyDown(textarea, { key: ' ' });
+    await hold(350);
+    expect(voiceBridge.start).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    fireEvent(document, new Event('visibilitychange'));
+    expect(voiceBridge.stop).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+  });
+
+  it('a quick tap does not start or stop the mic', async () => {
+    const textarea = await renderComposer();
+    fireEvent.keyDown(textarea, { key: ' ' });
+    await hold(100);
+    fireEvent.keyUp(textarea, { key: ' ' });
+    await hold(500);
+
+    expect(voiceBridge.start).not.toHaveBeenCalled();
+    expect(voiceBridge.stop).not.toHaveBeenCalled();
+  });
+
+  // Destin, 2026-09-05, twice. First: "it should work basically any time I press
+  // and hold in the input area, not just when it's empty. Should append to the
+  // end of existing text." Then, on the first attempt at that: "still seems like
+  // a bit of a gamble as to whether the spacebar does voice mode or just enters
+  // a bunch of spaces lmao."
+  //
+  // The gamble was real and these pin it shut. The gesture is now: nothing is
+  // typed while the bar is down; the space appears only if the hold is
+  // abandoned; and the decision NEVER consults the browser's `repeat` flag,
+  // which Electron on Linux does not reliably set. Together those mean at most
+  // ONE space can ever come out of a hold, whatever the keyboard does.
+  it('holding the space bar with text in the box starts dictation and keeps the text', async () => {
+    const textarea = await renderComposer();
+    fireEvent.change(textarea, { target: { value: 'Tell Sam' } });
+
+    const cancelled = fireEvent.keyDown(textarea, { key: ' ' });
+    expect(cancelled).toBe(false);          // nothing typed while the bar is down
+    await hold(350);
+
+    expect(voiceBridge.start).toHaveBeenCalledTimes(1);
+    // One space between the typed half and the spoken half, added by startVoice.
+    expect(textarea.value).toBe('Tell Sam ');
+
+    emitHold({ type: 'final', text: 'the meeting moved.' });
+    expect(textarea.value).toBe('Tell Sam the meeting moved. ');
+  });
+
+  it('a keyboard that repeats produces ONE space, not a run of them', async () => {
+    // THE bug Destin hit. These repeats carry no `repeat: true`, exactly as they
+    // arrive from Electron on Linux — the old code asked the event and believed
+    // it, so every one of them was typed.
+    const textarea = await renderComposer();
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+
+    fireEvent.keyDown(textarea, { key: ' ' });
+    for (let i = 0; i < 8; i += 1) {
+      expect(fireEvent.keyDown(textarea, { key: ' ' })).toBe(false);   // swallowed
+      await hold(30);
+    }
+    fireEvent.keyUp(textarea, { key: ' ' });
+
+    // 8 repeats over 240 ms — short of the hold, so this is a space, and exactly one.
+    expect(voiceBridge.start).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('hello ');
+  });
+
+  it('a quick tap with text in the box types exactly one space', async () => {
+    const textarea = await renderComposer();
+    fireEvent.change(textarea, { target: { value: 'already typing' } });
+    textarea.setSelectionRange(14, 14);
+
+    fireEvent.keyDown(textarea, { key: ' ' });
+    await hold(100);                        // let go well before the hold matures
+    fireEvent.keyUp(textarea, { key: ' ' });
+    await hold(500);
+
+    expect(voiceBridge.start).not.toHaveBeenCalled();
+    expect(textarea.value).toBe('already typing ');
+  });
+
+  // WHY: jsdom keydown has no browser-default text insertion. Model it from
+  // the LIVE value/selection, then run the queued frame only after typing.
+  function typeLetter(textarea: HTMLTextAreaElement, key: string) {
+    expect(fireEvent.keyDown(textarea, { key })).toBe(true);
+    const { value, selectionStart: at, selectionEnd: to } = textarea;
+    fireEvent.change(textarea, {
+      target: { value: value.slice(0, at) + key + value.slice(to), selectionStart: at + 1, selectionEnd: at + 1 },
+    });
+    fireEvent.keyUp(textarea, { key });
+  }
+
+  describe.each(['release first', 'letter first'] as const)('pending space caret — %s', (order) => {
+    it.each([
+      { draft: 'hello', at: 5, to: 5, expected: 'hello world' },
+      { draft: 'hello!', at: 5, to: 5, expected: 'hello world!' },
+      { draft: 'helloOLD!', at: 5, to: 8, expected: 'hello world!' },
+    ])('types at the selection in "$draft" and survives a rerender', async ({ draft, at, to, expected }) => {
+      const textarea = await renderComposer();
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => frames.push(cb));
+      fireEvent.change(textarea, { target: { value: draft } });
+      textarea.setSelectionRange(at, to);
+      expect(fireEvent.keyDown(textarea, { key: ' ' })).toBe(false);
+      if (order === 'release first') fireEvent.keyUp(textarea, { key: ' ' });
+      typeLetter(textarea, 'w');
+      if (order === 'letter first') fireEvent.keyUp(textarea, { key: ' ' });
+      act(() => { frames.splice(0).forEach((cb) => cb(0)); });
+      for (const letter of 'orld') typeLetter(textarea, letter);
+      expect(textarea.value).toBe(expected);
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([11, 11]);
+      rerenderComposer();
+      expect(textarea.value).toBe(expected);
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([11, 11]);
+      expect(voiceBridge.start).not.toHaveBeenCalled();
+    });
+
+    it('does not overwrite a later cursor move, and keeps the space through a rerender', async () => {
+      const textarea = await renderComposer();
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => frames.push(cb));
+      fireEvent.change(textarea, { target: { value: 'hello!' } });
+      textarea.setSelectionRange(5, 5);
+      fireEvent.keyDown(textarea, { key: ' ' });
+      if (order === 'release first') fireEvent.keyUp(textarea, { key: ' ' });
+      else fireEvent.keyDown(textarea, { key: 'ArrowLeft' });
+      expect(textarea.value).toBe('hello !');
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([6, 6]);
+      // Model a subsequent mouse selection before any frame is painted.
+      textarea.setSelectionRange(1, 3);
+      if (order === 'letter first') fireEvent.keyUp(textarea, { key: ' ' });
+      rerenderComposer();
+      act(() => { frames.splice(0).forEach((cb) => cb(0)); });
+      expect(textarea.value).toBe('hello !');
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([1, 3]);
+      expect(voiceBridge.start).not.toHaveBeenCalled();
+    });
+  });
+
+  it('typing straight through a space puts it in ahead of the next letter', async () => {
+    // "hello world" at speed: the w goes down before the space comes up. The
+    // space must land BEFORE the w, or the box reads "hellow orld".
+    const textarea = await renderComposer();
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+    textarea.setSelectionRange(5, 5);
+
+    fireEvent.keyDown(textarea, { key: ' ' });
+    await hold(80);
+    fireEvent.keyDown(textarea, { key: 'w' });
+
+    expect(textarea.value).toBe('hello ');   // the space, already in, before the w types
+    expect(voiceBridge.start).not.toHaveBeenCalled();
+  });
+
+  it('puts the space where the caret is, not at the end', async () => {
+    const textarea = await renderComposer();
+    fireEvent.change(textarea, { target: { value: 'TellSam about it' } });
+    textarea.setSelectionRange(4, 4);        // between "Tell" and "Sam"
+
+    fireEvent.keyDown(textarea, { key: ' ' });
+    await hold(100);
+    fireEvent.keyUp(textarea, { key: ' ' });
+
+    expect(textarea.value).toBe('Tell Sam about it');
+  });
+
+  it('an empty box types no space when the hold matures', async () => {
+    const textarea = await renderComposer();
+    const cancelled = fireEvent.keyDown(textarea, { key: ' ' });
+    expect(cancelled).toBe(false);
+    await hold(350);
+    expect(voiceBridge.start).toHaveBeenCalledTimes(1);
+    expect(textarea.value).toBe('');
+  });
+
+  it('focus leaving the box mid-hold closes the mic', async () => {
+    const textarea = await renderComposer();
+    fireEvent.keyDown(textarea, { key: ' ' });
+    await hold(350);
+    expect(voiceBridge.start).toHaveBeenCalledTimes(1);
+
+    // Clicking away, alt-tabbing — no key-up will ever arrive.
+    fireEvent.blur(textarea);
+    expect(voiceBridge.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('the whole window losing focus mid-hold closes the mic', async () => {
+    const textarea = await renderComposer();
+    fireEvent.keyDown(textarea, { key: ' ' });
+    await hold(350);
+
+    act(() => { window.dispatchEvent(new Event('blur')); });
+    expect(voiceBridge.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('focus leaving BEFORE the 350 ms hold is up leaves the mic closed', async () => {
+    // The leak this exists to stop: for the first 350 ms nothing is listening
+    // yet, only a countdown is running. Without cancelling that countdown the
+    // mic opens in a window the user has already left, no key-up ever comes,
+    // and it stays open until the silence stop drops the room into the box.
+    const textarea = await renderComposer();
+    fireEvent.keyDown(textarea, { key: ' ' });
+    await hold(100);
+    fireEvent.blur(textarea);
+    await hold(1000);
+
+    expect(voiceBridge.start).not.toHaveBeenCalled();
+    expect(voiceBridge.stop).not.toHaveBeenCalled();
+  });
+});
+
+// The idle unfocus frees the Shift shortcuts, but on a touchscreen laptop it
+// also dismisses the on-screen keyboard every pause. A "coarse primary pointer"
+// check cannot see that machine: with a touchpad or any mouse-like device
+// attached the primary pointer is "fine" even while the user types with a
+// finger (measured on the ROG Flow Z13 under KDE Wayland, 2026-09-10). So the
+// decision follows how the box was last reached — finger or pen keeps focus.
+describe('InputBar — idle unfocus vs the on-screen keyboard', () => {
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
+      session: { sendInput: vi.fn() },
+      skills: {
+        list: vi.fn().mockResolvedValue([]),
+        getFavorites: vi.fn().mockResolvedValue([]),
+        getChips: vi.fn().mockResolvedValue([]),
+        getCuratedDefaults: vi.fn().mockResolvedValue([]),
+      },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function renderComposer() {
+    render(
+      <ChatProvider>
+        <SkillProvider>
+          <InputBar sessionId="sess-1" provider="native" />
+        </SkillProvider>
+      </ChatProvider>,
+    );
+    vi.useFakeTimers();
+    return screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+  }
+
+  /** Reach the box the way a user would, then type one character. */
+  function tapAndType(textarea: HTMLTextAreaElement, pointerType: string) {
+    fireEvent.pointerDown(textarea, { pointerType });
+    act(() => { textarea.focus(); });
+    fireEvent.keyDown(textarea, { key: 'a' });
+  }
+
+  async function pause(ms: number) {
+    await act(async () => { vi.advanceTimersByTime(ms); });
+  }
+
+  it('a touchpad or mouse click still lets the box unfocus after a pause', async () => {
+    const textarea = renderComposer();
+    tapAndType(textarea, 'mouse');
+    expect(document.activeElement).toBe(textarea);
+    await pause(800);
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it.each(['touch', 'pen'])('a %s tap keeps the box focused through a pause', async (pointerType) => {
+    const textarea = renderComposer();
+    tapAndType(textarea, pointerType);
+    await pause(800);
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it('a touchpad click after a finger tap turns the unfocus back on', async () => {
+    const textarea = renderComposer();
+    tapAndType(textarea, 'touch');
+    fireEvent.pointerDown(textarea, { pointerType: 'mouse' });
+    fireEvent.keyDown(textarea, { key: 'b' });
+    await pause(800);
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it('typing on a real keyboard with the box unfocused turns the unfocus back on', async () => {
+    const textarea = renderComposer();
+    // A finger tap somewhere else in the app, then the folio keyboard: the
+    // window-level auto-focus pulls the box in, which no soft keyboard can do.
+    fireEvent.pointerDown(document.body, { pointerType: 'touch' });
+    fireEvent.keyDown(document.body, { key: 'h' });
+    expect(document.activeElement).toBe(textarea);
+    fireEvent.keyDown(textarea, { key: 'i' });
+    await pause(800);
+    expect(document.activeElement).not.toBe(textarea);
   });
 });

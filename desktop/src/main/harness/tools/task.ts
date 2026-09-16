@@ -17,9 +17,9 @@ import { defineTool } from './registry';
 import type { NativeTool, ToolContext, ToolResultPayload } from './types';
 import { resolveP, toPosix } from './guards';
 import { BUILTIN_ROSTER, type SpecialistRoster, type SpecialistDefinition } from '../specialists/registry';
-import { SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../specialists/limits';
+import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../specialists/limits';
 import {
-  resolveDelegatedBinding, resolveRequestedModel, DelegatedModelRefused, type DelegatedTier,
+  resolveDelegatedBinding, resolveRequestedModel, DelegatedModelRefused, DelegatedModelUnavailable,
 } from '../specialists/delegated-models';
 import type { CatalogModel, ModelBinding } from '../../../shared/provider-types';
 
@@ -103,18 +103,23 @@ function buildSchema(roster: SpecialistRoster) {
     // read on a task_id RESUME (Task 6): same meaning, applied to the resumed
     // run instead of a new one.
     background: z.boolean().optional().describe(
-      'Set true for anything long — you keep working and the report is delivered to you automatically when the specialist finishes. '
-      + 'On a task_id resume, applies to the resumed run.',
+      'Set true only when you have other useful, non-overlapping work to do while the specialist runs; the report is '
+      + 'delivered to you when it finishes. If you would only be waiting for it, leave this false and let the report '
+      + 'come back as this call\'s result. On a task_id resume, applies to the resumed run.',
     ),
-    // Task 14: verbatim per the spec ruling — the only two named tiers, plus an
-    // escape hatch for a user-directed specific id. Omitting this (the default
-    // for every existing call and every built-in specialist) is unchanged
-    // behavior: run on the parent's own model. Not read on a task_id call — a
-    // steer/resume/interrupt keeps the child's own model.
-    model: z.string().optional().describe(
-      'Optional: "budget" or "frontier" to use the models the user designated in Settings, or a specific '
-      + 'model id — only name a specific model when the user asked for it. Omit to run the specialist on '
-      + "this conversation's model. Not used with task_id — a resumed specialist keeps its own model.",
+    // Two named tiers, an explicit parent escape hatch, and a user-directed
+    // specific id. Omitting this uses the safe automatic Budget tier. Not read
+    // on a task_id call — steer/resume/interrupt keeps the child's own model.
+    // Item 13 (2026-09-09 transcript audit): the model once sent `"budget}},{"`
+    // — a fragment of its own JSON — and the tool only refused it a resolve
+    // later, as "not an available model". A model id is letters, digits and
+    // a few separators; anything else is a malformed call and is refused at
+    // the schema, where the error names the field and the accepted shape.
+    model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:@\/-]*$/, 'model must be "budget", "frontier", "parent", or a model id (letters, digits, . _ : @ / -)').optional().describe(
+      'Optional: "budget" or "frontier" to use the user\'s selection or a provider-matched automatic default, '
+      + '"parent" to deliberately use this conversation\'s model, or a specific model id — only name a specific '
+      + 'model when the user asked for it. Omit for the safe automatic budget tier. Not used with task_id — a '
+      + 'resumed specialist keeps its own model.',
     ),
     // Task 6 — the task_id management surface. Semantics documented verbatim in
     // the tool description below (TASK_ID_DOCTRINE).
@@ -127,6 +132,14 @@ function buildSchema(roster: SpecialistRoster) {
       + "belongs to a different conversation or never existed at all — you can only manage specialists you yourself started.",
     ),
     interrupt: z.boolean().optional().describe('With task_id: cancel that specialist instead of steering or resuming it.'),
+    // 2026-09-09 — replaces the per-turn `<specialists-status>` block. Codex
+    // (list_agents) and Hermes (action='list') give the model a list it asks
+    // for; none of the harnesses we compared remind it every turn.
+    list: z.boolean().optional().describe(
+      'Alone, with no other fields: list this conversation\'s specialists (running, finished with report pending, failed, '
+      + 'interrupted) and its background commands, with their state. Ask once when you need it — never in a loop; you are '
+      + 'told when a report or a command finishes.',
+    ),
   }).strict(); // .strict(): an unknown parameter is an error the model can fix, never silently dropped (ledger D-2)
 }
 
@@ -167,7 +180,35 @@ function describeSpecialists(roster: SpecialistRoster): string {
 // follow-up question (child-ask-router.ts denies AskUserQuestion instantly —
 // it routes permission GATES to the parent's card, not interactive questions),
 // so the caller must front-load everything into one brief.
-const DOCTRINE = 'Specialists work independently and report back once; give each specialist a complete, self-contained brief — they cannot ask you a follow-up question.';
+// WHY the when/when-not rules (2026-09-09): three days of transcripts showed
+// the model hiring a helper for single lookups, then steering it every minute
+// ("report now", 72% of all steers) and re-calling Task to pull the report
+// instead of waiting. Every other harness we compared (Claude Code, Codex,
+// Hermes) spends most of its delegation text on WHEN NOT to delegate; ours
+// said nothing about it. The limits are stated up front for the same reason:
+// the model used to discover each one only by being refused.
+const DOCTRINE =
+  'Most work is faster done yourself. Delegate only a self-contained job that also meets one of these: '
+  + 'it would fill your context with file contents or search output you only need the conclusion of; '
+  + 'it can run while you do something else; or it needs a fresh, unbiased read (a review). '
+  + 'Do not delegate a single lookup you could do with one Read, Grep or Glob, a quick edit to a file you have '
+  + 'already read, a question that needs the user\'s answer, or the very next step your own work is blocked on.\n'
+  + 'Specialists work independently and report back once; give each specialist a complete, self-contained brief — '
+  + 'they cannot ask you a follow-up question. Once you have delegated a job, do not also do it yourself, and do not '
+  + 'send status requests: the report arrives on its own. When nothing else is left for you to do, tell the user '
+  + 'what is still running and end your turn.\n'
+  + `Limits: up to ${HOSTED_MAX_CONCURRENT_SPECIALISTS} specialists run at once (fewer on a local engine), only one `
+  + 'of them may edit files, specialists cannot start specialists, and each conversation has a budget of '
+  + `${SPECIALIST_SPAWN_BUDGET_PER_SESSION} launches. Independent read-only specialists can be started in the same turn.`;
+
+// What a background launch answers with. WHY it says "end your turn": the
+// old ack said "Keep working", and the model took that as licence to poll the
+// helper and re-run its search itself. The status block at the start of every
+// turn is how it knows what is still running — it never needs to ask.
+const BACKGROUND_ACK =
+  'Their report will be delivered to you when they finish — do not wait, poll, or send status requests, and do not '
+  + 'redo the job yourself. Continue with work that does not depend on it; when nothing else is left, tell the user '
+  + 'what is still running and end your turn. Task with list: true shows what is still running, specialists and background commands alike — once, if you need it.';
 
 // Task 6 — the task_id management surface, documented VERBATIM in the tool
 // description (per the plan's own instruction) so a model reads these four
@@ -331,6 +372,10 @@ export function createTaskTool(
         return { text: 'Task failed: no specialist services are wired for this session (configuration error).', isError: true };
       }
       const parentId = ctx.sessionId;
+      if (args.list) {
+        const status = services.listStatus(parentId);
+        return { text: status ?? 'No specialists or background commands are running or awaiting delivery in this conversation.' };
+      }
 
       // ---- Task 6: task_id management surface — checked BEFORE the spawn
       // path entirely (order per the plan): steer a running child, resume a
@@ -421,8 +466,7 @@ export function createTaskTool(
             if (result.status === 'ok') throw new Error(`resumeSpecialist returned a foreground result for a background request (task_id ${taskId}) — this is a host bug, not a refusal.`);
             return {
               text: `${result.title} (${specialist.id}) is now working in the background (task_id: ${result.childId}). `
-                + 'Their report will be delivered to you automatically when they finish — do not wait or poll. '
-                + 'Keep working; a status block at the start of your turns tracks running specialists.',
+                + BACKGROUND_ACK,
             };
           } catch (err: any) {
             services.release(reservation.token);
@@ -487,15 +531,11 @@ export function createTaskTool(
         };
       }
 
-      // Task 14: resolve what model this child runs on. 'parent' — no
-      // args.model AND no specialist.modelPreference, the default for every
-      // existing call and every built-in specialist — needs nothing beyond
-      // ctx.binding, so a session that never touches this feature never
-      // needs ToolServices.models wired at all. Only a tier or a specific id
-      // reaches resolveDelegatedBinding.
+      // Resolve what model this child runs on. Omission means Budget, so every
+      // implicit launch crosses the safe-default resolver. Only an explicit
+      // `parent` request bypasses catalog resolution.
       const requestedModel = resolveRequestedModel(args.model, specialist.modelPreference);
       let resolvedBinding: ModelBinding | undefined;
-      let fallbackNote = '';
       // Hoisted out of the `if` below (Task 5, plan 1c) so the model-record
       // computation after it can read `resolution?.fellBack` — undefined
       // (never entered the block) reads the same as "no fallback happened",
@@ -509,10 +549,12 @@ export function createTaskTool(
         if (!models) {
           return { text: 'Task failed: no model catalog is wired for this session (configuration error).', isError: true };
         }
-        // Catalog is fetched ONLY for a specific-id request — a tier lookup
-        // never needs it (DelegatedModels.get is the whole answer), so the
-        // common tier path pays no catalog-fetch cost.
-        const catalog: CatalogModel[] | null = typeof requestedModel === 'object'
+        // WHY only an UNSET tier fetches the catalog: a curated provider
+        // default must be confirmed live, but a saved user override is already
+        // authoritative and should not wait on a network catalog refresh.
+        const needsCatalog = typeof requestedModel === 'object'
+          || !models.designated.get(requestedModel);
+        const catalog: CatalogModel[] | null = needsCatalog
           ? (await models.catalog()) ?? null
           : null;
         try {
@@ -523,22 +565,12 @@ export function createTaskTool(
           // A user-directed specific model id that couldn't be confirmed —
           // never silently substituted (spec ruling). Rethrow anything else:
           // an unexpected throw here is a bug, not a refusal to render.
-          if (err instanceof DelegatedModelRefused) return { text: err.message, isError: true };
+          if (err instanceof DelegatedModelRefused || err instanceof DelegatedModelUnavailable) {
+            return { text: err.message, isError: true };
+          }
           throw err;
         }
         resolvedBinding = resolution.binding;
-        if (resolution.fellBack) {
-          // requestedModel is a DelegatedTier here — the { modelId } branch
-          // above either resolves or throws, it never falls back.
-          //
-          // Final-review fix (Finding 6): this used to say "is set in
-          // Settings" — this release ships no Settings UI for designating a
-          // budget/frontier model (plan 1c, not yet written), so it pointed
-          // the model AND the user at a control neither can find. Matches
-          // resolveDelegatedBinding's own reason string (delegated-models.ts)
-          // — state the fact, not a place to fix it that doesn't exist yet.
-          fallbackNote = `\n\n(No ${requestedModel as DelegatedTier} model is designated — using this conversation's model.)`;
-        }
       }
 
       // Task 5 (plan 1c) — the model actually used, recorded onto the ledger
@@ -604,10 +636,14 @@ export function createTaskTool(
             parentToolCallId: ctx.toolCallId ?? '',
             description: args.description,
             token: reservation.token,
+            // WHY background must receive the same resolved binding as
+            // foreground: createChild otherwise inherits the parent even while
+            // the ledger misleadingly records the safe tier.
+            ...(resolvedBinding ? { binding: resolvedBinding } : {}),
             ...(model ? { model } : {}),
           });
           return {
-            text: `${title} (${args.agent}) is now working in the background (task_id: ${childId}). Their report will be delivered to you automatically when they finish — do not wait or poll. Keep working; a status block at the start of your turns tracks running specialists.`,
+            text: `${title} (${args.agent}) is now working in the background (task_id: ${childId}). ${BACKGROUND_ACK}`,
           };
         } catch (err: any) {
           services.release(reservation.token);
@@ -629,9 +665,7 @@ export function createTaskTool(
           ...(resolvedBinding ? { binding: resolvedBinding } : {}),
           ...(model ? { model } : {}),
         });
-        // Task 14: the one honest line a tier fallback earns — appended to the
-        // report, never folded into it, so the child's own words stay intact.
-        return { text: fallbackNote ? `${report}${fallbackNote}` : report };
+        return { text: report };
       } catch (err: any) {
         // Every failure path must resolve a tool result — never a dangling
         // call. err.message is expected to already name the child id when one

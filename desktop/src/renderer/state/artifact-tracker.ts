@@ -9,6 +9,13 @@ export interface ArtifactState {
   // instead of the "no files yet" empty state; cleared on the next pill click,
   // a successful selection, or drawer close.
   pillError: Record<string, string | null>;
+  // A tapped file still being looked up (per session): the file's name as the
+  // chat shows it. WHY (2026-09-11, the owner's phone): the drawer opened onto
+  // "Nothing here yet" for as long as the lookup took, contradicting the file
+  // just tapped. SessionDrawer shows "Opening <name>…" instead. Every way a
+  // lookup ends clears it — the file opened, it could not open, the drawer
+  // closed, or a new tap started.
+  pillPending: Record<string, string | null>;
   // Drawer open/closed is scoped per session and remembered across switches.
   // A new/unseen session has no entry → closed by default. Consumers read the
   // ACTIVE session's flag; the open/close actions carry the sessionId.
@@ -36,6 +43,7 @@ export const initialArtifactState: ArtifactState = {
   sessionCwd: {},
   projectArtifacts: {},
   pillError: {},
+  pillPending: {},
   drawerOpenBySession: {},
   drawerExpanded: false,
   projectViewOpen: false,
@@ -59,10 +67,21 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
     }
     case 'SET_SESSION_CWD':
       return { ...s, sessionCwd: { ...s.sessionCwd, [a.sessionId]: a.cwd } };
+    case 'PILL_RESOLVE_STARTED':
+      return { ...s, pillPending: { ...s.pillPending, [a.sessionId]: a.name } };
     case 'PILL_RESOLVE_FAILED':
-      return { ...s, pillError: { ...s.pillError, [a.sessionId]: a.message } };
+      // The lookup ended — the failure note replaces the "Opening …" note.
+      return {
+        ...s,
+        pillError: { ...s.pillError, [a.sessionId]: a.message },
+        pillPending: { ...s.pillPending, [a.sessionId]: null },
+      };
     case 'PILL_ERROR_CLEARED':
-      return { ...s, pillError: { ...s.pillError, [a.sessionId]: null } };
+      return {
+        ...s,
+        pillError: { ...s.pillError, [a.sessionId]: null },
+        pillPending: { ...s.pillPending, [a.sessionId]: null },
+      };
     case 'DRAWER_OPENED':
       return { ...s, drawerOpenBySession: { ...s.drawerOpenBySession, [a.sessionId]: true } };
     case 'DRAWER_CLOSED':
@@ -76,6 +95,8 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
         drawerExpanded: false,
         activeArtifactBySession: { ...s.activeArtifactBySession, [a.sessionId]: null },
         pillError: { ...s.pillError, [a.sessionId]: null },
+        // A re-opened drawer must not say "Opening …" for a tap the person closed on.
+        pillPending: { ...s.pillPending, [a.sessionId]: null },
         gitReviewBySession: { ...s.gitReviewBySession, [a.sessionId]: false },
         // Closing the drawer must also drop a live preview — the exclusivity
         // rule (only one of active-artifact/preview at a time) still applies
@@ -90,6 +111,8 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
         activeArtifactBySession: { ...s.activeArtifactBySession, [a.sessionId]: a.artifactId },
         // A successful open supersedes any earlier failure note.
         pillError: { ...s.pillError, [a.sessionId]: null },
+        // …and ends any lookup that was still showing "Opening …".
+        pillPending: { ...s.pillPending, [a.sessionId]: null },
         // Clicking a file in the list always lands on the file view — the review
         // view belongs to the file it was opened from, not the newly selected one.
         gitReviewBySession: { ...s.gitReviewBySession, [a.sessionId]: false },

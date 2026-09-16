@@ -19,6 +19,46 @@ export function attentionDotColor(state: AttentionState): 'red' | 'amber' | null
   return RED_ATTENTION.has(state) ? 'red' : 'amber';
 }
 
+/**
+ * Fold the two cross-window feeds into the locally-derived status map, for the
+ * sessions this window does NOT own. Pure so the precedence rules below are
+ * unit-testable without mounting App (same reason attentionDotColor is pure).
+ *
+ * Precedence, and why each rung is where it is:
+ *   1. A session this window OWNS keeps its local colour, always. Blue depends
+ *      on what *you* have looked at, and only this window knows that.
+ *   2. attentionSummary — main's merge of every window's own derived colour,
+ *      pushed ~100ms after any change. The only feed that can say "green".
+ *      Overwrites, because `base` may already hold a staler red/amber for the
+ *      same id (see 3).
+ *   3. attentionMap — "needs attention" states on the 10s status push. Can only
+ *      ever produce red or amber, but it reaches remote browsers (which run no
+ *      aggregation) and covers the instant before the first summary arrives.
+ */
+export function mergePeerSessionStatuses(args: {
+  base: Map<string, SessionStatusColor>;
+  localSessionIds: Set<string>;
+  windowDirectory: { windows?: Array<{ sessions?: Array<{ id: string }> | null }> | null } | null | undefined;
+  summaryPerSession: Record<string, { status?: SessionStatusColor } | undefined> | undefined;
+  attentionMap: Record<string, string> | undefined;
+}): Map<string, SessionStatusColor> {
+  const { base, localSessionIds, windowDirectory, summaryPerSession, attentionMap } = args;
+  const m = new Map(base);
+  for (const w of (windowDirectory?.windows ?? [])) {
+    for (const s of (w?.sessions ?? [])) {
+      if (!s?.id || localSessionIds.has(s.id)) continue;
+      const reported = summaryPerSession?.[s.id]?.status;
+      if (reported) { m.set(s.id, reported); continue; }
+      if (m.has(s.id)) continue;
+      const state = attentionMap?.[s.id];
+      if (!state) continue;
+      const color = attentionDotColor(state as AttentionState);
+      if (color) m.set(s.id, color);
+    }
+  }
+  return m;
+}
+
 export interface SessionAttentionInfo {
   status: SessionStatusColor;
   attentionState: AttentionState;
@@ -82,8 +122,20 @@ export function useSessionAttention(
         );
       next.set(s.id, { status, attentionState: chatState.attentionState, awaitingApproval: hasAwaiting });
     }
-    // Sessions present in chat state but not in the sessions list: the old
-    // reporter still reported them (dot fallback 'gray') — preserve that.
+    // Sessions present in chat state but not in the sessions list — this is
+    // now also how a PEER WINDOW's session gets a color: App's statusData
+    // handler dispatches ATTENTION_STATE_CHANGED for every session in the
+    // cross-window attentionMap, including ones this window doesn't own, so
+    // its attentionState lands here even though nothing else about it does
+    // (no transcript events ever arrive for it in this renderer). The old
+    // reporter hardcoded 'gray' regardless of that state — WHY (2026-09-07,
+    // Destin: "status lights properly displayed across windows"): use the
+    // same red/amber mapping the local branch above uses, so a peer session
+    // that's stalled/errored/awaiting approval reads correctly here too.
+    // Known gap: "green" (actively thinking) has no cross-window signal yet
+    // (isThinking/toolCalls never populate for a session this window doesn't
+    // own), so an actively-working peer session still reads gray, same as
+    // idle — only the red/amber "needs attention" states are accurate.
     for (const [sid, chatState] of state) {
       if (next.has(sid)) continue;
       let awaitingApproval = false;
@@ -91,7 +143,8 @@ export function useSessionAttention(
         const t = chatState.toolCalls.get(id);
         if (t?.status === 'awaiting-approval') { awaitingApproval = true; break; }
       }
-      next.set(sid, { status: 'gray', attentionState: chatState.attentionState, awaitingApproval });
+      const status: SessionStatusColor = awaitingApproval ? 'red' : attentionDotColor(chatState.attentionState) ?? 'gray';
+      next.set(sid, { status, attentionState: chatState.attentionState, awaitingApproval });
     }
 
     // Identity stabilization: return the previous Map when nothing changed.

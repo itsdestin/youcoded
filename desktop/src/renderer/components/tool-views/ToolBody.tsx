@@ -24,7 +24,8 @@ import ChatsearchShowCard from './ChatsearchShowCard';
 // asString (from the PR #295 ToolCard fix) treats non-strings as absent.
 import { asString } from '../../utils/tool-input';
 // G-1: the running-in-the-background strip and its Stop button.
-import { StatusStrip, Button } from '../ui';
+import { StatusStrip, Button, Tooltip } from '../ui';
+import SpecialistModelUnavailable, { parseSpecialistModelUnavailable } from '../SpecialistModelUnavailable';
 import { useSpecialistRunByChild, useSpecialistDefinition } from '../../hooks/useSpecialists';
 import { hasNestedAsk } from '../../utils/specialist-cards';
 import { SpecialistActions } from '../specialists/SpecialistActions';
@@ -159,10 +160,10 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
 
   return (
     <div className="space-y-2">
+      <Tooltip text={`Open ${name}`}>
       <button
         type="button"
         onClick={open}
-        title={`Open ${name}`}
         // data-file-path (absolute) lets the chat right-click menu recover the
         // real path for View in folder / Copy as path — left-click still opens
         // the in-app artifact drawer.
@@ -187,6 +188,7 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
           </svg>
         </span>
       </button>
+      </Tooltip>
       {chips && <div className="flex items-center gap-2 flex-wrap">{chips}</div>}
     </div>
   );
@@ -221,13 +223,14 @@ function CopyButton({ text }: { text: string }) {
     } catch { /* clipboard may be blocked — silently ignore */ }
   };
   return (
+    <Tooltip text="Copy">
     <button
       onClick={handle}
       className="text-3xs text-fg-muted tracking-wider uppercase hover:text-fg-2 px-1 rounded-sm"
-      title="Copy"
     >
       {copied ? 'Copied' : 'Copy'}
     </button>
+    </Tooltip>
   );
 }
 
@@ -704,6 +707,7 @@ function AgentView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
   // The consent envelope for an awaiting Task call renders in ToolCard (above
   // the buttons, visible without expanding) — not here, or it would double.
   const awaiting = tool.status === 'awaiting-approval';
+  const unavailableTier = isNative ? parseSpecialistModelUnavailable(tool.error) : null;
 
   return (
     <div className="space-y-2">
@@ -730,7 +734,16 @@ function AgentView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
           <SpecialistActions sessionId={sessionId} run={run} />
         )}
       </AgentSections>
-      {tool.error && <ErrorBlock error={tool.error} />}
+      {unavailableTier ? (
+        <SpecialistModelUnavailable
+          sessionId={sessionId}
+          tier={unavailableTier}
+          agent={subagent}
+          description={desc}
+          prompt={asString(tool.input.prompt)}
+          workDir={asString(tool.input.work_dir)}
+        />
+      ) : tool.error ? <ErrorBlock error={tool.error} /> : null}
     </div>
   );
 }

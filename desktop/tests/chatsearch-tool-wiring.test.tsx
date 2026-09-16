@@ -127,7 +127,7 @@ describe('chatsearch wiring — ToolBody + ToolCard', () => {
   it('renders the plain shell view with its normal header for an ordinary Bash call', () => {
     render(<ChatProvider><ToolCard tool={finishedBash(ORDINARY_CMD, 'file1\nfile2')} sessionId="s1" /></ChatProvider>);
     // Normal header: friendlyToolDisplay's non-chatsearch Bash branch.
-    expect(screen.getByText('Running ls')).toBeTruthy();
+    expect(screen.getByText('Ran a command')).toBeTruthy();
     openCard();
     // Positive: the plain shell view's own content — the full command in a <pre>.
     expect(screen.getByText(ORDINARY_CMD)).toBeTruthy();

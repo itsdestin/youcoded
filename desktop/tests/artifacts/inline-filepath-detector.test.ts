@@ -22,13 +22,48 @@ describe('detectFilepaths', () => {
     expect(matches[0].path).toBe('./docs/plan.md');
   });
 
-  it('does not match unwhitelisted extensions', () => {
-    expect(detectFilepaths('see /tmp/x.exe')).toEqual([]);
-    expect(detectFilepaths('see /tmp/x.log')).toEqual([]);
+  // Was: "does not match unwhitelisted extensions". The whitelist is gone
+  // (2026-09-05) — every file type is clickable now, and the viewer says
+  // honestly when it can't display one.
+  it('matches media, archives and source files, not just readable documents', () => {
+    for (const [text, path] of [
+      ['see /tmp/song.mp3', '/tmp/song.mp3'],
+      ['see /tmp/clip.mp4', '/tmp/clip.mp4'],
+      ['see /tmp/bundle.zip', '/tmp/bundle.zip'],
+      ['see scripts/run.sh', 'scripts/run.sh'],
+      ['see src/main.rs', 'src/main.rs'],
+      ['see ~/logs/app.log', '~/logs/app.log'],
+      ['see /tmp/x.exe', '/tmp/x.exe'],
+    ] as const) {
+      expect(detectFilepaths(text).map((m) => m.path), text).toEqual([path]);
+    }
   });
 
-  it('does not match mid-word paths', () => {
-    expect(detectFilepaths('abc/foo.md.bak')).toEqual([]);
+  it('matches a doubled extension', () => {
+    // `.bak` used to fail the whitelist, so this whole path was skipped.
+    expect(detectFilepaths('abc/foo.md.bak').map((m) => m.path)).toEqual(['abc/foo.md.bak']);
+  });
+
+  it('accepts an all-caps extension', () => {
+    expect(detectFilepaths('open docs/README.MD').map((m) => m.path)).toEqual(['docs/README.MD']);
+  });
+
+  it('does not treat a number after a slash as a file', () => {
+    // "a ratio of 3/4.5" and "step 2/3.1" must stay prose — an extension needs
+    // at least one letter.
+    expect(detectFilepaths('a ratio of 3/4.5 here')).toEqual([]);
+    expect(detectFilepaths('step 2/3.1 of the plan')).toEqual([]);
+  });
+
+  it('does not treat a capitalised word after a missing space as a file', () => {
+    // "either/or.It's" — a typo in prose, not a filename. Real extensions are
+    // written all-lower or all-upper.
+    expect(detectFilepaths("either/or.It's the same")).toEqual([]);
+    expect(detectFilepaths('TCP/IP.Then we continue')).toEqual([]);
+  });
+
+  it('does not match an over-long extension', () => {
+    expect(detectFilepaths('read/write.Nonetheless it works')).toEqual([]);
   });
 
   it('does not match a bare filename without separator', () => {

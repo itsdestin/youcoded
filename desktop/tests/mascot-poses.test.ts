@@ -28,11 +28,33 @@ describe('defaultPivot', () => {
 
 describe('POSES', () => {
   it('every pose names only known part ids and a valid face', () => {
+    // 'blink' joined the list on 2026-09-04, and it is the only addition a pose
+    // may make: the blink SCHEDULER owns a momentary blink, but a pose owns a
+    // SUSTAINED closed eye, which is what sleeping is. Every rig already ships
+    // a rig-face-blink group, so this costs no theme any new artwork.
     for (const pose of Object.values(POSES)) {
-      expect(['idle', 'welcome', 'curious', 'shocked', 'dizzy']).toContain(pose.face);
+      expect(['idle', 'welcome', 'curious', 'shocked', 'dizzy', 'blink', 'happy', 'shutdown']).toContain(pose.face);
       for (const id of Object.keys(pose.parts)) {
         expect([...LIMB_IDS, 'rig-tail', 'rig-body']).toContain(id);
       }
+    }
+  });
+
+  // THE BODY CAN MOVE (2026-09-04). Before this, `rig-body` was allowed by the
+  // type, accepted in a pose, and then silently DROPPED — applyPose skipped it
+  // by name and the spring loop only ever drove limbs. So the promo film's own
+  // power-down could not be reproduced by the shipped app on any theme. Sleeping
+  // is the first behaviour that needs it, and a pose that declares a body
+  // transform nothing applies is worse than one that declares none.
+  it('a sleep pose settles the BODY, not just the limbs', () => {
+    const sleeps = Object.entries(POSES).filter(([name]) => name.startsWith('sleep'));
+    expect(sleeps.length).toBeGreaterThan(0);
+    for (const [name, pose] of sleeps) {
+      const body = pose.parts['rig-body'];
+      expect(body, `${name} must move the body`).toBeTruthy();
+      // Downward. Up is flying away, not falling asleep.
+      expect(body!.ty!, `${name} settles downward`).toBeGreaterThan(0);
+      expect(['shutdown', 'blink'], `${name} closes his eyes`).toContain(pose.face);
     }
   });
   // SIGN-CONVENTION PINS (2026-07-16 workbench): limbs hang down from their

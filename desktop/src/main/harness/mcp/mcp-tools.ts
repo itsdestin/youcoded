@@ -12,6 +12,8 @@ export function mcpToolsFor(server: ReadyServer): NativeTool[] {
   return server.tools.map((t) => defineTool({
     name: `mcp__${server.id}__${t.name}`,
     description: t.description ?? `${server.label}: ${t.name}`,
+    // MCP servers are external programs; their output is data, not instruction.
+    untrusted: server.label,
     // Permissive on purpose: the SERVER validates its own arguments and returns a
     // real error. A lossy local re-validation could reject a valid call.
     inputSchema: z.object({}).passthrough(),

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { bashGrantOptions, describeBashPattern, HOSTILE_CORPUS } from '../src/shared/bash-grant-shapes';
-import { ruleMatches } from '../src/shared/subject-glob';
+import { grantAdmitsHostile, ruleMatches } from '../src/shared/subject-glob';
 import { DESTRUCTIVE_DENY_LIST } from '../src/shared/permission-types';
 
 const wideOf = (cmd: string) => bashGrantOptions(cmd).find((o) => o.scope === 'wide');
@@ -33,7 +33,14 @@ describe('bashGrantOptions — wide rung derivation', () => {
 
   it('program only when the second token is a flag or a path', () => {
     expect(wideOf('ls -la /tmp')!.rule.pattern).toBe('ls*');
-    expect(wideOf('node scripts/x.mjs')!.rule.pattern).toBe('node*');
+    expect(wideOf('cat ./notes.txt')!.rule.pattern).toBe('cat*');
+  });
+
+  it('an env-style assignment is an argument, not a subcommand', () => {
+    // `env FOO=1*` would cover `env FOO=1 <any program>`; the program-wide `env*`
+    // rung is refused by HOSTILE_CORPUS instead, leaving the exact rung.
+    expect(wideOf('env FOO=1 ls')).toBeUndefined();
+    expect(exactOf('env FOO=1 ls')).toBeDefined();
   });
 
   it('a quoted second token is an argument, not a subcommand', () => {
@@ -85,21 +92,39 @@ describe('bashGrantOptions — postcondition 2: an option admits nothing hostile
 
   it('leaves innocent program-wide rungs alone', () => {
     expect(wideOf('ls -la /tmp')!.rule.pattern).toBe('ls*');
-    expect(wideOf('node scripts/x.mjs')!.rule.pattern).toBe('node*');
     expect(wideOf('git status')!.rule.pattern).toBe('git status*');
+  });
+
+  it.each([
+    'python -c "print(1)"', 'python3 -c "print(1)"', 'node -e "console.log(1)"',
+    'bash -c "ls"', 'sh -c "ls"', 'pwsh -Command Get-Date', "perl -e 'print 1'",
+    'find . -name "*.log"', 'xargs -n1 echo', 'npx -y cowsay hi', "awk '{print $1}' f.txt",
+    'bun -e "1"', 'deno eval "1"',
+    // Found by the fix's own review (2026-09-10): options that run a command.
+    'sed -n 1,5p notes.txt', 'tar -xf a.tar', 'rg -n foo src', 'git grep -n foo', 'sort -u f.txt',
+    'python -m timeit "1+1"', 'eval ls', 'nohup npm start', 'nice -n 5 make', 'watch -n1 ls',
+    'timeout 10 npm test', 'command -v node', 'npm exec vite', 'npm x vite', 'pnpm dlx create-x',
+    'bun x cowsay', 'uv run pytest', 'docker run alpine ls', 'sqlite3 x.db .tables',
+    'tsx watch src/index.ts', 'powershell ./build.ps1',
+  ])('a program that runs code from its arguments gets no wide rung: %s', (cmd) => {
+    // "Any python command" would cover `python -c <anything>` (2026-09-10 review).
+    expect(wideOf(cmd)).toBeUndefined();
+    expect(exactOf(cmd)).toBeDefined();
   });
 
   it('no wide rung anywhere admits a hostile command', () => {
     const commands = [
       'git --no-pager log', 'git -C x status', 'git status', 'npm run build',
       'ls -la', 'node x.mjs', 'cargo test', 'docker ps', 'echo hi',
+      'python build.py', 'python -m pytest -q', 'bash deploy.sh', 'bun run dev',
+      'deno run main.ts', 'bun test', 'npx prettier --write .', 'env FOO=1 ls',
     ];
     for (const cmd of commands) {
       const wide = wideOf(cmd);
       if (!wide) continue;
-      for (const hostile of HOSTILE_CORPUS) {
-        expect(ruleMatches(wide.rule, hostile), `${wide.rule.pattern} admits ${hostile}`).toBe(false);
-      }
+      // grantAdmitsHostile, not ruleMatches: ruleMatches VOIDS a hostile grant, so it
+      // would answer "covers nothing" for exactly the rung this test exists to catch.
+      expect(grantAdmitsHostile(wide.rule.pattern!), `${wide.rule.pattern} admits a hostile command`).toBe(false);
     }
   });
 
@@ -229,12 +254,66 @@ describe('describeBashPattern — the reverse direction', () => {
     const commands = [
       'git push origin feat/x', 'git push origin master', 'git push origin HEAD:feat/x',
       'npm run build', 'cargo test --release', 'ls -la /tmp', 'node scripts/x.mjs',
+      'python build.py --fast', 'python -m pytest -q', 'bun run dev', 'deno run main.ts', 'bun test',
     ];
     for (const cmd of commands) {
       const wide = bashGrantOptions(cmd).find((o) => o.scope === 'wide');
       if (!wide) continue;
       expect(describeBashPattern(wide.rule.pattern!), `no phrase for ${wide.rule.pattern}`).not.toBeNull();
     }
+  });
+});
+
+describe('bashGrantOptions — a script run is bounded to its file', () => {
+  it('offers "running <file>" instead of "Any node command"', () => {
+    const opt = wideOf('node scripts/x.mjs')!;
+    expect(opt.rule.pattern).toBe('node scripts/x.mjs*');
+    expect(opt.label).toBe('Always allow running scripts/x.mjs');
+    expect(describeBashPattern(opt.rule.pattern!)).toBe('Running scripts/x.mjs');
+  });
+
+  it('covers the same file with arguments, and nothing else', () => {
+    const rule = wideOf('python build.py')!.rule;
+    expect(ruleMatches(rule, 'python build.py --fast')).toBe(true);
+    expect(ruleMatches(rule, 'python other.py')).toBe(false);
+    expect(ruleMatches(rule, 'python -c "print(1)"')).toBe(false);
+    expect(ruleMatches(rule, 'python build.py & python -c "x"')).toBe(false);
+  });
+
+  it('bun and deno: only `run <file>` or a path is a script — a verb stays generic', () => {
+    expect(wideOf('bun run dev')!.rule.pattern).toBe('bun run dev*');
+    expect(wideOf('deno run main.ts')!.rule.pattern).toBe('deno run main.ts*');
+    expect(wideOf('bun ./x.ts')!.rule.pattern).toBe('bun ./x.ts*');
+    expect(wideOf('bun test')!.rule.pattern).toBe('bun test*');
+    expect(describeBashPattern('bun test*')).toBe('Any bun test command');
+  });
+
+  it('python -m names its module, so it is bounded like a subcommand', () => {
+    const opt = wideOf('python -m pytest -q')!;
+    expect(opt.rule.pattern).toBe('python -m pytest*');
+    expect(opt.label).toBe('Any python -m pytest command');
+    expect(ruleMatches(opt.rule, 'python -c "x"')).toBe(false);
+  });
+
+  it('a quoted script name or one with wildcard characters stays exact', () => {
+    expect(wideOf('python "my script.py"')).toBeUndefined();
+    expect(wideOf("node 'x*.js'")).toBeUndefined();
+  });
+
+  it('a package runner stays bound to the package it named', () => {
+    const rule = wideOf('npx prettier --write .')!.rule;
+    expect(rule.pattern).toBe('npx prettier*');
+    expect(ruleMatches(rule, 'npx prettier --check .')).toBe(true);
+    expect(ruleMatches(rule, 'npx prettier-evil')).toBe(false);
+  });
+
+  it('only option-taking python modules are widened', () => {
+    expect(wideOf('python -m mypy src')!.rule.pattern).toBe('python -m mypy*');
+    expect(wideOf('python -m pdb x.py')).toBeUndefined();
+  });
+
+  it('a grant stored before this change still reads as before', () => {
+    expect(describeBashPattern('node*')).toBe('Any node command');
   });
 });
 

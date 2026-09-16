@@ -1,13 +1,32 @@
 # test-engine — llama.cpp smoke probes
 
-Dev-run probes against the REAL pinned `llama-server` binary (never CI). Run all
-three on every engine pin bump and record outcomes in
-`../../docs/engine-dependencies.md` — the same discipline as `test-conpty/` on a
-Claude Code bump.
+Dev-run probes against the REAL pinned `llama-server` binary (never CI), and
+record outcomes in `../../docs/engine-dependencies.md` — the same discipline as
+`test-conpty/` on a Claude Code bump.
+
+**THIS FILE IS THE ONE PLACE THAT SAYS WHICH PROBES A BUMP RE-RUNS.** Twelve
+`probe-*.mjs` files live here and they are not all the same kind of thing:
+
+- **NINE are engine-bump gates** — every one asserts, exits non-zero on failure,
+  and must PASS before a new pin ships: `probe-health`, `probe-models`,
+  `probe-chat`, `probe-download`, `probe-tools`, `probe-speed`, `probe-presets`,
+  `probe-vision`, `probe-headers`. These are the nine listed below.
+- **TWO are one-off MEASUREMENTS, not gates** — `probe-parallel` (how many
+  requests the server really runs at once) and `probe-prefix-cache` (whether a
+  shared system prefix is reused). They print a number and a classification;
+  there is no pass/fail to break, and each needs a server you launched yourself.
+  Re-run them when the NUMBER matters — a specialists fan-out change, or a build
+  whose scheduler is suspect — not on every bump. Their findings live in
+  `engine-dependencies.md` → "Parallel slots" and "KV prefix reuse".
+- **ONE is not about the engine at all** — `probe-shell-command` tests that a
+  "Run in terminal" command survives being typed into a real shell. Re-run it
+  when that path changes or a shell is added, never on an engine bump.
 
 The pinned version + per-platform asset table live in
 `../src/main/engine/engine-pin.ts`. Regenerate that table with
-`node ../scripts/generate-engine-pin.mjs <tag>`.
+`node ../scripts/generate-engine-pin.mjs <tag> --binary <path-to-llama-server>`.
+**Without `--binary` the `ARG_ALIASES` block is NOT regenerated** and the app
+keeps reasoning about the previous build's option names; the script says so.
 
 ## Setup (once)
 
@@ -26,10 +45,15 @@ The pinned version + per-platform asset table live in
 
 ## Probes
 
-- `node probe-health.mjs --binary <path>` — spawn shape: router mode boots with
-  our exact flag set; `GET /health` returns 200 when ready. (Observed on b9992:
-  200 with an EMPTY body — the supervisor only checks `res.ok`, never parses the
-  body, so this is fine.)
+- `node probe-health.mjs --binary <path>` — the router SKELETON boots and
+  `GET /health` returns 200 when ready. (Observed on b9992: 200 with an EMPTY
+  body — the supervisor only checks `res.ok`, never parses the body, so this is
+  fine.) **It does NOT boot the shipped flag set**: it spawns the RECOVERY shape,
+  with `-c` on the command line and no `--models-preset`, `--spec-default` or
+  `--cache-type-k`. The shipped shape is covered by `probe-presets` (the preset
+  path) and `probe-speed` (the two speed flags reaching the model child), so
+  nothing is unguarded — but do not read this probe's arg list as "what the app
+  runs", and do not widen this bullet back to "our exact flag set".
 - `node probe-models.mjs --binary <path>` — TWO assertions. (1) `GET /models`
   schema + id parity: the router's model ids match `cache-scan.ts`'s
   filename-derived ids for the same directory. PRINTS both lists — on mismatch,
@@ -45,6 +69,54 @@ The pinned version + per-platform asset table live in
   starts re-scanning, which would make our refresh redundant rather than wrong.
 - `node probe-chat.mjs --binary <path>` — streamed `/v1/chat/completions`
   round-trip: auto-load on first request, delta frames, final usage/timings.
+- `node probe-download.mjs --binary <path>` — the naming contract, end to end. It
+  downloads a real ~0.4 GB GGUF from Hugging Face, ALSO splits it with the sibling
+  `llama-gguf-split`, drops both in the cache and asserts the router lists AND serves
+  the single-file id AND the `-00001-of-00002` split id, with a real chat round-trip
+  against the split model. This is the only cheap check of the large-tier multi-part
+  path, which cannot be downloaded on a 32 GB dev box. It also pins the two folder
+  ids (a vision model is named by its FOLDER, not its file).
+- `node probe-tools.mjs http://127.0.0.1:<port> <model-id>` — runs against an
+  ALREADY-RUNNING engine, not one it spawns. Fires a tool-y prompt (asserts
+  schema-valid JSON arguments come back), then a plain prompt (asserts the build does
+  NOT force a tool call on ordinary text — that would break normal chat), and prints
+  the real `/props` `n_ctx`. Tool-call argument encoding and the `/props` field layout
+  are both build-sensitive, which is why this is bump-gated.
+- `node probe-speed.mjs --binary <path>` — the speed flags (`--spec-default`, `--cache-type-k q8_0`)
+  reach the router's model child and the n-gram drafter fires on an echo task (2026-09-04)
+- `node probe-presets.mjs --binary <path>` — the per-model settings file
+  (`--models-preset`, design §C2), which is the most dangerous file the app
+  writes: llama-server treats ANY defect in it as a FATAL startup error, so one
+  bad key means every local model disappears at the next launch with nothing on
+  screen to explain it. Asserts that `[*]` reaches a model, that a per-model
+  section overrides one key and inherits the rest, that a sectioned model reports
+  `source: preset`, that an unrecognised key in EITHER section is fatal with the
+  exact message `model-presets.ts` quotes back to the user, and that EVERY key on
+  the reserved list is a real option on this build (47 today — the probe prints
+  the count it checked, so it cannot drift out of date here). Cheap: `GET /models` renders each
+  model's full child command line without loading it, so nothing here reads a
+  gigabyte of weights. If the fatal-key assertion ever goes GREEN-by-passing (the
+  engine tolerates a bad key), the save-time binary check has stopped being
+  load-bearing and its cost can be revisited.
+- `node probe-vision.mjs --binary <path> [--port N]` — the vision folder layout
+  (design §E2). Downloads SmolVLM-256M (~0.4 GB, both files) into
+  `cache/<id>/`, then asserts the router lists that model under the FOLDER's
+  name, reports `input_modalities` including `image`, and answers an inline
+  solid-red PNG with the word "red". Both halves matter: the modality alone only
+  proves the flag was passed, and the same two files laid out FLAT report
+  `["text"]` with no `--mmproj` at all — which is the silent failure the whole
+  folder layout exists to avoid.
+- `node probe-headers.mjs` — the ONLY probe that needs no binary and no local
+  GGUF: it reads each curated repo's header straight off Hugging Face and asserts
+  that ONE 1 MB range request is enough. `gguf-header.ts`'s whole design rests on
+  a fact about real files we do not control — that a converted GGUF writes its
+  architecture keys before its multi-megabyte tokenizer arrays — and unit
+  fixtures cannot notice that changing upstream. It prints each model's real
+  layer/head/window numbers, which is also the fastest way to see what a new
+  family looks like. `--repo <id>` for one repo; `--local <file.gguf>` for a file
+  on disk. It has already earned its keep: on its first run it found that
+  Gemma 4's larger models write `head_count_kv` as a per-LAYER array, which the
+  reader was dropping (2026-09-05).
 
 Each probe exits 0 on pass and prints the raw JSON it saw (that output is what
 goes into `engine-dependencies.md` entries).

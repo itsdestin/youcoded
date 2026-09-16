@@ -101,9 +101,9 @@ describe('chat find bar row', () => {
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
     expect(container.querySelector('.find-row')).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.getByTitle('Previous (Shift+Enter)')).toBeTruthy();
-    expect(screen.getByTitle('Next (Enter)')).toBeTruthy();
-    expect(screen.getByTitle('Close (Esc)')).toBeTruthy();
+    expect(screen.getByLabelText('Previous (Shift+Enter)')).toBeTruthy();
+    expect(screen.getByLabelText('Next (Enter)')).toBeTruthy();
+    expect(screen.getByLabelText('Close (Esc)')).toBeTruthy();
   });
 
   it('ContentFindBar still floats by default (the artifact viewer is untouched)', () => {

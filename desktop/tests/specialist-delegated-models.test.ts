@@ -8,7 +8,7 @@ import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path'
 import { NativeHome } from '../src/main/native-home';
 import {
   DelegatedModels, resolveDelegatedBinding, resolveRequestedModel, DelegatedModelRefused,
-  delegatedModelsView,
+  DelegatedModelUnavailable, delegatedModelsView,
 } from '../src/main/harness/specialists/delegated-models';
 import type { CatalogModel } from '../src/shared/provider-types';
 
@@ -89,17 +89,65 @@ describe('resolveDelegatedBinding — tier resolution', () => {
     expect(r).toEqual({ binding: BUDGET_BINDING, fellBack: false });
   });
 
-  it('an unset tier degrades gracefully: parent binding, fellBack true, honest reason', () => {
-    const r = resolveDelegatedBinding({ requested: 'budget', parent: PARENT, designated, catalog: null });
-    expect(r.binding).toEqual(PARENT);
-    expect(r.fellBack).toBe(true);
-    expect(r.reason).toBe('no budget model is designated');
+  it('an unset ChatGPT Plan tier uses its same-provider curated model', () => {
+    const parent = { providerId: 'chatgpt', modelId: 'gpt-5.6-fable' };
+    const catalog: CatalogModel[] = [
+      { id: 'gpt-5.6-terra', providerId: 'chatgpt', label: 'GPT-5.6 Terra' },
+    ];
+    const r = resolveDelegatedBinding({ requested: 'budget', parent, designated, catalog });
+    expect(r).toEqual({
+      binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' },
+      fellBack: false,
+      automatic: true,
+    });
   });
 
-  it('the frontier tier names itself in the fallback reason (not a copy-pasted "budget")', () => {
-    const r = resolveDelegatedBinding({ requested: 'frontier', parent: PARENT, designated, catalog: null });
-    expect(r.fellBack).toBe(true);
-    expect(r.reason).toBe('no frontier model is designated');
+  it('an unset ChatGPT Plan frontier tier uses Sol', () => {
+    const parent = { providerId: 'chatgpt', modelId: 'gpt-5.6-fable' };
+    const catalog: CatalogModel[] = [
+      { id: 'gpt-5.6-sol', providerId: 'chatgpt', label: 'GPT-5.6 Sol' },
+    ];
+    const r = resolveDelegatedBinding({ requested: 'frontier', parent, designated, catalog });
+    expect(r.binding).toEqual({ providerId: 'chatgpt', modelId: 'gpt-5.6-sol' });
+  });
+
+  it('an unset OpenRouter frontier tier uses Kimi K3', () => {
+    const parent = { providerId: 'openrouter', modelId: 'openai/gpt-5.6-fable' };
+    const catalog: CatalogModel[] = [
+      { id: 'moonshotai/kimi-k3', providerId: 'openrouter', label: 'Kimi K3' },
+    ];
+    const r = resolveDelegatedBinding({ requested: 'frontier', parent, designated, catalog });
+    expect(r.binding).toEqual({ providerId: 'openrouter', modelId: 'moonshotai/kimi-k3' });
+    expect(r.automatic).toBe(true);
+  });
+
+  it('an unset OpenRouter budget tier uses DeepSeek V4 Flash 0731', () => {
+    const parent = { providerId: 'openrouter', modelId: 'openai/gpt-5.6-fable' };
+    const catalog: CatalogModel[] = [
+      { id: 'deepseek/deepseek-v4-flash-0731', providerId: 'openrouter', label: 'DeepSeek V4 Flash 0731' },
+    ];
+    const r = resolveDelegatedBinding({ requested: 'budget', parent, designated, catalog });
+    expect(r.binding).toEqual({ providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash-0731' });
+  });
+
+  it('refuses instead of falling back to the parent when the curated model is unavailable', () => {
+    expect(() => resolveDelegatedBinding({
+      requested: 'budget',
+      parent: { providerId: 'chatgpt', modelId: 'gpt-5.6-fable' },
+      designated,
+      catalog: [],
+    })).toThrow(DelegatedModelUnavailable);
+    try {
+      resolveDelegatedBinding({
+        requested: 'budget',
+        parent: { providerId: 'chatgpt', modelId: 'gpt-5.6-fable' },
+        designated,
+        catalog: [],
+      });
+      expect.unreachable();
+    } catch (err) {
+      expect((err as Error).message).toBe('SPECIALIST_MODEL_UNAVAILABLE:budget');
+    }
   });
 
   it('"parent" passes the parent binding straight through, no fallback flag', () => {
@@ -119,6 +167,16 @@ describe('resolveDelegatedBinding — specific model id (user-directed override)
       requested: { modelId: 'gpt-5' }, parent: PARENT, designated, catalog: CATALOG,
     });
     expect(r).toEqual({ binding: { providerId: 'openai', modelId: 'gpt-5' }, fellBack: false });
+  });
+
+  it('a specific id shared by providers refuses instead of choosing the first account', () => {
+    const catalog: CatalogModel[] = [
+      { id: 'shared-model', providerId: 'openai', label: 'Shared' },
+      { id: 'shared-model', providerId: 'chatgpt', label: 'Shared' },
+    ];
+    expect(() => resolveDelegatedBinding({
+      requested: { modelId: 'shared-model' }, parent: PARENT, designated, catalog,
+    })).toThrow(DelegatedModelRefused);
   });
 
   it('an unknown specific id REFUSES — the typed shape, never a silent substitution', () => {
@@ -152,8 +210,11 @@ describe('resolveRequestedModel — priority ordering', () => {
     expect(resolveRequestedModel(undefined, 'budget')).toBe('budget');
   });
 
-  it('falls all the way back to "parent" when neither is set', () => {
-    expect(resolveRequestedModel(undefined, undefined)).toBe('parent');
+  it('uses the budget tier when neither the caller nor specialist picked a model', () => {
+    expect(resolveRequestedModel(undefined, undefined)).toBe('budget');
+  });
+
+  it('keeps an author-directed parent preference explicit', () => {
     expect(resolveRequestedModel(undefined, 'parent')).toBe('parent');
   });
 

@@ -1,6 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Button, FieldError, InputGroup, Select, TextInput, Toggle } from './ui';
-import type { ProviderStatus, ProviderConfig, ProviderType } from '../../shared/provider-types';
+import { isLocalEndpoint, type ProviderStatus, type ProviderConfig, type ProviderType } from '../../shared/provider-types';
+import { invalidateProviderTypeCache } from '../hooks/use-provider-type';
+
+/** Pass-through that forgets the provider-type cache once a write succeeded. */
+function afterWrite<T>(value: T): T {
+  invalidateProviderTypeCache();
+  return value;
+}
+
+// WHY: this panel's error lines are where a phone's "desktop only" refusal and
+// Electron's "Error invoking remote method …" wrapper both land verbatim.
+import { plainMessage } from '../utils/ipc-error';
 
 // Settings → Providers section (Phase 1 Plan A, Task 13). Lets the user add,
 // test, enable/disable, and remove the model providers the NATIVE runtime binds
@@ -58,12 +69,18 @@ async function normalize<T>(p: Promise<T>): Promise<T> {
 const safeProviders = {
   list: (): Promise<ProviderStatus[]> =>
     normalize(window.claude.providers.list() as Promise<ProviderStatus[]>),
+  // Each write below changes which provider rows (and models) exist, and the
+  // status bar / usage card resolve a session's provider through a cached
+  // copy of those rows (hooks/use-provider-type.ts). Dropping the cache here,
+  // on success, is what makes a just-added provider's sessions resolve
+  // without an app reload (design §4.9 / review R3-4). A throw leaves the
+  // cache alone: nothing changed.
   upsert: (config: Partial<ProviderConfig>): Promise<string> =>
-    normalize(window.claude.providers.upsert(config)),
+    normalize(window.claude.providers.upsert(config)).then(afterWrite),
   remove: (id: string): Promise<unknown> =>
-    normalize(window.claude.providers.remove(id)),
+    normalize(window.claude.providers.remove(id)).then(afterWrite),
   setKey: (id: string, key: string): Promise<unknown> =>
-    normalize(window.claude.providers.setKey(id, key)),
+    normalize(window.claude.providers.setKey(id, key)).then(afterWrite),
   // Never throws on ok:false — a failed test is a real result, not an error.
   // A genuinely rejected promise (or a transport { ok:false, error } with no
   // message) still degrades to a displayable { ok:false, message }.
@@ -77,7 +94,7 @@ const safeProviders = {
       const err = errorMessageOf(res);
       return { ok: false, message: err ?? 'Could not test this provider.' };
     } catch (e) {
-      return { ok: false, message: e instanceof Error ? e.message : 'Could not test this provider.' };
+      return { ok: false, message: plainMessage(e, 'Could not test this provider.') };
     }
   },
 };
@@ -88,6 +105,8 @@ const safeProviders = {
 // below the row carries the detailed install/status controls.
 function stateWord(p: ProviderStatus): string {
   if (p.type === 'local-engine') return p.ready ? 'Installed' : 'Not installed';
+  // Keyless like the local engine: `ready` is "signed in" (shared/chatgpt-types.ts).
+  if (p.type === 'chatgpt') return p.ready ? 'Signed in' : 'Not signed in';
   if (!p.enabled) return 'Disabled';
   if (p.ready) return 'Connected';
   // enabled && !ready && not local → the key is missing (ready already accounts
@@ -115,7 +134,12 @@ const ADD_TYPE_SELECT_OPTIONS = ADD_TYPE_OPTIONS.map((o) => ({ value: o.value as
 // BOTH the local-engine row (managed in Local Models) and the openrouter row
 // (managed by the section's own Connect-to-OpenRouter control). What's left is
 // the "add your own API provider" list.
-export default function ProvidersSection({ embedded = false }: { embedded?: boolean } = {}) {
+// `embedded`: which GROUP of the Model Providers popup this list is inside.
+// 'cloud' = the API-key providers and custom endpoints on other machines, under
+// the OpenRouter card; 'local' = custom endpoints on this computer (Ollama, LM
+// Studio), under Local Models. Only the cloud list offers "Add provider" — a
+// local endpoint added there files itself under Local Models once saved.
+export default function ProvidersSection({ embedded = false }: { embedded?: false | 'cloud' | 'local' } = {}) {
   // Gate the ENTIRE section on native support — hidden in production until
   // Phase 2 ungates. Read once (it's a static boolean, no IPC round-trip).
   const supported = window.claude?.native?.supported === true;
@@ -130,7 +154,7 @@ export default function ProvidersSection({ embedded = false }: { embedded?: bool
       setRows(list);
       setListError(null);
     } catch (e) {
-      setListError(e instanceof Error ? e.message : 'Something went wrong');
+      setListError(plainMessage(e, 'Could not load your providers.'));
       setRows((prev) => prev ?? []); // stop the skeleton; show the error line
     }
   }, []);
@@ -142,11 +166,18 @@ export default function ProvidersSection({ embedded = false }: { embedded?: bool
 
   if (!supported) return null;
 
-  // In embedded mode the local-engine row (managed in Local Models) AND the
-  // openrouter row (managed by the section's own Connect control) are hidden.
+  // Embedded, the rows the popup draws as its own cards (local engine,
+  // OpenRouter, ChatGPT) are hidden, and custom endpoints split by address:
+  // this computer → the 'local' list, anywhere else → the 'cloud' list.
   const visibleRows = rows === null
     ? null
-    : (embedded ? rows.filter((p) => p.type !== 'local-engine' && p.type !== 'openrouter') : rows);
+    : !embedded ? rows
+    : rows.filter((p) => {
+        if (p.type === 'local-engine' || p.type === 'openrouter' || p.type === 'chatgpt') return false;
+        const local = p.type === 'openai-compatible' && isLocalEndpoint(p.baseUrl);
+        return embedded === 'local' ? local : !local;
+      });
+  const canAdd = embedded !== 'local';
 
   return (
     <section>
@@ -180,7 +211,7 @@ export default function ProvidersSection({ embedded = false }: { embedded?: bool
             <ProviderRow key={p.id} provider={p} onChanged={refresh} />
           ))}
 
-          {adding ? (
+          {!canAdd ? null : adding ? (
             <AddProviderForm onDone={async () => { setAdding(false); await refresh(); }} onCancel={() => setAdding(false)} />
           ) : (
             <Button variant="secondary" onClick={() => setAdding(true)} className="w-full py-2.5">
@@ -221,7 +252,7 @@ function ProviderRow({ provider, onChanged }: { provider: ProviderStatus; onChan
       setKeyOpen(false);
       await onChanged(); // refresh hasKey/ready
     } catch (e) {
-      setNote({ tone: 'bad', text: e instanceof Error ? e.message : 'Could not save the key.' });
+      setNote({ tone: 'bad', text: plainMessage(e, 'Could not save the key.') });
     } finally {
       setBusy(false);
     }
@@ -246,7 +277,7 @@ function ProviderRow({ provider, onChanged }: { provider: ProviderStatus; onChan
       await safeProviders.upsert({ ...config, enabled: !provider.enabled });
       await onChanged();
     } catch (e) {
-      setNote({ tone: 'bad', text: e instanceof Error ? e.message : 'Could not update the provider.' });
+      setNote({ tone: 'bad', text: plainMessage(e, 'Could not update the provider.') });
     } finally {
       setBusy(false);
     }
@@ -260,7 +291,7 @@ function ProviderRow({ provider, onChanged }: { provider: ProviderStatus; onChan
       setConfirmingRemove(false);
       await onChanged();
     } catch (e) {
-      setNote({ tone: 'bad', text: e instanceof Error ? e.message : 'Could not remove the provider.' });
+      setNote({ tone: 'bad', text: plainMessage(e, 'Could not remove the provider.') });
     } finally {
       // Reset in finally (mirrors saveKey/toggleEnabled): a success that somehow
       // leaves this row mounted must not strand it permanently disabled.
@@ -416,7 +447,7 @@ function AddProviderForm({ onDone, onCancel }: { onDone: () => Promise<void>; on
       }
       await onDone();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not add the provider.');
+      setError(plainMessage(e, 'Could not add the provider.'));
       setBusy(false);
     }
   };

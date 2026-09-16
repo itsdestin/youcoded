@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ConversationTranscript from './project-view/ConversationTranscript';
 import { ErrorState } from './ui/states';
 import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import { COPY, READ_TAIL_DEFAULT, type TranscriptMessage, type ChatsearchProvider } from '../../shared/chatsearch-refs';
 
 // Fix (2026-08-27): the conversation title for the right-click scaffold (A3)
@@ -20,7 +21,22 @@ import { COPY, READ_TAIL_DEFAULT, type TranscriptMessage, type ChatsearchProvide
 // (build-menu.ts) already falls back to COPY.untitled when it's empty.
 type Phase = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; message: string };
 
-export default function SessionPreviewPane({ provider, id, title }: { provider: ChatsearchProvider; id: string; title: string }) {
+export default function SessionPreviewPane({ provider, id, title, onSettled, projectSlug }: {
+  provider: ChatsearchProvider;
+  id: string;
+  title: string;
+  /** Fired once a first load has SETTLED (ready or error) for this id. The
+   *  Resume browser holds its arrival animation until this fires: a transcript
+   *  is read off disk, and on a large one that is a second, so animating on the
+   *  click played the whole arrival over a loading line and let the bubbles
+   *  land afterwards — "chat bubbles in the preview feel like they pop in a
+   *  second or so after the actual animation" (Destin, 2026-09-10). */
+  onSettled?: (id: string) => void;
+  /** The conversation's project folder slug, when the caller has it (a Resume
+   *  list row does). Main then opens the file directly instead of looking the
+   *  id up in the search index — see ChatsearchReadRequest.projectSlug. */
+  projectSlug?: string;
+}) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
@@ -50,12 +66,16 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
   // Opens BugReportPopup for the "no reason given" branch of a read failure
   // (case (b) below) — same one-destination pattern as SettingsPanel's
   // Tailscale setup error and PermissionsSection's load failure: both
-  // "Report bug" and "Diagnose with Claude" land on this popup, which already
+  // "Report bug" and "Diagnose with the assistant" land on this popup, which already
   // wraps dev:summarize-issue + dev:submit-issue.
-  const [showBugReport, setShowBugReport] = useState(false);
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
 
   const load = useCallback(async (before?: number) => {
-    const req = before === undefined ? { provider, id, tail: READ_TAIL_DEFAULT } : { provider, id, tail: READ_TAIL_DEFAULT, before };
+    const req = {
+      provider, id, tail: READ_TAIL_DEFAULT,
+      ...(before === undefined ? {} : { before }),
+      ...(projectSlug ? { projectSlug } : {}),
+    };
     const res = await (window.claude as any).chatsearch.read(req);
     if (!res?.ok) {
       // WHY: never invent a cause for a failure nobody diagnosed. `res.error`
@@ -71,16 +91,27 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
       throw new Error(res?.error);
     }
     return res as { messages: TranscriptMessage[]; hasMore: boolean };
-  }, [provider, id]);
+  }, [provider, id, projectSlug]);
+
+  // Held in a ref, not a dep: a caller that passes an inline arrow would
+  // otherwise rebuild loadNewest on every one of ITS renders and re-read the
+  // transcript each time.
+  const onSettledRef = useRef(onSettled);
+  onSettledRef.current = onSettled;
 
   const loadNewest = useCallback(() => {
     const myGen = ++genRef.current;
-    setPhase({ kind: 'loading' }); setMessages([]); setOlderError(null); setLoadingOlder(false);
+    setPhase({ kind: 'loading' }); setMessages([]);
+    setOlderError(null); setLoadingOlder(false);
     return load().then((r) => {
       if (genRef.current !== myGen) return; // superseded — see genRef comment above
       setMessages(r.messages); setHasMore(r.hasMore); setPhase({ kind: 'ready' }); setScrollKey((k) => k + 1);
+      onSettledRef.current?.(id);
     }).catch((e) => {
       if (genRef.current !== myGen) return;
+      // An error settles too: the card that says so should arrive the same way
+      // a conversation does, rather than appearing without motion.
+      onSettledRef.current?.(id);
       // e.message is '' exactly when load() couldn't find a real reason —
       // keep it '' rather than falling back to String(e) ('Error'), which
       // would just be a different hardcoded guess wearing a JS-native mask.
@@ -152,8 +183,8 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
                 mode="general"
                 title={COPY.errReadUnknownTitle}
                 explainer={COPY.errReadUnknownExplainer}
-                onReportBug={() => setShowBugReport(true)}
-                onDiagnose={() => setShowBugReport(true)}
+                onReportBug={() => setReportContext({ surface: 'Reading a past conversation' })}
+                onDiagnose={() => setReportContext({ surface: 'Reading a past conversation', diagnose: true })}
               />
             )
         )}
@@ -171,8 +202,8 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
                           mode="general"
                           title={COPY.errReadUnknownTitle}
                           explainer={COPY.errReadUnknownExplainer}
-                          onReportBug={() => setShowBugReport(true)}
-                          onDiagnose={() => setShowBugReport(true)}
+                          onReportBug={() => setReportContext({ surface: 'Loading older messages' })}
+                          onDiagnose={() => setReportContext({ surface: 'Loading older messages', diagnose: true })}
                         />
                       )
                   ) : (
@@ -183,7 +214,7 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
               : <div className="py-2 text-center text-[11.5px] text-fg-muted">— {COPY.startOfConversation} —</div>} />
         )}
       </div>
-      <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+      <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
     </div>
   );
 }

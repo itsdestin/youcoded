@@ -1,8 +1,23 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame } from 'electron';
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
 import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, SessionMetaResult } from '../shared/types';
+// Type-only (erased at build), so the sandboxed preload still resolves nothing at
+// runtime — same footing as the '../shared/types' line above.
+import type { FirstRunState } from '../shared/first-run-types';
+import type { ChatGptAccountStatus } from '../shared/chatgpt-types';
+import type { ClaudeAccountStatus } from '../shared/claude-account-types';
+
+// WHY: buddy geometry and pointer offsets are native DIPs, so its CSS pixels
+// must stay at 100% even when a same-origin main window is zoomed. In Electron
+// 41 webFrame sets a temporary per-frame zoom (unlike webContents' host zoom).
+// Reapply on every preload/reload, without splitting theme protocol or storage
+// into another session, or resetting the main window's chosen zoom.
+const buddyMode = new URLSearchParams(location.search).get('mode');
+if (['buddy-mascot', 'buddy-chat', 'buddy-bar', 'buddy-overlay'].includes(buddyMode ?? '')) {
+  webFrame.setZoomFactor(1);
+}
 
 // Mirrored type — must match ChangelogResult in src/main/changelog-service.ts.
 interface ChangelogIpcResult {
@@ -74,6 +89,8 @@ const IPC = {
   UPDATE_LAUNCH: 'update:launch',
   UPDATE_PROGRESS: 'update:progress',
   UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
+  UPDATE_GET_BETA_CHANNEL: 'update:get-beta-channel',   // () -> { betaChannel, effective }
+  UPDATE_SET_BETA_CHANNEL: 'update:set-beta-channel',   // (enabled: boolean)
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
   OPEN_PATH: 'shell:open-path',
@@ -85,9 +102,14 @@ const IPC = {
   REMOTE_DETECT_TAILSCALE: 'remote:detect-tailscale',
   REMOTE_GET_CLIENT_COUNT: 'remote:get-client-count',
   REMOTE_GET_CLIENT_LIST: 'remote:get-client-list',
-  REMOTE_DISCONNECT_CLIENT: 'remote:disconnect-client',
+  REMOTE_STATUS: 'remote:status',
+  REMOTE_DEVICES_LIST: 'remote:devices:list',
+  REMOTE_DEVICES_RENAME: 'remote:devices:rename',
+  REMOTE_DEVICES_UNPAIR: 'remote:devices:unpair',
   REMOTE_INSTALL_TAILSCALE: 'remote:install-tailscale',
   REMOTE_AUTH_TAILSCALE: 'remote:auth-tailscale',
+  // Remote access batch 2 (§6): Refresh on a phone. The desktop answers not-remote.
+  REMOTE_REHYDRATE: 'remote:rehydrate',
   UI_ACTION_BROADCAST: 'ui:action:broadcast',
   UI_ACTION_RECEIVED: 'ui:action:received',
   TRANSCRIPT_EVENT: 'transcript:event',
@@ -103,6 +125,12 @@ const IPC = {
   // Session tags + note (custom user tags, freeform note)
   SESSION_SET_TAG: 'session:set-tag',
   SESSION_SET_NOTE: 'session:set-note',
+  // Session naming (2026-09-09). get/set are the Assistant-settings preference;
+  // title/rename are per-conversation name ownership.
+  SESSION_NAMING_GET: 'session-naming:get',       // () -> { mode, model }
+  SESSION_NAMING_SET: 'session-naming:set',       // ({ mode, model })
+  SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
+  SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
   SESSION_GET_META: 'session:get-meta',
   // Tag registry CRUD + change push
   TAGS_LIST: 'tags:list',
@@ -160,6 +188,11 @@ const IPC = {
   FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
   FIRST_RUN_DEV_MODE_DONE: 'first-run:dev-mode-done',
   FIRST_RUN_SKIP: 'first-run:skip',
+  // First-run local models (2026-09-14) — mirrors shared/types.ts.
+  FIRST_RUN_LOCAL_SETUP: 'first-run:local-setup',
+  FIRST_RUN_CONNECT_LOCAL_APP: 'first-run:connect-local-app',
+  FIRST_RUN_LOCAL_DOWNLOAD: 'first-run:local-download',
+  FIRST_RUN_RESUME_LOCAL_DOWNLOAD: 'first-run:resume-local-download',
   MODEL_GET_PREFERENCE: 'model:get-preference',
   MODEL_SET_PREFERENCE: 'model:set-preference',
   APPEARANCE_GET: 'appearance:get',
@@ -174,6 +207,8 @@ const IPC = {
   MODES_GET: 'modes:get',
   MODES_SET: 'modes:set',
   SESSION_SWITCH: 'session:switch',
+  // Remote access batch 2 (§2): a window tells main which session it shows.
+  SESSION_SELECTED: 'session:selected',
   // Sync management
   SYNC_GET_STATUS: 'sync:get-status',
   SYNC_GET_CONFIG: 'sync:get-config',
@@ -306,15 +341,25 @@ const IPC = {
   // Task 8: Settings' KDE keep-above toggle — invoke/handle, not fire-and-
   // forget, since it returns whether the KWin script actually ran.
   BUDDY_OVERLAY_KEEP_ABOVE: 'buddy:overlay-keep-above',
+  // The Linux/KDE buddy helper. Kept byte-identical to shared/types.ts's copy —
+  // preload cannot import that file (Electron sandbox), so the two maps are
+  // duplicated on purpose and ipc-channels.test.ts is what stops them drifting.
+  BUDDY_HELPER_STATUS: 'buddy:helper-status',
+  BUDDY_INSTALL_HELPER: 'buddy:install-helper',
+  BUDDY_REMOVE_HELPER: 'buddy:remove-helper',
   SESSION_FOCUS_REQUEST: 'session:focus-request',
   SESSION_ATTENTION_SUMMARY: 'session:attention-summary',
   ATTENTION_REPORT: 'attention:report',
+  ATTENTION_GET_SUMMARY: 'attention:get-summary',
   // Settings → Development feature (bug report, contribute, known issues)
   DEV_LOG_TAIL: 'dev:log-tail',
   DEV_DIAGNOSTICS: 'dev:diagnostics',
   DEV_SUMMARIZE_ISSUE: 'dev:summarize-issue',
   DEV_SUBMIT_ISSUE: 'dev:submit-issue',
   DEV_INSTALL_WORKSPACE: 'dev:install-workspace',
+  DEV_SETUP_WORKSPACE: 'dev:setup-workspace',
+  DEV_SETUP_STATUS: 'dev:setup-status',
+  DEV_SETUP_CLEAR: 'dev:setup-clear',
   DEV_INSTALL_PROGRESS: 'dev:install-progress',
   DEV_OPEN_SESSION_IN: 'dev:open-session-in',
   // Anonymous analytics opt-out — read/write the boolean gate that
@@ -345,14 +390,33 @@ const IPC = {
   NATIVE_SET_BINDING: 'native:set-binding',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   NATIVE_GET_PERMISSION_MODE: 'native:get-permission-mode',
+  NATIVE_PERMISSION_MODE: 'native:permission-mode',
+  NATIVE_GET_CONTEXT_PREFERENCES: 'native:get-context-preferences',
+  NATIVE_SET_CONTEXT_PREFERENCES: 'native:set-context-preferences',
+  NATIVE_GET_STEP_GUARD: 'native:get-step-guard',
+  NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',
+  // "What the assistant was given" (2026-09-10): the session-start push carrying
+  // the inventory, and the on-demand read of ONE file's text. Two channels
+  // because file bodies do not belong in a push — see shared/types.ts's
+  // SessionContext header for the measurement.
+  NATIVE_SESSION_CONTEXT: 'native:session-context',
+  NATIVE_SESSION_CONTEXT_TEXT: 'native:session-context-text',
   PROVIDER_LIST: 'provider:list',
   PROVIDER_UPSERT: 'provider:upsert',
   PROVIDER_REMOVE: 'provider:remove',
   PROVIDER_TEST: 'provider:test',
   PROVIDER_SET_KEY: 'provider:set-key',
   PROVIDER_CATALOG: 'provider:catalog',
+  // Sign in with ChatGPT (backend design 2026-09-05 §5) — mirrors shared/types.ts.
+  CHATGPT_STATUS: 'chatgpt:status',
+  CHATGPT_SIGN_IN: 'chatgpt:sign-in',
+  CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
+  CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
+  // Claude Code's own sign-in, read live (2026-09-09) — mirrors shared/types.ts.
+  CLAUDE_CODE_STATUS: 'claude-code:status',
+  CLAUDE_CODE_INSTALL: 'claude-code:install',
   // ---- Native runtime Plan B (Phase 1): local llama.cpp engine ----
   ENGINE_STATUS: 'engine:status',
   ENGINE_INSTALL: 'engine:install',
@@ -363,6 +427,9 @@ const IPC = {
   // ---- Native runtime Plan C (Phase 1): model manager ----
   ENGINE_SET_BACKEND: 'engine:set-backend',
   ENGINE_SET_CONTEXT: 'engine:set-context',   // context-length knob (Task 9)
+  ENGINE_SET_CONFIG: 'engine:set-config',     // one write for every engine-wide setting (2026-09-05)
+  ENGINE_RUN_IN_TERMINAL: 'engine:run-in-terminal',  // plain-shell session + typed command
+  ENGINE_PREREQS: 'engine:prereqs',           // faster-engine prerequisites (2026-09-05)
   MODELS_CURATED: 'models:curated',
   MODELS_SEARCH: 'models:search',
   MODELS_QUANTS: 'models:quants',
@@ -372,6 +439,10 @@ const IPC = {
   MODELS_DELETE: 'models:delete',
   MODELS_INSTALLED: 'models:installed',
   MODELS_RESUME: 'models:resume',
+  // Per-model settings + vision (2026-09-05) — keep in sync with shared/types.ts.
+  MODELS_SETTINGS: 'models:settings',
+  MODELS_SET_SETTINGS: 'models:set-settings',
+  MODELS_ADD_VISION: 'models:add-vision',
   ENDPOINTS_DETECT: 'endpoints:detect',
   // Model memory lifecycle (2026-07-14) — keep in sync with shared/types.ts.
   ENGINE_MODELS: 'engine:models',
@@ -380,7 +451,40 @@ const IPC = {
   NATIVE_SHELL_EVENT: 'native:shell-event',
   MODELS_MEMORY_CHECK: 'models:memory-check',
   MODELS_LOAD: 'models:load',
+  // ---- Voice prompting (design 2026-09-05) ----
+  // Six things the composer can ask, one fire-and-forget audio stream, and one
+  // push. VOICE_AUDIO is `send`, not `invoke`: ten slices a second, and a reply
+  // per slice would cost more than the audio does.
+  VOICE_STATUS: 'voice:status',
+  VOICE_DOWNLOAD: 'voice:download',
+  VOICE_START: 'voice:start',
+  VOICE_STOP: 'voice:stop',
+  VOICE_CANCEL: 'voice:cancel',
+  VOICE_MIC_ACCESS: 'voice:mic-access',
+  VOICE_AUDIO: 'voice:audio',
+  VOICE_EVENT: 'voice:event',   // push
 } as const;
+
+// Strip the transport prefix Electron puts on a rejected invoke (see the
+// `chatgpt` namespace for why), keeping the handler's own sentence. Anything
+// that is not that exact shape is rethrown untouched.
+const INVOKE_ERROR_PREFIX = /^Error invoking remote method '[^']*': (?:Error: )?/;
+function unwrapInvokeError<T>(p: Promise<T>): Promise<T> {
+  return p.catch((e: unknown) => {
+    if (e instanceof Error && INVOKE_ERROR_PREFIX.test(e.message)) {
+      throw new Error(e.message.replace(INVOKE_ERROR_PREFIX, ''));
+    }
+    throw e;
+  });
+}
+
+// Turn a main-process {ok:false,error} answer into a rejection. Main never
+// throws across IPC (house rule); the naming UI needs a rejection so its
+// ErrorState + Retry can show what actually went wrong.
+async function unwrap(p: Promise<any>): Promise<void> {
+  const r = await p;
+  if (!r || r.ok !== true) throw new Error(r?.error || 'That could not be saved.');
+}
 
 contextBridge.exposeInMainWorld('claude', {
   // Dev-instance descriptor from `run-dev.sh --label` (YOUCODED_DEV_LABEL). The
@@ -389,13 +493,35 @@ contextBridge.exposeInMainWorld('claude', {
   // taskbars group by app id and render the app name, not the per-window caption,
   // so the title alone isn't reliably visible. null in the built app (env unset).
   // Same sandboxed process.env read the `native.supported` kill switch uses.
+
   devLabel: process.env.YOUCODED_DEV_LABEL?.trim() || null,
+
+  // Session naming. Its own top-level namespace because the renderer decides
+  // whether the whole feature exists by asking whether this own-property is
+  // present (components/assistant-settings/naming-api.ts) — a nested member
+  // behind the bridge's callable catch-all would answer "yes" everywhere.
+  //
+  // The writes REJECT on refusal instead of resolving {ok:false}: the
+  // settings card and the rename dialog show <ErrorState> from a caught error
+  // and keep the previously saved value, which a resolved failure would paint
+  // over as success.
+  sessionNaming: {
+    get: () => ipcRenderer.invoke(IPC.SESSION_NAMING_GET),
+    set: (value: unknown) => unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_SET, value)),
+    title: (sessionId: string, fallback: string) =>
+      ipcRenderer.invoke(IPC.SESSION_NAMING_TITLE, sessionId, fallback),
+    rename: (sessionId: string, title: string) =>
+      unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_RENAME, sessionId, title)),
+  },
   session: {
     create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string }) =>
       ipcRenderer.invoke(IPC.SESSION_CREATE, opts),
     destroy: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SESSION_DESTROY, sessionId),
     list: () => ipcRenderer.invoke(IPC.SESSION_LIST),
+    // The desktop talks over IPC, so there is no connection to be down. Present on both
+    // bridges so the composer can ask without knowing which one it has.
+    canSend: () => true,
     sendInput: (sessionId: string, text: string) =>
       ipcRenderer.send(IPC.SESSION_INPUT, sessionId, text),
     resize: (sessionId: string, cols: number, rows: number) =>
@@ -410,6 +536,10 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SESSION_HISTORY, sessionId, projectSlug, count || 10, all || false),
     switch: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SESSION_SWITCH, sessionId),
+    // Remote access batch 2 (§2): report this window's selection to main, which
+    // caches it per window so a phone's first connect opens what the desktop shows.
+    noteSelected: (sessionId: string | null) =>
+      ipcRenderer.send(IPC.SESSION_SELECTED, sessionId),
     // Mark/unmark a session flag (complete, priority, helpful, …).
     // Persists in conversation-index.json and rides the existing sync pipeline.
     setFlag: (sessionId: string, flag: string, value: boolean) =>
@@ -437,7 +567,9 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.SESSION_CREATED, handler);
       return handler;
     },
-    sessionDestroyed: (cb: (id: string, exitCode: number) => void) => {
+    // The third argument (the desktop's focus, batch 2 §3) only ever comes from the remote
+    // shim; a desktop window never receives it.
+    sessionDestroyed: (cb: (id: string, exitCode: number, focusSessionId?: string | null) => void) => {
       // exitCode piped in so the chat reducer can classify this as a clean
       // exit vs. 'session-died'. Default to 0 when absent (older bridges).
       const handler = (_e: IpcRendererEvent, id: string, exitCode: number = 0) => cb(id, exitCode);
@@ -462,6 +594,20 @@ contextBridge.exposeInMainWorld('claude', {
     ptyRawBytesForSession: (_sessionId: string, _cb: (data: string) => void) => {
       return () => {};
     },
+    // Remote access batch 2 (§7): the host tells a reconnecting phone to clear its
+    // terminal before a full redraw. A desktop terminal is never reset this way —
+    // shape parity with remote-shim only, never fires here.
+    ptyResetForSession: (_sessionId: string, _cb: () => void) => {
+      return () => {};
+    },
+    // Remote access batch 2 (§7): the host's list of still-open permission asks
+    // after a reconnect replay. Desktop cards are answered in place — never fires.
+    hookReplayComplete: (_cb: (payload: { sessionId: string; pendingRequestIds: string[] }) => void) => {
+      return () => {};
+    },
+    // Remote access batch 2 (§6): where a phone's copy of the conversation stands. Only
+    // the remote shim ever pushes it — declared, never fires here.
+    remoteConversationStatus: (_cb: unknown) => () => {},
     hookEvent: (cb: (event: any) => void) => {
       const handler = (_e: IpcRendererEvent, event: any) => cb(event);
       ipcRenderer.on(IPC.HOOK_EVENT, handler);
@@ -558,7 +704,7 @@ contextBridge.exposeInMainWorld('claude', {
     ipcRenderer.on(IPC.CHAT_EXPORT_SNAPSHOT, handler);
     return () => ipcRenderer.off(IPC.CHAT_EXPORT_SNAPSHOT, handler);
   },
-  sendChatSnapshotResponse: (payload: { requestId: string; snapshot: unknown }) =>
+  sendChatSnapshotResponse: (payload: { requestId: string; snapshot: unknown; loadingSessionIds?: string[] }) =>
     ipcRenderer.send(IPC.CHAT_SNAPSHOT_RESPONSE, payload),
   fireRemoteAttentionChanged: (payload: { sessionId: string; state: string }) =>
     ipcRenderer.send(IPC.REMOTE_ATTENTION_CHANGED, payload),
@@ -768,6 +914,13 @@ contextBridge.exposeInMainWorld('claude', {
     cancel: (jobId: string) => ipcRenderer.invoke(IPC.UPDATE_CANCEL, { jobId }),
     launch: (jobId: string, filePath: string) => ipcRenderer.invoke(IPC.UPDATE_LAUNCH, { jobId, filePath }),
     getCachedDownload: (version: string) => ipcRenderer.invoke(IPC.UPDATE_GET_CACHED_DOWNLOAD, { version }),
+    // `betaChannel` is the saved answer (null = never chosen); `effective` is what
+    // the next check will actually use, which for an unchosen install is whether
+    // this build is itself a beta. The toggle renders `effective`.
+    getBetaChannel: (): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
+      ipcRenderer.invoke(IPC.UPDATE_GET_BETA_CHANNEL),
+    setBetaChannel: (enabled: boolean): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
+      ipcRenderer.invoke(IPC.UPDATE_SET_BETA_CHANNEL, enabled),
     onProgress: (handler: (ev: { jobId: string; bytesReceived: number; bytesTotal: number; percent: number }) => void) => {
       const wrap = (_event: unknown, ev: any) => handler(ev);
       ipcRenderer.on(IPC.UPDATE_PROGRESS, wrap);
@@ -777,15 +930,29 @@ contextBridge.exposeInMainWorld('claude', {
   remote: {
     getConfig: () => ipcRenderer.invoke(IPC.REMOTE_GET_CONFIG),
     setPassword: (password: string) => ipcRenderer.invoke(IPC.REMOTE_SET_PASSWORD, password),
-    setConfig: (updates: { enabled?: boolean; trustTailscale?: boolean }) =>
+    setConfig: (updates: { enabled?: boolean }) =>
       ipcRenderer.invoke(IPC.REMOTE_SET_CONFIG, updates),
     detectTailscale: () => ipcRenderer.invoke(IPC.REMOTE_DETECT_TAILSCALE),
     getClientCount: () => ipcRenderer.invoke(IPC.REMOTE_GET_CLIENT_COUNT),
     getClientList: () => ipcRenderer.invoke(IPC.REMOTE_GET_CLIENT_LIST),
-    disconnectClient: (clientId: string) => ipcRenderer.invoke(IPC.REMOTE_DISCONNECT_CLIENT, clientId),
+    getStatus: () => ipcRenderer.invoke(IPC.REMOTE_STATUS),
+    onStatus: (cb: (status: unknown) => void) => {
+      const listener = (_e: unknown, status: unknown) => cb(status);
+      ipcRenderer.on(IPC.REMOTE_STATUS, listener);
+      return () => ipcRenderer.removeListener(IPC.REMOTE_STATUS, listener);
+    },
+    devices: {
+      list: () => ipcRenderer.invoke(IPC.REMOTE_DEVICES_LIST),
+      rename: (deviceId: string, name: string) => ipcRenderer.invoke(IPC.REMOTE_DEVICES_RENAME, deviceId, name),
+      unpair: (deviceId: string) => ipcRenderer.invoke(IPC.REMOTE_DEVICES_UNPAIR, deviceId),
+    },
     installTailscale: () => ipcRenderer.invoke(IPC.REMOTE_INSTALL_TAILSCALE),
     authTailscale: () => ipcRenderer.invoke(IPC.REMOTE_AUTH_TAILSCALE),
     broadcastAction: (action: any) => ipcRenderer.send(IPC.UI_ACTION_BROADCAST, action),
+    // Batch 2 (§6): shape parity with the remote shim. The strip that calls these only
+    // shows on a remote client; the desktop has no remote copy to refresh or report.
+    rehydrate: () => ipcRenderer.invoke(IPC.REMOTE_REHYDRATE),
+    reportHydrate: (_report: { seq?: number; kept: string[] }) => {},
   },
   model: {
     getPreference: (): Promise<string> => ipcRenderer.invoke(IPC.MODEL_GET_PREFERENCE),
@@ -857,6 +1024,12 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.DEV_SUBMIT_ISSUE, args),
     installWorkspace: () =>
       ipcRenderer.invoke(IPC.DEV_INSTALL_WORKSPACE),
+    setupWorkspace: () =>
+      ipcRenderer.invoke(IPC.DEV_SETUP_WORKSPACE),
+    setupStatus: () =>
+      ipcRenderer.invoke(IPC.DEV_SETUP_STATUS),
+    clearSetupStatus: () =>
+      ipcRenderer.invoke(IPC.DEV_SETUP_CLEAR),
     onInstallProgress: (cb: (line: string) => void) => {
       const listener = (_e: unknown, line: string) => cb(line);
       ipcRenderer.on(IPC.DEV_INSTALL_PROGRESS, listener);
@@ -1105,12 +1278,26 @@ contextBridge.exposeInMainWorld('claude', {
   firstRun: {
     getState: (): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_STATE),
     retry: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_RETRY),
-    startAuth: (mode: 'oauth' | 'apikey'): Promise<void> =>
+    // Widened from 'oauth' | 'apikey' (backend design 2026-09-05 §5): the
+    // approved first-run card has a "Sign in with ChatGPT" button and an
+    // OpenRouter one, and main.ts's two FIRST_RUN_START_AUTH handlers branch on
+    // the mode. 'none' is in the union only because it IS FirstRunState's; main
+    // ignores it.
+    startAuth: (mode: FirstRunState['authMode']): Promise<void> =>
       ipcRenderer.invoke(IPC.FIRST_RUN_START_AUTH, mode),
-    submitApiKey: (key: string): Promise<void> =>
-      ipcRenderer.invoke(IPC.FIRST_RUN_SUBMIT_API_KEY, key),
+    // `service` (first-run local models, F-1/F-2): which native provider the key
+    // is for. Without it main keeps the old Claude Code path.
+    submitApiKey: (key: string, service?: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_SUBMIT_API_KEY, key, service),
     devModeDone: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_DEV_MODE_DONE),
     skip: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_SKIP),
+    // First-run local models (2026-09-14).
+    localSetup: (): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_SETUP),
+    connectLocalApp: (baseUrl: string, name: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_CONNECT_LOCAL_APP, baseUrl, name),
+    localDownload: (sessionId?: string | null): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_DOWNLOAD, sessionId),
+    resumeLocalDownload: (sessionId?: string | null): Promise<void> =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD, sessionId),
     onStateChanged: (cb: (state: any) => void) => {
       const handler = (_e: IpcRendererEvent, state: any) => cb(state);
       ipcRenderer.on(IPC.FIRST_RUN_STATE, handler);
@@ -1133,7 +1320,7 @@ contextBridge.exposeInMainWorld('claude', {
     getViewedSession: () => ipcRenderer.invoke(IPC.BUDDY_GET_VIEWED_SESSION),
     // Fire-and-forget: pointer drag fires ~60 events/sec; invoke() round-trips
     // would starve the renderer. Main clamps target to visible workArea.
-    moveMascot: (target: { targetX: number; targetY: number }) => ipcRenderer.send(IPC.BUDDY_MOVE_MASCOT, target),
+    moveMascot: (target: { localDx: number; localDy: number }) => ipcRenderer.send(IPC.BUDDY_MOVE_MASCOT, target),
     onAttentionSummary: (cb: (summary: AttentionSummary) => void) => {
       const listener = (_: unknown, summary: AttentionSummary) => cb(summary);
       ipcRenderer.on(IPC.SESSION_ATTENTION_SUMMARY, listener);
@@ -1217,12 +1404,41 @@ contextBridge.exposeInMainWorld('claude', {
     // "couldn't reach KWin" hint, not to render the toggle's own state.
     setKeepAbove: (enabled: boolean): Promise<boolean> =>
       ipcRenderer.invoke(IPC.BUDDY_OVERLAY_KEEP_ABOVE, enabled),
+    // ── The Linux/KDE buddy helper (design §4) ──
+    //
+    // `needed` is the fact that decides whether ANY of this UI appears: it is
+    // true only where the app genuinely cannot move its own windows. It is NOT
+    // "is this Linux" — the same binary on the same KDE desktop reports
+    // Wayland from every environment variable while its windows are actually
+    // X11-backed and move perfectly well (probe Round 7), and a user in that
+    // state must keep the buddy they already have.
+    //
+    // `installed` is asked freshly every time rather than cached in the
+    // renderer: the user can switch the script off in KDE's own System
+    // Settings mid-session, and a stale "installed" would leave the buddy
+    // switched on and unable to move.
+    helperStatus: (): Promise<{ needed: boolean; supported: boolean; installed: boolean; reason?: string }> =>
+      ipcRenderer.invoke(IPC.BUDDY_HELPER_STATUS),
+    installHelper: (): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.BUDDY_INSTALL_HELPER),
+    // The undo half (decide-uninstall#D-1). The consent card can no longer
+    // promise the helper leaves when YouCoded is uninstalled — the AppImage
+    // build has no uninstall step — so removal is a control the user owns.
+    removeHelper: (): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.BUDDY_REMOVE_HELPER),
   },
   // Renderer pushes per-session attention state to main whenever the chat
   // reducer's ATTENTION_STATE_CHANGED fires. Main aggregates across all windows
   // and broadcasts a global AttentionSummary to buddy subscribers.
   attention: {
     report: (payload: AttentionReport) => ipcRenderer.send(IPC.ATTENTION_REPORT, payload),
+    // Pull-style snapshot of that same aggregate. The push channel
+    // (buddy.onAttentionSummary, which every window may subscribe to) only
+    // fires on change, so a window that opens while a peer session is already
+    // mid-turn would otherwise show it gray until the turn ended. Called once
+    // from the subscriber's mount effect. Lives under `attention` rather than
+    // `buddy` because the main window's session switcher reads it too.
+    getSummary: (): Promise<AttentionSummary> => ipcRenderer.invoke(IPC.ATTENTION_GET_SUMMARY),
   },
   // Exposes the live xterm buffer for a session. Used by useAttentionClassifier
   // (~1s cadence) so it can read terminal state on both Electron and Android
@@ -1280,16 +1496,39 @@ contextBridge.exposeInMainWorld('claude', {
     setPermissionMode: (sessionId: string, mode: string) => ipcRenderer.invoke(IPC.NATIVE_SET_PERMISSION_MODE, sessionId, mode),
     // Read the session's current permission mode — seeds the chip on create/resume.
     getPermissionMode: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_GET_PERMISSION_MODE, sessionId),
+    getContextPreferences: () => ipcRenderer.invoke(IPC.NATIVE_GET_CONTEXT_PREFERENCES),
+    setContextPreferences: (patch: unknown) => ipcRenderer.invoke(IPC.NATIVE_SET_CONTEXT_PREFERENCES, patch),
+    getStepGuard: () => ipcRenderer.invoke(IPC.NATIVE_GET_STEP_GUARD),
+    setStepGuard: (value: number | null) => ipcRenderer.invoke(IPC.NATIVE_SET_STEP_GUARD, value),
     sessionsList: () => ipcRenderer.invoke(IPC.NATIVE_SESSIONS_LIST),
     // G-1: the Bash card's Stop button. Request-response — the card needs
     // {ok, reason} to stop showing "Stopping…" when nothing was stopped.
     killShell: (sessionId: string, shellId: string) => ipcRenderer.invoke(IPC.NATIVE_KILL_SHELL, { sessionId, shellId }),
+    // One file's text for the "What the assistant was given" panel, read when the
+    // user opens that row. Runs the session's OWN fitter and budget in main, so
+    // what the panel shows is what the model would receive.
+    sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) =>
+      ipcRenderer.invoke(IPC.NATIVE_SESSION_CONTEXT_TEXT, { sessionId, kind, id }),
+    // Pushed once per session from nativeHost's 'session-context' listener in
+    // ipc-handlers.ts. Returns the unsubscribe fn, same as shellEvent above.
+    onSessionContext: (cb: (e: { sessionId: string; context: unknown }) => void) => {
+      const handler = (_e: IpcRendererEvent, event: { sessionId: string; context: unknown }) => cb(event);
+      ipcRenderer.on(IPC.NATIVE_SESSION_CONTEXT, handler);
+      return () => ipcRenderer.removeListener(IPC.NATIVE_SESSION_CONTEXT, handler);
+    },
     // Per-session bound-model residency push (unloaded/loading/loaded/sleeping)
     // → ChatView's model-unloaded banner + loading indicator (2026-07-14).
     onModelState: (cb: (s: unknown) => void) => {
       const listener = (_e: unknown, s: unknown) => cb(s);
       ipcRenderer.on(IPC.NATIVE_MODEL_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.NATIVE_MODEL_STATE, listener);
+    },
+    // Push: a session's permission mode was seeded or changed (any window,
+    // any phone). The chip always takes this value — see the App.tsx listener.
+    onPermissionMode: (cb: (e: { sessionId: string; mode: string }) => void) => {
+      const listener = (_e: unknown, e: { sessionId: string; mode: string }) => cb(e);
+      ipcRenderer.on(IPC.NATIVE_PERMISSION_MODE, listener);
+      return () => ipcRenderer.removeListener(IPC.NATIVE_PERMISSION_MODE, listener);
     },
   },
   // Provider registry — CRUD + connection test + model catalog for native
@@ -1302,6 +1541,38 @@ contextBridge.exposeInMainWorld('claude', {
     test: (id: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, id),
     setKey: (id: string, key: string) => ipcRenderer.invoke(IPC.PROVIDER_SET_KEY, id, key),
     catalog: () => ipcRenderer.invoke(IPC.PROVIDER_CATALOG),
+  },
+  // Sign in with ChatGPT (backend design 2026-09-05 §5, §6). The account state
+  // machine the Settings card and the first-run wizard read, and its three verbs.
+  // `supported` mirrors native.supported above: YOUCODED_CHATGPT=0 is the kill
+  // switch, and the renderer gates the card on `=== true` (workbench and
+  // remote-shim set it explicitly for that reason — review R1-9).
+  //
+  // WHY the invokes go through unwrapInvokeError: signIn() THROWS the two
+  // sentences the card must show verbatim ("Port 1455 is already in use…", the
+  // keychain one). Electron's ipcRenderer.invoke rewraps a handler's throw as
+  // "Error invoking remote method 'chatgpt:sign-in': Error: <sentence>", and
+  // the card prints e.message as-is — so without this the user would read the
+  // transport's prefix in front of the sentence. No other namespace in this
+  // file needed it: the provider handlers' throws reach a section that shows
+  // them the same prefixed way (ProvidersSection.tsx, a pre-existing wart).
+  chatgpt: {
+    supported: process.env.YOUCODED_CHATGPT !== '0',
+    status: (): Promise<ChatGptAccountStatus> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_STATUS)),
+    signIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_SIGN_IN)),
+    cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_CANCEL_SIGN_IN)),
+    signOut: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_SIGN_OUT)),
+  },
+  // Claude Code's own sign-in, read live from `claude auth status` (2026-09-09).
+  // Read-only on purpose — the other three verbs have no equivalent here,
+  // because Claude Code owns its login and the app cannot clear it.
+  // `refresh: true` drops main's 60s cache first; the Cloud providers page
+  // passes it so opening Settings always shows today's answer.
+  claudeCode: {
+    status: (opts?: { refresh?: boolean }): Promise<ClaudeAccountStatus> =>
+      ipcRenderer.invoke(IPC.CLAUDE_CODE_STATUS, opts),
+    // First-run local models (F-5): the Settings card's Install Claude Code.
+    install: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke(IPC.CLAUDE_CODE_INSTALL),
   },
   // WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades. list = the
   // fixed backend rows (hasKey flags); set/remove-key manage the encrypted key;
@@ -1357,8 +1628,20 @@ contextBridge.exposeInMainWorld('claude', {
     status: (): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_STATUS),
     install: (): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_INSTALL),
     restart: (): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_RESTART),
-    // Plan C context-length knob — persists -c and reboots the engine.
+    // Plan C context-length knob. Now a thin alias for setConfig({contextSize}).
     setContext: (contextSize: number): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_SET_CONTEXT, contextSize),
+    // Every engine-wide setting in one write. The value saves at once; it
+    // reaches the engine after the reply that is streaming right now.
+    setConfig: (patch: { contextSize?: number; speed?: { speculative?: boolean; compressCache?: boolean } }): Promise<unknown> =>
+      ipcRenderer.invoke(IPC.ENGINE_SET_CONFIG, patch),
+    // Opens a plain-shell session in the folder this window is working in and
+    // types `command` onto its prompt. It is NOT run — the user presses Enter.
+    // The returned id is the session the caller then selects.
+    runInTerminal: (command: string): Promise<{ sessionId: string }> =>
+      ipcRenderer.invoke(IPC.ENGINE_RUN_IN_TERMINAL, command),
+    // What a faster engine build needs on this machine before it can be
+    // installed (Linux ROCm). The card's "Check again" re-invokes this.
+    prereqs: (backend: string): Promise<unknown> => ipcRenderer.invoke(IPC.ENGINE_PREREQS, backend),
     onInstallProgress: (cb: (p: unknown) => void) => {
       const listener = (_e: unknown, p: unknown) => cb(p);
       ipcRenderer.on(IPC.ENGINE_INSTALL_PROGRESS, listener);
@@ -1392,6 +1675,19 @@ contextBridge.exposeInMainWorld('claude', {
     // (2026-08-26) — no Hugging Face round trip, so it works when the network
     // is the reason the download stopped.
     resume: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_RESUME, modelId),
+    // One model's stored settings (2026-09-05). The answer is the STORED shape,
+    // which carries two things the user never sets: whether the last save is
+    // still waiting on the reply that is streaming, and why the model last
+    // failed to load.
+    settings: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_SETTINGS, modelId),
+    // Save one model's settings. The patch holds the four fields the dialog
+    // owns, plus `dismissMemoryWarning: true|false` — a signal, not a value:
+    // main works out the context length to remember it against, because only
+    // main knows how this model's setting and the engine-wide default combine.
+    setSettings: (modelId: string, patch: unknown) => ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, modelId, patch),
+    // Give a downloaded model its eye: fetch the vision file and move the model
+    // into a folder of its own. Progress rides the ordinary download stream.
+    addVision: (modelId: string) => ipcRenderer.invoke(IPC.MODELS_ADD_VISION, modelId),
     detectEndpoints: () => ipcRenderer.invoke(IPC.ENDPOINTS_DETECT),
     setBackend: (backend: string) => ipcRenderer.invoke(IPC.ENGINE_SET_BACKEND, backend),
     // Create-time / swap memory guard + [Reload Model] (2026-07-14).
@@ -1408,6 +1704,28 @@ contextBridge.exposeInMainWorld('claude', {
   // Android, where MainActivity uses them to enable/disable
   // OnBackPressedCallback and broadcast back-press events. Exposed here for
   // shape parity with remote-shim.ts (PITFALLS.md → Cross-Platform parity).
+  // Voice typing. `sendAudio` and `micAccess` are DESKTOP ONLY on purpose: on a
+  // phone the operating system's own recogniser owns the microphone, and the
+  // Activity's permission launcher owns the permission question — so the shared
+  // renderer tests `typeof bridge.sendAudio === 'function'` instead of assuming.
+  voice: {
+    status: (): Promise<unknown> => ipcRenderer.invoke(IPC.VOICE_STATUS),
+    download: (): Promise<void> => ipcRenderer.invoke(IPC.VOICE_DOWNLOAD),
+    start: (): Promise<void> => ipcRenderer.invoke(IPC.VOICE_START),
+    stop: (): Promise<void> => ipcRenderer.invoke(IPC.VOICE_STOP),
+    cancel: (): Promise<void> => ipcRenderer.invoke(IPC.VOICE_CANCEL),
+    micAccess: (): Promise<unknown> => ipcRenderer.invoke(IPC.VOICE_MIC_ACCESS),
+    // One 100 ms slice of microphone audio plus the loudness the audio worklet
+    // already measured for it. The loudness travels with the audio because the
+    // main process owns the two-second silence stop and must not re-measure
+    // what the worklet already knows.
+    sendAudio: (chunk: ArrayBuffer, rms: number) => ipcRenderer.send(IPC.VOICE_AUDIO, chunk, rms),
+    onEvent: (cb: (e: unknown) => void) => {
+      const listener = (_e: unknown, payload: unknown) => cb(payload);
+      ipcRenderer.on(IPC.VOICE_EVENT, listener);
+      return () => ipcRenderer.removeListener(IPC.VOICE_EVENT, listener);
+    },
+  },
   system: {
     notifyStackState: (_empty: boolean) => {
       // No-op on desktop. Electron has no hardware back button.
@@ -1425,6 +1743,12 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('artifacts:list-project', projectId, opts),
     listAllFiles: (projectId: string, opts?: { force?: boolean }) =>
       ipcRenderer.invoke('artifacts:list-all-files', projectId, opts),
+    // Resolve ONE file path tapped in chat to the record the drawer opens — a
+    // tracked record, or the on-disk file inside the folder. Replaces
+    // downloading the whole project list to find one file (read-service.ts
+    // resolveArtifactPath). Answers { ok:true, artifact } or { ok:false, error }.
+    resolvePath: (projectRoot: string, filePath: string) =>
+      ipcRenderer.invoke('artifacts:resolve-path', projectRoot, filePath),
     listProjectsIndex: (opts?: { withCounts?: boolean }) =>
       ipcRenderer.invoke('artifacts:list-projects-index', opts),
     // opts: { full? } — full opts into reading up to FULL_READ_MAX_BYTES for a
@@ -1435,6 +1759,12 @@ contextBridge.exposeInMainWorld('claude', {
     // to bytes (renderer can't fetch a file:// URL from the http/app origin).
     readBinary: (absolutePath: string) =>
       ipcRenderer.invoke('artifacts:read-binary', absolutePath),
+    // Save a copy to THIS device — a remote-access channel (batch 3). The
+    // desktop answers { ok:false, code:'not-remote' }: a file on this computer
+    // is opened or revealed, never downloaded to itself. Declared so the shared
+    // renderer has one shape on both transports.
+    download: (absolutePath: string, opts?: { projectRoot?: string; artifactId?: string }) =>
+      ipcRenderer.invoke('artifacts:download', absolutePath, opts),
     // opts: { baseMtimeMs?, confirmed? } — concurrency token + confirm-tier ack
     save: (projectRoot: string, projectId: string, projectName: string,
            artifactId: string, content: string, sessionId: string,
@@ -1534,7 +1864,7 @@ contextBridge.exposeInMainWorld('claude', {
   // into conversations, and read a bounded slice of one for the preview pane.
   chatsearch: {
     resolve: (shortIds: string[]) => ipcRenderer.invoke('chatsearch:resolve', shortIds),
-    read: (req: { provider: string; id: string; tail: number; before?: number }) =>
+    read: (req: { provider: string; id: string; tail: number; before?: number; projectSlug?: string }) =>
       ipcRenderer.invoke('chatsearch:read', req),
   },
 });

@@ -31,6 +31,10 @@ export function modelChipFor(
   session: ModelChipSession | undefined,
   currentModel: ModelAlias | 'unknown',
 ): ModelChip | undefined {
+  // A shell session runs no model at all. Falling through would hand it the
+  // Claude Code alias matcher and render the red "Model Unknown" error chip for
+  // a session that is not missing a model — it is a terminal.
+  if (session?.provider === 'shell') return undefined;
   if (session?.provider === 'native') {
     if (!session.model) return undefined;
     return { kind: 'native', label: nativeModelLabel(session.model), modelId: session.model };
@@ -41,6 +45,10 @@ export function modelChipFor(
 /**
  * Whether Shift+Space / the alias cycle may act on this session.
  *
+ * False for shell sessions too, for the opposite reason: they DO have a PTY, so
+ * `/model sonnet` plus its Enter would be typed into — and run by — the user's
+ * own shell.
+ *
  * False for native sessions: they have no PTY, so `/model <alias>\r` goes
  * nowhere (SessionManager.sendInput returns false for a worker-less session, and
  * guardedPtySend discards that return value). Without this gate the cycle fell
@@ -49,5 +57,5 @@ export function modelChipFor(
  * preference. Native model changes go through native.setBinding in the picker.
  */
 export function supportsAliasCycling(session: ModelChipSession | undefined): boolean {
-  return session?.provider !== 'native';
+  return session?.provider !== 'native' && session?.provider !== 'shell';
 }

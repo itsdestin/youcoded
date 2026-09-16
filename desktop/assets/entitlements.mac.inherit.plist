@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  WHY this file exists, and why it is nearly a copy of entitlements.mac.plist:
+  electron-builder signs the top-level .app with entitlements.mac.plist and EVERY
+  OTHER signed binary - the Electron Helper processes - with a file it looks up by
+  the name entitlements.mac.inherit.plist. If that file is absent it silently falls
+  back to its own bundled 3-key template, which has no microphone entitlement.
+
+  That matters here because Chromium opens audio input in a HELPER process, not in
+  the main app: with only entitlements.mac.plist edited, the app would carry the
+  microphone entitlement and the process that actually asks for the microphone
+  would not. Nothing in this repo would have gone red - no test or CI step reads
+  either entitlements file - and it would have surfaced as "the voice button does
+  nothing on a Mac". Found in review of task T3, 2026-09-05.
+
+  Keep the two files' key lists identical.
+-->
+<plist version="1.0">
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+  </dict>
+</plist>

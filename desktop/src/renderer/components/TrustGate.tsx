@@ -84,7 +84,7 @@ export default function TrustGate({ sessionId }: Props) {
   return (
     // z-10: must stay below glassmorphism chrome (z-20) so header/bottom bars remain accessible
     <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
-      <ThemeMascot variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6" />
+      <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6" />
       <p className="text-sm text-fg font-medium mb-1">{trustPrompt.title}</p>
       <p className="text-xs text-fg-muted mb-6 max-w-sm text-center">
         Claude needs your permission before working in this directory.

@@ -60,12 +60,26 @@ beforeEach(() => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-conv-'));
   store = createConversationStore(tmp);
 });
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  fs.rmSync(tmp, { recursive: true, force: true });
+  await fs.promises.rm(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
 });
 
 describe('createConversationStore', () => {
+  it.each(['native', 'claude'])('persists an explicit model-only update in the %s lane without activity', async (provider) => {
+    const modelA = { modelId: 'model-a', providerType: 'openrouter', providerLabel: 'Cloud' };
+    const modelB = { ...modelA, modelId: 'model-b' };
+    const before = await store.upsert({ id: 'model-session', provider,
+      lastActive: '2026-07-03T10:00:00.000Z', device: 'Laptop', lastUsedModel: modelA });
+    const updated = await store.upsert({ id: before.id, provider, lastUsedModel: modelB });
+    expect(updated).toEqual({ ...before, lastUsedModel: modelB });
+    const reopened = createConversationStore(tmp);
+    expect(await reopened.get(provider, before.id)).toEqual(updated);
+    const omitted = await reopened.upsert({ id: before.id, provider });
+    expect(omitted).toEqual(updated);
+    expect(await createConversationStore(tmp).get(provider, before.id)).toEqual(updated);
+  });
+
   // Contract 1: upsert on a MISSING record creates <root>/claude/<id>.json with
   // schema 1, returns the written record, and creates the provider dir on demand.
   it('upsert creates the record file (and provider dir) on demand', async () => {

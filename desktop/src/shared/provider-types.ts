@@ -5,7 +5,11 @@ export type ProviderType =
   | 'local-engine'        // supervised llama-server (registered in Plan B; entry exists from day one)
   | 'openai-compatible'   // Ollama, LM Studio, custom endpoints
   | 'openrouter'
-  | 'anthropic' | 'openai' | 'google';  // direct-key providers
+  | 'anthropic' | 'openai' | 'google'   // direct-key providers
+  // Sign in with ChatGPT: the user's own plan, reached through OpenAI's sign-in
+  // rather than a key. Keyless like 'local-engine' — `ready` means signed in.
+  // shared/chatgpt-types.ts carries the account state.
+  | 'chatgpt';
 
 export interface ProviderConfig {
   id: string;             // 'local' | 'openrouter' | ulid for user-created entries
@@ -16,6 +20,21 @@ export interface ProviderConfig {
   enabled: boolean;
 }
 
+/** True when a custom endpoint's address points at this computer — Ollama,
+ *  LM Studio and the like. The only signal the app has to file a custom
+ *  endpoint under Local Models rather than Cloud Models (Destin, 2026-09-05:
+ *  "wouldn't that be local?"); a server elsewhere keeps its cloud placement. */
+export function isLocalEndpoint(baseUrl: string | undefined | null): boolean {
+  if (!baseUrl) return false;
+  try {
+    const host = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1'
+      || host.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
+
 /** What a native session is bound to: one model on one provider. */
 export interface ModelBinding { providerId: string; modelId: string; }
 
@@ -24,14 +43,21 @@ export interface CatalogModel {
   providerId: string;
   label: string;
   contextLength?: number;
+  /** ChatGPT's advertised opt-in maximum, distinct from its default window.
+   *  WHY separate: merely listing a model must not opt a plan into long context. */
+  maxContextLength?: number;
   supportsTools?: boolean;
   supportsReasoning?: boolean;
   // Whether this catalog row's model accepts image input, per the SOURCE's own
-  // modality data (currently only OpenRouter's `architecture.input_modalities`
-  // — see model-catalog.ts's openrouterModels()). `undefined` means "this
-  // source does not know" (models.dev rows, local-engine rows, or a malformed
-  // OpenRouter row) — a caller must NOT read that as `false`. Only an actual
-  // `false` means the source affirmatively says the model can't see images.
+  // modality data. Two sources publish it, both under the same name
+  // `architecture.input_modalities`: OpenRouter's /models (see
+  // model-catalog.ts's openrouterModels()) and llama-server's own /models for a
+  // LOCAL model (see EngineManager.catalogModels — `["text","image"]` exactly
+  // when the engine paired a vision projector beside the weights).
+  // `undefined` means "this source does not know" (models.dev rows, a local row
+  // read off the disk scan because the engine is stopped, or a malformed row)
+  // — a caller must NOT read that as `false`. Only an actual `false` means the
+  // source affirmatively says the model can't see images.
   supportsVision?: boolean;
   // USD per 1M tokens — terse to mirror per-1M-token convention; `in` is a JS
   // keyword — destructure as `{ in: input }`.

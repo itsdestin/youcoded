@@ -28,6 +28,7 @@ import React, {
   useState,
 } from "react";
 import type { MarketplaceUser } from "../../main/marketplace-auth-store";
+import { useOnRemoteReconnect } from "../hooks/useOnRemoteReconnect";
 
 // ── Context shape ─────────────────────────────────────────────────────────────
 
@@ -143,6 +144,9 @@ export function AccountProvider({
   useEffect(() => {
     void reloadFromStore();
   }, [reloadFromStore]);
+  // And after a remote reconnect: a read lost while the phone was away left "Sign in" on screen
+  // for a signed-in user until the page reloaded (2026-09-11 phone pass sweep).
+  useOnRemoteReconnect(() => { reloadFromStore().catch(() => { /* next reconnect retries */ }); });
 
   // Start the device-code OAuth flow.
   // Prevents concurrent flows with signInPending guard.

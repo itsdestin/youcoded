@@ -29,6 +29,26 @@ export function resolveAssetPath(value: string | undefined, slug: string): strin
 }
 
 /**
+ * resolveAssetPath for an asset the app FETCHES AND INLINES into its page — the
+ * mascot rig, flat mascot variants and scene companions. Returns null for a web
+ * address, a protocol-relative `//` address, or any scheme other than
+ * theme-asset://.
+ *
+ * WHY (2026-09-10 security review): an inlined drawing is sanitized, but one
+ * loaded from a web address can be swapped for a different file after the theme
+ * was reviewed. A theme's own files (theme-asset://) and same-origin root paths
+ * (the workbench serves its fixture packs as `/…` Vite URLs) are kept; no
+ * published or theme-builder theme uses anything else.
+ */
+export function resolveInlineAssetPath(value: string | undefined, slug: string): string | null {
+  const r = resolveAssetPath(value, slug);
+  if (!r) return null;
+  if (r.startsWith('theme-asset://')) return r;
+  if (r.startsWith('/') && !r.startsWith('//')) return r;
+  return null;
+}
+
+/**
  * Deep-resolves all asset paths in a theme to theme-asset:// URIs.
  * Only applies to user and community themes. Official (youcoded-core) themes are returned unchanged.
  */
@@ -80,18 +100,21 @@ export function resolveAllAssetPaths<T extends ThemeDefinition | LoadedTheme>(th
       // Guard: only resolve string entries. A future manifest may put
       // structured values here and resolveAssetPath would throw on them.
       if (typeof val !== 'string') continue;
-      const r = resolveAssetPath(val, slug);
+      const r = resolveInlineAssetPath(val, slug);
+      // An address outside the theme is DROPPED, not passed through: the app
+      // then falls back to the default buddy (see resolveInlineAssetPath).
       if (r) (mascot as Record<string, string>)[key] = r;
+      else delete (mascot as Record<string, string>)[key];
     }
     resolved.mascot = mascot;
   }
 
   // Scene companions (top-level key — see MascotCompanion in theme-types)
   if (Array.isArray(resolved.companions)) {
-    resolved.companions = resolved.companions.map((c) => {
-      if (!c || typeof c.asset !== 'string') return c;
-      const r = resolveAssetPath(c.asset, slug);
-      return r ? { ...c, asset: r } : c;
+    resolved.companions = resolved.companions.flatMap((c) => {
+      if (!c || typeof c.asset !== 'string') return [c];
+      const r = resolveInlineAssetPath(c.asset, slug);
+      return r ? [{ ...c, asset: r }] : [];
     });
   }
 

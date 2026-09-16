@@ -100,6 +100,53 @@ describe('ChatView history sentinel', () => {
     await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledWith({ type: 'HISTORY_PAGE_FAILED', sessionId: 's1' }));
   });
 
+  // "I could not locate the transcript" used to be indistinguishable from "you
+  // have reached the beginning of the conversation" — both were an empty page
+  // with hasMore:false — so a page that merely was not resolvable YET (a
+  // just-resumed CC session before its hook lands, a session whose process has
+  // exited) permanently removed the cursor and the sentinel, and the rest of
+  // the conversation became unreachable in that window. Destin, 2026-09-07.
+  describe('an unresolved page', () => {
+    beforeEach(() => {
+      requestPage.mockResolvedValue({ events: [], cursor: null, hasMore: false, unresolved: true });
+    });
+
+    it('is not recorded as the beginning of the conversation', async () => {
+      renderWith({ cursor: { path: 'p', offset: 100, sizeAtRead: 900 }, hasMore: true, loading: false });
+      await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledWith({ type: 'HISTORY_PAGE_FAILED', sessionId: 's1' }));
+      expect(mocks.dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'HISTORY_PAGE_LOADED' }),
+      );
+    });
+
+    it('retries itself, so a conversation recovers with no gesture from the user', async () => {
+      vi.useFakeTimers();
+      try {
+        renderWith({ cursor: { path: 'p', offset: 100, sizeAtRead: 900 }, hasMore: true, loading: false });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(requestPage).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(requestPage.mock.calls.length).toBeGreaterThan(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('backs off and gives up rather than polling forever', async () => {
+      vi.useFakeTimers();
+      try {
+        renderWith({ cursor: { path: 'p', offset: 100, sizeAtRead: 900 }, hasMore: true, loading: false });
+        await vi.advanceTimersByTimeAsync(120_000);
+        // Bounded: a transcript that never resolves must not become a permanent
+        // background poll for as long as the conversation is open.
+        expect(requestPage.mock.calls.length).toBeLessThanOrEqual(10);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it('the retired "See previous messages" button is gone', () => {
     const { container } = renderWith({ cursor: null, hasMore: false, loading: false });
     expect(container.textContent).not.toContain('See previous messages');

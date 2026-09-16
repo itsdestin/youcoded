@@ -22,6 +22,7 @@ import { useArtifact } from '../state/ArtifactContext';
 import { GamepadIcon } from './Icons';
 import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
 import { useArtifactCount } from '../hooks/useArtifactCount';
+import { Tooltip } from './ui';
 
 const MENU_WIDTH = 208; // w-52
 
@@ -121,6 +122,7 @@ export default function OverflowMenu({
 
   return (
     <>
+      <Tooltip text="Menu">
       <button
         ref={anchorRef}
         type="button"
@@ -128,7 +130,6 @@ export default function OverflowMenu({
         // coarse-hit gives this a 44x44 touch target without changing its
         // visual box (globals.css). p-2 matches the Android cog sizing.
         className={`coarse-hit relative p-2 rounded-sm hover:bg-inset transition-colors shrink-0 ${open ? 'text-fg bg-inset' : 'text-fg-muted'}`}
-        title="Menu"
         aria-label="Open menu"
         aria-haspopup="menu"
         aria-expanded={open}
@@ -141,6 +142,7 @@ export default function OverflowMenu({
           <span className={`absolute top-0.5 right-0.5 w-2 h-2 rounded-full ${badgeColor}`} />
         )}
       </button>
+      </Tooltip>
 
       {open && pos && createPortal(
         <div

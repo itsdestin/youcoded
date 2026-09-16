@@ -20,6 +20,12 @@ export type ArtifactAction =
   // ActiveArtifactView's own onChanged subscription for the conflict banner.)
   | { type: 'PILL_RESOLVE_FAILED'; sessionId: string; message: string }
   | { type: 'PILL_ERROR_CLEARED'; sessionId: string }
+  // A tapped path is being looked up (click mode only). `name` is the file's
+  // name as shown in chat. WHY: while the lookup ran, the drawer opened onto
+  // "Nothing here yet", contradicting the file just tapped — the drawer shows
+  // "Opening <name>…" instead. Cleared by ACTIVE_ARTIFACT_SET (it opened),
+  // PILL_RESOLVE_FAILED (it could not), DRAWER_CLOSED and PILL_ERROR_CLEARED.
+  | { type: 'PILL_RESOLVE_STARTED'; sessionId: string; name: string }
   // Open/close is per-session (remembered across session switches), so both
   // carry the sessionId whose drawer is being toggled.
   | { type: 'DRAWER_OPENED'; sessionId: string }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveAssetPath, resolveAllAssetPaths } from '../src/renderer/themes/theme-asset-resolver';
+import { resolveAssetPath, resolveAllAssetPaths, resolveInlineAssetPath } from '../src/renderer/themes/theme-asset-resolver';
 
 describe('resolveAssetPath', () => {
   it('returns theme-asset:// URI for a relative path', () => {
@@ -50,6 +50,31 @@ describe('resolveAssetPath', () => {
   });
 });
 
+// Drawings the app fetches and INLINES — the mascot rig, its flat variants and
+// scene companions — may not come from a web address, which could be swapped for
+// a different file after the theme was reviewed (2026-09-10 security review).
+describe('resolveInlineAssetPath', () => {
+  it("keeps the theme's own files and same-origin root paths (the workbench)", () => {
+    expect(resolveInlineAssetPath('assets/mascot-rig.svg', 'kitty')).toBe('theme-asset://kitty/assets/mascot-rig.svg');
+    expect(resolveInlineAssetPath('theme-asset://kitty/assets/rig.svg', 'kitty')).toBe('theme-asset://kitty/assets/rig.svg');
+    expect(resolveInlineAssetPath('/src/renderer/dev/workbench/fixtures/themes/kitty/assets/rig.svg', 'kitty'))
+      .toBe('/src/renderer/dev/workbench/fixtures/themes/kitty/assets/rig.svg');
+  });
+
+  it.each([
+    'https://example.com/rig.svg',
+    'http://example.com/rig.svg',
+    '//example.com/rig.svg',
+    'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+  ])('refuses %s', (value) => {
+    expect(resolveInlineAssetPath(value, 'kitty')).toBeNull();
+  });
+
+  it('refuses nothing it was not given', () => {
+    expect(resolveInlineAssetPath(undefined, 'kitty')).toBeNull();
+  });
+});
+
 describe('resolveAllAssetPaths', () => {
   it('resolves background image value to theme-asset URI', () => {
     const theme = {
@@ -85,6 +110,21 @@ describe('resolveAllAssetPaths', () => {
     expect(resolved.icons?.send).toBe('theme-asset://test/assets/send.svg');
     expect(resolved.mascot?.idle).toBe('theme-asset://test/assets/mascot.svg');
     expect(resolved.cursor).toBe('theme-asset://test/assets/cursor.svg');
+  });
+
+  it('drops a mascot drawing or companion that points outside the theme — the default buddy shows instead', () => {
+    const theme = {
+      name: 'Test', slug: 'test', dark: false,
+      tokens: {} as any,
+      mascot: { rig: 'https://example.com/rig.svg', idle: 'assets/idle.svg' },
+      companions: [
+        { asset: 'https://example.com/sun.svg', size: 0.3, dx: 0, dy: 0 },
+        { asset: 'assets/companions/sun.svg', size: 0.3, dx: 0, dy: 0 },
+      ],
+    };
+    const resolved = resolveAllAssetPaths(theme);
+    expect(resolved.mascot).toEqual({ idle: 'theme-asset://test/assets/idle.svg' });
+    expect(resolved.companions?.map((c) => c.asset)).toEqual(['theme-asset://test/assets/companions/sun.svg']);
   });
 
   it('does not modify youcoded-core themes', () => {

@@ -209,7 +209,12 @@ function isLive(file: string, liveMs: number, now: () => number): boolean {
 // spec §5.1's symlink discussion for ccProjectSlug itself).
 const sameDir = (a: string, b: string) => path.resolve(a) === path.resolve(b);
 
-export function repairHomeForks(opts: RepairOpts): RepairFinding[] {
+// WHY async (perf/main-thread-async-reads, Task 2): firstCwd (transcript-cwd.ts)
+// now reads asynchronously, so this function awaits it and became async, and its
+// only caller, runSlugRepair, awaits this function in turn. Every other
+// synchronous fs call in this file deliberately stays synchronous — that task
+// converted only firstCwd's call sites.
+export async function repairHomeForks(opts: RepairOpts): Promise<RepairFinding[]> {
   const { projectsDir, homeDir, knownFolders, quarantine: q } = opts;
   const liveMs = opts.liveMs ?? LIVE_MTIME_MS;
   const now = opts.now ?? Date.now;
@@ -223,7 +228,12 @@ export function repairHomeForks(opts: RepairOpts): RepairFinding[] {
       findings.push({ sessionId, homeFolder: '', kind: 'deferred-live', paths: [file] });
       continue;
     }
-    const cwd = firstCwd(file, platform);              // R2 — NOT R1 (§6.1: R1 would
+    // WHY safe to yield here: this await now sits between the isLive check above
+    // and the rename below, which the synchronous version never allowed — but the
+    // app's own reconcile/materialize sweeps cannot touch these files meanwhile,
+    // because main.ts runs the whole repair inside the paused chain
+    // `startConversationStore({ pauseSweeps: true }).then(() => runSlugRepair()).finally(() => resumeSweeps())`.
+    const cwd = await firstCwd(file, platform);        // R2 — NOT R1 (§6.1: R1 would
     if (!cwd || isForeignCwd(cwd, platform)) continue; // call the fork a resident and no-op)
     const P = knownFolders.find(p => sameDir(p, cwd));
     if (!P || sameDir(P, homeDir)) continue;
@@ -366,7 +376,7 @@ export async function repairRecordsAndSpace(
   for (const P of knownFolders) {
     const correctDir = path.join(projectsDir, ccProjectSlug(P));
     for (const f of topLevelJsonl(correctDir)) {
-      const cwd = firstCwd(f, platform);
+      const cwd = await firstCwd(f, platform);
       if (!cwd || isForeignCwd(cwd, platform) || !sameDir(cwd, P)) continue;
       repairSet.set(path.basename(f, '.jsonl'), P);
     }
@@ -377,7 +387,7 @@ export async function repairRecordsAndSpace(
   try { buckets = fs.readdirSync(lane); } catch { /* no space yet */ }
   for (const bucket of buckets) {
     for (const f of topLevelJsonl(path.join(lane, bucket))) {
-      const cwd = firstCwd(f, platform);
+      const cwd = await firstCwd(f, platform);
       if (!cwd || isForeignCwd(cwd, platform)) continue;
       const P = knownFolders.find(p => sameDir(p, cwd));
       if (P && path.basename(P) !== bucket) repairSet.set(path.basename(f, '.jsonl'), P);
@@ -729,7 +739,7 @@ export async function runSlugRepair(overrides?: Partial<RepairOpts> & {
   // run in that sequence.
   const all: RepairFinding[] = [];
   try {
-    all.push(...stageFns.repairHomeForks(opts));                          // 6.1
+    all.push(...await stageFns.repairHomeForks(opts));                    // 6.1
   } catch (e) {
     log('ERROR', 'SlugRepair', 'stage failed', { stage: '6.1 repairHomeForks', error: String(e) });
     quarantine.log(`ERROR stage 6.1 repairHomeForks failed: ${String(e)}`);

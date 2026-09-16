@@ -86,7 +86,8 @@ export function canRetrySubmit(session: SessionChatState): boolean {
  *
  * Pure predicate for session validity:
  * - session must exist
- * - provider must be 'claude' (native sessions have no PTY worker)
+ * - provider must be 'claude' (native sessions have no PTY worker; a SHELL
+ *   session has one, but it is the USER'S shell — see below)
  * - chat state must not indicate the session has died
  *
  * Returns true for sessions still attached to Claude Code (when chat state
@@ -98,6 +99,17 @@ export function canPtySend(
 ): boolean {
   if (!session) return false;
   if (session.provider === 'native') return false;
+  // A shell session HAS a PTY, so this is not "can't" but "must not": every
+  // caller of this gate writes Claude Code text (/sync, /config, /model, a
+  // skill invocation) and would type — and, with its trailing Enter, RUN — that
+  // text in the user's own shell. The app types into a shell session exactly
+  // once, at creation, and never again.
+  //
+  // This gate is not the whole of that promise: App.tsx's cyclePermission calls
+  // session.sendInput RAW, without asking here, so it carries its own shell
+  // check. Any new raw sendInput must do the same — the ones that route through
+  // guardedPtySend are covered by this line.
+  if (session.provider === 'shell') return false;
   if (chat?.attentionState === 'session-died') return false;
   return true;
 }

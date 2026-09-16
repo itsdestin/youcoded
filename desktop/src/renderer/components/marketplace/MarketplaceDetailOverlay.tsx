@@ -93,7 +93,9 @@ export default function MarketplaceDetailOverlay({
           installed={installed}
           favorited={favorited}
           isInstalling={installing}
-          installError={errEntry?.message ?? null}
+          // Only an INSTALL failure feeds "Retry Install" — the key is shared with
+          // uninstall and update (error inventory 2026-09-10, false message 14).
+          installError={errEntry?.op === 'install' ? errEntry.message : null}
           updateAvailable={!!mp.updateAvailable[target.id]}
           onNavigate={onNavigate}
           memberId={memberId}
@@ -117,7 +119,8 @@ export default function MarketplaceDetailOverlay({
         <ThemeBody
           entry={entry}
           isInstalling={installing}
-          installError={errEntry?.message ?? null}
+          // Same rule as SkillBody above: only an INSTALL failure feeds "Retry Install".
+          installError={errEntry?.op === 'install' ? errEntry.message : null}
           updateAvailable={!!mp.updateAvailable[target.slug]}
           isActive={isActive}
           favorited={favorited}

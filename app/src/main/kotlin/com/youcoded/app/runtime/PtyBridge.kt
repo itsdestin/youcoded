@@ -114,6 +114,10 @@ class PtyBridge(
     fun start() {
         val env = bootstrap.buildRuntimeEnv().toMutableMap()
         apiKey?.let { env["ANTHROPIC_API_KEY"] = it }
+        // WHY keep this PTY-only instead of buildRuntimeEnv(): DirectShellBridge
+        // shares that environment but is a plain shell, not a Claude session.
+        // putIfAbsent preserves an explicit user/runtime override.
+        env.putIfAbsent("CLAUDE_CODE_SUBAGENT_MODEL", "sonnet")
 
         // Set socket path for hook-relay.js
         env["CLAUDE_MOBILE_SOCKET"] = socketPath

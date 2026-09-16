@@ -56,6 +56,13 @@
     "vignette": 0,
     "noise": 0
   },
+  "mascot": {
+    "rig": "assets/mascot-rig.svg",
+    "idle": "assets/mascot-idle.svg",
+    "welcome": "assets/mascot-welcome.svg",
+    "inquisitive": "assets/mascot-inquisitive.svg",
+    "shocked": "assets/mascot-shocked.svg"
+  },
   "custom_css": "::selection { background: rgba(47, 125, 85, 0.3); color: var(--fg); }",
   "contentHash": "sha256:168d293f2304c089afb639d1087c2c57c65c82db4776d36955bcec3dfc3a4ff1"
 }

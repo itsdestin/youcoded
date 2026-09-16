@@ -391,7 +391,7 @@ describe('bubble grouping — Claude Code (whole-block events, no partId)', () =
 
   it('an empty reply (max_tokens) renders the footer row and no shell', () => {
     const sig = signature([['user', 'go'], ['text', 'Half a thou'], ['done', 'max_tokens']]);
-    expect(sig).toEqual(['T F:Response truncated — Claude hit the output token limit.']);
+    expect(sig).toEqual(['T F:Response truncated — Your assistant hit the output token limit.']);
     const empty = signature([
       ['user', 'go'], ['text', 'x'], ['done'],
       // second turn: a contentless step that ended abnormally

@@ -74,6 +74,41 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Microphone permission launcher for voice prompting.
+     *
+     * WHY it lives here and not in the background service: on Android only a
+     * visible app window may ask the user for a permission. SessionService parks a
+     * "waiting for an answer" slot when the user taps the mic; this launcher shows
+     * the system prompt and drops the user's answer into that slot — the same
+     * hand-off the file picker above uses.
+     */
+    private val micPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        boundService?.pendingMicPermission?.complete(granted)
+    }
+
+    /**
+     * WHY: POST_NOTIFICATIONS has been declared in the manifest since the approval
+     * channel was added, but nothing ever REQUESTED it. On Android 13+ a declared but
+     * ungranted notification permission means every notification is dropped silently,
+     * so the approval prompt a background session raises never reached anyone on a
+     * modern phone (audit 2026-09-10). Asked once, after setup is done and the chat is
+     * up, so a new user's first sight of the app is not a permission dialog. Nothing to
+     * complete on the result: notifications simply start arriving once granted.
+     */
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        val perm = android.Manifest.permission.POST_NOTIFICATIONS
+        if (checkSelfPermission(perm) == android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        notificationPermissionLauncher.launch(perm)
+    }
+
     private var boundService: com.youcoded.app.runtime.SessionService? = null
 
     /**
@@ -181,6 +216,9 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         } else {
+                            // Setup is done and the chat is about to show: the right
+                            // moment to ask for notifications (see the launcher's WHY).
+                            LaunchedEffect(Unit) { requestNotificationPermissionIfNeeded() }
                             // Boot self-test
                             val selfTestResult = remember(isReady) {
                                 if (isReady) bootstrap.selfTest() else null
@@ -229,6 +267,13 @@ class MainActivity : ComponentActivity() {
                                         }
                                         svc.onQrScanRequested = {
                                             _showQrScanner.value = true
+                                        }
+                                        // Voice prompting: the service asks, the window
+                                        // shows the microphone prompt (a service cannot).
+                                        svc.onMicPermissionRequested = {
+                                            micPermissionLauncher.launch(
+                                                android.Manifest.permission.RECORD_AUDIO
+                                            )
                                         }
                                         // Marketplace auth: open the GitHub device-code URL in the
                                         // device's default browser. Non-fatal — if no browser is

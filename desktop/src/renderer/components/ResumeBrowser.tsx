@@ -1,15 +1,24 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState } from './ui';
+import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, CheckboxMark, SearchFilterPill, SettingRow } from './ui';
+import SessionRenameDialog from './SessionRenameDialog';
+import { namingApi } from './assistant-settings/naming-api';
+import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { isAndroid } from '../platform';
+import SessionPreviewPane from './SessionPreviewPane';
+import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
+import { ResumeFilterPopover } from './ResumeFilterPopover';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
 import {
   applyFilters,
   sortSessions,
   groupSessions,
   getAvailableProjects,
+  pickLabel,
   type FilterState,
   type FlagName,
 } from './resume-browser-filters';
@@ -25,6 +34,8 @@ import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { claudeAliasForModelId } from '../../shared/model-ids';
 import type { ModelBinding } from '../../shared/provider-types';
+import { SkipPermissionsCaption } from './SkipPermissionsCaption';
+import { useFirstTimeGate } from './FirstTimeWarning';
 
 function formatRelativeTime(epochMs: number): string {
   const diff = Date.now() - epochMs;
@@ -55,55 +66,64 @@ function formatModelId(id: string): string {
   return id.replace(/-\d{8}$/, '');
 }
 
-// Shared trigger-button shape for the filter row beneath the search bar.
-// Inactive pills look like the search input frame; active pills tint with the
-// accent so the user can see at a glance which pills have departed from
-// default state — narrowing filters (Projects, Tags) AND a non-default sort
-// direction (Sort). Don't "tighten" the predicate to only narrowing — Sort
-// would lose its visual cue.
-function FilterPill({
-  active,
-  onClick,
-  children,
-  hasPopup,
-  expanded,
-  buttonRef,
-}: {
-  active: boolean;
-  // Receives the MouseEvent so dropdown-owning callers can stopPropagation()
-  // — the Projects + Tags pills (Tasks 4 + 5) rely on this to keep their
-  // outside-click handler from immediately re-closing the dropdown.
-  onClick: (e: React.MouseEvent) => void;
-  children: React.ReactNode;
-  // Optional: when the pill opens a dropdown, callers pass these so screen
-  // readers announce both "active filter" (aria-pressed) AND dropdown state.
-  // expanded is only read when hasPopup is true; React strips both attrs
-  // entirely when hasPopup is falsy (Sort pill).
-  hasPopup?: boolean;
-  expanded?: boolean;
-  // Optional: dropdown-owning callers pass a ref so they can measure the
-  // trigger's bounding rect for portal positioning. Sort doesn't need it.
-  buttonRef?: React.Ref<HTMLButtonElement>;
-}) {
+// ── The conversation preview panel (2026-09-10) ─────────────────────────────
+// Every decision below is an answered review-deck step, not a default. Five
+// rounds, in docs/archive/design/2026-09-10-resume-preview-panel/:
+//   R2  the list keeps its cards; it never collapses and never hides itself;
+//       the right half stays one line of text until a row is clicked.
+//   R3  the sheet: heading, conversation and actions on one inset surface with
+//       the window showing all round it.
+//   R4  the header IS the list's card, drawn again, floating at the top of the
+//       sheet; the action card sits at its foot, vertically stacked, and its
+//       switches are the existing resume block rather than a restyled copy.
+//   R5  the whole sheet arrives on a jump (not just the card); the action card
+//       stays open while you read; no folder chip on it — the header card
+//       already says which folder this is.
+
+// Filter menu rows and footer (design guide G-21: 28px rows of mark · label ·
+// right-aligned count at text-xs; actions in a footer under a hairline, where
+// FolderSwitcher and ModelPicker put theirs). One recipe shared by the Projects
+// and Tags menus so the two cannot drift into two looks again (2026-09-10).
+const MENU_ROW = 'w-full h-7 px-3 text-xs flex items-center gap-2 text-left text-fg-2 hover:bg-inset transition-colors';
+const MENU_FOOTER = 'border-t border-edge flex divide-x divide-edge';
+const MENU_FOOTER_ACTION = 'flex-1 px-2.5 py-2 text-xs whitespace-nowrap text-fg-dim hover:bg-inset hover:text-fg transition-colors disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-fg-dim';
+
+// Renders pickLabel()'s answer: the text, and a muted numeral when there is one.
+function PickLabel({ text, count }: { text: string; count?: number }) {
+  return count ? <>{text} <span className="opacity-70 tabular-nums">{count}</span></> : <>{text}</>;
+}
+
+// The sort chip's glyph: three bars with a down arrow, running wide-to-narrow
+// for newest first and narrow-to-wide for oldest first. Destin picked it on the
+// round-2 deck (C-1 "bars") over two-way arrows and words only, after rejecting
+// round 1's single arrow that turned over ("still don't like the arrow").
+function SortArrow({ muted, up }: { muted: boolean; up: boolean }) {
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      onClick={onClick}
-      // aria-pressed conveys the toggle state to assistive tech. Mirrors the
-      // Show Complete toggle's pattern further down in this file.
-      aria-pressed={active}
-      aria-haspopup={hasPopup ? 'listbox' : undefined}
-      aria-expanded={hasPopup ? !!expanded : undefined}
-      className={`px-2.5 py-1 rounded-full text-2xs flex items-center gap-1.5 transition-colors duration-75 ${
-        active
-          ? 'bg-accent/10 border border-accent/40 text-fg'
-          : 'bg-inset border border-edge-dim text-fg-muted hover:text-fg'
-      }`}
-    >
-      {children}
-    </button>
+    <svg
+      className={`w-3.5 h-3.5 shrink-0 ${muted ? 'text-fg-muted' : ''}`.trim()}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d={up ? 'm3 16 4 4 4-4M7 20V4M11 4h4M11 8h7M11 12h10' : 'm3 16 4 4 4-4M7 20V4M11 4h10M11 8h7M11 12h4'}
+      />
+    </svg>
   );
+}
+
+// State updater that returns the PREVIOUS position object when the new one has
+// the same numbers, so React bails out instead of re-rendering — required by the
+// layout effect below, which depends on one of these positions.
+function samePos<T extends Record<string, number>>(next: T | null): (prev: T | null) => T | null {
+  return (prev) => {
+    if (!next || !prev) return next;
+    for (const k of Object.keys(next)) if (next[k] !== prev[k]) return next;
+    return prev;
+  };
 }
 
 // Compute fixed-position coords for a portaled dropdown anchored just below a
@@ -114,13 +134,18 @@ function FilterPill({
 function measureDropdown(
   triggerRef: React.RefObject<HTMLButtonElement | null>,
   dropdownWidthPx: number,
+  boundsRef?: React.RefObject<HTMLElement | null>,
 ): { top: number; left: number } | null {
   const el = triggerRef.current;
   if (!el) return null;
   const rect = el.getBoundingClientRect();
-  // Clamp so the dropdown's right edge stays at least 8px inside the viewport.
+  // Clamp so the dropdown's right edge stays inside the row it hangs from (so
+  // it never pokes past the panel — UX review U15 saw the Tags menu reach to
+  // within 9px of a phone's screen edge) and at least 8px inside the viewport.
   // If the trigger sits too far right, the dropdown shifts left.
-  const maxLeft = Math.max(8, window.innerWidth - dropdownWidthPx - 8);
+  const bounds = boundsRef?.current?.getBoundingClientRect();
+  const rightLimit = Math.min(window.innerWidth - 8, bounds ? bounds.right : Infinity);
+  const maxLeft = Math.max(8, rightLimit - dropdownWidthPx);
   return {
     top: rect.bottom + 4,
     left: Math.min(rect.left, maxLeft),
@@ -136,11 +161,12 @@ function useDropdownReposition(
   triggerRef: React.RefObject<HTMLButtonElement | null>,
   dropdownWidthPx: number,
   setPosition: React.Dispatch<React.SetStateAction<{ top: number; left: number } | null>>,
+  boundsRef?: React.RefObject<HTMLElement | null>,
 ): void {
   useEffect(() => {
     if (!isOpen) return;
     const remeasure = () => {
-      const next = measureDropdown(triggerRef, dropdownWidthPx);
+      const next = measureDropdown(triggerRef, dropdownWidthPx, boundsRef);
       if (next) setPosition(next);
     };
     window.addEventListener('resize', remeasure);
@@ -151,7 +177,7 @@ function useDropdownReposition(
       window.removeEventListener('resize', remeasure);
       window.removeEventListener('scroll', remeasure, true);
     };
-  }, [isOpen, triggerRef, dropdownWidthPx, setPosition]);
+  }, [isOpen, triggerRef, dropdownWidthPx, setPosition, boundsRef]);
 }
 
 // Right padding reserved on a card's upper rows for the absolutely-positioned
@@ -268,16 +294,86 @@ interface Props {
   defaultSkipPermissions?: boolean;
 }
 
+// How many previewed conversations stay built (the one on screen, recent ones,
+// and one being warmed), and how long the pointer must rest on a row before
+// its conversation starts building — long enough that sweeping across the list
+// warms nothing, short enough to finish before a deliberate click.
+const PANES_KEPT = 4;
+const WARM_AFTER_MS = 150;
+// How far the previewed conversation must scroll one way before the header card
+// tucks away or comes back. Small enough that a short flick counts, big enough
+// that touchpad jitter at rest moves nothing.
+const TUCK_MIN_PX = 6;
+
+type RowActions = {
+  select: (s: PastSession) => void;
+  toggleFlag: (sessionId: string, flag: FlagName, next: boolean) => unknown;
+  warmSoon: (s: PastSession, e: React.PointerEvent) => void;
+  warmNow: (s: PastSession) => void;
+  cancelWarm: () => void;
+};
+
+// A list card that re-renders only when something it draws changes. A click
+// here used to re-render every revealed card (~50) five or six times — 13–90 ms
+// a commit (measured 2026-09-11) to move one highlight. `deps` is the complete
+// list of what a CLOSED card reads from the browser's state (see rowDeps); its
+// handlers go through a ref (rowActions), so skipping a render can never leave
+// a card calling an old render's function. The same idea as SkillCard's memo.
+const RowMemo = React.memo(
+  function RowMemo({ render }: { render: () => React.ReactNode; deps: readonly unknown[] }) {
+    return <>{render()}</>;
+  },
+  (a, b) => a.deps.length === b.deps.length && a.deps.every((d, i) => Object.is(d, b.deps[i])),
+);
+
+// One previewed conversation, kept built. A hidden layer uses `visibility`, not
+// unmounting or display:none — the choice ChatView makes for background
+// sessions (ChatView.tsx): its bubbles stay formatted and laid out, so bringing
+// it on screen is a paint, and hidden text is out of tab order and
+// find-in-page. Addressed by primitives so a keystroke in the search box
+// re-renders no layer — and so re-reads nothing.
+const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, projectSlug, visible, onSettled, onGone }: {
+  id: string;
+  provider: ChatsearchProvider;
+  title: string;
+  projectSlug?: string;
+  visible: boolean;
+  onSettled: (id: string) => void;
+  onGone: (id: string) => void;
+}) {
+  useEffect(() => () => onGone(id), [id, onGone]);
+  return (
+    // data-preview-id: lets the header card's scroll handler tell the layer on
+    // screen from the hidden ones (see onPreviewScroll).
+    <div className="absolute inset-0 flex flex-col" data-preview-id={id} style={{ visibility: visible ? 'visible' : 'hidden' }}>
+      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} />
+    </div>
+  );
+});
+
 export default function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions }: Props) {
   // Live tag registry — drives the Tag Picker, chips, and custom-tag filter.
   const registry = useTagRegistry();
-  const [sessions, setSessions] = useState<PastSession[]>([]);
+  const [sourceSessions, setSessions] = useState<PastSession[]>([]);
+  const sourceNames = useMemo(() => Object.fromEntries(sourceSessions.map((s) => [s.sessionId, s.name])), [sourceSessions]);
+  const previewNames = useRenamedSessions(sourceNames);
+  const sessions = useMemo(() => sourceSessions.map((s) => previewNames[s.sessionId] === undefined
+    ? s : { ...s, name: previewNames[s.sessionId] }), [sourceSessions, previewNames]);
+  // Read by the settle effect below, which must not re-run every time the list
+  // re-renders — only when the row it is about to show changes.
+  const sessionsRef = useRef<PastSession[]>([]);
+  sessionsRef.current = sessions;
+  const [renameSession, setRenameSession] = useState<PastSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const searchRef = useRef<HTMLInputElement>(null);
+  // The shared search pill forwards its wrapper, not the input, so autofocus
+  // reaches the field through it (see the open-effect below).
+  const searchRef = useRef<HTMLDivElement>(null);
   const listRef = useScrollFade<HTMLDivElement>();
   // Wraps the filter pill row so outside-click can close the active dropdown.
   const filterRowRef = useRef<HTMLDivElement>(null);
+  // The chips row scrolls sideways at phone width; the fade says so (design guide §4.8).
+  useScrollFade(filterRowRef);
   // Trigger refs for portal positioning + dropdown refs so the outside-click
   // handler can recognize clicks inside the portaled dropdown body (which is
   // no longer a child of filterRowRef).
@@ -286,8 +382,187 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const projectsDropdownRef = useRef<HTMLDivElement | null>(null);
   const tagsDropdownRef = useRef<HTMLDivElement | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // The row whose transcript the right panel is showing. Distinct
+  // from expandedId because in variants b/c nothing expands in the list at all.
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // the Resume options sheet
+  // The header clone's own tags/note sheet (see renderSessionRow).
+  const [cloneOrganizeId, setCloneOrganizeId] = useState<string | null>(null);
+  // ── One arrival, not three ──────────────────────────────────────────────
+  // Everything in the sheet — the header card, the conversation, the action
+  // card — changes at ONE moment, and that moment is after the new transcript
+  // is both read and painted. Three separate moments is what this replaced:
+  // the header and action card swapped on the click (local data), the
+  // transcript blanked and came back a second later (a disk read), and its
+  // bubbles painted a beat after that again (forty markdown blocks take longer
+  // than a frame to build, so the arrival — running on the compositor —
+  // started before they were drawn). Destin, 2026-09-10: "the header/footer
+  // cards switch, THEN the animation happens, THEN the messages pop in."
+  //
+  // So the sheet renders `shownId`, which LAGS `previewId` until the read
+  // settles. The click's acknowledgement is the row lighting up in the list,
+  // which is instant; the previous conversation stays on screen meanwhile,
+  // because the new one is built in its own hidden layer (paneIds, below)
+  // rather than in place of it.
+  //
+  // `staged` is the frame in between: the new content is committed and laid
+  // out while the sheet is still transparent, so the expensive paint happens
+  // invisibly. Only then does `.switch-arrival` go on. Without it the bubbles
+  // paint after the animation has begun, which is the third beat above.
+  const [shownId, setShownId] = useState<string | null>(null);
+  const [arrival, setArrival] = useState<'staged' | 'run' | null>(null);
+  // ── The header card tucks away while you read back (Destin, 2026-09-11) ──
+  // A preview opens on the NEWEST message, so reading it means scrolling UP,
+  // and the floating card covered the top of what you were reading. Scrolling
+  // up slides it out through the top of the sheet; scrolling down brings it
+  // back. `tuckMark` is the position the last decision was made from, so slow
+  // moves add up against it instead of each being judged alone.
+  const [headerTucked, setHeaderTucked] = useState(false);
+  const tuckMark = useRef<{ el: EventTarget | null; top: number; height: number }>({ el: null, top: 0, height: 0 });
+  // ── Conversations kept built ────────────────────────────────────────────
+  // A click used to read and format its conversation from scratch every time,
+  // even one previewed a moment ago: 0.6–1 s from click to settled on large
+  // conversations (measured 2026-09-11). The main chat switches in half a
+  // millisecond because every open conversation stays built and merely hidden;
+  // this keeps the last few previewed the same way, plus the one the pointer is
+  // resting on or pressing (warmPane), so most clicks only reveal a layer that
+  // is already there.
+  //
+  // `paneIds` is in INSERTION order and never reordered — React moving a
+  // layer's DOM node would reset its scroll position. Recency is paneUsedAt.
+  const [paneIds, setPaneIds] = useState<string[]>([]);
+  const paneUsedAt = useRef(new Map<string, number>());
+  // Mounted layers whose first read has finished. A layer that unmounts drops
+  // out (onPreviewGone), so a remounted one is waited on again, not revealed
+  // over its loading line.
+  const settledRef = useRef(new Set<string>());
+  const previewIdRef = useRef<string | null>(null);
+  previewIdRef.current = previewId;
+  const shownIdRef = useRef<string | null>(null);
+  shownIdRef.current = shownId;
+  const reveal = useCallback((id: string) => {
+    setShownId(id);
+    setArrival('staged');
+    // A newly picked conversation always arrives with its card showing — it
+    // is the only thing that says which conversation this is.
+    setHeaderTucked(false);
+    tuckMark.current.el = null;
+  }, []);
+  const warmPane = useCallback((id: string) => {
+    paneUsedAt.current.set(id, performance.now());
+    setPaneIds((prev) => {
+      if (prev.includes(id)) return prev;
+      const next = [...prev, id];
+      // Least recently used goes first — never the conversation on screen,
+      // the one just picked, or the one being warmed.
+      const pinned = new Set([id, previewIdRef.current, shownIdRef.current]);
+      while (next.length > PANES_KEPT) {
+        const victims = next.filter((p) => !pinned.has(p));
+        if (!victims.length) break;
+        const oldest = victims.reduce((a, b) => ((paneUsedAt.current.get(a) ?? 0) <= (paneUsedAt.current.get(b) ?? 0) ? a : b));
+        next.splice(next.indexOf(oldest), 1);
+      }
+      return next;
+    });
+  }, []);
+  const onPreviewSettled = useCallback((id: string) => {
+    settledRef.current.add(id);
+    // A layer warmed by a resting pointer settles silently; only the
+    // conversation the user actually picked is brought on screen.
+    if (id === previewIdRef.current && id !== shownIdRef.current) reveal(id);
+  }, [reveal]);
+  const onPreviewGone = useCallback((id: string) => {
+    settledRef.current.delete(id);
+  }, []);
+  // Moves the header card (headerTucked, above). Caught on the layers' wrapper
+  // in the CAPTURE phase: scroll does not bubble, and the element that scrolls
+  // is inside SessionPreviewPane.
+  const onPreviewScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.target;
+    if (!(el instanceof HTMLElement)) return;
+    // Only the conversation on screen counts. A hidden layer jumps itself to
+    // its newest message when its read lands, and that is not the reader moving.
+    if (el.closest('[data-preview-id]')?.getAttribute('data-preview-id') !== shownIdRef.current) return;
+    const mark = tuckMark.current;
+    // The content changed height under the reader: Load older adds messages
+    // ABOVE, and the browser pushes the position down to keep the same message
+    // in view. Nobody scrolled, so take a new bearing and decide nothing —
+    // otherwise pressing Load older would drop the card back over the top.
+    if (mark.el !== el || mark.height !== el.scrollHeight) {
+      tuckMark.current = { el, top: el.scrollTop, height: el.scrollHeight };
+      return;
+    }
+    const moved = el.scrollTop - mark.top;
+    if (Math.abs(moved) < TUCK_MIN_PX) return;
+    mark.top = el.scrollTop;
+    // Its tags/note sheet is open: leave it where it is rather than slide the
+    // thing being edited away.
+    if (cloneOrganizeId) return;
+    setHeaderTucked(moved < 0);
+  };
+  // Closing the browser unmounts every layer. Keep only the one that was on
+  // screen, so reopening re-reads one conversation rather than four. The card
+  // comes back with it rather than reopening tucked away.
+  useEffect(() => {
+    if (!open) {
+      setPaneIds((prev) => prev.filter((id) => id === shownIdRef.current));
+      setHeaderTucked(false);
+      tuckMark.current.el = null;
+    }
+  }, [open]);
+  // Cards are memoised (RowMemo), so they reach this render's handlers through
+  // a ref that is reassigned every render, never through a captured closure.
+  const rowActions = useRef<RowActions | null>(null);
+  const warmTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (warmTimer.current !== null) clearTimeout(warmTimer.current); }, []);
+  useEffect(() => {
+    if (arrival !== 'staged') return;
+    // Two frames: the first lets React's commit lay the new bubbles out, the
+    // second is the one the animation can start on with them already painted.
+    let inner = 0;
+    const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setArrival('run')); });
+    return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+  }, [arrival]);
+  // The resume controls belong to the row the action card is about to show, so
+  // they are derived here rather than on the click — otherwise the card spent
+  // the read showing the OLD conversation's name over the NEW one's model.
+  useEffect(() => {
+    if (!shownId) return;
+    const s = sessionsRef.current.find((r) => r.sessionId === shownId);
+    if (!s) return;
+    setResumeModel(claudeModelForRow(s));
+    setResumeDangerous(defaultSkipPermissions || false);
+    setResumeLaunchInNewWindow(false);
+    setNativeResumeBinding(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- claudeModelForRow
+    // is redefined every render; the row id is what actually changes here.
+  }, [shownId, defaultSkipPermissions]);
+
+  useEffect(() => {
+    if (arrival !== 'run') return;
+    // Just past --dur-switch (380ms). Dropping the class afterwards keeps a
+    // stale animation off the element the next time it re-renders.
+    const t = setTimeout(() => setArrival(null), 420);
+    return () => clearTimeout(t);
+  }, [arrival]);
+
+  const narrowViewport = useNarrowViewport();
+  // Two reasons the browser stays single-column, and they are different:
+  //  · narrow — a 390px screen cannot hold a list AND a transcript. 640px is
+  //    the app's one breakpoint (.claude/rules/narrow-viewport.md); do not
+  //    invent a second.
+  //  · Android — `chatsearch:read` answers not-implemented-on-mobile there
+  //    (SessionService.kt), so the panel could only ever show an error. Phones
+  //    are already excluded by the width test; this is for a tablet wide enough
+  //    to pass it. The list is fully usable without the panel, which is what
+  //    makes hiding it legitimate rather than a narrow "fix" that removes the
+  //    only route to something.
+  const previewOn = !narrowViewport && !isAndroid();
   const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
   const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
+  // First-time Skip Permissions warning (spec §5). This browser is an L1
+  // modal, so the L2 warning simply sits on top of it — no yielding needed.
+  const { gate: gateSkipPermissions, dialog: skipPermissionsDialog } = useFirstTimeGate('skip-permissions');
   // Task 6 — native resume ALWAYS offers the provider-scoped model selector
   // (Destin's ruling: never auto-launch a binding). null until the user picks
   // a row OR ModelPicker auto-selects a prefill match; the Resume button
@@ -296,7 +571,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // mount per expansion is what actually resets ITS internal state; this just
   // keeps the Resume-button gate and the value threaded through onResume in
   // sync with that same lifecycle.
-  const [nativeResumeBinding, setNativeResumeBinding] = useState<ModelBinding | null>(null);
+  //
+  // OWNED by the conversation it was picked for. In the preview panel the reset
+  // lands one render AFTER the next conversation's picker has mounted — and that
+  // picker only pre-fills when it sees no value. Unowned, it saw the PREVIOUS
+  // conversation's model, skipped its own pre-fill, and then the reset left it
+  // on "Choose a model…" (Destin, 2026-09-11). Read it only through
+  // nativeBindingFor, which never hands one conversation another's pick.
+  const [nativeResumeBinding, setNativeResumeBinding] = useState<{ sessionId: string; binding: ModelBinding } | null>(null);
+  const nativeBindingFor = (s: PastSession): ModelBinding | null =>
+    (nativeResumeBinding && nativeResumeBinding.sessionId === s.sessionId ? nativeResumeBinding.binding : null);
   // Launch the resumed session in a new peer window (multi-window only).
   const [resumeLaunchInNewWindow, setResumeLaunchInNewWindow] = useState(false);
   // Sesion id currently resuming — keeps its Resume button busy + the browser open
@@ -313,6 +597,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // visible until the menu is closed and reopened, so the row doesn't vanish
   // mid-interaction when Show Complete is off. Reset on every open.
   const [stickyComplete, setStickyComplete] = useState<Set<string>>(new Set());
+  /** Non-null when the last load FAILED. Empty string = it failed and said no reason. */
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // New filter state — all reset on each open (no localStorage). Default values
   // (empty Sets, sortDir='desc') produce identical behaviour to the prior
@@ -324,6 +610,17 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Tracks which filter pill's dropdown is currently open. null = both closed.
   // Single state instead of two booleans so the dropdowns are mutually exclusive.
   const [openPill, setOpenPill] = useState<'projects' | 'tags' | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  // Below 640px the chips give way to the filter button docked in the search
+  // pill (deck round 1, S-7): one popover holds all three controls.
+  const narrow = useNarrowViewport();
+  useEffect(() => { if (!narrow) setFiltersOpen(false); }, [narrow]);
+  const filtersPopoverRef = useRef<HTMLDivElement | null>(null);
+  const [filtersPos, setFiltersPos] = useState<{ top: number; right: number } | null>(null);
+  const measureFilters = () => {
+    const r = searchRef.current?.getBoundingClientRect();
+    return r ? { top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) } : null;
+  };
 
   // Which card's Organize popover is open (session id), plus its anchor position.
   //
@@ -338,11 +635,31 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const organizeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const organizePopRef = useRef<HTMLDivElement>(null);
   // The tag registry editor (rename/recolor/archive/delete). Opened from the
-  // "Manage tags…" footer in either the Organize popover's TagPicker or the
-  // Tags filter dropdown, so there is ONE destination for tag management.
+  // "Manage tags…" footer of the Organize popover's TagPicker; the Tags filter
+  // menu's second route was removed at Destin's request (deck round 1, S-4), so
+  // there is ONE destination for tag management.
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
 
   // Fetch sessions when opened
+  // WHY a failed load is not an empty list: this used to `.catch(() => setSessions([]))`,
+  // so anything going wrong — a dropped connection on a phone, a request that timed out
+  // after thirty seconds — produced "No previous sessions found". A confident, wrong
+  // sentence about someone's own history. Destin hit it over remote access on 2026-09-10:
+  // nothing appeared, then it worked on the second try, and there was no way to tell from
+  // the screen that the first attempt had failed at all.
+  const loadSessions = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    (window as any).claude.session.browse()
+      .then((list: PastSession[]) => { setSessions(list); setLoadError(null); })
+      .catch((err: any) => {
+        setSessions([]);
+        // The real message when there is one; never a guess about the cause.
+        setLoadError(err?.message ? String(err.message) : '');
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
   useEffect(() => {
     if (open) {
       setSearch('');
@@ -361,12 +678,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setSelectedProjects(new Set());
       setSelectedTagIds(new Set());
       setSortDir('desc');
-      setLoading(true);
-      (window as any).claude.session.browse()
-        .then((list: PastSession[]) => setSessions(list))
-        .catch(() => setSessions([]))
-        .finally(() => setLoading(false));
-      const t = setTimeout(() => searchRef.current?.focus(), 50);
+      loadSessions();
+      const t = setTimeout(() => searchRef.current?.querySelector('input')?.focus(), 50);
       return () => clearTimeout(t);
     }
   }, [open]);
@@ -381,11 +694,26 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     else if (expandedId) setExpandedId(null);
     else onClose();
   }, [tagManagerOpen, organizeId, openPill, expandedId, onClose]);
-  useEscClose(open, handleEscClose);
+  useEscClose(open && !renameSession, handleEscClose);
 
   // Close the active filter dropdown on outside click. Recognizes clicks
   // inside the trigger row AND the portaled dropdowns (which live in
   // document.body, outside filterRowRef).
+  // A tap that only meant "close this menu" must not travel on to the scrim
+  // and close the whole browser with the filters in it (UX review 2, U2): the
+  // mousedown that closes a menu arms a one-shot capture listener that swallows
+  // the click that follows it.
+  const swallowNextClick = useRef(false);
+  useEffect(() => {
+    const swallow = (e: MouseEvent) => {
+      if (!swallowNextClick.current) return;
+      swallowNextClick.current = false;
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    document.addEventListener('click', swallow, true);
+    return () => document.removeEventListener('click', swallow, true);
+  }, []);
   useEffect(() => {
     if (!openPill) return;
     const handler = (e: Event) => {
@@ -393,6 +721,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       if (filterRowRef.current?.contains(target)) return;
       if (projectsDropdownRef.current?.contains(target)) return;
       if (tagsDropdownRef.current?.contains(target)) return;
+      // Inside the phone panel the panel itself stays; the click is still spent.
+      swallowNextClick.current = true;
       setOpenPill(null);
     };
     document.addEventListener('mousedown', handler);
@@ -402,6 +732,27 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       document.removeEventListener('touchstart', handler);
     };
   }, [openPill]);
+  // The phone popover closes on a tap outside it, its pill, and the menus that
+  // open from the chips inside it (those are portaled, so not its descendants).
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const handler = (e: Event) => {
+      const target = e.target as Node;
+      if (searchRef.current?.contains(target)) return;
+      if (filtersPopoverRef.current?.contains(target)) return;
+      if (projectsDropdownRef.current?.contains(target)) return;
+      if (tagsDropdownRef.current?.contains(target)) return;
+      swallowNextClick.current = true;
+      setFiltersOpen(false);
+      setOpenPill(null);
+    };
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('touchstart', handler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('touchstart', handler);
+    };
+  }, [filtersOpen]);
 
   // Same outside-click close for the Organize popover. It is portaled to
   // document.body, so the card's own subtree can't see it — the popover ref is
@@ -439,13 +790,32 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     return applyFilters(sessions, state);
   }, [sessions, search, showComplete, stickyComplete, selectedProjects, selectedTagIds, registry.tags]);
 
+  // What the sheet is currently showing — it lags the clicked row (previewId,
+  // which drives the list's highlight) until that conversation has been read.
+  // Looked up in `filtered`, so a search that hides it empties the sheet.
+  const previewSession = previewOn && shownId
+    ? filtered.find((r) => r.sessionId === shownId) ?? null
+    : null;
+  // The layers look their rows up in ALL sessions, not `filtered`: a search
+  // that hides a row must not throw away its built conversation.
+  const sessionsById = useMemo(() => new Map(sessions.map((r) => [r.sessionId, r])), [sessions]);
+
   // Group by project path ONLY when the user has narrowed via the Projects
   // pill — the default view is pure chronological (each row carries its own
   // project label instead). Within-group sort is priority-pinned + lastModified
   // by sortDir; between-group order also follows sortDir. Search always stays
   // flat so results read as one ranked list.
+  const filtersActive = selectedProjects.size > 0 || selectedTagIds.size > 0;
+  // The way out of an empty list names what emptied it (design guide G-18).
+  const emptyAction = search.trim() && filtersActive
+    ? { label: 'Clear search and filters', onClick: () => { setSearch(''); setSelectedProjects(new Set()); setSelectedTagIds(new Set()); } }
+    : search.trim() ? { label: 'Clear search', onClick: () => setSearch('') }
+    : filtersActive ? { label: 'Clear filters', onClick: () => { setSelectedProjects(new Set()); setSelectedTagIds(new Set()); } }
+    : undefined;
+  // One project picked needs no group header — it would repeat the chip's own
+  // label above the only group (UX review U17).
   const grouped = useMemo(() => {
-    if (search.trim() || selectedProjects.size === 0) return null;
+    if (search.trim() || selectedProjects.size <= 1) return null;
     return groupSessions(filtered, sortDir);
   }, [filtered, search, selectedProjects, sortDir]);
 
@@ -542,17 +912,35 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Distinct projects with counts — what the Projects pill dropdown displays.
   // Derived from the unfiltered session list so the dropdown always shows
   // every known project, even when the user has narrowed the visible list.
-  const availableProjects = useMemo(() => getAvailableProjects(sessions), [sessions]);
+  // Counts and rows reflect what the list can actually show: with Show Complete
+  // off, a finished conversation is not counted and a project with only finished
+  // conversations is not offered (UX review U6: "youcoded 2" then showed one row).
+  const countable = useMemo(
+    () => (showComplete ? sessions : sessions.filter((s) => !s.flags?.complete || stickyComplete.has(s.sessionId))),
+    [sessions, showComplete, stickyComplete],
+  );
+  const availableProjects = useMemo(() => getAvailableProjects(countable), [countable]);
+  const tagCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of countable) for (const id of s.tags ?? []) m.set(id, (m.get(id) ?? 0) + 1);
+    return m;
+  }, [countable]);
 
-  // Trigger label for the Projects pill: 0 selected → "Projects",
-  // 1 → label, 2-3 → comma-joined labels, 4+ → "Projects (N)".
-  const projectsLabel = useMemo(() => {
-    if (selectedProjects.size === 0) return 'Projects';
-    const selectedList = availableProjects.filter((p) => selectedProjects.has(p.path));
-    if (selectedList.length === 1) return selectedList[0].label;
-    if (selectedList.length <= 3) return selectedList.map((p) => p.label).join(', ');
-    return `Projects (${selectedList.length})`;
+  // Chip labels: nothing picked → the category; one picked → its name; more →
+  // the category and a count (design guide G-19: label, space, numeral — never
+  // parentheses). The old 2–3 → comma-joined names made one chip as wide as the
+  // whole row on a phone.
+  // A picked project that the menu no longer offers (all its conversations are
+  // finished and Show Complete is off) still names itself from its path.
+  const projectsLabel = useMemo((): React.ReactNode => {
+    const picked = [...selectedProjects].map((path) => availableProjects.find((p) => p.path === path)?.label ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path);
+    return <PickLabel {...pickLabel('Projects', picked)} />;
   }, [selectedProjects, availableProjects]);
+  const liveTags = useMemo(() => registry.tags.filter((t) => !t.archived), [registry.tags]);
+  const tagsLabel = useMemo((): React.ReactNode => {
+    const picked = [...selectedTagIds].map((id) => liveTags.find((t) => t.id === id)?.label ?? id);
+    return <PickLabel {...pickLabel('Tags', picked)} />;
+  }, [selectedTagIds, liveTags]);
 
   // Portal-anchored dropdown positions. Dropdown widths match the className
   // (Projects: w-64 = 256px, Tags: w-52 = 208px). Keep these in sync if the
@@ -565,8 +953,27 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [tagsDropdownPos, setTagsDropdownPos] = useState<{ top: number; left: number } | null>(null);
   // Reposition while open (resize / scroll updates only — not the initial
   // measurement, which is sync in the click handler).
-  useDropdownReposition(openPill === 'projects', projectsTriggerRef, 256, setProjectsDropdownPos);
-  useDropdownReposition(openPill === 'tags', tagsTriggerRef, 208, setTagsDropdownPos);
+  useDropdownReposition(openPill === 'projects', projectsTriggerRef, 256, setProjectsDropdownPos, filterRowRef);
+  useDropdownReposition(openPill === 'tags', tagsTriggerRef, 208, setTagsDropdownPos, filterRowRef);
+  // The panel re-centres when a pick shrinks or grows the list, which moves the
+  // chips without any scroll or resize event. A menu left at its old spot then
+  // covers the row, and the next click ticks a row nobody chose (UX review U1/U3).
+  // Every setter below keeps the previous object when nothing moved: this
+  // effect lists filtersPos as a dependency (at phone width the chips live
+  // inside the panel, so their menus can only be placed once the panel has
+  // landed — UX review 2, U3), and a fresh object on every run re-fired it
+  // forever ("Maximum update depth exceeded", caught by the grader on R12).
+  useLayoutEffect(() => {
+    if (openPill === 'projects') setProjectsDropdownPos(samePos(measureDropdown(projectsTriggerRef, 256, filterRowRef)));
+    if (openPill === 'tags') setTagsDropdownPos(samePos(measureDropdown(tagsTriggerRef, 208, filterRowRef)));
+    if (filtersOpen) setFiltersPos(samePos(measureFilters()));
+  }, [openPill, filtersOpen, filtered.length, filtersPos]);
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const remeasure = () => setFiltersPos(measureFilters());
+    window.addEventListener('resize', remeasure);
+    return () => window.removeEventListener('resize', remeasure);
+  }, [filtersOpen]);
 
   // Clear stale position state when the dropdown closes via outside-click or
   // ESC (the click handlers do this themselves, but those external paths
@@ -691,6 +1098,25 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // starts on the model THIS conversation last ran on, which only the row
   // knows. See claudeModelForRow.
   const handleSelectSession = (s: PastSession) => {
+    // With the panel open, clicking a row PREVIEWS it (and
+    // re-clicking the same row does nothing, because collapsing the panel would
+    // leave the right half empty for no reason the user asked for). The resume
+    // controls live in the transcript pane, so the card itself never expands.
+    if (previewOn) {
+      setPreviewId(s.sessionId);
+      setPreviewSheetOpen(false);
+      setCloneOrganizeId(null);
+      setOrganizeId(null);
+      warmPane(s.sessionId);
+      // Already built — warmed by a resting pointer, or previewed recently:
+      // there is nothing to wait for, so it arrives on this click. Otherwise
+      // onPreviewSettled brings it on screen when its read finishes.
+      if (settledRef.current.has(s.sessionId) && shownIdRef.current !== s.sessionId) reveal(s.sessionId);
+      // NOT the resume state — the action card still belongs to the
+      // conversation on screen until this one has loaded. It is reset in the
+      // settle effect below, with the row the card is about to show.
+      return;
+    }
     if (expandedId === s.sessionId) {
       setExpandedId(null);
     } else {
@@ -707,21 +1133,51 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     }
   };
 
+  const clearWarmTimer = () => {
+    if (warmTimer.current !== null) { clearTimeout(warmTimer.current); warmTimer.current = null; }
+  };
+  rowActions.current = {
+    select: handleSelectSession,
+    toggleFlag,
+    // Resting the pointer on a row starts building its conversation, so the
+    // click that follows finds it ready. Touch has no hover — a finger warms on
+    // press instead (warmNow), which still starts the read before the click.
+    warmSoon: (s, e) => {
+      if (!previewOn || s.notSyncedYet || e.pointerType === 'touch') return;
+      clearWarmTimer();
+      warmTimer.current = window.setTimeout(() => { warmTimer.current = null; warmPane(s.sessionId); }, WARM_AFTER_MS);
+    },
+    warmNow: (s) => {
+      if (!previewOn || s.notSyncedYet) return;
+      clearWarmTimer();
+      warmPane(s.sessionId);
+    },
+    cancelWarm: clearWarmTimer,
+  };
+  // Everything a CLOSED list card reads from this component, for RowMemo.
+  // An OPEN card — its tag sheet or resume options showing — reads a great deal
+  // more, so it gets a value that differs every render and is never skipped.
+  // Adding a read of component state to renderSessionRow means adding it here.
+  const renderStamp = {};
+  const rowDeps = (s: PastSession, showPath: boolean): readonly unknown[] => {
+    const opened = organizeId === s.sessionId || expandedId === s.sessionId;
+    return [s, showPath, previewOn, previewOn && previewId === s.sessionId, registry.byId, !!namingApi(), opened ? renderStamp : null];
+  };
+
   // Bridge the unified <ModelPicker> onto the two pieces of resume state that
   // already existed: `resumeModel` (a Claude alias) and `nativeResumeBinding`.
   // Which one a row uses is decided by its own provider, so the picker is
   // scoped and only one can ever be in play.
   const resumeChoice = (s: PastSession): ModelChoice | null => {
     if (s.provider === 'native') {
-      return nativeResumeBinding
-        ? { runtime: 'native', providerId: nativeResumeBinding.providerId, modelId: nativeResumeBinding.modelId }
-        : null;
+      const b = nativeBindingFor(s);
+      return b ? { runtime: 'native', providerId: b.providerId, modelId: b.modelId } : null;
     }
     return resumeModel ? { runtime: 'claude', alias: resumeModel } : null;
   };
 
-  const applyResumeChoice = (_s: PastSession, c: ModelChoice) => {
-    if (c.runtime === 'native') setNativeResumeBinding({ providerId: c.providerId, modelId: c.modelId });
+  const applyResumeChoice = (s: PastSession, c: ModelChoice) => {
+    if (c.runtime === 'native') setNativeResumeBinding({ sessionId: s.sessionId, binding: { providerId: c.providerId, modelId: c.modelId } });
     else setResumeModel(c.alias);
   };
 
@@ -739,7 +1195,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     // browser open (App has toasted the honest reason) so the user can retry or
     // pick another row, rather than closing over a silent failure.
     setResumingId(s.sessionId);
-    const result = await onResume(s.sessionId, s.projectSlug, s.projectPath, resumeModel, resumeDangerous, resumeLaunchInNewWindow, s.provider, nativeResumeBinding ?? undefined);
+    const result = await onResume(s.sessionId, s.projectSlug, s.projectPath, resumeModel, resumeDangerous, resumeLaunchInNewWindow, s.provider, nativeBindingFor(s) ?? undefined);
     setResumingId(null);
     if (result !== false) onClose(); // undefined (non-awaiting wiring) or true → close
   };
@@ -773,7 +1229,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           appliedIds={new Set(s.tags ?? [])}
           onToggle={(tagId, next) => toggleTag(s.sessionId, tagId, next)}
           registry={registry}
-          onManageTags={() => { setOrganizeId(null); setTagManagerOpen(true); }}
+          onManageTags={() => { setOrganizeId(null); setCloneOrganizeId(null); setTagManagerOpen(true); }}
           fieldClassName="bg-well border-edge"
           builtIns={[{
             tag: PRIORITY_TAG,
@@ -800,9 +1256,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // the two launch toggles, Resume. Flags/tags/note used to be stacked in here
   // too, which is what made an open card a seven-field form with its primary
   // action at the bottom.
-  const renderExpandedOptions = (s: PastSession) => {
+  const renderExpandedOptions = (s: PastSession, opts?: { flush?: boolean }) => {
   return (
-    <div className="border-t border-edge-dim">
+    // `flush`: the action card at the foot of the preview draws
+    // its own border, and this block's top hairline would double up against it.
+    <div className={opts?.flush ? '' : 'border-t border-edge-dim'}>
       <div className="p-3 flex flex-col gap-2">
         {/* ONE model control for both runtimes. Was two: a Claude alias button
             row here and a separate native picker below, which is the duplication this
@@ -812,6 +1270,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         <div onClick={(e) => e.stopPropagation()}>
           <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
           <ModelPicker
+            // One picker per conversation. The preview's action card stays
+            // mounted while you move between conversations, and the picker fills
+            // in `prefill` only once per mount — so without this key only the
+            // FIRST conversation previewed got its last-used model, and every
+            // later one opened on "Choose a model…" (Destin, 2026-09-11).
+            key={s.sessionId}
             value={resumeChoice(s)}
             onSelect={(c) => applyResumeChoice(s, c)}
             includeClaude={s.provider !== 'native'}
@@ -837,7 +1301,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                   associated with the control — screen readers announced nothing. */}
               <Toggle
                 checked={resumeDangerous}
-                onChange={setResumeDangerous}
+                // Turning ON goes through the first-time warning; Cancel there
+                // leaves it off. Turning off never asks.
+                onChange={(next) => (next ? gateSkipPermissions(() => setResumeDangerous(true)) : setResumeDangerous(false))}
                 tone="danger"
                 aria-label="Skip Permissions"
               />
@@ -846,7 +1312,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 the same token as the toggle beside it, so a community theme
                 restyling its red doesn't leave the two out of sync. */}
             {resumeDangerous && (
-              <p className="text-3xs text-destructive-fg">Claude will execute tools without asking for approval.</p>
+              <SkipPermissionsCaption />
             )}
           </>
         )}
@@ -872,7 +1338,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           // binding exists (manual pick or a prefill auto-select). Never lets
           // resume proceed with no binding to launch — that would be exactly
           // the auto-launch Destin's ruling forbids.
-          const nativeNeedsPick = s.provider === 'native' && !nativeResumeBinding;
+          const nativeNeedsPick = s.provider === 'native' && !nativeBindingFor(s);
           const busy = resumingId === s.sessionId; // create in flight — keep the button busy (ack-gap)
           return (
             /* Filled danger for skip-permissions — same call as SessionStrip's
@@ -893,11 +1359,28 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   );
   };
 
-  const renderSessionRow = (s: PastSession, showPath?: boolean) => {
+  // `clone`: the preview's header is this same card drawn a
+  // second time. Both copies are on screen at once, so the tag/note sheet needs
+  // its own open-id per copy — sharing one made pressing Tag in the header also
+  // expand the card in the list and shove the rest of the list down.
+  const renderSessionRow = (s: PastSession, showPath?: boolean, clone?: boolean) => {
+    const orgId = clone ? cloneOrganizeId : organizeId;
+    const setOrg = clone ? setCloneOrganizeId : setOrganizeId;
     const isExpanded = expandedId === s.sessionId;
+    // With the resume controls out of the card, the accent border
+    // is the ONLY thing left saying which row the right panel is showing, so
+    // the previewed row has to claim it whether or not anything expanded.
+    const isSelected = isExpanded || (previewOn && previewId === s.sessionId);
     // Unresumable rows are inert: no card hover, no expand. See the note on the
     // click handler below for the two reasons a row lands here.
-    const inert = !!(s.missingProject || s.notSyncedYet);
+    // Resume needs the project folder AND the transcript; a PREVIEW needs only
+    // the transcript. So `missingProject` (synced in from another device, folder
+    // not here) is readable and is no longer inert once the panel is open —
+    // reading a conversation you cannot resume on this machine is most of why
+    // the panel exists. `notSyncedYet` stays inert either way: the transcript
+    // itself has not arrived, so there is nothing to show.
+    const canResume = !s.missingProject && !s.notSyncedYet;
+    const inert = previewOn ? !!s.notSyncedYet : !canResume;
     // px-4 matches the search bar and the project group headers above, so the
     // card's outer edge lines up with the rest of the panel.
     return (
@@ -935,24 +1418,77 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           The card wraps BOTH the trigger and the expanded panel so an open row
           reads as one object instead of a row with a detached box under it. */}
       <div
+        // Start building this conversation before the click lands (warmSoon /
+        // warmNow). Not on the header clone: its conversation is already shown.
+        {...(clone ? {} : {
+          onPointerEnter: (e: React.PointerEvent) => rowActions.current?.warmSoon(s, e),
+          onPointerLeave: () => rowActions.current?.cancelWarm(),
+          onPointerDown: () => rowActions.current?.warmNow(s),
+        })}
         // `relative` is load-bearing: the icon cluster is positioned against
         // this card, not the panel. The icon buttons are SIBLINGS of the expand
         // trigger, never nested — a button inside a button is invalid HTML and
         // the inner one would never receive its own click.
         className={`relative rounded-lg border bg-inset overflow-hidden transition-colors ${
-          isExpanded ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
+          isSelected ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
         }`}
       >
+      {/* WHY: match SessionDrawer's filename rename classes and Ic pencil, not
+          the organize icons. Keep the viewer unchanged and retain this dialog's
+          separate keyboard handling. R5-1 keeps both edit cues visible even at rest. */}
+      <div
+        className={`flex items-center gap-1 px-3 pt-2 ${ICON_GUTTER}`}
+        // The empty space between the name and the tag/complete icons was a
+        // dead zone: the name opens Rename, the icons float over the corner, and
+        // only the lower half of the card was the select button. Clicking there
+        // did nothing (Destin, 2026-09-11). Clicks INSIDE a button are left to
+        // that button — without the check the no-rename fallback button would
+        // select twice, which on a narrow screen expands the card and
+        // immediately collapses it again.
+        onClick={(e) => {
+          if (inert || (e.target as HTMLElement).closest('button')) return;
+          rowActions.current?.select(s);
+        }}
+      >
+        {namingApi() ? <Button variant="ghost" size="sm"
+          // -ml-2 cancels the button's own px-2 so the NAME's first letter lands
+          // on the same left edge as the metadata line below it, while the hover
+          // background keeps its padding. Without it the title sat 8px right of
+          // everything else in the card and the row read as indented.
+          className="group flex items-center justify-start gap-1.5 min-w-0 -ml-2 px-2 py-1 rounded-md cursor-text hover:bg-well transition-colors"
+          aria-label={`Rename ${s.name}`} aria-haspopup="dialog"
+          onKeyDown={(e) => {
+            // WHY: Enter did not synthesize a click in the isolated workbench
+            // keyboard check; activate it explicitly. Space stays native.
+            if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setRenameSession(s); }
+          }}
+          onClick={(e) => { e.stopPropagation(); setRenameSession(s); }}>
+          <span className="text-sm-tight font-semibold text-fg truncate decoration-dotted underline-offset-[3px] underline decoration-fg-muted">{s.name}</span>
+          <span className="text-fg-muted shrink-0">
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+            </svg>
+          </span>
+        </Button> : <button type="button" className="text-sm truncate text-left min-w-0 focus-visible:ring-2 focus-visible:ring-accent"
+          onClick={() => { if (!inert) rowActions.current?.select(s); }} aria-disabled={inert || undefined}>
+          {s.name}
+        </button>}
+      </div>
       <button
         // Resume is disabled for conversations whose project folder isn't on
         // this device (synced in from elsewhere) OR whose transcript hasn't
         // synced here yet — either way there's nothing to resume into, so the
         // row shows a plain-words note instead of expanding.
-        onClick={() => { if (!inert) handleSelectSession(s); }}
+        onClick={() => { if (!inert) rowActions.current?.select(s); }}
         aria-disabled={inert || undefined}
         aria-expanded={inert ? undefined : isExpanded}
-        className={`w-full text-left p-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-          inert ? 'text-fg-dim cursor-default' : isExpanded ? 'text-fg' : 'text-fg-dim'
+        // WHY an explicit label: the session name used to be this button's only
+        // text, and R12 moved it into the rename control above. Without this the
+        // resume control announces nothing but its metadata line.
+        aria-label={s.name}
+        className={`w-full text-left px-3 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+          inert ? 'text-fg-dim cursor-default' : isSelected ? 'text-fg' : 'text-fg-dim'
         }`}
       >
         <div className="min-w-0">
@@ -969,7 +1505,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               conversation title right on every native row. The model chip on
               the line below says the same thing in the user's terms — a model
               name — and says it for Claude Code rows too. */}
-          <div className={`text-sm truncate ${ICON_GUTTER}`}>{s.name}</div>
           {/* Tag chips after the name. Priority is FIRST and rendered with the
               same TagChip as everything else — it is a built-in tag, not a
               separate species of label (built-in-tags.ts). Complete has no chip:
@@ -1080,20 +1615,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          if (organizeId === s.sessionId) { setOrganizeId(null); return; }
+          if (orgId === s.sessionId) { setOrg(null); return; }
           organizeTriggerRef.current = e.currentTarget;
           // The two panes are mutually exclusive: a card shows EITHER how to
           // relaunch it or how to organize it, never both stacked. Without this
           // an open card could grow two panels deep and the Resume button would
           // slide down the screen as you tagged.
           setExpandedId(null);
-          setOrganizeId(s.sessionId);
+          setOrg(s.sessionId);
         }}
         aria-label={`Organize ${s.name}`}
         aria-haspopup="dialog"
-        aria-expanded={organizeId === s.sessionId}
+        aria-expanded={orgId === s.sessionId}
         className={`px-1 py-1.5 rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-          organizeId === s.sessionId ? 'text-fg' : 'text-fg-faint hover:text-fg-2'
+          orgId === s.sessionId ? 'text-fg' : 'text-fg-faint hover:text-fg-2'
         }`}
       >
         {/* A tag, not a generic dots menu — it names what the sheet holds.
@@ -1111,7 +1646,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         return (
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); toggleFlag(s.sessionId, 'complete', !done); }}
+            onClick={(e) => { e.stopPropagation(); rowActions.current?.toggleFlag(s.sessionId, 'complete', !done); }}
             aria-pressed={done}
             title={done ? 'Marked complete — hidden unless Show Complete is on. Click to undo.' : 'Mark this session complete?'}
             aria-label={done ? `Mark ${s.name} not complete` : `Mark ${s.name} complete`}
@@ -1140,8 +1675,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           It shares organizePopRef with the floating variants: only one of the
           two is ever mounted, and the outside-click handler checks that ref to
           know "the click landed inside the open organize UI". */}
-      {organizeId === s.sessionId && (
-        <div ref={organizePopRef} className="border-t border-edge-dim p-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
+      {orgId === s.sessionId && (
+        <div ref={clone ? undefined : organizePopRef} className="border-t border-edge-dim p-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
           {renderOrganizeControls(s)}
         </div>
       )}
@@ -1151,19 +1686,242 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     );
   };
 
+
+  // The action card at the FOOT of the sheet, in the place a real
+  // conversation puts its message box: this is where you act on what you just
+  // read. Its contents are `renderExpandedOptions` verbatim — the same block the
+  // expanded card in the list and ResumeOptionsPopover already draw — because
+  // Destin's ruling on the switches was "this should look like it does in our
+  // other existing new/resume surfaces", and re-styling them here is exactly how
+  // three surfaces drift apart. `flush` only drops the top hairline, which would
+  // otherwise double up against the card's own border.
+  const renderActionCard = (s: PastSession) => (
+    <div className="shrink-0 p-3 pt-0">
+      <div className="rounded-lg border border-edge bg-panel shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
+        {/* Readable but not resumable here. The row's own card carries the same
+            sentence; repeating it at the foot is the answer to "so why is there
+            no Resume button?", asked at the moment it is asked. */}
+        {s.missingProject ? (
+          <div className="px-3 py-2.5 text-2xs text-fg-muted">
+            Project folder not on this device — you can read this conversation, but it has to be resumed where its folder lives.
+          </div>
+        ) : (<>
+        {/* No folder chip here. It was above the model picker until Destin
+            pointed out the header card at the top of the sheet already says
+            which folder this is — the same fact twice, 300px apart. */}
+        {renderExpandedOptions(s, { flush: true })}
+        </>)}
+      </div>
+    </div>
+  );
+
+  // The filter row: three chips. Rendered under the search box at desktop width
+  // and INSIDE the phone popover below 640px (deck round 1 S-7, round 2 S-9 —
+  // "project/tags should be dropdowns"), so both widths share one set of controls.
+  const chipsRow = (
+        <div ref={filterRowRef} className={narrow ? 'flex flex-wrap items-center gap-2' : 'flex items-center gap-2 mt-2 scroll-fade-x'}>
+          {/* Projects: pick-any menu over the distinct project paths in the loaded
+              sessions. The menu is portaled to document.body so it escapes the
+              OverlayPanel's overflow:hidden clipping (lets it overlap the panel edge). */}
+          <FilterMenuChip
+            buttonRef={projectsTriggerRef}
+            active={selectedProjects.size > 0}
+            open={openPill === 'projects'}
+            className="shrink-0 max-w-[7rem]"
+            onClick={(e) => {
+              e.stopPropagation();
+              // Measure synchronously so the dropdown renders with its final
+              // position in the same commit as openPill flipping. Avoids the
+              // two-render lag the prior useLayoutEffect approach had.
+              if (openPill === 'projects') {
+                setOpenPill(null);
+                setProjectsDropdownPos(null);
+              } else {
+                setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256, filterRowRef));
+                setOpenPill('projects');
+              }
+            }}
+          >
+            {projectsLabel}
+          </FilterMenuChip>
+          {openPill === 'projects' && projectsDropdownPos && createPortal(
+            <div
+              ref={projectsDropdownRef}
+              className="layer-surface w-64 max-w-[calc(100vw-1rem)] overflow-hidden"
+              style={{ position: 'fixed', top: projectsDropdownPos.top, left: projectsDropdownPos.left, zIndex: 60 }}
+            >
+              {/* The list scrolls; the footer stays put, so Clear never leaves
+                  the screen behind a long list of projects. */}
+              <div role="listbox" aria-multiselectable aria-label="Filter by project" className="max-h-56 overflow-y-auto py-1">
+                {availableProjects.map((p) => {
+                  const checked = selectedProjects.has(p.path);
+                  return (
+                    <button
+                      key={p.path}
+                      type="button"
+                      role="option"
+                      aria-selected={checked}
+                      onClick={() => {
+                        setSelectedProjects((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(p.path)) next.delete(p.path);
+                          else next.add(p.path);
+                          return next;
+                        });
+                      }}
+                      className={MENU_ROW}
+                    >
+                      <CheckboxMark checked={checked} />
+                      <span className="flex-1 truncate" title={p.path}>{p.label}</span>
+                      <span className="text-2xs text-fg-muted shrink-0 tabular-nums">{p.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Clear empties the selection, which the data model treats as
+                  "filter inactive". Dimmed rather than hidden when there is
+                  nothing to clear, so the menu's height never jumps. */}
+              <div className={MENU_FOOTER}>
+                <button
+                  type="button"
+                  disabled={selectedProjects.size === 0}
+                  onClick={() => { setSelectedProjects(new Set()); setOpenPill(null); setProjectsDropdownPos(null); }}
+                  className={MENU_FOOTER_ACTION}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>,
+            document.body,
+          )}
+
+          {/* Tags: pick-any menu over the user's tags. Portaled for the same reason. */}
+          <FilterMenuChip
+            buttonRef={tagsTriggerRef}
+            active={selectedTagIds.size > 0}
+            open={openPill === 'tags'}
+            className="shrink-0 max-w-[7rem]"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (openPill === 'tags') { setOpenPill(null); setTagsDropdownPos(null); }
+              else { setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208, filterRowRef)); setOpenPill('tags'); }
+            }}
+          >
+            {tagsLabel}
+          </FilterMenuChip>
+          {openPill === 'tags' && tagsDropdownPos && createPortal(
+            <div
+              ref={tagsDropdownRef}
+              className="layer-surface w-52 max-w-[calc(100vw-1rem)] overflow-hidden"
+              style={{ position: 'fixed', top: tagsDropdownPos.top, left: tagsDropdownPos.left, zIndex: 60 }}
+            >
+              {/* A failed tag read is not "No tags yet" (code review 2026-09-11, F5). */}
+              {registry.error && registry.tags.length === 0 ? (
+                <div className="px-3 py-3">
+                  <ErrorState variant="inline" message={`Couldn't load your tags: ${registry.error}`} onRetry={registry.reload} />
+                </div>
+              ) : liveTags.length === 0 ? (
+                <div className="px-3 py-3">
+                  <EmptyState variant="inline" message="No tags yet" />
+                </div>
+              ) : (
+                <div role="listbox" aria-multiselectable aria-label="Filter by tag" className="max-h-64 overflow-y-auto py-1">
+                  {liveTags.map((t) => {
+                    const checked = selectedTagIds.has(t.id);
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        role="option"
+                        aria-selected={checked}
+                        onClick={() => setSelectedTagIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(t.id)) next.delete(t.id); else next.add(t.id);
+                          return next;
+                        })}
+                        className={MENU_ROW}
+                      >
+                        <CheckboxMark checked={checked} />
+                        <TagChip tag={t} />
+                        <span className="ml-auto text-2xs text-fg-muted shrink-0 tabular-nums">{tagCounts.get(t.id) ?? 0}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {/* Footer: Clear only. The route to the tag manager used to sit
+                  here too; Destin removed it (deck round 1, S-4) — a
+                  conversation's Organize popover keeps its "Manage tags…". */}
+              <div className={MENU_FOOTER}>
+                <button
+                  type="button"
+                  disabled={selectedTagIds.size === 0}
+                  onClick={() => { setSelectedTagIds(new Set()); setOpenPill(null); setTagsDropdownPos(null); }}
+                  className={MENU_FOOTER_ACTION}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>,
+            document.body,
+          )}
+
+          {/* Sort — one tap flips the order and the arrow turns with it. Lit,
+              like a narrowing filter, only when the order is not the default,
+              so the row says at a glance that the list is not newest-first.
+              Priority-pin still wins over the sort. */}
+          <FilterChip
+            kind="toggle"
+            active={sortDir !== 'desc'}
+            onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
+            className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+          >
+            <span className="grid">
+              <span className="col-start-1 row-start-1">{sortDir === 'desc' ? 'Most recent' : 'Oldest first'}</span>
+              {/* The other label, invisible, so the chip keeps one width when it
+                  flips and the row stops nudging (UX review U19). */}
+              <span className="col-start-1 row-start-1 invisible" aria-hidden="true">{sortDir === 'desc' ? 'Oldest first' : 'Most recent'}</span>
+            </span>
+            <SortArrow muted={sortDir === 'desc'} up={sortDir === 'asc'} />
+          </FilterChip>
+        </div>  );
+
   return (
     <>
+      {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
+      {skipPermissionsDialog}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
       <Scrim layer={1} onClick={onClose} />
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}
-          className="w-full max-w-md max-h-[70vh] flex flex-col pointer-events-auto"
+          // Preview mode swaps max-h for a DEFINITE height. The
+          // note on the list below explains why: with only a max-height, a
+          // flex-1 child does not grow in Chromium, and the transcript column
+          // needs a real height to scroll inside.
+          className={`w-full pointer-events-auto flex flex-col ${previewOn
+            ? 'max-w-[1000px] h-[76vh]'
+            : 'max-w-md max-h-[70vh]'}`}
           style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
+        {/* The body row. `contents` when there is no preview so the header and
+            list stay DIRECT flex children of the panel, and the single-column
+            browser (narrow, or Android) renders exactly as it always has. */}
+        <div className={previewOn ? 'flex-1 min-h-0 flex' : 'contents'}>
+        {/* List column. */}
+        <div className={previewOn
+          ? 'w-[420px] shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge overflow-hidden'
+          : 'contents'}>
+          <div className={previewOn ? 'w-[420px] flex flex-col h-full min-h-0' : 'contents'}>
           {/* Header */}
-          <div className="px-4 pt-4 pb-3 border-b border-edge">
+          {/* No `border-b`: Destin, 2026-09-10, "there should be gaps
+              on the left/right side of the divider line where it doesn't
+              connect to the outer container but tapers off". A border cannot
+              fade, so the rule is a 1px gradient row instead — the same idiom
+              SessionStrip already uses for the divider between Resume and
+              + New Session. */}
+          <div className="px-4 pt-4 pb-3 shrink-0 relative">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-fg">Resume Session</h2>
               {/* Show Complete — same toggle pattern as Skip Permissions
@@ -1180,158 +1938,61 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 />
               </div>
             </div>
-            <div className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
-              <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
-              </svg>
-              <input
+            {/* Phones get the shared search pill with its docked filter button, which
+                opens the filter panel (deck round 1, S-7). Desktop keeps the box
+                Destin chose over the pill (S-2), with the chips on the next row. */}
+            {narrow ? (
+              <SearchFilterPill
                 ref={searchRef}
-                type="text"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={setSearch}
                 placeholder="Search sessions..."
-                className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
+                inputAriaLabel="Search sessions"
+                activeFilters={selectedProjects.size + selectedTagIds.size}
+                filterOpen={filtersOpen}
+                onToggleFilter={() => {
+                  if (filtersOpen) { setFiltersOpen(false); setOpenPill(null); setFiltersPos(null); }
+                  else { setFiltersPos(measureFilters()); setFiltersOpen(true); }
+                }}
+                filterLabel="Filters"
               />
-            </div>
-            <div ref={filterRowRef} className="flex items-center gap-1.5 mt-2 relative">
-              {/* Projects: multi-select dropdown over distinct projectPaths in the loaded sessions.
-                  Dropdown is portaled to document.body so it escapes the OverlayPanel's
-                  overflow:hidden clipping (lets it overlap the panel edge). */}
-              <FilterPill
-                buttonRef={projectsTriggerRef}
-                active={selectedProjects.size > 0}
-                hasPopup
-                expanded={openPill === 'projects'}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  // Measure synchronously so the dropdown renders with its final
-                  // position in the same commit as openPill flipping. Avoids the
-                  // two-render lag the prior useLayoutEffect approach had.
-                  if (openPill === 'projects') {
-                    setOpenPill(null);
-                    setProjectsDropdownPos(null);
-                  } else {
-                    setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256));
-                    setOpenPill('projects');
-                  }
-                }}
+            ) : (
+              // Destin kept this box over the shared search pill (deck round 1, S-2).
+              <div ref={searchRef} className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
+                <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
+                </svg>
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search sessions..."
+                  aria-label="Search sessions"
+                  className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
+                />
+              </div>
+            )}
+            {narrow && filtersOpen && filtersPos && createPortal(
+              <ResumeFilterPopover
+                ref={filtersPopoverRef}
+                anchor={filtersPos}
+                filtersActive={filtersActive}
+                onClear={() => { setSelectedProjects(new Set()); setSelectedTagIds(new Set()); }}
+                onClose={() => { setFiltersOpen(false); setOpenPill(null); setFiltersPos(null); }}
               >
-                <span>{projectsLabel}</span>
-                <span className="text-fg-faint text-4xs">▾</span>
-              </FilterPill>
-              {openPill === 'projects' && projectsDropdownPos && createPortal(
-                <div
-                  ref={projectsDropdownRef}
-                  className="layer-surface w-64 max-w-[calc(100vw-1rem)] overflow-hidden"
-                  style={{
-                    position: 'fixed',
-                    top: projectsDropdownPos.top,
-                    left: projectsDropdownPos.left,
-                    zIndex: 60,
-                  }}
-                >
-                  {/* "Clear" — text-only affordance that empties selectedProjects (which the data
-                      model treats as "filter inactive"). No checkbox visual so it doesn't read as
-                      a master "select every project" toggle. Muted small-caps style separates it
-                      from the checkbox rows below. Always visible; clicks no-op when already cleared. */}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedProjects(new Set())}
-                    className="w-full text-left px-2.5 py-1.5 text-2xs text-fg-muted tracking-wider uppercase hover:text-fg hover:bg-inset transition-colors"
-                  >
-                    Clear
-                  </button>
-                  <div className="max-h-56 overflow-y-auto border-t border-edge-dim">
-                    {availableProjects.map((p) => {
-                      const checked = selectedProjects.has(p.path);
-                      return (
-                        <button
-                          key={p.path}
-                          type="button"
-                          onClick={() => {
-                            setSelectedProjects((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(p.path)) next.delete(p.path);
-                              else next.add(p.path);
-                              return next;
-                            });
-                          }}
-                          className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
-                        >
-                          <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
-                          <span className="flex-1 truncate" title={p.path}>{p.label}</span>
-                          <span className="text-3xs text-fg-muted shrink-0">{p.count}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>,
-                document.body,
-              )}
-
-              {/* Tags: multi-select dropdown over the user's custom tags. Portaled
-                  to escape the OverlayPanel's overflow:hidden clipping. */}
-              <FilterPill
-                buttonRef={tagsTriggerRef}
-                active={selectedTagIds.size > 0}
-                hasPopup
-                expanded={openPill === 'tags'}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (openPill === 'tags') { setOpenPill(null); setTagsDropdownPos(null); }
-                  else { setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208)); setOpenPill('tags'); }
-                }}
-              >
-                <span>{selectedTagIds.size === 0 ? 'Tags' : `${selectedTagIds.size} tag${selectedTagIds.size > 1 ? 's' : ''}`}</span>
-                <span className="text-fg-faint text-4xs">▾</span>
-              </FilterPill>
-              {openPill === 'tags' && tagsDropdownPos && createPortal(
-                <div
-                  ref={tagsDropdownRef}
-                  className="layer-surface w-52 max-w-[calc(100vw-1rem)] max-h-64 overflow-y-auto"
-                  style={{ position: 'fixed', top: tagsDropdownPos.top, left: tagsDropdownPos.left, zIndex: 60 }}
-                >
-                  {registry.tags.filter((t) => !t.archived).length === 0 && (
-                    <div className="px-2.5 py-1.5 text-xs text-fg-muted">No tags yet.</div>
-                  )}
-                  {/* Second route to the tag manager, so "where do I rename a
-                      tag?" is answerable from the filter too — not only from a
-                      conversation's Organize popover. */}
-                  <button
-                    type="button"
-                    onClick={() => { setOpenPill(null); setTagManagerOpen(true); }}
-                    className="w-full text-left px-2.5 py-1.5 text-2xs text-fg-muted tracking-wider uppercase hover:text-fg hover:bg-inset transition-colors border-b border-edge-dim"
-                  >
-                    Manage tags…
-                  </button>
-                  {registry.tags.filter((t) => !t.archived).map((t) => {
-                    const checked = selectedTagIds.has(t.id);
-                    return (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => setSelectedTagIds((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(t.id)) next.delete(t.id); else next.add(t.id);
-                          return next;
-                        })}
-                        className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
-                      >
-                        <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
-                        <TagChip tag={t} />
-                      </button>
-                    );
-                  })}
-                </div>,
-                document.body,
-              )}
-
-              {/* Sort toggle — flips lastModified direction. Priority-pin still wins. */}
-              <FilterPill active={sortDir !== 'desc'} onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}>
-                {sortDir === 'desc' ? 'Most recent ↓' : 'Oldest first ↑'}
-              </FilterPill>
-            </div>
+                {chipsRow}
+              </ResumeFilterPopover>,
+              document.body,
+            )}
+            {!narrow && chipsRow}
+            {/* Inset both ends so the line stops short of the panel edge and
+                fades out rather than butting into it. */}
+            <div
+              aria-hidden
+              className="absolute inset-x-0 bottom-0 h-px"
+              style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
+            />
           </div>
 
           {/* Session list */}
@@ -1343,14 +2004,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               no padding. Sticky fade pseudos then sit flush with the scroll-fade's
               outer edge, and the `overflow: hidden` on .layer-surface clips them to
               the OverlayPanel's rounded corners. */}
-          <div ref={listRef} className="scroll-fade">
+          <div ref={listRef} className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
             <div className="py-2">
               {loading ? (
                 <LoadingState what="sessions" />
+              ) : loadError !== null ? (
+                loadError ? (
+                  <ErrorState mode="recoverable" message={`Couldn\u2019t load your conversations: ${loadError}`} onRetry={loadSessions} variant="inline" />
+                ) : (
+                  <ErrorState mode="recoverable" message="Couldn\u2019t load your conversations." onRetry={loadSessions} variant="inline" />
+                )
               ) : filtered.length === 0 ? (
                 <EmptyState
-                  message={search.trim() ? 'No matching sessions' : 'No previous sessions found'}
-                  action={search.trim() ? { label: 'Clear search', onClick: () => setSearch('') } : undefined}
+                  message={search.trim() || filtersActive ? 'No matching sessions' : 'No previous sessions found'}
+                  action={emptyAction}
                 />
               ) : (
                 // ONE list for both modes — grouped (project header + its rows,
@@ -1371,7 +2038,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                           {item.label}
                         </span>
                       </div>
-                    ) : renderSessionRow(item.session, item.showPath)
+                    ) : (
+                      <RowMemo
+                        key={item.session.sessionId}
+                        render={() => renderSessionRow(item.session, item.showPath)}
+                        deps={rowDeps(item.session, item.showPath)}
+                      />
+                    )
                   ))}
                   {/* Top-up trigger. Rendered only while rows remain, so the
                       observer effect above tears down once the list is whole. */}
@@ -1380,6 +2053,82 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               )}
             </div>
           </div>
+          </div>
+        </div>
+        {/* The transcript column. */}
+        {previewOn && (() => {
+          // `s` is what the sheet SHOWS; null until a picked conversation has
+          // been read, and null again if a search hides it. The sheet is
+          // mounted either way — its layers do the reading, including warming
+          // a row before anything is picked, so they cannot wait for a pick.
+          // It just stays invisible, with the empty state over it, until there
+          // is something to show. Plain words, no invented benefit: the panel
+          // is empty because nothing is picked, and that is the whole message.
+          const s = previewSession;
+          return (
+            <div className="relative flex-1 min-w-0 flex flex-col min-h-0 p-3">
+              {!s && (
+                <div className="absolute inset-0 flex items-center justify-center px-8">
+                  <EmptyState message="Pick a conversation to read it here before you resume." />
+                </div>
+              )}
+              <div className={`relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas${
+                !s || arrival === 'staged' ? ' opacity-0' : arrival === 'run' ? ' switch-arrival' : ''
+              }`}>
+                {s && (
+                  <>
+                    {/* The header IS the list's card, drawn again — Destin, round
+                        four: "a clone of the card on the lefthand side ... floats at
+                        the top of the window inside the container". Floating, not
+                        welded: older messages pass under it as you scroll back.
+                        pointer-events-none on the strip, auto on the card, so the
+                        gutter beside it does not swallow scroll wheels.
+                        preview-header-slide / data-tucked: it slides up out of the
+                        sheet while you scroll back, and down again when you scroll
+                        toward the newest message (onPreviewScroll). data-still on
+                        the staged frame, so a card coming back for a newly picked
+                        conversation is simply there, not sliding in under the
+                        arrival. The open tags/note sheet holds it on screen. */}
+                    <div
+                      className="preview-header-slide absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none"
+                      data-tucked={headerTucked && !cloneOrganizeId ? '' : undefined}
+                      data-still={arrival === 'staged' ? '' : undefined}
+                    >
+                      {/* PERF: box-shadow, not `drop-shadow-[…]`. drop-shadow is a CSS
+                          FILTER — it traces the alpha of the whole subtree and re-runs
+                          on every paint, and this card floats over a scrolling
+                          transcript, so it repaints constantly.
+                          onFocusCapture: Tab can still land on a tucked card's
+                          buttons, so focus brings it back into view. */}
+                      <div className="pointer-events-auto [&>div>div]:shadow-[0_6px_16px_rgba(0,0,0,0.35)]" onFocusCapture={() => setHeaderTucked(false)}>
+                        {renderSessionRow(s, true, true)}
+                      </div>
+                    </div>
+                  </>
+                )}
+                <div className="relative flex-1 min-h-0" onScrollCapture={onPreviewScroll}>
+                  {paneIds.map((id) => {
+                    const r = sessionsById.get(id);
+                    return r ? (
+                      <PreviewLayer
+                        key={id}
+                        id={id}
+                        provider={r.provider === 'native' ? 'native' : 'claude'}
+                        title={r.name}
+                        projectSlug={r.projectSlug || undefined}
+                        visible={id === shownId}
+                        onSettled={onPreviewSettled}
+                        onGone={onPreviewGone}
+                      />
+                    ) : null;
+                  })}
+                </div>
+                {s && renderActionCard(s)}
+              </div>
+            </div>
+          );
+        })()}
+        </div>
         </OverlayPanel>
       </div>
 

@@ -100,4 +100,41 @@ class SkillScannerTest {
             .first { it.getString("id") == "imessage:send-message" }
         assertEquals("imessage", entry.getString("pluginName"))
     }
+
+    @Test
+    fun `reads a plugin skill's real SKILL_md description instead of the generic fallback`() {
+        // Regression test, mirrors desktop's skill-scanner.test.ts: this used to
+        // pass "" as fallbackDesc unconditionally, so every plugin skill without
+        // a curated registry entry showed "Run the X skill" even though its
+        // SKILL.md has a real description.
+        write(".claude/plugins/test-plugin/plugin.json", """{"name":"test-plugin"}""")
+        write(
+            ".claude/plugins/test-plugin/skills/setup-wizard/SKILL.md",
+            "---\nname: setup-wizard\ndescription: Walks the user through first-run setup.\n---\n\nBody\n",
+        )
+
+        val skills = SkillScanner(tmpHome, context).scan()
+        val entry = (0 until skills.length()).map { skills.getJSONObject(it) }
+            .first { it.getString("id") == "test-plugin:setup-wizard" }
+        assertEquals("Walks the user through first-run setup.", entry.getString("description"))
+    }
+
+    @Test
+    fun `joins a YAML folded block-scalar description instead of capturing the greater-than sign`() {
+        // youcoded-encyclopedia's real skills all use "description: >" for long
+        // trigger text; a naive single-line regex would capture ">" itself.
+        write(".claude/plugins/test-plugin/plugin.json", """{"name":"test-plugin"}""")
+        write(
+            ".claude/plugins/test-plugin/skills/encyclopedia-compile/SKILL.md",
+            "---\nname: encyclopedia-compile\ndescription: >\n  Compiles the user's Encyclopedia from eight\n  modular source files.\n---\n\nBody\n",
+        )
+
+        val skills = SkillScanner(tmpHome, context).scan()
+        val entry = (0 until skills.length()).map { skills.getJSONObject(it) }
+            .first { it.getString("id") == "test-plugin:encyclopedia-compile" }
+        assertEquals(
+            "Compiles the user's Encyclopedia from eight modular source files.",
+            entry.getString("description"),
+        )
+    }
 }

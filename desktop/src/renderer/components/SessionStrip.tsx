@@ -1,11 +1,11 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
-import { Button, Toggle } from './ui';
+import { Button, Toggle, Tooltip } from './ui';
 import { isAndroid, isRemoteMode } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
-import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, type Runtime, type Binding } from './RuntimeBinding';
+import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './RuntimeBinding';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import { packSessions, PILL_GAP, type SessionMeasurement, type PackResult } from './header/pack-sessions';
 import { pillLabelStyle } from './header/pill-label-style';
@@ -28,7 +28,13 @@ import {
   beginLocalSessionDrag, endLocalSessionDrag, localSessionDrag,
 } from '../session-drag-model';
 import { ContextMenu } from './context-menu/ContextMenu';
+import SessionRenameDialog from './SessionRenameDialog';
+import { namingApi } from './assistant-settings/naming-api';
+import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import type { MenuEntry } from './context-menu/build-menu';
+import { SkipPermissionsCaption } from './SkipPermissionsCaption';
+import { useFirstTimeGate } from './FirstTimeWarning';
+import { isSmallModel } from './first-time-warnings';
 
 // Stable empty map for the non-dragging render, so a new Map is not allocated
 // on every frame the strip re-renders.
@@ -110,16 +116,19 @@ interface SessionEntry {
   name: string;
   cwd: string;
   permissionMode: string;
-  // Which runtime backend this session runs — 'claude' (default) or 'native'.
-  // With harnessId and model, drives the "Claude Code · Sonnet" /
-  // "YouCoded Coder · DeepSeek R1" line under the name in the All Sessions
-  // menu (session-runtime-label.ts). Nothing on the pill itself.
+  // Which runtime backend this session runs — 'claude' (default), 'native' or
+  // 'shell'. With harnessId and model, drives the "Claude Code · Sonnet" /
+  // "YouCoded Coder · DeepSeek R1" / "Terminal · fish" line under the name in
+  // the All Sessions menu (session-runtime-label.ts). Nothing on the pill itself.
   provider?: string;
   // Resolved native preset id ('assistant' | 'coder', post legacy-mapping).
   // Absent for Claude sessions.
   harnessId?: string;
   // Model id the session runs on — a Claude alias or a native model id.
   model?: string;
+  // provider='shell' only — the shell that was spawned ('fish'), which the
+  // All Sessions menu shows where a model would otherwise go.
+  shellName?: string;
 }
 
 interface Props {
@@ -127,7 +136,10 @@ interface Props {
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
   onCreateSession: (cwd: string, dangerous: boolean, model: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string) => void;
-  onCloseSession: (id: string) => void;
+  // WHY (2026-09-07): name is optional so the confirm prompt can show a real
+  // session name for a "sessions in other windows" row — that session isn't
+  // in the `sessions` array App.tsx uses to look names up by id.
+  onCloseSession: (id: string, name?: string) => void;
   sessionStatuses?: Map<string, SessionStatusColor>;
   // WHY: `onResumeSession` is no longer accepted here. The strip never invoked
   // it — resuming is owned by the ResumeBrowser modal, opened via
@@ -136,6 +148,11 @@ interface Props {
   onOpenResumeBrowser: () => void;
   onReorderSessions?: (fromIndex: number, toIndex: number) => void;
   defaultModel?: string;
+  /** The saved default across EVERY provider (Assistant settings → Default
+   *  model). `defaultModel` beside it is the Claude alias this form has always
+   *  had; on its own it could not express "my default is GPT-5.6", which is why
+   *  a non-Claude default was written down and then ignored (contract R5). */
+  defaultStartModel?: ModelChoice;
   defaultSkipPermissions?: boolean;
   defaultProjectFolder?: string;
   /** Window directory (for switcher's "Sessions in other windows" group). */
@@ -261,14 +278,18 @@ function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<str
         <TagChip key={i} tag={{ label: m.label, color: m.color as TagRecord['color'] }} />
       ))}
       {rest.length > 0 && (
-        <span className="text-3xs text-fg-muted" title={rest.map((m) => m.label).join(', ')}>
+        <Tooltip text={rest.map((m) => m.label).join(', ')}>
+        <span className="text-3xs text-fg-muted">
           +{rest.length}
         </span>
+        </Tooltip>
       )}
       {meta.note && (
-        <span title="This session has a note" className="flex items-center">
+        <Tooltip text="This session has a note">
+        <span className="flex items-center">
           <NotePageGlyph className="w-3 h-3 text-fg-faint" />
         </span>
+        </Tooltip>
       )}
     </span>
   );
@@ -298,9 +319,11 @@ function DragGrip() {
 // second line under the name, so the name gets the row's full width.
 function SessionName({ name }: { name: string }) {
   return (
-    <span className="block truncate leading-snug text-sm-tight" title={name}>
+    <Tooltip text={name}>
+    <span className="block truncate leading-snug text-sm-tight">
       {name}
     </span>
+    </Tooltip>
   );
 }
 
@@ -320,12 +343,16 @@ function blankDragImage(): HTMLCanvasElement {
 /* ── Main component ──────────────────────────────────────── */
 
 export default function SessionStrip({
-  sessions, activeSessionId, onSelectSession,
+  sessions: sourceSessions, activeSessionId, onSelectSession,
   onCreateSession, onCloseSession, sessionStatuses,
   onOpenResumeBrowser, onReorderSessions,
-  defaultModel, defaultSkipPermissions, defaultProjectFolder,
+  defaultModel, defaultStartModel, defaultSkipPermissions, defaultProjectFolder,
   windowDirectory, myWindowId,
 }: Props) {
+  const sourceNames = useMemo(() => Object.fromEntries(sourceSessions.map((s) => [s.id, s.name])), [sourceSessions]);
+  const previewNames = useRenamedSessions(sourceNames);
+  const sessions = useMemo(() => sourceSessions.map((s) => previewNames[s.id] === undefined
+    ? s : { ...s, name: previewNames[s.id] }), [sourceSessions, previewNames]);
   // One registry read for the whole menu: the rows need tag COLOURS, and a hook
   // per row would be one tags.list() per row.
   const tagsById = useTagRegistry().byId;
@@ -370,9 +397,21 @@ export default function SessionStrip({
   // whole control — Runtime toggle, provider/model picker, and all derivation —
   // now lives in the shared RuntimeBinding module so this form and the welcome/
   // app-open form can't drift on native-session creation.
-  const [runtime, setRuntime] = useState<Runtime>('claude');
+  // Opens on the install's remembered default (see RuntimeBinding.defaultRuntime):
+  // 'claude' normally, 'native' on an install that signed in with ChatGPT.
+  const [runtime, setRuntime] = useState<Runtime>(() => defaultRuntime());
   const [binding, setBinding] = useState<Binding | null>(() => loadLastBinding());
   const nb = useNativeBinding({ active: showNewForm, runtime, binding, setBinding });
+
+  // First-time warnings (spec §5): Skip Permissions on its toggle, small model
+  // on Create. The popover at z-9000 would sit ABOVE the warning and its
+  // outside-click closer would read a click in the dialog as "outside", so the
+  // popover hides while the warning is up and returns after. Only `menuOpen`
+  // flips — `showNewForm` and every field stay put, so Cancel lands back on the
+  // form exactly as it was (see useFirstTimeGate for the why).
+  const yieldToWarning = { onShow: () => setMenuOpen(false), onSettle: () => setMenuOpen(true) };
+  const { gate: gateSkipPermissions, dialog: skipPermissionsDialog } = useFirstTimeGate('skip-permissions', yieldToWarning);
+  const { gate: gateSmallModel, dialog: smallModelDialog } = useFirstTimeGate('small-model', yieldToWarning);
   // Native harness preset (Assistant | Coder) — shared lifecycle hook (see
   // RuntimeBinding.usePreset). Follows the folder heuristic until the user picks a
   // card, then latches; re-arms every time the form (re)opens via `showNewForm`.
@@ -388,15 +427,17 @@ export default function SessionStrip({
         : null)
     : { runtime: 'claude', alias: newModel };
 
-  const applyModelChoice = (c: ModelChoice) => {
+  // useCallback so the create path below can list it as a dependency: every
+  // setter it touches is stable, so this identity never changes.
+  const applyModelChoice = useCallback((c: ModelChoice) => {
     if (c.runtime === 'claude') {
       setRuntime('claude');
       setNewModel(c.alias);
     } else {
       setRuntime('native');
-      nb.setBinding({ providerId: c.providerId, modelId: c.modelId });
+      setBinding({ providerId: c.providerId, modelId: c.modelId });
     }
-  };
+  }, []);
   // Launch the new session in its own peer window instead of this one.
   // Hidden on platforms without multi-window support (Android / remote-shim).
   const [launchInNewWindow, setLaunchInNewWindow] = useState(false);
@@ -515,6 +556,20 @@ export default function SessionStrip({
   // the cursor is currently over this window's strip. Drives a visual drop-
   // target highlight. Cleared on any non-hover tick or when the drag ends.
   const [incomingDropActive, setIncomingDropActive] = useState(false);
+  // Drop-target highlight for the "sessions in this window" list while a
+  // "sessions in other windows" row (native HTML5 drag, see below) is over it.
+  const [peerDropActive, setPeerDropActive] = useState(false);
+  // Reordering INSIDE the All Sessions menu, by the same native drag the peer
+  // rows use. WHY a second system rather than the pointer path the pill bar
+  // uses: that path picks a target slot from the cursor's clientX against the
+  // PILL BAR's geometry and ignores Y entirely ("Y is ignored on purpose",
+  // handlePointerMove) — so in a vertical list the one gesture the list invites
+  // could never land anywhere, and a sideways drag reordered against pills the
+  // dropdown isn't even near. `menuDragId` is the row in hand; `menuDropIndex`
+  // is the insertion slot (0…sessions.length) the line is drawn at.
+  const [menuDragId, setMenuDragId] = useState<string | null>(null);
+  const [menuDropIndex, setMenuDropIndex] = useState<number | null>(null);
+  const endMenuDrag = useCallback(() => { setMenuDragId(null); setMenuDropIndex(null); setPeerDropActive(false); }, []);
 
   // Listen for cross-window cursor updates from main — fires ~30Hz while
   // a peer window is dragging a pill. We hit-test each update against our
@@ -738,28 +793,48 @@ export default function SessionStrip({
   const handleCreate = useCallback(() => {
     // Native runtime carries a provider/model binding; a missing binding is
     // already guarded by the disabled Create button, so bail defensively.
-    if (runtime === 'native') {
-      if (!nb.effectiveBinding) return;
-      persistLastBinding(nb.effectiveBinding);
-    }
-    onCreateSession(
-      newCwd,
-      // Hidden for native (see the gate on the toggle), so a value left over
-      // from an earlier Claude pick must not ride along into the create.
-      runtime === 'native' ? false : dangerous,
-      newModel,
-      runtime,
-      launchInNewWindow,
-      runtime === 'native' ? (nb.effectiveBinding ?? undefined) : undefined,
-      runtime === 'native' ? preset : undefined,
-    );
-    setMenuOpen(false);
-    setShowNewForm(false);
-    setDangerous(defaultSkipPermissions || false);
-    setNewModel(defaultModel || 'sonnet');
-    setLaunchInNewWindow(false);
-    setRuntime('claude');
-  }, [newCwd, dangerous, newModel, launchInNewWindow, onCreateSession, defaultSkipPermissions, defaultModel, runtime, nb.effectiveBinding, preset]);
+    const nativeBinding = runtime === 'native' ? nb.effectiveBinding : null;
+    if (runtime === 'native' && !nativeBinding) return;
+    const proceed = () => {
+      // Persisted inside `proceed`, not before the gate: a cancelled create
+      // should leave no trace, and "last used" is a trace.
+      if (nativeBinding) persistLastBinding(nativeBinding);
+      onCreateSession(
+        newCwd,
+        // Hidden for native (see the gate on the toggle), so a value left over
+        // from an earlier Claude pick must not ride along into the create.
+        runtime === 'native' ? false : dangerous,
+        newModel,
+        runtime,
+        launchInNewWindow,
+        nativeBinding ?? undefined,
+        runtime === 'native' ? preset : undefined,
+      );
+      setMenuOpen(false);
+      setShowNewForm(false);
+      setDangerous(defaultSkipPermissions || false);
+      setNewModel(defaultModel || 'sonnet');
+      setLaunchInNewWindow(false);
+      // Reset to the remembered default, NOT the literal 'claude' -- otherwise a
+      // ChatGPT-only install's default would last one session (review R2-3).
+      setRuntime(defaultRuntime());
+      if (defaultStartModel) applyModelChoice(defaultStartModel);
+    };
+    // First session on a small model gets the once-only explainer (spec §5).
+    // The catalog row supplies the label and, for a local model, the file size
+    // that decides when the name carries no parameter count. Claude aliases
+    // ('sonnet', 'haiku'…) name no size, so they never trip it.
+    const row = nativeBinding
+      ? nb.modelCatalog.find((m) => m.providerId === nativeBinding.providerId && m.id === nativeBinding.modelId)
+      : undefined;
+    const small = isSmallModel({
+      modelId: nativeBinding ? nativeBinding.modelId : newModel,
+      modelLabel: row?.label,
+      localSizeBytes: (row as { local?: { sizeBytes?: number } } | undefined)?.local?.sizeBytes,
+    });
+    if (small) gateSmallModel(proceed);
+    else proceed();
+  }, [newCwd, dangerous, newModel, launchInNewWindow, onCreateSession, defaultSkipPermissions, defaultModel, defaultStartModel, applyModelChoice, runtime, nb.effectiveBinding, nb.modelCatalog, preset, gateSmallModel]);
 
   /* ── Pointer-event drag handlers ───────────────────────── */
 
@@ -780,6 +855,17 @@ export default function SessionStrip({
   const handlePointerDown = useCallback((e: React.PointerEvent, sessionId: string, inStrip = false) => {
     // Only primary button
     if (e.button !== 0) return;
+    // WHY (2026-09-07, Destin: "i cant seem to grab the drag handle for
+    // same-window sessions"): the All Sessions menu's grip is a native
+    // draggable (see the menu list below). Two reasons this path must not
+    // engage from it. It cannot do the job — its target slot comes from
+    // clientX against the pill bar and ignores Y, so a vertical list drag
+    // lands nowhere. And on the live-window model it takes pointer capture,
+    // which can stop Chromium ever firing dragstart (same reason the
+    // html-drag branch below skips capture). Pressing anywhere ELSE on a menu
+    // row still takes this path, so the tear-off-from-the-menu it supports on
+    // Windows/macOS is untouched.
+    if ((e.target as HTMLElement).closest?.('[data-menu-drag-grip]')) return;
     lastPointerType.current = e.pointerType || 'mouse';
     // Another pill's peek closes NOW, before the drag geometry is frozen below:
     // the packer counts that pill as a dot, but it is drawn 56px wide while its
@@ -1391,6 +1477,7 @@ export default function SessionStrip({
   // window N". Cannot fail on any platform, works by keyboard, and it is the
   // ONLY way a finger moves a session between windows on Linux/Wayland (touch
   // never becomes a browser drag there — measured 2026-09-04).
+  const [renameId, setRenameId] = useState<string | null>(null);
   const [pillMenu, setPillMenu] = useState<{ x: number; y: number; sessionId: string } | null>(null);
   const handlePillContextMenu = useCallback((e: React.MouseEvent, sessionId: string) => {
     const det = (window as any).claude?.detach;
@@ -1425,6 +1512,7 @@ export default function SessionStrip({
         run: () => det?.dragDropped?.({ sessionId, targetWindowId: w.window.id, insertIndex: 0 }),
       });
     }
+    if (namingApi()) entries.unshift({ type: 'item', id: 'rename-session', label: 'Rename session…', icon: 'rename', run: () => setRenameId(sessionId) });
     return entries;
   }, [pillMenu, sessions.length, windowDirectory, myWindowId]);
 
@@ -1899,6 +1987,7 @@ export default function SessionStrip({
 
           return (
             <React.Fragment key={s.id}>
+              <Tooltip text={s.name}>
               <button
                 data-session-idx={idx}
                 data-session-id={s.id}
@@ -1980,10 +2069,10 @@ export default function SessionStrip({
                   cursor: 'default',
                 }}
                 onTransitionEnd={settle?.heldId === s.id ? () => setSettle(null) : undefined}
-                title={s.name}
               >
                 {pillBody}
               </button>
+              </Tooltip>
               {isBeingDragged && dragLeft !== null && (
                 // The twin: the pill in hand, drawn at the cursor. NO transition
                 // on its position — a 150ms ease there made the pill trail the
@@ -2038,6 +2127,9 @@ export default function SessionStrip({
             </React.Fragment>
           );
         })}
+        {renameId && <SessionRenameDialog id={renameId} name={sessions.find((s) => s.id === renameId)?.name ?? 'Untitled session'} onClose={() => setRenameId(null)} />}
+        {skipPermissionsDialog}
+        {smallModelDialog}
         {pillMenu && (
           <ContextMenu x={pillMenu.x} y={pillMenu.y} entries={pillMenuEntries} onClose={() => setPillMenu(null)} />
         )}
@@ -2045,28 +2137,30 @@ export default function SessionStrip({
         {/* Overflow count: sessions open in this window that the strip couldn't fit.
             Purely an indicator — clicking the trigger (or this badge) opens the full list. */}
         {sessions.length - visibleSessions.length > 0 && (
+          <Tooltip text={`${sessions.length - visibleSessions.length} more session${sessions.length - visibleSessions.length === 1 ? '' : 's'}`}>
           <button
             onClick={handleMenuToggle}
             className="inline-flex items-center justify-center min-w-[18px] h-[16px] px-1 ml-1 rounded-full bg-inset text-fg-2 text-3xs font-semibold leading-none hover:bg-well transition-colors"
-            title={`${sessions.length - visibleSessions.length} more session${sessions.length - visibleSessions.length === 1 ? '' : 's'}`}
             aria-label={`${sessions.length - visibleSessions.length} more sessions`}
           >
             +{sessions.length - visibleSessions.length}
           </button>
+          </Tooltip>
         )}
 
         {/* ── Dropdown trigger ───────────────────────────── */}
         <div ref={menuRef}>
+          <Tooltip text="All Sessions">
           <button
             ref={triggerBtnRef}
             onClick={handleMenuToggle}
             className="flex items-center justify-center w-5 h-5 ml-1 rounded-sm hover:bg-inset transition-colors text-fg-muted hover:text-fg-2"
-            title="All Sessions"
           >
             <svg className={`w-3 h-3 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -2075,22 +2169,34 @@ export default function SessionStrip({
         <div
           ref={dropdownRef}
           // P-8 (2026-08-28): w-72 (288px) was too narrow for a session name and
-          // its project side by side. 28rem with an 88vw ceiling keeps it inside
-          // a phone-width window.
-          className="glass-overlay overlay-no-drag fixed w-[min(28rem,88vw)] bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden"
+          // its project side by side. 24rem retains that two-line row at a more
+          // compact desktop width, while the 88vw ceiling keeps it inside a phone.
+          className="glass-overlay overlay-no-drag fixed flex flex-col w-[min(24rem,88vw)] bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden"
           style={(() => {
             const triggerRect = triggerBtnRef.current?.getBoundingClientRect();
             const pillRect = pillBarRef.current?.getBoundingClientRect();
             const pillCenter = pillRect
               ? pillRect.left + pillRect.width / 2
               : undefined;
-            // Half the rendered width, which is min(448px, 88vw) — the clamp below
+            // Half the rendered width, which is min(384px, 88vw) — the clamp below
             // keeps the menu on screen, so it has to track the real width.
-            const halfDropdown = Math.min(448, window.innerWidth * 0.88) / 2;
+            const halfDropdown = Math.min(384, window.innerWidth * 0.88) / 2;
+            // WHY: a fixed 432px session list let its rows plus the New Session
+            // form run below short windows. Cap the complete menu at the space
+            // below its trigger; the list is the flexing, scrollable portion.
+            const belowTrigger = triggerRect
+              ? `calc(100vh - ${triggerRect.bottom + 8}px - var(--vvp-offset, 0px))`
+              : 'calc(100vh - 8px - var(--vvp-offset, 0px))';
             // Compute left-edge directly (no transform: translateX(-50%))
             // so backdrop-filter isn't broken by a persistent transform
             return {
               top: triggerRect ? triggerRect.bottom + 4 : 0,
+              // Keep the menu content-sized so the form footer follows the
+              // Create button. The form reads this cap and becomes its own
+              // scroll region only when the available viewport is too short.
+              height: undefined,
+              maxHeight: `min(680px, ${belowTrigger})`,
+              '--session-menu-available-height': `min(680px, ${belowTrigger})`,
               left: pillCenter != null
                 ? Math.min(Math.max(0, pillCenter - halfDropdown), window.innerWidth - halfDropdown * 2)
                 : `calc(50% - ${halfDropdown}px)`,
@@ -2106,11 +2212,73 @@ export default function SessionStrip({
               </div>
             </>
           )}
-          {/* P-8 (2026-08-28): 336px held six and a half of the old wrapped rows;
-              432px holds eight of the new one-line rows plus a sliced ninth, which
-              is the list's only "there is more below" cue. */}
+          {/* WHY: This is the menu's flexible middle. With the menu capped to
+              the available screen height above, it shrinks first (roughly five
+              rows on short windows) and scrolls before its New Session controls
+              can be pushed past the bottom edge. */}
           {sessions.length > 0 && (
-            <div ref={sessionListRef} className="scroll-fade" style={{ maxHeight: 'min(432px, 55vh)' }}>
+            <div
+              ref={sessionListRef}
+              className="scroll-fade flex-1"
+              // WHY (2026-09-07, Destin): lets a "sessions in other windows" row be
+              // dragged straight back into this window's list — reuses the same
+              // dragAdopt() main already uses for the header pill bar's cross-window
+              // drop, just triggered by a plain in-page drag confined to this
+              // dropdown instead of an OS-level drag. Separate from the pointer-based
+              // reorder system above (session-strip-motion.md) — deliberately not
+              // touching that fragile, heavily-reviewed code path. Background stays
+              // inline (not a class) so this div's className keeps matching the
+              // literal string menu-row-reachability.test.ts pins.
+              style={{
+                maxHeight: 'min(432px, 55vh)',
+                background: peerDropActive ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : undefined,
+              }}
+              onDragOver={(e) => {
+                if (!dragCarriesSession(e.dataTransfer)) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                // A row from THIS list is a reorder — the rows draw their own
+                // insertion line, and lighting the whole list as a drop target
+                // would say "adopt", which is the wrong promise. WHY we read
+                // state instead of the drag's payload: dataTransfer.getData is
+                // deliberately blank during dragover (only `types` is legible),
+                // so which session is in hand is knowable only from the
+                // dragstart that set it — and that is always this window's.
+                if (menuDragId) return;
+                if (!peerDropActive) setPeerDropActive(true);
+              }}
+              onDragLeave={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                  setPeerDropActive(false);
+                  setMenuDropIndex(null);
+                }
+              }}
+              onDrop={(e) => {
+                const sessionId = readSessionDrag(e.dataTransfer);
+                if (!sessionId) return;
+                e.preventDefault();
+                const insertAt = menuDropIndex;
+                setPeerDropActive(false);
+                setMenuDropIndex(null);
+                setMenuDragId(null);
+                // Ownership decides the route, read from the dropped payload
+                // rather than the in-flight state: a session already in this
+                // list is a reorder, anything else came from another window
+                // and is an adoption.
+                const from = sessions.findIndex((x) => x.id === sessionId);
+                if (from < 0) {
+                  (window as any).claude?.detach?.dragAdopt?.({ sessionId });
+                  return;
+                }
+                if (insertAt === null || !onReorderSessions) return;
+                // insertAt is a slot in the list AS SHOWN; onReorderSessions
+                // splices the row out first, so a slot after the row's own
+                // position shifts down by one. Both slots either side of the
+                // row it came from are where it already is.
+                const to = insertAt > from ? insertAt - 1 : insertAt;
+                if (to !== from) onReorderSessions(from, to);
+              }}
+            >
               <div className="py-1">
               {sessions.map((s, idx) => {
                 const color = sessionStatuses?.get(s.id) || 'gray';
@@ -2124,7 +2292,20 @@ export default function SessionStrip({
                     onPointerDown={(e) => handlePointerDown(e, s.id)}
                     onPointerMove={handlePointerMove}
                     onPointerUp={handlePointerUp}
+                    // Half a row decides the slot: above the midline the row in
+                    // hand lands before this one, below it lands after. Only
+                    // while a row from THIS list is in hand — a peer window's
+                    // row is an adoption, which has no position to choose.
+                    onDragOver={(e) => {
+                      if (!menuDragId || !dragCarriesSession(e.dataTransfer)) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      const r = e.currentTarget.getBoundingClientRect();
+                      setMenuDropIndex(e.clientY < r.top + r.height / 2 ? idx : idx + 1);
+                    }}
                     className={`relative flex items-center pr-1 group/row select-none touch-none ${
+                      menuDragId === s.id ? 'opacity-40 ' : ''
+                    }${
                       shiftNavIdx === idx
                         ? 'bg-accent/20 text-fg'
                         : s.id === activeSessionId
@@ -2143,13 +2324,58 @@ export default function SessionStrip({
                       cursor: 'default',
                     }}
                   >
-                    {/* Drag grip — visible on hover */}
-                    <span className={`shrink-0 flex items-center pl-1.5 transition-opacity ${isAndroid() ? 'hidden' : 'opacity-0 group-hover/row:opacity-100'}`}>
+                    {/* Where the row in hand will land. Drawn on the row above
+                        the slot, or under the last row for the final slot, so
+                        the line sits between rows without a spacer element of
+                        its own perturbing the list's layout mid-drag. */}
+                    {menuDragId && menuDropIndex === idx && (
+                      <span className="absolute left-0 right-0 top-0 h-[2px] bg-accent rounded-full pointer-events-none" />
+                    )}
+                    {menuDragId && menuDropIndex === idx + 1 && idx === sessions.length - 1 && (
+                      <span className="absolute left-0 right-0 bottom-0 h-[2px] bg-accent rounded-full pointer-events-none" />
+                    )}
+                    {/* Drag grip — visible on hover, and the handle itself: it
+                        is the native draggable, so the browser owns the gesture
+                        (handlePointerDown steps aside for it by the data
+                        attribute). Hidden on Android, which has no drag. */}
+                    <span
+                      data-menu-drag-grip
+                      draggable={!isAndroid()}
+                      onDragStart={(e) => {
+                        writeSessionDrag(e.dataTransfer, s.id);
+                        e.dataTransfer.effectAllowed = 'move';
+                        // Drag the whole row, not the ten-pixel grip: the grip
+                        // alone gives the cursor nothing to aim a list slot with.
+                        const row = e.currentTarget.closest('[data-session-id]') as HTMLElement | null;
+                        const r = row?.getBoundingClientRect();
+                        if (row && r) { try { e.dataTransfer.setDragImage(row, e.clientX - r.left, e.clientY - r.top); } catch { /* no picture, drag still works */ } }
+                        setMenuDragId(s.id);
+                      }}
+                      onDragEnd={endMenuDrag}
+                      className={`shrink-0 flex items-center pl-1.5 transition-opacity ${isAndroid() ? 'hidden' : 'opacity-0 group-hover/row:opacity-100 cursor-grab active:cursor-grabbing'}`}
+                    >
                       <DragGrip />
                     </span>
-                    <button
+                    {/* A <div role="button"> rather than a <button>, for the
+                        same reason SkillCard's root is one: the rename pencil
+                        below is a real <button> and must not be nested inside
+                        another. Clicking the row — the name included — still
+                        selects the session; only the pencil does anything else.
+                        Keyboard parity is the onKeyDown, which a native button
+                        gave for free. */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={s.name}
                       onClick={() => { if (!suppressClick.current) { onSelectSession(s.id); setMenuOpen(false); } }}
-                      className="flex-1 text-left pl-1 pr-1.5 py-1.5 flex items-center min-w-0"
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        // Space scrolls the menu otherwise, and Enter would
+                        // fall through to whatever else is listening.
+                        e.preventDefault();
+                        if (!suppressClick.current) { onSelectSession(s.id); setMenuOpen(false); }
+                      }}
+                      className="flex-1 text-left pl-1 pr-1.5 py-1.5 flex items-center min-w-0 cursor-pointer"
                     >
                       {/* P-8 (2026-08-28): name and project start at the SAME left
                           edge, one under the other; what used to be a bare dot at
@@ -2157,7 +2383,34 @@ export default function SessionStrip({
                           name, with the session's tag marks under it. */}
                       <span className="flex-1 min-w-0 flex flex-col gap-0.5">
                         <span className="flex items-center gap-2 min-w-0">
-                          <span className="flex-1 min-w-0"><SessionName name={s.name} /></span>
+                          {/* The pencil sits with the name, not at the row's
+                              right edge (deck session-switcher-rename, SR-3:
+                              "pencil only"). Same icon and same meaning as the
+                              saved-conversation list, minus its dotted
+                              underline — here the name itself must stay a
+                              switch-to-this-session target, which is the whole
+                              reason the underline treatment was not chosen. */}
+                          <span className="flex-1 min-w-0 flex items-center gap-1.5">
+                            <span className="min-w-0 truncate"><SessionName name={s.name} /></span>
+                            {namingApi() && (
+                              <button
+                                type="button"
+                                aria-label={`Rename ${s.name}`}
+                                aria-haspopup="dialog"
+                                className="shrink-0 text-fg-muted hover:text-fg focus-visible:ring-2 focus-visible:ring-accent rounded-sm"
+                                // The row is the drag source; without this a
+                                // press on the pencil starts dragging the
+                                // session instead of arming the click.
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setRenameId(s.id); }}
+                              >
+                                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                                  <path d="M12 20h9" />
+                                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                </svg>
+                              </button>
+                            )}
+                          </span>
                           {s.permissionMode === 'bypass' && (
                             <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-[#DD4444]/20 text-[#DD4444]">
                               DANGER
@@ -2184,9 +2437,9 @@ export default function SessionStrip({
                           {(() => {
                             const rt = sessionRuntimeLabel(s);
                             return (
+                              <Tooltip text={rt.text}>
                               <span
                                 className="shrink-0 min-w-0 max-w-[55%] flex items-center gap-1 text-3xs text-fg-muted"
-                                title={rt.text}
                               >
                                 {rt.icon && (
                                   <span className="shrink-0 flex items-center" style={{ color: rt.color }}>
@@ -2195,24 +2448,26 @@ export default function SessionStrip({
                                 )}
                                 <span className="truncate">{rt.text}</span>
                               </span>
+                              </Tooltip>
                             );
                           })()}
                           <SessionTagMarks sessionId={s.id} byId={tagsById} />
                         </span>
                       </span>
-                    </button>
+                    </div>
+                    <Tooltip text="Close Session">
                     <button
                       // Close the dropdown so the CloseSessionPrompt (L2 popup)
                       // isn't competing with the still-open session menu above it.
-                      onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) { setMenuOpen(false); onCloseSession(s.id); } }}
+                      onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) { setMenuOpen(false); onCloseSession(s.id, s.name); } }}
                       onPointerDown={(e) => e.stopPropagation()}
                       className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-[#DD4444] hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
-                      title="Close Session"
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                       </svg>
                     </button>
+                    </Tooltip>
                   </div>
                 );
               })}
@@ -2237,32 +2492,116 @@ export default function SessionStrip({
               }))
               .filter((g) => g.sessions.length > 0);
             if (remoteGroups.length === 0) return null;
+            // WHY (2026-09-07, Destin): rows here used to be a flat button with a
+            // bare dot — visually a different UI from "sessions in this window"
+            // right above it. This mirrors that section's card markup (background,
+            // folder subtitle, status pill, runtime line, tags) so the two read as
+            // one list. The click target and the trailing "→ window" tag still
+            // differ; the drag grip and close button are real here too — drag
+            // adopts the session into this window (native HTML5 drag, dropped on
+            // the "this window" list above), close destroys it outright (main's
+            // session:destroy already takes any session id regardless of which
+            // window owns it — no new IPC needed for either).
+            let remoteIdx = 0;
             return (
               <>
                 <div className="border-t border-edge" />
                 <div className="px-3 pt-1.5 text-3xs font-medium text-fg-muted tracking-wider uppercase">
                   Sessions in other windows
                 </div>
-                <div className="py-1">
+                {/* WHY: Peer windows can hold an unbounded number of sessions.
+                    Keep this group inside the same scrolling middle as local
+                    sessions, so it cannot hide the New Session actions below. */}
+                <div className="scroll-fade flex-1 py-1">
                   {remoteGroups.flatMap((g) =>
                     g.sessions.map((s) => {
                       const color = sessionStatuses?.get(s.id) || 'gray';
+                      const idx = remoteIdx++;
                       return (
-                        <button
+                        <div
                           key={s.id}
-                          onClick={() => {
-                            (window as any).claude?.detach?.focusAndSwitch?.({ windowId: g.windowId, sessionId: s.id });
-                            setMenuOpen(false);
+                          draggable
+                          onDragStart={(e) => {
+                            writeSessionDrag(e.dataTransfer, s.id);
+                            e.dataTransfer.effectAllowed = 'move';
                           }}
-                          className="w-full text-left pl-3 pr-2 py-2 flex items-center gap-2 text-fg-dim hover:bg-inset hover:text-fg transition-colors"
+                          // A drag abandoned outside any drop target still has
+                          // to put the list's highlight back.
+                          onDragEnd={endMenuDrag}
+                          className="relative flex items-center pr-1 group/row select-none touch-none text-fg-dim hover:bg-inset hover:text-fg"
+                          style={{
+                            animation: `row-fade-in 100ms ease both`,
+                            animationDelay: `${idx * 20}ms`,
+                            transition: 'opacity 150ms steps(4), background 150ms steps(4)',
+                          }}
                         >
-                          <SessionDot color={color} isActive={false} />
-                          <span className="flex-1 min-w-0"><SessionName name={s.name} /></span>
-                          <span className="ml-auto shrink-0 text-3xs text-fg-muted whitespace-nowrap flex items-center gap-1">
-                            <span>→</span>
-                            <span>{g.label}</span>
+                          {/* Drag grip — visible on hover. Drag this row onto the
+                              "sessions in this window" list above to claim it. */}
+                          <span className="shrink-0 flex items-center pl-1.5 transition-opacity opacity-0 group-hover/row:opacity-100 cursor-grab">
+                            <DragGrip />
                           </span>
-                        </button>
+                          <button
+                            onClick={() => {
+                              (window as any).claude?.detach?.focusAndSwitch?.({ windowId: g.windowId, sessionId: s.id });
+                              setMenuOpen(false);
+                            }}
+                            className="flex-1 text-left pl-1 pr-1.5 py-1.5 flex items-center min-w-0"
+                          >
+                            <span className="flex-1 min-w-0 flex flex-col gap-0.5">
+                              <span className="flex items-center gap-2 min-w-0">
+                                <span className="flex-1 min-w-0"><SessionName name={s.name} /></span>
+                                {s.permissionMode === 'bypass' && (
+                                  <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-[#DD4444]/20 text-[#DD4444]">
+                                    DANGER
+                                  </span>
+                                )}
+                                <StatusPill color={color} isActive={false} />
+                              </span>
+                              <span className="flex items-center gap-2 min-w-0">
+                                <span className="flex-1 min-w-0 flex items-center gap-1 text-3xs text-fg-muted">
+                                  <FolderMark className="w-3 h-3 shrink-0 text-fg-faint" />
+                                  <span className="truncate">{s.cwd.replace(/\\/g, '/').split('/').pop()}</span>
+                                </span>
+                                {(() => {
+                                  const rt = sessionRuntimeLabel(s);
+                                  return (
+                                    <Tooltip text={rt.text}>
+                                    <span
+                                      className="shrink-0 min-w-0 max-w-[35%] flex items-center gap-1 text-3xs text-fg-muted"
+                                    >
+                                      {rt.icon && (
+                                        <span className="shrink-0 flex items-center" style={{ color: rt.color }}>
+                                          <ProviderIcon icon={rt.icon} size={10} />
+                                        </span>
+                                      )}
+                                      <span className="truncate">{rt.text}</span>
+                                    </span>
+                                    </Tooltip>
+                                  );
+                                })()}
+                                <SessionTagMarks sessionId={s.id} byId={tagsById} />
+                                <span className="ml-auto shrink-0 text-3xs text-fg-muted whitespace-nowrap flex items-center gap-1">
+                                  <span>→</span>
+                                  <span>{g.label}</span>
+                                </span>
+                              </span>
+                            </span>
+                          </button>
+                          <Tooltip text="Close Session">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMenuOpen(false);
+                              onCloseSession(s.id, s.name);
+                            }}
+                            className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-[#DD4444] hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
+                          >
+                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                          </Tooltip>
+                        </div>
                       );
                     }),
                   )}
@@ -2274,7 +2613,13 @@ export default function SessionStrip({
           <div className="border-t border-edge" />
 
           {showNewForm ? (
-            <div className="p-3 flex flex-col gap-2 rounded-b-lg overflow-hidden">
+            <div
+              className="p-3 flex-1 min-h-0 flex flex-col gap-2 rounded-b-lg overflow-y-auto scroll-fade"
+              style={{ maxHeight: 'var(--session-menu-available-height)' }}
+            >
+              {/* WHY: The creation form is another long list inside the capped
+                  dropdown, so this container must shrink and scroll before its
+                  Model, permissions, and Create controls reach the bottom edge. */}
               <div>
                 <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Project Folder</label>
                 <FolderSwitcher
@@ -2326,7 +2671,9 @@ export default function SessionStrip({
                         control, so it announced as an unnamed button. */}
                     <Toggle
                       checked={dangerous}
-                      onChange={setDangerous}
+                      // Turning ON goes through the first-time warning; Cancel
+                      // there leaves it off. Turning off never asks.
+                      onChange={(next) => (next ? gateSkipPermissions(() => setDangerous(true)) : setDangerous(false))}
                       tone="danger"
                       aria-label="Skip Permissions"
                     />
@@ -2335,7 +2682,7 @@ export default function SessionStrip({
                       the same token as the toggle beside it, so a community theme
                       restyling its red doesn't leave the two out of sync. */}
                   {dangerous && (
-                    <p className="text-3xs text-destructive-fg">Claude will execute tools without asking for approval.</p>
+                    <SkipPermissionsCaption />
                   )}
                 </>
               )}
@@ -2389,6 +2736,9 @@ export default function SessionStrip({
                   setNewCwd(defaultProjectFolder || '');
                   setDangerous(defaultSkipPermissions || false);
                   setNewModel(defaultModel || 'sonnet');
+                  // The saved default, whatever provider it names — through the
+                  // picker's own setter, which moves the engine with it.
+                  if (defaultStartModel) applyModelChoice(defaultStartModel);
                   // usePreset re-arms the heuristic itself on the showNewForm
                   // false→true edge — no manual touched reset needed here.
                   setShowNewForm(true);

@@ -242,13 +242,20 @@ describe("installTheme telemetry", () => {
     expect(mock.marketplaceApi.install).not.toHaveBeenCalled();
   });
 
-  it("records nothing when the theme did not actually install", async () => {
+  it("records nothing when the theme did not actually install — and reports the failure", async () => {
     const mock = makeMock({ signedIn: true, themeInstallFails: true });
     const installTheme = await mount(mock);
 
-    await act(async () => { await installTheme("ocean-depths"); });
+    // The failure is REPORTED now (error inventory 2026-09-10, false message 14): the
+    // provider used to resolve quietly on { status: 'failed' }, so a theme that never
+    // landed on disk looked like nothing at all to the person who asked for it.
+    await act(async () => {
+      await expect(installTheme("ocean-depths")).rejects.toThrow("Theme not found in registry");
+    });
 
     expect(mock.marketplaceApi.install).not.toHaveBeenCalled();
+    // A theme that did not install is not starred as a favorite either.
+    expect(mock.appearance.favoriteTheme).not.toHaveBeenCalled();
   });
 
   it("still resolves when theme telemetry rejects (non-fatal)", async () => {

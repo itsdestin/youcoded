@@ -18,7 +18,7 @@ import { listProjects } from './central-index';
 import { buildSavedFolderProjects } from './saved-folder-projects';
 import { trackedArtifacts } from './visible-artifacts';
 import { isAbsoluteRecorded } from './write-authorization';
-import { discoverProjectFiles } from './project-file-discovery';
+import { discoverProjectFiles, discoveredFileRecord } from './project-file-discovery';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
 import { readFolders, type SavedFolder } from '../saved-folders';
 import { getManagedRoots } from '../sync-spaces/service';
@@ -82,11 +82,8 @@ export async function projectAllFiles(projectRoot: string): Promise<{ files: any
       const rel = canonicalize(a.path, projectRoot);
       if (seen.has(rel)) return; // two sidecar entries can canonicalize to one path
       seen.add(rel);
-      extra.push({
-        id: rel, path: rel, kind: 'internal', absolutePath: null,
-        lastModified: a.lastModified ?? '', status: 'active',
-        versions: [], comments: [], tags: [], discovered: true,
-      });
+      // Same record the discovery walk builds — one builder, so the two cannot drift.
+      extra.push(discoveredFileRecord(rel, a.lastModified ?? ''));
     });
   }
   return { files: [...scan.files, ...extra], truncated: scan.truncated };

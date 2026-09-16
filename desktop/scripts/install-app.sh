@@ -124,7 +124,10 @@ case "$PLATFORM" in
     echo "  Waiting for installer to finish..."
     sleep 2
     for i in $(seq 1 60); do
-      if ! tasklist 2>/dev/null | grep -qi "YouCoded.Setup"; then
+      # WHY both names: releases before 1.3.0 ship "YouCoded.Setup.*.exe"; later
+      # ones are "YouCoded-Installer-*.exe" (electron-builder.yml nsis.artifactName).
+      # Matching only one would stop waiting instantly for the other.
+      if ! tasklist 2>/dev/null | grep -qiE "YouCoded.Setup|YouCoded-Installer"; then
         break
       fi
       sleep 1

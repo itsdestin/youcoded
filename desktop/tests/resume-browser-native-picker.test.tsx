@@ -181,4 +181,31 @@ describe('ResumeBrowser — native resume model selector (Task 6)', () => {
     const resumeBtn = screen.getByRole('button', { name: 'Resume Session' });
     expect(resumeBtn).not.toBeDisabled();
   });
+
+  // The preview panel's action card stays mounted while you move between
+  // conversations, and the picker pre-fills once per mount — so only the FIRST
+  // conversation previewed used to get its last model; the next opened on
+  // "Choose a model…" (Destin, 2026-09-11).
+  it('pre-fills each previewed conversation with ITS last model, not only the first one', async () => {
+    // Wide viewport, declared: the preview panel only exists there.
+    (window as any).matchMedia = (q: string) => ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {} });
+    Element.prototype.scrollIntoView = vi.fn();
+    mockWindowClaude([
+      nativeRow({ sessionId: 'a3f2aaaa-1111-4111-8111-000000000001', name: 'First Chat',
+        lastUsedModel: { modelId: 'gpt-5', providerType: 'openrouter', providerLabel: 'OpenRouter' } }),
+      nativeRow({ sessionId: 'a3f2aaaa-1111-4111-8111-000000000002', name: 'Second Chat',
+        lastUsedModel: { modelId: 'claude-x', providerType: 'anthropic', providerLabel: 'Anthropic' } }),
+    ]);
+    (window as any).claude.chatsearch = {
+      read: vi.fn(async () => ({ ok: true, messages: [{ role: 'user', content: 'hello', timestamp: 1, seq: 0, droppedToolCalls: 0 }], hasMore: false })),
+    };
+    render(<ResumeBrowser open={true} onClose={() => {}} onResume={() => {}} />);
+
+    fireEvent.click(await screen.findByText('First Chat'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('GPT-5'));
+
+    fireEvent.click(screen.getByText('Second Chat'));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('Claude X'));
+    delete (window as any).matchMedia;
+  });
 });

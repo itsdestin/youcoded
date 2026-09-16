@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import { Button, Dialog, TextInput } from './ui';
+import { plainMessage } from '../utils/ipc-error';
 
 interface Props {
   sourcePath: string;
@@ -66,8 +67,8 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
     inFlightRef.current = true;
     setBusy(true);
     setError(null);
-    // try/catch: on Android the shim has no syncspaces handlers and rejects
-    // after 30s — surface inline, never as an unhandled rejection.
+    // try/catch: on the phone's own bridge the shim refuses at once (no Sync Spaces
+    // engine there) — surface the plain sentence inline, never as an unhandled rejection.
     try {
       const r = await (window as any).claude.syncSpaces.importProject(sourcePath, trimmed);
       if (cancelledRef.current) return;
@@ -79,7 +80,7 @@ export default function ImportProjectModal({ sourcePath, defaultName, onClose, o
       }
     } catch (err: any) {
       if (cancelledRef.current) return;
-      setError(String(err?.message ?? err));
+      setError(plainMessage(err));
     } finally {
       inFlightRef.current = false;
       if (!cancelledRef.current) setBusy(false);

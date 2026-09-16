@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { isAndroid } from '../platform';
 import { useSkills } from '../state/skill-context';
 import type { ChipConfig } from '../../shared/types';
-import { Button, Dialog, TextInput, Textarea } from './ui';
+import { Button, Dialog, TextInput, Textarea, Tooltip } from './ui';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 
@@ -65,7 +65,9 @@ export default function QuickChips({ onChipTap }: Props) {
   const pencilSize = android ? 'w-8 h-8' : 'w-6 h-6';
 
   return (
-    <div className="relative">
+    // select-none: quick chips are chrome, not highlightable or copyable
+    // (Destin, 2026-09-10). The chip editor is a portaled Dialog, unaffected.
+    <div className="relative select-none">
       <div className="flex gap-1 px-3 py-1 overflow-x-auto scrollbar-none items-center">
         {displayChips.map((chip, i) => (
           <button
@@ -78,13 +80,14 @@ export default function QuickChips({ onChipTap }: Props) {
         ))}
 
         {/* Pencil button — opens chip editor */}
+        <Tooltip text="Edit quick chips">
         <button
           onClick={() => setEditorOpen(!editorOpen)}
           className={`shrink-0 ${pencilSize} rounded-md bg-well border border-edge-dim text-fg-muted hover:bg-inset hover:text-fg transition-colors flex items-center justify-center`}
-          title="Edit quick chips"
         >
           <PencilIcon size={android ? 12 : 10} />
         </button>
+        </Tooltip>
       </div>
 
       {/* Chip editor popup — centered L2 modal (Scrim + OverlayPanel) to match
@@ -342,8 +345,8 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                   }
 
                   return (
+                    <Tooltip key={i} text="Edit chip">
                     <div
-                      key={i}
                       data-chip-idx={i}
                       onPointerDown={(e) => handlePointerDown(e, i)}
                       onPointerMove={handlePointerMove}
@@ -355,7 +358,6 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                       role="button"
                       tabIndex={0}
                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); beginEdit(i); } }}
-                      title="Edit chip"
                       className={`group/row flex items-center gap-2 px-2 py-1.5 rounded-md bg-well border border-edge-dim text-2xs select-none touch-none hover:bg-inset hover:border-edge transition-colors ${
                         isBeingDragged ? 'opacity-30' : ''
                       }`}
@@ -375,6 +377,7 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                       <span className="shrink-0 px-1 text-fg-faint opacity-0 group-hover/row:opacity-100 transition-opacity flex items-center">
                         <PencilIcon size={9} />
                       </span>
+                      <Tooltip text="Remove chip">
                       <button
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) remove(i); }}
@@ -382,14 +385,19 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
                         // (which is a 16px badge and did migrate), this is a bare glyph
                         // with no background, radius or padding — routing it through the
                         // primitive would ADD chrome it has never had. It sits below
-                        // spec §11.1's "real button chrome" bar. `title` already gives it
-                        // an accessible name.
+                        // spec §11.1's "real button chrome" bar.
+                        //
+                        // WHY the explicit name: `title` used to supply it, and a hover
+                        // hint no longer can — the only text inside this button is the
+                        // "×" glyph, so the accessible name would have become "×".
+                        aria-label="Remove chip"
                         className="shrink-0 px-1 text-fg-muted hover:text-red-400"
-                        title="Remove chip"
                       >
                         &times;
                       </button>
+                      </Tooltip>
                     </div>
+                    </Tooltip>
                   );
                 })}
               </div>

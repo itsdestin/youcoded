@@ -31,8 +31,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
 import com.youcoded.app.marketplace.ApiResult
 import com.youcoded.app.marketplace.MarketplaceApiClient
 import com.youcoded.app.marketplace.MarketplaceAuthStore
@@ -47,6 +45,12 @@ import com.youcoded.app.social.PresenceClient
 // The analytics Worker base URL, spelled once for the three AnalyticsService call sites below.
 // WHY: Moved to its own domain so Cloudflare's cache and rate limiter apply; the old workers.dev address still answers for older app versions.
 private const val ANALYTICS_API_BASE = "https://api.youcoded.ai"
+
+// Ceiling on the `claude auth status` probe behind claude-code:status. Matches
+// the desktop's CLAUDE_STATUS_TIMEOUT_MS (8s) rather than DevTools' 5s probe
+// budget: this one blocks a Settings card and a model menu, and on a phone the
+// Node startup is slower than the 0.13s measured on desktop.
+private const val CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS = 8L
 
 class SessionService : Service() {
     private val binder = LocalBinder()
@@ -94,28 +98,13 @@ class SessionService : Service() {
      * passwords are encrypted at rest. Falls back to regular SharedPreferences
      * if the Android Keystore is unavailable (e.g. corrupted key on some devices).
      */
-    private fun getEncryptedPrefs(): android.content.SharedPreferences {
-        return try {
-            val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
-            EncryptedSharedPreferences.create(
-                "remote_devices_encrypted",
-                masterKeyAlias,
-                applicationContext,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        } catch (e: Exception) {
-            android.util.Log.w("SessionService", "EncryptedSharedPreferences unavailable, using fallback: ${e.message}")
-            applicationContext.getSharedPreferences("remote_devices", android.content.Context.MODE_PRIVATE)
-        }
-    }
+    // One definition of the paired-device store, shared with WebViewHost, which
+    // now downloads only from a paired computer (remote access batch 3, T8 review).
+    private fun getEncryptedPrefs(): android.content.SharedPreferences =
+        PairedDeviceStore.prefs(applicationContext)
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /** Layout insets reported by React UI (header and bottom bar pixel heights). */
-    data class LayoutInsets(val headerPx: Int, val bottomPx: Int)
-    private val _layoutInsets = kotlinx.coroutines.flow.MutableSharedFlow<LayoutInsets>(replay = 1)
-    val layoutInsets: kotlinx.coroutines.flow.SharedFlow<LayoutInsets> = _layoutInsets
-
     /** File picker bridge: Service sets the deferred, Activity completes it with paths. */
     var pendingFilePicker: CompletableDeferred<List<String>>? = null
     /** Callback for Activity to know when to launch the file picker. */
@@ -130,6 +119,32 @@ class SessionService : Service() {
     var pendingQrScanner: CompletableDeferred<String?>? = null
     /** Callback for Activity to know when to launch the QR scanner. */
     var onQrScanRequested: (() -> Unit)? = null
+
+    // ── Voice prompting ─────────────────────────────────────────────────────
+    // Talking to the chat box uses the phone's own speech recognition. Two
+    // things about Android force the shape of this code: only the app WINDOW can
+    // ask the user for microphone permission (this Service cannot), and the
+    // recogniser itself refuses to be touched from any thread but the main one.
+
+    /** Microphone permission bridge: Service parks the deferred, the Activity's
+     *  permission launcher completes it with the user's answer — the same
+     *  hand-off the file, folder and QR pickers above already use. */
+    var pendingMicPermission: CompletableDeferred<Boolean>? = null
+    /** Callback for the Activity to know when to show the microphone prompt. */
+    var onMicPermissionRequested: (() -> Unit)? = null
+
+    /** True only once the user has actually SEEN the permission prompt and said no.
+     *  WHY it matters: "permission not granted" must never be reported before the
+     *  question has been asked — that would grey the mic button out for someone who
+     *  was never offered the choice, with a reason that is not yet true. */
+    private var micPermissionDenied = false
+
+    /** Lives for the life of the app; only ever touched on the main thread. */
+    private var voiceRecognizer: VoiceRecognizer? = null
+
+    /** Runs work on the main thread, which is the only thread Android's speech
+     *  recogniser tolerates (bridge messages arrive on the web-socket thread). */
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     // ── Marketplace auth + API ───────────────────────────────────────────────
     // WHY lazy: applicationContext is not available during construction; initialized
@@ -261,11 +276,6 @@ class SessionService : Service() {
     // Native sync engine — owns push/pull lifecycle, background timer.
     // Replaces bash sync.sh hooks when the app is running.
     var syncService: SyncService? = null
-        private set
-
-    // Restore service — directional user-initiated pull from a backup. Paused
-    // push loop during execute prevents uploading half-restored state.
-    var restoreService: RestoreService? = null
         private set
 
     // Legacy single-session API — kept for ServiceBinder compatibility during migration
@@ -444,12 +454,11 @@ class SessionService : Service() {
         // Start native sync engine — pulls on launch, pushes every 15 min
         syncService = SyncService(applicationContext, bs).also { it.start() }
 
-        // Wire up restore service — owns the snapshot + atomic-swap machinery.
-        // Startup housekeeping (orphan staging cleanup + retention) runs once here.
-        restoreService = RestoreService(syncService!!, File(bs.homeDir, ".claude")).also {
-            it.cleanupOrphanedStaging()
-            it.enforceRetention()
-        }
+        // The restore-from-backup wizard that used to be wired here (RestoreService,
+        // Drive/GitHub adapters, sync:restore:*) was deleted 2026-09-10 on Destin's
+        // decision (android rebuild deck Q-5): desktop demolished restore in July with
+        // sync Plan 2c, nothing in the shared UI called it any more, and the phone gets
+        // the current Sync Spaces when the built-in assistant's runtime arrives.
     }
 
     /** Watch ~/.claude-mobile/open-url for URLs written by the JS wrapper.
@@ -711,6 +720,93 @@ class SessionService : Service() {
         wakeLock = null
     }
 
+    // ── Voice prompting helpers ─────────────────────────────────────────────
+
+    /** Has the user given this app permission to use the microphone? */
+    private fun micPermissionGranted(): Boolean =
+        checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    /** What came back when we needed the microphone. */
+    private enum class MicPermission {
+        /** The user has said yes (now, or at some point before). */
+        GRANTED,
+        /** The user saw the prompt and said no. */
+        DENIED,
+        /** Nobody could ask — the app window is not on screen, or it never replied. */
+        UNANSWERED,
+    }
+
+    /**
+     * Make sure we may use the microphone, asking the user if we have not already.
+     *
+     * A background Service cannot show a permission prompt on Android; only an
+     * Activity can. So this parks a "waiting for an answer" slot the way the file,
+     * folder and QR pickers already do, asks MainActivity to launch its permission
+     * prompt, and waits for the Activity to fill the slot in.
+     */
+    private suspend fun ensureMicPermission(): MicPermission {
+        if (micPermissionGranted()) {
+            micPermissionDenied = false
+            return MicPermission.GRANTED
+        }
+        // No Activity bound means no window on screen and therefore no way to ask.
+        val ask = onMicPermissionRequested ?: return MicPermission.UNANSWERED
+
+        val deferred = CompletableDeferred<Boolean>()
+        pendingMicPermission = deferred
+        withContext(Dispatchers.Main) { ask() }
+        // A timeout rather than an endless wait: if the window is swiped away while
+        // the prompt is up, the answer never arrives and this coroutine would leak.
+        val granted = try {
+            withTimeoutOrNull(120_000) { deferred.await() }
+        } catch (_: Exception) { null }
+        pendingMicPermission = null
+
+        return when (granted) {
+            true -> { micPermissionDenied = false; MicPermission.GRANTED }
+            false -> { micPermissionDenied = true; MicPermission.DENIED }
+            // Never answered — deliberately NOT recorded as a refusal.
+            null -> MicPermission.UNANSWERED
+        }
+    }
+
+    /**
+     * Whether the mic can listen right now, in the shape
+     * `desktop/src/shared/voice-types.ts` defines (`VoiceReadiness`).
+     *
+     * Note the middle branch: we only say the permission was refused once the user
+     * has actually turned the prompt down. Before that — permission not yet given,
+     * never asked — this reports `ready`, because the first tap on the mic is what
+     * asks the question.
+     */
+    private fun voiceReadiness(): JSONObject = when {
+        !android.speech.SpeechRecognizer.isRecognitionAvailable(this) ->
+            JSONObject().put("state", "unavailable")
+                .put("reason", "This phone has no speech recognition service installed.")
+        micPermissionDenied && !micPermissionGranted() ->
+            JSONObject().put("state", "unavailable")
+                .put("reason", "Microphone permission was not granted.")
+        else ->
+            JSONObject().put("state", "ready").put("engine", "your phone's speech recognition")
+    }
+
+    /** Push one voice event to the chat UI (no id — it is a broadcast, not a reply). */
+    private fun broadcastVoiceEvent(event: JSONObject) {
+        bridgeServer.broadcast(JSONObject().apply {
+            put("type", "voice:event")
+            put("payload", event)
+        })
+    }
+
+    /** Open the microphone. MAIN THREAD ONLY — Android's recogniser demands it. */
+    private fun startVoiceRecognizer() {
+        val recognizer = voiceRecognizer
+            ?: VoiceRecognizer.create(this) { event -> broadcastVoiceEvent(event) }
+                .also { voiceRecognizer = it }
+        recognizer.start()
+    }
+
     /** Push permission overrides to all active sessions' in-memory cache. */
     private fun syncPermissionOverridesToSessions(overrides: JSONObject) {
         sessionRegistry.sessions.value.values.forEach { session ->
@@ -788,10 +884,14 @@ class SessionService : Service() {
     }
 
     override fun onDestroy() {
+        // Hand the microphone back to Android. onDestroy already runs on the main
+        // thread, which is the only thread the recogniser may be touched from.
+        try { voiceRecognizer?.release() } catch (_: Exception) {}
+        voiceRecognizer = null
+
         // Stop sync service — cancels timer, releases locks, removes .app-sync-active marker
         try { syncService?.stop() } catch (_: Exception) {}
         syncService = null
-        restoreService = null
         bridgeServer.stop()
         urlObserver?.stopWatching()
         urlObserver = null
@@ -1387,7 +1487,6 @@ class SessionService : Service() {
                         put("enabled", false)
                         put("port", 9901)
                         put("hasPassword", false)
-                        put("trustTailscale", false)
                         put("keepAwakeHours", 0)
                         put("clientCount", 1)
                     })
@@ -1420,6 +1519,13 @@ class SessionService : Service() {
                     bridgeServer.respond(ws, msg.type, id, JSONObject().apply {
                         put("installed", installed)
                         put("connected", connected)
+                        // Desktop reads Tailscale's own BackendState and can say WHICH
+                        // prerequisite is missing. All this phone can see is an installed
+                        // package and a CGNAT address, so it reports only what it knows:
+                        // running, or not installed. "Signed out" and "switched off" are
+                        // indistinguishable from here, and guessing between them would put
+                        // an invented cause in front of the user.
+                        put("state", if (!installed) "not-installed" else if (connected) "running" else "unknown")
                         if (tsIp != null) put("ip", tsIp)
                     })
                 }
@@ -1427,14 +1533,44 @@ class SessionService : Service() {
             "remote:get-client-list" -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
             }
-            "remote:set-password" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            // Host administration does not travel over the remote socket on either platform.
+            // Answering `true` here told the caller a change had happened when none had.
+            "remote:set-password", "remote:set-config",
+            "remote:devices:rename", "remote:devices:unpair" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("ok", false)
+                        put("error", "Change this on the computer itself.")
+                    })
+                }
             }
-            "remote:set-config" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()) }
+            // This phone hosts no paired devices of its own, so the list is empty rather
+            // than absent — an absent channel would read as "not supported yet".
+            // The phone is not a host: it is neither listening nor failed.
+            // The phone keeps no ring of completed requests, so it answers unknown for
+            // every id. Stated rather than hidden: pretending otherwise would be inventing
+            // a cause, which docs/error-message-standards.md forbids.
+            "remote:request-outcome" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("outcomes", JSONObject())
+                    })
+                }
             }
-            "remote:disconnect-client" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            "remote:status" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("state", "stopped")
+                        put("port", 0)
+                    })
+                }
+            }
+            "remote:devices:list" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("devices", org.json.JSONArray())
+                    })
+                }
             }
             "transcript:read-meta" -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject.NULL) }
@@ -1610,13 +1746,10 @@ class SessionService : Service() {
                 // flow existed solely to drive the deleted Compose TerminalView block, and
                 // desktop's relay of this action only exists to fan it out to OTHER remote
                 // clients, which Android doesn't host. So switch-view needs no native work.
-                when (action) {
-                    "layout-update" -> {
-                        val headerPx = msg.payload.optInt("headerHeight", 0)
-                        val bottomPx = msg.payload.optInt("bottomHeight", 0)
-                        _layoutInsets.tryEmit(LayoutInsets(headerPx, bottomPx))
-                    }
-                }
+                // No "layout-update" branch either (removed 2026-09-10): the header/bottom
+                // heights it carried fed a layoutInsets flow whose only collector was that
+                // same deleted Compose block. The React side stopped sending it too.
+                if (action.isNotEmpty()) android.util.Log.d("SessionService", "ui:action ignored on Android: $action")
             }
 
             // ── Android-only settings bridge ────────────────────────────
@@ -1931,7 +2064,7 @@ class SessionService : Service() {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
                             .put("success", result.success)
                             .put("output", result.backends.joinToString(", ").ifEmpty { "No backends configured" })
-                            .put("error", if (result.errors > 0) "${result.errors} backend(s) had errors" else "")) }
+                            .put("error", if (result.errors > 0) "Some backups didn't finish." else "")) } // user-facing, mirrors sync-state.ts
                     } catch (e: Exception) {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
                             .put("success", false).put("output", "").put("error", e.message ?: "SyncService push failed")) }
@@ -2038,7 +2171,7 @@ class SessionService : Service() {
                     try {
                         val result = sync.push(force = true, backendId = id)
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
-                            .put("success", result.success).put("error", if (result.errors > 0) "Push had errors" else "")) }
+                            .put("success", result.success).put("error", if (result.errors > 0) "Some files didn't upload." else "")) } // user-facing, mirrors sync-state.ts
                     } catch (e: Exception) {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("success", false).put("error", e.message ?: "Push failed")) }
                     }
@@ -2087,34 +2220,15 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("url", url)) }
             }
 
-            // ── Restore from backup — directional user-initiated pull ─────────
-            // Separate code path from sync (which is bidirectional merge). See
-            // RestoreService.kt header for safety invariants (snapshot-first,
-            // atomic swap, paused push loop).
-            "sync:restore:probe" -> {
-                val backendId = msg.payload.optString("backendId", "")
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("hasData", false).put("categories", org.json.JSONArray())) }
-                } else {
-                    try {
-                        val (hasData, cats) = svc.probe(backendId)
-                        val payload = JSONObject()
-                            .put("hasData", hasData)
-                            .put("categories", org.json.JSONArray(cats.map { c -> c.wire }))
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("hasData", false).put("categories", org.json.JSONArray()).put("error", e.message ?: "probe failed")) }
-                    }
-                }
-            }
             // Android's half of Electron's shell.openExternal. The React UI
             // runs under file:// here, where window.open from a promise
-            // callback silently does nothing (see the sync:restore:browse-url
-            // comment below) — so a Deliverables link tile would be a dead
-            // button without this. Scheme-gated exactly like desktop's
-            // OPEN_EXTERNAL handler: http/https only, never file:, intent:,
-            // javascript:. The tap is always the user's own.
+            // callback silently does nothing — so a Deliverables link tile
+            // would be a dead button without this. Scheme-gated exactly like
+            // desktop's OPEN_EXTERNAL handler: http/https only, never file:,
+            // intent:, javascript:. The tap is always the user's own.
+            // (Restored 2026-09-10: it sat between the restore handlers and
+            // went with them when that block was deleted — caught by
+            // ipc-channels.test.ts.)
             "shell:open-external" -> {
                 val url = msg.payload.optString("url", "")
                 if (url.startsWith("http://") || url.startsWith("https://")) {
@@ -2125,142 +2239,6 @@ class SessionService : Service() {
                     } catch (_: Exception) {}
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()) }
-            }
-
-            "sync:restore:browse-url" -> {
-                // Resolve a deep link into the remote backend for a given
-                // category (Drive folder, GitHub tree). UI shows a "browse remote"
-                // button from the preview screen. Adapters that don't support
-                // browse URLs return null → we pass JSONObject.NULL over the wire.
-                val backendId = msg.payload.optString("backendId", "")
-                val categoryStr = msg.payload.optString("category", "")
-                val versionRef = msg.payload.optString("versionRef", "HEAD")
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("url", JSONObject.NULL)) }
-                } else {
-                    val cat = RestoreCategory.fromWire(categoryStr)
-                    val url = if (cat == null) {
-                        null
-                    } else {
-                        try {
-                            svc.browseCategoryUrl(backendId, cat, versionRef)
-                        } catch (_: Exception) { null }
-                    }
-                    // Fire Intent.ACTION_VIEW here — desktop's handler calls
-                    // shell.openExternal as a side effect, but React on Android
-                    // runs under file:// so its window.open fallback is a no-op.
-                    // Without this, tapping the folder icon silently does
-                    // nothing on mobile. Still return the URL so the IPC
-                    // response shape stays identical to desktop.
-                    if (url != null) {
-                        platformBridge?.openUrl(url)
-                    }
-                    msg.id?.let {
-                        bridgeServer.respond(ws, msg.type, it,
-                            JSONObject().put("url", url ?: JSONObject.NULL))
-                    }
-                }
-            }
-            "sync:restore:list-versions" -> {
-                val backendId = msg.payload.optString("backendId", "")
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
-                } else {
-                    try {
-                        val points = svc.listVersions(backendId)
-                        val arr = org.json.JSONArray()
-                        points.forEach { p -> arr.put(p.toJson()) }
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, arr) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "listVersions failed")) }
-                    }
-                }
-            }
-            "sync:restore:preview" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
-                } else {
-                    try {
-                        // React shim wraps as { opts: {...} } for preview/execute;
-                        // other sync:restore:* handlers pass backendId at the top
-                        // level. Mirror desktop's `payload.opts || payload` fallback.
-                        val optsJson = msg.payload.optJSONObject("opts") ?: msg.payload
-                        val opts = RestoreOptions.fromJson(optsJson)
-                        val preview = svc.previewRestore(opts)
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, preview.toJson()) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "preview failed")) }
-                    }
-                }
-            }
-            "sync:restore:execute" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
-                } else {
-                    try {
-                        // Same { opts } unwrap as sync:restore:preview above.
-                        val optsJson = msg.payload.optJSONObject("opts") ?: msg.payload
-                        val opts = RestoreOptions.fromJson(optsJson)
-                        // Progress events are broadcast (no id) — matches desktop's
-                        // sync:restore:progress push-event shape. Wizard UI subscribes
-                        // to them across every connected client.
-                        val result = svc.executeRestore(opts) { evt ->
-                            bridgeServer.broadcast(JSONObject().apply {
-                                put("type", "sync:restore:progress")
-                                put("payload", evt.toJson())
-                            })
-                        }
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, result.toJson()) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "execute failed")) }
-                    }
-                }
-            }
-            "sync:restore:list-snapshots" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
-                } else {
-                    try {
-                        val arr = org.json.JSONArray()
-                        svc.listSnapshots().forEach { s -> arr.put(s.toJson()) }
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, arr) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "listSnapshots failed")) }
-                    }
-                }
-            }
-            "sync:restore:undo" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", "RestoreService not initialized")) }
-                } else {
-                    try {
-                        val snapshotId = msg.payload.optString("snapshotId", "")
-                        svc.undoRestore(snapshotId)
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", e.message ?: "undo failed")) }
-                    }
-                }
-            }
-            "sync:restore:delete-snapshot" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", "RestoreService not initialized")) }
-                } else {
-                    try {
-                        val snapshotId = msg.payload.optString("snapshotId", "")
-                        svc.deleteSnapshot(snapshotId)
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", e.message ?: "delete failed")) }
-                    }
-                }
             }
 
             // ── Theme file IPC — parity with desktop's theme:list /
@@ -3136,6 +3114,40 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, text) }
             }
 
+            // Claude Code's own sign-in, read LIVE (2026-09-09). Unlike chatgpt:*
+            // below, this one is REAL on Android: Bootstrap installs Claude Code
+            // into the Termux prefix, so the phone has its own login to report.
+            // The shared model menu greys out Claude models on a definite
+            // "signed-out"/"not-installed" and on nothing else — so every failure
+            // path here answers {"state":"unknown"}, which keeps them available.
+            // Desktop mirror: desktop/src/main/providers/claude-account.ts.
+            "claude-code:status" -> {
+                val json = withContext(Dispatchers.IO) {
+                    val bs = bootstrap
+                    if (bs == null) {
+                        // Runtime not bootstrapped yet — we do not know, and must
+                        // not say "signed out".
+                        """{"state":"unknown"}"""
+                    } else {
+                        // claude is a Node.js program — runs via LD_PRELOAD, no
+                        // linker64 prefix (same as dev:summarize-issue below).
+                        val (exit, out) = DevTools.runStreamed(
+                            bs.buildRuntimeEnv(),
+                            listOf("claude", "auth", "status"),
+                            bs.homeDir,
+                            onLine = {},
+                            timeoutSeconds = CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS,
+                        )
+                        // `claude auth status` EXITS 0 EVEN WHEN LOGGED OUT, so the
+                        // exit code only tells us whether it RAN. Parsing is the
+                        // desktop's statusFromOutput(), kept in step by hand.
+                        if (exit != 0) """{"state":"unknown"}"""
+                        else DevTools.claudeAuthStatusJson(out)
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject(json)) }
+            }
+
             "dev:summarize-issue" -> {
                 val kind = msg.payload.optString("kind", "bug")
                 val description = msg.payload.optString("description", "")
@@ -3447,10 +3459,16 @@ class SessionService : Service() {
                 }
             }
 
-            // Desktop in-app update installer stubs (Android uses Play Store / direct APK sideload)
+            // Desktop in-app update installer stubs (Android uses Play Store / direct APK sideload).
+            // The beta CHANNEL is stubbed for the same reason the installer is: with no in-app
+            // updater there is no channel to choose, so answering anything else would be a
+            // setting that silently does nothing. The About toggle is desktop-gated and never
+            // calls these here.
             "update:download",
             "update:cancel",
             "update:launch",
+            "update:get-beta-channel",
+            "update:set-beta-channel",
             "update:get-cached-download" -> {
                 msg.id?.let {
                     bridgeServer.respond(ws, msg.type, it, UpdateInstallerStub.unsupported())
@@ -3575,31 +3593,51 @@ class SessionService : Service() {
                 val wantsFull = wantsFullFlag &&
                     resolved.length() <= EditablePathPolicy.FULL_READ_MAX_BYTES
                 if (resolved.length() > EditablePathPolicy.EDIT_MAX_BYTES && !wantsFull) {
-                    val head = ByteArray(8192)
-                    val headLen = EditablePathPolicy.readFully(resolved, head)
+                    // Both reads go through readPrefix, the guarded twin of readWhole below:
+                    // an unreadable file answers { ok: false, error } here too, instead of
+                    // throwing out of the handler (code review 2026-09-11, F6).
+                    val head = when (val read = EditablePathPolicy.readPrefix(resolved, 8192)) {
+                        is EditablePathPolicy.FileRead.Bytes -> read.bytes
+                        is EditablePathPolicy.FileRead.Unreadable -> {
+                            msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                                .put("ok", false).put("error", read.reason)) }
+                            return@handleBridgeMessage
+                        }
+                    }
                     val out = org.json.JSONObject()
                         .put("ok", true).put("artifact", artifact.toJson()).put("orphan", false)
                         .put("sizeBytes", resolved.length())
                         .put("mtimeMs", resolved.lastModified().toDouble())
-                    if (EditablePathPolicy.looksBinary(head.copyOf(headLen))) {
+                    if (EditablePathPolicy.looksBinary(head)) {
                         out.put("content", org.json.JSONObject.NULL)
                            .put("binary", true).put("truncated", false)
                     } else {
                         val cap = EditablePathPolicy.EDIT_MAX_BYTES.toInt()
-                        val win = ByteArray(cap)
-                        val winLen = EditablePathPolicy.readFully(resolved, win)
-                        out.put("content", EditablePathPolicy.textPrefix(win, winLen, cap))
+                        val win = when (val read = EditablePathPolicy.readPrefix(resolved, cap)) {
+                            is EditablePathPolicy.FileRead.Bytes -> read.bytes
+                            is EditablePathPolicy.FileRead.Unreadable -> {
+                                msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                                    .put("ok", false).put("error", read.reason)) }
+                                return@handleBridgeMessage
+                            }
+                        }
+                        out.put("content", EditablePathPolicy.textPrefix(win, win.size, cap))
                            .put("binary", false).put("truncated", true)
                     }
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, out) }
                     return@handleBridgeMessage
                 }
-                val bytes = try { resolved.readBytes() } catch (_: java.io.IOException) { null }
-                if (bytes == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", true).put("artifact", artifact.toJson())
-                        .put("content", org.json.JSONObject.NULL).put("orphan", true)) }
-                    return@handleBridgeMessage
+                // A file that passed exists() but cannot be read is a read FAILURE:
+                // answer { ok: false, error } — the viewer shows "Couldn't read this
+                // file" with Retry — never orphan, which reads "no longer on disk".
+                // See EditablePathPolicy.readWhole (error inventory 2026-09-10, #13).
+                val bytes = when (val read = EditablePathPolicy.readWhole(resolved)) {
+                    is EditablePathPolicy.FileRead.Bytes -> read.bytes
+                    is EditablePathPolicy.FileRead.Unreadable -> {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                            .put("ok", false).put("error", read.reason)) }
+                        return@handleBridgeMessage
+                    }
                 }
                 // NUL-sniff: binary bytes as UTF-8 turn into U+FFFD soup — return
                 // binary:true + null content so the renderer routes to its fallback.
@@ -3901,6 +3939,15 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it,
                     org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
             }
+            // One file path tapped in chat, resolved to the record the drawer
+            // opens (desktop: read-service.ts resolveArtifactPath). Not built on
+            // the phone yet: this answer makes the shared UI fall back to its
+            // older lookup (useOpenFilepath.ts), so a tap behaves as it did
+            // before the channel existed.
+            "artifacts:resolve-path" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                    org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
+            }
             "artifacts:list-projects-index" -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it,
                     org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
@@ -3959,6 +4006,75 @@ class SessionService : Service() {
             }
             // artifacts:changed is a server-push event only — no inbound handler needed.
 
+            // ── Voice prompting ─────────────────────────────────────────────
+            // Talking instead of typing. On a phone this is Android's own speech
+            // recognition, so there is nothing to download and no audio for the
+            // app to handle — Android listens and hands back words.
+
+            /** Can the mic be used right now, and if not, what is in the way? */
+            "voice:status" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, voiceReadiness()) }
+            }
+
+            /** Open the microphone. Asks for permission first if it has not been given. */
+            "voice:start" -> {
+                when (ensureMicPermission()) {
+                    MicPermission.GRANTED -> {
+                        // The recogniser is main-thread-only and this runs on the
+                        // web-socket thread, so hop before touching it.
+                        mainHandler.post { startVoiceRecognizer() }
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                            org.json.JSONObject().put("ok", true)) }
+                    }
+                    MicPermission.DENIED -> {
+                        // Push the new readiness as well as answering the call, so the
+                        // card in the chat box explains itself instead of the button
+                        // just going quiet.
+                        broadcastVoiceEvent(org.json.JSONObject()
+                            .put("type", "readiness")
+                            .put("readiness", voiceReadiness()))
+                        // And PUSH it as an error too. WHY both: this bridge has no
+                        // error channel — the shim resolves every reply, so an
+                        // `ok:false` payload reads to the composer as a SUCCESSFUL
+                        // start, and the phone would sit saying "Listening…" over a
+                        // microphone that was never opened, with no clock to end it.
+                        // The pushed `error` is what returns the box to idle.
+                        broadcastVoiceEvent(org.json.JSONObject()
+                            .put("type", "error")
+                            .put("message", "Microphone permission was not granted."))
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                            org.json.JSONObject().put("ok", false)
+                                .put("error", "Microphone permission was not granted.")) }
+                    }
+                    MicPermission.UNANSWERED -> {
+                        // Nobody could show the prompt (the app window is not on
+                        // screen). Say exactly that — do NOT record this as a refusal,
+                        // because the user was never asked.
+                        // Pushed as an error for the same reason as the DENIED branch.
+                        broadcastVoiceEvent(org.json.JSONObject()
+                            .put("type", "error")
+                            .put("message", "The YouCoded window is not open, so the microphone permission could not be requested."))
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                            org.json.JSONObject().put("ok", false)
+                                .put("error", "The YouCoded window is not open, so the microphone permission could not be requested.")) }
+                    }
+                }
+            }
+
+            /** Close the microphone and keep the words. */
+            "voice:stop" -> {
+                mainHandler.post { voiceRecognizer?.stop() }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                    org.json.JSONObject().put("ok", true)) }
+            }
+
+            /** Close the microphone and throw the words away. */
+            "voice:cancel" -> {
+                mainHandler.post { voiceRecognizer?.cancel() }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                    org.json.JSONObject().put("ok", true)) }
+            }
+
             "git:file-status", "git:file-review", "git:commit-file-diff", "git:stage",
             "git:unstage", "git:commit", "git:discard", "git:watch", "git:unwatch" -> {
                 // Git surface is desktop-only for now (spec 2026-07-22); the shared
@@ -3979,6 +4095,39 @@ class SessionService : Service() {
             "project:write-context-file" -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it,
                     org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
+            }
+
+            // The six local-engine upgrade channels (2026-09-05). Desktop-only for
+            // the same reason as every other branch here — a phone runs no local
+            // engine, holds no model folder and has no terminal to open — but they
+            // answer `unsupported` as well as `ok:false`, and the difference is
+            // something the user reads.
+            //
+            // WHY: the shared shim RE-THROWS an `ok:false` answer for exactly these
+            // six (remote-shim.ts REJECT_ON_NOT_OK), because over the remote link
+            // that shape means "the host's handler failed". Answered the plain way,
+            // a phone would put the literal words "not-implemented-on-mobile" in the
+            // model settings dialog as if the engine had said them. `unsupported`
+            // takes the shim's other path instead: one plain-language notice naming
+            // the feature, and a rejection the caller can recognise.
+            //
+            // WHY IT IS ITS OWN BRANCH, WHOLE, HERE: a Kotlin `when` branch runs
+            // from its FIRST comma-separated value to the one carrying the `-> {`.
+            // Written into the middle of the long not-implemented list below, this
+            // `-> {` silently captured the eighteen native:* / provider:* channels
+            // above it — so `provider:list`, which the model picker calls every time
+            // it opens, started answering `unsupported` and popping a toast on a
+            // phone doing no remote access. Six labels, one branch, its own
+            // boundaries. The label set is pinned by ipc-channels.test.ts.
+            "engine:set-config",
+            "engine:prereqs",
+            "engine:run-in-terminal",
+            "models:settings",
+            "models:set-settings",
+            "models:add-vision" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                    org.json.JSONObject().put("ok", false).put("unsupported", true)
+                        .put("error", "not-implemented-on-mobile")) }
             }
 
             // Native runtime (YouCoded's first-party harness) + provider registry
@@ -4009,17 +4158,40 @@ class SessionService : Service() {
             "native:set-binding",
             "native:set-permission-mode",
             "native:get-permission-mode",
+            // Cloud context defaults belong to the desktop native runtime.
+            "native:get-context-preferences",
+            "native:set-context-preferences",
+            "native:get-step-guard",
+            "native:set-step-guard",
             "native:sessions-list",
             // G-1 background Bash: Stop a desktop command. Android has no
             // native harness, so this is the honest refusal; the phone stops a
             // DESKTOP command through the remote WebSocket path instead.
             "native:kill-shell",
+            // "What the assistant was given" (2026-09-10). The context record
+            // itself is PUSHED, and reaches a phone inside chat:hydrate over the
+            // remote WebSocket — there is nothing to answer here. This is the
+            // on-demand read of one file's text, which lives on the desktop
+            // beside the session that was given it; a phone paired to a desktop
+            // gets it over that same WebSocket instead.
+            "native:session-context-text",
             "provider:list",
             "provider:upsert",
             "provider:remove",
             "provider:test",
             "provider:set-key",
             "provider:catalog",
+            // Sign in with ChatGPT (backend design 2026-09-05 §5). The account,
+            // its encrypted tokens and the 127.0.0.1:1455 sign-in listener all
+            // live in the DESKTOP main process; Android has no native runtime to
+            // hold any of that until M8. Reply not-implemented so the shared
+            // React UI degrades to a "desktop only" state instead of timing out
+            // (the card is hidden here anyway — chatgpt.supported is false off
+            // the desktop preload).
+            "chatgpt:status",
+            "chatgpt:sign-in",
+            "chatgpt:cancel-sign-in",
+            "chatgpt:sign-out",
             // WebSearch providers (Phase 2 Plan B) — keyed Tavily/Exa upgrades.
             // Desktop-only; no Android runtime yet. Reply not-implemented so the
             // shared React UI degrades to a "desktop only" state instead of timing out.
@@ -4043,6 +4215,21 @@ class SessionService : Service() {
             // state instead of timing out. specialists:event (the ledger push) is
             // OUTBOUND-only — same as native:model-state above — so it needs no
             // entry here at all.
+            // Session naming (2026-09-09). The ownership store, the naming
+            // preference and the provider-registry call that generates a name
+            // all live in the desktop main process; Android has none of them.
+            // Answering not-implemented is what keeps the shared React UI
+            // HONEST here: the remote shim's capability probe leaves
+            // window.claude.sessionNaming.available false, so the naming card,
+            // the Rename item and the saved-session pencil render nothing at
+            // all rather than appearing and then failing. Android conversations
+            // keep being named by the bundled Auto-Title hook, which falls back
+            // to its own timer when no mode file is present.
+            "session-naming:get",
+            "session-naming:set",
+            "session-naming:title",
+            "session-naming:rename",
+            "session-naming:automatic",
             "specialists:list",
             "specialists:delegated-get",
             "specialists:delegated-set",
@@ -4072,6 +4259,10 @@ class SessionService : Service() {
             "engine:models",
             "models:memory-check",
             "models:load",
+            // Install Claude Code on demand (first-run local models, 2026-09-14) —
+            // desktop-only: Bootstrap installs it on Android, so the phone never
+            // reports "not-installed" and the Settings button never shows here.
+            "claude-code:install",
             // Cross-device project rename (display-name) + stop-syncing (2026-07-12)
             // are desktop-only (Phase 3 on Android).
             "syncspaces:rename-project",
@@ -4094,6 +4285,13 @@ class SessionService : Service() {
             // signs into GitHub via its own gh-auth flow; the shared React modal
             // degrades — these invokes reject fast with this stub instead of
             // 30s-timing-out. (github:connect-done is a PUSH event — no handler.)
+            // Voice prompting's two desktop-only calls. The desktop downloads a
+            // speech model and asks the operating system about microphone access;
+            // a phone needs neither — Android's own speech recognition is already
+            // installed, and the permission question belongs to the app window's
+            // prompt (voice:start above), not to a call the UI can make.
+            "voice:download",
+            "voice:mic-access",
             "github:status",
             "github:connect-start",
             "github:connect-cancel",
@@ -4104,8 +4302,9 @@ class SessionService : Service() {
             }
 
             else -> {
+                // An honest refusal, not a bare error: see MessageRouter.buildUnsupportedResponse.
                 android.util.Log.w("SessionService", "Unknown bridge message: ${msg.type}")
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildErrorResponse("Unknown: ${msg.type}")) }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildUnsupportedResponse("not-implemented-on-mobile (no handler for ${msg.type})")) }
             }
         }
     }

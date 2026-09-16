@@ -11,7 +11,10 @@ import { createPortal } from 'react-dom';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { syncDotFor, findSpaceFor, type SyncStatusData } from './sync-dot-state';
-import { fieldClasses } from './ui';
+import { fieldClasses, Tooltip, ErrorState } from './ui';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
+import { NO_FOLDER_CWD, NO_FOLDER_DIR_NAME } from '../../shared/no-folder';
+import { isAndroid } from '../platform';
 import { POPOVER_Z } from './overlays/Overlay';
 
 interface SavedFolder {
@@ -35,6 +38,12 @@ interface Props {
   /** Opens Project View ("Manage projects…"). Omitted where Project View
    *  doesn't exist (the buddy window) — the footer row hides itself. */
   onManageProjects?: () => void;
+  /** Assistant settings only (review round 4, R4-2): the open list is exactly
+   *  as wide as the closed control and left-aligned to it, and each row puts
+   *  the name and the path on ONE line. Everywhere else the panel keeps its
+   *  fixed 320px, centred and overhanging its host — the shape Destin chose
+   *  for the new-session menu on 2026-07-17, which this must not disturb. */
+  panelMatchesTrigger?: boolean;
 }
 
 // Dot colors: status colors are theme-independent by design-system rule.
@@ -45,8 +54,10 @@ const DOT_CLASS: Record<'green' | 'red' | 'gray', string> = {
   gray: 'bg-fg-faint',
 };
 
-export default function FolderSwitcher({ value, onChange, autoSelect = true, onManageProjects }: Props) {
+export default function FolderSwitcher({ value, onChange, autoSelect = true, onManageProjects, panelMatchesTrigger = false }: Props) {
   const [folders, setFolders] = useState<SavedFolder[]>([]);
+  // The last read failed. Shown only when there is no list to show (see the panel below).
+  const [loadFailed, setLoadFailed] = useState(false);
   const [open, setOpen] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatusData | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -58,20 +69,35 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
   const listRef = useScrollFade<HTMLDivElement>();
   // Fixed-position coordinates for the portaled dropdown, computed from the
   // trigger button's screen rect whenever the dropdown opens (and on resize).
-  const [panelPos, setPanelPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
+  const [panelPos, setPanelPos] = useState<{ top: number; left: number; maxHeight: number; width: number } | null>(null);
 
   const load = useCallback(async () => {
     try {
       const list = await (window as any).claude.folders.list();
+      if (!Array.isArray(list)) throw new Error('folders.list did not answer a list');
       setFolders(list);
+      setLoadFailed(false);
       // Auto-select the first folder (home) when no value is set
       if (autoSelect && !value && list.length > 0) {
         onChange(list[0].path);
       }
-    } catch {}
+    } catch {
+      // Keep any list already shown. WHY not swallow it (it was `catch {}`): an empty picker
+      // then looked exactly like having no projects (Destin, 2026-09-11 phone pass).
+      setLoadFailed(true);
+    }
   }, [value, onChange, autoSelect]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Ask again each time the list opens, and after a remote reconnect. Loaded only on mount, one
+  // request lost while a phone slept left the picker empty until the form happened to remount
+  // (Destin, 2026-09-11: the projects "randomly popped back in"). Through a ref, so neither
+  // re-runs because `load` got a new identity when the selection changed.
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  useEffect(() => { if (open) void loadRef.current(); }, [open]);
+  useOnRemoteReconnect(() => { void loadRef.current(); });
 
   // Fetch sync state when the dropdown opens. catch → null: on Android the
   // shim has no syncspaces handlers (30s reject) — rows simply render no dot.
@@ -115,15 +141,20 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
     const margin = 8;
-    const left = Math.min(
-      Math.max(rect.left + rect.width / 2 - PANEL_WIDTH / 2, margin),
-      window.innerWidth - PANEL_WIDTH - margin
-    );
+    // R4-2: match-the-trigger mode measures the control instead of using the
+    // fixed width, and hangs the panel off its left edge rather than centring.
+    const width = panelMatchesTrigger ? rect.width : PANEL_WIDTH;
+    const left = panelMatchesTrigger
+      ? Math.min(Math.max(rect.left, margin), Math.max(window.innerWidth - width - margin, margin))
+      : Math.min(
+          Math.max(rect.left + rect.width / 2 - width / 2, margin),
+          window.innerWidth - width - margin,
+        );
     const top = rect.bottom + 4;
     // Never extend past the viewport bottom — the panel scrolls instead.
     const maxHeight = Math.max(window.innerHeight - top - margin, 120);
-    setPanelPos({ top, left, maxHeight });
-  }, []);
+    setPanelPos({ top, left, maxHeight, width });
+  }, [panelMatchesTrigger]);
 
   useLayoutEffect(() => {
     if (!open) { setPanelPos(null); return; }
@@ -165,9 +196,11 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
   const currentFolder = folders.find(f => f.path === value);
   const displayLabel = currentFolder
     ? currentFolder.nickname
-    : value
-      ? value.replace(/\\/g, '/').split('/').pop() || value
-      : 'Select folder...';
+    : value === NO_FOLDER_CWD
+      ? NO_FOLDER_DIR_NAME
+      : value
+        ? value.replace(/\\/g, '/').split('/').pop() || value
+        : 'Select folder...';
 
   return (
     <div ref={wrapperRef} className="relative">
@@ -213,9 +246,40 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
           // see it — without this attribute the host closes (and unmounts us)
           // on the mousedown, and our click never fires.
           data-folder-switcher-portal=""
-          className="layer-surface fixed w-80 overflow-hidden flex flex-col"
-          style={{ top: panelPos.top, left: panelPos.left, maxHeight: panelPos.maxHeight, zIndex: POPOVER_Z, animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
+          className="layer-surface fixed overflow-hidden flex flex-col"
+          style={{ top: panelPos.top, left: panelPos.left, width: panelPos.width, maxHeight: panelPos.maxHeight, zIndex: POPOVER_Z, animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
         >
+          {/* "No folder" — a session with no project at all (Destin, first-run
+              guide round 2, N-6). Always the first row, above the saved list,
+              even when there are no saved folders yet. Same row shape as a
+              folder; the sentinel is swapped for the app-owned empty folder in
+              main (shared/no-folder.ts). */}
+          {/* Desktop and remote only: the phone's own runtime creates sessions
+              from the cwd it is handed and knows nothing of the sentinel. */}
+          {!isAndroid() && (
+          <div className="py-1 border-b border-edge-dim">
+            <div
+              onClick={() => handleSelect(NO_FOLDER_CWD)}
+              data-no-folder-row=""
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 cursor-pointer transition-colors ${
+                value === NO_FOLDER_CWD ? 'bg-accent/10 text-fg' : 'text-fg-2 hover:bg-inset hover:text-fg'
+              }`}
+            >
+              <svg className="w-3 h-3 shrink-0 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h8M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs truncate">{NO_FOLDER_DIR_NAME}</div>
+                <div className="text-3xs text-fg-muted truncate">Just chat — no files, no instructions</div>
+              </div>
+            </div>
+          </div>
+          )}
+          {loadFailed && folders.length === 0 && (
+            <div className="p-2">
+              <ErrorState variant="inline" message="Couldn't load your projects." onRetry={() => { void load(); }} />
+            </div>
+          )}
           {/* Saved folders list — min-h-0 lets flexbox shrink the list first
               when the viewport-clamped panel height is tight. */}
           {folders.length > 0 && (
@@ -248,12 +312,21 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
                     {/* Nickname + path. Rename/remove hover actions were
                         deliberately removed (2026-07-09) — both live in
                         Project View via "Manage projects…". Don't re-add. */}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs truncate">{shown}</div>
-                      <div className="text-3xs text-fg-muted truncate" title={f.path}>
-                        {f.path}
+                    {panelMatchesTrigger ? (
+                      // R4-2: name and path on one line, the path taking
+                      // whatever room is left after the name.
+                      <div className="flex-1 min-w-0 flex items-baseline gap-1.5">
+                        <span className="text-xs shrink-0">{shown}</span>
+                        <span className="text-3xs text-fg-muted truncate" title={f.path}>{f.path}</span>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs truncate">{shown}</div>
+                        <div className="text-3xs text-fg-muted truncate" title={f.path}>
+                          {f.path}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Stale warning */}
                     {!f.exists && (
@@ -273,11 +346,12 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
                         sync; the tooltip carries the full phrase. Renders only
                         when syncSpaces.status() resolved (desktop). */}
                     {dot && (
+                      <Tooltip text={dot.label}>
                       <span
                         className={`w-2 h-2 rounded-full shrink-0 ${DOT_CLASS[dot.color]}`}
-                        title={dot.label}
                         aria-label={dot.label}
                       />
+                      </Tooltip>
                     )}
                   </div>
                 );

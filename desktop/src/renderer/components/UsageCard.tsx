@@ -1,5 +1,6 @@
 import type { UsageSnapshot } from '../state/chat-types';
 import { ProgressBar } from './ui';
+import { PlanWindows, formatResetsAt, utilizationColor } from './plan-windows';
 import { selectCacheReuse } from '../state/cache-reuse';
 
 // Permanent inline card rendered when user types /cost or /usage. Snapshot-only —
@@ -64,33 +65,8 @@ function formatDuration(seconds: number): string {
   return `${m}m ${s}s`;
 }
 
-function formatResetsAt(iso: string | null): string {
-  if (!iso) return '';
-  try {
-    const d = new Date(iso);
-    const now = Date.now();
-    const diff = d.getTime() - now;
-    if (diff <= 0) return 'resetting';
-    const hours = Math.floor(diff / 3_600_000);
-    const mins = Math.floor((diff % 3_600_000) / 60_000);
-    if (hours === 0) return `resets in ${mins}m`;
-    if (hours < 24) return `resets in ${hours}h ${mins}m`;
-    const days = Math.floor(hours / 24);
-    return `resets in ${days}d`;
-  } catch {
-    return '';
-  }
-}
-
-// Status bar color logic: green <50%, amber 50-80%, red ≥80%.
-// Kept in sync with StatusBar.tsx — hardcoded hex so colors survive theme changes.
-// Takes a PERCENT (0-100), the unit every caller here now speaks.
-function utilizationColor(pct: number | null): string {
-  if (pct == null) return 'var(--fg-muted)';
-  if (pct >= 80) return '#ef4444';
-  if (pct >= 50) return '#f59e0b';
-  return '#10b981';
-}
+// formatResetsAt and utilizationColor moved to plan-windows.tsx (2026-09-05) so the
+// Model Providers rows draw the plan windows with this card's exact recipe.
 
 // Context is REMAINING, not used — so its colour scale is the INVERSE of the
 // one above. statusline.sh writes `remaining_percentage` to the file the main
@@ -146,8 +122,6 @@ export default function UsageCard({ snapshot: s }: Props) {
   // much of the prompt came from cache instead of being re-read.
   const cacheReuse = selectCacheReuse(s, null);
 
-  const fiveHourColor = utilizationColor(s.fiveHourUtilization);
-  const sevenDayColor = utilizationColor(s.sevenDayUtilization);
   const contextColor = contextRemainingColor(s.contextPercent);
 
   // Rule 1 (spec §3): no value, no row. Every one of these used to render a
@@ -166,7 +140,8 @@ export default function UsageCard({ snapshot: s }: Props) {
   const showTokens = s.inputTokens != null || s.outputTokens != null || cacheMeasured;
   const showLines = !!(s.linesAdded || s.linesRemoved);
   const showSessionSection = showCost || showUnpriced || s.duration != null || showTokens || showLines;
-  const showSubscription = s.fiveHourUtilization != null || s.sevenDayUtilization != null;
+  // Any window counts — a free ChatGPT plan has only a 30-day one (W-2 = a).
+  const showSubscription = s.fiveHourUtilization != null || s.sevenDayUtilization != null || !!s.otherWindows?.length;
   // Rule 1 taken to its end: when EVERY row is omitted the card was nothing but
   // a heading and a timestamp — furniture, and the normal state of a native
   // session that has not run a turn yet and has no Claude usage cache on disk.
@@ -293,35 +268,28 @@ export default function UsageCard({ snapshot: s }: Props) {
             bar no longer shows them there. */}
         {showSubscription && (
           <div className="space-y-2 pt-3 border-t border-edge-dim">
-            {s.fiveHourUtilization != null && (
-              <div>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-fg-muted">5-hour limit · {formatResetsAt(s.fiveHourResetsAt)}</span>
-                  <span className="tabular-nums" style={{ color: fiveHourColor }}>
-                    {Math.round(s.fiveHourUtilization)}%
-                  </span>
-                </div>
-                <UsageBar percent={s.fiveHourUtilization} color={fiveHourColor} label="5-hour limit" />
-              </div>
-            )}
-            {s.sevenDayUtilization != null && (
-              <div>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-fg-muted">7-day limit · {formatResetsAt(s.sevenDayResetsAt)}</span>
-                  <span className="tabular-nums" style={{ color: sevenDayColor }}>
-                    {Math.round(s.sevenDayUtilization)}%
-                  </span>
-                </div>
-                <UsageBar percent={s.sevenDayUtilization} color={sevenDayColor} label="7-day limit" />
-              </div>
-            )}
+            {/* One recipe for the two windows (plan-windows.tsx) — the Model
+                Providers rows draw the same bars for each plan. */}
+            <PlanWindows usage={{
+              five_hour: s.fiveHourUtilization != null ? { utilization: s.fiveHourUtilization, resets_at: s.fiveHourResetsAt ?? '' } : null,
+              seven_day: s.sevenDayUtilization != null ? { utilization: s.sevenDayUtilization, resets_at: s.sevenDayResetsAt ?? '' } : null,
+              // Odd-length windows, drawn after the two above and labelled by
+              // length (a free ChatGPT plan's "30-day limit"). Undefined when
+              // the plan has none, so the two-bar output is unchanged.
+              other: s.otherWindows ?? null,
+            }} />
             {/* These two bars are ACCOUNT-wide, not session-scoped. Saying so
                 here is the whole reason the status bar can drop the chips in a
                 native session without leaving the user guessing (spec §10) —
                 and it stops the card recreating the confusion the bar just
                 shed. */}
+            {/* Sign in with ChatGPT (2026-09-04): the same two bars describe the
+                ChatGPT plan when the session runs on one; the scope line says
+                which, because "5-hour limit" alone no longer names the plan. */}
             <p className="text-3xs text-fg-muted pt-1">
-              Measured across your whole Claude account, not just this conversation.
+              {s.subscriptionPlan === 'chatgpt'
+                ? 'Measured across your whole ChatGPT plan, not just this conversation.'
+                : 'Measured across your whole Claude account, not just this conversation.'}
             </p>
           </div>
         )}

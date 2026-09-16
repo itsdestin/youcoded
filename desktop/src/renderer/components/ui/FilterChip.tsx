@@ -32,16 +32,26 @@ export type FilterChipProps = {
   /** Accessible name when the visible label isn't the whole story (e.g. "★ Favorites only"). */
   'aria-label'?: string;
   title?: string;
+  /**
+   * `filter` (default) is a pick-any filter: role=checkbox, "checked" when lit.
+   * `toggle` is a two-state button whose LABEL changes with the state — the
+   * Resume browser's sort chip reads "Most recent" or "Oldest first" — where a
+   * checkbox named by its current label would announce "Most recent, not
+   * checked". Same paint either way; only what a screen reader hears differs.
+   */
+  kind?: 'filter' | 'toggle';
 };
 
-export function FilterChip({ active, onClick, children, className = '', title, 'aria-label': ariaLabel }: FilterChipProps) {
+export function FilterChip({ active, onClick, children, className = '', title, kind = 'filter', 'aria-label': ariaLabel }: FilterChipProps) {
+  const isToggle = kind === 'toggle';
   return (
     <button
       type="button"
       // role=checkbox + aria-checked: a filter chip is an on/off state, not a
       // pressed button — screen readers announce "checked"/"not checked".
-      role="checkbox"
-      aria-checked={active}
+      role={isToggle ? undefined : 'checkbox'}
+      aria-checked={isToggle ? undefined : active}
+      aria-pressed={isToggle ? active : undefined}
       aria-label={ariaLabel}
       title={title}
       onClick={onClick}

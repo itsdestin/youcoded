@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import chokidar, { type FSWatcher } from 'chokidar';
-import type { BrowserWindow } from 'electron';
+import { BrowserWindow } from 'electron';
 import { migrateBarJsonFiles } from './theme-migration';
 
 const THEMES_DIR = path.join(os.homedir(), '.claude', 'wecoded-themes');
@@ -21,8 +21,16 @@ function ensureAndMigrate(): void {
 
 /** Watches ~/.claude/wecoded-themes/ for changes.
  *  Sends theme:reload to the renderer when a manifest.json or asset changes. */
-export function startThemeWatcher(win: BrowserWindow): () => void {
+export function startThemeWatcher(): () => void {
   ensureAndMigrate();
+
+  // WHY: buddy/tear-off providers cache themes too, and appearance sync reaches
+  // all windows. Refresh the same consumers, including windows opened later.
+  const notify = (slug: string) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('theme:reload', slug);
+    }
+  };
 
   // chokidar, not fs.watch — fs.watch misses events for subdirs created after
   // the watcher starts on Windows, and doesn't support recursive on Linux at all.
@@ -43,9 +51,7 @@ export function startThemeWatcher(win: BrowserWindow): () => void {
     if (existing) clearTimeout(existing);
     debounceMap.set(slug, setTimeout(() => {
       debounceMap.delete(slug);
-      if (!win.isDestroyed()) {
-        win.webContents.send('theme:reload', slug);
-      }
+      notify(slug);
     }, 100));
   };
 
@@ -62,7 +68,7 @@ export function startThemeWatcher(win: BrowserWindow): () => void {
       // Emit a reload keyed on the removed slug so the renderer can revert active-theme state.
       const rel = path.relative(THEMES_DIR, absPath).replace(/\\/g, '/');
       if (!rel || rel.includes('/') || rel.startsWith('..')) return;
-      if (!win.isDestroyed()) win.webContents.send('theme:reload', rel);
+      notify(rel);
     });
     watcher.on('error', (err) => {
       console.warn('[theme-watcher] chokidar error:', err);

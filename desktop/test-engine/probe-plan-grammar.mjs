@@ -27,7 +27,7 @@
 //
 // Launch a server first (engine-supervisor.ts router-mode spawn shape):
 //   llama-server --host 127.0.0.1 --port 8199 --no-webui --jinja \
-//     --models-dir <cacheDir> --models-max 2 --sleep-idle-seconds 300 -c 16384
+//     --models-dir <cacheDir> --models-max 2 --sleep-idle-seconds 900 -c 16384
 //
 // Usage: node test-engine/probe-plan-grammar.mjs <baseURL> <modelId> [trials=3]
 import Ajv from 'ajv';

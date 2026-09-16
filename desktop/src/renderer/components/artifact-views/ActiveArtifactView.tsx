@@ -11,6 +11,16 @@ import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-pat
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { LoadingState, ErrorState } from '../ui/states';
+import { RemoteFileCard } from './RemoteFileCard';
+import { isRemoteMode } from '../../platform';
+
+/** Absolute on-disk path of an artifact — the same join SessionDrawer and
+ *  FilesTab make for Copy path, so Download asks the host for the same file. */
+function absoluteArtifactPath(projectRoot: string, a: ArtifactRecord): string {
+  return a.kind === 'internal'
+    ? `${projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${a.path.replace(/\\/g, '/')}`
+    : (a.absolutePath ?? a.path);
+}
 import { openEditorSearch, revealLineIn } from './cm/editor-registry';
 import { draftKey, stashDraft, takeDraft, clearDraft } from './draft-store';
 
@@ -90,7 +100,11 @@ export type ArtifactContentState =
   | { phase: 'loading' }
   | { phase: 'ready' }
   | { phase: 'missing' }
-  | { phase: 'error'; message: string };
+  // `code` is the handler's own error code (e.g. 'too-large') and `sizeBytes`
+  // rides with it: over remote access a too-large answer carries the file's real
+  // size so the phone can show "24.0 MB · PDF" with a Download button rather
+  // than a bare error (RemoteFileCard).
+  | { phase: 'error'; message: string; code?: string; sizeBytes?: number };
 
 export interface ActiveArtifactViewProps {
   artifact: ArtifactRecord;
@@ -321,6 +335,32 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       setSaveError(`YouCoded is only showing part of this file (it is over ${(EDIT_MAX_BYTES / (1024 * 1024)).toFixed(1)} MB), so saving would overwrite the rest. Copy your changes out before closing.`);
       return false;
     }
+    // WHY a save never goes out without a token (error inventory 2026-09-10, false
+    // message 11): the token normally comes from startEdit's read, and if that read
+    // failed or had not landed, the save sent no baseMtimeMs — and main's
+    // write-authorization skips the "changed on disk" check when none arrives. Another
+    // writer's newer version was silently overwritten behind a normal, successful save.
+    // So with no token, read the file NOW and let what is on disk decide:
+    //   · same text the editor loaded → nobody changed it; save guarded by THIS read's token.
+    //   · different text              → it did change; raise the conflict banner, write nothing.
+    //   · no longer there (orphan)    → there is no newer version to lose; save as before.
+    //   · unreadable                  → the check cannot be made; refuse, and say so.
+    // "Keep mine" (opts.force) skips all of this on purpose: it means overwrite.
+    if (!opts?.force && mtimeRef.current === null) {
+      let disk: any = null;
+      try { disk = await (window.claude as any).artifacts.get(projectRoot, artifact.id); } catch { disk = null; }
+      if (!(disk && disk.ok && disk.orphan)) {
+        if (!disk || !disk.ok || typeof disk.mtimeMs !== 'number') {
+          setSaveError("YouCoded couldn't check whether this file changed since you opened it, so nothing was saved. Try saving again.");
+          return false;
+        }
+        mtimeRef.current = disk.mtimeMs;
+        if ((disk.content ?? '') !== content) {
+          setConflict({ disk: disk.content ?? '' });
+          return false;
+        }
+      }
+    }
     const saveOpts: { baseMtimeMs?: number; confirmed?: boolean } = {};
     if (!opts?.force && mtimeRef.current !== null) saveOpts.baseMtimeMs = mtimeRef.current;
     if (tier === 'needs-confirm') saveOpts.confirmed = true; // dialog shown at startEdit
@@ -499,6 +539,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   if (!editing && readState.phase === 'missing') {
     // ONLY shown when artifacts:get genuinely returned orphan:true.
     return <div className="text-fg-muted text-sm p-4">This file is no longer on disk.</div>;
+  }
+  if (!editing && readState.phase === 'error' && readState.code === 'too-large' && isRemoteMode()) {
+    // A phone asked for a file over its preview ceiling. Not an error to retry —
+    // the host answered honestly with the size — so the card offers Download
+    // (questions deck 2026-09-10, Q-6/Q-8).
+    return <RemoteFileCard path={absoluteArtifactPath(projectRoot, artifact)} sizeBytes={readState.sizeBytes} reason="too-large" projectRoot={projectRoot} artifactId={artifact.id} />;
   }
   if (!editing && readState.phase === 'error') {
     // The REAL failure with a Retry — never mapped to "no longer on disk"

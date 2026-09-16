@@ -17,9 +17,12 @@ export function BinaryFallback({ path, absolutePath, contentInfo, sniffedBinaryT
       // "can't display .md files" here would be plainly false.
       ? `This ${ext ? `.${ext} ` : ''}file contains data that isn’t text, so it can’t be shown here.`
       : path.includes('.') && ext
-        // The format is the reason.
-        ? `YouCoded can’t display .${ext} files.`
-        : 'YouCoded can’t display this kind of file.';
+        // The format is the reason. "yet" is deliberate (Destin, 2026-09-05):
+        // every file type is now clickable in chat, so this panel is the app
+        // admitting a gap rather than refusing a file — and the way out of it
+        // is the button below.
+        ? `YouCoded can’t display .${ext} files yet.`
+        : 'YouCoded can’t display this kind of file yet.';
   // shell.openPath is desktop-only — the remote shim stubs it as a no-op and
   // Android has no handler, so showing the button there would silently do
   // nothing. Gate on the platform like SessionDrawer's toolbar does.
@@ -36,11 +39,14 @@ export function BinaryFallback({ path, absolutePath, contentInfo, sniffedBinaryT
         <Button
           // `primary` (the default) + lg reproduces the old accent fill and
           // px-4 py-2 sizing; the primitive owns radius, hover and focus ring.
+          // Label matches the Session Drawer toolbar, CsvView and XlsxView,
+          // which have always called this action "Open externally" — this was
+          // the one place that said something different.
           size="lg"
           onClick={openExternally}
           title="Open with the default app"
         >
-          Open in default app
+          Open externally
         </Button>
       )}
     </div>

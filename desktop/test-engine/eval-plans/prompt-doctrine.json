@@ -1,0 +1,18 @@
+{
+  "_notes": [
+    "Does the shared doctrine (youcoded#423) change what the assistant actually does? Two builds of the SAME code, differing only in the prompt: 'before' is a12396fa (the merge before #423), 'after' is 085ef667.",
+    "Cases chosen to hit the rules that changed. config-investigation is 'find out what is wrong and report back' — the question-vs-action rule says that ends in findings, not edits, so the before/after gap should show as fewer unasked Write/Edit calls. options-proposal is 'tell me my options' — it exercises the new writing block and the rule that a final message offers two or three ways forward with a recommendation.",
+    "Models: Qwen 3.6 27B is the smallest on the roster and the same open-weight family the local path runs, so it stands in for the model with the least room for a longer prompt. Claude Opus 5 is the control: a frontier model already has these habits, so a gap there would mean the prompt is doing something unintended rather than teaching.",
+    "CAVEAT: every OpenRouter model resolves as cloud, so all four arms get the FULL doctrine. The COMPACT form a small LOCAL model gets is not measured by this run.",
+    "Instructions arm is the baseline (no project file) so the only variable is the app's own prompt."
+  ],
+  "name": "prompt-doctrine",
+  "cases": ["config-investigation", "options-proposal"],
+  "instructions": [{ "id": "none", "file": null }],
+  "models": ["Qwen 3.6 27B", "Claude Opus 5"],
+  "builds": [
+    { "id": "before", "dist": "/home/destin/youcoded-dev/worktrees/eval-before/desktop/dist" },
+    { "id": "after",  "dist": "/home/destin/youcoded-dev/worktrees/eval-after/desktop/dist" }
+  ],
+  "judge": "x-ai/grok-4.5"
+}

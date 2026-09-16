@@ -55,7 +55,9 @@ export function TagNoteEditor({
       <div className="border-t border-edge-dim pt-2">
         {/* NoteEditor commits on blur AND on unmount, so a note typed and then
             dismissed without blurring still lands. */}
-        <NoteEditor value={note} onSave={onNote} placeholder="Add a note…" fieldClassName={FIELD_LIFT} />
+        {/* No placeholder override: NoteEditor's default says what a note is
+            for (first-run guide, S-3), and every host should read the same. */}
+        <NoteEditor value={note} onSave={onNote} fieldClassName={FIELD_LIFT} />
       </div>
       {footer && (
         // Filled NEUTRAL pill, deliberately not `primary`: on the close prompt

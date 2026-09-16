@@ -23,7 +23,16 @@ const schema = z.object({
 
 type SkillArgs = z.infer<typeof schema>;
 
-export function createSkillTool(catalog: SkillCatalog): NativeTool<SkillArgs> {
+/** `maxChars` is the session's injection budget in characters. WHY it is passed
+ *  rather than left to defineTool's flat 30,000-char default (2026-09-10): that
+ *  default is the same number for every model, so on a 32k-window model — the
+ *  smallest window that gets this tool at all — one skill could return roughly a
+ *  quarter of everything the model can hold, while the SAME skill reached by
+ *  typing /name was fitted to the session's budget. One skill, two sizes,
+ *  depending only on who asked for it. The cap rides defineTool's own bounds
+ *  machinery, so the widening advice stays this tool's (see moreHint) rather
+ *  than hand-written truncation prose. */
+export function createSkillTool(catalog: SkillCatalog, maxChars?: number): NativeTool<SkillArgs> {
   // Snapshotted ONCE at construction: buildAiTools() reads these strings on every
   // turn, and re-scanning the filesystem per turn would be a real cost for a list
   // that only changes when the user installs something (which rebuilds the session's
@@ -31,6 +40,7 @@ export function createSkillTool(catalog: SkillCatalog): NativeTool<SkillArgs> {
   const installed = catalog.list();
 
   return defineTool<SkillArgs>({
+    ...(maxChars != null ? { caps: { maxChars } } : {}),
     name: 'Skill',
     description:
       "Load a named skill's instructions and follow them. Use this when the user asks for "

@@ -15,7 +15,7 @@ import type { TagRecord } from '../../../shared/tags';
 import { DEFAULT_TAG_COLOR } from '../../../shared/tags';
 import { TagRegistryApi } from '../../hooks/useTagRegistry';
 import { TagChip } from './TagChip';
-import { Button, InputGroup } from '../ui';
+import { Button, ErrorState, InputGroup } from '../ui';
 
 /** A reserved flag rendered as a tag (see built-in-tags.ts). Not in the
  *  registry, so it carries its own applied state and setter, and never appears
@@ -97,7 +97,12 @@ export function TagPicker({ appliedIds, onToggle, registry, onManageTags, builtI
           <TagRow key={t.id} tag={t} applied={appliedIds.has(t.id)}
             onToggle={() => onToggle(t.id, !appliedIds.has(t.id))} />
         ))}
-        {visible.length === 0 && visibleBuiltIns.length === 0 && !canCreate && (
+        {/* WHY (code review 2026-09-11, F5): a failed read reaches here as no tags, and
+            "No tags yet — type a name to create one." invited duplicates of tags the user
+            already has. Same split as the tag manager: nothing loaded + an error = say so. */}
+        {registry.error && registry.tags.length === 0 ? (
+          <ErrorState variant="inline" message={`Couldn't load your tags: ${registry.error}`} onRetry={registry.reload} />
+        ) : visible.length === 0 && visibleBuiltIns.length === 0 && !canCreate && (
           <div className="px-2 py-1 text-3xs text-fg-muted">No tags yet — type a name to create one.</div>
         )}
       </div>

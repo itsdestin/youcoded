@@ -14,6 +14,31 @@
 // production build, so Vite folds every branch below to dead code — nothing in
 // here can fire in Electron or the Android WebView.
 
+/** True in ANY document the workbench boots — including the PRODUCTION site build.
+ *
+ *  WHY this exists next to `isWorkbenchMode()`, which looks almost identical:
+ *  `isWorkbenchMode` short-circuits on `import.meta.env.DEV`, so Vite folds it to
+ *  `false` in a production bundle. That is correct for the terminal's dev-only
+ *  branches, and it is WRONG for anything used as a SAFETY gate, because the
+ *  landing page's live demo is a production build of the workbench
+ *  (`npm run build:site` sets VITE_WORKBENCH=1, and index.tsx boots the workbench
+ *  on `DEV || VITE_WORKBENCH === '1'`). Gating the microphone on the dev-only
+ *  predicate compiled the gate away in exactly the build a stranger can click:
+ *  the marketing page would have asked visitors for microphone permission, and
+ *  shown "No microphone was found on this computer." to anyone without one.
+ *  Found reviewing T6, 2026-09-05, by reading the built site bundle.
+ *
+ *  Mirrors index.tsx's boot condition exactly. Use THIS one for anything that
+ *  must not happen in a workbench document; use `isWorkbenchMode` only for a
+ *  dev-time visual branch. */
+export function isWorkbenchDocument(): boolean {
+  // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
+  const enabled = import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1';
+  if (!enabled) return false;
+  if (typeof location === 'undefined') return false;
+  return new URLSearchParams(location.search).get('mode') === 'workbench';
+}
+
 /** True only inside the UI Workbench (`bash scripts/run-workbench.sh`). */
 export function isWorkbenchMode(): boolean {
   // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time

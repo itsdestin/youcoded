@@ -11,6 +11,42 @@ import { COPY } from '../../../shared/chatsearch-refs';
 
 export type TranscriptRow = HistoryMessage & { seq?: number; droppedToolCalls?: number };
 
+// The reader dropped tool activity here. Say so — a seamless join would present
+// an edited conversation as the whole one. Destin (2026-08-27 gate, M-toolgap):
+// draw it as a tool card, not a centred dash line — same border/padding/`|`
+// separator as the real group header in AssistantTurnBubble.tsx, so a gap in a
+// past conversation looks like what it is. No chevron and no button: there is
+// nothing behind it to open. The glyph is the terminal mark, NOT the check the
+// real header shows on success: the reader dropped these tools without reading
+// their results, so claiming they all completed would be asserting something
+// nobody checked.
+// `fill`: inside a bubble the card spans it, exactly as the real one does —
+// CollapsedToolGroup is a plain block (`border border-edge rounded-lg`) whose
+// header row is `w-full … px-3 py-1.5`, so it takes whatever width the bubble
+// gives it. Destin, 2026-09-10: "call should be the full width of the message
+// bubble, as it is in real chat". On its OWN row it stays `w-fit`: that is the
+// case his 2026-08-27 ruling covered, where spanning the whole column left a
+// card with an empty right end that read as a stretched pill.
+function toolGapCard(n: number, fill?: boolean) {
+  return (
+    <div className={`border border-edge rounded-lg overflow-hidden ${fill ? '' : 'w-fit max-w-full'}`}>
+      <div className="w-full flex items-center gap-1.5 px-3 py-1.5">
+        <TerminalIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
+        <span className="text-fg-faint text-xs select-none">|</span>
+        <span className="text-xs text-fg-dim">{COPY.toolsNotShown(n)}</span>
+      </div>
+    </div>
+  );
+}
+
+// The card on its own row, for the two places it cannot live inside a bubble:
+// a gap before the first message shown, and a gap that followed a USER message
+// (the assistant ran tools and never spoke). A tool card inside the accent-
+// filled user bubble would read as something the user did.
+function toolGapRow(n: number) {
+  return <div className="mb-3 flex justify-start">{toolGapCard(n)}</div>;
+}
+
 export default function ConversationTranscript({ messages, olderHint, scrollToEndKey, conversationId, conversationTitle }: {
   messages: TranscriptRow[];
   /** Rendered above the first message, e.g. a Load older button. */
@@ -39,51 +75,59 @@ export default function ConversationTranscript({ messages, olderHint, scrollToEn
     // neither attribute and its right-click behaviour is untouched.
     <div className="w-full min-w-0 max-w-[680px] mx-auto" data-conversation-id={conversationId} data-conversation-title={conversationTitle}>
       {olderHint}
-      {messages.map((m, i) => (
-        <div key={m.seq ?? i}>
-          {!!m.droppedToolCalls && (
-            // The reader dropped tool activity here. Say so — a seamless join
-            // would present an edited conversation as the whole one.
-            // Destin (2026-08-27 gate, M-toolgap): draw it as a tool card, not
-            // a centred dash line — same border/padding/`|` separator as the
-            // real group header in AssistantTurnBubble.tsx, so a gap in a past
-            // conversation looks like what it is. No chevron and no button:
-            // there is nothing behind it to open.
-            <div className="my-2 flex justify-start">
-              {/* Byte-for-byte the collapsed tool-group header from
-                  AssistantTurnBubble.tsx — glyph, the `|` separator, the label,
-                  same border/radius/padding — with two deliberate differences:
-                  no chevron, because there is nothing behind this to open, and
-                  it sizes to its own text rather than filling the row, since a
-                  full-width card with an empty right end is what made it read
-                  as a stretched pill instead of a tool card.
-                  The glyph is the terminal mark, NOT the check the real header
-                  shows on success: the reader dropped these tools without
-                  reading their results, so claiming they all completed would be
-                  asserting something nobody checked. */}
-              <div className="w-fit max-w-[85%] border border-edge rounded-lg px-3 py-1.5 flex items-center gap-1.5">
-                <TerminalIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
-                <span className="text-fg-faint text-xs select-none">|</span>
-                <span className="text-xs text-fg-dim">{COPY.toolsNotShown(m.droppedToolCalls)}</span>
+      {/* A gap recorded on the FIRST message shown has no earlier bubble to
+          hang under — the message it followed is off the top of what was read.
+          It stays above, as a lead-in. */}
+      {!!messages[0]?.droppedToolCalls && toolGapRow(messages[0].droppedToolCalls!)}
+      {messages.map((m, i) => {
+        // WHY the NEXT message's count and not this one's: `droppedToolCalls`
+        // records the tools that ran BEFORE the message carrying it
+        // (transcript-reader.ts pushes a message's text first, then counts its
+        // own tool calls toward the gap before the next one). Drawn above that
+        // message, the card sits between the tools and the sentence that
+        // PRECEDED them. The real chat groups the other way round — "a tool
+        // never splits: it belongs to whatever the assistant was doing, the
+        // silent step before it, or the sentence it just said"
+        // (AssistantTurnBubble.tsx, splitIntoBubbles) — so the gap belongs
+        // under the message it followed. Destin, 2026-09-10: "put the '3 tools
+        // not shown' warning in the bottom of the assistant message it attaches
+        // to, like our real tool/message grouping logic does".
+        const gapAfter = messages[i + 1]?.droppedToolCalls ?? 0;
+        // INSIDE the bubble, under the text — the real chat's fixed order is
+        // "the reasoning section, the message, the tool group" (Destin,
+        // 2026-09-02), all three within one assistant-bubble shell, and the
+        // shell trades its even padding for `pt-4 pb-3` when it carries tools.
+        // Between two bubbles the card looked identical to how it looked
+        // before this changed at all, which is what Destin spotted.
+        const gapInBubble = gapAfter > 0 && m.role === 'assistant';
+        return (
+          // `timeline-entry` is the chat timeline's own containment (layout +
+          // style, NOT content-visibility — its implicit contain:paint clips
+          // community themes' bubble glows, see globals.css). A preview can
+          // hold a couple of hundred markdown bubbles; this keeps an off-screen
+          // one out of layout without changing how it paints.
+          <div key={m.seq ?? i} className="timeline-entry">
+            <div className={`${gapAfter && !gapInBubble ? 'mb-1.5' : 'mb-3'} flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              {/* user-bubble / assistant-bubble: the SAME hook classes the real
+                  chat's UserMessage.tsx / AssistantTurnBubble.tsx carry. Theme
+                  packs' custom_css targets these names directly (they're on
+                  theme-validator.ts's KNOWN_THEME_HOOKS allowlist) — without
+                  them, a theme that restyles chat bubbles (border, glow, shadow)
+                  silently skips this read-only preview, so the same conversation
+                  looks like two different apps depending which surface it's
+                  viewed from. This does not change layout/geometry, only which
+                  selectors can reach these nodes. */}
+              <div className={`min-w-0 break-words rounded-2xl px-5 text-sm ${m.role === 'user' ? 'user-bubble max-w-[80%] rounded-br-sm bg-accent text-on-accent py-3' : `assistant-bubble max-w-[85%] rounded-bl-sm bg-inset text-fg ${gapInBubble ? 'pt-4 pb-3' : 'py-3'}`}`}>
+                <MarkdownContent content={m.content} />
+                {/* mt-1.5: ToolGroupInline's own `afterText` spacing — "a group
+                    right after the spoken text gets a little more room above it". */}
+                {gapInBubble && <div className="mt-1.5">{toolGapCard(gapAfter, true)}</div>}
               </div>
             </div>
-          )}
-          <div className={`mb-3 flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            {/* user-bubble / assistant-bubble: the SAME hook classes the real
-                chat's UserMessage.tsx / AssistantTurnBubble.tsx carry. Theme
-                packs' custom_css targets these names directly (they're on
-                theme-validator.ts's KNOWN_THEME_HOOKS allowlist) — without
-                them, a theme that restyles chat bubbles (border, glow, shadow)
-                silently skips this read-only preview, so the same conversation
-                looks like two different apps depending which surface it's
-                viewed from. This does not change layout/geometry, only which
-                selectors can reach these nodes. */}
-            <div className={`min-w-0 break-words rounded-2xl px-5 py-3 text-sm ${m.role === 'user' ? 'user-bubble max-w-[80%] rounded-br-sm bg-accent text-on-accent' : 'assistant-bubble max-w-[85%] rounded-bl-sm bg-inset text-fg'}`}>
-              <MarkdownContent content={m.content} />
-            </div>
+            {!!gapAfter && !gapInBubble && toolGapRow(gapAfter)}
           </div>
-        </div>
-      ))}
+        );
+      })}
       <div ref={endRef} />
     </div>
   );

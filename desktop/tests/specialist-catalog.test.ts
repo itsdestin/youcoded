@@ -298,7 +298,6 @@ describe('resolveOffered (pure)', () => {
         systemPrompt: 'x',
         allowedTools: ['Read'],
         charter: 'read-only',
-        stepCap: 25,
         reportBudgetTokens: 2000,
         source,
       },

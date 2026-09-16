@@ -7,7 +7,7 @@
 // exists to fix. Same reasoning as subject-glob.ts's own header.
 import { DESTRUCTIVE_DENY_LIST } from './permission-types';
 import type { PermissionRule } from './permission-types';
-import { ruleMatches } from './subject-glob';
+import { grantAdmitsHostile, ruleMatches } from './subject-glob';
 
 export type GrantScope = 'exact' | 'wide';
 
@@ -52,17 +52,9 @@ const GENERIC_LIMITS =
 // branch), so it is not "hostile regardless of intent" — putting it here would
 // refuse the very branch rung Task 3 exists to build. `git*` is still caught, by
 // the --delete and --prune and reset --hard entries.
-export const HOSTILE_CORPUS: readonly string[] = [
-  'git push --delete origin master',
-  'git push --prune origin master',
-  'git reset --hard HEAD~1',
-  'rm -rf /',
-  'sudo rm -rf /',
-  'rmdir /s /q C:\\Windows',
-  'del /f /q C:\\boot.ini',
-  'sudo apt-get install anything',
-  'format c:',
-];
+// The list itself lives in bash-hostile-corpus.ts (2026-09-10): subject-glob.ts
+// reads it too, to void a STORED grant that covers one, and cannot import this module.
+export { HOSTILE_CORPUS } from './bash-hostile-corpus';
 
 /** Turn a stored Bash pattern back into the sentence the confirm showed.
  *
@@ -76,6 +68,14 @@ export const HOSTILE_CORPUS: readonly string[] = [
 export function describeBashPattern(pattern: string): string | null {
   const push = /^git push\*(\S+) (.+)$/.exec(pattern);
   if (push) return `Pushing to ${refDestination(push[2])}`;
+  // A script-run rung (`node scripts/x.mjs*`) reads as the file it runs. Decided
+  // by the same scriptIndex the offer used, so a legacy `node*` grant — no file
+  // token — still falls through to "Any node command".
+  if (/^[^*?]+\*$/.test(pattern)) {
+    const tokens = pattern.slice(0, -1).split(' ');
+    const i = scriptIndex(tokens);
+    if (i >= 0 && i === tokens.length - 1) return `Running ${tokens[i]}`;
+  }
   const generic = /^([^*?]+?)\*$/.exec(pattern);
   if (generic) return `Any ${generic[1].trim()} command`;
   return null;
@@ -194,7 +194,10 @@ function tokenize(command: string): string[] {
  *  rung labelled `Any echo "hi there" command`, which is an argument masquerading
  *  as a verb. */
 function isSubcommand(token: string | undefined): boolean {
-  return !!token && !token.startsWith('-') && !/^["']/.test(token) && !/[/\\.]/.test(token);
+  // '=' (2026-09-10): `env FOO=1 ls` is an assignment, not a verb. Treated as a
+  // subcommand it derived `env FOO=1*`, which covers `env FOO=1 <any program>` and
+  // slipped past HOSTILE_CORPUS's `env …` entry.
+  return !!token && !token.startsWith('-') && !/^["']/.test(token) && !/[/\\.=]/.test(token);
 }
 
 /** `program sub` when the second token is a verb, else `program`. */
@@ -226,7 +229,107 @@ function deriveWide(command: string, tokens: string[]): GrantOption | null {
   // push refspec, so it cannot be bounded to a single target.
   if (isDenyListed(command)) return null;
 
+  // A script run gets a rung bound to that one file (see SCRIPT_RUNNERS). Anything
+  // else from these programs (`python -c …`, `node -e …`) falls through to the
+  // generic rung, which postcondition 2 then refuses against HOSTILE_CORPUS — so
+  // those commands are offered their exact rung only.
+  // Programs that run code or another program handed to them get no wide rung,
+  // whatever follows (see NO_WIDE_RUNG).
+  if (NO_WIDE_RUNG.has(tokens[0]) || NO_WIDE_RUNG.has(key)) return null;
+
+  const run = scriptRunScope(tokens);
+  if (run) return { scope: 'wide', rule: wideRule(run.pattern), label: run.label, limits: run.limits };
+
   return { scope: 'wide', rule: wideRule(`${key}*`), label: `Any ${key} command`, limits: GENERIC_LIMITS };
+}
+
+/** Programs that run a FILE of code: `python build.py`, `node scripts/x.mjs`.
+ *
+ *  WHY (2026-09-10 security review): their generic rung — "Any python command" —
+ *  also covers `python -c …`, which runs anything at all, so HOSTILE_CORPUS now
+ *  refuses it. Refusing it outright would cost every repeated script run its
+ *  "Always allow", so a script run is offered a rung bound to that one file
+ *  instead. That grant trusts whatever the file contains when it runs — the same
+ *  trust as approving the run itself.
+ *
+ *  Not here: `tsx`/`ts-node` (a bare word after them is a verb such as `watch`, and
+ *  both take `-e`) and Windows PowerShell 5.1's `powershell`, which reads its first
+ *  bare argument as a COMMAND rather than a file — `pwsh` reads it as a file. */
+const SCRIPT_RUNNERS = new Set([
+  'python', 'python3', 'py', 'node', 'bun', 'deno',
+  'bash', 'sh', 'zsh', 'perl', 'ruby', 'pwsh',
+]);
+
+/** Programs, or `program subcommand` keys, never offered a wide rung.
+ *
+ *  WHY (2026-09-10 security review): each runs code, or another program, handed
+ *  to it in its arguments — `sed`'s `e` command, `tar --to-command`, `rg --pre`,
+ *  `timeout 10 <any program>` — so "Any sed command" would quietly mean "any
+ *  command". HOSTILE_CORPUS alone cannot catch these when offering: `timeout 10*`
+ *  is a different rung from the corpus's `timeout 5 …`. The exact rung is still
+ *  offered, so a repeated command can always be remembered.
+ *
+ *  Considered, not done: an ALLOW-list of programs that may be widened. Safer in
+ *  principle, but every program missing from it would lose "Any … command" at
+ *  once — a visible change with no known hole behind it. This list grows when
+ *  one is found. Package runners bound to a named package (`npx prettier*`) stay
+ *  widenable: safety rule 3 keeps them off a different package. */
+export const NO_WIDE_RUNG: ReadonlySet<string> = new Set([
+  // Interpreters that take code as an argument (script runs have their own rung).
+  'tsx', 'ts-node', 'powershell', 'cmd', 'awk', 'gawk',
+  // Launchers: the next word is itself a program.
+  'find', 'xargs', 'env', 'eval', 'exec', 'command', 'nohup', 'nice', 'time', 'watch', 'timeout',
+  'doas', 'su', 'ssh', 'script', 'strace', 'setsid', 'stdbuf', 'parallel',
+  'npm exec', 'npm x', 'pnpm dlx', 'pnpm exec', 'yarn dlx', 'yarn exec', 'bun x', 'uv run',
+  'docker run', 'docker exec',
+  // Everyday tools with an option that runs a command.
+  'sed', 'tar', 'sort', 'rg', 'git grep', 'sqlite3', 'rsync', 'zip',
+]);
+
+/** `python -m <module>` is widened only for modules whose arguments are options,
+ *  never code — `python -m timeit "<code>"` and `python -m pdb` run what they are
+ *  handed (2026-09-10 review). */
+const PYTHON_MODULE_RUNGS: ReadonlySet<string> = new Set([
+  'pytest', 'unittest', 'mypy', 'black', 'ruff', 'flake8', 'pylint', 'isort', 'venv', 'build',
+]);
+
+/** bun and deno take verbs of their own (`bun test`, `deno fmt`), so a bare word
+ *  after them is a subcommand, not a file: only `run <file>` or a path-shaped
+ *  token is a script. */
+const SUBCOMMAND_RUNNERS = new Set(['bun', 'deno']);
+
+const SCRIPT_LIMITS = "Doesn't cover other files, or this command chained onto another one.";
+
+/** Where the script sits in a runner command, or -1 when the command is not "run
+ *  this file" — a flag first (`-c`, `-e`), or a name that is quoted or carries a
+ *  '*'/'?' (which would become a wildcard in the stored pattern). Shared by the
+ *  offer and by describeBashPattern so the two directions cannot disagree. */
+function scriptIndex(tokens: string[]): number {
+  if (!SCRIPT_RUNNERS.has(tokens[0])) return -1;
+  let i = 1;
+  if (SUBCOMMAND_RUNNERS.has(tokens[0])) {
+    if (tokens[1] === 'run') i = 2;
+    else if (!/[/\\.]/.test(tokens[1] ?? '')) return -1;
+  }
+  const script = tokens[i];
+  if (!script || script.startsWith('-') || /^["']/.test(script) || /[*?]/.test(script)) return -1;
+  return i;
+}
+
+function scriptRunScope(tokens: string[]): { pattern: string; label: string; limits: string } | null {
+  const [program, flag, module] = tokens;
+  // `python -m pytest` names the module it runs, so it can be bounded like a
+  // subcommand — for the modules in PYTHON_MODULE_RUNGS; anything else stays exact.
+  if (/^(python3?|py)$/.test(program) && flag === '-m' && PYTHON_MODULE_RUNGS.has(module ?? '')) {
+    return { pattern: `${program} -m ${module}*`, label: `Any ${program} -m ${module} command`, limits: GENERIC_LIMITS };
+  }
+  const i = scriptIndex(tokens);
+  if (i < 0) return null;
+  return {
+    pattern: `${tokens.slice(0, i + 1).join(' ')}*`,
+    label: `Always allow running ${tokens[i]}`,
+    limits: SCRIPT_LIMITS,
+  };
 }
 
 /** Why this command may not be remembered at any width, in the user's words —
@@ -274,7 +377,9 @@ export function bashGrantOptions(command: string): GrantOption[] {
     // command. An exact rung is exempt: it covers exactly the string the user is
     // looking at, so approving `rm -rf build` is a decision, not a surprise.
     if (o.scope === 'exact') return true;
-    return !HOSTILE_CORPUS.some((hostile) => ruleMatches(o.rule, hostile));
+    // grantAdmitsHostile, not ruleMatches: ruleMatches now VOIDS a hostile grant
+    // (rule 4), so asking it "does this rung cover a hostile command?" would say no.
+    return !grantAdmitsHostile(o.rule.pattern!);
   });
 
   // A SHAPED rung already says, in the user's own words, what the command does

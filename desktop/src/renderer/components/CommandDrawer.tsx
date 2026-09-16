@@ -6,7 +6,7 @@ import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { isAndroid } from '../platform';
-import { EmptyState, FilterChip } from './ui';
+import { EmptyState, ErrorState, FilterChip } from './ui';
 
 interface Props {
   open: boolean;
@@ -29,7 +29,7 @@ const categoryChips = ['personal', 'work', 'development', 'admin', 'other'] as c
 type CategoryChip = typeof categoryChips[number];
 
 export default function CommandDrawer({ open, searchMode, externalFilter, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
-  const { drawerSkills, drawerCommands, favorites, setFavorite } = useSkills();
+  const { drawerSkills, drawerCommands, favorites, setFavorite, loadError, retryLoad } = useSkills();
   const mp = useMarketplace();
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<CategoryChip | null>(null);
@@ -293,7 +293,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
           <div className="pb-4">
           {isSearching ? (
             // Search mode: flat filtered list of skills + commands, no chip row
-            <div className="px-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
+            <div className="px-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
               {searchFiltered.map(renderSkillCard)}
               {commandSearchFiltered.map(renderCommandCard)}
               <AddSkillsCard onClick={openMarketplace} />
@@ -333,7 +333,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
               {showFavs && (
                 <section className="px-2 pt-2">
                   <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 px-1">Favorites</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
                     {favsSorted.map(renderSkillCard)}
                     {addSkillsIn === 'favorites' && <AddSkillsCard onClick={openMarketplace} />}
                   </div>
@@ -346,7 +346,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
               {showOthers && (
                 <section className="px-2 pt-3">
                   <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 px-1">All installed</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
                     {othersSorted.map(renderSkillCard)}
                     <AddSkillsCard onClick={openMarketplace} />
                   </div>
@@ -357,7 +357,13 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
                   before P-9 #3 all three showed one dashed "Add Skills" card
                   hugging the left edge, which read as a broken grid. */}
               {addSkillsIn === null && (
-                drawerSkills.length === 0 ? (
+                drawerSkills.length === 0 && loadError ? (
+                  // WHY this comes first (error inventory 2026-09-10, false message 10):
+                  // drawerSkills is [] both when nothing is installed and when loading the
+                  // skills failed. A failed load is its own answer, with Retry — never
+                  // "No skills installed yet." and a trip to the Marketplace.
+                  <ErrorState className="mx-4" message={`Couldn't load your skills: ${loadError}`} onRetry={retryLoad} />
+                ) : drawerSkills.length === 0 ? (
                   // Truly nothing installed: the standard empty state with the
                   // marketplace as the way out (same action Add Skills has).
                   <EmptyState

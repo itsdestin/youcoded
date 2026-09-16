@@ -14,19 +14,31 @@ import { modelChipFor, supportsAliasCycling } from './components/model-chip';
 import FolderSwitcher from './components/FolderSwitcher';
 import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
+import { CHATGPT_UPGRADE_URL } from '../shared/chatgpt-types';
 
 import ErrorBoundary from './components/ErrorBoundary';
-import { AnchorTip, Button, Dialog, Toast, Toggle } from './components/ui';
+import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy } from './components/takeover-dialog-copy';
+import { runLeaseTakeoverGate } from './state/resume-lease-gate';
+import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
+import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
-import { ChatProvider, useChatDispatch, useChatStore } from './state/chat-context';
+import { ChatProvider, useChatDispatch, useChatStore, useChatState } from './state/chat-context';
+import type { ChatAction } from './state/chat-types';
+import { installTranscriptBatcher, applyChatHydrate } from './state/transcript-batch';
+import {
+  remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
+  choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
+} from './state/remote-place';
 import { artifactReducer, initialArtifactState } from './state/artifact-tracker';
 import { ArtifactProvider } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
+import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
+import { showFirstRunWelcome } from './first-run-screen';
 // Central slash-command router — also used by the drawer so drawer-initiated
 // slash commands behave the same as typed ones (otherwise drawer bypasses InputBar's intercept).
 import { dispatchSlashCommand, type DispatcherResult } from './state/slash-command-dispatcher';
@@ -34,6 +46,7 @@ import { runNativeSlashAction, routeSlashResult } from './state/native-slash-act
 import { GameProvider, useGameState, useGameDispatch } from './state/game-context';
 import { hookEventToAction } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
+import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
 import { hasPendingInteraction, canPtySend } from './state/pty-input-gate';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
@@ -44,7 +57,8 @@ import { usePartyGame } from './hooks/usePartyGame';
 import { useChessGame } from './hooks/useChessGame';
 import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
 import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
-import { useSessionAttention } from './hooks/useSessionAttention';
+import { useSessionAttention, mergePeerSessionStatuses } from './hooks/useSessionAttention';
+import { useAttentionSummary } from './hooks/useAttentionSummary';
 import { useActiveSessionModel } from './hooks/useActiveSessionModel';
 import { useNativeSessionUsage, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
 import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
@@ -60,11 +74,12 @@ import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
-import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, type Runtime, type Binding } from './components/RuntimeBinding';
+import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './components/RuntimeBinding';
 import ModelPicker, { type ModelChoice } from './components/model/ModelPicker';
 import ModelPickerPopup from './components/ModelPickerPopup';
 import type { ModelBinding } from '../shared/provider-types';
 import OpenTasksPopup from './components/OpenTasksPopup';
+import { SPECIALIST_SETTINGS_EVENT } from './components/SpecialistModelUnavailable';
 import { useSessionTasks } from './hooks/useSessionTasks';
 import MarketplaceScreen from './components/marketplace/MarketplaceScreen';
 import LibraryScreen from './components/library/LibraryScreen';
@@ -74,17 +89,17 @@ import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
 import { ProjectView } from './components/project-view/ProjectView';
 
-import type { SkillEntry, PermissionMode, AttentionState, CommandEntry } from '../shared/types';
+import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
+import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
 
-/** First-page fetch retries — see loadFirstPage. Three attempts 400ms apart
- *  covers the gap between a session starting and Claude Code's hook reporting
- *  its transcript path, without making a genuinely empty session feel slow. */
-const FIRST_PAGE_ATTEMPTS = 3;
-const FIRST_PAGE_RETRY_MS = 400;
 import FirstRunView from './components/FirstRunView';
 import { getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
+
+/** Remote access batch 2: where a phone's copy of the conversation stands. */
+type ConversationStatus = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
 import type { SessionStatusColor } from './components/StatusDot';
 import { ThemeProvider } from './state/theme-context';
 import { SkillProvider } from './state/skill-context';
@@ -121,6 +136,18 @@ const buddyMode = new URLSearchParams(
 
 // --- Sound notifications (shared engine) ---
 import { playSound } from './utils/sounds';
+// --- First-run guide: the buddy's tour and the tips after it ---
+import GuideTour from './components/guide/GuideTour';
+import GuideTipHost from './components/guide/GuideTipHost';
+import { findGuideAnchor } from './components/guide/GuideRing';
+import { requestGuideAdvance, requestGuideReset } from './components/guide/guide-events';
+import { armGuideForFreshInstall, bumpCounter, guideDoneAt, isGuidePending, markGuideDone } from './components/guide/guide-state';
+import { triggerTip } from './components/guide/tips';
+// --- First-time warnings: Skip Permissions, Full auto, a small model ---
+import { useFirstTimeGate } from './components/FirstTimeWarning';
+import { isSmallModel } from './components/first-time-warnings';
+import { SkipPermissionsInfoTooltip } from './components/SkipPermissionsInfoTooltip';
+import type { GuideScreen } from './components/guide/guide-stops';
 
 interface SessionStats {
   costUsd: number | null;
@@ -137,12 +164,21 @@ interface SessionStats {
 
 interface StatusDataState {
   usage: any;
+  /** The ChatGPT plan's rolling windows (Sign in with ChatGPT, 2026-09-04),
+   *  pushed beside Claude's on status:data. Shown only for a session bound to
+   *  a 'chatgpt' provider — see the StatusBar props below. */
+  chatgptUsage: any;
   announcement: any;
   updateStatus: any;
   model: string | null;
   contextMap: Record<string, number>;
   gitBranchMap: Record<string, string>;
   sessionStatsMap: Record<string, SessionStats>;
+  // Cross-window/cross-platform attention feed (main's `lastAttentionBySession`,
+  // pushed every ~10s) — remote browsers have always used this for their dots;
+  // desktop now also reads it for a peer window's sessions in the switcher,
+  // since a peer session has no local chat-store entry to derive a color from.
+  attentionMap: Record<string, string>;
   syncWarnings: SyncWarning[] | null;
   lastSyncEpoch: number | null;
   syncInProgress: boolean;
@@ -175,6 +211,32 @@ function matchPermissionMode(mode?: string | null): PermissionMode | 'unknown' {
   return VALID_PERMISSION_MODES.includes(mode as PermissionMode) ? (mode as PermissionMode) : 'unknown';
 }
 
+const VALID_NATIVE_MODES: NativePermissionMode[] = ['ask', 'auto-edit', 'full-auto'];
+type SetNativeModes = React.Dispatch<React.SetStateAction<Map<string, NativePermissionMode | 'unknown'>>>;
+
+// Ask the host for a native session's current mode and seed the chip, unless
+// something (a push, a click) already set it. WHY one helper: this used to run
+// only on session:created, so a reloaded window or a reconnecting phone — which
+// learn their sessions from the session list instead — never asked and showed
+// the 'ask' fallback whatever the session was really running on.
+function seedNativeMode(sessionId: string, set: SetNativeModes): void {
+  const get = (window as any).claude?.native?.getPermissionMode;
+  if (!get) return;
+  (get(sessionId) as Promise<string>).then((mode) => {
+    // Unrecognized response → 'unknown', not a silent 'ask' guess: an
+    // older/remote host that answered with something we don't understand
+    // could actually be sitting on 'full-auto', and showing 'ASK FIRST'
+    // in that case would understate what the session is allowed to do.
+    set((prev) => prev.has(sessionId) ? prev : new Map(prev).set(
+      sessionId, VALID_NATIVE_MODES.includes(mode as NativePermissionMode) ? (mode as NativePermissionMode) : 'unknown',
+    ));
+  }).catch(() => {
+    // getPermissionMode unavailable (remote/older host) — we genuinely
+    // don't know the mode, so say so instead of defaulting to 'ask'.
+    set((prev) => prev.has(sessionId) ? prev : new Map(prev).set(sessionId, 'unknown'));
+  });
+}
+
 function AppInner() {
   // Dev-only: count AppInner's OWN re-renders (the tranche-1 metric — see
   // AppInnerProfiler). No-dep effect → runs once per AppInner commit; when
@@ -198,6 +260,18 @@ function AppInner() {
   // deliverable auto-open rule needs it without re-subscribing per switch).
   const focusedSessionIdRef = useRef<string | null>(null);
   useEffect(() => { focusedSessionIdRef.current = sessionId; }, [sessionId]);
+  // Remote access batch 2 (§2, R2): tell main which session this window shows, so a
+  // phone connecting for the first time opens what the desktop is showing. A no-op
+  // on the remote shim (a phone is not a desktop window).
+  useEffect(() => {
+    (window.claude as any).session?.noteSelected?.(sessionId);
+  }, [sessionId]);
+  // Remote access batch 2 (§3): remember this tab's place once it has been decided, so a
+  // reconnect or a reload opens where the phone was.
+  useEffect(() => {
+    if (!sessionId || !isRemoteMode() || !placeDecidedRef.current) return;
+    writeRemotePlace(remotePlaceStorages(), remotePlaceHost(), sessionId);
+  }, [sessionId]);
   // Multi-window detach state (desktop-only; remote-shim stubs these as no-ops).
   // `myWindowId` identifies this renderer's BrowserWindow so the switcher can
   // distinguish local sessions from sessions owned by peer windows. `directory`
@@ -208,8 +282,9 @@ function AppInner() {
   const isLeader = myWindowId != null && leaderWindowId === myWindowId;
   const [viewModes, setViewModes] = useState<Map<string, ViewMode>>(new Map());
   const [statusData, setStatusData] = useState<StatusDataState>({
-    usage: null, announcement: null, updateStatus: null,
+    usage: null, chatgptUsage: null, announcement: null, updateStatus: null,
     model: null, contextMap: {}, gitBranchMap: {}, sessionStatsMap: {},
+    attentionMap: {},
     syncWarnings: [],
     lastSyncEpoch: null, syncInProgress: false, backupMeta: null,
   });
@@ -225,6 +300,22 @@ function AppInner() {
   // Sessions that have received their first hook event (Claude is initialized).
   // Until this fires, show an "Initializing" overlay to prevent premature input.
   const [initializedSessions, setInitializedSessions] = useState<Set<string>>(new Set());
+  // Has the list of open sessions arrived from this computer at least once? The welcome screen
+  // must not call anyone a first-time user before it has — see first-run-screen.ts.
+  const [sessionListLoaded, setSessionListLoaded] = useState(false);
+  // Past conversations to resume: true / false / null = unknown (not asked, or the question
+  // failed — which over remote access happens on every dropped connection).
+  const [hasResumable, setHasResumable] = useState<boolean | null>(null);
+  // Bumped to ask that question again, after a remote reconnect.
+  const [resumeProbe, setResumeProbe] = useState(0);
+  // A session start the person asked for that the computer has not answered yet. WHY (Destin,
+  // 2026-09-11, from his phone): "when i create a session, i don't see the initializing session
+  // screen. it just immediately resets to the create session/no active session screen" — the
+  // form closed on the tap and nothing else changed until the computer's announcement arrived,
+  // which over remote access waits behind a catch-up.
+  const [startingSession, setStartingSession] = useState(false);
+  const [startFailed, setStartFailed] = useState<string | null>(null);
+  const startArgsRef = useRef<unknown[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerSearchMode, setDrawerSearchMode] = useState(false);
   const [drawerFilter, setDrawerFilter] = useState<string | undefined>(undefined);
@@ -233,10 +324,28 @@ function AppInner() {
   const bottomBarRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBadge, setSettingsBadge] = useState(false);
+  // Remote access batch 2: the phone's copy of the conversation (see the
+  // remoteConversationStatus subscription below). Undefined on the desktop.
+  const [conversationStatus, setConversationStatus] = useState<ConversationStatus | undefined>(undefined);
+  // Remote access batch 2 (§3): on a remote client nothing picks a conversation until the
+  // computer's copy has arrived — the hydrate handler (or a destroyed conversation's
+  // focus) decides the place. Every automatic selection asks mayAutoSelect() first; the
+  // desktop is unaffected. Reset whenever a restore starts (the strip's "restoring").
+  const placeDecidedRef = useRef(false);
+  const mayAutoSelect = () => !isRemoteMode() || placeDecidedRef.current;
+  // Bumped when a hydrate lands, so sessions waiting on it load their first page.
+  const [hydrateTick, setHydrateTick] = useState(0);
+  // Batch 2 (§3): before the computer's copy arrives, the no-conversation screen says it is
+  // catching up instead of offering New Session — a tap there created a stray conversation.
+  const remoteCatchingUp = isRemoteMode() && (conversationStatus === 'restoring' || conversationStatus === 'reconnecting');
+  const handleRefreshConversation = useCallback(() => {
+    void (window.claude as any).remote?.rehydrate?.();
+  }, []);
   const [syncAutoOpen, setSyncAutoOpen] = useState(false);
   // Deep-link flag for the Model Providers popup — set by a provider-error
   // bubble's "Open Settings" jump so Settings opens straight to that section.
   const [providersAutoOpen, setProvidersAutoOpen] = useState(false);
+  const [specialistsAutoOpen, setSpecialistsAutoOpen] = useState(false);
 
   // "Manage models…" in the unified ModelPicker. The picker renders inside
   // SessionStrip (which HeaderBar owns) and inside ResumeBrowser, so a prop
@@ -247,6 +356,13 @@ function AppInner() {
     const open = () => { setProvidersAutoOpen(true); setSettingsOpen(true); };
     window.addEventListener('youcoded:open-model-providers', open);
     return () => window.removeEventListener('youcoded:open-model-providers', open);
+  }, []);
+  useEffect(() => {
+    // WHY the destination is owned here: App owns the outer Settings drawer;
+    // AssistantSettingsRow owns the page inside it, so both flags must move.
+    const open = () => { setSpecialistsAutoOpen(true); setSettingsOpen(true); };
+    window.addEventListener(SPECIALIST_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(SPECIALIST_SETTINGS_EVENT, open);
   }, []);
   // Track which sessions the user has "seen" (switched to after activity completed)
   const [viewedSessions, setViewedSessions] = useState<Set<string>>(new Set());
@@ -326,6 +442,9 @@ function AppInner() {
   // Shown when the user closes an active session — offers to mark it complete
   // in one step so it's hidden from the resume menu by default.
   const [closePromptFor, setClosePromptFor] = useState<string | null>(null);
+  // WHY (2026-09-07): a "sessions in other windows" close can't look its name
+  // up in `sessions` — that session isn't in this window's local list.
+  const [closePromptName, setClosePromptName] = useState<string | undefined>(undefined);
   // Preferences popup state — opened by /config in chat view or from SettingsPanel
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   // Model/effort/fast picker — opened by bare /model, /fast, /effort (and future status-bar chip clicks)
@@ -403,7 +522,12 @@ function AppInner() {
   const [shareSkillId, setShareSkillId] = useState<string | null>(null);
 
   const [isFirstRun, setIsFirstRun] = useState<boolean | null>(null); // null = loading
-  const handleFirstRunComplete = useCallback(() => setIsFirstRun(false), []);
+  // The wizard handing off is the ONE moment that owes a tour and arms tips —
+  // an install that was already set up never sees either uninvited (deck
+  // 2026-09-10, Q-11: fresh installs only). See guide-state.ts.
+  const handleFirstRunComplete = useCallback(() => { armGuideForFreshInstall(); setIsFirstRun(false); }, []);
+  const [tourOpen, setTourOpen] = useState(false);
+  useEffect(() => { if (isFirstRun === false && isGuidePending()) setTourOpen(true); }, [isFirstRun]);
 
   // Welcome screen "New Session" expansion form state
   const [welcomeFormOpen, setWelcomeFormOpen] = useState(false);
@@ -413,7 +537,9 @@ function AppInner() {
   // Runtime (Claude Code vs YouCoded native harness) + native binding for the
   // welcome/app-open new-session form — mirrors the SessionStrip form via the
   // shared RuntimeBinding hook so the two forms can't drift.
-  const [welcomeRuntime, setWelcomeRuntime] = useState<Runtime>('claude');
+  // Opens on the install's remembered default (see RuntimeBinding.defaultRuntime):
+  // 'claude' normally, 'native' on an install that signed in with ChatGPT.
+  const [welcomeRuntime, setWelcomeRuntime] = useState<Runtime>(() => defaultRuntime());
   const [welcomeBinding, setWelcomeBinding] = useState<Binding | null>(() => loadLastBinding());
   const welcomeNb = useNativeBinding({ active: welcomeFormOpen, runtime: welcomeRuntime, binding: welcomeBinding, setBinding: setWelcomeBinding });
   // Native harness preset for the welcome form — shared lifecycle hook (see
@@ -465,10 +591,31 @@ function AppInner() {
     | string
     | { message: string; durationMs?: number; action?: { label: string; onClick: () => void } };
   const [toast, setToast] = useState<ToastState | null>(null);
+  // Components with no prop path to this state (the file drawer's Download and
+  // Copy path, the too-big card) announce through a window event — see
+  // utils/announce.ts for why.
+  useEffect(() => {
+    const onNotice = (e: Event) => {
+      const d = (e as CustomEvent<AppNoticeDetail>).detail;
+      if (d?.message) setToast(d.durationMs ? { message: d.message, durationMs: d.durationMs } : d.message);
+    };
+    window.addEventListener(APP_NOTICE_EVENT, onNotice);
+    return () => window.removeEventListener(APP_NOTICE_EVENT, onNotice);
+  }, []);
   // Zoom state + handlers extracted to useZoomControls (tranche 1).
   const { zoomPercent, zoomVisible, handleZoomIn, handleZoomOut, handleZoomReset } = useZoomControls();
 
-  const [sessionDefaults, setSessionDefaults] = useState({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
+  // `startModel` is the saved default across EVERY provider (Assistant settings,
+  // Q-3a). The inferred shape had only the Claude alias, which is exactly why the
+  // setting was written, read back, and then ignored by every form that starts a
+  // conversation (contract R5).
+  const [sessionDefaults, setSessionDefaults] = useState<{
+    skipPermissions: boolean;
+    model: string;
+    projectFolder: string;
+    startModel?: ModelChoice;
+    startModelLabel?: { provider: string; model: string };
+  }>({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
 
   // Check first-run state with a 3-second safety timeout — never hang the app
   useEffect(() => {
@@ -488,12 +635,16 @@ function AppInner() {
     return () => clearTimeout(timeout);
   }, []);
 
-  // Load session defaults on mount and whenever settings panel closes
-  useEffect(() => {
+  // Load session defaults on mount and whenever settings panel closes, and after a remote
+  // reconnect: one read lost during a drop left the new-session forms without the default
+  // project and model until Settings was opened and closed (2026-09-11 phone pass sweep).
+  const loadSessionDefaults = useCallback(() => {
     (window as any).claude?.defaults?.get?.().then((defs: any) => {
       if (defs) setSessionDefaults(defs);
     }).catch(() => {});
-  }, [settingsOpen]);
+  }, []);
+  useEffect(() => { loadSessionDefaults(); }, [settingsOpen, loadSessionDefaults]);
+  useOnRemoteReconnect(loadSessionDefaults);
 
   usePromptDetector();
   // Recovers chat→PTY submits that get lost on Windows ConPTY when Claude is
@@ -524,6 +675,17 @@ function AppInner() {
   // Ref mirror of artifact state so the (once-registered) tool-use handler can
   // dedup Read-tracking against the session's already-known artifacts without
   // re-subscribing on every reducer tick.
+  // MEMOIZED, and it has to be: an inline `{ state, dispatch }` object literal is
+  // a new identity on every render of this component — which is every streamed
+  // token — so every consumer of ArtifactContext (the session drawer, the file
+  // pane, Project View) re-rendered on each one, whether or not any artifact
+  // state had changed. `artifactState` only changes on a dispatch and
+  // `dispatchArtifact` is stable, so this now changes exactly when the artifact
+  // state does. Renderer rule: memoize every Context value.
+  const artifactContextValue = useMemo(
+    () => ({ state: artifactState, dispatch: dispatchArtifact }),
+    [artifactState, dispatchArtifact],
+  );
   const artifactStateRef = useRef(artifactState);
   useEffect(() => { artifactStateRef.current = artifactState; }, [artifactState]);
   // Latest-value ref so transcript-shrink and turn-complete handlers see
@@ -549,7 +711,7 @@ function AppInner() {
   const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
     const session = chatStateMapRef.current.get(sid);
     if (session && hasPendingInteraction(session)) {
-      setToast('Claude is waiting for your response — answer the prompt first.');
+      setToast('Your assistant is waiting for your response — answer the prompt first.');
       return true;
     }
     return false;
@@ -594,7 +756,12 @@ function AppInner() {
         // Was a silent drop: guardedPtySend refuses for native sessions and its
         // own toast only fires for the pending-interaction case, so a native user
         // choosing this command got no feedback at all (handoff §2.3).
-        setToast(`${route.command} isn't available in YouCoded-runtime sessions yet.`);
+        setToast(provider === 'shell'
+          // A shell session is a plain terminal — the command would have been
+          // typed into the user's shell, which is not what they asked for. Say
+          // that, rather than the native-runtime sentence, which would be a lie.
+          ? `${route.command} isn't available in a terminal session — it's a Claude Code command.`
+          : `${route.command} isn't available in YouCoded-runtime sessions yet.`);
         return true;
       case 'none':
         return true;
@@ -784,11 +951,35 @@ function AppInner() {
   // re-renders only when a triple changes, not on every dispatch (see
   // useSessionAttention). sessionStatuses keeps its old shape for HeaderBar.
   const sessionAttention = useSessionAttention(sessions, viewedSessions, sessionId);
+  const attentionSummary = useAttentionSummary();
   const sessionStatuses = useMemo(() => {
     const m = new Map<string, SessionStatusColor>();
     for (const [id, info] of sessionAttention) m.set(id, info.status);
-    return m;
-  }, [sessionAttention]);
+    // WHY (2026-09-07, Destin: "status lights properly displayed across
+    // windows"): a peer-window session has no transcript events in this
+    // renderer at all, so nothing here can derive its colour locally — the
+    // switcher's "sessions in other windows" rows read gray/Inactive whatever
+    // the truth. Two cross-window feeds can answer, and they are NOT
+    // equivalent:
+    //   1. attentionSummary — main's merge of every window's own derived dot
+    //      colour, pushed ~100ms after any change. Carries the colour itself,
+    //      green and blue included. Authoritative; the buddy pill already uses it.
+    //   2. statusData.attentionMap — "needs attention" STATES on the 10s status
+    //      push. Can only ever say red or amber, and is up to 10s stale, but it
+    //      survives places the summary doesn't run (remote browsers, and the
+    //      instant before this window's first summary arrives).
+    // So: summary first, attentionMap as the fallback. A session THIS window
+    // owns always keeps its local derivation — blue depends on what *you* have
+    // looked at, which only this window knows. Precedence lives in the pure
+    // mergePeerSessionStatuses so it can be pinned by tests.
+    return mergePeerSessionStatuses({
+      base: m,
+      localSessionIds: new Set<string>(sessions.map((s: any) => s.id)),
+      windowDirectory,
+      summaryPerSession: attentionSummary.perSession,
+      attentionMap: statusData.attentionMap,
+    });
+  }, [sessionAttention, attentionSummary, sessions, windowDirectory, statusData.attentionMap]);
 
   // Play the 'attention' sound when any session transitions to red (awaiting
   // approval). Red is a visible state, so color-driven dedup is correct here.
@@ -803,15 +994,35 @@ function AppInner() {
   // when nothing changed; without this guard the unconditional setStatusData
   // re-rendered the whole app tree at idle, forever.
   const lastStatusJsonRef = useRef<string | null>(null);
+  // Did the last status push carry ChatGPT plan usage? Main starts (and stops)
+  // that usage poll the moment the browser sign-in completes or the user signs
+  // out, so this yes/no answer flipping is a reliable, app-wide "the ChatGPT
+  // account just changed" signal. WHY we need one at all: the only other place
+  // that notices a sign-in is the card inside the Settings popup, and the
+  // sign-in happens in a BROWSER TAB — close Settings on the way back from the
+  // browser and the card is gone before the sign-in lands, so a conversation on
+  // a plan model would show no usage chips and no plan on /usage until the app
+  // was restarted. For anyone who never signs in with ChatGPT this value is
+  // `false` on every push forever and nothing below ever runs.
+  const hadChatGptUsageRef = useRef(false);
+  // WHY (2026-09-07) this walks `sessions` rather than the whole map: since the
+  // switcher started colouring peer-window rows, sessionStatuses also contains
+  // sessions OTHER windows own. Chiming on those would play the same alert once
+  // per open window, all at once, on top of the owning window's own chime — and
+  // the owner is already chiming, so no alert is lost by staying owner-only.
   useEffect(() => {
     const prev = prevStatusSoundRef.current;
-    for (const [id, color] of sessionStatuses) {
-      const was = prev.get(id);
+    const next = new Map<string, SessionStatusColor>();
+    for (const s of sessions) {
+      const color = sessionStatuses.get(s.id);
+      if (!color) continue;
+      next.set(s.id, color);
+      const was = prev.get(s.id);
       if (was === color) continue;
       if (color === 'red' && was !== 'red') playSound('attention');
     }
-    prevStatusSoundRef.current = new Map(sessionStatuses);
-  }, [sessionStatuses]);
+    prevStatusSoundRef.current = next;
+  }, [sessionStatuses, sessions]);
 
   // Play the 'ready' sound when any session's isThinking transitions true → false.
   // Replaces the prior blue-color-transition trigger, which never fired for the
@@ -863,10 +1074,22 @@ function AppInner() {
   // Stays a REACT EFFECT (not a store subscription) and is declared here (not
   // where the ref is) because it must observe the post-render selector output
   // — running it before sessionAttention is computed would read `undefined`.
+  //
+  // WHY (2026-09-07) this reports only sessions THIS window owns: sessionAttention
+  // also holds placeholder entries for peer-window sessions (App dispatches
+  // ATTENTION_STATE_CHANGED for every id in the 10s attentionMap, whoever owns
+  // it), and those placeholders can only ever derive gray/red/amber — they have
+  // no transcript, so they never know "green". Main's aggregate is keyed by
+  // session id across all windows, last report wins, so reporting them let a
+  // non-owner's stale gray overwrite the owner's green in the very feed the
+  // switcher now reads. One session, one reporter: its owner.
   useEffect(() => {
     const prev = lastAttentionReportedRef.current;
     const currentIds = new Set<string>();
-    for (const [sid, info] of sessionAttention) {
+    for (const s of sessions) {
+      const sid = s.id;
+      const info = sessionAttention.get(sid);
+      if (!info) continue;
       currentIds.add(sid);
       // Thread the same dot color the main switcher renders for this
       // session so the buddy pill's dot is visually identical.
@@ -887,7 +1110,7 @@ function AppInner() {
         prev.delete(sid);
       }
     }
-  }, [sessionAttention]);
+  }, [sessionAttention, sessions]);
 
   // Buddy "open main app" → land on the buddy's viewed session. Reads the
   // existing sessionsRef mirror so the IPC subscription survives
@@ -927,6 +1150,20 @@ function AppInner() {
     return unsubscribe;
   }, []);
 
+  // The host pushes a native session's permission mode whenever it is seeded
+  // or changed — from this window, another window or a phone. ALWAYS applied
+  // (no has() guard): it is the authoritative value, and it is what corrects a
+  // chip that read the 'ask' fallback before the session had its real mode.
+  useEffect(() => {
+    const off = window.claude.native?.onPermissionMode?.((e) => {
+      if (!e?.sessionId || !VALID_NATIVE_MODES.includes(e.mode as NativePermissionMode)) return;
+      setNativePermissionModes((prev) => prev.get(e.sessionId) === e.mode
+        ? prev
+        : new Map(prev).set(e.sessionId, e.mode as NativePermissionMode));
+    });
+    return off;
+  }, []);
+
   // Native local-model residency → per-session ModelLoadingBar (2026-07-14).
   // Main joins per-model engine state with session→model and pushes each native
   // session its bound model's state (loaded/loading/sleeping/unloaded).
@@ -945,28 +1182,51 @@ function AppInner() {
     return () => { off?.(); };
   }, []);
 
+  // What this session was given — pushed once as the session opens, and again on
+  // resume. Drives the line above the conversation and the panel behind it
+  // (contract R23: EVERY chat carries the line, including one where everything
+  // fit). A remote client that connects later gets the same record inside
+  // chat:hydrate, so there is no replay buffer to keep in step.
+  useEffect(() => {
+    const off = window.claude.native?.onSessionContext?.((e: any) => {
+      if (!e?.sessionId) return;
+      dispatch({ type: 'SESSION_CONTEXT', sessionId: e.sessionId, context: e.context ?? null });
+    });
+    return () => { off?.(); };
+  }, []);
+
   useEffect(() => {
     const createdHandler = window.claude.on.sessionCreated((info) => {
       setSessions((prev) => {
         // Deduplicate — replay buffers resend session:created for existing sessions
         if (prev.some((s) => s.id === info.id)) return prev;
         dispatch({ type: 'SESSION_INIT', sessionId: info.id });
-        // Only auto-focus genuinely new sessions (not replayed ones)
-        setSessionId(info.id);
+        // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
+        // client not before its place is decided: the restore sends every session as
+        // session:created ahead of the hydrate.
+        if (mayAutoSelect()) setSessionId(info.id);
         return [...prev, info];
       });
       // Native harness sessions (roadmap Phase 1+) are chat-first — they have
       // no PTY, so 'terminal' would be an empty pane. Claude sessions also
       // default to chat. (Gemini, the old terminal-only provider, is gone.)
-      const defaultView = 'chat';
+      // A shell session is the opposite: it IS a terminal and has no chat at
+      // all, so it opens on the terminal (and stays there — see currentViewMode).
+      const defaultView = info.provider === 'shell' ? 'terminal' : 'chat';
       setViewModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, defaultView));
       setPermissionModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, matchPermissionMode(info.permissionMode)));
       setSessionModels((prev) => {
         if (prev.has(info.id)) return prev;
         return new Map(prev).set(info.id, matchModelAlias(info.model));
       });
+      // A shell session is made by Settings' "Run in terminal" button, which sits
+      // on top of the app — without closing Settings the user would never see the
+      // terminal that just opened with their command typed into it.
+      if (info.provider === 'shell') setSettingsOpen(false);
       // Native harness sessions (roadmap Phase 1+) have no hook relay, so they'd
-      // never trigger the "first hook = initialized" gate. Mark them ready immediately.
+      // never trigger the "first hook = initialized" gate. Mark them ready
+      // immediately. A shell session has no hook relay either (it is spawned with
+      // no pipe), so this already covers it.
       if (info.provider && info.provider !== 'claude') {
         setInitializedSessions((prev) => {
           if (prev.has(info.id)) return prev;
@@ -980,25 +1240,12 @@ function AppInner() {
       // fetch async and validate against the known modes, mirroring
       // cycleNativePermission's guard. Fires for both fresh + resumed native
       // sessions (both flow through session:created). Skip if already seeded.
-      if (info.provider === 'native' && (window as any).claude?.native?.getPermissionMode) {
-        (window.claude.native as any).getPermissionMode(info.id).then((mode: string) => {
-          const VALID: NativePermissionMode[] = ['ask', 'auto-edit', 'full-auto'];
-          // Unrecognized response → 'unknown', not a silent 'ask' guess: an
-          // older/remote host that answered with something we don't understand
-          // could actually be sitting on 'full-auto', and showing 'ASK FIRST'
-          // in that case would understate what the session is allowed to do.
-          setNativePermissionModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(
-            info.id, VALID.includes(mode as NativePermissionMode) ? (mode as NativePermissionMode) : 'unknown',
-          ));
-        }).catch(() => {
-          // getPermissionMode unavailable (remote/older host) — we genuinely
-          // don't know the mode, so say so instead of defaulting to 'ask'.
-          setNativePermissionModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, 'unknown'));
-        });
-      }
+      // This read can land before the host has the real mode; the
+      // native:permission-mode push below corrects it.
+      if (info.provider === 'native') seedNativeMode(info.id, setNativePermissionModes);
     });
 
-    const destroyedHandler = window.claude.on.sessionDestroyed((id: string, exitCode: number = 0) => {
+    const destroyedHandler = window.claude.on.sessionDestroyed((id: string, exitCode: number = 0, focusSessionId?: string | null) => {
       // Plan 2b Moved Gate: this session was TAKEN OVER, not closed. Keep its pill
       // (so clicking it hits the gate), skip the "session died" banner
       // (SESSION_PROCESS_EXITED), and DON'T wipe chat state (SESSION_REMOVE) — the
@@ -1023,6 +1270,12 @@ function AppInner() {
         const remaining = prev.filter((s) => s.id !== id);
         // Auto-switch to another session when closing the active one
         setSessionId((curr) => {
+          if (isRemoteMode()) {
+            // Batch 2 (§3): open what the desktop is showing, or the first remaining when
+            // that IS the one that went away. A decided place, like the hydrate's.
+            if (curr === id) placeDecidedRef.current = true;
+            return chooseAfterDestroyed({ destroyedId: id, currentId: curr, remainingIds: remaining.map((s) => s.id), focusSessionId });
+          }
           if (curr !== id) return curr;
           return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
         });
@@ -1079,6 +1332,10 @@ function AppInner() {
 
     const hookHandler = window.claude.on.hookEvent((event) => {
       const action = hookEventToAction(event);
+      // T2 re-review (4): a desktop window must not say "Answered on the computer" — the
+      // note would name the wrong device — but ignoring the resolution left live buttons
+      // whenever a phone's answer broadcast was lost. Clear the card quietly instead.
+      if (action?.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) action.silent = true;
       if (action) {
         dispatch(action);
       }
@@ -1097,51 +1354,11 @@ function AppInner() {
 
     // Batch transcript dispatches into animation frames — multiple fs.watch events
     // within a single frame become one React render instead of N separate renders.
-    //
-    // Hidden-window caveat: Electron suspends requestAnimationFrame while the
-    // window is minimized/occluded, which used to FREEZE chat state (queued
-    // actions never flushed) while wall-clock timers kept firing — the 8s
-    // submit-retry then evaluated its idle gate against stale state and could
-    // send a stray \r into the PTY. While hidden we batch on a 16ms timeout
-    // instead: same batching cost, but state keeps advancing.
-    const pendingTranscriptActions: any[] = [];
-    let transcriptRafId: number | null = null;
-    let transcriptTimerId: ReturnType<typeof setTimeout> | null = null;
-    let transcriptBatchCancelled = false;
-
-    function flushTranscriptActions() {
-      transcriptRafId = null;
-      transcriptTimerId = null;
-      if (transcriptBatchCancelled) return;
-      const batch = pendingTranscriptActions.splice(0);
-      // React 18 batches all synchronous dispatches → single render for the whole batch
-      for (const action of batch) {
-        dispatch(action);
-      }
-    }
-
-    function batchTranscriptDispatch(action: any) {
-      pendingTranscriptActions.push(action);
-      if (transcriptRafId !== null || transcriptTimerId !== null) return;
-      if (document.visibilityState === 'hidden') {
-        transcriptTimerId = setTimeout(flushTranscriptActions, 16);
-      } else {
-        transcriptRafId = requestAnimationFrame(flushTranscriptActions);
-      }
-    }
-
-    // If the window hides while an rAF flush is pending, that rAF may never
-    // fire — hand the pending batch to a timeout so it can't strand.
-    function onTranscriptVisibilityChange() {
-      if (document.visibilityState === 'hidden' && transcriptRafId !== null) {
-        cancelAnimationFrame(transcriptRafId);
-        transcriptRafId = null;
-        if (transcriptTimerId === null) {
-          transcriptTimerId = setTimeout(flushTranscriptActions, 16);
-        }
-      }
-    }
-    document.addEventListener('visibilitychange', onTranscriptVisibilityChange);
+    // The batcher lives in state/transcript-batch.ts (with its hidden-window
+    // timer fallback) so the remote snapshot exporter and the chat:hydrate
+    // handler can flush it on demand — see that module's WHY.
+    const transcriptBatcher = installTranscriptBatcher(dispatch);
+    const batchTranscriptDispatch = (action: ChatAction) => transcriptBatcher.push(action);
 
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
       if (!event?.type || !event?.sessionId) return;
@@ -1154,6 +1371,9 @@ function AppInner() {
             uuid: event.uuid,
             text: event.data.text,
             timestamp: event.timestamp,
+            // A slash command read from its command tags — MUST mirror BubbleFeed.tsx and
+            // transcript-page-actions.ts. It starts no turn (chat-reducer).
+            slashCommand: event.data.slashCommand,
             // Host-injected turn marker (a delivered specialist report) + its
             // structured header — MUST mirror BubbleFeed.tsx. See TimelineEntry.injected.
             injected: event.data.injected,
@@ -1459,10 +1679,21 @@ function AppInner() {
       const json = JSON.stringify(data);
       if (json === lastStatusJsonRef.current) return;
       lastStatusJsonRef.current = json;
+      const chatgptUsage = pruneExpiredUsage(data.chatgptUsage);
+      // Signed in or signed out since the last push → the list of providers and
+      // models has changed, so anything showing "which plan is this session on"
+      // has to look again. See hadChatGptUsageRef above for why the Settings
+      // card cannot be relied on to notice this itself.
+      const hasChatGptUsage = chatgptUsage != null;
+      if (hasChatGptUsage !== hadChatGptUsageRef.current) {
+        hadChatGptUsageRef.current = hasChatGptUsage;
+        invalidateProviderTypeCache();
+      }
       setStatusData((prev) => ({
         ...prev,
         // A window past its reset time is stale, not current — see pruneExpiredUsage.
         usage: pruneExpiredUsage(data.usage),
+        chatgptUsage,
         announcement: data.announcement,
         updateStatus: data.updateStatus,
         syncWarnings: Array.isArray(data.syncWarnings) ? data.syncWarnings : [],
@@ -1472,6 +1703,7 @@ function AppInner() {
         contextMap: data.contextMap || prev.contextMap,
         gitBranchMap: data.gitBranchMap || prev.gitBranchMap,
         sessionStatsMap: data.sessionStatsMap || prev.sessionStatsMap,
+        attentionMap: data.attentionMap || prev.attentionMap,
       }));
 
       // Diff attentionMap and dispatch per-session when state flips.
@@ -1495,16 +1727,10 @@ function AppInner() {
     // UI action sync — receive actions broadcast from other devices
     const uiActionHandler = (window.claude.on as any).uiAction?.((action: any) => {
       if (!action) return;
-      // Handle view switching from native side (e.g. Chat button in TerminalKeyboardRow)
-      if (action.action === 'switch-view' && action.mode) {
-        setSessionId((currentSid) => {
-          if (currentSid) {
-            setViewModes((prev) => new Map(prev).set(currentSid, action.mode));
-          }
-          return currentSid;
-        });
-        return;
-      }
+      // Remote access batch 2 (§5, contract R4): the chat/terminal switch is each
+      // screen's own. A `switch-view` used to be applied here, so the Android
+      // app's toggle moved the desktop and every other phone; it is ignored now,
+      // like any other action without a reducer type.
       if (!action.type) return;
       // Handle session initialization sync (not a chat reducer action)
       if (action.type === '_SESSION_INITIALIZED' && action.sessionId) {
@@ -1570,8 +1796,57 @@ function AppInner() {
     // remote client connects. Dispatches HYDRATE_CHAT_STATE so the reducer
     // pre-populates all session timelines without waiting for transcript replay.
     // Typed-optional on the shared surface — present only on remote-shim.
+    // Remote access batch 2 (§7): after a reconnect the host replays only the asks
+    // still open and then names them; every awaiting card not named was answered
+    // while this phone was away. Remote-only (preload's stub never fires).
+    const hookReplayCompleteOff = (window.claude.on as any).hookReplayComplete?.((p: { sessionId: string; pendingRequestIds: string[] }) => {
+      if (!p?.sessionId) return;
+      dispatch({ type: 'PERMISSION_REPLAY_COMPLETE', sessionId: p.sessionId, pendingRequestIds: Array.isArray(p.pendingRequestIds) ? p.pendingRequestIds : [] });
+    });
+
+    // applyChatHydrate flushes this client's pending transcript batch FIRST —
+    // the phone's half of the cut line (state/transcript-batch.ts).
     const chatHydrateHandler = window.claude.on.chatHydrate?.((payload: any) => {
-      dispatch({ type: 'HYDRATE_CHAT_STATE', sessions: payload });
+      const kept = applyChatHydrate(dispatch, payload, chatStore.getState);
+      // Batch 2 (§3): the place is decided here — the stored place if that conversation
+      // still exists, else what the desktop is showing, else the first.
+      if (isRemoteMode()) {
+        const choice = choosePlaceOnHydrate({
+          // The conversation on screen first (T4 review, 6): one picked while catching up, or
+          // any place in a browser that blocks storage, must not be undone by the hydrate.
+          stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
+          existingSessionIds: [...chatStore.getState().keys()],
+          focusSessionId: payload?.focus?.sessionId ?? null,
+        });
+        placeDecidedRef.current = true;
+        setHydrateTick((t) => t + 1);
+        if (choice) setSessionId(choice);
+      }
+      // §6: the shim shows "may be out of date" while any session was kept.
+      (window.claude as any).remote?.reportHydrate?.({ seq: payload?.seq, kept });
+    });
+    // Remote access batch 2 (2026-09-10): where the phone's copy of the
+    // conversation stands — reconnecting, restoring, incomplete, complete. Only
+    // a remote client ever receives it; ChatView renders the strip (preload
+    // declares it and never fires).
+    const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus }) => {
+      setConversationStatus(s?.phase);
+      // A restore is starting (connect, reconnect or Refresh): the place is decided again
+      // when its hydrate lands, so nothing jumps the phone meanwhile.
+      if (s?.phase === 'restoring') placeDecidedRef.current = false;
+      // A restore that ended WITHOUT a hydrate — a refused Refresh, a host restore that
+      // failed, a copy that never came (T4 review, 1): decide the place with what the phone
+      // has, so it is never left with nothing selected and no history loading.
+      if ((s?.phase === 'incomplete' || s?.phase === 'complete') && isRemoteMode() && !placeDecidedRef.current) {
+        placeDecidedRef.current = true;
+        setHydrateTick((t) => t + 1);
+        const choice = choosePlaceOnHydrate({
+          stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
+          existingSessionIds: [...chatStore.getState().keys()],
+          focusSessionId: null,
+        });
+        if (choice) setSessionId((prev) => prev ?? choice);
+      }
     });
 
     // Artifact tracker: when Claude writes/edits a file inside the active project
@@ -1636,10 +1911,7 @@ function AppInner() {
     // removed as dead state.
 
     return () => {
-      transcriptBatchCancelled = true;
-      if (transcriptRafId !== null) cancelAnimationFrame(transcriptRafId);
-      if (transcriptTimerId !== null) clearTimeout(transcriptTimerId);
-      document.removeEventListener('visibilitychange', onTranscriptVisibilityChange);
+      transcriptBatcher.dispose();
       window.claude.off('session:created', createdHandler);
       window.claude.off('session:destroyed', destroyedHandler);
       window.claude.off('hook:event', hookHandler);
@@ -1661,6 +1933,8 @@ function AppInner() {
       if (promptCompleteHandler) window.claude.off('prompt:complete', promptCompleteHandler);
       if (sessionPermissionModeHandler) window.claude.off('session:permission-mode', sessionPermissionModeHandler);
       if (chatHydrateHandler) window.claude.off('chat:hydrate', chatHydrateHandler);
+      if (typeof hookReplayCompleteOff === 'function') hookReplayCompleteOff();
+      if (typeof conversationStatusOff === 'function') conversationStatusOff();
       if (artifactToolUseHandler) window.claude.off('transcript:event', artifactToolUseHandler);
       artifactTracker.dispose();
       if (deliverableAutoOpenHandler) window.claude.off('transcript:event', deliverableAutoOpenHandler);
@@ -1723,15 +1997,22 @@ function AppInner() {
   // claudeSessionId/projectSlug are the fallback locator for a session the
   // transcript watcher does not know yet (a just-resumed CC session) — see
   // TranscriptPageRequest.
-  // Sessions whose first page has already been asked for. Ids are never removed:
-  // asking twice would prepend the newest page a second time.
+  // Sessions whose first page has already been asked for — asking twice would
+  // prepend the newest page a second time. An id is removed only when its
+  // session leaves the list (the effect below), never on the strength of the
+  // ANSWER: for the life of a session, the first request to arrive is the only
+  // one that ever runs.
   const firstPageAsked = useRef<Set<string>>(new Set());
 
   const loadFirstPage = useCallback(async (sid: string, locator?: { claudeSessionId: string; projectSlug: string }) => {
     if (firstPageAsked.current.has(sid)) return;
+    // Batch 2 (§4): the computer's copy is the only source on a remote client — wait for
+    // it, and never load a page on top of a session it delivered. Not recorded as asked,
+    // so the sessions effect retries when the hydrate lands (hydrateTick).
+    if (!shouldLoadFirstPage({ remote: isRemoteMode(), placeDecided: placeDecidedRef.current, hydrated: !!chatStore.getState().get(sid)?.history.hydrated })) return;
     firstPageAsked.current.add(sid);
     dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: sid });
-    for (let attempt = 0; attempt < FIRST_PAGE_ATTEMPTS; attempt++) {
+    for (let attempt = 0; ; attempt++) {
       try {
         const page = await (window as any).claude?.detach?.requestTranscriptPage?.({
           sessionId: sid,
@@ -1740,17 +2021,19 @@ function AppInner() {
           projectSlug: locator?.projectSlug,
         });
         if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }
-        // An empty page is ambiguous: either the session genuinely has no
-        // history, or main cannot resolve its transcript YET (a just-started
-        // session is not watched until Claude Code's hook reports its path).
-        // Retry a few times before accepting it — guessing wrong one way shows
-        // an empty conversation with no way to recover, guessing wrong the
-        // other way costs a few hundred ms on a genuinely new session.
-        const empty = page.events.length === 0 && !page.hasMore;
-        if (!empty || attempt === FIRST_PAGE_ATTEMPTS - 1) {
+        // An empty page used to be ambiguous: either the session genuinely has
+        // no history, or main could not resolve its transcript YET (a
+        // just-started session is not watched until Claude Code's hook reports
+        // its path). Main now says which — `unresolved` — so the two get
+        // different budgets, and an unresolved one is never RECORDED: writing
+        // hasMore:false + a null cursor is what permanently removes the
+        // scroll-up sentinel (Destin, 2026-09-07). See first-page-retry.ts.
+        const decision = decideFirstPage(page, attempt);
+        if (decision === 'accept') {
           dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
           return;
         }
+        if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }
       } catch {
         // The scroll sentinel can retry; a failed first page leaves an empty
         // view rather than a wrong one.
@@ -1759,7 +2042,7 @@ function AppInner() {
       }
       await new Promise((r) => setTimeout(r, FIRST_PAGE_RETRY_MS));
     }
-  }, [dispatch]);
+  }, [dispatch, chatStore]);
 
   // Every session this window knows about gets its most recent page — not just
   // the paths that happen to create one. History used to arrive as a side effect
@@ -1775,13 +2058,15 @@ function AppInner() {
     const live = new Set(sessions.map((s) => s.id));
     for (const id of firstPageAsked.current) if (!live.has(id)) firstPageAsked.current.delete(id);
     for (const s of sessions) void loadFirstPage(s.id);
-  }, [sessions, loadFirstPage]);
+  }, [sessions, loadFirstPage, hydrateTick]);
 
   useEffect(() => {
     window.claude.session.list().then((list: any[]) => {
       // Perf lab: boot-time session fetch has resolved (catches pre-existing
       // sessions on mount — see comment above this effect).
       performance.mark('yc:sessions-listed');
+      // Even an empty list is an answer: it is what tells the welcome screen it may decide.
+      setSessionListLoaded(true);
       if (!list || list.length === 0) return;
 
       // Fix: this per-session seeding used to run INSIDE the setSessions updater
@@ -1801,6 +2086,9 @@ function AppInner() {
         // handlers attached (e.g. a remote reconnect) — session:created never
         // fired for them, so this is the only place their model gets seeded.
         setSessionModels((sm) => sm.has(s.id) ? sm : new Map(sm).set(s.id, matchModelAlias(s.model)));
+        // Same reason for the native permission chip, which otherwise showed
+        // the 'ask' fallback after a reload whatever the real mode was.
+        if (s.provider === 'native') seedNativeMode(s.id, setNativePermissionModes);
       }
 
       // Pure updater — dedup against whatever session:created already added.
@@ -1810,7 +2098,7 @@ function AppInner() {
         if (newSessions.length === 0) return prev;
         return [...prev, ...newSessions];
       });
-      setSessionId((prev) => prev ?? list[0].id);
+      setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
       // Mark all existing sessions as initialized — they're already running,
       // so skip the "Initializing" overlay (which waits for first hook event)
       setInitializedSessions((prev) => {
@@ -1971,8 +2259,15 @@ function AppInner() {
   // On Android, switching to remote means the WebSocket now talks to the desktop server —
   // all local session state is stale and must be replaced with the desktop's sessions.
   useEffect(() => {
-    const unsub = onConnectionModeChange(() => {
+    const unsub = onConnectionModeChange((mode) => {
       // Flush all session state
+      // Batch 2 (§3): a new host means a new place, decided by its hydrate.
+      placeDecidedRef.current = false;
+      // Back on this device's own runtime there is no computer's copy to describe; a strip
+      // left saying "reconnecting" would never clear (T4 review, 3).
+      if (mode === 'local') setConversationStatus(undefined);
+      // Whatever the last computer said about past conversations was about THAT computer.
+      setHasResumable(null);
       setSessions([]);
       setSessionId(null);
       setViewModes(new Map());
@@ -1992,8 +2287,12 @@ function AppInner() {
           setViewModes((vm) => new Map(vm).set(s.id, 'chat'));
           setPermissionModes((pm) => new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
           setSessionModels((sm) => new Map(sm).set(s.id, matchModelAlias(s.model)));
+          // A new computer's sessions: ask each native one for its real mode.
+          if (s.provider === 'native') seedNativeMode(s.id, setNativePermissionModes);
         }
-        setSessionId(list[0].id);
+        // Never over a place already on screen: this reply can land after the hydrate chose
+        // one (T4 review, 7).
+        setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
         // Mark existing sessions as initialized (already running)
         setInitializedSessions(new Set(list.map((s) => s.id)));
       }).catch(() => {});
@@ -2099,33 +2398,50 @@ function AppInner() {
     setDrawerFilter(undefined);
   }, []);
 
-  // Shift+Space cycles model in chat view
-  const cycleModelRef = useRef<(() => void) | null>(null);
-  const cycleModel = useCallback(() => {
-    if (!sessionId) return;
-    // Native sessions can't cycle CC aliases — see supportsAliasCycling for the
-    // failure this prevents (a chip relabeled to a model the session isn't
-    // running, plus a stray write to the global model preference).
-    if (!supportsAliasCycling(sessions.find((s) => s.id === sessionId))) return;
-    // currentModel may be 'unknown' — indexOf then legitimately returns -1,
-    // which wraps to index 0 below, so cycling from an unknown state starts fresh.
-    const idx = MODELS.indexOf(currentModel as ModelAlias);
-    const next = MODELS[(idx + 1) % MODELS.length];
+  // Shared core for any "switch THIS session to model X" flow — Shift+Space
+  // cycling and the typed `/model <alias>` chat command both route through
+  // this so the guarded PTY send, the optimistic pill update, and the
+  // drift-verification handshake below stay in exactly ONE place.
+  const switchSessionModel = useCallback((sid: string, target: ModelAlias): 'sent' | 'blocked' | 'ineligible' => {
+    // Native/shell sessions can't cycle CC aliases — see supportsAliasCycling
+    // for the failure this prevents (a chip relabeled to a model the session
+    // isn't running, plus a stray write to the global model preference).
+    if (!supportsAliasCycling(sessions.find((s) => s.id === sid))) return 'ineligible';
     // Send first, guarded: while a prompt is pending, "/model …\r" would land
     // on CC's live Ink menu and answer it. Refusing BEFORE the optimistic
     // state writes also keeps the model pill truthful when nothing was sent.
-    if (!guardedPtySend(sessionId, `/model ${next}\r`)) return;
-    setSessionModels((prev) => new Map(prev).set(sessionId, next));
-    setPendingModel(next);
+    if (!guardedPtySend(sid, `/model ${target}\r`)) return 'blocked';
+    setSessionModels((prev) => new Map(prev).set(sid, target));
+    setPendingModel(target);
     // Fix: don't verify against in-flight events from the current turn —
     // wait until a new user turn starts so we know Claude is using the new model.
     postSwitchTurnReady.current = false;
     // Persist preference optimistically — the /model command is reliable,
     // verification is just a safety net. If verification later shows a
     // mismatch, the failure handler overwrites with the actual model.
-    (window.claude as any).model?.setPreference(next);
-  }, [currentModel, sessionId, guardedPtySend, sessions]);
+    (window.claude as any).model?.setPreference(target);
+    return 'sent';
+  }, [guardedPtySend, sessions]);
+
+  // Shift+Space cycles model in chat view
+  const cycleModelRef = useRef<(() => void) | null>(null);
+  const cycleModel = useCallback(() => {
+    if (!sessionId) return;
+    // currentModel may be 'unknown' — indexOf then legitimately returns -1,
+    // which wraps to index 0 below, so cycling from an unknown state starts fresh.
+    const idx = MODELS.indexOf(currentModel as ModelAlias);
+    const next = MODELS[(idx + 1) % MODELS.length];
+    switchSessionModel(sessionId, next);
+  }, [currentModel, sessionId, switchSessionModel]);
   cycleModelRef.current = cycleModel;
+
+  // Typed `/model <alias>` in chat — see slash-command-dispatcher.ts for why
+  // this must never fall through to a normal chat-message send (the command
+  // is Claude-Code-local and produces no turn to end the "thinking" spinner).
+  const handleModelSwitchCommand = useCallback((alias: ModelAlias): 'sent' | 'blocked' | 'ineligible' => {
+    if (!sessionId) return 'ineligible';
+    return switchSessionModel(sessionId, alias);
+  }, [sessionId, switchSessionModel]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -2276,16 +2592,24 @@ function AppInner() {
     // The derivation itself lives in state/usage-snapshot.ts — a pure function,
     // so the thing /usage is entirely made of can be tested without rendering
     // App (no test imports this file). This wrapper only gathers the inputs.
-    (sid: string) =>
-      buildUsageSnapshot({
+    (sid: string) => {
+      const info = sessionsRef.current.find((x) => x.id === sid);
+      // A session bound to the ChatGPT plan reports THAT plan's windows on the
+      // card (questions deck Q-4a); every other session keeps Claude's.
+      // info.providerType is what the session itself says it is billed to; the
+      // model-id lookup is only the fallback (see hooks/use-provider-type.ts).
+      const onChatGpt = info?.provider === 'native' && resolveProviderType(info.model, info.providerType) === 'chatgpt';
+      return buildUsageSnapshot({
         sessionId: sid,
         now: Date.now(),
         stats: statusData.sessionStatsMap[sid],
         contextPercent: statusData.contextMap[sid] ?? null,
-        usage: statusData.usage as SubscriptionUsage | null,
-        isNative: sessionsRef.current.find((x) => x.id === sid)?.provider === 'native',
+        usage: (onChatGpt ? statusData.chatgptUsage : statusData.usage) as SubscriptionUsage | null,
+        subscriptionPlan: onChatGpt ? 'chatgpt' : 'claude',
+        isNative: info?.provider === 'native',
         session: chatStateMapRef.current.get(sid),
-      }),
+      });
+    },
     [statusData],
   );
 
@@ -2312,7 +2636,7 @@ function AppInner() {
           // onToast: master's change 44 moved the dismiss timer INTO <Toast>, so
           // the hand-rolled setTimeout this branch carried would now be a second,
           // competing timer. Take master's plain form.
-          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true) },
+          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true), onModelSwitchCommand: handleModelSwitchCommand },
           // Native /clear is durable-first — see deferUiEffectsToRuntime.
           deferUiEffectsToRuntime: sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'native',
         });
@@ -2342,7 +2666,7 @@ function AppInner() {
         timestamp: Date.now(),
       });
     },
-    [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend],
+    [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend, handleModelSwitchCommand],
   );
 
   const handleSelectSkill = useCallback(
@@ -2372,7 +2696,7 @@ function AppInner() {
           // onToast: master's change 44 moved the dismiss timer INTO <Toast>, so
           // the hand-rolled setTimeout this branch carried would now be a second,
           // competing timer. Take master's plain form.
-          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true) },
+          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true), onModelSwitchCommand: handleModelSwitchCommand },
           // Native /clear is durable-first — see deferUiEffectsToRuntime.
           deferUiEffectsToRuntime: sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'native',
         });
@@ -2405,30 +2729,63 @@ function AppInner() {
         timestamp: Date.now(),
       });
     },
-    [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend],
+    [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend, handleModelSwitchCommand],
   );
+
+  /** Put a just-created session on screen from the computer's ANSWER. session:created still
+   *  arrives and dedups against this; on a phone that announcement is queued behind a catch-up,
+   *  and a remote client would not auto-select it even then (mayAutoSelect). Starting one is a
+   *  decision about where to be, so it also settles the place a hydrate would otherwise pick. */
+  const adoptCreatedSession = useCallback((info: any) => {
+    placeDecidedRef.current = true;
+    dispatch({ type: 'SESSION_INIT', sessionId: info.id });
+    setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]));
+    setViewModes((vm) => (vm.has(info.id) ? vm : new Map(vm).set(info.id, 'chat')));
+    setPermissionModes((pm) => (pm.has(info.id) ? pm : new Map(pm).set(info.id, matchPermissionMode(info.permissionMode))));
+    setSessionModels((sm) => (sm.has(info.id) ? sm : new Map(sm).set(info.id, matchModelAlias(info.model))));
+    // Same rule as the announcement handler: only Claude Code sessions wait for a first hook
+    // event, so anything else is ready as soon as it exists.
+    if (info.provider && info.provider !== 'claude') {
+      setInitializedSessions((prev) => (prev.has(info.id) ? prev : new Set(prev).add(info.id)));
+    }
+    setSessionId(info.id);
+  }, [dispatch]);
 
   const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string) => {
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
     const m = sessionModel || realModelAlias(currentModel);
-    const info = await (window.claude.session.create as any)({
-      name: 'New Session',
-      cwd,
-      skipPermissions: dangerous,
-      // A Claude alias is meaningless for a native session (the harness uses
-      // binding.modelId; SessionManager's native branch ignores `model`), so
-      // omit it to keep the payload honest.
-      model: provider === 'native' ? undefined : m,
-      provider: provider || 'claude',
-      // Native runtime only — the provider/model binding for the harness. The
-      // main handler requires it for a fresh native session (session-manager
-      // throws otherwise); undefined for claude sessions.
-      binding: provider === 'native' ? binding : undefined,
-      // Native runtime only — the harness preset (Assistant | Coder) the fresh
-      // session is stamped with. Ignored for claude sessions.
-      preset: provider === 'native' ? preset : undefined,
-    });
+    // The projects tip's moment: the fifth session ever started (tips.ts).
+    if (bumpCounter('sessions-started') === 5) triggerTip('projects');
+    // A session started while the tour's form stop is up moves the tour on.
+    requestGuideAdvance();
+    // The four native/claude conditionals this payload needs (drop the alias,
+    // force skipPermissions false, carry binding, carry preset) live in ONE
+    // place now — shared/session-create-args.ts. They were hand-written at each
+    // call site, and the buddy floater's copy remembered none of them.
+    // The screen changes on the tap, not when the computer answers.
+    setStartingSession(true);
+    setStartFailed(null);
+    startArgsRef.current = [cwd, dangerous, sessionModel, provider, launchInNewWindow, binding, preset];
+    let info: any;
+    try {
+      info = await (window.claude.session.create as any)(buildSessionCreateArgs({
+        name: 'New Session',
+        cwd,
+        runtime: provider === 'native' ? 'native' : 'claude',
+        model: m,
+        skipPermissions: dangerous,
+        binding,
+        preset,
+      }));
+    } catch (err: any) {
+      // Never a silent return to the empty screen — that is the "it just reset" Destin saw.
+      setStartingSession(false);
+      setStartFailed(err?.message ? String(err.message) : '');
+      return;
+    }
+    if (info?.id) adoptCreatedSession(info);
+    setStartingSession(false);
     // I1 fix: deliver the RESOLVED harnessId to the live session pill. The
     // session:created event that seeds the sessions entry is emitted+sent
     // (process.nextTick) BEFORE the main handler finishes create/resume, so on a
@@ -2485,37 +2842,15 @@ function AppInner() {
     // the dialog on "held AND not self" so a lease left over from OUR OWN install
     // (e.g. after an unclean shutdown) resumes straight through instead of popping
     // a confusing "active on <your-own-hostname>" takeover dialog.
-    try {
-      const q = await window.claude.syncSpaces?.leaseQuery?.(claudeSessionId);
-      if (q?.held && !q.self) {
-        const device = q.device || 'another device';
-        const confirmed = await askTakeover(device, 'confirm');
-        if (!confirmed) return false; // "Never mind" — abort the resume
-        const r = await window.claude.syncSpaces?.leaseTakeover?.(claudeSessionId);
-        // 'timeout' (asked, no answer) and 'undeliverable' (never asked — hub had
-        // no delivery path) both offer the SAME force path, just with different
-        // dialog copy — see takeoverDialogCopy. Never collapse them into one
-        // phase: that's exactly the dishonest "isn't responding" framing this
-        // 3-state redesign replaced.
-        if (r?.outcome === 'timeout' || r?.outcome === 'undeliverable') {
-          const forced = await askTakeover(device, r.outcome === 'undeliverable' ? 'undeliverable' : 'force');
-          if (!forced) return false; // "Never mind" — abort
-          const fr = await window.claude.syncSpaces?.leaseForce?.(claudeSessionId);
-          // A failed force means the lease was never overwritten — the other device
-          // may STILL be live and holding it. Never-block (proceed with the resume),
-          // but say so: the user is about to have two writers on one transcript and
-          // recent turns may be missing. Silent here was the 2026-07-18 bug's mask.
-          if (fr && fr.ok === false) {
-            setToast({ message: `Couldn't confirm the handoff from ${device} — it may still be editing this conversation, and recent turns may be missing.`, durationMs: 8000 });
-          }
-        } else if (r?.outcome === 'error') {
-          // The takeover request itself failed (hub error / exception). Same deal:
-          // proceed (never-block) but warn that the other device may still be live.
-          setToast({ message: `Couldn't reach ${device} to hand off this conversation — it may still be editing, and recent turns may be missing.`, durationMs: 8000 });
-        }
-        // 'acquired' -> clean handoff, fall through and resume.
-      }
-    } catch { /* never-block: a lease query/takeover failure must not stop the resume */ }
+    // The gate itself now lives in state/resume-lease-gate.ts — the buddy
+    // floater's own resume list runs the SAME never-block / three-honest-states
+    // logic instead of re-deriving it slightly differently.
+    const proceed = await runLeaseTakeoverGate({
+      claudeSessionId,
+      askTakeover,
+      onWarn: (message) => setToast({ message, durationMs: 8000 }),
+    });
+    if (!proceed) return false; // "Never mind" — abort the resume
 
     // Native-harness resume. Task 6 / Destin's ruling: NEVER auto-launch a
     // binding — the resume-time model selector is ALWAYS the source of the
@@ -2528,17 +2863,16 @@ function AppInner() {
       return false; // deferred to the pre-resume picker — not launched yet
     }
     if (provider === 'native') {
-      const nativeSession = await (window.claude.session.create as any)({
+      const nativeSession = await (window.claude.session.create as any)(buildSessionCreateArgs({
         // WHY the constant: main's title feeder must be able to RECOGNIZE this
         // as a placeholder (shared/session-title.ts). A bare literal here is
         // what let it pass as a real title and block auto-titling on resume.
         name: RESUMING_NATIVE,
         cwd,
-        skipPermissions: false, // native sessions have no PTY permission flow
-        provider: 'native',
+        runtime: 'native',
         resumeSessionId: claudeSessionId,
         binding: nativeBinding, // the selector's pick — becomes the live binding (native-session-host.ts resume() override)
-      });
+      }));
       if (!nativeSession?.id) {
         // The create never acked (Task 6 review — was a silent return). Main also
         // emits a session-error for the split not-synced / folder-missing / data-
@@ -2568,13 +2902,14 @@ function AppInner() {
     const m = resumeModel || realModelAlias(currentModel);
 
     // Pass --resume flag so Claude Code boots directly into the resumed session
-    const newSession = await (window.claude.session.create as any)({
+    const newSession = await (window.claude.session.create as any)(buildSessionCreateArgs({
       name: RESUMING_CLAUDE, // see RESUMING_NATIVE above — different spelling, same contract
       cwd,
-      skipPermissions: resumeDangerous || false,
+      runtime: 'claude',
+      skipPermissions: resumeDangerous,
       resumeSessionId: claudeSessionId,
       model: m,
-    });
+    }));
     if (!newSession?.id) {
       // Honest failure instead of a silent return (Task 6 review — the CC ack-gap).
       setToast({ message: "Couldn't resume this conversation.", durationMs: 6000 });
@@ -2624,7 +2959,13 @@ function AppInner() {
     return () => window.removeEventListener('youcoded:resume-session', onResume);
   }, [handleResumeSession]);
 
-  const currentViewMode = sessionId ? (viewModes.get(sessionId) || 'chat') : 'chat';
+  // A shell session has no chat side — no transcript, no model, nothing to show
+  // in the chat pane — so its view is FORCED to the terminal here rather than
+  // merely defaulted. Forcing (not seeding) is what makes the header's toggle
+  // and the Ctrl+` shortcut unable to strand the user on an empty chat pane.
+  const activeSessionProvider = sessionId ? sessions.find((s) => s.id === sessionId)?.provider : undefined;
+  const isShellSession = activeSessionProvider === 'shell';
+  const currentViewMode = isShellSession ? 'terminal' : (sessionId ? (viewModes.get(sessionId) || 'chat') : 'chat');
 
   // Mirror the active view mode onto <html data-view-mode="..."> so CSS can
   // react to it. Needed on Android to hide the wallpaper layer over the native
@@ -2644,11 +2985,13 @@ function AppInner() {
   const handleToggleView = useCallback(
     (mode: ViewMode) => {
       if (!sessionId) return;
+      // A shell session is terminal-only. The header hides its toggle, but Ctrl+`
+      // still lands here, so refuse rather than trust the callers.
+      if (sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'shell') return;
       setViewModes((prev) => new Map(prev).set(sessionId, mode));
-      // On Android, tell the native side to switch views
-      if (getPlatform() === 'android') {
-        (window as any).claude?.remote?.broadcastAction?.({ action: 'switch-view', mode });
-      }
+      // Batch 2 (§5): no broadcast. This screen's switch is this screen's own —
+      // the Android-only `switch-view` broadcast moved the desktop and every
+      // other phone along with it (contract R4).
     },
     [sessionId],
   );
@@ -2674,7 +3017,9 @@ function AppInner() {
   const escPassthroughStateRef = useRef<{
     activeSessionId: string;
     viewMode: 'chat' | 'terminal';
-    provider: 'claude' | 'native' | undefined;
+    // Widened for the 'shell' provider (2026-09-05). ESC into a shell session is
+    // correct — it reaches the PTY, which is what ESC does in any terminal.
+    provider: SessionProvider | undefined;
   }>({ activeSessionId: '', viewMode: 'chat', provider: 'claude' });
   escPassthroughStateRef.current = {
     activeSessionId: sessionId ?? '',
@@ -2742,6 +3087,13 @@ function AppInner() {
   // Native sessions: permission modes are a harness policy (Phase 2), not a
   // PTY shift+tab cycle — hide the badge + cycle affordance for them.
   const isNativeSession = currentSession?.provider === 'native';
+  // Sign in with ChatGPT (2026-09-04): which provider the bound model runs on,
+  // and what to offer when its plan window runs out (the plan-limit card).
+  const activeProviderType = useModelProviderType(
+    isNativeSession ? currentSession?.model : null,
+    isNativeSession ? currentSession?.providerType : null,
+  );
+  const onChatGptPlan = activeProviderType === 'chatgpt';
   // What the StatusBar model chip renders — see model-chip.ts for why native
   // sessions bypass the Claude Code alias matcher entirely.
   const modelChip = modelChipFor(currentSession, currentModel);
@@ -2783,6 +3135,16 @@ function AppInner() {
   // Task 12 IPC (NOT a PTY Shift+Tab — native sessions have no PTY). The IPC
   // returns the APPLIED mode, which is authoritative — state updates from the
   // return value, not the optimistic `next` (no screen-scrape correction path).
+  // First-time warnings (Destin, 2026-09-10): the first time Skip Permissions
+  // or Full auto is switched on, and the first session on a small model, a
+  // plain explainer with an "I understand" checkbox for the two dangerous
+  // ones. `gate(proceed)` runs proceed at once when already acknowledged.
+  // The session strip and the Resume browser carry their own gates; these
+  // three cover the welcome form and the status-bar chip.
+  const { gate: gateSkip, dialog: skipWarning } = useFirstTimeGate('skip-permissions');
+  const { gate: gateSmallModel, dialog: smallModelWarning } = useFirstTimeGate('small-model');
+  const { gate: gateFullAuto, dialog: fullAutoWarning } = useFirstTimeGate('full-auto');
+
   const cycleNativePermission = useCallback(async () => {
     if (!sessionId) return;
     const cycle: NativePermissionMode[] = ['ask', 'auto-edit', 'full-auto'];
@@ -2790,6 +3152,7 @@ function AppInner() {
     // which wraps to index 0 below, so cycling from an unknown state starts fresh.
     const idx = cycle.indexOf(currentNativeMode as NativePermissionMode);
     const next = cycle[(idx + 1) % cycle.length];
+    const apply = async () => {
     try {
       const applied = await window.claude.native.setPermissionMode(sessionId, next);
       // Validate before storing: the normal path returns a bare mode string, but
@@ -2807,7 +3170,11 @@ function AppInner() {
       // the chip on its current (unchanged) mode rather than lying about state.
       console.error('Failed to set native permission mode:', err);
     }
-  }, [sessionId, currentNativeMode]);
+    };
+    // Cycling INTO Full auto is switching it on: the first time, the warning.
+    if (next === 'full-auto') { gateFullAuto(() => { void apply(); }); return; }
+    await apply();
+  }, [sessionId, currentNativeMode, gateFullAuto]);
 
   // Shift+Tab cycles permission mode in chat view
   // (In terminal view, the raw escape code reaches the PTY directly)
@@ -2819,6 +3186,16 @@ function AppInner() {
     // ModelAlias union that has access). On other models, CC's Shift+Tab won't
     // surface auto, so showing it would create a click-but-nothing-happens
     // state. The PTY watcher above corrects mismatches within ~1 tick anyway.
+    // A shell session has no permission modes to cycle, and the write below is a
+    // RAW sendInput that bypasses guardedPtySend/canPtySend entirely — its only
+    // other shield is isTypingTarget, which is false whenever xterm does not
+    // hold focus. Open Run in terminal, click the header pill, press Shift+Tab,
+    // and the app types \x1b[Z at the user's own prompt. Inert on a default
+    // bash/zsh/fish, but a bound shift-tab (oh-my-zsh reverse-menu-complete,
+    // fish complete-and-search) edits the line they are about to run. This is
+    // the guard that makes pty-input-gate's "exactly once, at creation, and
+    // never again" true.
+    if (sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'shell') return;
     const canAuto = currentModel === 'opus[1m]';
     const cycle: PermissionMode[] = [
       'normal',
@@ -2831,10 +3208,16 @@ function AppInner() {
     // -1, which wraps to index 0 below, so cycling from an unknown state starts fresh.
     const idx = cycle.indexOf(currentPermissionMode as PermissionMode);
     const next = cycle[(idx + 1) % cycle.length];
-    setPermissionModes((prev) => new Map(prev).set(sessionId, next));
-    // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
-    window.claude.session.sendInput(sessionId, '\x1b[Z');
-  }, [sessionId, canBypass, currentPermissionMode, currentModel]);
+    const apply = () => {
+      setPermissionModes((prev) => new Map(prev).set(sessionId, next));
+      // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
+      window.claude.session.sendInput(sessionId, '\x1b[Z');
+    };
+    // 'bypass' IS Skip Permissions, reached by cycling: the first time, the
+    // same warning the form's toggle shows.
+    if (next === 'bypass') { gateSkip(apply); return; }
+    apply();
+  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip]);
   cyclePermissionRef.current = cyclePermission;
 
   useEffect(() => {
@@ -2875,7 +3258,9 @@ function AppInner() {
   // (now-dead) chat/terminal view.
   const movedGate = sessionId ? movedSessions.get(sessionId) : undefined;
 
-  // Show a "something may be wrong" hint after 15s of waiting on initialization.
+  // Show a "something may be wrong" hint after 6s of waiting on initialization.
+  // WHY 6s (was 15s, shortened 2026-09-14): 15s was a long wait before the way
+  // out (the terminal view) was offered when a start really is stuck.
   // Resets whenever the active session changes or the session becomes initialized.
   const [initSlowWarning, setInitSlowWarning] = useState(false);
   // The init warning's button is a one-way door: switching to terminal view also
@@ -2884,9 +3269,125 @@ function AppInner() {
   useEffect(() => {
     if (sessionInitialized) { setInitSlowWarning(false); return; }
     setInitSlowWarning(false);
-    const t = setTimeout(() => setInitSlowWarning(true), 15000);
+    const t = setTimeout(() => setInitSlowWarning(true), 6000);
     return () => clearTimeout(t);
   }, [sessionId, sessionInitialized]);
+
+  // ── First-run guide ──────────────────────────────────────────────────────
+  // The welcome screen's first-time version (deck 2026-09-10, Q-8): with no
+  // session open AND nothing to resume, the screen says "Start your first
+  // session" and opens the form itself; Resume is hidden because it would list
+  // nothing. `null` = not asked yet, which keeps Resume visible — a second,
+  // synced device may have sessions this device has not pulled yet, so the
+  // unknown state errs toward showing the button.
+  useOnRemoteReconnect(() => setResumeProbe((n) => n + 1));
+  useEffect(() => {
+    if (isFirstRun !== false || sessions.length > 0) return;
+    let alive = true;
+    Promise.resolve()
+      .then(() => (window as any).claude?.session?.browse?.() as Promise<unknown[]> | undefined)
+      // Anything that is not a list is not an answer either: an older or remote host that
+      // replied with an object must not be read as "you have no past conversations".
+      .then((list) => { if (alive) setHasResumable(Array.isArray(list) ? list.length > 0 : null); })
+      // A failed question is unknown, never "none" (Destin, 2026-09-11: the phone sometimes
+      // opened on "Start your first session"). Unknown keeps the everyday screen AND keeps
+      // Resume offered; the reconnect above asks again.
+      .catch(() => { if (alive) setHasResumable(null); });
+    return () => { alive = false; };
+  }, [isFirstRun, sessions.length, resumeRequested, resumeProbe]);
+  const firstTimeWelcome = showFirstRunWelcome({ sessionCount: sessions.length, hasResumable, sessionListLoaded });
+
+  // One opener for the welcome form, shared by the New Session button, the
+  // first-time auto-open and the tour, so the defaults it loads cannot drift.
+  const openWelcomeForm = useCallback(() => {
+    setWelcomeCwd(sessionDefaults.projectFolder || '');
+    setWelcomeDangerous(sessionDefaults.skipPermissions || false);
+    setWelcomeModel(sessionDefaults.model || 'sonnet');
+    // The saved default, whatever provider it names. Routed through the
+    // picker's own setter so a ChatGPT or local default moves the engine with
+    // it — setWelcomeModel alone only ever moved the Claude alias (contract R5).
+    if (sessionDefaults.startModel) applyWelcomeModelChoice(sessionDefaults.startModel);
+    // usePreset re-arms the heuristic itself on the welcomeFormOpen false→true
+    // edge — no manual touched reset needed here.
+    setWelcomeFormOpen(true);
+  }, [sessionDefaults]); // eslint-disable-line react-hooks/exhaustive-deps
+  const autoOpenedWelcome = useRef(false);
+  useEffect(() => {
+    // Not while a phone is still catching up: the screen it would open over is about to fill
+    // with real conversations, and this effect only ever fires once.
+    if (remoteCatchingUp) return;
+    if (firstTimeWelcome && !autoOpenedWelcome.current) { autoOpenedWelcome.current = true; openWelcomeForm(); }
+  }, [firstTimeWelcome, openWelcomeForm, remoteCatchingUp]);
+
+  // What each tour stop's screen means in THIS app. The tour names screens
+  // (guide-stops.ts); only App knows the state that opens them, so the mapping
+  // lives here and reuses the exact setters every button already uses.
+  const lastGuideScreen = useRef<GuideScreen | null>(null);
+  const openGuideScreen = useCallback((screen: GuideScreen) => {
+    // Two stops in a row on the same screen (Projects, then Files) keep it
+    // open instead of closing and reopening it between them (UX tester, U6).
+    const previous = lastGuideScreen.current;
+    lastGuideScreen.current = screen;
+    if (previous === screen) return;
+    const closeAll = () => {
+      setSettingsOpen(false); setProvidersAutoOpen(false); setResumeRequested(false);
+      dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+      setActiveView('chat');
+      // The drawer's own dialogs (Assistant settings, Appearance, Help) keep
+      // their open state across the drawer closing; tell them to close too.
+      requestGuideReset();
+    };
+    switch (screen) {
+      case 'welcome': closeAll(); break;
+      case 'welcome-form': closeAll(); if (sessions.length === 0 && !welcomeFormOpen) openWelcomeForm(); break;
+      case 'projects': closeAll(); dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }); break;
+      case 'settings:cloud': closeAll(); setProvidersAutoOpen(true); setSettingsOpen(true); break;
+      // Appearance and Help are dialogs the settings drawer opens from a row,
+      // with no auto-open prop of their own. The tour presses the real row
+      // once the drawer has slid in (its transition is ~300ms), so what opens
+      // is exactly what a person's own press opens.
+      case 'settings:appearance':
+      case 'settings:help': {
+        closeAll(); setSettingsOpen(true);
+        const row = screen === 'settings:help' ? 'help' : 'appearance';
+        setTimeout(() => findGuideAnchor(row)?.querySelector('button')?.click(), 350);
+        break;
+      }
+    }
+  }, [sessions.length, welcomeFormOpen, openWelcomeForm]);
+  // Three tip moments App itself owns (the rest fire from the screen they are
+  // about — SessionDrawer, CloseSessionPrompt, ModelPicker, ErrorState):
+  // Resume, when there is a session to pick up and none is open; the floater,
+  // on the third launch of a desktop; themes, the first time Settings opens a
+  // day or more after the tour. triggerTip refuses anything not yet earned.
+  useEffect(() => {
+    if (isFirstRun !== false || tourOpen) return;
+    if (sessions.length === 0 && hasResumable === true) triggerTip('resume');
+  }, [isFirstRun, tourOpen, sessions.length, hasResumable]);
+  useEffect(() => {
+    if (isFirstRun !== false) return;
+    if (bumpCounter('launches') === 3 && getPlatform() === 'electron') triggerTip('floater');
+  }, [isFirstRun]);
+  useEffect(() => {
+    if (!settingsOpen || tourOpen) return;
+    const done = guideDoneAt();
+    if (done !== null && Date.now() - done >= 24 * 60 * 60 * 1000) triggerTip('themes');
+  }, [settingsOpen, tourOpen]);
+
+  // A tip waits while the assistant is answering (GuideTipHost). One session's
+  // state through the cached per-session selector, never the whole map.
+  const guideChatState = useChatState(sessionId ?? '');
+  const guideBusy = !!sessionId && !!guideChatState?.isThinking;
+  const exitTour = useCallback(() => {
+    markGuideDone();
+    setTourOpen(false);
+    lastGuideScreen.current = null;
+    // Leave the person on the welcome screen, or their session — never inside
+    // a settings page the tour opened for its own reasons.
+    setSettingsOpen(false); setProvidersAutoOpen(false);
+    dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+    requestGuideReset();
+  }, []);
 
   // Terminal mode on touch/remote platforms — show minimal input with special keys
   const isTerminalTouch = currentViewMode === 'terminal' && getPlatform() !== 'electron';
@@ -2928,7 +3429,7 @@ function AppInner() {
     // ArtifactProvider: exposes artifact state + dispatch to the entire AppInner
     // subtree. Sits inside all top-level providers (ChatProvider, ThemeProvider,
     // etc.) because artifact operations may eventually consume chat/theme context.
-    <ArtifactProvider value={{ state: artifactState, dispatch: dispatchArtifact }}>
+    <ArtifactProvider value={artifactContextValue}>
     <div className={`app-shell flex w-screen h-full text-fg ${getPlatform() === 'android' && currentViewMode === 'terminal' ? '' : 'bg-canvas'}`}>
       {/* Mount-only: listens for chat:export-snapshot from main, serializes
           ChatState, and sends the snapshot back for remote-browser hydration. */}
@@ -2997,13 +3498,17 @@ function AppInner() {
                   });
                 }}
                 onCreateSession={createSession}
-                onCloseSession={(id) => {
+                onCloseSession={(id, name) => {
                   // Skip prompt if the user has checked "Don't show again".
                   // In that case destroy immediately without any flags — the
                   // user can still tag sessions from the resume menu later.
+                  // WHY: session:destroy is a global main-process command keyed
+                  // only by session id — it works the same for a peer window's
+                  // session as it does for a local one, no ownership check.
                   if (localStorage.getItem(CLOSE_PROMPT_SUPPRESS_KEY) === '1') {
                     try { window.claude.session.destroy(id); } catch {}
                   } else {
+                    setClosePromptName(name);
                     setClosePromptFor(id);
                   }
                 }}
@@ -3028,6 +3533,7 @@ function AppInner() {
                 sessionStatuses={sessionStatuses}
                 onOpenResumeBrowser={() => setResumeRequested(true)}
                 defaultModel={sessionDefaults.model}
+                defaultStartModel={sessionDefaults.startModel}
                 defaultSkipPermissions={sessionDefaults.skipPermissions}
                 defaultProjectFolder={sessionDefaults.projectFolder}
                 windowDirectory={windowDirectory}
@@ -3058,7 +3564,10 @@ function AppInner() {
                   <ErrorBoundary name="Chat">
                     <ChatView
                       sessionId={s.id}
-                      visible={s.id === sessionId && (viewModes.get(s.id) || 'chat') === 'chat'}
+                      // currentViewMode, not the raw map: a shell session FORCES
+                      // the terminal, and reading the map here would show the
+                      // chat pane for a session whose map entry was never seeded.
+                      visible={s.id === sessionId && currentViewMode === 'chat'}
                       // Drives content-visibility so INACTIVE sessions leave the
                       // layout tree entirely — see ChatView's root style block.
                       // Deliberately not folded into `visible`: the two hide
@@ -3075,14 +3584,23 @@ function AppInner() {
                       // Provider-config error bubble → open Settings straight to
                       // the Model Providers section so the key can be fixed.
                       onOpenProviderSettings={() => { setProvidersAutoOpen(true); setSettingsOpen(true); }}
+                      // Plan-limit card (review round 2, P-9): Switch Providers
+                      // opens the same picker the status-bar chip opens.
+                      onSwitchProviders={() => setModelPickerOpen(true)}
+                      // Plan-limit card: the Upgrade plan button opens OpenAI's
+                      // own upgrade page (the URL the Codex CLI's limit error
+                      // names) in the system browser, like My Account does.
+                      onUpgradePlan={() => void window.claude.shell.openExternal(CHATGPT_UPGRADE_URL)}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
+                      conversationStatus={conversationStatus}
+                      onRefreshConversation={handleRefreshConversation}
                     />
                   </ErrorBoundary>
                   <ErrorBoundary name="Terminal">
                     <TerminalView
                       sessionId={s.id}
-                      visible={s.id === sessionId && (viewModes.get(s.id) || 'chat') === 'terminal'}
+                      visible={s.id === sessionId && currentViewMode === 'terminal'}
                     />
                   </ErrorBoundary>
                 </React.Fragment>
@@ -3110,8 +3628,10 @@ function AppInner() {
                  z-10: must stay below glassmorphism chrome (z-20) so header/bottom bars remain accessible */}
               {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
-                  <ThemeMascot variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
-                  <p className="text-sm text-fg-dim font-medium">Initializing session...</p>
+                  <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
+                  {/* select-none: a status line, not content. Ctrl+A must not
+                      paint it (Destin, 2026-09-10). */}
+                  <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>
                   {initSlowWarning && (
                     <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
                       <p>Something may be wrong. The terminal may show what it is waiting on.</p>
@@ -3180,13 +3700,19 @@ function AppInner() {
                inert disables focus/keyboard/paste when hidden so keystrokes
                reach xterm instead of the buried textarea. */}
               <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
-                {/* TerminalToolbar (Esc/Tab/Ctrl/arrows) now renders inside
+                {/* A shell session draws NONE of the bottom chrome: no composer
+                    (there is nothing to send a message to), and so no Stop
+                    button, no model chip and no way into the model picker — all
+                    three live inside these two children. The wrapper itself stays
+                    mounted because useChromeMeasurements measures it.
+                    TerminalToolbar (Esc/Tab/Ctrl/arrows) now renders inside
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Claude is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
+                {!isShellSession && (<>
+                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Your assistant is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={{
-                    usage: statusData.usage,
+                    usage: onChatGptPlan ? statusData.chatgptUsage : statusData.usage,
                     updateStatus: statusData.updateStatus,
                     announcement: statusData.announcement,
                     contextPercent: sessionId ? (statusData.contextMap[sessionId] ?? null) : null,
@@ -3207,6 +3733,8 @@ function AppInner() {
                     dispatch({ type: 'USER_PROMPT', sessionId, content: '/sync', timestamp: Date.now() });
                   } : undefined}
                   model={modelChip}
+                  modelProviderType={activeProviderType}
+                  usagePlan={onChatGptPlan ? 'chatgpt' : 'claude'}
                   provider={isNativeSession ? 'native' : 'claude'}
                   permissionMode={isNativeSession ? currentNativeMode : currentPermissionMode}
                   onCyclePermission={isNativeSession ? cycleNativePermission : cyclePermission}
@@ -3233,6 +3761,7 @@ function AppInner() {
                         onToast: (msg: string) => setToast(msg),
                         getSessionState: (sid: string) => chatStateMapRef.current.get(sid),
                         onOpenModelPicker: () => setModelPickerOpen(true),
+                        onModelSwitchCommand: handleModelSwitchCommand,
                       },
                       deferUiEffectsToRuntime: currentSession?.provider === 'native',
                     });
@@ -3249,6 +3778,7 @@ function AppInner() {
                   turnsWithUsage={turnsWithUsage}
                   nativeTotals={sessionTotals}
                 />
+                </>)}
               </div>
           </>
         ) : (
@@ -3285,15 +3815,50 @@ function AppInner() {
             // still centres in the open middle instead of drifting downward.
             style={{ paddingTop: 'var(--top-chrome-bottom, 2.5rem)', paddingBottom: 'var(--top-chrome-height, 2.5rem)' }}
           >
-            <p className="text-xl text-fg-muted">No Active Session</p>
+            {/* First-time version (deck 2026-09-10, Q-8): "No Active Session"
+                reads like an error to someone who has never had one. Once a
+                session exists to resume, this is the everyday screen again.
+                select-none: a screen title, not content. Ctrl+A must not paint
+                it (Destin, 2026-09-10); the buttons below are covered by
+                globals.css.
+                remoteCatchingUp wins over both (remote batch 2, T4): a phone that
+                has not received its first copy yet must not invite a new session. */}
+            {remoteCatchingUp ? (
+              <StatusStrip tone="busy" detail="Loading the newest messages…">Catching up with your computer…</StatusStrip>
+            ) : startingSession ? (
+              /* The wait between the tap and the session existing. The Initializing screen
+                 takes over the moment it does; on a phone this covers the round trip. */
+              <StatusStrip tone="busy" detail="Opening the folder and starting the assistant.">Starting your session…</StatusStrip>
+            ) : startFailed !== null ? (
+              <ErrorState
+                variant="inline"
+                message={startFailed ? `Couldn't start the session: ${startFailed}` : "Couldn't start the session."}
+                onRetry={() => {
+                  const args = startArgsRef.current;
+                  setStartFailed(null);
+                  if (args) void (createSession as any)(...args);
+                }}
+              />
+            ) : firstTimeWelcome ? (
+              <div className="flex flex-col items-center gap-1 text-center max-w-sm select-none">
+                <p className="text-xl text-fg">Start your first session</p>
+                <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
+              </div>
+            ) : (
+              <p className="text-xl text-fg-muted select-none">No Active Session</p>
+            )}
             {/* scene: the hero surface renders the theme's companions (sun,
-                motes, sparkles) orbiting the mascot — big canvas, no clipping. */}
-            <ThemeMascot variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
+                motes, sparkles) orbiting the mascot — big canvas, no clipping.
+                data-guide-anchor: the tour's first stop rings the buddy. */}
+            <div data-guide-anchor="welcome-mascot" className="flex">
+              <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
+            </div>
             {/* Welcome screen: New Session (expandable) + Resume Session */}
-            <div className="flex flex-col items-center gap-2 mt-1 w-64">
+            <div className={`flex flex-col items-center gap-2 mt-1 w-64${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
               {welcomeFormOpen ? (
-                /* Expanded new-session form with toggles */
-                <div className="layer-surface w-full p-3 flex flex-col gap-2">
+                /* Expanded new-session form with toggles.
+                   data-guide-anchor: the tour's "sessions" stop rings the form. */
+                <div className="layer-surface w-full p-3 flex flex-col gap-2" data-guide-anchor="new-session-form">
                   <div>
                     <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Project Folder</label>
                     {/* Match SessionStrip: the picker's "Manage projects…"
@@ -3333,14 +3898,20 @@ function AppInner() {
                   {welcomeRuntime !== 'native' && (
                     <>
                       <div className="flex items-center justify-between">
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Skip Permissions</label>
+                        {/* The same (i) explainer the strip form carries — the
+                            welcome form had none (UX tester run 1, U10). */}
+                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
+                          Skip Permissions
+                          <SkipPermissionsInfoTooltip />
+                        </label>
                         {/* Was a hand-rolled 32x18 track with a raw #DD4444 on-state; now
                             the shared Toggle on the danger tone, so theme packs can restyle
                             it (changes 15/17). The <label> beside it isn't bound to this
                             control, so it carries its own aria-label. */}
                         <Toggle
                           checked={welcomeDangerous}
-                          onChange={setWelcomeDangerous}
+                          // On goes through the first-time warning; off never does.
+                          onChange={(next) => (next ? gateSkip(() => setWelcomeDangerous(true)) : setWelcomeDangerous(false))}
                           tone="danger"
                           aria-label="Skip Permissions"
                         />
@@ -3350,7 +3921,7 @@ function AppInner() {
                           others). Change 17 puts it on the destructive token so it
                           tracks the toggle above it under a community theme. */}
                       {welcomeDangerous && (
-                        <p className="text-3xs text-destructive-fg">Claude will execute tools without asking for approval.</p>
+                        <SkipPermissionsCaption />
                       )}
                     </>
                   )}
@@ -3375,10 +3946,21 @@ function AppInner() {
                         // Native runtime carries a provider/model binding; persist
                         // the choice so it sticks. The disabled guard already blocks
                         // a missing binding, but bail defensively.
-                        if (welcomeRuntime === 'native') {
-                          if (!welcomeNb.effectiveBinding) return;
-                          persistLastBinding(welcomeNb.effectiveBinding);
-                        }
+                        const binding = welcomeRuntime === 'native' ? welcomeNb.effectiveBinding : null;
+                        if (welcomeRuntime === 'native' && !binding) return;
+                        // The first session on a small model gets the explainer
+                        // first (first-time-warnings.ts); everything below is
+                        // what Create did before, run after Got it.
+                        const row = binding
+                          ? welcomeNb.modelCatalog.find((m) => m.providerId === binding.providerId && m.id === binding.modelId)
+                          : undefined;
+                        const small = isSmallModel({
+                          modelId: binding ? binding.modelId : welcomeModel,
+                          modelLabel: row?.label,
+                          localSizeBytes: (row as { local?: { sizeBytes?: number } } | undefined)?.local?.sizeBytes,
+                        });
+                        const proceed = () => {
+                        if (binding) persistLastBinding(binding);
                         createSession(
                           welcomeCwd,
                           // Hidden for native (see the gate above), so a value left
@@ -3391,7 +3973,14 @@ function AppInner() {
                           welcomeRuntime === 'native' ? welcomePreset : undefined,
                         );
                         setWelcomeFormOpen(false);
-                        setWelcomeRuntime('claude');
+                        // Reset to the remembered default, NOT the literal 'claude' --
+                        // otherwise a ChatGPT-only install's default would last one
+                        // session (review R2-3). The saved default then goes back on
+                        // top, or it too would survive exactly one conversation.
+                        setWelcomeRuntime(defaultRuntime());
+                        if (sessionDefaults.startModel) applyWelcomeModelChoice(sessionDefaults.startModel);
+                        };
+                        if (small) gateSmallModel(proceed); else proceed();
                       }}
                       disabled={welcomeNb.nativeCreateBlocked}
                       variant={welcomeDangerous && welcomeRuntime !== 'native' ? 'danger' : 'primary'}
@@ -3415,30 +4004,29 @@ function AppInner() {
                     variant="primary"
                     size="lg"
                     className="panel-glass w-full px-8 text-base"
-                    onClick={() => {
-                      setWelcomeCwd(sessionDefaults.projectFolder || '');
-                      setWelcomeDangerous(sessionDefaults.skipPermissions || false);
-                      setWelcomeModel(sessionDefaults.model || 'sonnet');
-                      // usePreset re-arms the heuristic itself on the welcomeFormOpen
-                      // false→true edge — no manual touched reset needed here.
-                      setWelcomeFormOpen(true);
-                    }}
+                    // data-guide-anchor: the tour's "sessions" stop rings this
+                    // button, and its "Open the form" presses it.
+                    data-guide-anchor="new-session"
+                    onClick={openWelcomeForm}
                   >
                     New Session
                   </Button>
                   {/* Same decision-69 rationale as above: panel-glass is preserved
-                      as a className override so wallpaper themes still re-tier it. */}
-                  <Button
-                    variant="secondary"
-                    size="lg"
-                    className="panel-glass w-full px-6"
-                    onClick={() => setResumeRequested(true)}
-                  >
-                    <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span className="text-sm font-medium">Resume Session</span>
-                  </Button>
+                      as a className override so wallpaper themes still re-tier it.
+                      Hidden on the first-time screen: it would list nothing. */}
+                  {!firstTimeWelcome && (
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      className="panel-glass w-full px-6"
+                      onClick={() => setResumeRequested(true)}
+                    >
+                      <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="text-sm font-medium">Resume Session</span>
+                    </Button>
+                  )}
                 </>
               )}
             </div>
@@ -3452,7 +4040,7 @@ function AppInner() {
           artifact drawer's framed chrome instead of being a separate slide-out. */}
       <SettingsPanel
         open={settingsOpen}
-        onClose={() => { setSettingsOpen(false); setSyncAutoOpen(false); setProvidersAutoOpen(false); }}
+        onClose={() => { setSettingsOpen(false); setSyncAutoOpen(false); setProvidersAutoOpen(false); setSpecialistsAutoOpen(false); }}
         onSendInput={(text) => {
           // Guarded: with a permission/question pending, the text would land on
           // CC's live Ink menu and the trailing \r would answer it.
@@ -3472,7 +4060,7 @@ function AppInner() {
             files: [],
             dispatch,
             timeline: [],
-            callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true) },
+            callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true), onModelSwitchCommand: handleModelSwitchCommand },
             deferUiEffectsToRuntime: sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'native',
           });
           if (runSlashResult(sessionId, result)) return;
@@ -3497,7 +4085,24 @@ function AppInner() {
         onSyncAutoOpenHandled={() => setSyncAutoOpen(false)}
         providersAutoOpen={providersAutoOpen}
         onProvidersAutoOpenHandled={() => setProvidersAutoOpen(false)}
+        specialistsAutoOpen={specialistsAutoOpen}
+        onSpecialistsAutoOpenHandled={() => setSpecialistsAutoOpen(false)}
+        // Help & feedback → Show me around: replays the tour from stop one.
+        onShowMeAround={() => { setSettingsOpen(false); setTourOpen(true); }}
       />
+
+      {/* The buddy's tour, then its tips — one bubble at a time, so the tip
+          host stays out while the tour is up. Design:
+          docs/active/specs/2026-09-10-first-run-guide-design.md */}
+      {tourOpen ? (
+        <GuideTour onOpenScreen={openGuideScreen} onExit={exitTour} onMarketplace={() => { setSettingsOpen(false); openMarketplace('themes'); }} />
+      ) : (
+        <GuideTipHost busy={guideBusy} />
+      )}
+      {/* The first-time warnings the welcome form and the status-bar chip raise. */}
+      {skipWarning}
+      {smallModelWarning}
+      {fullAutoWarning}
       <ResumeBrowser
         open={resumeRequested}
         onClose={() => setResumeRequested(false)}
@@ -3507,9 +4112,9 @@ function AppInner() {
       />
       <CloseSessionPrompt
         open={closePromptFor !== null}
-        sessionName={sessions.find((s) => s.id === closePromptFor)?.name}
+        sessionName={closePromptName ?? sessions.find((s) => s.id === closePromptFor)?.name}
         sessionId={closePromptFor}
-        onCancel={() => setClosePromptFor(null)}
+        onCancel={() => { setClosePromptFor(null); setClosePromptName(undefined); }}
         onConfirm={(result) => {
           const id = closePromptFor;
           if (!id) return;
@@ -3534,6 +4139,7 @@ function AppInner() {
           if (result.noteChanged) { try { Promise.resolve((window as any).claude.session.setNote(id, result.note)).catch(() => {}); } catch {} }
           try { window.claude.session.destroy(id); } catch {}
           setClosePromptFor(null);
+          setClosePromptName(undefined);
         }}
       />
       <PreferencesPopup
@@ -3550,10 +4156,20 @@ function AppInner() {
           // pending, "/config\r" would answer CC's live Ink menu instead.
           setTimeout(() => guardedPtySend(sessionId, '/config\r'), 50);
         }}
-        showAdvanced={currentSession?.provider !== 'native'}
+        // "Advanced" opens Claude Code's own /config screen by typing into the
+        // PTY. A native session has no PTY; a shell session has one, but it is
+        // the user's shell — /config there is just a wrong command typed at
+        // their prompt. Both hide the button.
+        showAdvanced={currentSession?.provider !== 'native' && currentSession?.provider !== 'shell'}
       />
       <ModelPickerPopup
-        open={modelPickerOpen}
+        // A shell session has no model, so it must never open the picker — the
+        // popup would offer Claude Code aliases whose only effect would be
+        // typing "/model sonnet" at the user's shell prompt. Its two entry
+        // points (the composer and the status bar) are already gone for a shell
+        // session; this closes the third — a /model typed into a command list
+        // while Settings is open.
+        open={modelPickerOpen && !isShellSession}
         onClose={() => setModelPickerOpen(false)}
         sessionId={sessionId}
         // The popup only knows real ModelAlias values (highlights the active
@@ -3814,9 +4430,9 @@ function AppInner() {
 // getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
 import type { UsageSnapshot } from './state/chat-types';
 import type { SessionChatState } from './state/chat-types';
-const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; initialInput?: string; provider?: 'claude' | 'native' }>(
-  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, initialInput, provider }, ref) {
-    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} initialInput={initialInput} provider={provider} />;
+const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; provider?: 'claude' | 'native' }>(
+  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, provider }, ref) {
+    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} provider={provider} />;
   },
 );
 
@@ -3859,6 +4475,104 @@ function AppInnerProfiler({ children }: { children: React.ReactNode }) {
   return <React.Profiler id="AppInner" onRender={onRender}>{children}</React.Profiler>;
 }
 
+// ─── R12: the one-time Linux buddy hide ────────────────────────────────────
+// Design §6 of docs/active/design/2026-09-04-linux-buddy-helper/.
+//
+// WHAT THE USER SEES: a Linux user who already had the buddy switched on finds it
+// OFF exactly once, the first time they launch the version that adds the KDE
+// helper. Turning it back on is one click in Settings → Buddy Floater, and that
+// click is where the helper is offered. Nothing pops up at launch (R13).
+//
+// WHY it has to happen at all: before this version the buddy appeared on Wayland
+// but could not be dragged. Leaving it switched on would put a stuck buddy back on
+// screen with no explanation; hiding it once turns "it's broken" into "it's off,
+// switch it on and it asks you a question".
+//
+// WHY IT IS NOT "every Linux user" (design §4, revision 7): only a buddy that is
+// actually broken gets hidden. On Linux X11 — and on Wayland sessions whose
+// windows are really XWayland ones, which look identical from every environment
+// variable — the app moves its own windows perfectly well and the buddy has
+// always worked. Hiding THEIR buddy would take away something that was fine, and
+// they could not get it back: the switch is where the hiding is undone, and a
+// user who never needed a helper would be handed a consent card for one. So the
+// question this asks the desktop is "does the buddy need a helper here, and is
+// one missing?" — nothing else qualifies.
+//
+// WHY IN THE RENDERER, not the main process: the preference is
+// localStorage['youcoded-buddy-enabled'], which only the renderer can read or
+// write — a main-process one-shot cannot clear it.
+const BUDDY_LINUX_HIDE_MIGRATION_KEY = 'youcoded-buddy-linux-hidden-once';
+
+// Exported for tests/buddy-linux-migration.test.ts. Resolves to what it did, so a
+// test can prove "exactly once" rather than inferring it from storage.
+export async function runBuddyLinuxHideMigration(): Promise<
+  'hid' | 'nothing-to-hide' | 'already-run' | 'skipped'
+> {
+  // The three buddy renderers (and the dormant overlay one) are separate windows
+  // running this same App module. They share the profile's localStorage, so
+  // without this guard the migration would run up to four times per launch and,
+  // worse, could fire inside a buddy window after the main window had already
+  // been re-enabled by the user.
+  if (buddyMode) return 'skipped';
+  // Remote browsers and Android: same Electron-only probe the boot effect uses
+  // below. A phone has no buddy and no KDE, and every buddy method there throws.
+  if (!(window as any).claude?.window) return 'skipped';
+  if (localStorage.getItem(BUDDY_LINUX_HIDE_MIGRATION_KEY) === '1') return 'already-run';
+  // The desktop's own three-fact answer, NOT "is this Linux". This one call is
+  // the difference between hiding a broken buddy and taking a working one away.
+  let helper: { needed?: boolean; installed?: boolean } | undefined;
+  try {
+    helper = await window.claude.buddy?.helperStatus?.();
+  } catch {
+    // Never let a boot-time IPC failure take the launch path down: if we cannot
+    // tell what kind of desktop this is, we change nothing and try again next
+    // launch. Doing nothing costs the user exactly today's behaviour.
+    return 'skipped';
+  }
+  // No helper is wanted here (Windows, macOS, Linux/X11, XWayland): the buddy is
+  // not broken, so there is nothing to hide. Deliberately WITHOUT writing the
+  // marker — someone who is on X11 today and logs into a Wayland session
+  // tomorrow still gets their one hide on the launch where it would matter.
+  if (!helper?.needed) return 'skipped';
+  // The helper is already in place, so the buddy can be dragged and works as
+  // promised. Hiding it would be a mystery, not a rescue.
+  if (helper.installed) return 'skipped';
+  // The marker is written whether or not the buddy was on, so this is a true
+  // one-shot: a user who switches the buddy back on is never hidden again.
+  localStorage.setItem(BUDDY_LINUX_HIDE_MIGRATION_KEY, '1');
+  if (localStorage.getItem('youcoded-buddy-enabled') !== '1') return 'nothing-to-hide';
+  localStorage.setItem('youcoded-buddy-enabled', '0');
+  return 'hid';
+}
+
+// The launch path for the buddy, extracted from the effect below so the ordering
+// it depends on is testable: the R12 one-shot must finish BEFORE the preference
+// is read, or a launch would still re-open the buddy this version means to hide.
+export async function bootBuddyOnLaunch(): Promise<void> {
+  if (buddyMode) return;
+  // Fix: buddy.show() is an error-throwing stub in remote-shim (browser and
+  // Android). Optional chaining does NOT help — the stub exists, it throws —
+  // so a remote client with this flag set in localStorage threw out of this
+  // effect and RootErrorBoundary replaced the whole app with "YouCoded failed
+  // to start". Gate on window.claude.window, the Electron-only window-controls
+  // surface the shim deliberately omits; getPlatform() is NOT usable here
+  // because the shim sets __PLATFORM__ to the host's 'desktop' on auth:ok, so
+  // a remote browser does not report as 'browser'.
+  if (!(window as any).claude?.window) return;
+  await runBuddyLinuxHideMigration();
+  if (localStorage.getItem('youcoded-buddy-enabled') !== '1') return;
+  // show() can now answer "no" (design §5) — a Wayland desktop whose helper has
+  // gone missing since last launch refuses rather than putting a buddy on screen
+  // that cannot be dragged. When it does, the stored preference is cleared, so
+  // Settings → Buddy Floater does not sit there reading "On" with nothing on the
+  // desktop. The refusal itself is main's to explain; the launch path stays
+  // silent (R13: no dialog interrupts you).
+  try {
+    const res = await window.claude.buddy?.show?.();
+    if (res && res.ok === false) localStorage.setItem('youcoded-buddy-enabled', '0');
+  } catch { /* a throwing bridge is not a refusal — leave the preference alone */ }
+}
+
 export default function App() {
   // Perf lab: React has mounted the app shell (first commit).
   useEffect(() => { performance.mark('yc:app-mounted'); }, []);
@@ -3868,30 +4582,23 @@ export default function App() {
   // buddy windows themselves — only the main window should re-open the
   // buddy. Optional chaining guards against preload not being ready.
   useEffect(() => {
-    if (buddyMode) return;
-    // Fix: buddy.show() is an error-throwing stub in remote-shim (browser and
-    // Android). Optional chaining does NOT help — the stub exists, it throws —
-    // so a remote client with this flag set in localStorage threw out of this
-    // effect and RootErrorBoundary replaced the whole app with "YouCoded failed
-    // to start". Gate on window.claude.window, the Electron-only window-controls
-    // surface the shim deliberately omits; getPlatform() is NOT usable here
-    // because the shim sets __PLATFORM__ to the host's 'desktop' on auth:ok, so
-    // a remote browser does not report as 'browser'.
-    if (!(window as any).claude?.window) return;
-    if (localStorage.getItem('youcoded-buddy-enabled') === '1') {
-      window.claude.buddy?.show?.();
-    }
+    void bootBuddyOnLaunch();
   }, []);
 
   // Buddy windows render as isolated placeholders without main-app providers
   if (buddyMode === 'buddy-mascot') return <BuddyMascotApp />;
   if (buddyMode === 'buddy-chat') return <BuddyChatApp />;
   if (buddyMode === 'buddy-bar') return <BuddyBarApp />;
-  // Linux Wayland can't reposition BrowserWindows, so the whole floater
-  // (mascot + chat + bar) mounts as DOM inside one screen-sized overlay
-  // window instead of the three separate windows above — see
-  // BuddyOverlayManager (main) / chooseBuddyStrategy for how a platform ends
-  // up on this route. Other platforms never set ?mode=buddy-overlay.
+  // The overlay strategy: the whole floater (mascot + chat + bar) mounted as DOM
+  // inside one screen-sized window instead of the three separate windows above.
+  //
+  // Correction 2026-09-04 (design §7): this comment used to say Linux Wayland
+  // takes this route. It does not, and has not — chooseBuddyStrategy
+  // (buddy-manager.ts) returns 'windows' on every path except an explicit
+  // YOUCODED_BUDDY_STRATEGY env override, so NO platform reaches
+  // ?mode=buddy-overlay on its own. The overlay code is dormant, kept behind that
+  // override; on Linux Wayland the buddy is three real windows moved by the KWin
+  // helper. Believing the old sentence sends a session to the wrong file.
   if (buddyMode === 'buddy-overlay') return <BuddyOverlayApp />;
 
   // Main app wrapped in providers

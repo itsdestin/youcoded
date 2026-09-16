@@ -112,6 +112,18 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // Write a body in CHUNK_SIZE pieces with small inter-chunk gaps. Returns
 // once all bytes have been handed to ptyProcess.write — does NOT wait for
 // CC to consume them.
+// A chunk boundary must never fall BETWEEN the two halves of a surrogate pair —
+// slice() cuts UTF-16 code units, so a boundary inside an emoji or a non-BMP
+// path character would send two broken halves and the child would render
+// garbage. Backing off by one keeps the pair whole; every chunk stays <=
+// CHUNK_SIZE units, which is what the ConPTY thresholds are measured in.
+function safeEnd(body, end) {
+  if (end <= 0 || end >= body.length) return end;
+  const code = body.charCodeAt(end - 1);
+  const isHighSurrogate = code >= 0xd800 && code <= 0xdbff;
+  return isHighSurrogate ? end - 1 : end;
+}
+
 async function writeChunked(body) {
   if (body.length <= CHUNK_SIZE) {
     if (!ptyProcess) return;
@@ -124,7 +136,7 @@ async function writeChunked(body) {
   let chunkIdx = 0;
   while (offset < body.length) {
     if (!ptyProcess) return;
-    const end = Math.min(offset + CHUNK_SIZE, body.length);
+    const end = safeEnd(body, Math.min(offset + CHUNK_SIZE, body.length));
     ptyProcess.write(body.slice(offset, end));
     chunkIdx++;
     trace('CHUNK', `k=${chunkIdx}/${total} len=${end - offset}`);
@@ -167,7 +179,14 @@ async function handleInput(text) {
   trace('IN', `len=${inLen} endsCR=${endsCR} head=${tracePreview(text, 40)} tail=${tracePreview(typeof text === 'string' ? text.slice(-20) : '', 60)}`);
 
   // Path 1: Passthrough — anything not ending in \r (single bytes, raw
-  // escapes, in-progress typing). Pass through unchanged.
+  // escapes, in-progress typing). Pass through unchanged, in ONE write.
+  //
+  // Do NOT chunk this path. A terminal paste ends in ESC[201~, not \r, so it
+  // comes through here: chunking made a 10 KB paste 179 writes 30 ms apart —
+  // 5.4 s with the input queue blocked behind it — which is a visible
+  // regression in ordinary terminal use. The one caller that genuinely needs
+  // chunking without a trailing \r is a shell session's initial command, and
+  // it asks for it explicitly via the 'input-chunked' message below.
   if (!endsCR) {
     ptyProcess.write(text);
     trace('PASSTHROUGH', `len=${inLen}`);
@@ -251,6 +270,13 @@ process.on('message', (msg) => {
         cwd: msg.cwd || require('os').homedir(),
         env: {
           ...childEnv,
+          // WHY this default is injected only for Claude sessions: Claude
+          // Code otherwise inherits the conversation model for subagents,
+          // which can silently multiply a Fable-class bill. An explicit
+          // launch-environment choice remains authoritative.
+          ...(msg.sessionId ? {
+            CLAUDE_CODE_SUBAGENT_MODEL: childEnv.CLAUDE_CODE_SUBAGENT_MODEL || 'sonnet',
+          } : {}),
           // Pass our session ID so hook scripts can include it in payloads
           CLAUDE_DESKTOP_SESSION_ID: msg.sessionId || '',
           // Pass the unique pipe name so relay.js connects to the right instance
@@ -314,6 +340,19 @@ process.on('message', (msg) => {
       // defense if echo somehow doesn't arrive within ECHO_TIMEOUT_MS.
       if (!ptyProcess) break;
       inputQueue = inputQueue.then(() => handleInput(msg.data)).catch((e) => {
+        trace('INPUT_ERROR', e && e.message ? e.message : String(e));
+      });
+      break;
+    }
+    case 'input-chunked': {
+      // The ONE write that needs chunking without a trailing \r: a shell
+      // session's initial "Run in terminal" command, which is deliberately left
+      // unsubmitted for the user to press Enter on. Windows ConPTY silently
+      // truncates a single write over ~600 chars, and a truncated command would
+      // sit HALF-TYPED on the prompt for the user to run. Queued behind the same
+      // inputQueue as 'input' so ordering with real keystrokes is preserved.
+      if (!ptyProcess) break;
+      inputQueue = inputQueue.then(() => writeChunked(msg.data)).catch((e) => {
         trace('INPUT_ERROR', e && e.message ? e.message : String(e));
       });
       break;

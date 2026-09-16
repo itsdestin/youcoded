@@ -15,9 +15,11 @@ import { nativeModelLabel } from '../native-model-label';
 import { claudeAliasForModelId, type ClaudeAlias } from '../../../shared/model-ids';
 
 export interface SessionRuntimeLabel {
-  /** "Claude Code" | "YouCoded Coder" | "YouCoded Assistant". */
+  /** "Claude Code" | "YouCoded Coder" | "YouCoded Assistant" | "Terminal". */
   runtime: string;
-  /** Short model name, or null when the session has no model to show. */
+  /** Short model name, or null when the session has no model to show. For a
+   *  shell session this slot carries the SHELL's name instead ('fish') — the
+   *  session has no model, and the shell is the equivalent "what is running". */
   model: string | null;
   /** `runtime · model`, or just the runtime when there is no model. */
   text: string;
@@ -43,7 +45,20 @@ export function sessionRuntimeLabel(s: {
   provider?: string;
   harnessId?: string;
   model?: string;
+  shellName?: string;
 }): SessionRuntimeLabel {
+  // A shell session is the user's own terminal — no AI, no model. It is named
+  // after the shell it actually spawned ("Terminal · fish"), because "Claude
+  // Code" here would be plainly wrong: nothing in this session is Claude.
+  if (s.provider === 'shell') {
+    const shell = s.shellName || null;
+    return {
+      runtime: 'Terminal',
+      model: shell,
+      text: shell ? `Terminal · ${shell}` : 'Terminal',
+      color: UNBRANDED,
+    };
+  }
   if (s.provider === 'native') {
     const runtime = `YouCoded ${s.harnessId === 'coder' ? 'Coder' : 'Assistant'}`;
     const model = s.model ? nativeModelLabel(s.model) || null : null;

@@ -77,7 +77,8 @@
     "rig": "assets/mascot-rig.svg",
     "idle": "assets/mascot-idle.svg",
     "welcome": "assets/mascot-welcome.svg",
-    "inquisitive": "assets/mascot-inquisitive.svg"
+    "inquisitive": "assets/mascot-inquisitive.svg",
+    "shocked": "assets/mascot-shocked.svg"
   },
   "scrollbar": {
     "thumb-image": "assets/scrollbar-thumb.svg",

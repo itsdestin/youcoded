@@ -49,12 +49,9 @@ export interface UpsertInput {
   lastActive?: string;   // ISO — REQUIRED for activity updates; omitted for metadata-only
   device?: string;
   transcriptRef?: string;
-  // Portable model reference (store-core.ts). Unlike projectName/originalPath/
-  // transcriptRef/title above, this is NOT local truth re-applied post-merge —
-  // it merges like a normal activity-coupled field (mergeRecords' newer-wins
-  // rule), so two devices racing a model pick converge the same way lastActive
-  // does. See noteModelUsed (service.ts) for why a caller must never seed a
-  // record with only this field set.
+  // Portable model reference (store-core.ts). An explicit local observation
+  // lands post-merge without fabricating activity. Cross-device mergeRecords
+  // ranking is unchanged. noteModelUsed must never seed a model-only record.
   lastUsedModel?: PortableModelRef;
 }
 
@@ -279,9 +276,6 @@ export function createConversationStore(conversationsRoot: string): Conversation
           ...(partial.title !== undefined && { title: partial.title }),
           ...(partial.device !== undefined && { device: partial.device }),
           ...(partial.transcriptRef !== undefined && { transcriptRef: partial.transcriptRef }),
-          // lastUsedModel goes into the MERGE overlay (not the local-truth
-          // re-apply block below) — see the UpsertInput field comment: it
-          // competes on activity like a normal field instead of always landing.
           ...(partial.lastUsedModel !== undefined && { lastUsedModel: partial.lastUsedModel }),
           lastActive: incoming.lastActive,
         };
@@ -298,6 +292,9 @@ export function createConversationStore(conversationsRoot: string): Conversation
         // must never clobber a real title.
         return {
           ...merged,
+          // WHY: noteModelUsed writes without lastActive; the EPOCH overlay
+          // loses to existing activity but this explicit local model must land.
+          ...(partial.lastUsedModel !== undefined && { lastUsedModel: partial.lastUsedModel }),
           ...(partial.projectName !== undefined && { projectName: partial.projectName }),
           ...(partial.originalPath !== undefined && { originalPath: partial.originalPath }),
           ...(partial.transcriptRef !== undefined && { transcriptRef: partial.transcriptRef }),

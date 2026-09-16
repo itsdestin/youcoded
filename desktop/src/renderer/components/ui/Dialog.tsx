@@ -70,6 +70,15 @@ export const DIALOG_WIDTHS = {
   prompt: 'min(340px, 88vw)',
   panel: 'min(420px, 88vw)',
   document: 'min(600px, 88vw)',
+  // WIDE 820 — a two-pane settings window (Assistant settings, questions deck
+  // Q-1a 2026-09-05): a 176px page list on the left plus a page on the right
+  // that must still hold a `panel`-width column of prose (388px of content) and
+  // the Local models browser. 820 - 176 - padding leaves ~600px for the page,
+  // which is `document` width — nothing on a page is narrower than it was in
+  // the popup it came from. 92vw (not 88) because this is the one dialog that
+  // is a workspace rather than a card; on a 900px-wide window it still leaves
+  // 36px of scrim a side.
+  wide: 'min(820px, 92vw)',
 } as const;
 
 export type DialogSize = keyof typeof DIALOG_WIDTHS;
@@ -108,6 +117,13 @@ export const DIALOG_MAX_HEIGHTS = {
   prompt: 'min(476px, calc(100vh - 6rem))',
   panel: 'min(588px, calc(100vh - 6rem))',
   document: 'min(840px, calc(100vh - 6rem))',
+  // NOT 1.4x. The ratio above keeps portrait cards from becoming columns; a
+  // two-pane window is landscape by nature, and 820 x 1148 would be taller than
+  // any laptop screen — the viewport clamp would decide the height everywhere
+  // and the number here would never apply. 0.85x (697 → 700) is where the
+  // page list still shows all eight rows with room under them and the window
+  // reads as a window, not a sheet.
+  wide: 'min(700px, calc(100vh - 6rem))',
 } as const;
 
 export type DialogProps = {

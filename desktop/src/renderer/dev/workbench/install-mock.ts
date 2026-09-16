@@ -11,6 +11,7 @@ import { FakePartySocket, isWorkbenchFakeParty } from './fake-party';
 import { __setPartySocketFactory } from '../../game/party-client';
 import type { WidgetId } from '../../state/status-widgets';
 import { installWorkerApiMock } from './fixtures/marketplace/worker-api-mock';
+import { setConnectionMode } from '../../platform';
 
 /** Scenario comes from ?scenario= so a reload lands on the same seed. An
  *  unrecognised value falls back to 'default' rather than throwing — a typo in
@@ -90,6 +91,16 @@ function declarePlatform(): void {
   // the narrow layout hides that toggle anyway.
   // `typeof location` guard: workbench-install-mock.test.ts runs this in Node.
   if (!w.__PLATFORM__ && typeof location !== 'undefined' && new URLSearchParams(location.search).get('platform') === 'android') w.__PLATFORM__ = 'android';
+  // `?connection=remote` renders the app as a PHONE BROWSER paired to a desktop: the
+  // platform a remote shim reports ('browser') and the connection mode it declares on
+  // auth ('remote'). This is what every isRemoteMode() branch keys on — the theme
+  // without its wallpaper, no Unpair, no terminal classifier — and, for the
+  // 2026-09-10 file-reading mockups, the Download buttons and the too-large card.
+  // Film it NARROW (390 wide): that is the only width a phone browser has.
+  if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('connection') === 'remote') {
+    if (!w.__PLATFORM__) w.__PLATFORM__ = 'browser';
+    setConnectionMode('remote');
+  }
   if (!w.__PLATFORM__) w.__PLATFORM__ = 'electron';
   if (typeof document !== 'undefined' && !document.documentElement.dataset.platform) {
     document.documentElement.dataset.platform = w.__PLATFORM__;

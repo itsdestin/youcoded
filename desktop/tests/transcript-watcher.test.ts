@@ -784,6 +784,113 @@ describe('TranscriptWatcher read integrity', () => {
     expect(msg!.data.text).not.toContain('�');
   });
 
+  // 300 assistant-text lines of ~10 KB each ≈ 3 MB written in ONE fs write —
+  // simulates a /compact rewrite, a huge pasted tool result, or a transcript
+  // that grew while the app was suspended: all arrive as a single delta that
+  // must still deliver every line, whatever the per-read byte cap is.
+  const bigBurstLine = (i: number) =>
+    JSON.stringify({
+      uuid: `u${i}`,
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: `${i}:` + 'x'.repeat(10_000) }] },
+      timestamp: new Date().toISOString(),
+    }) + '\n';
+
+  // WHY a session with NO fs.watch: the cap/drain tests below must prove the
+  // watcher drains a multi-pass burst ON ITS OWN from one trigger. startWatching
+  // attaches fs.watch only when the file already exists, so creating the file
+  // AFTERWARDS leaves no watch attached; the describe's 60s poll interval is far
+  // longer than any waitFor here. The only read that can happen is the one the
+  // test triggers — nothing external can do the draining for it.
+  function setupUnwatchedSession(desktopId: string, claudeId: string) {
+    const projectDir = path.join(tmpDir, 'proj');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const jsonlPath = path.join(projectDir, `${claudeId}.jsonl`);
+    watcher.startWatching(desktopId, claudeId, '/home/user/integrity', jsonlPath);
+    return jsonlPath;
+  }
+
+  it('delivers every line of a burst larger than one read cap, in order', async () => {
+    const jsonlPath = setupUnwatchedSession('desktop-burst', 'claude-burst');
+
+    const events: TranscriptEvent[] = [];
+    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
+
+    fs.writeFileSync(jsonlPath, Array.from({ length: 300 }, (_, i) => bigBurstLine(i)).join(''));
+
+    // ONE trigger, no retry loop: ~3 MB against a 1 MiB cap needs at least three
+    // passes, and only readNewLines' own rerun request can chain them.
+    watcher.readNewLinesForSession('desktop-burst');
+    await vi.waitFor(
+      () => expect(events.filter((e) => e.type === 'assistant-text')).toHaveLength(300),
+      { timeout: SETTLE_MS },
+    );
+
+    const texts = events.filter((e) => e.type === 'assistant-text').map((e) => e.data.text.split(':')[0]);
+    expect(texts).toEqual(Array.from({ length: 300 }, (_, i) => String(i)));
+  });
+
+  it('never allocates more than the read cap per pass', async () => {
+    const jsonlPath = setupUnwatchedSession('desktop-cap', 'claude-cap');
+
+    const events: TranscriptEvent[] = [];
+    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
+
+    const sizes: number[] = [];
+    const orig = Buffer.alloc.bind(Buffer);
+    // Narrow to allocations that could plausibly be a tail-read buffer (>= 64
+    // KiB) — Buffer.alloc is a common global utility (e.g. the shrink-reset
+    // `partialBytes = Buffer.alloc(0)` a few lines away), and recording every
+    // call would make this spy flaky against unrelated callers rather than
+    // proving anything about the read cap.
+    const spy = vi.spyOn(Buffer, 'alloc').mockImplementation((n: number, ...rest: any[]) => {
+      if (n >= 64 * 1024) sizes.push(n);
+      return orig(n, ...rest);
+    });
+    try {
+      fs.writeFileSync(jsonlPath, Array.from({ length: 300 }, (_, i) => bigBurstLine(i)).join(''));
+
+      // One trigger, same reason as the burst test above.
+      watcher.readNewLinesForSession('desktop-cap');
+      await vi.waitFor(
+        () => expect(events.filter((e) => e.type === 'assistant-text')).toHaveLength(300),
+        { timeout: SETTLE_MS },
+      );
+
+      expect(sizes.length).toBeGreaterThan(0);
+      expect(Math.max(...sizes)).toBeLessThanOrEqual(1024 * 1024);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not spin retrying when opening the transcript keeps failing', async () => {
+    // WHY: a failed open makes no progress, so it must wait for the next watch
+    // event or poll tick — never rerun at once. An immediate rerun loops
+    // stat+open as fast as libuv's 4-thread pool allows for as long as the error
+    // lasts (EMFILE, a Windows sharing violation during an antivirus scan),
+    // starving lease writes, transcript copies and other reads.
+    const jsonlPath = setupUnwatchedSession('desktop-open-fail', 'claude-open-fail');
+    // Larger than one read cap, so a pass that asked for a rerun before opening
+    // (the regression) would have a reason to ask.
+    fs.writeFileSync(jsonlPath, Array.from({ length: 150 }, (_, i) => bigBurstLine(i)).join(''));
+
+    const openSpy = vi.spyOn(fs.promises, 'open').mockRejectedValue(
+      Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' }),
+    );
+    try {
+      watcher.readNewLinesForSession('desktop-open-fail');
+      await vi.waitFor(() => expect(openSpy).toHaveBeenCalled(), { timeout: SETTLE_MS });
+      // Fixed settle before a NEGATIVE assertion (see `wait` above): it gives a
+      // retry loop time to show itself. No watch is attached and the poll is 60s,
+      // so exactly one open is correct; a tight loop makes hundreds in 300ms.
+      await wait(300);
+      expect(openSpy.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it('getHistory skips repeated assistant-text for the same uuid (mirrors live dedup)', () => {
     const jsonlPath = setupSession('desktop-replay', 'claude-replay');
 
@@ -1033,5 +1140,55 @@ describe('parseTranscriptLine — a turn is summed across all its requests', () 
     const tally = emptyTurnUsageTally();
     const events = parseTranscriptLine(assistantLine('e1', 'end_turn', req(7, 1, 900, 93)), 's1', tally);
     expect(usageOf(events)!.inputTokens).toBe(1_000);
+  });
+});
+
+// Destin, 2026-09-11, phone pass: "still having issues with messages not always appearing in the
+// same order on the desktop and the remote client". Two kinds of message Claude Code records
+// outside an ordinary user line were dropped here, so the device that typed them kept an
+// unconfirmed bubble pinned to the bottom while every other device never showed them. Measured
+// on the 400 newest transcripts on this machine: 84 queued typed messages (82 from a person, 2
+// sent in by another Claude Code session), 1,218 queued background-task notices, and no
+// ordinary user line repeating a queued message within three lines.
+describe('messages recorded outside an ordinary user line', () => {
+  const queued = (prompt: string, commandMode: string, origin?: unknown) => JSON.stringify({
+    type: 'attachment', uuid: 'q1', timestamp: '2026-09-11T10:00:00.000Z',
+    attachment: { type: 'queued_command', prompt, commandMode, ...(origin === undefined ? {} : { origin }), timestamp: '2026-09-11T10:00:00.000Z' },
+  });
+  const commandLine = (content: string) => JSON.stringify({
+    type: 'user', uuid: 'c1', promptId: 'p1', timestamp: '2026-09-11T10:00:00.000Z', message: { role: 'user', content },
+  });
+
+  it('a message typed while Claude is working is a user message', () => {
+    expect(parseTranscriptLine(queued('second', 'prompt', { kind: 'human' }), 's1')).toEqual([
+      expect.objectContaining({ type: 'user-message', sessionId: 's1', uuid: 'q1', data: { text: 'second' } }),
+    ]);
+  });
+
+  it('a background task notice stays hidden', () => {
+    expect(parseTranscriptLine(queued('<task-notification><task-id>b1</task-id></task-notification>', 'task-notification'), 's1')).toEqual([]);
+  });
+
+  it('a message another Claude Code session sent in is not shown as something the person typed', () => {
+    expect(parseTranscriptLine(queued('Heads-up from the Plan C session', 'prompt', { kind: 'peer', from: 'uds:/run/x.sock' }), 's1')).toEqual([]);
+  });
+
+  it('a slash command is a user message, marked as a command', () => {
+    const line = commandLine('<command-name>/reload-plugins</command-name>\n            <command-message>reload-plugins</command-message>\n            <command-args></command-args>');
+    expect(parseTranscriptLine(line, 's1')).toEqual([
+      expect.objectContaining({ type: 'user-message', uuid: 'c1', data: { text: '/reload-plugins', slashCommand: true } }),
+    ]);
+  });
+
+  it('a slash command keeps its arguments', () => {
+    const line = commandLine('<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args>we are going to prepare the plan.</command-args>');
+    expect(parseTranscriptLine(line, 's1')).toEqual([
+      expect.objectContaining({ data: { text: '/compact we are going to prepare the plan.', slashCommand: true } }),
+    ]);
+  });
+
+  it("the dimmed echo of a command's output stays hidden", () => {
+    const esc = String.fromCharCode(27);
+    expect(parseTranscriptLine(commandLine(`<local-command-stdout>${esc}[2mCompacted${esc}[22m</local-command-stdout>`), 's1')).toEqual([]);
   });
 });

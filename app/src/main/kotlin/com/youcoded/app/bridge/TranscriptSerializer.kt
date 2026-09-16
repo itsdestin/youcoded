@@ -14,9 +14,11 @@ import org.json.JSONObject
  */
 object TranscriptSerializer {
 
-    fun userMessage(sessionId: String, uuid: String, timestamp: Long, text: String): JSONObject {
+    fun userMessage(sessionId: String, uuid: String, timestamp: Long, text: String, slashCommand: Boolean = false): JSONObject {
         return build("user-message", sessionId, uuid, timestamp, JSONObject().apply {
             put("text", text)
+            // Only when it is one, the same as the desktop's event (shared/types.ts TranscriptEvent).
+            if (slashCommand) put("slashCommand", true)
         })
     }
 

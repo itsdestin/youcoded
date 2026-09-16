@@ -6,12 +6,66 @@ in the youcoded-dev workspace).
 
 ## Pinned versions
 
-- **ai** — `7.0.22` (Vercel AI SDK). Stream-part, finish-reason, and
+- **ai** — `7.0.89` (Vercel AI SDK). Stream-part, finish-reason, and
   tool-call/tool-result message shapes pinned by
   `desktop/tests/harness-*.test.ts`.
 - **@modelcontextprotocol/sdk** — `^1.30.0` (native MCP phase 1). `Client`,
   `StdioClientTransport`, `StreamableHTTPClientTransport`, `UnauthorizedError`,
   `ErrorCode`/`McpError` from `types.js`. Consumer: `harness/mcp/mcp-client.ts`.
+
+## ChatGPT diagnostics SDK coupling (Stage 1, unshipped)
+
+`@ai-sdk/openai` 4.0.55 Responses `includeRawChunks` exposes `rawValue` before
+normalized usage fills absent cache fields. `chatgpt-model.ts` reduces those
+chunks to allowlisted usage at consumer demand, then removes raw parts from the
+outward stream. It does not clone/tee HTTP bodies or add wire fields. Auth owns
+actual-send and 401 resend identity; async-local middleware context associates
+the successful stream with its transport attempt. Tests in `chatgpt-auth.test.ts`
+exercise fake SSE through the actual installed SDK. Storage limits, local CLI,
+privacy and measured hashing costs: `native-runtime.md` → ChatGPT request diagnostics.
+
+## ChatGPT continuation identity (Stage 4, unshipped)
+
+`chatgpt-account.json` carries a `credentialEpoch` field: 16 random bytes (hex),
+minted on every fresh sign-in, dropped with the account on sign-out, reported as
+`legacy` for a row written before the field existed. It is the durable half of
+the continuation identity `ProviderRegistry.continuationIdentity()` builds
+(`providerId\0modelId\0sha256(accountId)\0credentialEpoch`) — the in-memory
+`authGeneration` counter restarts at 0 each process and so cannot fence a
+checkpoint across a restart. The identity is what the durable accepted-history
+sidecar is bound to, and what the pinned `@ai-sdk/openai` 4.0.55 Responses
+continuation metadata is only ever replayed under. Depth:
+`native-runtime.md` → Durable accepted history.
+
+## Cloud context defaults
+
+Assistant settings → General → Context chooses an operating budget independently
+for OpenRouter and ChatGPT. The approximate **250k** tier caps at **272,000**;
+**1M** caps at **1,200,000**, the upper edge of the model-dependent range explained
+in the approved UI. Both are constrained by published model capability.
+
+- ChatGPT's `/codex/models` fields `context_window` and `max_context_window` are
+  separate catalog facts (`contextLength`, `maxContextLength`). Standard uses the
+  default, also respecting a smaller maximum; long uses the maximum, falling back
+  to the default when absent. Only positive safe-integer maximum values are
+  accepted. Old cached rows without that field stay at their known default until
+  the normal manifest refresh supplies it. No API-key model specification or
+  hardcoded model-name table substitutes for the account's model manifest.
+- OpenRouter's `context_length` is the capability ceiling. The preference applies
+  by provider **type**, including user-defined OpenRouter provider IDs. Other
+  provider types, including local engines and custom endpoints, are unchanged.
+- `ModelCatalog.get()` remains capability metadata; `contextLengthFor()` applies
+  the current preferences without changing or invalidating the catalog cache.
+  Missing/invalid context metadata remains unknown, leaving the harness's existing
+  conservative fallback intact. `contextBudget()` still owns reply reserve,
+  trimming and compaction margins; this layer does not subtract them twice.
+- Native sessions resolve this on create, resume/reopen and model switch;
+  specialists resolve it when created/resumed. Saving defaults does not mutate an
+  active session's context or history mid-turn. The resulting single operating
+  window also supplies the context-usage display.
+
+Guards: `cloud-context.test.ts`, `chatgpt-oauth.test.ts`, and
+`model-catalog.test.ts`. These use fixtures/fake catalogs, not paid live probes.
 
 ## Touchpoints (to be filled as built)
 

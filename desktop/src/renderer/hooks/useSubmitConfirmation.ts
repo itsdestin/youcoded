@@ -1,3 +1,4 @@
+import type { SessionProvider } from '../../shared/types';
 import { useCallback, useEffect, useRef } from 'react';
 import { useChatStore } from '../state/chat-context';
 import { canRetrySubmit } from '../state/pty-input-gate';
@@ -46,7 +47,7 @@ interface UseSubmitConfirmationArgs {
   // Claude/PTY-specific — so their pending bubbles are never tracked here. A
   // stray `\r` would be a nonsense write for a native session anyway. Optional
   // for callers that only ever run claude sessions.
-  providerForSession?: (sessionId: string) => 'claude' | 'native' | undefined;
+  providerForSession?: (sessionId: string) => SessionProvider | undefined;
 }
 
 /**
@@ -173,7 +174,10 @@ export function useSubmitConfirmation(args: UseSubmitConfirmationArgs) {
         // treated as claude/tracked — safe by default (a bare `\r` to a dead
         // session is a harmless no-op); a native session caught mid-teardown is a
         // low residual risk, not a correctness bug.
-        if (argsRef.current.providerForSession?.(sessionId) === 'native') continue;
+        // A shell session is skipped for the opposite reason: it HAS a PTY, and
+        // the retry's bare `\r` would press Enter in the user's own shell.
+        const trackProvider = argsRef.current.providerForSession?.(sessionId);
+        if (trackProvider === 'native' || trackProvider === 'shell') continue;
         for (const entry of session.timeline) {
           if (entry.kind !== 'user' || !entry.pending) continue;
           const messageId = entry.message.id;

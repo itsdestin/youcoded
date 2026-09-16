@@ -2,13 +2,15 @@ import { app, IpcMain, BrowserWindow, dialog, clipboard, nativeImage, shell, pow
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { resolveNoFolderCwd } from './no-folder';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
+import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
 import { execFile } from 'child_process';
-import { SessionManager } from './session-manager';
+import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
 import { HookRelay } from './hook-relay';
 import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
@@ -17,7 +19,7 @@ import { setPermissionOverrides } from './main';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { IntegrationInstaller, listWithState } from './integration-installer';
-import { RemoteConfig } from './remote-config';
+import { RemoteConfig, MIN_REMOTE_PASSWORD_LENGTH } from './remote-config';
 import { RemoteServer } from './remote-server';
 import { TranscriptWatcher } from './transcript-watcher';
 import { readTranscriptPage } from './transcript-page';
@@ -28,24 +30,39 @@ import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 import { NativeHome } from './native-home';
 import { SecretsStore } from './providers/secrets-store';
 import { ProviderRegistry } from './providers/provider-registry';
+// Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
+// (it needs the post-dev-profile userData) and passed IN; this file only wires it.
+import type { ChatGptAuth } from './providers/chatgpt-auth';
+import { ClaudeAccount } from './providers/claude-account';
 // Task 7: native auto-title generation over the AI SDK — the SAME `ai`
 // package harness-session.ts already depends on (never through
 // HarnessSession.send(), which hard-throws on re-entrancy).
 import { generateText } from 'ai';
 import type { ModelBinding } from '../shared/provider-types';
-import { createNativeTitleFeeder } from './native-title-feeder';
+import { createSessionNamer } from './session-namer';
+import { NamingSettings } from './naming-settings';
 import { reapplyStoredTitle, type ResumeTitleDeps } from './native-resume-title';
 import { ModelCatalog } from './providers/model-catalog';
 import { EngineManager } from './engine/engine-manager';
+// Faster-engine prerequisites (2026-09-05 §A5) — a pure-ish read of this
+// machine, so it needs no manager instance.
+import { enginePrereqs } from './engine/rocm-prereqs';
 import type { EngineModel as EngineModelType } from '../shared/engine-types';
 import { ModelManager } from './models/model-manager';
+import type { DownloadProgress, ModelSettingsWrite } from '../shared/model-manager-types';
+import { installClaude } from './prerequisite-installer';
+import { firstRunStateDir, type FirstRunNativeDeps } from './first-run';
+import { clearSetupDownload, computeSetupDownloadStatus, readSetupDownload } from './first-run-local';
 import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
+import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
 import { PermissionStore } from './harness/permission-store';
+import { StepGuardSettings } from './harness/step-guard-settings';
+import { ContextSettingsStore } from './harness/context-settings-store';
 // Type-only: the payload the permissions:remove handler forwards to the host.
 import type { PermissionRule } from '../shared/permission-types';
 // Task 7b: the MCP registry (WHICH servers ~/.youcoded/mcp.json configures)
@@ -64,12 +81,15 @@ import { ddgBackend } from './harness/search/backends/ddg';
 import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { resolveMappingAction } from './session-id-mapping';
-import { listPastSessions, loadHistory, SAFE_ID_RE } from './session-browser';
+import { listPastSessions, loadHistory } from './session-browser';
+import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
 import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
 import { isBundledPlugin } from '../shared/bundled-plugins';
 import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
+// The KDE script that lets the buddy move itself on a Wayland desktop.
+import { helperStatus, installHelper, removeHelper, type HelperStatus } from './kwin-helper';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, type SyncWarning } from './sync-state';
 // Cross-device sync spaces (spec 2026-07-03) — the folder-based sync engine.
 import {
@@ -90,9 +110,13 @@ import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } 
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
-import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn } from './dev-tools';
-import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError } from './update-installer';
-import type { UpdateProgressEvent } from '../shared/update-install-types';
+import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
+import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
+import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
+import { verifyDownloadedUpdate } from './update-manifest-verify';
+import { readReleaseStatus, selectRelease, type UpdateStatus } from './update-release-status';
+import { UpdateSettings } from './update-settings';
+import { UPDATE_SIGNING_PUBLIC_KEY_PEM } from './update-signing-key';
 import { getChangelog } from './changelog-service';
 // Analytics opt-out — Phase 6. The two exported functions read/write
 // ~/.claude/youcoded-analytics.json; runAnalyticsOnLaunch (wired in main.ts)
@@ -103,29 +127,26 @@ import { SavedFolder, readFolders, writeFolders } from './saved-folders';
 // Shared cap so a local folder's description can't drift from the synced
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
+import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
 import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from './performance-config';
-import type { PerformanceConfigSnapshot } from '../shared/types';
+import type { PerformanceConfigSnapshot, SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 // 2026-08-27 OOM fix: read-only handlers (list, get, save, check-existence,
 // the binary-roots pass) go through readSidecarShared — one parsed copy per
 // project however many callers ask at once. Only the manual include/exclude
 // handlers, which mutate and write back, keep the private readSidecar.
-import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArtifact, removeArtifactRecord, runSidecarMigration } from './artifacts/artifact-store';
+import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArtifact, removeArtifactRecord } from './artifacts/artifact-store';
 import { listProjects, removeProject } from './artifacts/central-index';
 // Shared with remote-server.ts — see that module's header for why these left
 // this file (they were closures, so the remote transport could not reach them).
-import { countArtifacts, projectAllFiles, isGatedRoot, listProjectsIndex } from './artifacts/projects-index';
+import { countArtifacts, listProjectsIndex } from './artifacts/projects-index';
 import { invalidateDiscoveryCache } from './artifacts/project-file-discovery';
 import { ensureProject, ensureProjectCoalesced, applyGitTreatmentCoalesced } from './artifacts/project-manager';
 import { sweepStaleTmp } from './artifacts/cas-write';
 import { canonicalize } from '../shared/artifacts/canonicalize';
-import { evaluateBinaryRead } from './artifacts/read-binary-access';
 import { readFileHead } from './fs-read-head';
 import { initProjectWatchers, watchProject, unwatchProject, dropSubscriber, noteOwnWrite, invalidateSidecarIdCache } from './artifacts/project-watcher';
-import { searchProjectContent } from './artifacts/content-search';
-import { looksBinary, EDIT_MAX_BYTES, FULL_READ_MAX_BYTES, READ_BINARY_MAX_BYTES } from '../shared/artifacts/editable-path-policy';
-import { decideOverCapRead } from '../shared/artifacts/over-cap-read';
-import { authorizeArtifactRead, authorizeArtifactWrite, isAbsoluteRecorded } from './artifacts/write-authorization';
+import { authorizeArtifactWrite } from './artifacts/write-authorization';
 import { trackedArtifacts } from './artifacts/visible-artifacts';
 import { importFile } from './artifacts/import-file';
 import { GIT_IPC } from './git/ipc-channels';
@@ -136,11 +157,27 @@ import {
 import { initGitWatchers, watchGit, unwatchGit, dropGitSubscriber } from './git/git-watcher';
 import { resolveRepoRoot, invalidateRepoRootCache } from './git/git-exec';
 import { PROJECT_IPC } from './project/ipc-channels';
-import { listProjectConversations, projectConversationHistory } from './project-conversations';
+import { projectConversationHistory } from './project-conversations';
+// The artifact and Project View READ bodies, shared with remote-server.ts
+// (remote access batch 3) so a phone gets the desktop's own answers.
+import {
+  listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
+  searchArtifactContent, checkArtifactExistence, resolveArtifactPath,
+} from './artifacts/read-service';
+import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 // Conversation Store (Phase 2a): live intake of transcript activity, session
 // cwd, title and flag changes. Keyed by CLAUDE session id (resolved from the
 // desktop id via sessionIdMap below), matching the store's record id.
-import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded, noteTitleChanged, noteFlagChanged, noteSessionNote, noteModelUsed, getConversationStore, flushSessionToSpace, buildLocalProjectResolver, emitConversationMetaChanged } from './conversations/service';
+import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded, noteTitleChanged,
+  noteFlagChanged, noteSessionNote, noteModelUsed, getConversationStore, flushSessionToSpace,
+  buildLocalProjectResolver, emitConversationMetaChanged,
+  noteAutomaticTitle,
+  getNamingRecord,
+  mutateNamingRecord,
+  isSessionNameOwned,
+  resolveSessionName,
+  setManualSessionName,
+} from './conversations/service';
 import { requestChatsearchRefresh } from './chatsearch-index/index-service';
 // Task 4: resolves a native session's live model binding into the store's
 // portable {modelId, providerType, providerLabel} shape — see
@@ -150,10 +187,9 @@ import type { PortableModelRef } from './conversations/store-core';
 // Plan 2b Task 8: holder-side takeover — when another device requests a session
 // this device holds, cleanly interrupt/flush/release/move/destroy it.
 import { createHolderTakeover } from './conversations/takeover';
-import { getTagRegistry } from './conversations/tag-registry-service';
+import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
-import { getRepoInfo } from './project-repo';
-import { listContext, readContextFile, writeContextFile } from './project-context';
+import { writeContextFile } from './project-context';
 
 // WHY: the chatsearch outbox drainer lives outside registerIpcHandlers but must
 // fire the SAME renderer + remote broadcast the IPC tag/flag/note handlers fire,
@@ -185,13 +221,126 @@ const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 
 // Native transcript existence probe: does ~/.youcoded/sessions/<slug>/<id>.jsonl
-// exist for this cwd? Mirrors NativeHome.sessionPath's convention — the RAW
+// exist for this cwd? Mirrors NativeHome.sessionFilePath's convention — the RAW
 // frozen nativeStoreSlug, NOT ccProjectSlug (see session-store.ts's slug-divergence
 // note). Used by the native RESUME path to validate a cwd BEFORE handing it to
 // nativeHost.resume, so session-manager's silent cwd→$HOME fallback can never
 // send a resume into the wrong (empty) directory (Task 9).
 function nativeTranscriptExists(cwd: string, sessionId: string): boolean {
   return fs.existsSync(path.join(os.homedir(), '.youcoded', 'sessions', nativeStoreSlug(cwd), `${sessionId}.jsonl`));
+}
+
+// ─── The Linux/KDE buddy helper: one cached answer, shared by main.ts ────────
+//
+// WHY a cache at all: two things ask "is the helper live right now?" and
+// neither can afford to wait. The drag path asks on EVERY FRAME (60×/second),
+// and the answer costs two subprocess calls — so it has to be a value already
+// in memory, never a fresh lookup. main.ts is the other reader; it lives here
+// rather than there because these handlers are the things that change it.
+let helperStatusCache: HelperStatus | null = null;
+
+/**
+ * The last answer, or null if we have never had one.
+ *
+ * Synchronous and allocation-free on purpose — this is what the buddy's drag
+ * loop reads.
+ */
+export function cachedBuddyHelperStatus(): HelperStatus | null {
+  return helperStatusCache;
+}
+
+/**
+ * Ask the desktop again and remember the answer.
+ *
+ * Called at launch, on every helper-status request, and after a successful
+ * add/remove — the last two matter because the user can switch the script off
+ * in KDE's own System Settings while YouCoded is running, and a stale "yes it
+ * is installed" would leave the buddy switched on and unable to move.
+ */
+let onHelperLost: (() => void) | null = null;
+
+/**
+ * Told what to do when the helper stops being live under a buddy that is
+ * already on screen. Wired by main.ts to `buddyManager.hide()`.
+ *
+ * WHY this exists rather than trusting the Remove button (B4 review, F1):
+ * `buddy-window-manager.ts` records that `captionChannelLive` MUST NOT flip
+ * true→false while buddy windows exist — after the flip, moves take the
+ * `setPosition` branch, which is a silent no-op on Wayland, and `rectOf` starts
+ * returning `getBounds()`, frozen at the constructor position, so the chat and
+ * bar re-anchor to the screen corner while the mascot stays put. It claimed
+ * removal-forces-hide as the guarantee, but removal is not the only writer:
+ * design §4 added the on-show re-check EXACTLY so that switching the script off
+ * in KDE's own System Settings mid-session is noticed, and a momentary DBus
+ * failure does the same. Noticing without acting produced the undraggable,
+ * corner-anchored buddy this whole feature exists to eliminate.
+ */
+export function setBuddyHelperLostHandler(fn: (() => void) | null): void {
+  onHelperLost = fn;
+}
+
+export async function refreshBuddyHelperStatus(): Promise<HelperStatus> {
+  const wasLive = helperStatusCache?.needed === true && helperStatusCache.installed === true;
+  try {
+    helperStatusCache = await helperStatus();
+  } catch (err) {
+    // WHY the previous answer is kept rather than thrown away: `needed` is
+    // decided from two facts that cannot change while the app runs (which OS
+    // this is, and whether Electron's own windows are Wayland-native), so an
+    // answer we already have is still true about THAT half. What a failed call
+    // costs us is only whether the helper is live right now — so that half is
+    // forced to "no", which makes the consent gate refuse instead of guess.
+    //
+    // WHY a total failure (no previous answer at all) reports needed:false
+    // instead of refusing: design §4's failing-safe rule. Getting this wrong in
+    // the "false" direction costs a Wayland user exactly today's behaviour — a
+    // buddy that cannot be dragged. Getting it wrong the other way TAKES AWAY a
+    // working buddy from a Windows, macOS or KDE-X11 user, who never needed a
+    // helper in the first place.
+    //
+    // BUT THIS BRANCH IS NOT THE RULE THAT GOVERNS IN PRACTICE (B4 review, F3).
+    // helperStatus() has no rejecting path today — supportGate() turns an
+    // unreachable KWin into { supported: false }, and kdeCall catches its own
+    // exec errors — so a real mid-session KDE outage lands on the NON-throwing
+    // path above: { needed: true, supported: false, installed: false }, which
+    // the consent gate refuses. That is the right direction (no buddy beats an
+    // undraggable one), and it is the behaviour to reason about. This branch is
+    // insurance against a future throw, not the live decision.
+    helperStatusCache = helperStatusCache
+      ? { ...helperStatusCache, installed: false, reason: err instanceof Error ? err.message : String(err) }
+      : { needed: false, supported: false, installed: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  const isLive = helperStatusCache.needed === true && helperStatusCache.installed === true;
+  // The transition, not the button, is the trigger. See setBuddyHelperLostHandler.
+  if (wasLive && !isLive) onHelperLost?.();
+  return helperStatusCache;
+}
+
+/**
+ * Why the buddy is being refused, or null when he may be shown.
+ *
+ * PURE, and exported so buddy-consent-gate.test.ts can drive every state
+ * without a compositor. The rule the design asks for (§5) is that consent is
+ * enforced HERE, in the main process, and not by an `if` in the settings
+ * screen: the settings screen is not the only thing that turns the buddy on —
+ * the app also restores him at launch from a saved preference — and a refusal
+ * the renderer forgets to make is a helper-less buddy that appears and then
+ * refuses to move, which is the exact bug this feature exists to remove.
+ *
+ * It refuses on `needed`, NEVER on "is this Linux". A KDE user on X11, or on
+ * Wayland whose windows are actually X11-backed, positions his own windows
+ * perfectly well and must never be refused a buddy he already has.
+ */
+export function buddyShowRefusal(status: HelperStatus | null): string | null {
+  // No helper is needed here — Windows, macOS, Linux/X11, and Wayland running
+  // through XWayland. Identical to today, and the most important line here.
+  if (!status || !status.needed) return null;
+  // Needed and running: the buddy moves by being renamed, so let him through.
+  if (status.installed) return null;
+  // Needed and NOT running. Report what we actually know — the support gate's
+  // own reason when it has one, and otherwise a plain statement of the fact,
+  // never a guess at a cause (docs/error-message-standards.md).
+  return status.reason ?? 'The buddy needs its KDE helper on this desktop, and the helper is not running.';
 }
 
 
@@ -226,6 +375,14 @@ export function registerIpcHandlers(
     deviceId: string;
     machineId: string;
   },
+  // Sign in with ChatGPT (backend design 2026-09-05 §1, §6): the account object
+  // main.ts built inside createWindow. Optional so the tests that call this with
+  // four args keep working. It is ALWAYS handed over when it exists — the kill
+  // switch (YOUCODED_CHATGPT=0) is applied HERE, not by omitting the argument:
+  // under the switch the registry, the catalog and the four handlers get null
+  // (no virtual row, no models, answers signed-out/false) while the object
+  // itself stays alive as the file reader main.ts's launch check needs.
+  chatgptAuth?: ChatGptAuth | null,
 ) {
   // Broadcast a non-session-scoped event to every renderer. Status data, UI
   // actions, and similar globals must reach every window — not just window 1.
@@ -323,7 +480,7 @@ export function registerIpcHandlers(
   };
 
   // --- Theme file watcher ---
-  const stopThemeWatcher = startThemeWatcher(mainWindow);
+  const stopThemeWatcher = startThemeWatcher();
 
   ipcMain.handle(IPC.THEME_LIST, async () => {
     return listUserThemes();
@@ -454,6 +611,35 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.ZOOM_GET, () => {
     if (!mainWindow || mainWindow.isDestroyed()) return 100;
     return zoomLevelToPercent(mainWindow.webContents.getZoomLevel());
+  });
+
+  // --- The Linux/KDE buddy helper (design §4) ---
+  // Three channels, and only three surfaces (here, preload.ts, remote-shim.ts).
+  // The buddy has no Android or remote-server presence at all today, so adding
+  // one for the helper would grow this feature into a platform-parity sweep —
+  // deliberately not done, and recorded in ipc-channels.test.ts so it does not
+  // read as an oversight later.
+
+  // Always a LIVE read, never the cache: the user can turn the script off in
+  // KDE's own System Settings at any moment, and the settings popup asks for
+  // this every time it opens (design §4 — "re-checked on window-show").
+  ipcMain.handle(IPC.BUDDY_HELPER_STATUS, () => refreshBuddyHelperStatus());
+
+  ipcMain.handle(IPC.BUDDY_INSTALL_HELPER, async () => {
+    const res = await installHelper();
+    // Re-read after a change, not before: the buddy's drag path reads this
+    // cached value on every frame, and until it says "installed" the buddy is
+    // still gated off. Doing it here means the user's very next click works.
+    if (res.ok) await refreshBuddyHelperStatus();
+    return res;
+  });
+
+  ipcMain.handle(IPC.BUDDY_REMOVE_HELPER, async () => {
+    const res = await removeHelper();
+    // Same reason in reverse: once the script is out of KDE, the buddy can no
+    // longer be moved, so the cache has to know before the next show().
+    if (res.ok) await refreshBuddyHelperStatus();
+    return res;
   });
 
   // --- Performance / GPU pref ---
@@ -611,7 +797,11 @@ export function registerIpcHandlers(
   };
 
   // Session CRUD
-  ipcMain.handle(IPC.SESSION_CREATE, async (event, opts) => {
+  ipcMain.handle(IPC.SESSION_CREATE, async (event, rawOpts) => {
+    // "No folder" (shared/no-folder.ts): the renderer's sentinel becomes the
+    // app-owned empty folder here, before the session manager or the native
+    // host sees a cwd.
+    const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     const info = sessionManager.createSession(opts);
     // Assign the new session to the calling window so per-session events (transcript,
     // pty output, permission prompts) route here once Task 1.4 migrates the emits.
@@ -740,6 +930,9 @@ export function registerIpcHandlers(
         // preset badge + resume rows can read it. getHarnessId is authoritative
         // after create/resume awaited above.
         info.harnessId = nativeHost.getHarnessId(info.id) ?? undefined;
+        // Same stamp as SESSION_LIST, so the very first render of a brand-new
+        // session already knows whose plan it is spending (review T6 F1).
+        info.providerType = bindingToPortableModel(nativeHost.getBinding(info.id), await providerRegistry.list())?.providerType;
 
         // Native sessions emit NO CC SessionStart hook, so the CC lease path
         // (sessionIdMap + acquire at the SessionStart listener) never fires for
@@ -819,6 +1012,26 @@ export function registerIpcHandlers(
       // the first message. Fire-and-forget; the model poll drives the UI.
       const eagerModelId = nativeHost.modelForSession(info.id);
       if (eagerModelId) { void engineManager.loadModel(eagerModelId).catch(() => { /* engine not installed / boot failed — the first send surfaces it */ }); }
+    } else if (info.provider === 'claude') {
+      // Contract R23: EVERY chat carries the line saying what the assistant
+      // started with — a Claude Code chat is still a chat. The native runtime
+      // pushes its own record from the host's wire(); Claude Code has no host
+      // here, so it is assembled from what this machine can honestly say (the
+      // instruction files on disk, the skills the app installed) and marked as
+      // Claude Code's own for everything else. See claude-code-context.ts.
+      //
+      // nextTick for the same reason the SESSION_CREATED forward defers: the
+      // renderer must have the session in state before a record about it lands.
+      // Never fatal — a chat that will not start is worse than an unexplained one.
+      process.nextTick(() => {
+        try {
+          const payload = { sessionId: info.id, context: buildClaudeCodeContext(info.cwd, info.model ?? null) };
+          sendForSession(info.id, IPC.NATIVE_SESSION_CONTEXT, payload);
+          remoteServer?.broadcast({ type: 'native:session-context', payload });
+        } catch (err) {
+          log('ERROR', 'ipc-handlers', 'could not describe a Claude Code session context', { sessionId: info.id, error: String(err) });
+        }
+      });
     }
     return info;
   });
@@ -838,7 +1051,12 @@ export function registerIpcHandlers(
     // Task 7: drop the title feeder's per-session state too — a no-op for
     // non-native ids (the feeder was never fed events for them) and cheap
     // idempotent Map.delete for native ones.
-    nativeTitleFeeder.forget(sessionId);
+    sessionNamer.forget(sessionId);
+    // Deliberately NOT dropped on session-EXIT: a conversation whose process
+    // has ended stays on screen and must stay scrollable, and exit is what
+    // stops the transcript watcher. Closing the conversation is the point where
+    // nothing can ask for its history again.
+    pageSources.forget(sessionId);
     const result = sessionManager.destroySession(sessionId);
     if (result) {
       // Explicit user-initiated destroy → treat as clean exit (0). The
@@ -857,7 +1075,16 @@ export function registerIpcHandlers(
   // so remote clients still see everything. RemoteServer uses its own path
   // and doesn't go through this handler.
   ipcMain.handle(IPC.SESSION_LIST, async (event) => {
-    const all = sessionManager.listSessions();
+    // Stamp each native session with the TYPE of the provider it is bound to.
+    // WHY: the renderer decides whose usage numbers to show from the session's
+    // model id alone otherwise, and two providers can list the same id — a user
+    // with both an OpenAI API key and the ChatGPT plan has `gpt-5.5` twice. The
+    // session itself knows which one it is bound to; the model id does not.
+    // (Review T6 F1 / design §4.9.) resolvePortableModel returns null for a
+    // non-native session or a provider that has left the registry — never a
+    // guess, so the renderer falls back to "unknown" rather than to the wrong
+    // plan.
+    const all = await stampProviderTypes(sessionManager.listSessions());
     if (!windowRegistry) return all;
     const callerId = event.sender.id;
     const primaryId = windowRegistry.getLeaderId();
@@ -866,6 +1093,14 @@ export function registerIpcHandlers(
       if (owner == null) return callerId === primaryId; // unowned → primary only
       return owner === callerId;
     });
+  });
+
+  // Remote access batch 2 (§2, R2): each window reports the session it shows; main
+  // caches it per window (WindowRegistry) so the remote snapshot and
+  // session:destroyed can tell a phone what the desktop is showing. Fire-and-forget:
+  // nothing on the desktop reads it back.
+  ipcMain.on(IPC.SESSION_SELECTED, (evt, sessionId: unknown) => {
+    windowRegistry?.setSelectedSession(evt.sender.id, typeof sessionId === 'string' ? sessionId : null);
   });
 
   ipcMain.handle(IPC.SESSION_SWITCH, async (_event, _sessionId: string) => {
@@ -1216,97 +1451,14 @@ export function registerIpcHandlers(
   // above) so the sync-spaces import flow can rewrite an entry when a folder
   // moves. The FOLDERS_* handlers below call the no-arg forms, which default
   // to the same ~/.claude/youcoded-folders.json path.
-  ipcMain.handle(IPC.FOLDERS_LIST, async () => {
-    let folders = readFolders();
-    // Seed with home directory on first use
-    if (folders.length === 0) {
-      const home = os.homedir();
-      folders = [{ path: home, nickname: 'Home', addedAt: Date.now() }];
-      writeFolders(folders);
-    }
-    // Annotate each folder with whether the path still exists on disk.
-    // A saved folder that lives under ~/YouCoded/Projects/ IS a managed sync
-    // project (the import flow rewrites saved entries to their new managed
-    // path) — badge it like the synthesized managed rows below.
-    const projectsRoot = getManagedRoots()?.projectsRoot;
-    const projectsPrefix = projectsRoot ? path.resolve(projectsRoot).toLowerCase() + path.sep : null;
-    const result: any[] = folders.map(f => ({
-      ...f,
-      exists: fs.existsSync(f.path),
-      ...(projectsPrefix && path.resolve(f.path).toLowerCase().startsWith(projectsPrefix)
-        ? { managed: true } : {}),
-    }));
-    // Managed projects (spec §3) always appear in the session-creation picker,
-    // deduped against saved folders by normalized path. `managed: true` lets
-    // the renderer badge them. addedAt:0 sorts them below user-added folders.
-    const managed = getManagedRoots()?.listProjects() ?? [];
-    const known = new Set(result.map(f => path.resolve(f.path).toLowerCase()));
-    for (const p of managed) {
-      if (!known.has(path.resolve(p.path).toLowerCase())) {
-        result.push({ path: p.path, nickname: p.name, addedAt: 0, exists: true, managed: true });
-      }
-    }
-    return result;
-  });
-
-  ipcMain.handle(IPC.FOLDERS_ADD, async (_event, folderPath: string, nickname?: string) => {
-    const folders = readFolders();
-    // Deduplicate by normalized path
-    const normalized = path.resolve(folderPath);
-    if (folders.some(f => path.resolve(f.path) === normalized)) {
-      return folders.find(f => path.resolve(f.path) === normalized);
-    }
-    const entry: SavedFolder = {
-      path: normalized,
-      nickname: nickname || path.basename(normalized),
-      addedAt: Date.now(),
-    };
-    folders.unshift(entry);
-    writeFolders(folders);
-    return entry;
-  });
-
-  ipcMain.handle(IPC.FOLDERS_REMOVE, async (_event, folderPath: string) => {
-    const folders = readFolders();
-    // Compare case-insensitively on Windows (paths are case-insensitive there).
-    // WHY: Project View passes the project's CANONICAL path (lowercase drive,
-    // e.g. c:\…) while the store holds the path.resolve form (uppercase drive,
-    // C:\…). A case-sensitive compare would silently fail to remove the entry.
-    const samePath = (a: string, b: string) =>
-      process.platform === 'win32'
-        ? a.toLowerCase() === b.toLowerCase()
-        : a === b;
-    const normalized = path.resolve(folderPath);
-    const filtered = folders.filter(f => !samePath(path.resolve(f.path), normalized));
-    if (filtered.length === folders.length) return false;
-    writeFolders(filtered);
-    return true;
-  });
-
-  ipcMain.handle(IPC.FOLDERS_RENAME, async (_event, folderPath: string, nickname: string) => {
-    const folders = readFolders();
-    const normalized = path.resolve(folderPath);
-    const entry = folders.find(f => path.resolve(f.path) === normalized);
-    if (!entry) return false;
-    entry.nickname = nickname;
-    writeFolders(folders);
-    return true;
-  });
-
-  ipcMain.handle(IPC.FOLDERS_SET_DESCRIPTION, async (_event, folderPath: string, description: string) => {
-    const folders = readFolders();
-    const normalized = path.resolve(folderPath);
-    const entry = folders.find(f => path.resolve(f.path) === normalized);
-    if (!entry) return false;
-    // Trim + cap here as well as in the UI: the renderer is a mirror, never the
-    // boundary (same rule as the artifact write policy). String(… ?? '') matches
-    // the remote-server path's coercion: the renderer always sends a string
-    // today, but the two transports must be equally defensive so a future
-    // null/undefined caller throws on neither surface rather than only one.
-    entry.description = String(description ?? '').trim().slice(0, PROJECT_DESCRIPTION_MAX) || null;
-    writeFolders(folders);
-    return true;
-  });
+  // The folder picker's five operations live in folders-service.ts, shared with remote-server.ts
+  // so a phone lists and edits folders exactly as this window does (a hand-copied remote version
+  // had stopped listing synced projects — Destin, 2026-09-11).
+  ipcMain.handle(IPC.FOLDERS_LIST, async () => listPickerFolders());
+  ipcMain.handle(IPC.FOLDERS_ADD, async (_event, folderPath: string, nickname?: string) => addFolder(folderPath, nickname));
+  ipcMain.handle(IPC.FOLDERS_REMOVE, async (_event, folderPath: string) => removeFolder(folderPath));
+  ipcMain.handle(IPC.FOLDERS_RENAME, async (_event, folderPath: string, nickname: string) => renameFolder(folderPath, nickname));
+  ipcMain.handle(IPC.FOLDERS_SET_DESCRIPTION, async (_event, folderPath: string, description: string) => setFolderDescription(folderPath, description));
 
   // --- Skills discovery & marketplace ---
   ipcMain.handle(IPC.SKILLS_LIST, async () => {
@@ -1568,15 +1720,21 @@ export function registerIpcHandlers(
     });
 
     ipcMain.handle(IPC.REMOTE_SET_PASSWORD, async (_event, password: string) => {
+      // Backstop for the length rule the Settings UI enforces (2026-09-10 security
+      // review, #5): refuse a new password under the minimum rather than silently
+      // storing a one-character one. Returns false so the UI can show its message;
+      // the boolean contract is unchanged (this handler only ever returned true).
+      if (typeof password !== 'string' || password.length < MIN_REMOTE_PASSWORD_LENGTH) {
+        return false;
+      }
       await remoteConfig.setPassword(password);
       remoteServer?.invalidateTokens();
       return true;
     });
 
-    ipcMain.handle(IPC.REMOTE_SET_CONFIG, async (_event, updates: { enabled?: boolean; trustTailscale?: boolean; keepAwakeHours?: number }) => {
+    ipcMain.handle(IPC.REMOTE_SET_CONFIG, async (_event, updates: { enabled?: boolean; keepAwakeHours?: number }) => {
       const wasEnabled = remoteConfig.enabled;
       if (typeof updates.enabled === 'boolean') remoteConfig.enabled = updates.enabled;
-      if (typeof updates.trustTailscale === 'boolean') remoteConfig.trustTailscale = updates.trustTailscale;
       if (typeof updates.keepAwakeHours === 'number') {
         remoteConfig.keepAwakeHours = updates.keepAwakeHours;
         applyKeepAwake(updates.keepAwakeHours);
@@ -1626,8 +1784,26 @@ export function registerIpcHandlers(
       return remoteServer?.getClientList() ?? [];
     });
 
-    ipcMain.handle(IPC.REMOTE_DISCONNECT_CLIENT, async (_event, clientId: string) => {
-      return remoteServer?.disconnectClient(clientId) ?? false;
+    // WHY these are desktop IPC and have no remote equivalent: renaming and unpairing decide
+    // who may reach this computer. The remote socket refuses them (HOST_ADMIN_REFUSAL).
+    ipcMain.handle(IPC.REMOTE_STATUS, async () => {
+      return remoteServer?.getStatus() ?? { state: 'stopped', port: 0 };
+    });
+
+    // Remote access batch 2 (§6): Refresh belongs to a remote client's copy of the
+    // conversation. A desktop window IS the copy; say so rather than pretend to refresh.
+    ipcMain.handle(IPC.REMOTE_REHYDRATE, async () => ({ ok: false, code: 'not-remote' }));
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_LIST, async () => {
+      return remoteServer?.getDeviceList() ?? [];
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_RENAME, async (_event, deviceId: string, name: string) => {
+      return remoteServer?.renameDevice(deviceId, name) ?? false;
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_UNPAIR, async (_event, deviceId: string) => {
+      return remoteServer?.unpairDevice(deviceId) ?? false;
     });
 
     ipcMain.handle(IPC.REMOTE_INSTALL_TAILSCALE, async () => {
@@ -1777,13 +1953,36 @@ export function registerIpcHandlers(
 
   // --- YouCoded app update checker via GitHub Releases API ---
   // Caches the latest release info and refreshes every 30 minutes.
-  let cachedUpdateStatus: { current: string; latest: string; update_available: boolean; download_url: string | null } | null = null;
+  // manifest_url/signature_url/tag are captured for the 2026-09-10 signed-update
+  // verification (#7): the app fetches the signed manifest + signature at launch
+  // time and refuses any installer that doesn't match. tag is the FULL tag
+  // (e.g. `v1.3.0`) the manifest's version must equal.
+  let cachedUpdateStatus: UpdateStatus | null = null;
   let lastReleaseCheck = 0;
   const RELEASE_CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
+  // WHY its own NativeHome and not the shared `nativeHome` below: that const is
+  // declared ~600 lines further down, and the first update check fires before it
+  // is initialised — reading it here would hit the temporal dead zone. A second
+  // instance is safe because NativeHome.mutateJson serialises through a FILE
+  // lock, not in-process state, so the two never race on config.json.
+  const updateSettings = new UpdateSettings(new NativeHome());
+
+  /** The listing to ask for, and how to read it, for this install's channel. */
+  function releaseEndpoint(): { url: string; listing: boolean } {
+    // WHY two endpoints (2026-09-13): GitHub defines /releases/latest as the
+    // newest STABLE release and omits pre-releases entirely. A stable install
+    // must keep seeing exactly that — it is what stops ordinary users being
+    // pulled onto beta software. Only the beta channel pays for the listing.
+    return updateSettings.resolve(app.getVersion())
+      ? { url: 'https://api.github.com/repos/itsdestin/youcoded/releases?per_page=20', listing: true }
+      : { url: 'https://api.github.com/repos/itsdestin/youcoded/releases/latest', listing: false };
+  }
+
   function fetchLatestRelease(): Promise<void> {
+    const { url, listing } = releaseEndpoint();
     return new Promise((resolve) => {
-      const req = https.get('https://api.github.com/repos/itsdestin/youcoded/releases/latest', {
+      const req = https.get(url, {
         headers: { 'User-Agent': 'YouCoded', 'Accept': 'application/vnd.github.v3+json' },
         timeout: 10000,
       }, (res) => {
@@ -1792,75 +1991,46 @@ export function registerIpcHandlers(
           https.get(res.headers.location!, { headers: { 'User-Agent': 'YouCoded', 'Accept': 'application/vnd.github.v3+json' }, timeout: 10000 }, (rRes) => {
             let body = '';
             rRes.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-            rRes.on('end', () => { parseReleaseResponse(body); resolve(); });
+            rRes.on('end', () => { parseReleaseResponse(body, listing); resolve(); });
           }).on('error', () => { resolve(); });
           return;
         }
         let body = '';
         res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-        res.on('end', () => { parseReleaseResponse(body); resolve(); });
+        res.on('end', () => { parseReleaseResponse(body, listing); resolve(); });
       });
       req.on('error', () => { resolve(); });
       req.on('timeout', () => { req.destroy(); resolve(); });
     });
   }
 
-  function parseReleaseResponse(body: string) {
+  function currentOnlyStatus(): UpdateStatus {
+    return { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null, manifest_url: null, signature_url: null, tag: null };
+  }
+
+  function parseReleaseResponse(body: string, listing: boolean) {
     try {
-      const release = JSON.parse(body);
-      const tagName: string = release.tag_name || '';
-      const latestVersion = tagName.replace(/^v/, '');
-      const currentVersion = app.getVersion();
-      const isNewer = compareVersions(latestVersion, currentVersion) > 0;
-
-      // Find the right installer asset for the current platform
-      const assets: Array<{ name: string; browser_download_url: string }> = release.assets || [];
-      let downloadUrl: string | null = null;
-      const platform = process.platform;
-      if (platform === 'win32') {
-        // Prefer .exe installer
-        const exe = assets.find(a => a.name.endsWith('.exe'));
-        downloadUrl = exe?.browser_download_url || null;
-      } else if (platform === 'darwin') {
-        // Prefer .dmg matching the current arch. electron-builder produces both
-        // `YouCoded-<ver>-arm64.dmg` and `YouCoded-<ver>.dmg` (x64, no suffix),
-        // and GitHub returns them in non-deterministic order — so a plain
-        // `.endsWith('.dmg')` would hand Intel Macs the arm64 DMG (or vice
-        // versa), which Gatekeeper refuses to mount. Match by arch first, then
-        // fall back to any .dmg if a matching one isn't in the release.
-        const wantArm = process.arch === 'arm64';
-        const archDmg = assets.find(a => a.name.endsWith('.dmg') && a.name.includes('arm64') === wantArm);
-        const anyDmg = assets.find(a => a.name.endsWith('.dmg'));
-        downloadUrl = archDmg?.browser_download_url || anyDmg?.browser_download_url || null;
-      } else {
-        // Linux — prefer .AppImage, fallback to .deb
-        const appImage = assets.find(a => a.name.endsWith('.AppImage'));
-        const deb = assets.find(a => a.name.endsWith('.deb'));
-        downloadUrl = appImage?.browser_download_url || deb?.browser_download_url || null;
-      }
-      // Fallback to release page if no matching asset found
-      if (!downloadUrl) downloadUrl = release.html_url || null;
-
-      cachedUpdateStatus = { current: currentVersion, latest: latestVersion, update_available: isNewer, download_url: downloadUrl };
+      // WHY the decision moved out (2026-09-11): the private compare that lived
+      // here read `1.3.0-beta.76` as HIGHER than `1.3.0`, so a beta was never told
+      // the full release existed. update-release-status.ts decides newer / which
+      // file / signed, with tests that walk a beta through to the full release.
+      const parsed: unknown = JSON.parse(body);
+      // On the beta channel the body is an ARRAY of releases, newest-published
+      // first; selectRelease picks the highest VERSION carrying this computer's
+      // installer, so the full 1.3.0 ends a beta run without a special case.
+      const release = listing
+        ? selectRelease(parsed, { includePrereleases: true, platform: process.platform, arch: process.arch })
+        : (parsed as Parameters<typeof readReleaseStatus>[0]);
+      const next = readReleaseStatus(release, app.getVersion(), process.platform, process.arch);
+      if (next) cachedUpdateStatus = next;
+      else if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
+      // Stamped even for a reply that is not a release (GitHub's rate-limit body),
+      // as before, so a rate limit is not re-asked on every status poll.
       lastReleaseCheck = Date.now();
     } catch {
       // Parse failed — keep previous cache or set current version only
-      if (!cachedUpdateStatus) {
-        cachedUpdateStatus = { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null };
-      }
+      if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
     }
-  }
-
-  /** Simple semver compare: returns >0 if a > b, <0 if a < b, 0 if equal */
-  function compareVersions(a: string, b: string): number {
-    const pa = a.split('.').map(Number);
-    const pb = b.split('.').map(Number);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-      const na = pa[i] || 0;
-      const nb = pb[i] || 0;
-      if (na !== nb) return na - nb;
-    }
-    return 0;
   }
 
   function getUpdateStatus() {
@@ -1894,6 +2064,25 @@ export function registerIpcHandlers(
     return status;
   }
 
+  function betaChannelState(): { betaChannel: boolean | null; effective: boolean } {
+    const saved = updateSettings.read().betaChannel;
+    return { betaChannel: saved, effective: updateSettings.resolve(app.getVersion()) };
+  }
+
+  // Registered here rather than beside the other update:* handlers so they sit
+  // in the same scope as updateSettings and the cache they have to invalidate.
+  ipcMain.handle('update:get-beta-channel', () => betaChannelState());
+  ipcMain.handle('update:set-beta-channel', async (_event, enabled: unknown) => {
+    await updateSettings.setBetaChannel(enabled);
+    // WHY re-check immediately: the status cache holds one answer for 30 minutes,
+    // and it was computed against the OTHER channel. Without this, turning the
+    // channel on leaves "you're up to date" on screen for up to half an hour —
+    // which reads as the toggle having done nothing.
+    lastReleaseCheck = 0;
+    await fetchLatestRelease();
+    return betaChannelState();
+  });
+
   // -------------------------------------------------------------------------
   // In-app update installer — download + launch the platform installer.
   // Spec: docs/superpowers/specs/2026-04-22-in-app-update-installer-design.md
@@ -1925,6 +2114,77 @@ export function registerIpcHandlers(
   // !app.isPackaged so production builds can never enter this path even if the
   // env var is somehow set.
   const devFakeUpdate = !app.isPackaged && process.env.YOUCODED_DEV_FAKE_UPDATE === '1';
+
+  // Fetch a small HTTPS body (the release manifest ~1 KB, its signature ~64 B)
+  // into a Buffer, following redirects and re-checking the host on each hop.
+  // Byte-capped so a hostile response can't balloon memory. 2026-09-10 security
+  // review #7.
+  function fetchUrlToBuffer(url: string, maxBytes: number): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const step = (current: string, depth: number) => {
+        if (!isAllowedUpdateHost(current)) { reject(new UpdateInstallError('url-rejected', `host not allowed: ${current}`)); return; }
+        if (depth > 5) { reject(new UpdateInstallError('network-failed', 'too many redirects')); return; }
+        const req = https.get(current, { headers: { 'User-Agent': 'YouCoded' }, timeout: 10000 }, (res) => {
+          const code = res.statusCode ?? 0;
+          if ((code === 301 || code === 302 || code === 307 || code === 308) && res.headers.location) {
+            res.resume();
+            step(new URL(res.headers.location, current).toString(), depth + 1);
+            return;
+          }
+          if (code !== 200) { res.resume(); reject(new UpdateInstallError('network-failed', `status ${code}`)); return; }
+          const chunks: Buffer[] = [];
+          let total = 0;
+          res.on('data', (c: Buffer) => {
+            total += c.length;
+            if (total > maxBytes) { req.destroy(); reject(new UpdateInstallError('verify-failed', 'metadata too large')); return; }
+            chunks.push(c);
+          });
+          res.on('end', () => resolve(Buffer.concat(chunks)));
+          res.on('error', (e: Error) => reject(new UpdateInstallError('network-failed', e.message)));
+        });
+        req.on('error', (e: Error) => reject(new UpdateInstallError('network-failed', e.message)));
+        req.on('timeout', () => { req.destroy(); reject(new UpdateInstallError('network-failed', 'timeout')); });
+      };
+      step(url, 0);
+    });
+  }
+
+  // Verify a downloaded installer against the release's signed manifest before we
+  // run it (2026-09-10 security review #7). Returns an error code to refuse, or
+  // null to proceed. A release with no signed manifest is REFUSED
+  // ('signature-invalid') rather than run unverified — that is the whole point of
+  // the fix. Reads cachedUpdateStatus directly (the dev-fake override never
+  // reaches here; dev short-circuits before this).
+  async function verifyBeforeLaunch(filePath: string): Promise<UpdateInstallErrorCode | null> {
+    const status = cachedUpdateStatus;
+    const manifestUrl = status?.manifest_url;
+    const signatureUrl = status?.signature_url;
+    const tag = status?.tag;
+    if (!manifestUrl || !signatureUrl || !tag) {
+      console.error('[update] refusing launch: this release has no signed manifest to verify against');
+      return 'signature-invalid';
+    }
+    try {
+      const [manifestBytes, signatureBytes] = await Promise.all([
+        fetchUrlToBuffer(manifestUrl, 1024 * 1024),
+        fetchUrlToBuffer(signatureUrl, 8 * 1024),
+      ]);
+      await verifyDownloadedUpdate({
+        filePath,
+        fileName: path.basename(filePath),
+        manifestBytes,
+        signatureBytes,
+        tag,
+        currentVersion: app.getVersion(),
+        publicKeyPem: UPDATE_SIGNING_PUBLIC_KEY_PEM,
+      });
+      return null;
+    } catch (err) {
+      if (err instanceof UpdateInstallError) return err.code;
+      console.error('[update] verification error:', err);
+      return 'verify-failed'; // a transient fetch failure is retriable
+    }
+  }
 
   ipcMain.handle('update:download', async () => {
     if (devFakeUpdate) {
@@ -1970,6 +2230,14 @@ export function registerIpcHandlers(
       // Return the fallback: 'browser' shape so the renderer flips out of launching
       // state and calls onClose() — do NOT schedule app.quit() (that would kill the dev session).
       return { success: true, quitPending: false, fallback: 'browser' as const };
+    }
+    // Gate: never run an installer we can't prove is genuine (2026-09-10 security
+    // review #7). On verify-failed, delete the cached file so a Retry re-downloads
+    // a clean copy rather than re-verifying the same corrupt bytes.
+    const verifyError = await verifyBeforeLaunch(payload.filePath);
+    if (verifyError) {
+      if (verifyError === 'verify-failed') { try { fs.unlinkSync(payload.filePath); } catch { /* ignore */ } }
+      return { success: false, error: verifyError };
     }
     const result = await launchInstaller({ jobId: payload.jobId, filePath: payload.filePath });
     if (result.success && result.quitPending) {
@@ -2124,7 +2392,14 @@ export function registerIpcHandlers(
     // (The background bulk-conversations pull + its restore-progress chip were
     // removed in sync-legacy-demolition — the pull path no longer exists.)
 
-    return { usage, announcement, updateStatus, syncWarnings, lastSyncEpoch, syncInProgress, lastSyncByDevice, backupMeta, contextMap, gitBranchMap, sessionStatsMap, attentionMap };
+    // Sign in with ChatGPT (§4.4): the plan's usage windows ride the same 10 s
+    // push the Claude usage does, so the status-bar chips and /usage draw either
+    // plan with one recipe — on desktop AND on remote browsers (this payload is
+    // forwarded verbatim by broadcastStatusData). Pruned by usageForStatus();
+    // null when signed out, never polled, or under the kill switch.
+    const chatgptUsage = chatgptForUi?.usageForStatus() ?? null;
+
+    return { usage, announcement, updateStatus, syncWarnings, lastSyncEpoch, syncInProgress, lastSyncByDevice, backupMeta, contextMap, gitBranchMap, sessionStatsMap, attentionMap, chatgptUsage };
   }
 
   // Push status data every 10s — store handle so it can be cleared on shutdown
@@ -2165,6 +2440,10 @@ export function registerIpcHandlers(
   const topicDir = path.join(os.homedir(), '.claude', 'topics');
   // Maps desktop session ID → Claude Code session ID
   const sessionIdMap = new Map<string, string>();
+  // Where each session's transcript lives, for the paged-history handler to
+  // fall back on whenever the transcript watcher cannot say — see
+  // transcript-page-source.ts for the three ordinary moments when it cannot.
+  const pageSources = new TranscriptPageSources();
 
   // Holder-side takeover (Plan 2b Task 8): when another device requests this
   // session, cleanly interrupt, flush the final turn to the space, release the
@@ -2250,6 +2529,10 @@ export function registerIpcHandlers(
     // This listener is on the CC TranscriptWatcher only — native transcript
     // events are routed separately (Task 4 wires the native listener's feed).
     if (claudeId) noteTranscriptEvent(claudeId, event, 'claude');
+    // Claude Code sessions are named by the SAME policy as native ones: this
+    // tailer emits 'turn-complete' only when stop_reason !== 'tool_use', so a
+    // turn that ran twenty tools counts as the one reply it is.
+    sessionNamer.noteEvent(event);
     // Record which model a CC turn ran on, mirroring what resolvePortableModel
     // does for native sessions. The transcript watcher already parses
     // `message.model` off every assistant message and forwards it on
@@ -2299,6 +2582,8 @@ export function registerIpcHandlers(
   // work (they share one file under NativeHome's lock) but would make the
   // "one store" invariant a coincidence rather than a fact.
   const permissionStore = new PermissionStore(nativeHome);
+  const stepGuardSettings = new StepGuardSettings(nativeHome);
+  const contextSettings = new ContextSettingsStore(nativeHome);
   const secretsStore = new SecretsStore(app.getPath('userData'));
   // Plan B: the local engine. EngineManager owns acquisition + supervision; its
   // hook makes the 'local' provider real and its listModels feeds the model
@@ -2312,10 +2597,22 @@ export function registerIpcHandlers(
   // keeps serving whatever version is on disk, so a model needing a newer llama.cpp
   // just looks like a broken app.
   void engineManager.autoUpdateOnLaunch();
-  const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook());
+  // Sign in with ChatGPT — the kill switch (§6). `chatgptForUi` is what the
+  // registry, the catalog, the four handlers and the remote WS cases see: null
+  // under YOUCODED_CHATGPT=0 so the plan's row and models vanish and every
+  // surface answers signed-out, while `chatgptAuth` itself (main.ts's file
+  // reader) is untouched. Stored tokens are left alone — the flag is a fast
+  // revert, not a sign-out.
+  const chatgptForUi: ChatGptAuth | null = process.env.YOUCODED_CHATGPT !== '0' ? (chatgptAuth ?? null) : null;
+  const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi);
   void providerRegistry.init();
   const modelCatalog = new ModelCatalog(app.getPath('userData'), undefined, {
+    // WHY read defaults at resolution time, never mutate budgets of active sessions.
+    contextPreferences: () => contextSettings.read(),
     localModels: () => engineManager.catalogModels(),
+    // The plan's models come from ChatGptAuth's manifest cache (§4.2); absent
+    // under the kill switch so the catalog contributes nothing for 'chatgpt'.
+    ...(chatgptForUi ? { chatgptModels: () => chatgptForUi.models() } : {}),
   });
   // WebSearch stack (Phase 2 Plan B): keys live in SecretsStore, the ref map in
   // ~/.youcoded/search-providers.json (via NativeHome). SearchChain caches the
@@ -2323,6 +2620,13 @@ export function registerIpcHandlers(
   // ModelCatalog/CuratedCatalog (both take app.getPath('userData')). The
   // SearchService is injected into the native tool framework as `toolServices`
   // so the WebSearch tool can reach it (see NativeSessionHost.toolWiring).
+  // Claude Code's live sign-in probe (2026-09-09). ONE instance for the whole
+  // process, because the cache is the point: the model menu, the Cloud
+  // providers card and the new-session form all ask, and a second instance
+  // would mean a second `claude auth status` spawn for the same answer.
+  // Shared with the remote server below so a paired browser gets the desktop's
+  // real answer rather than its own guess.
+  const claudeAccount = new ClaudeAccount();
   const searchKeyStore = new SearchKeyStore(nativeHome, secretsStore);
   const searchService = new SearchService(
     new SearchChain(app.getPath('userData')),
@@ -2356,6 +2660,13 @@ export function registerIpcHandlers(
   // its in-memory per-source state is what makes re-reading only a CHANGED
   // folder work across turns and across conversations sharing one project.
   const specialistCatalog = new SpecialistCatalog({ home: nativeHome });
+  // Durable accepted-history continuation (cache Stage 4). Profile-PRIVATE
+  // state: it lives under Electron's userData, never under NativeHome (which
+  // syncs) and never beside the transcripts it describes. One sweep at startup
+  // drops sidecars whose transcript is gone — the only lifecycle boundary the
+  // app has, since there is no native transcript-deletion UI today.
+  const acceptedHistory = new AcceptedHistoryStore(app.getPath('userData'));
+  void acceptedHistory.cleanupOrphans().catch(() => { /* best-effort cleanup */ });
   const nativeHost = new NativeSessionHost(
     new SessionStore(nativeHome),
     // Pass the per-turn opts (e.g. serialToolCalls for small local models) straight through.
@@ -2389,27 +2700,60 @@ export function registerIpcHandlers(
       const p = (await providerRegistry.list()).find((x) => x.id === binding.providerId);
       return p ? { type: p.type as ProfileProviderType, ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}) } : null;
     },
-    // Vision-support resolver (Task 6c): only OpenRouter's catalog carries real
-    // per-model modality data (architecture.input_modalities, parsed in
-    // model-catalog.ts's openrouterModels()) — every other provider type has no
-    // such signal, so this returns null for them and lets resolveProfile fall
-    // back to the registry/provider-type default, same as today. Mirrors the
-    // context/slots closure's short-circuit above (same `providers`/`p`
-    // lookup, just gated on a different provider type): every non-openrouter
-    // binding — INCLUDING local-engine — returns before modelCatalog is ever
-    // touched, so this closure adds no fetch/readFileSync/JSON.parse/engine-query
-    // cost to a session start it doesn't apply to. Only a live OpenRouter
-    // binding pays modelCatalog.get()'s cost, same as the context/slots closure
-    // already pays modelCatalog.contextLengthFor()'s for that same binding.
+    // Vision-support resolver (Task 6c; local models added by T18, design §E5).
+    // TWO provider types can answer "does THIS model accept images" from real
+    // per-model data rather than a hand-maintained guess, and both answer it
+    // through the SAME catalog field — so there is ONE lookup here, not two
+    // mechanisms:
+    //   - OpenRouter, from `architecture.input_modalities` on its /models rows
+    //     (parsed in model-catalog.ts's openrouterModels());
+    //   - the LOCAL engine, from the identically-named field on llama-server's
+    //     own `GET /models` (kept by EngineSupervisor.listModels, turned into
+    //     CatalogModel.supportsVision by EngineManager.catalogModels) — which
+    //     is `["text","image"]` exactly when the router paired an mmproj
+    //     projector beside the model.
+    // Every OTHER provider type has no such signal, so this still returns null
+    // for them and lets resolveProfile fall back to the registry/provider-type
+    // default. That short-circuit mirrors the context/slots closure above (same
+    // `providers`/`p` lookup, just gated on provider type) and is what keeps
+    // this closure off a session start it does not apply to: a direct-key or
+    // openai-compatible binding never touches modelCatalog at all.
+    // A local binding DOES now pay a catalog read, and this closure is the
+    // FIRST AND ONLY modelCatalog.get() on a local session start — the
+    // context/slots closure above asks the ENGINE, and the price closure below
+    // short-circuits local before the catalog. What keeps that read cheap is
+    // ModelCatalog.get()'s own network gate — it skips its two upstream fetches
+    // when no provider in the list can consume them — plus the fact that we
+    // hand it ONLY the binding's own provider (see below). Together those make
+    // a purely local, OFFLINE session start cost nothing. Without that gate this cost 4 fetches and
+    // 15.1 s on every create/resume/swap, with no memoization (measured
+    // 2026-09-05) — see the WHY at model-catalog.ts's get(). What is left is
+    // the engine's own listModels: a localhost GET while the engine runs (it
+    // does by now — the context closure above booted it), a disk scan
+    // otherwise.
     // modelCatalog.get() never throws (its own contract — a dead network
-    // degrades to stale cache or an empty list), so there is nothing to catch
-    // here; a cache miss or unknown model just falls through the
-    // `?.supportsVision` chain to null.
+    // degrades to stale cache or an empty list, and an unavailable engine
+    // degrades to no local rows), so there is nothing to catch here; a cache
+    // miss, an unknown model, or a router that reported no modalities all fall
+    // through the `?.supportsVision` chain to null, which means "don't know".
+    // Be aware where that honesty ends: capability-profile's visionFor() turns
+    // an undiscovered answer into a hard `false` at the profile layer, because
+    // there is no third state for the harness to act on. That is the safe
+    // direction — a wrong false means the model is told the picture cannot be
+    // delivered, a wrong true fails the whole turn with a provider error.
     async (binding) => {
       const providers = await providerRegistry.list();
       const p = providers.find((x) => x.id === binding.providerId);
-      if (p?.type !== 'openrouter') return null;
-      const models = await modelCatalog.get(providers);
+      if (p?.type !== 'openrouter' && p?.type !== 'local-engine') return null;
+      // `[p]`, not the whole list: the lookup below only ever inspects rows of
+      // the BINDING'S OWN provider, so every other provider's rows are built
+      // and discarded. Narrowing is what makes the network gate in
+      // ModelCatalog.get() actually reach the offline local user — 'openrouter'
+      // ships ENABLED by default (provider-registry's BUILT_INS), so handing
+      // over the full list would drag its fetch in on every local session start
+      // even for someone who has never touched it. Same rows out, since get()
+      // is scoped to the providers it is handed.
+      const models = await modelCatalog.get([p]);
       const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
       return hit?.supportsVision ?? null;
     },
@@ -2469,6 +2813,13 @@ export function registerIpcHandlers(
     // specialistCatalog (13th param, Task 4 plan 1c): the real catalog built
     // above, sharing nativeHome with every other ~/.youcoded/ writer here.
     specialistCatalog,
+    () => stepGuardSettings.read(),
+    // Continuation (16th param): the private store above, plus the registry's
+    // SINGLE continuation-identity method — the same one the ChatGPT model's
+    // owner closure calls, so what the harness accepts and what a resume looks
+    // up can never disagree. It throws when ChatGPT is signed out; the host
+    // treats that as a fallback to ordinary reconstruction.
+    { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
   );
 
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
@@ -2479,47 +2830,130 @@ export function registerIpcHandlers(
   const resolvePortableModel = async (sessionId: string): Promise<PortableModelRef | null> =>
     bindingToPortableModel(nativeHost.getBinding(sessionId), await providerRegistry.list());
 
-  // Task 7: native auto-title feeder. CC sessions get titled by the topic
-  // watcher below (~/.claude/topics, fed by the Auto-Title hook); native
-  // sessions have no such feed, so this generates one from the bound model
-  // at first turn-complete. See native-title-feeder.ts's header for the full
-  // rationale (JSONL-never, ordering, M6 floor-gating hook).
-  const nativeTitleFeeder = createNativeTitleFeeder({
+  // One registry read for a whole listing (§4.9, review T6 F1). Returns copies:
+  // SessionInfo objects are owned by SessionManager and must not be mutated here.
+  const stampProviderTypes = async (rows: SessionInfo[]): Promise<SessionInfo[]> => {
+    if (!rows.some((s) => s.provider === 'native')) return rows;
+    const providers = await providerRegistry.list();
+    return rows.map((s) => {
+      if (s.provider !== 'native') return s;
+      const ref = bindingToPortableModel(nativeHost.getBinding(s.id), providers);
+      return ref ? { ...s, providerType: ref.providerType } : s;
+    });
+  };
+
+  // Session naming (2026-09-09 contract). ONE policy for both lanes: Off,
+  // Basic (quote the opening request, no model call) and AI (review at
+  // completed replies 1, 3, then every 25). It replaces the old
+  // native-title-feeder, whose rule was "one bound-model call at the first
+  // turn-complete, native only". See session-namer.ts for the schedule, the
+  // ownership guard and the commit-time re-checks.
+  const namingSettings = new NamingSettings(nativeHome);
+
+  /**
+   * Publish the current mode where the bundled Auto-Title hook can read it.
+   * The hook runs inside the Claude Code process and cannot ask the app
+   * anything, so this one-word file is the whole protocol: it is what makes Off
+   * and Basic stop the hook from interrupting a reply to request a title, and
+   * what switches AI onto the app's review schedule instead of the hook's old
+   * 120s/600s timer. Written at startup and after every settings change.
+   *
+   * WHY it lives under userData and travels by ENV rather than sitting at a
+   * fixed path in ~/.claude/topics: that directory is shared by every YouCoded
+   * process on the machine, so a dev instance set to Off would silently switch
+   * off auto-titling in Destin's installed app. run-dev.sh isolates userData,
+   * so one file per instance is one setting per instance. The env var is set on
+   * the MAIN process before any session spawns, and the pty worker passes its
+   * whole environment down, so every Claude Code session inherits it. A session
+   * that somehow has neither falls back to the hook's own timer.
+   */
+  const namingModeFile = path.join(app.getPath('userData'), 'naming-mode');
+  const publishNamingMode = () => {
+    try {
+      fs.mkdirSync(path.dirname(namingModeFile), { recursive: true });
+      fs.writeFileSync(namingModeFile, `${namingSettings.read().mode}\n`);
+      process.env.YOUCODED_NAMING_MODE_FILE = namingModeFile;
+    } catch { /* best-effort: the hook falls back to its own timer */ }
+  };
+
+  // Store identity for a live session, or null when it is not knowable yet.
+  // Native ids are identity-mapped into sessionIdMap; a CC session only
+  // becomes identifiable once a hook event has told us its Claude id.
+  const namingIdentity = (sessionId: string): { provider: string; storeId: string } | null => {
+    const resolved = sessionIdMap.get(sessionId) || sessionId;
+    if (nativeHost.isNativeSessionId(resolved)) return { provider: 'native', storeId: resolved };
+    if (sessionIdMap.has(sessionId)) return { provider: 'claude', storeId: resolved };
+    return null;
+  };
+
+  /**
+   * Publish an AUTOMATIC name: persist, then paint. Every generated title in
+   * the app goes through here — the topic watcher below included — so the
+   * ownership check and the persist-before-broadcast order exist in exactly
+   * one place. Returns false when the user owns the name, so a caller that
+   * caches "the last topic I applied" does not record one it did not apply.
+   */
+  const applyAutomaticTitle = async (
+    desktopId: string, storeId: string, provider: SessionProvider, title: string,
+  ): Promise<boolean> => {
+    // Checked BEFORE the broadcast, not only at the write: noteAutomaticTitle
+    // can refuse a disk write, but nothing can un-paint a session pill.
+    if (await isSessionNameOwned(provider, storeId)) return false;
+    await noteAutomaticTitle(storeId, title, provider);
+    sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, title);
+    broadcastRename(desktopId, title);
+    return true;
+  };
+
+  const sessionNamer = createSessionNamer({
+    settings: () => namingSettings.read(),
+    identify: namingIdentity,
+    readNaming: (provider, storeId) => getNamingRecord(provider as SessionProvider, storeId),
+    mutateNaming: async (provider, storeId, fn) => {
+      const rec = await mutateNamingRecord(provider, storeId, fn);
+      // A null store (no managed roots this launch) must not look like a
+      // successful write — the namer treats a throw as "skip this reply".
+      if (!rec) throw new Error('conversation storage is not available');
+      return rec;
+    },
+    getBinding: (sessionId: string) => nativeHost.getBinding(sessionId),
     // Bounded with a 15s abort — a bare unbounded generateText await would
-    // hang the feeder (same hazard class as the compaction-hang rule).
-    // providerRegistry.languageModel() itself throws for an unconfigured/
-    // disabled/removed provider; that rejection propagates to the feeder's
-    // own try/catch around `generate`, which is exactly the "unresolvable =
-    // skip silently, never an error event" contract — no separate handling
-    // needed here.
+    // hang the namer (same hazard class as the compaction-hang rule).
+    // providerRegistry.languageModel() throws for an unconfigured/disabled/
+    // removed provider; that rejection is the namer's "stay silent, retry"
+    // path, which is why nothing is caught here.
     generate: async (binding: ModelBinding, prompt: string) => {
       const model = await providerRegistry.languageModel(binding);
       const { text } = await generateText({ model, prompt, abortSignal: AbortSignal.timeout(15_000) });
       return text;
     },
-    getBinding: (sessionId: string) => nativeHost.getBinding(sessionId),
-    // Store title wins; falls back to the live session name for the boot
-    // window before the store's first upsert lands (mirrors the browse/store
-    // title-overlay precedence Task 3/5 established — store wins unless
-    // placeholder).
-    //
-    // Fix (2026-08-06): both halves now go through the SHARED placeholder
-    // predicate. The old fallback only excluded 'New Session', so a RESUMED
-    // session — whose live name is 'Resuming…' — answered "already titled" and
-    // this feeder skipped generation on every turn-complete, permanently. A
-    // resumed, never-titled native session could never get a title at all.
+    // The free lane for a Claude Code session with no separately chosen naming
+    // model: its model lives inside the CLI, so the bundled Auto-Title hook
+    // asks it, in-session, at no extra cost. This file is the whole protocol —
+    // the hook writes a topic only when it finds one (hook-scripts/
+    // title-update.sh), which is what turned ~6 unsolicited title requests per
+    // conversation into exactly the scheduled ones.
+    askInSessionModel: (_sessionId: string, storeId: string) => {
+      try {
+        fs.mkdirSync(topicDir, { recursive: true });
+        fs.writeFileSync(path.join(topicDir, `ask-${storeId}`), '');
+      } catch { /* best-effort: a missed ask retries at the next review */ }
+    },
+    currentName: (sessionId: string) => sessionManager.getSession(sessionId)?.name ?? '',
+    // Store title wins; the live session name covers the boot window before
+    // the store's first upsert. BOTH halves go through the shared placeholder
+    // predicate — the 2026-08-06 lesson: a check that only excluded 'New
+    // Session' read a resumed session's 'Resuming…' as a real title.
     hasTitle: async (sessionId: string) => {
-      const rec = await getConversationStore()?.get('native', sessionId);
+      const ident = namingIdentity(sessionId);
+      if (!ident) return true; // unknown identity: assume named rather than overwrite
+      const rec = await getConversationStore()?.get(ident.provider, ident.storeId);
       return hasRealTitle(rec?.title, sessionManager.getSession(sessionId)?.name);
     },
-    // Both halves, or the Resume Browser (store title) and the live pill
-    // (session.name) disagree. Native ids are identity-mapped (see the WHY
-    // comment on noteTranscriptEvent's native call just below), so
-    // sessionId doubles as both the desktop id and the store's record id.
-    onTitle: async (sessionId: string, title: string) => {
-      sendForSession(sessionId, IPC.SESSION_RENAMED, sessionId, title);
-      broadcastRename(sessionId, title);
-      await noteTitleChanged(sessionId, title, 'native');
+    publish: async (sessionId: string, name: string) => {
+      const ident = namingIdentity(sessionId);
+      if (!ident) return;
+      await applyAutomaticTitle(sessionId, ident.storeId, ident.provider as SessionProvider, name);
     },
   });
 
@@ -2537,9 +2971,9 @@ export function registerIpcHandlers(
     // below, which resolves through sessionIdMap — event.sessionId IS already
     // the store's record id; no lookup needed.
     noteTranscriptEvent(event.sessionId, event, 'native');
-    // Task 7: feed the SAME event stream into the title feeder. Pure/injected
-    // logic — see native-title-feeder.ts — never throws synchronously.
-    nativeTitleFeeder.noteEvent(event);
+    // Feed the SAME event stream into the namer. Pure/injected logic — see
+    // session-namer.ts — never throws synchronously.
+    sessionNamer.noteEvent(event);
     if (event.type === 'turn-complete') {
       // The model may have changed mid-session (NATIVE_SET_BINDING) — refresh
       // the portable ref on every turn rather than trusting a stale snapshot
@@ -2567,7 +3001,7 @@ export function registerIpcHandlers(
       // is one-shot and the 3s heartbeat stops re-announcing once an ask is
       // held (permission-broker.ts). bufferHookEvent() feeds the SAME
       // hookBuffers map the legacy path fills, so the existing replay loop in
-      // replayBuffers() picks these up for free, in the same push order
+      // restoreClient() picks these up for free, in the same push order
       // (request, then held).
       remoteServer.bufferHookEvent(event);
       remoteServer.broadcast({ type: 'hook:event', payload: event });
@@ -2585,9 +3019,24 @@ export function registerIpcHandlers(
       // Task 9 (plan 1c): the phone hydrates over this WebSocket, never
       // through TRANSCRIPT_REPLAY, so it needs its own connect-time catch-up
       // for a helper's run status — bufferSpecialistRun feeds the buffer
-      // replayBuffers() reads from on connect (mirrors bufferHookEvent above).
+      // restoreClient() reads from on connect (mirrors bufferHookEvent above).
       remoteServer.bufferSpecialistRun(event);
       remoteServer.broadcast({ type: 'specialists:event', payload: event });
+    }
+  });
+
+  // What this session was given, pushed once when it opens (contract R23: every
+  // chat carries the line). Push-only, like specialists:event and shell-event
+  // below — there is no request handler, because nothing asks: the strip is part
+  // of the session's own opening.
+  //
+  // NOT buffered for a reconnecting phone the way the two below are: a remote
+  // client that connects later hydrates the whole chat state over chat:hydrate,
+  // and this record travels inside it. Buffering it as well would deliver it twice.
+  nativeHost.on('session-context', (event: { sessionId: string; context: unknown }) => {
+    sendForSession(event.sessionId, IPC.NATIVE_SESSION_CONTEXT, event);
+    if (remoteServer) {
+      remoteServer.broadcast({ type: 'native:session-context', payload: event });
     }
   });
 
@@ -2617,7 +3066,9 @@ export function registerIpcHandlers(
   // SAME catalog instance the desktop handler below reads — a second instance
   // would fingerprint-cache independently and could answer a re-read with
   // stale data relative to whichever surface wrote last.
-  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, specialistCatalog });
+  // chatgptAuth (Sign in with ChatGPT §5): the remote chatgpt:* WS cases read
+  // the SAME account object, already kill-switched (null → signed-out/false).
+  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount });
 
   // Plan 2b Task 11: give the remote server the SAME lease client/requester +
   // deviceId so its WS clients reach the identical lease/device state the
@@ -2656,23 +3107,32 @@ export function registerIpcHandlers(
       };
     }
 
-    let source = transcriptWatcher.pageSourceFor(sessionId);
+    let source: ResolvedPageSource | null = transcriptWatcher.pageSourceFor(sessionId);
     if (!source) {
-      // Not watched yet (a just-resumed CC session — the watcher starts when
-      // CC's hook reports the transcript path, which is after the renderer
-      // wants to paint). Resolve from the ids the caller already has. Both are
-      // validated: they shape a filesystem path.
-      const { claudeSessionId, projectSlug } = req;
-      if (typeof claudeSessionId !== 'string' || typeof projectSlug !== 'string'
-        || !SAFE_ID_RE.test(claudeSessionId) || !SAFE_ID_RE.test(projectSlug)) return empty;
-      const fallbackPath = path.join(os.homedir(), '.claude', 'projects', projectSlug, `${claudeSessionId}.jsonl`);
-      if (!fs.existsSync(fallbackPath)) return empty;
-      source = {
-        jsonlPath: fallbackPath,
-        subagentsDir: path.join(path.dirname(fallbackPath), claudeSessionId, 'subagents'),
-        // Nothing is tailing it yet, so read to EOF.
-        startOffset: 0,
-      };
+      // Not watched (a just-resumed CC session before CC's hook reports the
+      // transcript path; a session whose process has exited, which tears the
+      // watcher down; the buddy floater, which never watched one). Resolve from
+      // the ids the caller supplied, or from the ones an EARLIER request for
+      // this session supplied — only the FIRST page request carries them, and
+      // the scroll-up sentinel that follows it must not be told the
+      // conversation has no more history just because it has no ids to send.
+      // rememberLocator validates both before either shapes a path.
+      pageSources.rememberLocator(sessionId, req.claudeSessionId, req.projectSlug);
+      source = pageSources.get(sessionId);
+      // NOT `empty`: "I cannot find the file" and "this is the beginning of the
+      // conversation" were the same answer until 2026-09-07, and the renderer
+      // acted on the second — dropping the cursor and the scroll-up sentinel
+      // for good. Say which one this is so the caller can retry.
+      if (!source) {
+        // Put the one-shot tear-off mark back. It was consumed above (before we
+        // knew whether we could serve anything) and it is what makes the
+        // inheriting window's first page read to EOF — an attempt that served
+        // NO events must not be the one that spends it, or the retry that
+        // finally succeeds renders the conversation frozen at the moment the
+        // session was resumed.
+        if (inherited) windowRegistry?.markInheritedByTransfer(sessionId, evt.sender.id);
+        return { ...empty, unresolved: true };
+      }
     }
     // The FIRST page ends where the live tailer started, so the page and the
     // live stream cannot overlap (transcript-watcher startOffset, Task 4). A
@@ -2858,9 +3318,44 @@ export function registerIpcHandlers(
   // (getPermissionMode falls back to 'ask' for an unknown/non-live id).
   ipcMain.handle(IPC.NATIVE_GET_PERMISSION_MODE, async (_e, sessionId: string) =>
     nativeHost.getPermissionMode(sessionId));
+  // Push every seeded or changed mode to each window showing the session AND
+  // every phone. WHY: the get above can answer before a starting session has
+  // its mode, and a change made in one window or on the phone used to reach
+  // only the caller — so chips elsewhere could show a stricter mode than the
+  // session was really running on. The host emits from ONE place (seedMode /
+  // setPermissionMode), so both the IPC and the remote set paths are covered.
+  nativeHost.on('permission-mode', (e: { sessionId: string; mode: NativePermissionMode }) => {
+    sendForSession(e.sessionId, IPC.NATIVE_PERMISSION_MODE, e);
+    remoteServer?.broadcast({ type: IPC.NATIVE_PERMISSION_MODE, payload: e });
+  });
+  ipcMain.handle(IPC.NATIVE_GET_CONTEXT_PREFERENCES, () => {
+    if (process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
+    return contextSettings.read();
+  });
+  ipcMain.handle(IPC.NATIVE_SET_CONTEXT_PREFERENCES, async (_e, patch: unknown) => {
+    if (process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
+    return contextSettings.update(patch);
+  });
+  ipcMain.handle(IPC.NATIVE_GET_STEP_GUARD, () => stepGuardSettings.read());
+  ipcMain.handle(IPC.NATIVE_SET_STEP_GUARD, async (_e, value: number | null) => stepGuardSettings.update(value));
   ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.list());
   // G-1: the Bash card's Stop button, on every surface.
   ipcMain.handle(IPC.NATIVE_KILL_SHELL, (_e, { sessionId, shellId }: { sessionId: string; shellId: string }) => nativeHost.killShell(sessionId, shellId));
+  // "What the assistant was given" — one file's text, read when the user opens
+  // that row. Synchronous disk read of a file the session already depends on;
+  // the host answers { error } rather than throwing, so a deleted skill shows a
+  // line in the panel instead of an unhandled rejection in the renderer.
+  ipcMain.handle(IPC.NATIVE_SESSION_CONTEXT_TEXT, (_e, { sessionId, kind, id }: { sessionId: string; kind: 'project' | 'user' | 'skill'; id?: string }) => {
+    // The native harness answers for its own sessions, because only it knows the
+    // budget the text would be cut to. Everything else — a Claude Code session,
+    // and the user-level instructions the harness never reads — is a plain file
+    // read: nothing shortened it, so both sides of the comparison are the file.
+    if (kind !== 'user') {
+      const fromHost = nativeHost.sessionContextText(sessionId, kind, id);
+      if (!('error' in fromHost) || fromHost.error !== 'not-live') return fromHost;
+    }
+    return readWholeContextFile(sessionManager, sessionId, kind, id);
+  });
   // Provider management (Settings → Providers).
   ipcMain.handle(IPC.PROVIDER_LIST, async () => providerRegistry.list());
   ipcMain.handle(IPC.PROVIDER_UPSERT, async (_e, config: any) => providerRegistry.upsert(config));
@@ -2868,6 +3363,37 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.PROVIDER_TEST, async (_e, id: string) => providerRegistry.testConnection(id));
   ipcMain.handle(IPC.PROVIDER_SET_KEY, async (_e, id: string, key: string) => { await providerRegistry.setKey(id, key); return true; });
   ipcMain.handle(IPC.PROVIDER_CATALOG, async () => modelCatalog.get(await providerRegistry.list()));
+  // Sign in with ChatGPT (backend design 2026-09-05 §3, §5, §6). status is a
+  // cheap sync read (the card polls it every second while waiting). The verbs
+  // resolve boolean; signIn() is allowed to THROW its two verbatim sentences
+  // (port 1455 held by another program, keychain unavailable) — nothing here
+  // catches them, so Electron rejects the renderer's promise and preload's
+  // unwrapInvokeError strips the transport prefix before the card shows
+  // e.message. Under the kill switch chatgptForUi is null: signed-out / false.
+  ipcMain.handle(IPC.CHATGPT_STATUS, async () => chatgptForUi ? chatgptForUi.status() : { state: 'signed-out' as const });
+  ipcMain.handle(IPC.CHATGPT_SIGN_IN, async () => chatgptForUi ? chatgptForUi.signIn() : false);
+  ipcMain.handle(IPC.CHATGPT_CANCEL_SIGN_IN, async () => chatgptForUi ? chatgptForUi.cancelSignIn() : false);
+  ipcMain.handle(IPC.CHATGPT_SIGN_OUT, async () => chatgptForUi ? chatgptForUi.signOut() : false);
+  // Claude Code's own sign-in, read LIVE (2026-09-09). The model menu and the
+  // Cloud providers card both read this; before it existed they read the setup
+  // wizard's saved notes, which on every launch after the first arrive with no
+  // auth fields at all — so a signed-in install had every Claude model greyed
+  // out with "Sign in to use". Cached 60s inside ClaudeAccount; `refresh`
+  // drops that cache. Never throws: a failed probe answers `unknown`, which
+  // every reader treats as available.
+  ipcMain.handle(IPC.CLAUDE_CODE_STATUS, async (_e, opts?: { refresh?: boolean }) => {
+    if (opts?.refresh) claudeAccount.invalidate();
+    return claudeAccount.status();
+  });
+  // Install Claude Code on demand (first-run local models, F-5): setup no longer
+  // installs it for everyone, so the Claude Code card offers it. The installer's
+  // own { success, error } is the answer; the cached "not-installed" is dropped
+  // so the card's refresh reads the new state.
+  ipcMain.handle(IPC.CLAUDE_CODE_INSTALL, async () => {
+    const result = await installClaude();
+    claudeAccount.invalidate();
+    return result;
+  });
   // WebSearch key management (Settings → Providers → Search). list returns the
   // fixed Tavily/Exa rows with hasKey flags; set/remove manage the encrypted key;
   // test is never-throws ({ ok, message } is the result, not an exception).
@@ -2924,7 +3450,9 @@ export function registerIpcHandlers(
   });
   // --- Per-model residency → per-session model-state coordinator (2026-07-14) ---
   // #1: when the last session using a model releases it, unload it immediately.
-  nativeHost.setModelReleasedHandler((modelId) => { void engineManager.unloadModel(modelId); });
+  // releaseModel, not unloadModel: a model the user asked to KEEP LOADED must
+  // survive the last chat on it closing, or the setting is a lie (design §C2).
+  nativeHost.setModelReleasedHandler((modelId) => { void engineManager.releaseModel(modelId); });
   // Join per-model residency (engine) with session→model (host): push each live
   // native session its bound model's state so ChatView can show the unloaded /
   // loading banner (#4/#5). Only push on change per session.
@@ -2962,8 +3490,110 @@ export function registerIpcHandlers(
     // ensureServable is the safety net if this refresh fails or never ran.
     if (p.state === 'done') void engineManager.refreshModels().catch(() => { /* pick-time retry covers it */ });
   });
+
+  // First-run local models (2026-09-14): the band above the message box for the
+  // download setup finished on. Registered on EVERY launch — it is read after
+  // setup, when main.ts wires no first-run handlers — and it answers null unless
+  // that first download is still unfinished AND nothing else can answer yet
+  // (round 3 review B-5/B-6). The decision itself is computeSetupDownloadStatus.
+  const setupLive = new Map<string, { latest: DownloadProgress; first: { at: number; bytes: number } }>();
+  modelManager.on('download-progress', (p: DownloadProgress) => {
+    const key = `${p.repo}::${p.quant}`;
+    const prev = setupLive.get(key);
+    // The rate is measured from the first event of THIS attempt, so a resume
+    // does not inherit the previous attempt's clock.
+    const first = prev && prev.latest.downloadId === p.downloadId ? prev.first : { at: Date.now(), bytes: p.receivedBytes };
+    setupLive.set(key, { latest: p, first });
+  });
+  ipcMain.handle(IPC.FIRST_RUN_LOCAL_DOWNLOAD, async () => {
+    try {
+      const dir = firstRunStateDir();
+      const record = readSetupDownload(dir);
+      if (!record) return null;
+      const [providers, claude, installed] = await Promise.all([
+        providerRegistry.list().catch(() => []),
+        claudeAccount.status().catch(() => ({ state: 'unknown' as const })),
+        engineManager.installedModels().catch(() => []),
+      ]);
+      const otherUsable = providers.some((p) => p.ready && p.id !== 'local') || claude.state === 'signed-in';
+      const status = computeSetupDownloadStatus({
+        record, otherUsable, installed, now: Date.now(),
+        live: setupLive.get(`${record.repo}::${record.quant}`) ?? null,
+      });
+      // Finished, or no longer the only way to answer: the band never returns for it.
+      if (otherUsable || status?.state === 'done') clearSetupDownload(dir);
+      return status?.state === 'done' ? null : status;
+    } catch {
+      return null; // a band that cannot be read is a band not shown
+    }
+  });
+  ipcMain.handle(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD, async () => {
+    const record = readSetupDownload(firstRunStateDir());
+    if (!record) return;
+    const row = (await engineManager.installedModels())
+      .find((m) => m.repo === record.repo && m.quant === record.quant && m.status === 'unfinished');
+    if (row) await modelManager.resume(row.id);
+  });
   ipcMain.handle(IPC.ENGINE_SET_BACKEND, async (_e, backend: string) => { await engineManager.setBackend(backend as any); return engineManager.status(); });
   ipcMain.handle(IPC.ENGINE_SET_CONTEXT, async (_e, contextSize: number) => { await engineManager.setContext(contextSize); return engineManager.status(); });
+  // Engine-wide settings (2026-09-05 §B). The answer is the status the moment
+  // the value was SAVED — `configApplyPending` on it says whether the engine has
+  // picked it up yet, and a 'status-changed' push follows when it has.
+  ipcMain.handle(IPC.ENGINE_SET_CONFIG, async (_e, patch: { contextSize?: number; speed?: any }) => {
+    await engineManager.setConfig(patch ?? {});
+    return engineManager.status();
+  });
+  // "Run in terminal" (§F): open a plain-shell session and TYPE the set-up
+  // command onto its prompt. Nothing runs — the user presses Enter, and the
+  // password an installer asks for is typed into their own terminal, not into
+  // a dialog of ours.
+  ipcMain.handle(IPC.ENGINE_RUN_IN_TERMINAL, async (event, command: string) => {
+    // Refuses an empty command, a command carrying a control character (a `\r`
+    // inside the string runs it with nobody pressing Enter), and a $SHELL that
+    // is not installed. Throws with the real reason, which reaches EngineCard's
+    // FieldError beside the button — see session-manager.ts.
+    const checked = prepareRunInTerminal(command);
+    // WHY the folder comes from the calling window's own sessions: the button
+    // lives in Settings, which has no folder of its own, and the project the
+    // user is working in is whatever their live sessions are open on. The
+    // newest one wins; with no session at all (a fresh install setting up its
+    // first engine) createSession falls back to the home folder.
+    let cwd = '';
+    for (const sid of windowRegistry?.sessionsForWindow(event.sender.id) ?? []) {
+      const s = sessionManager.getSession(sid);
+      if (s && s.status !== 'destroyed') cwd = s.cwd;
+    }
+    const info = sessionManager.createSession({
+      name: shellDisplayName(checked.shell),
+      cwd,
+      skipPermissions: false,
+      provider: 'shell',
+      initialCommand: checked.command,
+      // Proof the command went through the validator — createSession refuses a
+      // shell session without it.
+      shellToken: checked.shellToken,
+    });
+    // Same ownership handshake SESSION_CREATE does, and for the same reason:
+    // session-created is forwarded one nextTick later, so without an owner
+    // registered here the new session would appear in the FIRST window instead
+    // of the one whose Settings the user is standing in. A buddy window can't
+    // own a session, so its leader takes it.
+    if (windowRegistry) {
+      let targetId = event.sender.id;
+      if (windowRegistry.getKind(event.sender.id) === 'buddy') {
+        const leader = windowRegistry.getLeaderId();
+        if (leader != null) targetId = leader;
+      }
+      try { windowRegistry.assignSession(info.id, targetId); }
+      catch (e) { log('WARN', 'IPC', 'assignSession failed for the shell session', { error: String(e) }); }
+    }
+    return { sessionId: info.id };
+  });
+  // Faster-engine prerequisites (2026-09-05 §A5). `refresh: true` on purpose:
+  // this channel is only ever called by the card, including its "Check again"
+  // button AFTER the user has run the install command — a cached answer there
+  // would report the software still missing and strand them in the set-up box.
+  ipcMain.handle(IPC.ENGINE_PREREQS, async (_e, backend: string) => enginePrereqs(backend, { refresh: true }));
   ipcMain.handle(IPC.MODELS_CURATED, async () => modelManager.curatedList());
   ipcMain.handle(IPC.MODELS_SEARCH, async (_e, query: string) => modelManager.search(query));
   ipcMain.handle(IPC.MODELS_QUANTS, async (_e, repo: string) => modelManager.quants(repo));
@@ -2975,6 +3605,22 @@ export function registerIpcHandlers(
   // beside the .partial — no Hugging Face round trip, so it works when the
   // network is the reason the download stopped.
   ipcMain.handle(IPC.MODELS_RESUME, async (_e, modelId: string) => modelManager.resume(modelId));
+  // --- Per-model settings + vision (2026-09-05 local-engine upgrades §C/§E4) ---
+  // Read: the STORED settings, so the dialog can also show "Applies after the
+  // current reply" and the model's last load error, neither of which the user
+  // sets. A model nobody has touched reads as every default.
+  ipcMain.handle(IPC.MODELS_SETTINGS, async (_e, modelId: string) => engineManager.modelSettings(modelId));
+  // Write: the value saves at once and the ENGINE is left alone — rewriting the
+  // preset file here would make the router unload the model mid-reply, which is
+  // the one thing this feature promises will not happen. Every rejection
+  // (context too small, an engine option the binary does not know, a bad
+  // toggle) throws with the reason the user needs, and the dialog shows it.
+  ipcMain.handle(IPC.MODELS_SET_SETTINGS, async (_e, modelId: string, patch: ModelSettingsWrite) =>
+    engineManager.setModelSettings(modelId, patch ?? {}));
+  // Add vision to a model already on disk. Returns the download id straight
+  // away; the bytes report on the ordinary models:download-progress stream, so
+  // the row's existing progress bar covers it with no second channel.
+  ipcMain.handle(IPC.MODELS_ADD_VISION, async (_e, modelId: string) => modelManager.addVision(modelId));
   ipcMain.handle(IPC.ENDPOINTS_DETECT, async () =>
     detectEndpoints(fetch, ((await providerRegistry.list()) as any[])));
   // /clear and /compact both truncate or rewrite the JSONL. App.tsx listens
@@ -3016,6 +3662,31 @@ export function registerIpcHandlers(
 
   const pendingWatchers = new Set<string>();
 
+  /**
+   * Apply a topic the Auto-Title hook wrote. The hook asks the conversation's
+   * OWN model, in-session, so this is the free naming lane for Claude Code —
+   * but it is still automatic naming, so it goes through the same ownership
+   * gate and the same persist-then-paint order as everything else.
+   */
+  async function applyTopic(desktopId: string, claudeId: string, topic: string): Promise<void> {
+    try {
+      const applied = await applyAutomaticTitle(desktopId, claudeId, 'claude', topic);
+      // Recorded even when REFUSED (the user owns the name). This map's job is
+      // "have I already dealt with this exact topic string" — not "did I paint
+      // it". The polling fallback re-reads every 2s, so a refused topic left
+      // unrecorded meant an ownership read plus a conflict-directory scan every
+      // two seconds, per manually-named session, for the life of the session.
+      lastTopics.set(desktopId, topic);
+      if (!applied) return;
+      // A topic that landed is also a completed review: advance the cursor so
+      // the next ask is the next SCHEDULED one. (applyAutomaticTitle already
+      // recorded the name itself.)
+      await mutateNamingRecord('claude', claudeId, (cur) => ({
+        ...cur, reviewed: Math.max(cur.reviewed, cur.replies),
+      }));
+    } catch { /* best-effort: the next topic write retries */ }
+  }
+
   function startWatching(desktopId: string, claudeId: string) {
     if (topicWatchers.has(desktopId) || pendingWatchers.has(desktopId)) return;
     pendingWatchers.add(desktopId);
@@ -3023,15 +3694,10 @@ export function registerIpcHandlers(
     // Read initial value
     const initial = readTopicFile(claudeId);
     if (initial && initial !== 'New Session') {
-      lastTopics.set(desktopId, initial);
-      sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, initial);
-      broadcastRename(desktopId, initial);
-      // Conversation Store (Phase 2a): mirror the auto-title into the record.
-      // Keyed by claudeId (the store's record id). This is the only sanctioned
-      // title writer (carry-forward 5) — no user-rename path exists yet.
-      // Result ignored (best-effort, no UI to revert here) — void per Item 6's
-      // Promise<MetaWriteResult> shape.
-      void noteTitleChanged(claudeId, initial, 'claude');
+      // lastTopics is set only if the title was actually APPLIED. A topic
+      // refused because the user owns the name must stay un-recorded, or a
+      // later Use-automatic-name would find it "unchanged" and never repaint.
+      void applyTopic(desktopId, claudeId, initial);
     }
 
     const topicFilePath = path.join(topicDir, `topic-${claudeId}`);
@@ -3042,10 +3708,7 @@ export function registerIpcHandlers(
       const watcher = fs.watch(topicFilePath, { persistent: false }, () => {
         const topic = readTopicFile(claudeId);
         if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
-          lastTopics.set(desktopId, topic);
-          sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, topic);
-          broadcastRename(desktopId, topic);
-          void noteTitleChanged(claudeId, topic, 'claude'); // Conversation Store (Phase 2a) title write-through; result ignored
+          void applyTopic(desktopId, claudeId, topic);
         }
       });
       watcher.on('error', () => {
@@ -3067,10 +3730,7 @@ export function registerIpcHandlers(
     const interval = setInterval(() => {
       const topic = readTopicFile(claudeId);
       if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
-        lastTopics.set(desktopId, topic);
-        sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, topic);
-        broadcastRename(desktopId, topic);
-        void noteTitleChanged(claudeId, topic, 'claude'); // Conversation Store (Phase 2a) title write-through; result ignored
+        void applyTopic(desktopId, claudeId, topic);
       }
     }, 2000);
     topicWatchers.set(desktopId, interval);
@@ -3181,6 +3841,15 @@ export function registerIpcHandlers(
         const ccCwd = payloadCwd || sessionInfo.cwd;
         const ccTranscriptPath = typeof event.payload?.transcript_path === 'string' ? event.payload.transcript_path : undefined;
         transcriptWatcher.startWatching(desktopId, claudeId, ccCwd, ccTranscriptPath);
+        // Take the AUTHORITATIVE path for paged history from the watcher we
+        // just started, so scroll-back keeps working after this session's
+        // process exits (session-exit stops the watcher; the conversation stays
+        // on screen). Read back rather than re-derived: the watcher prefers
+        // CC's own post-realpath transcript_path, which a path derived from our
+        // cwd can miss through a symlink. Overwrites any earlier guess, and
+        // follows a /clear rotation because this runs again on the remap.
+        const watched = transcriptWatcher.pageSourceFor(desktopId);
+        if (watched) pageSources.remember(desktopId, watched);
         // Conversation Store (Phase 2a): tell the store this claude session's cwd
         // so its activity upserts carry projectName/originalPath (local truth).
         noteSessionStarted(claudeId, ccCwd, 'claude');
@@ -3233,7 +3902,7 @@ export function registerIpcHandlers(
     // path also covers crashes/takeovers that never went through
     // SESSION_DESTROY, so the feeder's per-session state needs the same
     // cleanup here too.
-    nativeTitleFeeder.forget(sessionId);
+    sessionNamer.forget(sessionId);
     // Clean up context + session stats cache files
     const claudeId = sessionIdMap.get(sessionId);
     if (claudeId) {
@@ -3371,11 +4040,8 @@ export function registerIpcHandlers(
   });
 
   // --- Tag registry CRUD ---
-  ipcMain.handle(IPC.TAGS_LIST, async () => {
-    const reg = getTagRegistry();
-    if (!reg) return [];
-    try { return await reg.list(); } catch { return []; }
-  });
+  // A failed read answers { ok: false, error }, never [] — see listTagsForHost for why.
+  ipcMain.handle(IPC.TAGS_LIST, () => listTagsForHost());
 
   ipcMain.handle(IPC.TAGS_CREATE, async (_e, label: string, color: string) => {
     const reg = getTagRegistry();
@@ -3454,6 +4120,109 @@ export function registerIpcHandlers(
   });
 
   // --- Set/clear a session note ---
+  /* ── Session naming ────────────────────────────────────────────────────
+   * Four handlers: the Assistant-settings preference, and per-conversation
+   * name ownership. `sessionId` here may be a LIVE desktop id (the session
+   * strip) or a SAVED conversation id (the Resume Browser) — sessionIdMap
+   * resolves the first and passes the second through unchanged, the same
+   * resolution session:set-note uses.
+   */
+
+  const namingGet = async () => {
+    const prefs = namingSettings.read();
+    // The picker speaks ModelChoice; the preference stores a ModelBinding.
+    // Converted here rather than storing the renderer's shape, so a future
+    // picker change cannot reinterpret what is already on disk.
+    return {
+      mode: prefs.mode,
+      model: prefs.model
+        ? { runtime: 'native' as const, providerId: prefs.model.providerId, modelId: prefs.model.modelId }
+        : null,
+    };
+  };
+
+  const namingSet = async (value: unknown) => {
+    const v = (value && typeof value === 'object' ? value : {}) as { mode?: unknown; model?: unknown };
+    const choice = v.model as { runtime?: string; providerId?: string; modelId?: string } | null | undefined;
+    try {
+      let model: ModelBinding | null = null;
+      if (choice && choice.providerId && choice.modelId) {
+        // Naming runs through the provider registry, so a Claude-runtime
+        // choice has nowhere to execute. The picker is opened with
+        // includeClaude={false}; this refuses the case anyway rather than
+        // storing a choice that would silently never be used.
+        if (choice.runtime !== 'native') {
+          return { ok: false, error: 'Pick a model from a provider you have set up.' };
+        }
+        // Same confirm-against-the-catalog rule as the specialist defaults: a
+        // model we cannot see is refused, never quietly swapped for another.
+        const catalog = await modelCatalog.get(await providerRegistry.list()).catch(() => null);
+        if (catalog && !catalog.some((m) => m.id === choice.modelId && m.providerId === choice.providerId)) {
+          return { ok: false, error: `"${choice.modelId}" isn’t in the model list right now — pick it from the list.` };
+        }
+        model = { providerId: choice.providerId, modelId: choice.modelId };
+      }
+      await namingSettings.update({ mode: v.mode, model });
+      publishNamingMode();
+      // A mode or model change invalidates every generation in flight: a name
+      // produced under the old setting must not land after it changed.
+      sessionNamer.invalidateAll();
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || 'Your naming settings were not saved.' };
+    }
+  };
+
+  const namingTitle = async (sessionId: string, fallback: string) => {
+    const resolved = sessionIdMap.get(sessionId) || sessionId;
+    const provider = await sessionProviderFor(resolved);
+    const { name, manual } = await resolveSessionName(provider, resolved, String(fallback ?? ''));
+    return { title: name, manual };
+  };
+
+  const namingRename = async (sessionId: string, title: string) => {
+    // TWO id spaces meet here. The session strip renames a LIVE session by its
+    // desktop id; the Resume Browser renames a SAVED conversation by its store
+    // id. sessionIdMap resolves the first to the store's id and passes the
+    // second through — but the live-session broadcast must go back out under
+    // the DESKTOP id, because that is what App.tsx matches its rows on. For a
+    // Claude Code session the two genuinely differ (desktop id -> Claude UUID),
+    // and broadcasting the resolved one silently repainted nothing.
+    const resolved = sessionIdMap.get(sessionId) || sessionId;
+    const desktopId = sessionIdMap.has(sessionId) ? sessionId : resolved;
+    const provider = await sessionProviderFor(resolved);
+    try {
+      const res = await setManualSessionName(provider, resolved, String(title ?? ''));
+      if (!res.ok) return res;
+      // Stop work already in flight for this session BEFORE painting: a
+      // generation that returns after this must be discarded, not raced.
+      sessionNamer.invalidate(sessionId);
+      sessionNamer.invalidate(resolved);
+      sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, res.name);
+      broadcastRename(desktopId, res.name);
+      emitConversationMetaChanged();
+      return { ok: true, name: res.name };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || 'The name was not saved.' };
+    }
+  };
+
+  ipcMain.handle(IPC.SESSION_NAMING_GET, () => namingGet());
+  ipcMain.handle(IPC.SESSION_NAMING_SET, (_e, value: unknown) => namingSet(value));
+  ipcMain.handle(IPC.SESSION_NAMING_TITLE, (_e, sessionId: string, fallback: string) => namingTitle(sessionId, fallback));
+  ipcMain.handle(IPC.SESSION_NAMING_RENAME, (_e, sessionId: string, title: string) => namingRename(sessionId, title));
+
+  // Same four, for a phone or browser driving THIS desktop. One implementation,
+  // so a remote rename cannot bypass a gate the local path enforces — the
+  // reason session:set-tag / set-note got the same treatment (design §12).
+  publishNamingMode();
+  remoteServer?.setSessionNamingWiring({
+    get: namingGet,
+    set: namingSet,
+    title: namingTitle,
+    rename: namingRename,
+  });
+
   ipcMain.handle(IPC.SESSION_SET_NOTE, async (_e, sessionId: string, note: string) => {
     const resolved = sessionIdMap.get(sessionId) || sessionId;
     const text = String(note ?? '');
@@ -3483,7 +4252,12 @@ export function registerIpcHandlers(
     // Task 5: read from whichever provider bucket this session actually writes
     // to — native records are real now, so there's no more up-front refusal.
     // `supported` stays in the result shape (Android still answers false).
-    if (!store) return { tags: [], note: '', supported: true };
+    // WHY `unreadable` (error inventory 2026-09-10, false message 12): a missing store
+    // and a failed read both used to answer blank tags and note — indistinguishable
+    // from a conversation that has none. The close prompt showed "No note" for a
+    // conversation that had one and used that blank as the baseline for a note
+    // write. A record that is simply absent (`!rec`) is still a real "none".
+    if (!store) return { tags: [], note: '', supported: true, unreadable: "conversation storage isn't available" };
     try {
       const rec = await store.get(await sessionProviderFor(resolved), resolved);
       if (!rec) return { tags: [], note: '', supported: true };
@@ -3498,7 +4272,7 @@ export function registerIpcHandlers(
         else if (v.value && (SESSION_FLAG_NAMES as string[]).includes(k)) reserved[k] = true;
       }
       return { tags, note: rec.note || '', supported: true, flags: reserved };
-    } catch { return { tags: [], note: '', supported: true }; }
+    } catch (e) { return { tags: [], note: '', supported: true, unreadable: e instanceof Error && e.message ? e.message : "the conversation's record could not be read" }; }
   });
 
   // --- Sync management ---
@@ -3727,6 +4501,31 @@ export function registerIpcHandlers(
     }
   });
 
+  // Managed development workspace (contract R9/R10). Setup lives in the main
+  // process on purpose: the screen tells the user "you can close this — setup
+  // keeps going", which is only true if closing the dialog cannot cancel it.
+  ipcMain.handle(IPC.DEV_SETUP_WORKSPACE, async () =>
+    setupManagedWorkspace((absPath) => {
+      // Register it the same way the legacy install does — as a saved project
+      // folder, NOT a sync space. A space under ~/YouCoded/Projects would push
+      // this ~1GB tree to the user's backup with `git add -A`, unannounced.
+      try {
+        const normalized = path.resolve(absPath);
+        const folders = readFolders();
+        if (!folders.some((f) => path.resolve(f.path) === normalized)) {
+          folders.unshift({ path: normalized, nickname: path.basename(normalized), addedAt: Date.now() } as SavedFolder);
+          writeFolders(folders);
+        }
+      } catch (e) {
+        log('WARN', 'dev', 'folders.add post-setup failed', { error: String(e) });
+      }
+    }),
+  );
+
+  ipcMain.handle(IPC.DEV_SETUP_STATUS, async () => workspaceSetupStatus());
+
+  ipcMain.handle(IPC.DEV_SETUP_CLEAR, async () => { clearWorkspaceSetupStatus(); });
+
   ipcMain.handle(IPC.DEV_OPEN_SESSION_IN, async (_event, args: { cwd: string; initialInput?: string }) => {
     // Delegate to the exported helper so the logic is independently testable.
     return openDevSessionIn(args, { defaultsPrefPath, sessionManager, homedir: os.homedir });
@@ -3836,48 +4635,26 @@ export function registerIpcHandlers(
     return result;
   });
 
-  ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, async (_e, sessionId: string, projectRoot: string) => {
-    // Repair legacy relative-external records before listing. The Session
-    // Drawer is the only surface where an unpinned external is visible, so this
-    // is where the false "no longer on disk" actually renders. Memoized per
-    // project per process — this handler also fires after every tracked write.
-    const migration = await runSidecarMigration(projectRoot);
-    // Fix: every other sidecar writer here calls invalidateSidecarIdCache after
-    // committing (see APPEND_VERSION/RENAME/REMOVE_RECORD above) so the
-    // watcher's path-to-id map doesn't go stale. runSidecarMigration writes too
-    // (it rewrites reclassified records' path/kind) but had no caller doing
-    // this. Wiring it from artifact-store.ts would import project-watcher.ts,
-    // which already imports artifact-store.ts's readSidecar — a cycle — so it's
-    // done here at each of the three call sites instead, and only when a write
-    // actually happened.
-    if (migration.migrated) invalidateSidecarIdCache(projectRoot);
-    const sidecar = await readSidecarShared(projectRoot);
-    if (!sidecar || 'corrupted' in sidecar) return { ok: true, artifacts: [] };
-    // Filter to artifacts touched by this session
-    const result = sidecar.artifacts.filter((a) =>
-      a.versions.some((v) => v.sessionId === sessionId)
-    );
-    return { ok: true, artifacts: result };
-  });
+  // The artifact READ bodies live in artifacts/read-service.ts (remote access
+  // batch 3): remote-server.ts calls the same functions for a phone, so the two
+  // transports cannot drift on roots, denylist or shape. The legacy-record
+  // repair each listing runs is inside the service.
+  ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, sessionId: string, projectRoot: string) =>
+    listSessionFiles(sessionId, projectRoot));
 
   // Project View IPC — list project-scoped conversations, their history, git
   // repo info, and the discovered context files (CLAUDE.md, rules, etc.).
-  // Main-process modules already exist; these handlers just wire them to IPC.
-  ipcMain.handle(PROJECT_IPC.LIST_CONVERSATIONS, async (_e, projectPath: string) => {
-    return { ok: true, conversations: await listProjectConversations(projectPath) };
-  });
+  // The four reads go through project-read-service.ts (shared with the remote
+  // host); history and the context WRITE stay desktop-only.
+  ipcMain.handle(PROJECT_IPC.LIST_CONVERSATIONS, (_e, projectPath: string) =>
+    listConversations(projectPath));
   ipcMain.handle(PROJECT_IPC.CONVERSATION_HISTORY, async (_e, projectPath: string, sessionId: string, count: number, all: boolean) => {
     return { ok: true, messages: await projectConversationHistory(projectPath, sessionId, count ?? 20, !!all) };
   });
-  ipcMain.handle(PROJECT_IPC.REPO_INFO, async (_e, projectPath: string) => {
-    return { ok: true, ...(await getRepoInfo(projectPath)) };
-  });
-  ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, async (_e, projectPath: string) => {
-    return { ok: true, groups: await listContext(projectPath) };
-  });
-  ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, async (_e, projectPath: string, absolutePath: string) => {
-    return readContextFile(projectPath, absolutePath);
-  });
+  ipcMain.handle(PROJECT_IPC.REPO_INFO, (_e, projectPath: string) => repoInfo(projectPath));
+  ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, (_e, projectPath: string) => listContextFiles(projectPath));
+  ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, (_e, projectPath: string, absolutePath: string) =>
+    readContext(projectPath, absolutePath));
   ipcMain.handle(PROJECT_IPC.WRITE_CONTEXT_FILE, async (_e, projectPath: string, absolutePath: string, content: string) => {
     return writeContextFile(projectPath, absolutePath, content);
   });
@@ -3917,222 +4694,34 @@ export function registerIpcHandlers(
   //
   // visibleCount (withCount) is a separate, independently-computed count from
   // countArtifacts — non-deleted and on-disk — shared with the hero + switcher.
-  ipcMain.handle(ARTIFACT_IPC.LIST_PROJECT, async (_e, projectId: string, opts?: { withCount?: boolean }) => {
-    const projects = await listProjects(CLAUDE_DIR);
-    const p = projects.find((x) => x.id === projectId);
-    // Synth (saved-folder) projects use their canonical PATH as id and have no
-    // index entry — fall back to reading the sidecar at that path so their
-    // artifacts resolve too. A bogus id simply yields no sidecar.
-    const projectRoot = p ? p.path : projectId;
-    // Same legacy-repair call as LIST_SESSION above (filepath pills + the
-    // hero/switcher count also read through this handler) — memoized per
-    // project per process, so this costs one Set lookup after the first call.
-    const migration = await runSidecarMigration(projectRoot);
-    if (migration.migrated) invalidateSidecarIdCache(projectRoot); // see LIST_SESSION's WHY
-    const sidecar = await readSidecarShared(projectRoot);
+  ipcMain.handle(ARTIFACT_IPC.LIST_PROJECT, (_e, projectId: string, opts?: { withCount?: boolean }) =>
+    listProjectFiles(projectId, opts));
 
-    let tracked: any[] = [];
-    if (sidecar && !('corrupted' in sidecar)) {
-      // Shared predicate — see visible-artifacts.ts for the full rules.
-      tracked = trackedArtifacts(sidecar.artifacts as any[], sidecar.manualIncludes, sidecar.manualExcludes, projectRoot);
-    }
+  // LIST_ALL_FILES → the Project Files section: the folder as it exists on
+  // disk, unioned with tracked internals discovery missed (read-service.ts).
+  ipcMain.handle(ARTIFACT_IPC.LIST_ALL_FILES, (_e, projectId: string, opts?: { force?: boolean }) =>
+    listAllFiles(projectId, opts));
 
-    const visibleCount = opts?.withCount ? await countArtifacts(projectRoot) : undefined;
-    return {
-      ok: true,
-      artifacts: tracked,
-      ...(visibleCount !== undefined ? { visibleCount } : {}),
-    };
-  });
+  // RESOLVE_PATH → ONE file path tapped in chat, answered with the record the
+  // drawer opens. Replaces listing the whole project to find one file (a phone
+  // measured 3,090 records / ~1 MB for a single tap). The desktop's own
+  // renderer only names the folder of the chat it is showing, so no root gate
+  // here; the remote host adds one (remote-server.ts fileReads).
+  ipcMain.handle(ARTIFACT_IPC.RESOLVE_PATH, (_e, projectRoot: string, filePath: string) =>
+    resolveArtifactPath(projectRoot, filePath));
 
-  // LIST_ALL_FILES → the Project Files section. The project folder as it exists on
-  // disk: bounded, deterministic discovery (stops at nested git repos), cached.
-  //
-  // NOT pure discovery, despite what this comment said until 2026-07-23 — the
-  // callee projectAllFiles() UNIONS in any tracked INTERNAL artifact that exists on
-  // disk but discovery did not reach (e.g. one inside a skipped nested sub-repo).
-  // That union is load-bearing: it guarantees this list is a superset of the
-  // in-folder tracked files, so a code-heavy project cannot report fewer files than
-  // artifacts. Externals are NEVER unioned, which is exactly why they need their
-  // own section in the UI.
-  // Gated roots (home dir / drive root) return { gated: true } with no scan
-  // unless opts.force — the tab renders a "Browse anyway?" gate (see
-  // isGatedRoot above for WHY).
-  ipcMain.handle(ARTIFACT_IPC.LIST_ALL_FILES, async (_e, projectId: string, opts?: { force?: boolean }) => {
-    const projects = await listProjects(CLAUDE_DIR);
-    const p = projects.find((x) => x.id === projectId);
-    const projectRoot = p ? p.path : projectId;
-    if (isGatedRoot(projectRoot) && !opts?.force) {
-      return { ok: true, files: [], truncated: false, gated: true };
-    }
-    // Fix: this repair call used to run BEFORE the gated-root check above,
-    // so a gated root (home dir / drive root) could have its sidecar read
-    // and rewritten on a listing the user never confirmed via "Browse
-    // anyway?". Moved below the early return so the repair only touches a
-    // gated root once the user has actually agreed to browse it. Same
-    // legacy-repair call as LIST_SESSION above. Memoized per project per
-    // process.
-    const migration = await runSidecarMigration(projectRoot);
-    if (migration.migrated) invalidateSidecarIdCache(projectRoot); // see LIST_SESSION's WHY
-    const r = await projectAllFiles(projectRoot);
-    return { ok: true, files: r.files, truncated: r.truncated };
-  });
+  // full: the user clicked "Load the whole file" on the partial-view bar. Still
+  // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an
+  // unbounded one. No `maxBytes` here: the desktop's own limits are untouched.
+  ipcMain.handle(ARTIFACT_IPC.GET, (_e, projectRoot: string, artifactId: string, opts?: { full?: boolean }) =>
+    readArtifactText(projectRoot, artifactId, opts));
 
-  ipcMain.handle(ARTIFACT_IPC.GET, async (
-    _e, projectRoot: string, artifactId: string,
-    // full: the user clicked "Load the whole file" on the partial-view bar. Still
-    // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an
-    // unbounded one.
-    opts?: { full?: boolean },
-  ) => {
-    const sidecar = await readSidecarShared(projectRoot);
-    const artifact = (sidecar && !('corrupted' in sidecar))
-      ? sidecar.artifacts.find((a) => a.id === artifactId)
-      : undefined;
-
-    let fullPath: string;
-    if (artifact) {
-      fullPath = artifact.kind === 'internal'
-        ? path.join(projectRoot, artifact.path)
-        : artifact.absolutePath!;
-    } else {
-      // Discovered (on-disk) file: the id IS a canonical relative path. Resolve
-      // it inside the project root and refuse anything that escapes (traversal
-      // guard) so this can't be used to read arbitrary files.
-      const resolved = path.resolve(projectRoot, artifactId);
-      const root = path.resolve(projectRoot);
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-        return { ok: false, error: 'artifact-not-found' };
-      }
-      fullPath = resolved;
-    }
-
-    // Symlink-resolve + in-root + sensitive-read policy, all on the RESOLVED
-    // path (write-authorization.ts owns the logic + its tests). Tracked
-    // internals were never traversal-checked before (spec §12.1) — now they are.
-    const readAuth = await authorizeArtifactRead(projectRoot, fullPath, !artifact || artifact.kind === 'internal');
-    if (!readAuth.ok) {
-      if ('orphan' in readAuth) return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
-      return { ok: false, error: readAuth.error };
-    }
-    const realPath = readAuth.realPath;
-
-    // Size gate BEFORE reading (spec §2.3): a multi-MB readFile blocks the main
-    // thread, ships whole over IPC/WS, then blocks the renderer rendering it.
-    let st: fs.Stats;
-    try {
-      st = await fs.promises.stat(realPath);
-    } catch (e: any) {
-      if (e.code !== 'ENOENT') throw e;
-      return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
-    }
-    // Over the cap we no longer refuse blind. Sniff the head first: an over-cap
-    // IMAGE used to get the TEXT editor's error message, which is the bug this
-    // whole workstream exists to fix. Text comes back as a readable prefix.
-    const wantsFull = opts?.full === true && st.size <= FULL_READ_MAX_BYTES;
-    if (st.size > EDIT_MAX_BYTES && !wantsFull) {
-      const fh = await fs.promises.open(realPath, 'r');
-      try {
-        // fs.read is only contractually required to return SOME bytes, not to
-        // fill the buffer — so loop until the window is full or the file ends.
-        const readFully = async (len: number) => {
-          const buf = Buffer.allocUnsafe(len);
-          let off = 0;
-          while (off < len) {
-            const { bytesRead } = await fh.read(buf, off, len - off, off);
-            if (bytesRead === 0) break;
-            off += bytesRead;
-          }
-          return buf.subarray(0, off);
-        };
-        // Head first, so a file that turns out to be binary is decided on 8 KB.
-        const head = await readFully(8192);
-        const win = await readFully(EDIT_MAX_BYTES);
-        const d = decideOverCapRead(head, win);
-        return {
-          ok: true, artifact: artifact ?? null, orphan: false,
-          content: d.content, binary: d.binary, truncated: d.truncated,
-          sizeBytes: st.size, mtimeMs: st.mtimeMs,
-        };
-      } finally {
-        await fh.close();
-      }
-    }
-
-    let content: string | null = null;
-    let binary = false;
-    try {
-      const buf = await fs.promises.readFile(realPath);
-      // Head-slice NUL sniff: binary bytes decoded as utf8 turn into U+FFFD
-      // soup — return binary:true + null content so the renderer routes to the
-      // binary fallback instead of a garbage text view (D4 routing).
-      binary = looksBinary(buf.subarray(0, 8192));
-      if (!binary) content = buf.toString('utf8');
-    } catch (e: any) {
-      if (e.code !== 'ENOENT') throw e;
-      return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
-    }
-    // mtimeMs is the optimistic-concurrency token: round-trip it into
-    // artifacts:save as baseMtimeMs and the save is rejected when the file
-    // changed underneath (spec §12.9 — last-write-wins fix).
-    // sizeBytes and truncated ride EVERY response: the renderer derives
-    // editability from the size, and a `full` read must clear the partial bar.
-    return { ok: true, artifact: artifact ?? null, content, orphan: false, binary,
-             truncated: false, sizeBytes: st.size, mtimeMs: st.mtimeMs };
-  });
-
-  // Read a file as base64 for the binary viewers (xlsx/docx/pdf/image). The
-  // renderer can't fetch a file:// URL from the http(dev)/app(prod) origin, so
-  // bytes come through IPC.
-  //
-  // SECURITY: unlike openPath (which only launches a local app and returns
-  // nothing), this IPC RETURNS file contents — and on remote-access setups it is
-  // reachable over the WebSocket from a remote browser. So reads are restricted
-  // to (a) the user's known project roots (saved folders + central-index
-  // projects) and (b) tracked external artifact paths (temp-dir files the
-  // session drawer legitimately shows), with well-known secret locations
-  // (.ssh, .netrc, .credentials.json, …) refused even inside those roots.
-  // Pure decision logic + tests live in artifacts/read-binary-access.ts.
-  ipcMain.handle(ARTIFACT_IPC.READ_BINARY, async (_e, absolutePath: string) => {
-    if (typeof absolutePath !== 'string' || absolutePath.length === 0) {
-      return { ok: false, error: 'no path' };
-    }
-    try {
-      const canon = canonicalize(absolutePath, null);
-      // Known roots: saved folders (the session-creation picker) + every
-      // central-index project path.
-      const roots = [
-        ...readFolders().map((f) => canonicalize(f.path, null)),
-        ...(await listProjects(CLAUDE_DIR)).map((p) => canonicalize(p.path, null)),
-      ];
-      let verdict = evaluateBinaryRead(canon, roots, new Set());
-      if (verdict === 'outside-roots') {
-        // Second pass (rare): collect tracked EXTERNAL artifact paths + manual
-        // includes from each root's sidecar — covers e.g. a temp-dir xlsx.
-        const tracked = new Set<string>();
-        for (const root of roots) {
-          const sidecar = await readSidecarShared(root).catch(() => null);
-          if (!sidecar || 'corrupted' in sidecar) continue;
-          for (const a of sidecar.artifacts) {
-            if (a.kind === 'external' && a.absolutePath) tracked.add(canonicalize(a.absolutePath, null));
-          }
-          for (const inc of sidecar.manualIncludes) tracked.add(canonicalize(inc.path, null));
-        }
-        verdict = evaluateBinaryRead(canon, roots, tracked);
-      }
-      if (verdict !== 'allowed') return { ok: false, error: 'not-allowed' };
-
-      // Size gate before reading — a huge file would freeze the renderer (and
-      // the WS transport) long before the viewer could reject it.
-      const st = await fs.promises.stat(absolutePath);
-      if (st.size > READ_BINARY_MAX_BYTES) return { ok: false, error: 'too-large' };
-
-      const buf = await fs.promises.readFile(absolutePath);
-      return { ok: true, base64: buf.toString('base64') };
-    } catch (e: any) {
-      return { ok: false, error: e?.code === 'ENOENT' ? 'orphan' : String(e?.message ?? e) };
-    }
-  });
+  // Read a file as base64 for the binary viewers (xlsx/docx/pdf/image).
+  // SECURITY: this IPC RETURNS file contents, and over remote access it is
+  // reachable from a phone. read-service.ts resolves symlinks FIRST, then
+  // restricts reads to the user's project roots and tracked artifacts, refusing
+  // well-known secret locations even inside those roots.
+  ipcMain.handle(ARTIFACT_IPC.READ_BINARY, (_e, absolutePath: string) => readArtifactBytes(absolutePath));
 
   // First bytes of a user-chosen file, for the composer's attachment cards
   // (rendered markdown / mono text preview). The cap, the deny list and the
@@ -4244,6 +4833,12 @@ export function registerIpcHandlers(
     // Created/deleted files must show up in the next file-list fetch.
     if (evt.kind !== 'edit') invalidateDiscoveryCache(evt.projectRoot);
     webContents.getAllWebContents().forEach((wc) => wc.send(ARTIFACT_IPC.CHANGED, evt));
+    // A phone subscribed over remote access (remote-server.ts watch-project)
+    // is not a webContents; without this line the phone's file list never
+    // updated while the assistant worked (contract row R12). Every consumer
+    // filters on its own projectRoot, so an unrelated root costs one dropped
+    // message.
+    remoteServer?.broadcast({ type: ARTIFACT_IPC.CHANGED, payload: evt });
   });
   // A crashed/closed renderer never sends unwatch — drop its refs on destroy so
   // it cannot pin a watcher forever. One listener per webContents, attached on
@@ -4344,12 +4939,8 @@ export function registerIpcHandlers(
       return { ok: true };
     }));
 
-  ipcMain.handle(ARTIFACT_IPC.SEARCH_CONTENT, async (_e, projectRoot: string, query: string) => {
-    if (typeof projectRoot !== 'string' || projectRoot.length === 0 || typeof query !== 'string') {
-      return { ok: false, hits: [], truncated: false, error: 'projectRoot and query are required' };
-    }
-    return searchProjectContent(projectRoot, query);
-  });
+  ipcMain.handle(ARTIFACT_IPC.SEARCH_CONTENT, (_e, projectRoot: string, query: string) =>
+    searchArtifactContent(projectRoot, query));
 
   // Normalize an include/exclude entry to a canonical ABSOLUTE path. FilesTab
   // passes a relative path for internal artifacts and an absolute one for
@@ -4486,6 +5077,15 @@ export function registerIpcHandlers(
   // Thin wrapper — the computation lives in ./artifacts/projects-index so the
   // remote WebSocket server returns byte-identical results (remote Project View
   // was empty because that transport had no handler at all).
+  // artifacts:download is a REMOTE channel (batch 3): a phone asks the host for
+  // a short-lived link and the host's HTTP route streams the file. On the
+  // desktop's own transport there is nothing to download to, so it refuses
+  // with a code the renderer never shows (Download is only offered in remote
+  // mode). A literal, not an ARTIFACT_IPC constant: the artifact parity test
+  // requires every constant there to have an Android handler, and the phone's
+  // own bridge answers this one through its catch-all `else` by design.
+  ipcMain.handle('artifacts:download', async () => ({ ok: false, code: 'not-remote' }));
+
   ipcMain.handle(ARTIFACT_IPC.LIST_PROJECTS_INDEX, async (_e, opts?: { withCounts?: boolean }) =>
     listProjectsIndex(opts)
   );
@@ -4517,45 +5117,27 @@ export function registerIpcHandlers(
   // artifacts as deleted in the UI without mutating the sidecar. Internal
   // artifacts resolve to projectRoot/path; external artifacts resolve to
   // absolutePath. Parallel fs.access keeps this cheap even for hundreds of IDs.
-  ipcMain.handle(ARTIFACT_IPC.CHECK_EXISTENCE, async (
-    _e, projectRoot: string, artifactIds: string[]
-  ) => {
-    if (!projectRoot || !Array.isArray(artifactIds) || artifactIds.length === 0) {
-      return { ok: true, missingIds: [] };
-    }
-    const sidecar = await readSidecarShared(projectRoot);
-    if (!sidecar || 'corrupted' in sidecar) return { ok: true, missingIds: [] };
-    const byId = new Map(sidecar.artifacts.map((a) => [a.id, a]));
-    const results = await Promise.all(
-      artifactIds.map(async (id) => {
-        const a = byId.get(id);
-        if (!a) return id; // unknown id treated as missing
-        // A corrupt record (relative absolutePath) resolves against the PROCESS
-        // cwd here, which cuts both ways: it reports an in-project file as
-        // missing (the Session Drawer's "no longer on disk" — this handler feeds
-        // that label, SessionDrawer.tsx:42) AND would report an artifact as
-        // present if a same-named file happens to sit in the process cwd.
-        const fullPath = a.kind === 'internal'
-          ? path.join(projectRoot, a.path)
-          : a.absolutePath;
-        if (!fullPath) return id;
-        if (a.kind !== 'internal' && !isAbsoluteRecorded(fullPath)) return id;
-        try {
-          await fs.promises.access(fullPath);
-          return null;
-        } catch {
-          return id;
-        }
-      })
-    );
-    return { ok: true, missingIds: results.filter((x): x is string => x !== null) };
-  });
+  ipcMain.handle(ARTIFACT_IPC.CHECK_EXISTENCE, (_e, projectRoot: string, artifactIds: string[]) =>
+    checkArtifactExistence(projectRoot, artifactIds));
 
-  // Return cleanup function for use during app shutdown. It returns the engine-stop
-  // promise so main's quit handler can AWAIT the llama-server teardown before
-  // app.quit() — the old fire-and-forget `void` let quit win the race and orphaned
-  // the engine, which kept the port bound for the next instance to wrongly adopt.
-  return function cleanup(): Promise<void> {
+  // Return shape (Sign in with ChatGPT, backend design 2026-09-05 §5 / review
+  // R3-2): `cleanup` for app shutdown — it returns the engine-stop promise so
+  // main's quit handler can AWAIT the llama-server teardown before app.quit()
+  // (the old fire-and-forget `void` let quit win the race and orphaned the
+  // engine, which kept the port bound for the next instance to wrongly adopt) —
+  // plus `hasUsableProvider`, which main.ts's launch-time auth check reads
+  // BEFORE spawning `claude auth status`. WHY: this branch removes the wizard's
+  // Skip link, so an install running on an OpenRouter key (or any ready native
+  // provider) with no Claude login would otherwise be locked at a sign-in
+  // screen on its first launch after upgrading. "Usable" = any `ready` row in
+  // the registry, which for the ChatGPT row means signed in — but main.ts also
+  // asks chatgptAuth.isSignedIn() directly, so the kill switch (no row) cannot
+  // lock a ChatGPT-only install out either.
+  const hasUsableProvider = async (): Promise<boolean> => {
+    try { return (await providerRegistry.list()).some((p) => p.ready); }
+    catch { return false; }
+  };
+  const cleanup = function cleanup(): Promise<void> {
     stopThemeWatcher();
     clearInterval(statusInterval);
     transcriptWatcher.stopAll();
@@ -4578,4 +5160,16 @@ export function registerIpcHandlers(
     sessionIdMap.clear();
     return engineStopped;
   };
+  // firstRunDeps (first-run local models, 2026-09-14): the native objects setup
+  // reaches for an API key, a model app or a local download. Built here because
+  // this is the only place they exist; main.ts hands them to both first-run
+  // registrations.
+  // `installed` goes through registryHook(), the same answer the registry's
+  // local-engine `ready` reads, so setup and the provider list cannot disagree.
+  const firstRunDeps: FirstRunNativeDeps = {
+    providers: providerRegistry,
+    engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
+    models: modelManager,
+  };
+  return { cleanup, hasUsableProvider, firstRunDeps };
 }

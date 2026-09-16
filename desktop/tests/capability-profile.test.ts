@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { resolveProfile, effectiveContextForModel, CLOUD_DEFAULT, type DiscoveredModel } from '../src/main/harness/capability-profile';
 import type { KnownModelEntry } from '../src/main/harness/known-models';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS } from '../src/main/harness/specialists/limits';
+import type { ProviderType } from '../src/shared/provider-types';
 
 const local = (modelId: string, contextLength: number | null): DiscoveredModel => ({ providerType: 'local-engine', modelId, contextLength });
 
@@ -86,7 +87,7 @@ describe('effectiveContextForModel', () => {
 describe('nativeImageToolResults (Task 6b)', () => {
   it('is true only for the direct Anthropic provider', () => {
     expect(resolveProfile({ providerType: 'anthropic', modelId: 'claude-opus-5', contextLength: 200_000 }).nativeImageToolResults).toBe(true);
-    for (const providerType of ['openai', 'google', 'openrouter', 'openai-compatible', 'local-engine'] as const) {
+    for (const providerType of ['openai', 'google', 'openrouter', 'openai-compatible', 'local-engine', 'chatgpt'] as const) {
       expect(resolveProfile({ providerType, modelId: 'x', contextLength: 32_768 }).nativeImageToolResults, providerType).toBe(false);
     }
   });
@@ -167,7 +168,7 @@ describe('capability profile — injection sizing (M3 item 5)', () => {
   it('a FRONTIER provider stays generous even with no measured window', () => {
     // We never discover Anthropic's window, so null there means "not measured",
     // not "small" — sizing it down would break the main use case.
-    for (const providerType of ['anthropic', 'openai', 'google', 'openrouter'] as const) {
+    for (const providerType of ['anthropic', 'openai', 'google', 'openrouter', 'chatgpt'] as const) {
       const p = resolveProfile({ providerType, modelId: 'm', contextLength: null });
       expect(p.exposeSkillCatalog, providerType).toBe(true);
       expect(p.injectionBudgetTokens, providerType).toBeGreaterThan(10_000);
@@ -255,7 +256,7 @@ describe('mcpToolBudgetTokens ladder (Task 6 / fix pass 1, Finding 2)', () => {
   });
 
   it('a FRONTIER provider with an unmeasured window stays at CLOUD_DEFAULT, not the small tier', () => {
-    for (const providerType of ['anthropic', 'openai', 'google', 'openrouter'] as const) {
+    for (const providerType of ['anthropic', 'openai', 'google', 'openrouter', 'chatgpt'] as const) {
       expect(resolveProfile({ providerType, modelId: 'm', contextLength: null }).mcpToolBudgetTokens, providerType)
         .toBe(CLOUD_DEFAULT.mcpToolBudgetTokens);
     }
@@ -361,7 +362,7 @@ describe('maxConcurrentSpecialists (Task 13 — local concurrency from the engin
     // replacing the import in capability-profile.ts.
     expect(HOSTED_MAX_CONCURRENT_SPECIALISTS).toBe(4);
     expect(CLOUD_DEFAULT.maxConcurrentSpecialists).toBe(HOSTED_MAX_CONCURRENT_SPECIALISTS);
-    for (const providerType of ['anthropic', 'openai', 'google', 'openrouter'] as const) {
+    for (const providerType of ['anthropic', 'openai', 'google', 'openrouter', 'chatgpt'] as const) {
       expect(resolveProfile({ providerType, modelId: 'x', contextLength: 128_000 }).maxConcurrentSpecialists, providerType)
         .toBe(HOSTED_MAX_CONCURRENT_SPECIALISTS);
     }
@@ -409,7 +410,7 @@ describe('maxConcurrentSpecialists (Task 13 — local concurrency from the engin
 // ---------------------------------------------------------------------------
 describe('announcePrefill — the prompt-reading notice is local-only', () => {
   it('is false for every hosted provider', () => {
-    for (const providerType of ['anthropic', 'openai', 'google', 'openrouter'] as const) {
+    for (const providerType of ['anthropic', 'openai', 'google', 'openrouter', 'chatgpt'] as const) {
       expect(resolveProfile({ providerType, modelId: 'x', contextLength: 128_000 }).announcePrefill, providerType).toBe(false);
     }
     expect(CLOUD_DEFAULT.announcePrefill).toBe(false);
@@ -425,5 +426,72 @@ describe('announcePrefill — the prompt-reading notice is local-only', () => {
     // Same reasoning FRONTIER_PROVIDERS uses to exclude this type from the
     // "assume a roomy window" shortcut.
     expect(resolveProfile({ providerType: 'openai-compatible', modelId: 'llama3.3:70b', contextLength: null }).announcePrefill).toBe(true);
+  });
+});
+
+// Sign in with ChatGPT — design §4.8 / review R3-1. The user's own ChatGPT plan
+// serves GPT-5.x models, and before this the harness had never heard of the
+// 'chatgpt' provider kind: a plan model fell through to the "unmeasured local
+// model" path and silently behaved like a small local model.
+describe("Sign in with ChatGPT — the harness knows the 'chatgpt' provider (design §4.8)", () => {
+  it('a plan GPT-5.6 with no measured window gets frontier sizing, the GPT prompt and vision', () => {
+    // contextLength: null is the real production shape — the plan's manifest
+    // may not report a window, and null must mean "not measured", never "small".
+    const p = resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-5.6', contextLength: null });
+    expect(p.exposeSkillCatalog).toBe(true);
+    // 20,000 is CLOUD_DEFAULT.injectionBudgetTokens — the frontier tier every
+    // hosted provider gets; asserted literally so the pinned §4.8 number holds.
+    expect(p.injectionBudgetTokens).toBe(20_000);
+    expect(p.promptVariant).toBe('gpt');
+    expect(p.supportsVision).toBe(true);
+    // The rest of the hosted defaults come along too — same as any frontier provider.
+    expect(p.mcpToolBudgetTokens).toBe(CLOUD_DEFAULT.mcpToolBudgetTokens);
+    expect(p.canDelegate).toBe(true);
+    expect(p.supportsParallelToolCalls).toBe(true);
+    expect(p.maxToolPresentation).toBe('full');
+  });
+
+  it('is identical to the direct OpenAI-key profile for the same GPT model — same models, same wire', () => {
+    for (const modelId of ['gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini']) {
+      for (const contextLength of [null, 272_000]) {
+        expect(resolveProfile({ providerType: 'chatgpt', modelId, contextLength }), `${modelId} @ ${contextLength}`)
+          .toEqual(resolveProfile({ providerType: 'openai', modelId, contextLength }));
+      }
+    }
+  });
+
+  it('matches the OpenRouter profile for the same GPT model except where OpenRouter is only a transport', () => {
+    // Design §4.8's comparison point: "a 2k injection budget where OpenRouter's
+    // GPT-5.6 gets 20k". Sizing must now be equal. Two DELIBERATE differences
+    // remain, both because OpenRouter serves any model and so cannot assume
+    // anything about this one: (1) OpenRouter gets the generic prompt overlay,
+    // the plan gets the GPT one; (2) OpenRouter's vision answer has to come
+    // from its catalog (the discovered per-model fact), the plan's is known
+    // by construction. With that fact supplied, only the prompt differs.
+    const viaPlan = resolveProfile({ providerType: 'chatgpt', modelId: 'gpt-5.6', contextLength: null });
+    const viaOpenRouter = resolveProfile({ providerType: 'openrouter', modelId: 'openai/gpt-5.6', contextLength: null, supportsVision: true });
+    expect(viaPlan.injectionBudgetTokens).toBe(viaOpenRouter.injectionBudgetTokens);
+    expect(viaPlan).toEqual({ ...viaOpenRouter, promptVariant: 'gpt' });
+    // And without the catalog fact, OpenRouter alone falls to "no vision" — the
+    // plan does not, because it is not a transport.
+    expect(resolveProfile({ providerType: 'openrouter', modelId: 'openai/gpt-5.6', contextLength: null }).supportsVision).toBe(false);
+    expect(viaPlan.supportsVision).toBe(true);
+  });
+
+  it('every provider kind the app knows resolves a profile without a cast (the two unions agree)', () => {
+    // A Record keyed on the SHARED union: tsc refuses this literal if a
+    // ProviderType is missing from it, and refuses the resolveProfile call if
+    // that ProviderType is missing from ProfileProviderType. So this test
+    // fails to COMPILE — not just to run — the day someone adds a provider to
+    // shared/provider-types.ts and forgets the harness. The type-level guard
+    // in capability-profile.ts says the same thing; this is its runnable twin.
+    const every: Record<ProviderType, true> = {
+      'local-engine': true, 'openai-compatible': true, 'openrouter': true,
+      'anthropic': true, 'openai': true, 'google': true, 'chatgpt': true,
+    };
+    for (const providerType of Object.keys(every) as ProviderType[]) {
+      const p = resolveProfile({ providerType, modelId: 'x', contextLength: null });
+      expect(typeof p.injectionBudgetTokens, providerType).toBe('number');
+    }
   });
 });

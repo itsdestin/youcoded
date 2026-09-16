@@ -6,7 +6,8 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { usePtyOutput } from '../hooks/useIpc';
 import { usePtyRawBytes } from '../hooks/usePtyRawBytes';
-import { registerTerminal, unregisterTerminal, notifyBufferReady } from '../hooks/terminal-registry';
+import { usePtyReset } from '../hooks/usePtyReset';
+import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear } from '../hooks/terminal-registry';
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { useTheme } from '../state/theme-context';
 import { isTouchDevice } from '../platform';
@@ -310,6 +311,9 @@ export default function TerminalView({ sessionId, visible }: Props) {
       // all of them. Becoming visible is covered by the visibility effect.
       if (hasFlushedResize) {
         (terminalRef.current ?? terminal).clearTextureAtlas();
+        // WHY: rig instrument; the heal costs every open terminal a
+        // re-rasterize, so the rig counts clears per switch (terminal-registry).
+        noteAtlasClear();
       }
       hasFlushedResize = true;
     };
@@ -513,6 +517,9 @@ export default function TerminalView({ sessionId, visible }: Props) {
       // terminal has nothing to heal anyway.
       if (wasVisible === false) {
         terminalRef.current.clearTextureAtlas();
+        // WHY: rig instrument; the heal costs every open terminal a
+        // re-rasterize, so the rig counts clears per switch (terminal-registry).
+        noteAtlasClear();
       }
       const raf = requestAnimationFrame(() => terminalRef.current?.focus());
       return () => cancelAnimationFrame(raf);
@@ -530,6 +537,17 @@ export default function TerminalView({ sessionId, visible }: Props) {
   // based on it does not violate React's rules-of-hooks (the hook order is
   // stable for the lifetime of the renderer).
   const useRawBytes = isTouchDevice();
+  // Remote access batch 2 (§7): the host could not continue this terminal from
+  // where the phone left off (a host restart, or a session destroyed and
+  // recreated), so it says "start over" and then sends the whole buffer. Clear
+  // and jump to the bottom so the redraw lands on a blank screen.
+  // ORDER MATTERS: registered before the output listener, because the shim
+  // drains its pre-mount backlog on the first output listener and a reset in
+  // that backlog must find this handler already there (terminal-view-reset test).
+  usePtyReset(sessionId, () => {
+    terminalRef.current?.reset();
+    terminalRef.current?.scrollToBottom();
+  });
   usePtyOutput(useRawBytes ? null : sessionId, (data) => {
     terminalRef.current?.write(data, () => notifyBufferReady(sessionId));
   });

@@ -1,5 +1,6 @@
 import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { ChatIcon, TerminalIcon } from './Icons';
+import { Tooltip } from './ui';
 
 export type ViewMode = 'chat' | 'terminal';
 
@@ -229,13 +230,13 @@ export default function WideViewToggle({
           opacity: activeEndpoint ? 1 : 0,
         }}
       />
+      {/* The hint matters most in icon-only mode (<560px header), where the
+          visible label is hidden. aria-label still supplies the a11y name. */}
+      <Tooltip text="Chat" placement="bottom">
       <button
         type="button"
         aria-label="Chat"
         aria-pressed={viewMode === 'chat'}
-        // Tooltip matters most in icon-only mode (<560px header), where the
-        // visible label is hidden. aria-label still supplies the a11y name.
-        title="Chat"
         onClick={() => onToggleView('chat')}
         className={`relative z-10 ${BUTTON_LAYOUT_CLASS} transition-colors duration-300 ${
           viewMode === 'chat' ? 'text-on-accent' : 'text-fg-dim hover:text-fg-2'
@@ -248,11 +249,12 @@ export default function WideViewToggle({
           style={{ maxWidth: viewMode === 'chat' ? CHAT_LABEL_MAX : '0', opacity: viewMode === 'chat' ? 1 : 0 }}
         >Chat</span>
       </button>
+      </Tooltip>
+      <Tooltip text="Terminal" placement="bottom">
       <button
         type="button"
         aria-label="Terminal"
         aria-pressed={viewMode === 'terminal'}
-        title="Terminal"
         onClick={() => onToggleView('terminal')}
         className={`relative z-10 ${BUTTON_LAYOUT_CLASS} transition-colors duration-300 ${
           viewMode === 'terminal' ? 'text-on-accent' : 'text-fg-dim hover:text-fg-2'
@@ -265,6 +267,7 @@ export default function WideViewToggle({
           style={{ maxWidth: viewMode === 'terminal' ? TERMINAL_LABEL_MAX : '0', opacity: viewMode === 'terminal' ? 1 : 0 }}
         >Terminal</span>
       </button>
+      </Tooltip>
       {/* Inert measuring layer: absolute + invisible + pointer-events-none, so it
           has real geometry but never paints, never takes a tab stop, and never
           contributes to the container's intrinsic width. */}

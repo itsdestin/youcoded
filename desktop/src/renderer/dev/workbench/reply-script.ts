@@ -31,6 +31,8 @@ export interface ReplySinks {
   hook: (event: unknown) => void;
   /** characters per second for streamed text; tests pass a large number */
   cps?: number;
+  /** playback multiplier for the text AND each line's pause (`?replySpeed=`); 1 when absent */
+  speed?: number;
 }
 
 export function parseReplyScript(raw: string): ReplyLine[] {
@@ -73,10 +75,11 @@ export async function playReply(sessionId: string, text: string, script: ReplyLi
   if (isControl(text)) return;
   const t = (type: string, data: Record<string, unknown>) =>
     sinks.transcript({ type, sessionId, uuid: uid(), timestamp: stamp(), data });
-  const perChar = 1000 / (sinks.cps ?? 40);
+  const speed = sinks.speed && sinks.speed > 0 ? sinks.speed : 1;
+  const perChar = 1000 / ((sinks.cps ?? 40) * speed);
 
   for (const line of script) {
-    await sleep(line.delay ?? 400);
+    await sleep((line.delay ?? 400) / speed);
     switch (line.type) {
       case 'assistant_text': {
         // One partId across the chunks: App.tsx merges same-partId deltas into

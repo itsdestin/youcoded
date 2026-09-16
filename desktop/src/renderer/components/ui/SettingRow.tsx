@@ -112,6 +112,13 @@ export type SettingRowProps = {
   /** Accessible name for the radio when the title is not a plain string. */
   radioLabel?: string;
   disabled?: boolean;
+  /**
+   * Expand-in-place row (2026-09-05, Destin: "I HATE the bare dropdowns with a
+   * chevron"). The ONE shape for a section that opens below its row: the same
+   * right-hand chevron every navigating row has, turned to point down while
+   * open, plus aria-expanded. Never a leading "›" text toggle.
+   */
+  expanded?: boolean;
   /** Overrides the muted description color — e.g. Android's green "Connected". */
   descriptionClassName?: string;
   className?: string;
@@ -131,6 +138,7 @@ export function SettingRow({
   radioTabIndex,
   radioLabel,
   truncateTitle,
+  expanded,
   disabled,
   descriptionClassName,
   className = '',
@@ -202,7 +210,7 @@ export function SettingRow({
         ))}
       {isButton && (
         <svg
-          className="w-4 h-4 text-fg-muted shrink-0"
+          className={`w-4 h-4 text-fg-muted shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
           fill="none"
           viewBox="0 0 24 24"
           stroke="currentColor"
@@ -218,7 +226,7 @@ export function SettingRow({
 
   if (isButton) {
     return (
-      <button type="button" onClick={onClick} disabled={disabled} className={`${cls} ${FOCUS_RING}`}>
+      <button type="button" onClick={onClick} disabled={disabled} aria-expanded={expanded} className={`${cls} ${FOCUS_RING}`}>
         {body}
       </button>
     );

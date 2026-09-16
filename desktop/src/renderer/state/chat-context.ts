@@ -27,9 +27,11 @@ const EMPTY_SESSION_STATE: SessionChatState = Object.freeze(createSessionChatSta
 //   reference changes. Unaffected sessions skip re-render entirely.
 // - useChatStateMap() still re-renders on any change — for render-path callers
 //   that genuinely need the whole map. After the 2026-07-17 AppInner perf
-//   tranche the only such caller is RemoteSnapshotExporter (it serializes the
-//   full map for remote hydration); prefer a cached selector over this for
-//   anything new (see useChatStore below).
+//   tranche the only such caller was RemoteSnapshotExporter; since 2026-09-10
+//   it reads the store synchronously inside its export callback instead
+//   (useChatStore().getState() — the snapshot must reflect the flushed
+//   transcript batch, not a render-lagged ref), so no production code calls
+//   this today. Prefer a cached selector over this for anything new.
 // - useChatStore() exposes the raw store (getState + subscribe*) for two kinds
 //   of consumer that must NOT re-render on every dispatch: (a) effect-only
 //   readers — subscriptions/timers that read state without rendering it

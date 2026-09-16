@@ -8,19 +8,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ArtifactContentInfo, ArtifactContentState } from './ActiveArtifactView';
 import { rendersFromBytesOnly } from './RendererRegistry';
-
-// Turn the handler's error codes into specific, accurate user-facing strings —
-// unknown codes surface verbatim rather than being replaced with a guessed
-// cause (error-message-standards).
-function describeReadError(error: unknown): string {
-  if (error === 'protected-path') {
-    return 'This file is in a protected location (credential and system folders), so YouCoded won’t open it.';
-  }
-  if (error === 'artifact-not-found') {
-    return 'This file could not be resolved inside the project.';
-  }
-  return `Couldn’t read this file: ${String(error ?? 'unknown error')}`;
-}
+// The handler's error codes → specific, accurate words. Shared with the tapped-
+// path note (useOpenFilepath) so both say the same thing about one file.
+import { describeReadError } from './read-error-copy';
 
 export interface UseArtifactContentResult {
   content: string | null;
@@ -96,7 +86,9 @@ export function useArtifactContent(
         // disk". Everything else that resolved ok is ready.
         setContentState(res.orphan ? { phase: 'missing' } : { phase: 'ready' });
       } else {
-        setContentState({ phase: 'error', message: describeReadError(res?.error) });
+        // Keep the handler's own code and the size beside the message: the
+        // remote too-large answer needs both to render as a file card.
+        setContentState({ phase: 'error', message: describeReadError(res?.error), code: res?.error, sizeBytes: res?.sizeBytes });
       }
     }).catch((e: any) => {
       // A rejected invoke (e.g. EACCES thrown in the handler) is a read

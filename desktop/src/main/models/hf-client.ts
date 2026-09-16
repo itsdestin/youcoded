@@ -86,7 +86,14 @@ export class HfClient {
   }
 
   /** List a repo's downloadable quant variants. recursive=true is REQUIRED:
-   *  unsloth keeps dynamic quants in subfolders. */
+   *  unsloth keeps dynamic quants in subfolders.
+   *
+   *  NOT PAGINATED, and that is now a known gap: this reads the first page and
+   *  ignores the `Link: rel="next"` header the API sends when a tree is longer.
+   *  No real GGUF repo has come close (the largest measured on 2026-09-05 was 88
+   *  entries), but §E3's backfill turns a listing into a PERMANENT record — a
+   *  short read there costs a model its vision until the record expires, rather
+   *  than one stale panel. Follow the header if a repo is ever seen truncated. */
   async quantOptions(repo: string): Promise<QuantOption[]> {
     const url = `${API}/models/${repo}/tree/main?recursive=true`;
     const res = await this.fetchWithRetry(url);

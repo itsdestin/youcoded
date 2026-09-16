@@ -1,16 +1,21 @@
-// Delegated model tiers (Task 14, app-owner ruling 2026-08-12) — two
-// user-designated tiers, 'budget' and 'frontier', each pointing at a concrete
-// model the user picks in a later Settings menu (that UI is plan 1c; this
-// file ships the storage and the pure resolution logic it depends on).
-// DELIBERATE NON-GOAL: no automatic price-based selection anywhere in this
-// file — a tier is only ever what the user put there, and an unrecognized
-// specific model id is refused rather than substituted (see
-// resolveDelegatedBinding's own comment for why the two failure modes differ).
+// Delegated model tiers — two global user overrides, 'budget' and
+// 'frontier', plus curated provider-matched defaults when an override is unset.
+// DELIBERATE NON-GOAL: no automatic price heuristic. Reviewed model ids are
+// explicit below, and every automatic choice must still exist in the live
+// catalog before a specialist can start.
 import type { CatalogModel, ModelBinding } from '../../../shared/provider-types';
 import type { NativeHome } from '../../native-home';
 import type { DelegatedModelsView } from '../../../shared/types';
 
 export type DelegatedTier = 'budget' | 'frontier';
+
+// WHY these are explicit provider-native ids rather than a price heuristic:
+// recommendation changes need review, while a heuristic can silently drift to
+// a newly-listed premium model. The live catalog still has to confirm the row.
+const AUTOMATIC_DELEGATED_MODELS: Record<string, Record<DelegatedTier, string>> = {
+  chatgpt: { budget: 'gpt-5.6-terra', frontier: 'gpt-5.6-sol' },
+  openrouter: { budget: 'deepseek/deepseek-v4-flash-0731', frontier: 'moonshotai/kimi-k3' },
+};
 
 const FILE = 'delegated-models.json';
 type DelegatedModelsFile = { v: 1; budget?: ModelBinding; frontier?: ModelBinding };
@@ -25,9 +30,9 @@ const EMPTY: DelegatedModelsFile = { v: 1 };
 export class DelegatedModels {
   constructor(private home: NativeHome) {}
 
-  /** The tier's designated binding, or null when the user has not set one —
-   *  callers (resolveDelegatedBinding) treat null as "fall back to the
-   *  parent's model", never as an error. */
+  /** The tier's designated binding, or null when the user has not set one.
+   *  The resolver then tries a catalog-confirmed provider default; it never
+   *  treats null as permission to inherit the parent model. */
   get(tier: DelegatedTier): ModelBinding | null {
     const data = (this.home.readJson(FILE) as DelegatedModelsFile | null) ?? EMPTY;
     return data[tier] ?? null;
@@ -58,8 +63,8 @@ export class DelegatedModels {
  *  binding to a display LABEL from the live catalog (never a bare id); a row
  *  whose catalog entry can no longer be found (model removed/renamed since
  *  it was designated) still shows something readable, falling back to the
- *  raw modelId rather than an empty label. An unset tier stays null — the
- *  renderer already reads that as "falls back to the conversation's model". */
+ *  raw modelId rather than an empty label. An unset tier stays null so the
+ *  renderer can show that YouCoded will choose automatically. */
 export function delegatedModelsView(designated: DelegatedModels, catalog: CatalogModel[] | null): DelegatedModelsView {
   const rowFor = (tier: DelegatedTier): DelegatedModelsView['budget'] => {
     const binding = designated.get(tier);
@@ -73,8 +78,8 @@ export function delegatedModelsView(designated: DelegatedModels, catalog: Catalo
 /** Priority ordering for what a Task call runs on: the Task-call arg (a user
  *  directive, expressed in the tool call itself) wins over the specialist
  *  definition's own modelPreference (an author-time default), which wins
- *  over 'parent' (the ultimate fallback — run on this conversation's own
- *  model). A raw string that isn't literally "budget"/"frontier"/"parent" is
+ *  over the implicit Budget tier. The literal 'parent' is an explicit escape
+ *  hatch, never the fallback. A raw string that isn't literally "budget"/"frontier"/"parent" is
  *  treated as a user-directed specific model id, never guessed at or
  *  normalized — resolveDelegatedBinding is what validates it against the
  *  live catalog. */
@@ -91,8 +96,10 @@ export function resolveRequestedModel(
   // place instead of splitting "parent" off into its own branch below.
   if (argModel === 'budget' || argModel === 'frontier' || argModel === 'parent') return argModel;
   if (argModel) return { modelId: argModel };
-  if (specialistPreference === 'budget' || specialistPreference === 'frontier') return specialistPreference;
-  return 'parent';
+  if (specialistPreference === 'budget' || specialistPreference === 'frontier' || specialistPreference === 'parent') return specialistPreference;
+  // WHY implicit delegation starts at budget: inheriting an expensive parent
+  // was invisible and could multiply its cost with every specialist launch.
+  return 'budget';
 }
 
 /** Thrown by resolveDelegatedBinding when a user-directed specific model id
@@ -101,19 +108,22 @@ export function resolveRequestedModel(
  *  refusal instead of a generic "Task failed: ..." wrapper. */
 export class DelegatedModelRefused extends Error {}
 
-/** Pure resolver: given what was requested (a Task-call arg, falling back to
- *  the specialist definition's own preference, falling back to 'parent'),
- *  produce the ModelBinding to actually launch the child on.
+/** Structured refusal consumed by the Task card's recovery UI. */
+export class DelegatedModelUnavailable extends Error {
+  constructor(readonly tier: DelegatedTier) {
+    super(`SPECIALIST_MODEL_UNAVAILABLE:${tier}`);
+  }
+}
+
+/** Pure resolver: given the explicit request or the Budget tier selected by
+ *  resolveRequestedModel for an implicit call, produce the ModelBinding that
+ *  actually launches the child.
  *
- *  THE ASYMMETRY IS DELIBERATE (spec ruling): a tier that isn't configured
- *  degrades GRACEFULLY — the child still launches, on the parent's model,
- *  and the caller is told so (fellBack + reason) so it can pass that on
- *  honestly. A user-directed SPECIFIC model id that doesn't resolve against
- *  the live catalog REFUSES instead — silently substituting a different
- *  model than the one a user explicitly named is worse than not running at
- *  all, so this throws rather than returning a fallback binding for that
- *  case. Never provider-specific params cross model families here — this
- *  function only ever returns a { providerId, modelId } pair, nothing else.
+ *  A configured tier is a global override. Otherwise the resolver tries the
+ *  curated model for the parent's provider and confirms it against the live
+ *  catalog. If that safe model cannot be confirmed, delegation REFUSES: it
+ *  never substitutes the potentially expensive parent. A user-directed
+ *  specific model id is also catalog-validated and refused when unavailable.
  */
 export function resolveDelegatedBinding(i: {
   requested: 'parent' | DelegatedTier | { modelId: string };
@@ -124,7 +134,7 @@ export function resolveDelegatedBinding(i: {
    *  not found": an override that cannot be confirmed is refused, never
    *  trusted on faith. */
   catalog: CatalogModel[] | null;
-}): { binding: ModelBinding; fellBack: boolean; reason?: string } {
+}): { binding: ModelBinding; fellBack: boolean; automatic?: boolean; reason?: string } {
   const { requested, parent, designated, catalog } = i;
 
   if (requested === 'parent') {
@@ -134,27 +144,40 @@ export function resolveDelegatedBinding(i: {
   if (requested === 'budget' || requested === 'frontier') {
     const designatedBinding = designated.get(requested);
     if (designatedBinding) return { binding: designatedBinding, fellBack: false };
-    // Final-review fix (Finding 6): this used to say "is set in Settings" —
-    // true once the plan 1c Settings UI ships, false today. This release has
-    // no menu that lets a user designate a budget/frontier model at all
-    // (DelegatedModels.set()'s own comment: "The Settings UI (1c) is the
-    // only production caller" — not yet written), so pointing the model (and,
-    // via task.ts's fallbackNote, the user) at "Settings" named a control
-    // nobody can find. General and non-committal instead: state the fact
-    // (nothing is designated) without claiming a place to fix it that
-    // doesn't exist yet.
-    return { binding: parent, fellBack: true, reason: `no ${requested} model is designated` };
+
+    const automaticId = AUTOMATIC_DELEGATED_MODELS[parent.providerId]?.[requested];
+    const automatic = automaticId
+      ? catalog?.find((model) => model.providerId === parent.providerId && model.id === automaticId)
+      : undefined;
+    if (automatic) {
+      return {
+        binding: { providerId: automatic.providerId, modelId: automatic.id },
+        fellBack: false,
+        automatic: true,
+      };
+    }
+
+    // WHY fail closed: an absent catalog row may mean the provider changed its
+    // offering. Falling back to the parent here recreates the accidental-cost
+    // path this resolver exists to prevent.
+    throw new DelegatedModelUnavailable(requested);
   }
 
   // requested is { modelId }: a user-directed override, validated against the
   // live catalog. A null catalog (not loaded) and a catalog that simply
   // doesn't list this id read identically here — both mean "cannot confirm
   // this model exists", and an unconfirmed override is refused, not guessed at.
-  const found = catalog?.find((m) => m.id === requested.modelId);
-  if (!found) {
+  const matches = catalog?.filter((m) => m.id === requested.modelId) ?? [];
+  if (matches.length !== 1) {
+    if (matches.length > 1) {
+      throw new DelegatedModelRefused(
+        `Refused: "${requested.modelId}" is available from multiple providers, so the provider would be ambiguous. Use "budget"/"frontier" or assign the intended provider model to a tier in Settings.`,
+      );
+    }
     throw new DelegatedModelRefused(
       `Refused: "${requested.modelId}" is not an available model. Use ModelSearch to find the exact id, or use "budget"/"frontier".`,
     );
   }
+  const [found] = matches;
   return { binding: { providerId: found.providerId, modelId: found.id }, fellBack: false };
 }

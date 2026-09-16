@@ -5,6 +5,9 @@ import fs from 'fs';
 const PREVIEW_WIDTH = 800;
 const PREVIEW_HEIGHT = 500;
 
+// WHY: fs.existsSync blocks the main thread; access() answers the same question off it.
+const exists = (p: string) => fs.promises.access(p).then(() => true, () => false);
+
 /**
  * Generates a preview PNG for a theme by rendering a mock YouCoded UI
  * with the theme's tokens applied, then capturing it as an image.
@@ -27,7 +30,10 @@ export async function generateThemePreview(
     hasGradient: manifest.background?.type === 'gradient',
     hasPattern: !!manifest.background?.pattern,
   });
-  const html = buildPreviewHTML(manifest, themeDir);
+  // WHY: buildPreviewHTML reads the theme's wallpaper/pattern assets off disk
+  // (Task 2) — awaiting here keeps this whole generator off fs.*Sync while
+  // the caller (skills:generate-theme-preview IPC) already awaits this fn.
+  const html = await buildPreviewHTML(manifest, themeDir);
   const outputPath = path.join(themeDir, 'preview.png');
 
   // Use a real hidden window (show: false) rather than offscreen rendering.
@@ -122,8 +128,15 @@ async function waitForPreviewReady(
 /**
  * Builds a self-contained HTML string that mocks the YouCoded UI
  * using the theme's color tokens.
+ *
+ * WHY async (Task 2, perf/main-thread-async-reads): the wallpaper/pattern
+ * existence checks and reads below used to run on fs.*Sync, blocking the
+ * main thread for however long the disk read took. The base64 ENCODE itself
+ * (Buffer.toString('base64')) still runs synchronously on main — it's pure
+ * CPU work, single-digit ms for a typical wallpaper image — only the disk
+ * wait that used to precede it has moved off-thread.
  */
-function buildPreviewHTML(manifest: Record<string, any>, themeDir: string): string {
+async function buildPreviewHTML(manifest: Record<string, any>, themeDir: string): Promise<string> {
   const tokens = manifest.tokens || {};
   const dark = manifest.dark ?? true;
   const name = manifest.name || 'Theme';
@@ -155,10 +168,10 @@ function buildPreviewHTML(manifest: Record<string, any>, themeDir: string): stri
       assetRelPath = decodeURIComponent(url.pathname.replace(/^\//, ''));
     }
     const wallpaperPath = path.join(themeDir, assetRelPath);
-    if (fs.existsSync(wallpaperPath)) {
+    if (await exists(wallpaperPath)) {
       const ext = path.extname(wallpaperPath).toLowerCase();
       const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
-      const b64 = fs.readFileSync(wallpaperPath).toString('base64');
+      const b64 = (await fs.promises.readFile(wallpaperPath)).toString('base64');
       wallpaperDataUri = `data:${mime};base64,${b64}`;
     }
   } else if (bg.type === 'gradient' && bg.value) {
@@ -190,8 +203,8 @@ function buildPreviewHTML(manifest: Record<string, any>, themeDir: string): stri
       patternRelPath = decodeURIComponent(url.pathname.replace(/^\//, ''));
     }
     const patternFullPath = path.join(themeDir, patternRelPath);
-    if (fs.existsSync(patternFullPath)) {
-      const svgB64 = fs.readFileSync(patternFullPath).toString('base64');
+    if (await exists(patternFullPath)) {
+      const svgB64 = (await fs.promises.readFile(patternFullPath)).toString('base64');
       patternDataUri = `data:image/svg+xml;base64,${svgB64}`;
     }
   }

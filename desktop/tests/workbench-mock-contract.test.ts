@@ -1,8 +1,14 @@
-import { describe, it, expect } from 'vitest';
+// @vitest-environment jsdom
+//
+// jsdom (rather than this suite's default `node`) because the last block below
+// RUNS the workbench's voice fake, which schedules its scripted words with
+// `window.setTimeout`. Every other test here is a static scan and does not care.
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { HAND_WRITTEN } from '../src/renderer/dev/workbench/mock-shim';
+import { HAND_WRITTEN, createVoiceMock } from '../src/renderer/dev/workbench/mock-shim';
 import { MOCK_ONLY } from '../src/renderer/dev/workbench/mock-only';
+import type { VoiceEvent } from '../src/shared/voice-types';
 
 const preload = readFileSync(join(__dirname, '../src/main/preload.ts'), 'utf8');
 // remote-shim is the OTHER real implementation of window.claude — a handful of
@@ -146,5 +152,150 @@ describe('workbench mock contract', () => {
 
     const written = new Set(HAND_WRITTEN);
     expect(topLevel.filter((m) => !written.has(m))).toEqual([]);
+  });
+});
+
+// The workbench fake is the surface the voice UI is actually designed against,
+// so it has to obey the same event contract as the real host (voice-types.ts):
+// `cancel` emits nothing, `stop` emits exactly one `final`. The fake used to
+// answer a cancel with an empty `final` — which reads as "the mic closed and
+// heard nothing", i.e. a finished utterance — so a composer that trusts the
+// contract would have cleared text on cancel that the real app keeps.
+describe('the workbench voice fake', () => {
+  /** Start the fake, let it "hear" a few seconds of its scripted sentence, and
+   *  hand back the recorder so the caller can clear it and watch what one more
+   *  call emits. */
+  async function listening() {
+    const voice = createVoiceMock(null);
+    const seen: VoiceEvent[] = [];
+    voice.onEvent((e) => seen.push(e));
+    await voice.start();
+    await vi.advanceTimersByTimeAsync(3000);
+    // Sanity: without this, every assertion below would pass just as well on a
+    // fake that never started listening at all.
+    expect(seen.some((e) => e.type === 'partial')).toBe(true);
+    seen.length = 0;
+    return { voice, seen };
+  }
+
+  // WHY these two exist: reviewing T1 (2026-09-05) both of the behaviours below were
+  // MUTATED — the split reverted to the old hard-coded "grey the last two words", and
+  // the heartbeat emit deleted — and the whole suite stayed green. A guard that cannot
+  // fail on the exact regression it was written for is not a guard. The two-word split
+  // is what made the reviewed behaviour and the shipped behaviour two different things,
+  // which is the reason this task existed at all.
+  it("the fake greys by sentence, not by a fixed number of words", async () => {
+    vi.useFakeTimers();
+    try {
+      const voice = createVoiceMock(null);
+      const seen: VoiceEvent[] = [];
+      voice.onEvent((e) => seen.push(e));
+      await voice.start();
+      // Long enough for the script to pass its question mark.
+      await vi.advanceTimersByTimeAsync(8000);
+      const partials = seen.filter((e): e is Extract<VoiceEvent, { type: 'partial' }> => e.type === 'partial');
+      expect(partials.length).toBeGreaterThan(3);
+      // Every solid half ends at a sentence mark (or is empty, before the first one).
+      for (const p of partials) {
+        if (p.committed) expect(p.committed.trimEnd()).toMatch(/[.?!]$/);
+      }
+      // And the grey half is NOT always two words — that is the old rule.
+      expect(partials.some((p) => p.tail.split(' ').filter(Boolean).length !== 2)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the fake pushes a heartbeat with every partial', async () => {
+    vi.useFakeTimers();
+    try {
+      const voice = createVoiceMock(null);
+      const seen: VoiceEvent[] = [];
+      voice.onEvent((e) => seen.push(e));
+      await voice.start();
+      await vi.advanceTimersByTimeAsync(4000);
+      const partials = seen.filter((e) => e.type === 'partial').length;
+      const beats = seen.filter((e) => e.type === 'heartbeat').length;
+      expect(partials).toBeGreaterThan(0);
+      // The composer's watchdog arms when heartbeats STOP, so a fake that never
+      // sends them would make the watchdog fire during every workbench review.
+      expect(beats).toBe(partials);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The silence stop fires on its own once the script runs out. A `stop()` after
+  // that used to emit a SECOND `final` — and a composer that trusts the contract
+  // ("never zero and never two") would paste the whole utterance twice. Reachable
+  // in a review pane by holding Space longer than the ~13 s script.
+  it('a stop after the fake has already closed itself emits no second final', async () => {
+    vi.useFakeTimers();
+    try {
+      const voice = createVoiceMock(null);
+      const seen: VoiceEvent[] = [];
+      voice.onEvent((e) => seen.push(e));
+      await voice.start();
+      // Past the end of the script AND its two quiet seconds.
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(seen.filter((e) => e.type === 'final')).toHaveLength(1);
+      await voice.stop();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(seen.filter((e) => e.type === 'final')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the fake's cancel emits no final", async () => {
+    vi.useFakeTimers();
+    try {
+      const { voice, seen } = await listening();
+      await voice.cancel();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(seen).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the fake's stop emits exactly one final", async () => {
+    vi.useFakeTimers();
+    try {
+      const { voice, seen } = await listening();
+      await voice.stop();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(seen.filter((e) => e.type === 'final')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the fake offers the two desktop-only members the composer gates on', async () => {
+    const voice = createVoiceMock(null);
+    // The composer decides "does this computer capture its own audio?" by
+    // testing for these; a fake without them sends every review pane down the
+    // Android path, which opens no microphone and composes no readiness.
+    expect(typeof voice.sendAudio).toBe('function');
+    expect(typeof voice.micAccess).toBe('function');
+    await expect(voice.micAccess!()).resolves.toBe('granted');
+  });
+
+  it('the fake download passes through unpacking before ready', async () => {
+    vi.useFakeTimers();
+    try {
+      const voice = createVoiceMock('needs-download');
+      const states: string[] = [];
+      voice.onEvent((e) => { if (e.type === 'readiness') states.push(e.readiness.state); });
+      await voice.download();
+      await vi.advanceTimersByTimeAsync(20_000);
+      // The unpack is the longest single wait of the first run; if the fake
+      // skipped it, that card would never be reviewed by anyone.
+      expect(states).toContain('unpacking');
+      expect(states.indexOf('unpacking')).toBeLessThan(states.indexOf('ready'));
+      expect(states[states.length - 1]).toBe('ready');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

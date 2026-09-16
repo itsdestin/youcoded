@@ -67,7 +67,12 @@ class SkillScanner(private val homeDir: File, private val context: Context) {
                         val skillId = if (pluginRoot.name.startsWith("youcoded")) entry.name
                             else "${pluginRoot.name}:${entry.name}"
                         val source = if (pluginRoot.name.startsWith("youcoded")) "youcoded-core" else "plugin"
-                        addSkill(skillId, entry.name, "", source, pluginRoot.name)
+                        // WHY: mirrors desktop/src/main/skill-scanner.ts — without this,
+                        // every plugin skill with no curated registry entry fell back to
+                        // the generic "Run the X skill" string instead of its real
+                        // SKILL.md description.
+                        val desc = readSkillDescription(File(entry, "SKILL.md"))
+                        addSkill(skillId, entry.name, desc, source, pluginRoot.name)
                     }
                 }
             }
@@ -92,16 +97,19 @@ class SkillScanner(private val homeDir: File, private val context: Context) {
                 try {
                     File(installPath, "skills").listFiles()?.forEach { entry ->
                         if (entry.isDirectory) {
-                            addSkill("$pluginSlug:${entry.name}", entry.name, "", "plugin", pluginSlug)
+                            val desc = readSkillDescription(File(entry, "SKILL.md"))
+                            addSkill("$pluginSlug:${entry.name}", entry.name, desc, "plugin", pluginSlug)
                         }
                     }
                 } catch (_: Exception) {}
 
-                // commands/ directory
+                // commands/ directory — usually no SKILL.md (it's a slash command,
+                // not a skill), so this is a best-effort match for the fallback.
                 try {
                     File(installPath, "commands").listFiles()?.forEach { entry ->
                         if (entry.isDirectory) {
-                            addSkill("$pluginSlug:${entry.name}", entry.name, "", "plugin", pluginSlug)
+                            val desc = readSkillDescription(File(entry, "SKILL.md"))
+                            addSkill("$pluginSlug:${entry.name}", entry.name, desc, "plugin", pluginSlug)
                         }
                     }
                 } catch (_: Exception) {}
@@ -126,5 +134,41 @@ class SkillScanner(private val homeDir: File, private val context: Context) {
             Log.w("SkillScanner", "skill-registry.json not found in assets", e)
             JSONObject()
         }
+    }
+
+    // Minimal SKILL.md frontmatter reader — just `description`.
+    // Mirrors readSkillMeta() in desktop/src/main/skill-scanner.ts.
+    private fun readSkillDescription(skillMd: File): String {
+        return try {
+            val raw = skillMd.readText()
+            val fm = Regex("^---\\s*\\n([\\s\\S]*?)\\n---", RegexOption.MULTILINE).find(raw) ?: return ""
+            readFrontmatterDescription(fm.groupValues[1])
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    // `description:` is sometimes a YAML folded/literal block scalar
+    // (`description: >` or `description: |`) rather than a plain scalar on one
+    // line — every youcoded-encyclopedia skill uses this form for its long
+    // trigger text. A single-line regex would capture the block indicator
+    // itself (">") instead of the text, so walk the following indented lines
+    // and join them. Mirrors readFrontmatterDescription() in
+    // desktop/src/main/skill-scanner.ts.
+    private fun readFrontmatterDescription(body: String): String {
+        val lines = body.split("\n")
+        val idx = lines.indexOfFirst { Regex("^description:\\s*").containsMatchIn(it) }
+        if (idx == -1) return ""
+        val inline = Regex("^description:\\s*(.*)$").find(lines[idx])?.groupValues?.get(1)?.trim() ?: ""
+        if (!Regex("^[|>][+-]?\\d*$").matches(inline)) {
+            return inline.trim('"', '\'').trim()
+        }
+        val collected = mutableListOf<String>()
+        var i = idx + 1
+        while (i < lines.size && Regex("^\\s+\\S").containsMatchIn(lines[i])) {
+            collected.add(lines[i].trim())
+            i++
+        }
+        return collected.joinToString(" ").trim()
     }
 }

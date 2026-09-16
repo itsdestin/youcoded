@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { fieldClasses } from '../ui';
+import { Button, ErrorState, fieldClasses, Tooltip } from '../ui';
+import { plainMessage } from '../../utils/ipc-error';
+import { triggerTip } from '../guide/tips';
 import { SearchFilterPill } from '../ui/SearchFilterPill';
 import { POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -33,6 +35,7 @@ import { CLAUDE_ALIASES, type ClaudeAlias } from '../../../shared/model-ids';
 import { matchesQuery } from '../../../shared/text-match';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
+import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
 
 export type ModelChoice =
   | { runtime: 'claude'; alias: string }
@@ -57,9 +60,6 @@ const CLAUDE_SOURCE = 'claude';
  *    'all'   — marks everywhere + every row's name is brand-coloured.
  *  Review deck 2026-08-31 captures all three; the loser gets deleted. */
 
-interface ProviderRow { id: string; type: string; label: string; ready: boolean }
-interface CatalogRow { id: string; providerId: string; label: string }
-
 interface Entry {
   key: string;
   label: string;
@@ -71,6 +71,14 @@ interface Entry {
    *  the brand matcher's fallback when the model id itself names no company —
    *  e.g. a direct Anthropic key serving an id we don't recognise. */
   providerType?: string;
+  /** Why this row cannot be picked right now ("Sign in to use", "Add an API
+   *  key"). Set means the row is listed, greyed and inert — Destin, 2026-09-07
+   *  (Q-E a): a model this install cannot run is still worth SEEING, so the
+   *  list stops pretending the rest of the app does not exist. */
+  unavailable?: string;
+  /** `unavailable` is specifically "Add an API key" — clicking it should open
+   *  Settings' Cloud providers page instead of sitting there as inert text. */
+  needsApiKey?: boolean;
 }
 
 /** Which company mark + colour a row carries.
@@ -178,9 +186,24 @@ export default function ModelPicker({
   includeNative = true,
   onManageModels,
   prefill,
+  defaultOpen = false,
+  layout = 'floating',
+  pinSelectedToTop = false,
+  emptyLabel = 'Choose a model…',
 }: {
   value: ModelChoice | null;
-  onSelect: (choice: ModelChoice) => void;
+  /** What the CLOSED button reads when nothing is picked. Defaults to the
+   *  create-time wording. A host where "nothing picked" is itself a meaningful
+   *  setting — session naming, where it means the conversation's own model —
+   *  says so here rather than printing a prompt for a choice already made. */
+  emptyLabel?: string;
+  /** The second argument is the label this picker DISPLAYED for the choice —
+   *  provider and model as the user just read them. Optional, and every caller
+   *  that does not need it simply ignores it. Design review 2 (R2-3): the
+   *  Settings row had no way to name a native model and rendered its raw id,
+   *  which reads as a filename. The picker is the one place that already knows
+   *  the right words. */
+  onSelect: (choice: ModelChoice, label?: { provider: string; model: string }) => void;
   /** Scope the list to one runtime. A resume cannot move a conversation across
    *  runtimes — a Claude Code transcript has no native binding to resume into,
    *  and a native conversation has no CC transcript — so that host narrows the
@@ -201,11 +224,35 @@ export default function ModelPicker({
    *  (Destin's Task 6 ruling — native resume ALWAYS offers the picker,
    *  pre-filled when the model is available here). */
   prefill?: PortableModelRef;
+  /** Starts the panel already expanded — for a host where the picker IS the
+   *  surface (ModelPickerPopup's status-bar dialog) rather than one field
+   *  among several (SessionStrip, the welcome form, Resume Browser). Defaults
+   *  false everywhere else so this doesn't change the six other call sites. */
+  defaultOpen?: boolean;
+  /** 'floating' (default) portals the open panel to document.body and pins it
+   *  to the trigger with fixed positioning — built for a picker sitting among
+   *  other fields, where the panel must escape an ancestor's clipping and
+   *  overlay whatever is below it. 'inline' instead renders the panel as a
+   *  normal child, in flow, so surrounding content is pushed down rather than
+   *  covered, and OMITS the collapsed trigger row entirely — there is nothing
+   *  to collapse back to, since the panel has no closed state to return to.
+   *  Only ModelPickerPopup uses 'inline', always paired with `defaultOpen`:
+   *  without a trigger, `defaultOpen` is the only way the panel ever opens. */
+  layout?: 'floating' | 'inline';
+  /** Pins the current `value` to the TOP of the favourites view, even when it
+   *  isn't favourited — so a menu that opens straight to the list (`layout:
+   *  'inline'`) shows what's active first, rather than only ever showing
+   *  favourites and leaving the current pick to `search` for. No effect while
+   *  searching (the whole catalogue is already the result, unordered). */
+  pinSelectedToTop?: boolean;
 }) {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
+  // Claude Code's LIVE sign-in (2026-09-09). Unknown and not-yet-answered both
+  // count as yes (see useClaudeStatus) — the list must never invent a problem.
+  const { status: claudeStatus } = useClaudeStatus();
   const [loaded, setLoaded] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [search, setSearch] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const [sources, setSources] = useState<Set<string>>(new Set());
@@ -221,25 +268,40 @@ export default function ModelPicker({
   const panelRef = useRef<HTMLDivElement>(null);
   const pillRef = useRef<HTMLDivElement>(null);
   const filterPopRef = useRef<HTMLDivElement>(null);
-  const [panelPos, setPanelPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
+  const [panelPos, setPanelPos] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const [filterPos, setFilterPos] = useState<{ top: number; left: number } | null>(null);
 
   const FILTER_W = 264;
 
-  // Anchor the panel DIRECTLY BELOW the trigger, horizontally centred on it,
-  // and clamp into the viewport. Not viewport-centred — a picker that opens in
-  // the middle of the screen reads as a modal and loses its tie to the field.
+  // Anchor the panel beside its trigger (below where there is room, otherwise
+  // above), horizontally centred on it, and clamp into the viewport. It must
+  // stay tied to its field rather than appearing as a viewport-centred modal.
   const measure = useCallback(() => {
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const width = Math.max(r.width, 320);
+    const gap = 4;
+    const edge = 8;
+    // WHY the Math.min (2026-09-10): the 320 floor is a readability minimum, but
+    // it was applied unconditionally, so in a viewport NARROWER than 320+gutters
+    // the panel was wider than the window and clipped on the right — with no
+    // scrollbar and no visual tell. That is exactly the buddy floater's chat
+    // window, which is 320px wide, so the model list arrived there missing its
+    // right edge. A panel must never exceed the viewport it is clamped into.
+    // No-op in the main window and on Android, where innerWidth far exceeds 336.
+    const width = Math.min(Math.max(r.width, 320), window.innerWidth - edge * 2);
     const centred = r.left + r.width / 2 - width / 2;
+    const spaceBelow = window.innerHeight - r.bottom - edge;
+    const spaceAbove = r.top - edge;
+    const opensUpward = spaceBelow < 180 && spaceAbove > spaceBelow;
     setPanelPos({
-      top: r.bottom + 4,
-      left: Math.max(8, Math.min(centred, window.innerWidth - width - 8)),
+      // WHY: A New Session menu can put this field near the bottom of a short
+      // window. Choose the side with usable room instead of forcing a panel
+      // below the field where the viewport clips its search and model rows.
+      ...(opensUpward ? { bottom: window.innerHeight - r.top + gap } : { top: r.bottom + gap }),
+      left: Math.max(edge, Math.min(centred, window.innerWidth - width - edge)),
       width,
-      maxHeight: Math.max(180, window.innerHeight - r.bottom - 16),
+      maxHeight: Math.max(180, (opensUpward ? spaceAbove : spaceBelow) - gap),
     });
     // The filter popover is PORTALED too. `.layer-surface` sets
     // `overflow: hidden` (unlayered, globals.css:886) to clip scroll-fades to
@@ -256,17 +318,64 @@ export default function ModelPicker({
     }
   }, []);
 
+  /**
+   * Why this list is fetched more than once (Destin, 2026-09-06).
+   *
+   * He opened this menu, went off and set up a local model, came back to the
+   * STILL-OPEN menu, searched for it — and it wasn't there. Closing the menu and
+   * opening it again fixed it. The fetch below used to run once, when the picker
+   * mounted, and never again, so the list was a snapshot of whatever existed the
+   * moment the screen was built.
+   *
+   * Two things make it catch up now:
+   *   · it re-runs when the panel OPENS, for "went away and came back";
+   *   · `reload` is bumped when a local model finishes DOWNLOADING, for the case
+   *     Destin actually hit, where the panel never closed.
+   *
+   * The download signal is the app's existing progress push — the one the Local
+   * Models screen already listens to. It is deliberately NOT `engine.onModelsChanged`:
+   * that channel is declared in the preload and in shared/types.ts but NOTHING in
+   * the main process ever sends it (`rg -n "ENGINE_MODELS_CHANGED" src/` finds the
+   * declaration and the listener, no sender), and even wired up it only fires while
+   * the engine PROCESS is running — which it is not while you are downloading a
+   * model, since the engine starts on your first message.
+   */
+  const [reload, setReload] = useState(0);
+  const everLoadedRef = useRef(false);
+  // Why the last provider/catalog load failed, in plain words; null once one works.
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   useEffect(() => {
+    const off = window.claude?.models?.onDownloadProgress?.((p: { state?: string }) => {
+      if (p?.state === 'done') setReload((n) => n + 1);
+    });
+    return () => { off?.(); };
+  }, []);
+
+  useEffect(() => {
+    // The very first fetch happens while the panel is still closed (the pill has
+    // to show the model's name, and a prefill has to resolve). After that, only
+    // an open or a finished download is worth re-asking for — closing the panel
+    // is not.
+    if (everLoadedRef.current && !open) return;
+    everLoadedRef.current = true;
     let cancelled = false;
+    // WHY no per-call `.catch(() => [])` (error inventory 2026-09-10, false message 9):
+    // each call turned a failure into an empty list, so a failed load left no native
+    // rows and a native-only picker said "You have not set up any model providers." —
+    // with "Add provider" — to someone who had them. A failure now reaches the catch
+    // below and is shown as one. Rows from an earlier load are left in place (they are
+    // real), so the error replaces the list only when nothing has loaded.
     Promise.all([
-      window.claude.providers.list().catch(() => []),
-      window.claude.providers.catalog().catch(() => []),
+      window.claude.providers.list(),
+      window.claude.providers.catalog(),
     ]).then(([list, cat]: [any, any]) => {
       if (cancelled) return;
       const providerRows: ProviderRow[] = Array.isArray(list) ? list : [];
       const catalogRows: CatalogRow[] = Array.isArray(cat) ? cat : [];
       setProviders(providerRows);
       setCatalog(catalogRows);
+      setLoadError(null);
       setLoaded(true);
 
       if (prefill && !prefillAppliedRef.current && !value) {
@@ -276,12 +385,22 @@ export default function ModelPicker({
         });
         if (match) {
           prefillAppliedRef.current = true;
-          onSelect({ runtime: 'native', providerId: match.providerId, modelId: match.id });
+          const prov = providerRows.find((row) => row.id === match.providerId);
+          onSelect(
+            { runtime: 'native', providerId: match.providerId, modelId: match.id },
+            { provider: prov?.label ?? match.providerId, model: match.label ?? match.id },
+          );
         }
       }
-    }).catch(() => setLoaded(true));
+    }).catch((e: unknown) => {
+      // See the WHY above the Promise.all: the reason is kept so the panel can say
+      // it could not load, instead of saying no providers are set up.
+      if (!cancelled) setLoadError(plainMessage(e));
+      setLoaded(true);
+    });
     return () => { cancelled = true; };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, reload]);
 
   // Reset the transient view state on each open so the panel always starts on
   // the favourites view rather than resuming a stale search.
@@ -329,27 +448,47 @@ export default function ModelPicker({
 
   const entries: Entry[] = useMemo(() => {
     const out: Entry[] = [];
+    const data = { providers, catalog, claudeStatus };
     if (includeClaude) {
       for (const m of CLAUDE_MODELS) {
         const choice: ModelChoice = { runtime: 'claude', alias: m.alias };
         out.push({
           key: choiceKey(choice), label: m.label, choice,
           sourceId: CLAUDE_SOURCE, sourceLabel: 'Claude Code', local: false,
+          unavailable: unavailableReason(choice, data) ?? undefined,
         });
       }
     }
-    for (const p of includeNative ? providers.filter((x) => x.ready) : []) {
+    // WHY every provider, not just the ready ones (Destin, 2026-09-07, Q-E a):
+    // dropping an unready provider's models hid the app from the person most
+    // likely to need it — someone who set up with ChatGPT never learned the
+    // other models existed. They are listed, greyed and unpickable, each row
+    // carrying the one thing that would unlock it.
+    for (const p of includeNative ? providers : []) {
       for (const m of catalog.filter((c) => c.providerId === p.id)) {
         const choice: ModelChoice = { runtime: 'native', providerId: p.id, modelId: m.id };
         out.push({
           key: choiceKey(choice), label: m.label, choice,
           sourceId: p.id, sourceLabel: p.label, local: p.type === 'local-engine',
           providerType: p.type,
+          unavailable: unavailableReason(choice, data) ?? undefined,
+          needsApiKey: nativeChoiceNeedsApiKey(choice, data),
         });
       }
     }
     return out;
-  }, [providers, catalog, includeClaude, includeNative]);
+  }, [providers, catalog, includeClaude, includeNative, claudeStatus]);
+
+  /** Nothing on this install can actually start a conversation. Drives the
+   *  "You have not set up any model providers." block (P-3). */
+  const anyPickable = useMemo(() => entries.some((e) => !e.unavailable), [entries]);
+
+  /** Every provider with rows in the list, ready or not — the filter chips must
+   *  be able to reach a greyed source too. */
+  const listedProviders = useMemo(
+    () => (includeNative ? providers.filter((p) => catalog.some((c) => c.providerId === p.id)) : []),
+    [providers, catalog, includeNative],
+  );
 
   const readyProviders = useMemo(
     () => (includeNative ? providers.filter((p) => p.ready) : []),
@@ -369,16 +508,50 @@ export default function ModelPicker({
   const searching = q.length > 0;
 
   // THE view rule: favourites until you type, then the whole catalogue.
+  // The local-models tip's moment: the picker opens and nothing in it runs on
+  // this computer (guide/tips.ts). `loaded` so an empty catalog mid-fetch does
+  // not pass for "no local model".
+  const hasLocal = entries.some((e) => e.local);
+  useEffect(() => { if (open && loaded && !hasLocal) triggerTip('local-models'); }, [open, loaded, hasLocal]);
+
   const rows = useMemo(() => {
     const pool = searching ? entries : entries.filter((e) => favorites.has(e.key));
-    return pool.filter((e) => {
+    const filtered = pool.filter((e) => {
       if (localOnly && !e.local) return false;
       if (sources.size && !sources.has(e.sourceId)) return false;
       // Word-by-word, punctuation-insensitive: "gpt 5.6" has to find "GPT-5.6".
       if (!matchesQuery(q, e.label, e.sourceLabel)) return false;
       return true;
     });
-  }, [entries, favorites, searching, localOnly, sources, q]);
+    // Pin the active model to the top of the favourites view, even when it
+    // isn't favourited — a menu that opens straight to this list (no click to
+    // get here first) should lead with what's actually selected, not require
+    // typing to find it. Skipped while searching: the whole catalogue is
+    // already the result there, and reordering a search result is surprising.
+    let ordered = filtered;
+    if (pinSelectedToTop && !searching && value) {
+      const currentKey = choiceKey(value);
+      const idx = filtered.findIndex((e) => e.key === currentKey);
+      if (idx > 0) {
+        const reordered = filtered.slice();
+        const [current] = reordered.splice(idx, 1);
+        ordered = [current, ...reordered];
+      } else if (idx === -1) {
+        const hit = entries.find((e) => e.key === currentKey);
+        const passesFilters = hit
+          && (!localOnly || hit.local)
+          && (!sources.size || sources.has(hit.sourceId));
+        if (passesFilters) ordered = [hit, ...filtered];
+      }
+    }
+    // WHY partition rather than sort: `unavailable` already drives the disabled
+    // state, so this promotes rows the user can choose without re-checking
+    // provider readiness or disturbing catalogue/pinned order within either group.
+    return [
+      ...ordered.filter((e) => e.unavailable === undefined),
+      ...ordered.filter((e) => e.unavailable !== undefined),
+    ];
+  }, [entries, favorites, searching, localOnly, sources, q, pinSelectedToTop, value]);
 
   const toggleFavorite = (key: string) => {
     setFavorites((prev) => {
@@ -392,15 +565,15 @@ export default function ModelPicker({
   const activeFilters = (sources.size ? 1 : 0) + (localOnly ? 1 : 0);
 
   const currentLabel = useMemo(() => {
-    if (!value) return 'Choose a model…';
+    if (!value) return emptyLabel;
     const hit = entries.find((e) => e.key === choiceKey(value));
     if (hit) return `${hit.label} · ${hit.sourceLabel}`;
     // A binding whose catalog row hasn't loaded (or a typed freeform id) still
     // needs a truthful label rather than falling back to "Choose a model…".
     return value.runtime === 'claude' ? value.alias : value.modelId;
-  }, [value, entries]);
+  }, [value, entries, emptyLabel]);
 
-  const pick = (c: ModelChoice) => { onSelect(c); setOpen(false); setFilterOpen(false); };
+  const pick = (c: ModelChoice, label?: { provider: string; model: string }) => { onSelect(c, label); setOpen(false); setFilterOpen(false); };
 
   /** Brand for the CLOSED button. Derived from `value` directly rather than by
    *  looking the row up in `entries`, because the button must stay correct in
@@ -415,7 +588,7 @@ export default function ModelPicker({
   }, [value, providers]);
 
   const row = (e: Entry) => {
-    const selected = !!value && choiceKey(value) === e.key;
+    const selected = !!value && choiceKey(value) === e.key && !e.unavailable;
     const fav = favorites.has(e.key);
     const brand = brandForEntry(e);
     // On the selected row the accent fill owns the foreground: painting a brand
@@ -428,52 +601,126 @@ export default function ModelPicker({
     // names reads as decoration rather than meaning.
     const markColor = selected ? undefined : brand?.color;
     return (
-      <div key={e.key} className="group/model flex items-center gap-1 px-2">
-        <button
-          type="button"
-          onClick={() => pick(e.choice)}
-          aria-pressed={selected}
-          className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${
-            selected ? 'bg-accent text-on-accent font-medium' : 'text-fg-2 hover:bg-inset'
-          }`}
-        >
-          {/* The company mark. A fixed-width box whether or not a mark resolves,
-              so an unrecognised model's name still lines up with its neighbours'
-              instead of hanging one glyph-width to the left. */}
-          <span className="w-[13px] shrink-0 inline-flex items-center justify-center" style={markColor ? { color: markColor } : undefined}>
-            {brand?.icon
-              ? <ProviderIcon icon={brand.icon} size={13} />
-              : <ModelIcon className="w-3 h-3 opacity-40" />}
-          </span>
-          <span className="truncate block min-w-0">
-            {e.label}
-            {/* Divider dot + source, inline per row — this is what replaced the
-                per-provider sections. One flat list reads the same at 4 models
-                or 400. */}
-            <span className={selected ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
-          </span>
-        </button>
-        {/* touch-reveal + coarse-hit: hover-only affordances never resolve on
-            the Android WebView (narrow-viewport rule). */}
-        <button
-          type="button"
-          onClick={() => toggleFavorite(e.key)}
-          aria-pressed={fav}
-          aria-label={fav ? `Unfavourite ${e.label}` : `Favourite ${e.label}`}
-          title={fav ? 'Remove from favourites' : 'Add to favourites'}
-          className={`shrink-0 w-6 h-6 rounded inline-flex items-center justify-center transition-opacity coarse-hit touch-reveal ${
-            fav ? 'text-accent opacity-100' : 'text-fg-faint opacity-0 group-hover/model:opacity-100 hover:text-fg-2'
-          }`}
-        >
-          <StarGlyph filled={fav} />
-        </button>
+      // Two levels now: the OUTER div keeps the row's original left/right
+      // margin (px-2, unhighlighted, same on every row) — the accent fill on
+      // the whole outer box read as "too far across" once it ate that margin
+      // (2026-09-07 feedback). The INNER div is what actually carries the
+      // fill, sized to the space between those margins, so it covers the
+      // favourite star's column too instead of stopping at the name button.
+      <div key={e.key} className="group/model flex items-center px-2">
+        <div className={`flex-1 min-w-0 flex items-center gap-1 rounded ${selected ? 'bg-accent' : ''}`}>
+          <Tooltip text={e.unavailable ? `${e.label} · ${e.sourceLabel} — ${e.unavailable}` : ''}>
+          <button
+            type="button"
+            // A row this install cannot run is inert, not hidden: nothing is
+            // picked on the user's behalf, and nothing fails later because the
+            // list offered something that could not start (Q-E a).
+            disabled={!!e.unavailable}
+            onClick={() => pick(e.choice, { provider: e.sourceLabel, model: e.label })}
+            aria-pressed={selected}
+            className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${
+              e.unavailable
+                ? 'text-fg-faint cursor-default'
+                : selected ? 'text-on-accent font-medium' : 'text-fg-2 hover:bg-inset'
+            }`}
+          >
+            {/* The company mark. A fixed-width box whether or not a mark resolves,
+                so an unrecognised model's name still lines up with its neighbours'
+                instead of hanging one glyph-width to the left. */}
+            <span
+              className={`w-[13px] shrink-0 inline-flex items-center justify-center ${e.unavailable ? 'opacity-45' : ''}`}
+              style={markColor ? { color: markColor } : undefined}
+            >
+              {brand?.icon
+                ? <ProviderIcon icon={brand.icon} size={13} />
+                : <ModelIcon className="w-3 h-3 opacity-40" />}
+            </span>
+            <span className="truncate block min-w-0">
+              {e.label}
+              {/* Divider dot + source, inline per row — this is what replaced the
+                  per-provider sections. One flat list reads the same at 4 models
+                  or 400. */}
+              <span className={selected ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
+            </span>
+          </button>
+          </Tooltip>
+          {/* The one thing that would unlock this row, in its own words. Lives
+              OUTSIDE the row's own (disabled) button — a button can't nest
+              inside another button — so the one reason with a one-click fix
+              ("Add an API key") can be its own live control instead of inert
+              text next to a dead one. coarse-hit: the label text is well under
+              the touch target guideline. */}
+          {e.unavailable && (
+            e.needsApiKey ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  if (onManageModels) onManageModels();
+                  else window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
+                }}
+                aria-label={`Add an API key for ${e.sourceLabel}`}
+                className="ml-auto shrink-0 pl-2 pr-1 text-3xs text-fg-faint hover:text-fg-2 hover:underline focus-visible:underline transition-colors coarse-hit"
+              >
+                {e.unavailable}
+              </button>
+            ) : e.sourceId === CLAUDE_SOURCE && claudeStatus?.state === 'not-installed' ? (
+              // First-run local models (F-5): Claude Code installs on demand now,
+              // so its greyed rows carry the fix — the Claude card in Cloud
+              // providers, which holds the Install button.
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  if (onManageModels) onManageModels();
+                  else window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
+                }}
+                aria-label="Install Claude Code"
+                className="ml-auto shrink-0 pl-2 pr-1 text-3xs text-fg-faint hover:text-fg-2 hover:underline focus-visible:underline transition-colors coarse-hit"
+              >
+                Install Claude Code
+              </button>
+            ) : (
+              <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>
+            )
+          )}
+          {/* touch-reveal + coarse-hit: hover-only affordances never resolve on
+              the Android WebView (narrow-viewport rule). Selected uses the same
+              on-accent colour as the mark/name above, for the same reason:
+              painting the ordinary favourite-gold onto the accent fill is the
+              one place it can fail contrast, since the accent is theme-authored
+              and unknown to us. mr-1 keeps it off the fill's rounded corner,
+              mirroring the name button's own left inset (px-2) on the other end. */}
+          <Tooltip text={fav ? 'Remove from favourites' : 'Add to favourites'}>
+          <button
+            type="button"
+            onClick={() => toggleFavorite(e.key)}
+            aria-pressed={fav}
+            aria-label={fav ? `Unfavourite ${e.label}` : `Favourite ${e.label}`}
+            className={`shrink-0 w-6 h-6 mr-1 rounded inline-flex items-center justify-center transition-opacity coarse-hit touch-reveal ${
+              selected
+                ? 'text-on-accent opacity-100'
+                : fav
+                  ? 'text-accent opacity-100'
+                  : 'text-fg-faint opacity-0 group-hover/model:opacity-100 hover:text-fg-2'
+            }`}
+          >
+            <StarGlyph filled={fav} />
+          </button>
+          </Tooltip>
+        </div>
       </div>
     );
   };
 
   return (
     <div className="relative">
-      {/* Trigger — the project picker's field shape (FolderSwitcher.tsx:181). */}
+      {/* Trigger — the project picker's field shape (FolderSwitcher.tsx:181).
+          Omitted in 'inline' layout: that panel has no closed state to
+          collapse back to, so a row that only echoes `value` and toggles
+          `open` (to no visible effect worth keeping) is redundant with the
+          selected row already highlighted in the list below. */}
+      {layout !== 'inline' && (
       <button
         ref={triggerRef}
         type="button"
@@ -513,23 +760,13 @@ export default function ModelPicker({
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
       </button>
+      )}
 
-      {open && panelPos && createPortal(
-        <>
-          <div
-            ref={panelRef}
-            // Marker for HOST menus' outside-click handlers — the portal lives on
-            // document.body, so SessionStrip's contains() check can't see it and
-            // would otherwise unmount us on mousedown before our click fires.
-            // Same contract as FolderSwitcher's data-folder-switcher-portal.
-            data-model-picker-portal=""
-            className="layer-surface fixed flex flex-col overflow-hidden"
-            style={{
-              top: panelPos.top, left: panelPos.left, width: panelPos.width,
-              maxHeight: panelPos.maxHeight, zIndex: POPOVER_Z,
-              animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both',
-            }}
-          >
+      {open && (() => {
+        // Shared between both layouts — see the `layout` prop doc above for
+        // why there are two hosts for the identical content.
+        const panelBody = (
+          <>
             <div className="p-2 border-b border-edge-dim">
               <SearchFilterPill
                 ref={pillRef}
@@ -546,12 +783,38 @@ export default function ModelPicker({
             <div className="flex-1 min-h-0 overflow-y-auto py-1.5">
               {!loaded ? (
                 <p className="text-xs text-fg-muted text-center py-4">Loading…</p>
-              ) : entries.length === 0 ? (
-                <p className="text-xs text-fg-muted text-center py-4 px-3">
-                  No models available. Add a provider in Settings → Model Providers.
-                </p>
               ) : (
                 <>
+                  {/* NOTHING here can run yet. Destin, 2026-09-07 (P-3): this is
+                      the app's answer instead of an empty list or a fallback to
+                      a provider nobody chose — his words, and a way out that
+                      lands in Assistant settings. Sits between the search field
+                      and "Manage models…", where he asked for it. */}
+                  {/* WHY the load error comes first (error inventory 2026-09-10, false
+                      message 9): with nothing pickable, a failed load and "none set up"
+                      looked identical, and both said the second. A failed load says so,
+                      with Retry; only a load that WORKED may say none are set up. */}
+                  {!anyPickable && loadError && (
+                    <div className="px-4 py-3">
+                      <ErrorState variant="inline" message={`Couldn't load your models: ${loadError}`} onRetry={() => setReload((n) => n + 1)} />
+                    </div>
+                  )}
+                  {!anyPickable && !loadError && (
+                    <div className="px-4 py-4 text-center space-y-2.5">
+                      <p className="text-xs text-fg-muted leading-relaxed">You have not set up any model providers.</p>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => {
+                          setOpen(false);
+                          if (onManageModels) onManageModels();
+                          else window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
+                        }}
+                      >
+                        Add provider
+                      </Button>
+                    </div>
+                  )}
                   {rows.map(row)}
 
                   {/* Freeform providers only surface while searching — they are
@@ -571,7 +834,7 @@ export default function ModelPicker({
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') {
                                 const id2 = freeformText.trim();
-                                if (id2) pick({ runtime: 'native', providerId: p.id, modelId: id2 });
+                                if (id2) pick({ runtime: 'native', providerId: p.id, modelId: id2 }, { provider: p.label, model: id2 });
                                 setFreeformFor(null);
                               }
                               if (e.key === 'Escape') { setFreeformFor(null); setFreeformText(''); }
@@ -590,11 +853,11 @@ export default function ModelPicker({
                       </div>
                     ))}
 
-                  {rows.length === 0 && (
+                  {rows.length === 0 && anyPickable && (
                     <p className="text-xs text-fg-muted text-center py-4 px-4 leading-relaxed">
                       {searching
                         ? 'No models match.'
-                        : 'No favourites yet. Search for a model, then star it to keep it here.'}
+                        : 'No favorites yet. Search for a model, then star it to keep it here.'}
                     </p>
                   )}
                 </>
@@ -618,56 +881,100 @@ export default function ModelPicker({
                 </button>
               </div>
             )}
+          </>
+        );
+
+        return layout === 'inline' ? (
+          // In flow, right under the trigger — pushes whatever the host draws
+          // below it (ModelPickerPopup's Effort/Fast sections) down instead of
+          // covering it. No portal, no fixed positioning: this panel is meant
+          // to stay open, so there is nothing transient to escape an ancestor
+          // clip for.
+          // No data-model-picker-portal marker here: that marker exists solely
+          // so a HOST's outside-click check (which can't see document.body via
+          // its own contains()) still recognises the portaled panel as part of
+          // the picker. Rendered in flow, this div already IS a normal
+          // descendant, so no host needs the marker to find it.
+          <div
+            ref={panelRef}
+            className="layer-surface mt-1.5 flex flex-col overflow-hidden rounded-md"
+            style={{ maxHeight: 320 }}
+          >
+            {panelBody}
           </div>
-          {filterOpen && filterPos && (
-            <div
-              ref={filterPopRef}
-              // Portaled OUT of the panel: `.layer-surface` sets
-              // `overflow: hidden` unlayered (globals.css:886) so it can clip
-              // scroll-fades to its rounded corners, which also chopped this
-              // popover off at the panel edge. Anchored to the pill's own rect
-              // instead, at POPOVER_Z + 1 so it sits above the panel.
-              className="layer-surface fixed p-3 flex flex-col gap-3"
-              style={{ top: filterPos.top, left: filterPos.left, width: FILTER_W, zIndex: POPOVER_Z + 1 }}
-            >
-              <Group label="Source">
-                {includeClaude && (
-                  <Chip
-                    active={sources.has(CLAUDE_SOURCE)}
-                    onClick={() => setSources((prev) => {
-                      const n = new Set(prev);
-                      if (n.has(CLAUDE_SOURCE)) n.delete(CLAUDE_SOURCE); else n.add(CLAUDE_SOURCE);
-                      return n;
-                    })}
-                  >Claude Code</Chip>
-                )}
-                {readyProviders.map((p) => (
-                  <Chip
-                    key={p.id}
-                    active={sources.has(p.id)}
-                    onClick={() => setSources((prev) => {
-                      const n = new Set(prev);
-                      if (n.has(p.id)) n.delete(p.id); else n.add(p.id);
-                      return n;
-                    })}
-                  >{p.label}</Chip>
-                ))}
-              </Group>
-              <Group label="Show">
-                <Chip active={localOnly} onClick={() => setLocalOnly((v) => !v)}>
-                  Runs on this device
-                </Chip>
-              </Group>
-              {activeFilters > 0 && (
-                <button
-                  type="button"
-                  onClick={() => { setSources(new Set()); setLocalOnly(false); }}
-                  className="self-start text-3xs text-fg-muted hover:text-fg"
-                >Clear filters</button>
-              )}
-            </div>
+        ) : panelPos && createPortal(
+          <div
+            ref={panelRef}
+            // Marker for HOST menus' outside-click handlers — the portal lives on
+            // document.body, so SessionStrip's contains() check can't see it and
+            // would otherwise unmount us on mousedown before our click fires.
+            // Same contract as FolderSwitcher's data-folder-switcher-portal.
+            data-model-picker-portal=""
+            className="layer-surface fixed flex flex-col overflow-hidden"
+            style={{
+              top: panelPos.top, bottom: panelPos.bottom, left: panelPos.left, width: panelPos.width,
+              maxHeight: panelPos.maxHeight, zIndex: POPOVER_Z,
+              animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both',
+            }}
+          >
+            {panelBody}
+          </div>,
+          document.body,
+        );
+      })()}
+      {open && filterOpen && filterPos && createPortal(
+        <div
+          ref={filterPopRef}
+          // WHY: This second portal is outside the panel marker. Hosts such
+          // as SessionStrip use the shared marker to recognise every part of
+          // this picker as an inside click before their own menu can close.
+          data-model-picker-portal=""
+          // Portaled OUT of the panel: `.layer-surface` sets
+          // `overflow: hidden` unlayered (globals.css:886) so it can clip
+          // scroll-fades to its rounded corners, which also chopped this
+          // popover off at the panel edge. Anchored to the pill's own rect
+          // instead, at POPOVER_Z + 1 so it sits above the panel — and, in
+          // 'inline' layout, above the dialog content the panel now pushes
+          // down too, since it is fixed-positioned regardless of `layout`.
+          className="layer-surface fixed p-3 flex flex-col gap-3"
+          style={{ top: filterPos.top, left: filterPos.left, width: FILTER_W, zIndex: POPOVER_Z + 1 }}
+        >
+          <Group label="Source">
+            {includeClaude && (
+              <Chip
+                active={sources.has(CLAUDE_SOURCE)}
+                onClick={() => setSources((prev) => {
+                  const n = new Set(prev);
+                  if (n.has(CLAUDE_SOURCE)) n.delete(CLAUDE_SOURCE); else n.add(CLAUDE_SOURCE);
+                  return n;
+                })}
+              >Claude Code</Chip>
+            )}
+            {listedProviders.map((p) => (
+              <Chip
+                key={p.id}
+                active={sources.has(p.id)}
+                onClick={() => setSources((prev) => {
+                  const n = new Set(prev);
+                  if (n.has(p.id)) n.delete(p.id); else n.add(p.id);
+                  return n;
+                })}
+              >{p.label}</Chip>
+            ))}
+          </Group>
+          <Group label="Show">
+            <Chip active={localOnly} onClick={() => setLocalOnly((v) => !v)}>
+              Runs on this device
+            </Chip>
+          </Group>
+          {activeFilters > 0 && (
+            <button
+              type="button"
+              onClick={() => { setSources(new Set()); setLocalOnly(false); }}
+              className="self-start text-3xs text-fg-muted hover:text-fg"
+            >Clear filters</button>
           )}
-        </>,
+        </div>,
         document.body,
       )}
     </div>

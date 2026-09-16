@@ -1,11 +1,11 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
-import type { Plugin } from 'unified';
+import type { Plugin, PluggableList } from 'unified';
 import type { Root, Element, Text, RootContent } from 'hast';
 import { visitParents } from 'unist-util-visit-parents';
-import { detectFilepaths } from '../hooks/useInlineFilepathDetector';
+import { detectLinkTokens } from './markdown-linkify';
 import { Button } from './ui';
 import { FilepathToken } from './FilepathToken';
 import { CONVERSATIONS_FENCE, parseConversationRefs } from '../../shared/chatsearch-refs';
@@ -33,11 +33,100 @@ const rehypeMarkBlockCode: Plugin<[], Root> = () => (tree: Root) => {
   });
 };
 
-// Stable plugin arrays — avoids re-creating on every render when sessionId
-// is absent (non-artifact contexts). When filepath detection is active,
-// the rehype plugin array is memoized per-sessionId in the component below.
-const remarkPluginsStable = [remarkGfm];
-const rehypePluginsStable = [rehypeHighlight, rehypeMarkBlockCode];
+/**
+ * Rehype plugin: support the one raw-HTML construct assistant replies commonly
+ * use, while keeping arbitrary model-generated HTML inert.
+ *
+ * react-markdown deliberately emits HTML as `raw` nodes unless rehype-raw is
+ * enabled. Rendering all raw HTML would unnecessarily widen the trust boundary,
+ * but leaving those nodes alone exposes standalone closing tags such as
+ * `</details>` as visible text. Convert only a strict details/summary pair into
+ * real HAST elements; every other raw node becomes escaped readable text with
+ * its tags removed.
+ */
+const rehypeSafeDisclosures: Plugin<[{ disclosures?: boolean }?], Root> =
+  (options) => (tree: Root) => {
+  const renderDisclosures = options?.disclosures ?? true;
+  const processChildren = (parent: Root | Element) => {
+    const children = parent.children;
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index] as RootContent & { value?: string };
+      if (child.type === 'element') processChildren(child as Element);
+      if (child.type !== 'raw' || typeof child.value !== 'string') continue;
+
+      const combinedOpening = child.value.match(
+        /^\s*<details(\s+open)?\s*>\s*<summary>\s*([^<>]*?)\s*<\/summary>\s*$/i,
+      );
+      const detailsOnly = child.value.match(/^\s*<details(\s+open)?\s*>\s*$/i);
+      let summary = combinedOpening?.[2];
+      let contentStart = index + 1;
+      if (!summary && detailsOnly) {
+        // CommonMark inserts newline text nodes around HTML blocks. Ignore only
+        // whitespace while looking for a separately parsed <summary> node.
+        let summaryIndex = index + 1;
+        while (summaryIndex < children.length
+          && children[summaryIndex].type === 'text'
+          && hastText(children[summaryIndex]).trim() === '') summaryIndex++;
+        const summaryNode = children[summaryIndex] as RootContent & { value?: string };
+        const summaryMatch = summaryNode?.type === 'raw'
+          ? summaryNode.value?.match(/^\s*<summary>\s*([^<>]*?)\s*<\/summary>\s*$/i)
+          : null;
+        if (summaryMatch) {
+          summary = summaryMatch[1];
+          contentStart = summaryIndex + 1;
+        }
+      }
+
+      if (summary !== undefined && renderDisclosures) {
+        const closingIndex = children.findIndex(
+          (candidate, candidateIndex) => candidateIndex >= contentStart
+            && candidate.type === 'raw'
+            && /^\s*<\/details>\s*$/i.test((candidate as RootContent & { value?: string }).value ?? ''),
+        );
+        // Nested raw disclosures are deliberately flattened rather than paired
+        // incorrectly; only one unambiguous details/summary pair is promoted.
+        const hasNestedOpening = children.slice(contentStart, closingIndex).some(
+          (candidate) => candidate.type === 'raw'
+            && /^\s*<details(?:\s+open)?\s*>/i.test((candidate as RootContent & { value?: string }).value ?? ''),
+        );
+        if (closingIndex !== -1 && !hasNestedOpening) {
+          // A root may technically contain a doctype, but an element may not.
+          // Model replies do not need one inside a disclosure, so keep the HAST
+          // child contract exact rather than casting the wider RootContent type.
+          const disclosureChildren: Element['children'] = children
+            .slice(contentStart, closingIndex)
+            .filter((candidate) => candidate.type !== 'doctype');
+          const details: Element = {
+            type: 'element',
+            tagName: 'details',
+            properties: (combinedOpening?.[1] ?? detailsOnly?.[1]) ? { open: true } : {},
+            children: [
+              {
+                type: 'element',
+                tagName: 'summary',
+                properties: {},
+                children: [{ type: 'text', value: summary }],
+              },
+              ...disclosureChildren,
+            ],
+          };
+          processChildren(details);
+          children.splice(index, closingIndex - index + 1, details);
+          continue;
+        }
+      }
+
+      // WHY: preserve words from unsupported HTML without ever handing raw HTML
+      // to React. The tag matcher respects quoted `>` characters, so attributes
+      // cannot spill into text and become clickable in the later linkify pass.
+      const readable = child.value.replace(/<(?:"[^"]*"|'[^']*'|[^'">])*>/g, '').trim();
+      children.splice(index, 1, ...(readable ? [{ type: 'text' as const, value: readable }] : []));
+      if (!readable) index--;
+    }
+  };
+
+  processChildren(tree);
+};
 
 /**
  * Collect the raw text of a hast subtree.
@@ -59,49 +148,83 @@ function hastText(node: unknown): string {
 }
 
 /**
- * Rehype plugin: walks hast text nodes that are NOT inside <code> or <pre>
- * elements and splits detected file paths into filepath-token elements.
+ * Rehype plugin: splits plain text nodes into clickable tokens — web URLs
+ * (rendered as real <a> links) and file paths (rendered as filepath-token,
+ * which becomes a FilepathToken chip below).
  *
- * Filepath detection runs in the hast (HTML AST) pass — after the markdown is
- * already parsed — so we get correct element context (inline code vs. block code)
- * for free by checking the ancestor chain. No regex pre-processing of the source.
+ * WHY it runs in the hast (HTML AST) pass rather than on the markdown source:
+ * the ancestor chain is available here, so "is this inside a code block?" is a
+ * fact rather than a guess, and nothing has to be re-parsed.
+ *
+ * WHY it runs AFTER rehype-highlight in the plugin array: the highlighter
+ * rewrites a code block's single text node into a tree of <span> tokens. Going
+ * last means we split the leaves it produced, so a URL inside ```bash is found
+ * and the colouring around it survives.
+ *
+ * Text already inside an <a> is skipped — remark-gfm has already autolinked
+ * bare URLs in prose, and linkifying a link would nest anchors.
+ *
+ * Fenced code blocks are NO LONGER skipped (they were, for paths). A URL or a
+ * path printed in a code block is the single most common way Claude hands one
+ * over, and reading it out by hand was the complaint this fixes.
  */
-const rehypeFilepathTokens: Plugin<[], Root> = () => (tree: Root) => {
-  // visitParents provides the full ancestor chain so we can correctly detect
-  // whether the text node is inside a <code> or <pre> element.
+const rehypeLinkTokens: Plugin<[{ filepaths: boolean }], Root> =
+  (options) => (tree: Root) => {
+  const filepaths = options?.filepaths ?? false;
+  // visitParents provides the full ancestor chain, which is what tells us
+  // whether we are inside an existing link or inside a fenced code block.
   visitParents(tree, 'text', (node, ancestors) => {
     const parent = ancestors[ancestors.length - 1];
     if (!parent) return;
     const index = (parent as Element | Root).children.indexOf(node as Text);
     if (index === -1) return;
 
-    // Fix: skip ONLY when inside a <pre> element (fenced code block).
-    // Inline <code> spans are intentionally NOT excluded — Claude commonly formats
-    // file paths as backtick-wrapped inline code (e.g. `foo.md`) and users expect
-    // those to be clickable. Multi-line fenced blocks still get no detection because
-    // the <pre> ancestor check correctly catches them.
+    // Never linkify inside an existing anchor — that would nest <a> in <a>,
+    // which is invalid HTML and makes the click target ambiguous.
+    if (ancestors.some((a) => a.type === 'element' && (a as Element).tagName === 'a')) return;
+
+    // Inside a fenced block the chip styling would break the monospace grid, so
+    // FilepathToken uses its quieter 'inline' variant there (see the component
+    // map below). Inline `backticks` keep the chip.
     const inPreBlock = ancestors.some(
       (a) => a.type === 'element' && (a as Element).tagName === 'pre',
     );
-    if (inPreBlock) return;
 
     const textNode = node as Text;
-    const matches = detectFilepaths(textNode.value);
+    const matches = detectLinkTokens(textNode.value, { filepaths });
     if (matches.length === 0) return;
 
-    // Split the text node into a sequence of text + filepath-token elements.
+    // Split the text node into a sequence of text + token elements.
     const replacements: RootContent[] = [];
     let cursor = 0;
     for (const m of matches) {
       if (m.start > cursor) {
         replacements.push({ type: 'text', value: textNode.value.slice(cursor, m.start) });
       }
-      replacements.push({
-        type: 'element',
-        tagName: 'filepath-token',
-        properties: { 'data-path': m.path },
-        children: [],
-      } as Element);
+      // The matched source text is kept as the element's child even when the
+      // component ignores it: CopyButton reads the raw text off this hast tree
+      // (hastText), so dropping it would silently delete every path from what a
+      // code block copies.
+      const child: Text = { type: 'text', value: m.text };
+      replacements.push(
+        m.kind === 'url'
+          ? ({
+              type: 'element',
+              tagName: 'a',
+              properties: { href: m.value },
+              children: [child],
+            } as Element)
+          : ({
+              type: 'element',
+              tagName: 'filepath-token',
+              properties: {
+                'data-path': m.value,
+                'data-raw': m.text,
+                ...(inPreBlock ? { 'data-in-code': 'true' } : {}),
+              },
+              children: [child],
+            } as Element),
+      );
       cursor = m.end;
     }
     if (cursor < textNode.value.length) {
@@ -115,13 +238,47 @@ const rehypeFilepathTokens: Plugin<[], Root> = () => (tree: Root) => {
   });
 };
 
+// Stable plugin arrays — avoids re-creating on every render. URL linkification
+// runs in EVERY context (it needs no session), so it lives in the stable array;
+// only the filepath half, which needs a sessionId to resolve a click, is
+// switched on per-session in the memo below.
+const remarkPluginsStable = [remarkGfm];
+const rehypePluginsStable: PluggableList = [
+  rehypeSafeDisclosures,
+  rehypeHighlight,
+  rehypeMarkBlockCode,
+  [rehypeLinkTokens, { filepaths: false }],
+];
+const rehypePluginsWithFilepaths: PluggableList = [
+  rehypeSafeDisclosures,
+  rehypeHighlight,
+  rehypeMarkBlockCode,
+  [rehypeLinkTokens, { filepaths: true }],
+];
+const rehypePluginsPreview: PluggableList = [
+  [rehypeSafeDisclosures, { disclosures: false }],
+  rehypeHighlight,
+  rehypeMarkBlockCode,
+  [rehypeLinkTokens, { filepaths: false }],
+];
+
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  // WHY the timer is held and cleared (2026-09-10): the reset was a bare
+  // setTimeout, so a copy followed by the message closing within two seconds
+  // fired setState on an unmounted component. In the app that is a React warning;
+  // under vitest it is `ReferenceError: window is not defined` from react-dom
+  // AFTER jsdom is torn down, which vitest reports as an unhandled error — the run
+  // goes red while every test shows passed, so the failure names nothing.
+  // `.claude/rules/test-suite-hygiene.md` -> "Unmount what you render".
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(text);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -141,10 +298,64 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** A picture referenced from an assistant message.
+ *
+ *  WHY (2026-09-10 security review, Destin's "tap to show"): a `![](https://…)`
+ *  in a reply used to load the moment the message rendered — and the web address
+ *  can carry stolen text (`https://x/?d=<secret>`), so a prompt-injected model
+ *  could exfiltrate with no tool call and no click. A picture from a WEBSITE now
+ *  waits behind a Show button (the request only leaves once the person taps it);
+ *  a relative/app-local src has no network fetch and renders inline. (data:/blob:
+ *  never reach here — react-markdown's urlTransform drops them before this.)
+ *
+ *  Parsed with the URL constructor, NOT a `https://` prefix regex: `https:evil/x`
+ *  (one slash, or none) is normalised by the browser to `https://evil/x` and
+ *  fetched all the same, but a strict-prefix check read it as local — a
+ *  one-character bypass of the whole gate (2026-09-10 review). */
+function isNetworkImageSrc(src: string): boolean {
+  const s = src.trim();
+  if (s.startsWith('//')) return true; // protocol-relative → the page's scheme
+  try {
+    const proto = new URL(s).protocol;
+    return proto === 'http:' || proto === 'https:' || proto === 'ftp:' || proto === 'ws:' || proto === 'wss:';
+  } catch {
+    return false; // no scheme → relative / app-local, no network request
+  }
+}
+
+function ChatImage({ src, alt, ...props }: any) {
+  const [shown, setShown] = useState(false);
+  const source = typeof src === 'string' ? src : '';
+  if (!source || !isNetworkImageSrc(source)) {
+    // data:/blob:/app-local — no network request, safe to render.
+    return <img src={source} alt={alt} className="max-w-full rounded my-2" {...props} />;
+  }
+  if (shown) {
+    return <img src={source} alt={alt} className="max-w-full rounded my-2" {...props} />;
+  }
+  let host = 'a website';
+  try { host = new URL(source).host || host; } catch { /* keep the generic label */ }
+  return (
+    <button
+      type="button"
+      onClick={() => setShown(true)}
+      className="my-2 inline-flex items-center gap-2 rounded border border-edge bg-inset px-3 py-2 text-sm text-fg-2 hover:bg-panel"
+      title={`Load image from ${host}`}
+    >
+      <span aria-hidden>🖼</span>
+      <span>Image from {host}</span>
+      <span className="text-fg-dim">· Show</span>
+    </button>
+  );
+}
+
 // Stable component overrides — defined at module scope so ReactMarkdown
 // receives the same object reference on every render, preventing unnecessary
 // reconciliation of the entire markdown tree.
 const mdComponents = {
+  img(props: any) {
+    return <ChatImage {...props} />;
+  },
   h1({ children, ...props }: any) {
     return <h1 className="text-xl font-bold mt-6 mb-3 pb-1.5 text-fg border-b border-edge" {...props}>{children}</h1>;
   },
@@ -198,7 +409,10 @@ const mdComponents = {
       return <ConversationsFence body={codeText} />;
     }
     return (
-      <div className="relative group my-3">
+      // yc-code-block carries content-visibility so the browser can skip layout
+      // and paint for blocks scrolled out of view — see globals.css. A document
+      // with hundreds of fences is otherwise laid out in full before it paints.
+      <div className="yc-code-block relative group my-3">
         {/* yc-code is the hook the globals.css rule needs to out-specify
             highlight.js's own `pre code.hljs` box (see the .yc-code block
             there). Don't drop it. */}
@@ -300,6 +514,22 @@ const mdPreviewComponents = {
   a({ href: _href, children, ...props }: any) {
     return <span className="text-link underline" {...props}>{children}</span>;
   },
+  // A preview tile is decorative and never loads a network image (same exfil
+  // reason as the chat img handler); a data:/app-local image still renders.
+  img({ src, alt }: any) {
+    const source = typeof src === 'string' ? src : '';
+    if (source && !isNetworkImageSrc(source)) {
+      return <img src={source} alt={alt} className="max-w-full rounded" />;
+    }
+    return <span className="text-fg-dim">[image]</span>;
+  },
+  // Same reason as the <a> above: a preview tile is itself a <button>, so the
+  // path renders as its own text and nothing inside is focusable.
+  'filepath-token': ({ node, ...props }: any) => {
+    const p = (node as Element)?.properties ?? {};
+    const raw = (p['data-raw'] as string) ?? (p['data-path'] as string) ?? props['data-raw'] ?? '';
+    return <span className="text-fg-dim">{raw}</span>;
+  },
 };
 
 interface Props {
@@ -315,13 +545,14 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
   // (a) When sessionId is absent, we use the stable module-scope arrays (no allocation).
   // (b) When sessionId is present, the filepath-token component is added once and
   //     remains stable across re-renders for the same session.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const rehypePlugins = useMemo(
-    () => sessionId ? [rehypeHighlight, rehypeMarkBlockCode, rehypeFilepathTokens] : rehypePluginsStable,
-    // Intentionally omitting rehypeFilepathTokens from deps — it's stable (module-level function).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionId],
-  );
+  // Both arrays are module-level constants, so this only picks between them —
+  // URLs are linkified either way; the filepath half needs a session to resolve
+  // a click against, and in preview mode nothing may be clickable at all.
+  const rehypePlugins = preview
+    ? rehypePluginsPreview
+    : sessionId
+      ? rehypePluginsWithFilepaths
+      : rehypePluginsStable;
 
   const components = useMemo(() => {
     if (preview) return mdPreviewComponents;
@@ -333,8 +564,17 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
       // react-markdown v10 passes custom hast element props directly.
       // 'data-path' becomes 'data-path' in props (React preserves data-* attrs).
       'filepath-token': ({ node, ...props }: any) => {
-        const path: string = (node as Element)?.properties?.['data-path'] as string ?? props['data-path'] ?? '';
+        const p = (node as Element)?.properties ?? {};
+        const path: string = (p['data-path'] as string) ?? props['data-path'] ?? '';
         if (!path) return null;
+        // Inside a fenced code block a bordered chip would break the monospace
+        // grid and hide the rest of the command, so the quieter dotted-underline
+        // variant is used and it keeps the path EXACTLY as written.
+        const inCode = (p['data-in-code'] ?? props['data-in-code']) !== undefined;
+        const raw = (p['data-raw'] as string) ?? props['data-raw'] ?? path;
+        if (inCode) {
+          return <FilepathToken path={path} sessionId={sessionId} variant="inline" label={raw} />;
+        }
         return <FilepathToken path={path} sessionId={sessionId} />;
       },
     };

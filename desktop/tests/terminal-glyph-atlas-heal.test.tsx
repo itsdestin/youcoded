@@ -84,7 +84,11 @@ vi.mock('../src/renderer/state/theme-context', () => ({
   useTheme: () => ({ activeTheme: null, reducedEffects: false }),
 }));
 
-vi.mock('../src/renderer/hooks/terminal-registry', () => ({
+// The REAL atlas counter (noteAtlasClear / getAtlasClears) is kept — only the
+// terminal bookkeeping is stubbed — so the tests below prove the counter the perf
+// rig reads moves in step with every clearTextureAtlas() call, not a mock of it.
+vi.mock('../src/renderer/hooks/terminal-registry', async () => ({
+  ...(await vi.importActual<typeof import('../src/renderer/hooks/terminal-registry')>('../src/renderer/hooks/terminal-registry')),
   registerTerminal: vi.fn(),
   unregisterTerminal: vi.fn(),
   notifyBufferReady: vi.fn(),
@@ -99,6 +103,10 @@ vi.mock('../src/renderer/hooks/usePtyRawBytes', () => ({
 }));
 
 import TerminalView from '../src/renderer/components/TerminalView';
+import { getAtlasClears } from '../src/renderer/hooks/terminal-registry';
+// Side-effect import: installs window.__terminalRegistry, which is what the perf
+// rig actually reads the counter through.
+import '../src/renderer/bootstrap/terminal-bridge';
 
 if (typeof (globalThis as any).ResizeObserver === 'undefined') {
   (globalThis as any).ResizeObserver = class {
@@ -225,5 +233,64 @@ describe('TerminalView glyph-atlas heal — resize', () => {
     vi.advanceTimersByTime(120);
     expect(window.claude.session.resize).toHaveBeenCalledWith('s1', 100, 30);
     expect(clearTextureAtlasSpy).toHaveBeenCalled();
+  });
+});
+
+// The perf rig (youcoded-dev scripts/perf-lab/scenario-terminal.mjs) counts atlas
+// clears per session switch by reading window.__terminalRegistry.atlasClears. If a
+// heal site clears the atlas without counting, the rig under-reports the cost; if
+// the counter moves without a clear, it over-reports. Both sites are pinned to move
+// in lockstep with the clearTextureAtlas spy.
+describe('TerminalView glyph-atlas heal — rig counter', () => {
+  it('counts every visibility heal, one for one with clearTextureAtlas', () => {
+    const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+    const clears0 = getAtlasClears();
+    const calls0 = clearTextureAtlasSpy.mock.calls.length;
+
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+    rerender(<TerminalView sessionId="s1" visible={false} />);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+
+    const calls = clearTextureAtlasSpy.mock.calls.length - calls0;
+    expect(calls).toBe(2);
+    expect(getAtlasClears() - clears0).toBe(calls);
+  });
+
+  it('does not count when nothing was cleared (mount, and hide)', () => {
+    const clears0 = getAtlasClears();
+    const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+    rerender(<TerminalView sessionId="s1" visible={false} />);
+    expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
+    expect(getAtlasClears()).toBe(clears0);
+  });
+
+  it('counts the debounced resize heal, one for one with clearTextureAtlas', () => {
+    vi.useFakeTimers();
+    stubLayout();
+
+    render(<TerminalView sessionId="s1" visible={false} />);
+    vi.advanceTimersByTime(100 + 120); // mount fit — skipped, and not counted
+    const clears0 = getAtlasClears();
+    expect(clearTextureAtlasSpy).not.toHaveBeenCalled();
+
+    proposedDims = { cols: 100, rows: 30 };
+    window.dispatchEvent(new Event('resize'));
+    vi.advanceTimersByTime(120);
+
+    expect(clearTextureAtlasSpy.mock.calls.length).toBe(1);
+    expect(getAtlasClears() - clears0).toBe(1);
+  });
+
+  it('exposes the live count on window.__terminalRegistry.atlasClears', () => {
+    const bridge = (window as unknown as { __terminalRegistry?: { atlasClears: number } }).__terminalRegistry;
+    expect(bridge).toBeDefined();
+    const before = bridge!.atlasClears;
+    expect(before).toBe(getAtlasClears());
+
+    const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+    rerender(<TerminalView sessionId="s1" visible={true} />);
+
+    // A getter, not a snapshot: the rig reads it before and after each switch.
+    expect(bridge!.atlasClears).toBe(before + 1);
   });
 });

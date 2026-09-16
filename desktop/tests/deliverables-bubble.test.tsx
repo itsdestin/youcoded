@@ -103,10 +103,10 @@ describe('Deliverables card in the bubble', () => {
 describe('fallback surfaces', () => {
   it('friendlyToolDisplay: singular, plural, and never "Sent 0 files" on malformed input', () => {
     expect(friendlyToolDisplay({ toolName: 'SendUserFile', input: { files: ['/p/a.md'] } } as any))
-      .toEqual({ label: 'Sent a file', detail: '↳ a.md' });
+      .toEqual({ label: 'Sent a file', detail: '· a.md' });
     expect(friendlyToolDisplay({ toolName: 'SendUserFile', input: { files: ['/p/a.md', '/q/b.png'] } } as any))
-      .toEqual({ label: 'Sent 2 files', detail: '↳ a.md, b.png' });
-    // Pin the label only: whether the code yields '' or '↳ ' for detail on
+      .toEqual({ label: 'Sent 2 files', detail: '· a.md, b.png' });
+    // Pin the label only: whether the code yields '' or '· ' for detail on
     // garbage input is not worth a rule.
     expect(friendlyToolDisplay({ toolName: 'SendUserFile', input: { files: 'not-an-array' } } as any).label)
       .toBe('Sent files');
@@ -114,9 +114,9 @@ describe('fallback surfaces', () => {
 
   it('friendlyToolDisplay: SendUserLink shows the host, never the raw id', () => {
     expect(friendlyToolDisplay({ toolName: 'SendUserLink', input: { links: [{ url: 'https://example.com', label: 'The Site' }] } } as any))
-      .toEqual({ label: 'Sent a link', detail: '↳ example.com' });
+      .toEqual({ label: 'Sent a link', detail: '· example.com' });
     expect(friendlyToolDisplay({ toolName: 'SendUserLink', input: { links: [{ url: 'http://localhost:5173' }, { url: 'http://192.168.1.5:8000' }] } } as any))
-      .toEqual({ label: 'Sent 2 links', detail: '↳ localhost:5173, 192.168.1.5:8000' });
+      .toEqual({ label: 'Sent 2 links', detail: '· localhost:5173, 192.168.1.5:8000' });
     expect(friendlyToolDisplay({ toolName: 'SendUserLink', input: { links: 'not-an-array' } } as any).label)
       .toBe('Sent links');
   });
@@ -125,7 +125,7 @@ describe('fallback surfaces', () => {
     // Without an explicit case it would fall to the generic MCP label
     // ("Youcoded: Senduserlink"), which names the plumbing, not the deliverable.
     expect(friendlyToolDisplay({ toolName: CLAUDE_CODE_LINK_TOOL, input: { links: [{ url: 'https://example.com' }] } } as any))
-      .toEqual({ label: 'Sent a link', detail: '↳ example.com' });
+      .toEqual({ label: 'Sent a link', detail: '· example.com' });
   });
 
   it('a bare Claude Code MCP link ToolCard expands to the card, not the raw JSON view', () => {

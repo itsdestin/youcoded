@@ -1,0 +1,90 @@
+{
+  "_what": "REAL recorded output from the pinned Parakeet speech engine — not written by hand, not scripted. Each line is what the engine said when it was given the first N seconds of one real recording and asked, from scratch, what the whole thing says. That is exactly what voice-worker.ts does while somebody is talking (it re-hears the open stretch on every pass), so this file is the only evidence in the suite of how the real engine behaves — a hand-written fake always improves tidily and can never show the rewriting this whole grey-text rule exists to contain.",
+  "_recorded": "2026-09-05",
+  "_machine": "Linux x64, 4 decode threads, sherpa-onnx 1.13.7, sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8 (the pin in src/main/voice/voice-pin.ts)",
+  "_audio": "jfk.wav — 11 s of a public-domain John F. Kennedy inaugural recording, 16 kHz mono, the sample shipped with whisper.cpp and used by the voice bench rig.",
+  "_command": "node gen-rehear-ladder.js jfk.wav > parakeet-rehear-ladder.json   # engine + model set up per docs/active/prototypes/voice-stt-bench/README.md (youcoded-dev)",
+  "_generator": [
+    "// Records a REAL Parakeet re-hear ladder: growing 1-second prefixes of one",
+    "// utterance, each decoded from scratch, exactly as voice-worker.ts's re-hear",
+    "// loop re-decodes the whole open segment on every pass.",
+    "const path = require('path');",
+    "const fs = require('fs');",
+    "const S = '/tmp/claude-1000/-home-destin-youcoded-dev/7e873833-cc65-4983-be11-10b85f9dadd5/scratchpad';",
+    "const s = require(path.join(S, 'sherpa/nm/node_modules/sherpa-onnx-node'));",
+    "const M = path.join(S, 'models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8');",
+    "const wavPath = process.argv[2];",
+    "const wav = s.readWave(wavPath);",
+    "const sr = wav.sampleRate;",
+    "const rec = new s.OfflineRecognizer({",
+    "  featConfig: { sampleRate: 16000, featureDim: 80 },",
+    "  modelConfig: {",
+    "    transducer: { encoder: path.join(M, 'encoder.int8.onnx'), decoder: path.join(M, 'decoder.int8.onnx'), joiner: path.join(M, 'joiner.int8.onnx') },",
+    "    tokens: path.join(M, 'tokens.txt'), numThreads: 4, modelType: 'nemo_transducer', debug: 0,",
+    "  },",
+    "});",
+    "const total = wav.samples.length / sr;",
+    "const passes = [];",
+    "for (let n = 1; n <= Math.floor(total); n++) {",
+    "  const st = rec.createStream();",
+    "  const t0 = Date.now();",
+    "  st.acceptWaveform({ samples: wav.samples.slice(0, Math.round(n * sr)), sampleRate: sr });",
+    "  rec.decode(st);",
+    "  const ms = Date.now() - t0;",
+    "  const text = rec.getResult(st).text.trim();",
+    "  passes.push({ seconds: n, ms, text });",
+    "  console.error(`${String(n).padStart(2)}s | ${ms}ms | ${text}`);",
+    "}",
+    "process.stdout.write(JSON.stringify({ audioSeconds: total, sampleRate: sr, passes }, null, 2));",
+    ""
+  ],
+  "_theRewrite": "Look at 2 s -> 3 s. \"And so my fellow American\" becomes \"And so, my fellow Americans.\" — a comma appears three words back, in text the engine had already said. Look again at 3 s -> 4 s and 9 s -> 10 s: the full stop the engine had written DISAPPEARS, so text that had turned solid goes back to grey. This is measured, it is the reason voice-types.ts refuses to promise that solid text never changes, and it is what voice-rehear.test.ts pins.",
+  "audioSeconds": 11,
+  "sampleRate": 16000,
+  "passes": [
+    {
+      "seconds": 1,
+      "text": "And so"
+    },
+    {
+      "seconds": 2,
+      "text": "And so my fellow American"
+    },
+    {
+      "seconds": 3,
+      "text": "And so, my fellow Americans."
+    },
+    {
+      "seconds": 4,
+      "text": "And so, my fellow Americans ask"
+    },
+    {
+      "seconds": 5,
+      "text": "And so, my fellow Americans, ask not"
+    },
+    {
+      "seconds": 6,
+      "text": "And so, my fellow Americans, ask not what your"
+    },
+    {
+      "seconds": 7,
+      "text": "And so, my fellow Americans, ask not what your country can do for you."
+    },
+    {
+      "seconds": 8,
+      "text": "And so, my fellow Americans, ask not what your country can do for you."
+    },
+    {
+      "seconds": 9,
+      "text": "And so, my fellow Americans, ask not what your country can do for you. Ask what you can do."
+    },
+    {
+      "seconds": 10,
+      "text": "And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your"
+    },
+    {
+      "seconds": 11,
+      "text": "And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country."
+    }
+  ]
+}

@@ -55,7 +55,7 @@ Terminal rendering on Android happens in xterm.js inside the WebView, not in a n
 
 Typing on touch flows through `InputBar` minimal-mode `<textarea>` → `sendInput(text + '\r')`, NOT through xterm's hidden textarea (which is suppressed by `disableStdin`). Special keys (Esc, Tab, Ctrl, ←/→, ↑/↓ scroll buttons) come from `TerminalToolbar` and `TerminalScrollButtons`.
 
-The `layoutInsets` SharedFlow in `SessionService.kt` (declared ~:112, emitted ~:1634) still has a producer but no Kotlin consumer (the deleted Compose block was its only consumer); `screenMode` and `viewModeRequest` were removed 2026-07-22 (`ChatScreen.kt:17,21` records it). Pruning `layoutInsets` is safe but was left out of Tier 2 scope — tracked in the workspace `docs/roadmap/android-only.md`.
+The `layoutInsets` SharedFlow, its `LayoutInsets` data class and the React `layout-update` sender were deleted on 2026-09-10 (youcoded#468); `screenMode` and `viewModeRequest` were removed 2026-07-22 (`ChatScreen.kt:17,21` records it). Nothing native reads the chat's chrome geometry any more.
 
 ## Shared runtime environment
 

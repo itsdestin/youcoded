@@ -12,27 +12,30 @@ export interface PorcelainEntry {
   kind: 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked' | 'conflicted';
 }
 
-// git status --porcelain=v2 --branch. Line shapes we consume:
+// git status --porcelain=v2 -z --branch. NUL-delimited record shapes:
 //   # branch.head <name>          (name is "(detached)" when detached)
 //   1 XY ... <path>               (ordinary change; X=index, Y=worktree, "." = unchanged)
-//   2 XY ... <path>\t<origPath>   (rename/copy)
+//   2 XY ... <path>\0<origPath>   (rename/copy; two NUL records)
 //   u XY ... <path>               (unmerged/conflicted — mid-merge)
 //   ? <path>                      (untracked)
 export function parsePorcelainV2(text: string): { branch: string | null; files: PorcelainEntry[] } {
   let branch: string | null = null;
   const files: PorcelainEntry[] = [];
-  for (const line of text.split('\n')) {
+  // WHY: -z preserves literal tabs/newlines/quotes; rename sources occupy a
+  // separate record and must be consumed even if they look like status entries.
+  const records = text.split('\0');
+  for (let i = 0; i < records.length; i++) {
+    const line = records[i];
     if (line.startsWith('# branch.head ')) {
       const name = line.slice('# branch.head '.length).trim();
       branch = name === '(detached)' ? null : name;
     } else if (line.startsWith('1 ') || line.startsWith('2 ')) {
       const xy = line.slice(2, 4);
       // Fields are space-separated; the path is everything after the 8th field
-      // (v2 format is fixed-width up to the path). Renames append "\t<orig>".
+      // (v2 format is fixed-width up to the path).
       const fieldCount = line.startsWith('2 ') ? 9 : 8;
-      const parts = line.split(' ');
-      const rawPath = parts.slice(fieldCount).join(' ');
-      const p = rawPath.split('\t')[0];
+      const p = line.split(' ').slice(fieldCount).join(' ');
+      if (line.startsWith('2 ')) i++; // original path, not another status entry
       const staged = xy[0] !== '.';
       const unstaged = xy[1] !== '.';
       const kind =
@@ -58,95 +61,74 @@ export function parsePorcelainV2(text: string): { branch: string | null; files: 
   return { branch, files };
 }
 
-// git diff --numstat: "<added>\t<removed>\t<path>"; binary files show "-\t-".
+interface NumstatRecord {
+  path: string;
+  renamedFrom?: string;
+  added: number;
+  removed: number;
+  binary: boolean;
+}
+
+// WHY: in --numstat -z only an empty path field signals a rename/copy:
+// counts\t\0old\0new\0. Literal arrows, braces and tabs are just filename bytes.
+// Share this cursor reader with log so source/destination records cannot be
+// mistaken for commit headers (even when a filename contains control bytes).
+function readNumstat(records: string[], index: number): { entry: NumstatRecord; next: number } | null {
+  const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(records[index]);
+  if (!match) return null;
+  const [, a, r, field] = match;
+  const renamedFrom = field === '' ? records[++index] : undefined;
+  const p = field === '' ? records[++index] : field;
+  if (!p || (field === '' && !renamedFrom)) return null;
+  return {
+    entry: { path: p, renamedFrom, added: parseInt(a, 10) || 0, removed: parseInt(r, 10) || 0, binary: a === '-' || r === '-' },
+    next: index + 1,
+  };
+}
+
+// git diff --numstat -z; keys are the destination paths for renames/copies.
 export function parseNumstat(text: string): Map<string, { added: number; removed: number; binary: boolean }> {
   const out = new Map<string, { added: number; removed: number; binary: boolean }>();
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    const [a, r, ...rest] = line.split('\t');
-    const p = rest.join('\t');
-    if (!p) continue;
-    if (a === '-' || r === '-') out.set(p, { added: 0, removed: 0, binary: true });
-    else out.set(p, { added: parseInt(a, 10) || 0, removed: parseInt(r, 10) || 0, binary: false });
+  const records = text.split('\0');
+  for (let i = 0; i < records.length;) {
+    const row = readNumstat(records, i);
+    if (!row) { i++; continue; }
+    const { path, added, removed, binary } = row.entry;
+    out.set(path, { added, removed, binary });
+    i = row.next;
   }
   return out;
 }
 
-// A `--numstat` pathfield for a renamed/moved file comes in one of two
-// shapes (plain paths with no " => " at all just pass through unchanged):
-//   - brace form, when old and new share a common prefix/suffix:
-//     "docs/{superpowers => archive}/plans/x.md" -> old "docs/superpowers/…",
-//     new "docs/archive/…". Either side of the brace may be empty (a segment
-//     was purely inserted/removed, e.g. "dir/{ => sub}/f.md") — concatenating
-//     prefix+mid+suffix then leaves a doubled '/' where the empty mid sat;
-//     collapse it back to one.
-//   - plain form, when there's no common affix: "old.md => new.md".
-// Extracted as its own pure function so each shape unit-tests directly.
-//
-// ACCEPTED LIMITATION: a real filename containing a literal " => " is
-// indistinguishable from a rename in git's human-readable numstat output and
-// will be misread as one. Consequence is display-only; the misread path still
-// passes the full path gate at fetch time. Proper fix is the planned
-// `--numstat -z` migration where rename paths arrive as separate
-// NUL-delimited fields.
-export function parseRenamePath(field: string): { path: string; renamedFrom?: string } {
-  const brace = /^(.*?)\{(.*) => (.*)\}(.*)$/.exec(field);
-  if (brace) {
-    const [, prefix, oldMid, newMid, suffix] = brace;
-    const collapse = (s: string) => s.replace(/\/{2,}/g, '/');
-    return {
-      path: collapse(prefix + newMid + suffix),
-      renamedFrom: collapse(prefix + oldMid + suffix),
-    };
-  }
-  const arrow = field.indexOf(' => ');
-  if (arrow !== -1) {
-    return { path: field.slice(arrow + 4), renamedFrom: field.slice(0, arrow) };
-  }
-  return { path: field };
-}
-
-// git log --pretty=format:%x1e%H%x1f%s%x1f%aI --numstat — unit sep 0x1f
-// between header fields, LEADING record sep 0x1e before each commit (so
-// splitting on it always drops an empty first chunk, never a trailing one).
-// Chosen over newline parsing so commit subjects can contain anything.
-// `--numstat` rides along, pathspec-limited to the followed file, so each
-// chunk after the header line carries at most one numstat line for it —
-// that's how per-commit diffs learn the file's HISTORICAL path (see
-// GitLogEntry) AND how the card headers learn this commit's +/- counts.
+// LOG_FORMAT emits NUL-separated metadata prefixed by an empty record.
+// WHY: neither newline nor 0x1e/0x1f is safe in paths/subjects. NUL framing
+// plus consuming rename pairs keeps metadata separate from arbitrary paths.
 export function parseLogRecords(text: string): GitLogEntry[] {
-  return text
-    .split('\x1e')
-    .filter((rec) => rec.trim().length > 0)
-    .map((rec) => {
-      const lines = rec.split('\n');
-      const [sha, subject, authorDate] = lines[0].split('\x1f');
-      let pathAtCommit: string | undefined;
-      let renamedFrom: string | undefined;
-      let counts: GitFileCounts | null = null;
-      // First non-blank line after the header is the numstat entry for the
-      // followed file (pathspec-limited to one file, so there's at most
-      // one). No such line at all (e.g. a surfaced merge commit) -> path
-      // fields stay undefined and counts stays null; the caller falls back
-      // to the file's current path.
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line.trim()) continue;
-        const [addedStr, removedStr, ...rest] = line.split('\t');
-        const parsed = parseRenamePath(rest.join('\t'));
-        pathAtCommit = parsed.path;
-        renamedFrom = parsed.renamedFrom;
-        // Binary numstat rows are "-\t-\t<path>" — no line counts to show.
-        counts = addedStr === '-' || removedStr === '-'
-          ? null
-          : { added: parseInt(addedStr, 10) || 0, removed: parseInt(removedStr, 10) || 0 };
-        break;
-      }
-      return {
-        sha, shortSha: sha.slice(0, 7), subject: subject ?? '', authorDate: authorDate ?? '',
-        pathAtCommit, renamedFrom, counts,
-      };
-    });
+  const records = text.split('\0');
+  const out: GitLogEntry[] = [];
+  for (let i = 0; i < records.length;) {
+    if (records[i] === '' && /^[0-9a-f]{4,40}$/.test(records[i + 1] ?? '') && i + 3 < records.length) {
+      const sha = records[i + 1];
+      out.push({ sha, shortSha: sha.slice(0, 7), subject: records[i + 2], authorDate: records[i + 3],
+        pathAtCommit: undefined, renamedFrom: undefined, counts: null });
+      i += 4;
+      continue;
+    }
+    // Git inserts a newline between the pretty header and the numstat row;
+    // strip it only from the count prefix, never from a path field.
+    records[i] = records[i].replace(/^\n/, '');
+    const row = readNumstat(records, i);
+    if (!row) { i++; continue; }
+    const current = out[out.length - 1];
+    if (current && current.pathAtCommit === undefined) {
+      const { path, renamedFrom, added, removed, binary } = row.entry;
+      current.pathAtCommit = path;
+      current.renamedFrom = renamedFrom;
+      current.counts = binary ? null : { added, removed };
+    }
+    i = row.next;
+  }
+  return out;
 }
 
 // Unified diff -> StructuredPatchHunk[] (absolute file line numbers, the shape

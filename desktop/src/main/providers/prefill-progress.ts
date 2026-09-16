@@ -22,6 +22,8 @@
 // the SDK. No fork, no patch — a supported seam. This is the same shape the
 // existing `transformRequestBody` hook uses to inject parallel_tool_calls.
 
+import type { ReplyTimings } from '../../shared/engine-types';
+
 /** One progress reading, exactly as llama-server reports it. */
 export interface PrefillProgress {
   /** Prompt tokens that must be processed in total. */
@@ -104,6 +106,49 @@ export function parseProgressChunk(json: unknown): PrefillProgress | null {
 }
 
 /**
+ * Pull the reply-speed reading out of one parsed SSE payload, if it carries one.
+ *
+ * llama-server puts a `timings` block on the LAST frame of a streamed
+ * completion. Captured verbatim from the pinned b10665 build on 2026-09-05
+ * (test-engine/probe-chat.mjs's call shape, 2B model, CPU):
+ *
+ *   {"choices":[],…,"object":"chat.completion.chunk",
+ *    "usage":{"completion_tokens":24,"prompt_tokens":15,…},
+ *    "timings":{"cache_n":0,"prompt_n":15,"prompt_ms":178.45,
+ *               "prompt_per_second":84.05715886803026,
+ *               "predicted_n":24,"predicted_ms":608.126,
+ *               "predicted_per_second":37.821109441135555}}
+ *
+ * The block rides the `usage` frame when the request asks for usage (we always
+ * do — provider-registry sets includeUsage) and the `finish_reason` frame when
+ * it does not; both were captured, so this reads the block wherever it lands
+ * rather than keying off either neighbour.
+ *
+ * Each rate must be a real POSITIVE number to be reported. A zero is what a
+ * fully-cached prompt would give (`prompt_per_second` is prompt_n/prompt_ms*1000,
+ * so no reading work means zero), and an Infinity is what a zero `prompt_ms`
+ * would give; neither is a speed anyone can stand behind, and "0 read per second"
+ * on the card is a false claim about the machine.
+ *
+ * But a bad rate only drops ITS OWN number. The two halves are measured
+ * separately, and discarding a perfectly good WRITE rate because the prompt came
+ * out of the cache would blank the card's whole speed line for a reply that
+ * really did run. Only a frame with neither usable rate is "no reading".
+ */
+export function parseTimingsChunk(json: unknown): ReplyTimings | null {
+  const t = (json as any)?.timings;
+  if (!t || typeof t !== 'object') return null;
+  const rate = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+  const promptPerSecond = rate(t.prompt_per_second);
+  const generatePerSecond = rate(t.predicted_per_second);
+  if (promptPerSecond === undefined && generatePerSecond === undefined) return null;
+  return { promptPerSecond, generatePerSecond };
+}
+
+/**
  * Scan a raw SSE byte stream for `prompt_progress` readings.
  *
  * Deliberately tolerant: this runs on a COPY of a response the SDK is also
@@ -115,11 +160,23 @@ export function parseProgressChunk(json: unknown): PrefillProgress | null {
  */
 export async function scanPrefillProgress(
   body: ReadableStream<Uint8Array>,
-  onProgress: (p: PrefillProgress) => void,
+  onProgress?: (p: PrefillProgress) => void,
+  /** Called ONCE when a completion stream ENDS CLEANLY, with the speed reading
+   *  from its final frame or `null` when it carried none. Two deliberate
+   *  silences: a body that was never a chat-completion stream (a /models GET
+   *  going through the same fetch) reports nothing at all, so it can never
+   *  blank a good reading; and neither does an ABORTED stream (the user pressed
+   *  stop) — an interrupted reply has no honest speed to report, and the last
+   *  reply we did measure is a truer answer than none. */
+  onReply?: (t: ReplyTimings | null) => void,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  // What this stream turned out to be, and the last speed reading in it. Only a
+  // stream we positively recognised as a completion is allowed to report.
+  let sawCompletionFrame = false;
+  let timings: ReplyTimings | null = null;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -134,38 +191,59 @@ export async function scanPrefillProgress(
         const payload = trimmed.slice(5).trim();
         if (!payload || payload === '[DONE]') continue;
         try {
-          const progress = parseProgressChunk(JSON.parse(payload));
-          if (progress) onProgress(progress);
+          const json = JSON.parse(payload);
+          const progress = parseProgressChunk(json);
+          if (progress) onProgress?.(progress);
+          // llama-server stamps every completion frame with this. It is what
+          // tells a completion stream apart from any other body the SDK's fetch
+          // might carry, so `onReply` never fires on something it cannot know
+          // the speed of.
+          if ((json as any)?.object === 'chat.completion.chunk') sawCompletionFrame = true;
+          // Keep the LAST reading, not the first: the block rides the final
+          // frame, and taking the first match would pin an early one if a future
+          // build ever emitted more than one.
+          const t = parseTimingsChunk(json);
+          if (t) timings = t;
         } catch {
           // Not JSON, or not a shape we know — skip. See tolerance note above.
         }
       }
     }
+    // Reached only when the stream ended on its own: report what the reply ran
+    // at, or `null` for a completion whose final frame carried no timings (a
+    // future build that drops the block) — which CLEARS the card's speed line
+    // rather than leaving yesterday's number under today's reply.
+    if (sawCompletionFrame) onReply?.(timings);
   } catch {
     // The stream aborted (user interrupt, network drop). The SDK's branch owns
-    // reporting that; ours just stops.
+    // reporting that; ours just stops — deliberately without calling onReply.
   } finally {
     try { reader.releaseLock(); } catch { /* already released */ }
   }
 }
 
 /**
- * Wrap a fetch so llama.cpp prefill progress is reported as it streams.
+ * Wrap a fetch so llama.cpp prefill progress — and the finished reply's speed —
+ * are reported as the response streams.
  *
  * Returns a fetch with identical semantics: the caller receives a response whose
  * body is untouched. We only ever read a TEE'd copy.
  */
 export function withPrefillProgress(
   base: typeof fetch,
-  onProgress: (p: PrefillProgress) => void,
+  onProgress?: (p: PrefillProgress) => void,
+  onReply?: (t: ReplyTimings | null) => void,
 ): typeof fetch {
+  // Nobody listening → no tee. Copying every byte of every response for an
+  // audience of none is the cost this guard exists to avoid.
+  if (!onProgress && !onReply) return base;
   return async (input: any, init?: any) => {
     const res = await base(input, init);
     // Non-streaming replies (errors, /models) have nothing to watch.
     if (!res.body || !res.ok) return res;
     const [forSdk, forUs] = res.body.tee();
     // Fire-and-forget: the SDK's branch must never wait on ours.
-    void scanPrefillProgress(forUs, onProgress);
+    void scanPrefillProgress(forUs, onProgress, onReply);
     return new Response(forSdk, {
       status: res.status,
       statusText: res.statusText,

@@ -7,6 +7,7 @@ import { casWrite, CAS_REPLACE_ANY, type CasExpectation } from './cas-write';
 import { migrateRelativeExternals } from '../../shared/artifacts/migrate-relative-externals';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
 import { isAbsoluteRecorded } from './write-authorization';
+import { pruneSidecarVersions } from '../../shared/artifacts/version-retention';
 
 const SIDECAR_RELATIVE = '.youcoded/artifacts.json';
 
@@ -445,6 +446,24 @@ export async function appendVersionsDirect(
     // still be written even when every input deduped — otherwise the corrupt
     // file survives.
     if (!changed && typeof expectedUpdatedAt === 'string') return results;
+
+    // Retention. WHY HERE: pruning lives in the writer, in the same cycle that
+    // appends, so artifacts.json is bounded BY CONSTRUCTION. That is why there
+    // is no migration, no one-shot repair script and no startup scan — the
+    // first question a reader asks. A sidecar that is already oversized heals
+    // on its next write, and one that is never written again was never growing.
+    //
+    // It sweeps EVERY record, not just the ones this batch touched, so an
+    // oversized file heals in one write instead of file-by-file as each is
+    // edited. The cost is a linear pass over data we are about to
+    // JSON.stringify anyway.
+    //
+    // It runs only when we are already committing (below the dedupe early
+    // return above), so the "a re-opened conversation leaves the sidecar
+    // byte-identical" invariant is untouched.
+    //
+    // Policy and safety floor: shared/artifacts/version-retention.ts.
+    pruneSidecarVersions(sidecar);
 
     sidecar.updatedAt = new Date().toISOString();
     const result = await writeSidecar(projectRoot, expectedUpdatedAt, sidecar);

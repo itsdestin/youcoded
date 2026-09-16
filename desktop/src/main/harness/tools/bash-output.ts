@@ -19,7 +19,8 @@ export const BashOutputTool = defineTool({
   description:
     'Read NEW output from a background command since your last BashOutput for it (first call: everything so far). ' +
     'Without shell_id: list every background command in this conversation with its state. ' +
-    'You are told when a command finishes without calling this — read a few times per turn at most.',
+    'You are told when a command finishes without calling this. Do NOT use to continuously poll — ' +
+    'read it a few times per turn at most, only when you genuinely need new output right now.',
   shortDescription: 'Read new output from a background command, or list them.',
   inputSchema: z.object({
     shell_id: z.string().optional().describe('A shell id from Bash (sh-…). Omit to list every background command in this conversation.'),
@@ -45,7 +46,7 @@ export const BashOutputTool = defineTool({
     if (!text.trim()) {
       return {
         text: run.status === 'running'
-          ? `No new output from ${run.shellId} since your last look (still ${state}). You'll be told when it finishes.`
+          ? `No new output from ${run.shellId} since your last look (still ${state}). You'll be told when it finishes — do NOT poll for it.`
           : `No new output from ${run.shellId} since your last look (${state}).`,
       };
     }

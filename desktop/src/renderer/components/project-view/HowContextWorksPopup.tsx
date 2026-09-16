@@ -292,9 +292,11 @@ interface OverviewLayer {
   path: string;
   timing: string;
 }
+// WHY the labels: renamed with the tab ("Instructions & Memories") so the
+// overview's vocabulary matches what the user just clicked.
 const OVERVIEW_LAYERS: OverviewLayer[] = [
-  { Icon: GlobeIcon, label: 'Global', path: '~/.claude/CLAUDE.md', timing: 'Always · every project' },
-  { Icon: DocIcon, label: 'This project', path: 'CLAUDE.md · AGENTS.md', timing: 'Always · this folder · overrides global' },
+  { Icon: GlobeIcon, label: 'Global instructions', path: '~/.claude/CLAUDE.md', timing: 'Always · every project' },
+  { Icon: DocIcon, label: 'Project instructions', path: 'CLAUDE.md · AGENTS.md', timing: 'Always · this folder · overrides global' },
   { Icon: ListIcon, label: 'Rules', path: '.claude/rules/', timing: 'Only when you touch matching files' },
   { Icon: BrainIcon, label: 'Memory', path: 'MEMORY.md + saved facts', timing: 'Recalled when relevant to your message' },
 ];

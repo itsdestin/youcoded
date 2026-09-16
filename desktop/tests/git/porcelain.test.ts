@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  parsePorcelainV2, parseNumstat, parseLogRecords, parseRenamePath,
+  parsePorcelainV2, parseNumstat, parseLogRecords,
   parseUnifiedDiff, countsFromHunks, synthesizeAddHunk,
 } from '../../src/main/git/porcelain';
 
@@ -14,7 +14,7 @@ describe('parsePorcelainV2', () => {
       '1 MM N... 100644 100644 100644 aaa bbb src/both.ts',
       '? src/renderer/state/undo-stack.ts',
       '',
-    ].join('\n');
+    ].join('\0');
     const r = parsePorcelainV2(text);
     expect(r.branch).toBe('master');
     expect(r.files).toEqual([
@@ -30,9 +30,9 @@ describe('parsePorcelainV2', () => {
       '# branch.head (detached)',
       '1 A. N... 000000 100644 100644 000 bbb new.ts',
       '1 .D N... 100644 100644 000000 aaa bbb gone.ts',
-      '2 R. N... 100644 100644 100644 aaa bbb R100 renamed.ts\told-name.ts',
+      '2 R. N... 100644 100644 100644 aaa bbb R100 renamed.ts\0old-name.ts',
       '',
-    ].join('\n');
+    ].join('\0');
     const r = parsePorcelainV2(text);
     expect(r.branch).toBeNull();
     expect(r.files[0]).toMatchObject({ path: 'new.ts', kind: 'added', staged: true });
@@ -52,7 +52,7 @@ describe('parsePorcelainV2', () => {
       'u UU N... 100644 100644 100644 100644 df967b96a579e45a18b8251732d16804b2e56a55 ba2906d0666cf726c7eaadd2cd3db615dedfdf3a 2299c37978265a95cbe835a4b0f0bbf15aad5549 f.txt',
       'u UU N... 100644 100644 100644 100644 df967b96a579e45a18b8251732d16804b2e56a55 ba2906d0666cf726c7eaadd2cd3db615dedfdf3a 2299c37978265a95cbe835a4b0f0bbf15aad5549 sp ace.txt',
       '',
-    ].join('\n');
+    ].join('\0');
     const r = parsePorcelainV2(text);
     expect(r.branch).toBe('main');
     expect(r.files).toEqual([
@@ -66,63 +66,36 @@ describe('parsePorcelainV2', () => {
 
 describe('parseNumstat', () => {
   it('maps path to added/removed and flags binary', () => {
-    const text = '41\t12\tsrc/renderer/state/chat-reducer.ts\n-\t-\tassets/logo.png\n';
+    const text = '41\t12\tsrc/renderer/state/chat-reducer.ts\0-\t-\tassets/logo.png\0';
     const m = parseNumstat(text);
     expect(m.get('src/renderer/state/chat-reducer.ts')).toEqual({ added: 41, removed: 12, binary: false });
     expect(m.get('assets/logo.png')).toEqual({ added: 0, removed: 0, binary: true });
   });
 });
 
-describe('parseRenamePath', () => {
-  // Pure helper for a `--numstat` pathfield: plain path (no rename), the
-  // brace form git emits when old/new share a common prefix/suffix, and the
-  // plain "old => new" form when they don't.
-  it('returns a plain path unchanged when there is no rename', () => {
-    expect(parseRenamePath('src/reducer.ts')).toEqual({ path: 'src/reducer.ts' });
+describe('NUL numstat paths', () => {
+  it.each(['src/reducer.ts', 'old.md => new.md', 'dir/{ => sub}/f.md', 'dir/{sub => }/g.md'])('preserves literal %s', (name) => {
+    expect([...parseNumstat(`1\t2\t${name}\0`)]).toEqual([[name, { added: 1, removed: 2, binary: false }]]);
   });
 
-  it('splits the brace form with a common prefix/suffix into old/new', () => {
-    expect(parseRenamePath('docs/{superpowers => archive}/plans/x.md')).toEqual({
-      path: 'docs/archive/plans/x.md',
-      renamedFrom: 'docs/superpowers/plans/x.md',
-    });
-  });
-
-  it('collapses the doubled slash produced by an empty brace side', () => {
-    expect(parseRenamePath('dir/{ => sub}/f.md')).toEqual({
-      path: 'dir/sub/f.md',
-      renamedFrom: 'dir/f.md',
-    });
-  });
-
-  it('collapses the doubled slash from an empty new-side brace rename', () => {
-    expect(parseRenamePath('dir/{sub => }/g.md')).toEqual({
-      path: 'dir/g.md',
-      renamedFrom: 'dir/sub/g.md',
-    });
-  });
-
-  it('splits the plain "old => new" form when there is no common affix', () => {
-    expect(parseRenamePath('old.md => new.md')).toEqual({
-      path: 'new.md',
-      renamedFrom: 'old.md',
-    });
+  it('consumes rename source and destination without interpreting their content', () => {
+    expect([...parseNumstat('0\t0\t\0old\nname\0new\tname\0')]).toEqual([
+      ['new\tname', { added: 0, removed: 0, binary: false }],
+    ]);
   });
 });
 
 describe('parseLogRecords', () => {
-  // Format rides with `--numstat`: a LEADING record separator, so splitting
-  // on \x1e yields an empty first chunk, then one chunk per commit shaped
-  // "sha\x1fsubject\x1fauthorDate\n<added>\t<removed>\t<pathfield>\n".
-  const U = '\x1f'; // unit separator between header fields
-  const R = '\x1e'; // record separator, LEADS each commit chunk
+  // WHY: fixtures mirror --numstat -z and NUL-framed pretty metadata.
+  const U = '\0';
+  const R = '\0';
 
-  it('splits unit/record separators into entries and reads the numstat line', () => {
+  it('splits NUL-framed commit metadata and reads the numstat row', () => {
     const text =
-      R + ['3f1c9a2deadbeef00000000000000000000000', 'fix(reducer): drop stale tool ids', '2026-07-22T14:03:11-05:00'].join(U) + '\n' +
-      '12\t4\tsrc/reducer.ts\n' +
-      R + ['c9718267cafebabe0000000000000000000000', 'fix(ws): consolidate duplicate clients', '2026-07-22T11:00:00-05:00'].join(U) + '\n' +
-      '3\t0\tsrc/ws.ts\n';
+      R + ['3f1c9a2deadbeef00000000000000000000000', 'fix(reducer): drop stale tool ids', '2026-07-22T14:03:11-05:00'].join(U) + '\0\n' +
+      '12\t4\tsrc/reducer.ts\0' +
+      R + ['c9718267cafebabe0000000000000000000000', 'fix(ws): consolidate duplicate clients', '2026-07-22T11:00:00-05:00'].join(U) + '\0\n' +
+      '3\t0\tsrc/ws.ts\0';
     const log = parseLogRecords(text);
     expect(log).toHaveLength(2);
     expect(log[0]).toEqual({
@@ -138,10 +111,10 @@ describe('parseLogRecords', () => {
     expect(log[1].counts).toEqual({ added: 3, removed: 0 });
   });
 
-  it('extracts renamedFrom + pathAtCommit (new name) from a brace-rename numstat pathfield', () => {
+  it('extracts source and destination from NUL-delimited rename fields', () => {
     const text =
-      R + ['80e65644d13b133b901ef4274c1094b30f34246d', 'move to docs/new.md', '2026-07-23T10:35:16-07:00'].join(U) + '\n' +
-      '0\t0\tdocs/{superpowers => archive}/new.md\n';
+      R + ['80e65644d13b133b901ef4274c1094b30f34246d', 'move to docs/new.md', '2026-07-23T10:35:16-07:00'].join(U) + '\0\n' +
+      '0\t0\t\0docs/superpowers/new.md\0docs/archive/new.md\0';
     const log = parseLogRecords(text);
     expect(log).toHaveLength(1);
     expect(log[0].pathAtCommit).toBe('docs/archive/new.md');
@@ -149,19 +122,19 @@ describe('parseLogRecords', () => {
     expect(log[0].counts).toEqual({ added: 0, removed: 0 });
   });
 
-  it('extracts renamedFrom + pathAtCommit from an empty-side brace rename, collapsing the doubled slash', () => {
+  it('preserves a rename into a new subdirectory', () => {
     const text =
-      R + ['deadbeefcafe0000000000000000000000000000', 'move into sub/', '2026-07-23T10:35:16-07:00'].join(U) + '\n' +
-      '0\t0\tdir/{ => sub}/f.md\n';
+      R + ['deadbeefcafe0000000000000000000000000000', 'move into sub/', '2026-07-23T10:35:16-07:00'].join(U) + '\0\n' +
+      '0\t0\t\0dir/f.md\0dir/sub/f.md\0';
     const log = parseLogRecords(text);
     expect(log[0].pathAtCommit).toBe('dir/sub/f.md');
     expect(log[0].renamedFrom).toBe('dir/f.md');
   });
 
-  it('extracts renamedFrom + pathAtCommit from a plain "old => new" numstat pathfield (no common affix)', () => {
+  it('preserves rename paths with no common affix', () => {
     const text =
-      R + ['1111111111111111111111111111111111111', 'rename old to new', '2026-07-23T10:35:16-07:00'].join(U) + '\n' +
-      '1\t1\told.md => new.md\n';
+      R + ['1111111111111111111111111111111111111', 'rename old to new', '2026-07-23T10:35:16-07:00'].join(U) + '\0\n' +
+      '1\t1\t\0old.md\0new.md\0';
     const log = parseLogRecords(text);
     expect(log[0].pathAtCommit).toBe('new.md');
     expect(log[0].renamedFrom).toBe('old.md');
@@ -170,15 +143,15 @@ describe('parseLogRecords', () => {
 
   it('reports counts as null for a binary file (numstat "-\\t-")', () => {
     const text =
-      R + ['2222222222222222222222222222222222222', 'add logo', '2026-07-23T10:35:16-07:00'].join(U) + '\n' +
-      '-\t-\tassets/logo.png\n';
+      R + ['2222222222222222222222222222222222222', 'add logo', '2026-07-23T10:35:16-07:00'].join(U) + '\0\n' +
+      '-\t-\tassets/logo.png\0';
     const log = parseLogRecords(text);
     expect(log[0].pathAtCommit).toBe('assets/logo.png');
     expect(log[0].counts).toBeNull();
   });
 
   it('leaves pathAtCommit/counts undefined+null when a chunk has no numstat line (e.g. a surfaced merge commit)', () => {
-    const text = R + ['deadbeef', 'merge commit', '2026-07-22T00:00:00-05:00'].join(U) + '\n';
+    const text = R + ['deadbeef', 'merge commit', '2026-07-22T00:00:00-05:00'].join(U) + '\0\n';
     const log = parseLogRecords(text);
     expect(log).toHaveLength(1);
     expect(log[0].pathAtCommit).toBeUndefined();

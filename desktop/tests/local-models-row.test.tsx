@@ -59,10 +59,73 @@ describe('LocalModelRow', () => {
 
   it('a REFUSED resume says why instead of doing nothing visible', async () => {
     const models = setupModelsMock();
-    models.resume.mockRejectedValue(new Error('Not enough free space: this download needs about 40.0 GB but only 5.0 GB is free.'));
+    // The message wears Electron's wrapper, because that is how it ARRIVES: a
+    // rejected ipcRenderer.invoke is re-thrown as "Error invoking remote method
+    // '<channel>': Error: <the real one>". This test used to mock an
+    // already-clean string, so it could not tell a stripped message from an
+    // unstripped one and passed either way — the whole class went unguarded.
+    models.resume.mockRejectedValue(new Error(
+      "Error invoking remote method 'models:resume': Error: Not enough free space: this download needs about 40.0 GB but only 5.0 GB is free.",
+    ));
     render(<LocalModelRow model={unfinished} onRefresh={async () => {}} />);
     await act(async () => { fireEvent.click(screen.getByText('Resume')); });
-    await waitFor(() => expect(screen.getByText(/Not enough free space/)).toBeTruthy());
+    // Exact text, anchored at the start: a substring match would still pass with
+    // forty characters of Electron machinery in front of it.
+    await waitFor(() => expect(screen.getByText(
+      'Not enough free space: this download needs about 40.0 GB but only 5.0 GB is free.',
+    )).toBeTruthy());
+  });
+
+  // The start-up window this branch deliberately created: over the remote link
+  // the host can have no engine wired yet, and its honest answer to both of
+  // these is nothing at all. Neither may become developer text or a spinner
+  // that never ends.
+  it('says so plainly when the engine is not ready to READ a model\u2019s settings', async () => {
+    setupModelsMock({ settings: vi.fn().mockResolvedValue(null) });
+    render(<LocalModelRow model={{ ...unfinished, status: 'complete' }} onRefresh={async () => {}} />);
+    await act(async () => { fireEvent.click(screen.getByText('Settings')); });
+    // Not "Cannot read properties of null (reading 'contextLength')".
+    await waitFor(() => expect(screen.getByText(
+      'This model\u2019s settings are not available yet. Try again in a moment.',
+    )).toBeTruthy());
+    expect(screen.queryByText(/Cannot read properties/)).toBeNull();
+  });
+
+  it('says so plainly when the engine is not ready to SAVE, instead of blanking the dialog', async () => {
+    const ready = {
+      contextLength: null, keepLoaded: false, gpuLayers: 'auto' as const,
+      extraFlags: '', memoryWarningDismissed: null,
+    };
+    setupModelsMock({
+      settings: vi.fn().mockResolvedValue(ready),
+      setSettings: vi.fn().mockResolvedValue(null),
+    });
+    render(<LocalModelRow model={{ ...unfinished, status: 'complete' }} onRefresh={async () => {}} />);
+    await act(async () => { fireEvent.click(screen.getByText('Settings')); });
+    await waitFor(() => expect(screen.getByLabelText('Keep loaded')).toBeTruthy());
+
+    await act(async () => { fireEvent.click(screen.getByLabelText('Keep loaded')); });
+
+    await waitFor(() => expect(screen.getByText(
+      'That did not save \u2014 the engine is not ready yet. Try again in a moment.',
+    )).toBeTruthy());
+    // The dialog is still a dialog, not "Loading settings…" for ever.
+    expect(screen.queryByText('Loading settings…')).toBeNull();
+    expect(screen.getByLabelText('Keep loaded')).toBeTruthy();
+  });
+
+  it('a refused ADD VISION shows the reason without Electron\u2019s wrapper', async () => {
+    const models = setupModelsMock({
+      addVision: vi.fn().mockRejectedValue(new Error(
+        "Error invoking remote method 'models:add-vision': Error: The model is still busy \u2014 try again in a moment.",
+      )),
+    });
+    render(<LocalModelRow model={{ ...unfinished, status: 'complete', vision: 'available' }} onRefresh={async () => {}} />);
+    await act(async () => { fireEvent.click(screen.getByText('Add vision')); });
+    expect(models.addVision).toHaveBeenCalledWith(unfinished.id);
+    await waitFor(() => expect(screen.getByText(
+      'The model is still busy \u2014 try again in a moment.',
+    )).toBeTruthy());
   });
 
   it("a download that FAILED after it started shows the downloader's own message", () => {

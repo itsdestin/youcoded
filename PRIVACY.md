@@ -1,6 +1,6 @@
 # YouCoded Privacy Policy
 
-**Effective date:** September 3, 2026
+**Effective date:** September 15, 2026
 
 YouCoded is made and published by **Destin's Adventures, LLC**, an Arizona limited liability company. It is not affiliated with Anthropic or any other commercial entity. This policy explains in plain language what data the YouCoded software touches, what gets sent to servers operated by the project, and what doesn't.
 
@@ -10,11 +10,27 @@ If anything here conflicts with what the app actually does, **the app is wrong a
 
 ## 1. The short version
 
-- **Your conversations with Claude Code never reach YouCoded servers.** They go directly between your device and Anthropic, using your own Claude Pro/Max sign-in.
-- **Your sign-in tokens never reach YouCoded servers.** They sit in local files on your device managed by Claude Code.
-- **Your personal files, journal entries, encyclopedia notes, and any other user data created in the app stay on your device.** YouCoded ships several plugins (journaling, encyclopedia, task inbox, text-message tools, etc.) that operate entirely locally — they read and write files in your own home directory and don't transmit any of that data to YouCoded servers.
+- **YouCoded does not receive the content you send to an AI model.** Claude Code conversations go directly to Anthropic under your own account. Native cloud conversations go to the provider you choose, such as OpenRouter and its selected underlying provider, Anthropic, OpenAI/ChatGPT, Google, or another endpoint you configure.
+- **Cloud providers have their own data policies.** They may retain, log, review, or otherwise handle content under their own terms, account settings, plan, model, and legal or safety obligations. YouCoded cannot change or delete records held by those providers.
+- **Local-model inference stays on your device.** When a model runs entirely on your device, YouCoded does not send that inference request to a cloud model provider, so a cloud model provider does not receive it to retain or train on.
+- **Your sign-in tokens and API keys never reach YouCoded servers.** They are stored locally on your device.
+- **Your personal files, journal entries, encyclopedia notes, and other user data created in the app stay on your device unless you choose a feature that sends them elsewhere.** For example, a cloud-model prompt, sync or backup, web tool, integration, marketplace skill, or remote MCP server can each have its own data flow.
 - **Backup and sync use *your* accounts.** YouCoded supports backing up local state to Google Drive, GitHub, or iCloud — those are your accounts; YouCoded servers are never the destination.
-- **There are three narrow data flows that DO touch YouCoded-operated servers:** anonymous usage analytics (opt-out at any time), marketplace plugin discovery (anonymous reads, optional GitHub sign-in for ratings), and multiplayer games (only while a game lobby is open). Each is described in detail below.
+- **In the app, there are three narrow data flows that DO touch YouCoded-operated servers:** anonymous usage analytics (opt-out at any time), marketplace plugin discovery (anonymous reads, optional GitHub sign-in for ratings), and multiplayer games (only while a game lobby is open). Each is described in detail below.
+
+---
+
+## Website analytics
+
+The top-level landing page at `https://youcoded.ai/` sends a visit and cumulative counts of instruction opens and final installer-link clicks to `api.youcoded.ai`. Opening iOS instructions counts as an instruction open, not a download. Installer variants are grouped into Windows, macOS, Linux, and Android. Clicks do not prove download completion or installation. There is no periodic website heartbeat.
+
+Attribution uses an owner-registered source/campaign pair from the link and a referring hostname, never the full referring URL or other query parameters. Invalid or unregistered pairs are untagged. Website analytics do not send message content, app device hashes, account identifiers, inferred visitor platform, or geography. Hosting and security providers still process network requests and may keep operational logs under their own policies; this is not a promise of no server logs.
+
+Each page creates a random identifier in JavaScript memory. It is transmitted for initial admission, but the server stores only a secret-keyed HMAC-derived page key, not the raw random identifier. An opaque server capability lets the same open page update its cumulative counts without double-counting retries. This correlates updates from that page, including across midnight, but does not identify returning visitors across reloads or tabs. Reloading creates a new identifier; restoring the same document from the browser's back/forward cache retains the same visit. No website journey identifier is saved in cookies, localStorage, sessionStorage, or a URL.
+
+All website visitor analytics records in the active database — daily aggregates, per-page deduplication snapshots, and supporting daily records — share a rolling **90 UTC-date history including today**. Scheduled cleanup removes expired records; outages can delay physical deletion. Reports and updates independently enforce the retained window. Cloudflare backups/Time Travel and operational logs have separate retention. Cloudflare documents a Time Travel recovery window of 7 days on Workers Free and 30 days on Workers Paid; see [Cloudflare D1 limits](https://developers.cloudflare.com/d1/platform/limits/). The 90-day active-database window does not promise instantaneous deletion from backups or operational logs. Owner-created campaign configuration is retained separately so shared links continue to work; it is not visitor history.
+
+The website has no visitor preference or opt-out control. Blocking scripts or requests, connection failures, bots, and collection limits affect coverage. Counts describe accepted page snapshots, not every person who visits. The app's analytics opt-out remains separate and is described in Section 3.1.
 
 ---
 
@@ -22,8 +38,8 @@ If anything here conflicts with what the app actually does, **the app is wrong a
 
 To make the boundaries explicit, YouCoded servers do **not** receive:
 
-- The contents of any conversation between you and Claude.
-- Your Claude Pro/Max sign-in token, OAuth tokens for any other service, API keys, or passwords.
+- The contents of your conversations or prompts sent to a model. Those go to the cloud provider you choose, if any, rather than YouCoded servers.
+- Your Claude Pro/Max sign-in token, ChatGPT sign-in tokens, OAuth tokens for any other service, API keys, or passwords.
 - Files on your device, the contents of your projects, or the contents of any Claude Code transcript file.
 - Your name, email, real address, or other personal identifiers — except where you voluntarily sign in with GitHub for the marketplace (Section 3.2 below) or contact us by email.
 - Anything you type into the chat box, the terminal, the journaling plugin, the encyclopedia, or any other in-app surface.
@@ -35,9 +51,9 @@ If you discover a code path that contradicts any of the above, treat it as a pri
 
 ## 3. What YouCoded DOES collect, when, and why
 
-### 3.1 Anonymous usage analytics (opt-out)
+### 3.1 Privacy-preserving device analytics (opt-out)
 
-**What it is:** A daily heartbeat ping from each device that has the app open at least once that day, telling YouCoded *which version* of the app is in active use *on roughly how many devices* in *which countries and regions*. That's the entire purpose. It is a daily-attendance counter — there are no session counts, no message counts, no plugin usage events, no in-app behavior tracking.
+**What it is:** A daily heartbeat ping from each device that has the app open at least once that day, telling YouCoded *which version* of the app is in active use *on roughly how many devices* in *which countries and regions*. That's the entire purpose. It is a daily-attendance counter — there are no session counts, no message counts, no plugin usage events, no in-app behavior tracking. The device hash is a stable pseudonymous identifier, not an anonymous one: it lets us recognize the same device without receiving its raw hardware ID.
 
 **What we send:**
 
@@ -75,7 +91,7 @@ This data is stored in a Cloudflare D1 database. **You can delete this data on r
 
 ### 3.3 Multiplayer games
 
-YouCoded includes a multiplayer game system (currently Connect 4) backed by PartyKit (running on Cloudflare Durable Objects). When you are **in an active game lobby or game**:
+YouCoded includes multiplayer Connect 4 and chess backed by PartyKit (running on Cloudflare Durable Objects). When you are **in an active game lobby or game**:
 
 - Your GitHub login name (used as your in-game username) is shared with the room.
 - Your moves and any in-game chat are relayed through the room to the other player(s) in real time.
@@ -102,10 +118,13 @@ YouCoded relies on the following third-party services. Each has its own privacy 
 
 - **Cloudflare** — hosts the marketplace Worker, the Analytics Engine analytics store, the D1 database, and the PartyKit multiplayer rooms. Cloudflare receives the network requests that carry the data described in Section 3, including your IP address (which Cloudflare's edge network uses to serve content and to derive country/region for our analytics). See [Cloudflare's privacy policy](https://www.cloudflare.com/privacypolicy/).
 - **GitHub** — hosts the YouCoded source code, the marketplace registry, the theme registry, and the OAuth flow used for marketplace ratings/submissions. GitHub receives the network requests that carry the data described in Section 3.2 and 3.5. See [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
-- **Anthropic** — operates the Claude Code servers your conversations go to. Anthropic does not receive anything from YouCoded; it receives content directly from your local Claude Code CLI under your own Pro/Max sign-in. See [Anthropic's privacy policy](https://www.anthropic.com/privacy).
+- **Anthropic** — operates Claude Code and can also be selected as a direct cloud provider. Content sent through either route is governed by the account, plan, and Anthropic policies that apply to it. See [Anthropic's privacy policy](https://www.anthropic.com/privacy) and [data-retention information](https://privacy.claude.com/en/articles/10023548-how-long-do-you-store-my-data).
+- **OpenAI** — operates ChatGPT and can be selected as a direct cloud provider. Content sent through a ChatGPT-plan or direct OpenAI route is governed by the account, plan, and OpenAI policies that apply to it. See [OpenAI's privacy information](https://openai.com/consumer-privacy/).
+- **OpenRouter and its underlying providers** — OpenRouter routes requests to a selected model provider. OpenRouter documents its own handling separately from the underlying provider's retention and training rules; both matter for a request you send through OpenRouter. See [OpenRouter's data collection guide](https://openrouter.ai/docs/guides/privacy/data-collection) and [provider logging guide](https://openrouter.ai/docs/guides/privacy/provider-logging).
+- **Other cloud providers or endpoints you configure** — if you add a direct provider, an OpenAI-compatible endpoint, an MCP server, or another integration, that service receives the data needed to answer your request or perform the work you authorize. Review its policy before using it with sensitive information.
 - **Termux package mirrors (Android only)** — during initial setup, the Android app downloads runtime packages over HTTPS (with SHA256 verification) from `packages.termux.dev`. See [Termux's project pages](https://termux.dev/) for their policies.
 
-Beyond the above, YouCoded does not share your data with any third parties. We do not sell data, we do not run ads, we do not have any commercial partners.
+YouCoded does not sell data, run ads, or have commercial partners. The app does not send your model conversations or credentials to YouCoded-operated servers; third parties receive data only through the model, sync, backup, marketplace, integration, remote-access, or other features you choose to use.
 
 ---
 

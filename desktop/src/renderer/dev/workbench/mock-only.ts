@@ -32,7 +32,84 @@
 // the workbench can still show the you-alone, empty and stale-board states
 // without a live leaderboard. `no MOCK_ONLY entry has since gained a real
 // channel` in workbench-mock-contract.test.ts is what forces this cleanup.
+//
+// `engine.prereqs` came off this list on 2026-09-05 when the real check landed
+// (main/engine/rocm-prereqs.ts on all five surfaces). Its fake in mock-shim.ts
+// stays, so the workbench can still walk the "missing, then present" flow
+// without a machine that is actually missing the libraries.
+//
+// 2026-09-05 — local-engine upgrades (docs/active/design/2026-09-04-local-engine-upgrades):
+// six channels were designed in the workbench ahead of main, and all six have now landed on
+// every surface (ipc-handlers + preload + remote-shim + remote-server + SessionService.kt):
+//   engine.prereqs, engine.runInTerminal, engine.setConfig (which replaced engine.setSpeed),
+//   models.settings, models.setSettings, models.addVision.
+// `models.dismissMemoryWarning` never got a channel of its own: it folded into
+// models.setSettings, so one write covers everything a model's settings own. Every fake in
+// mock-shim.ts stays — the workbench still has no machine, no PTY and no engine — only the
+// "no real backend" claim goes.
+// The three Linux/KDE buddy helper rows (`buddy.helperStatus`,
+// `buddy.installHelper`, `buddy.removeHelper`) came off on 2026-09-04 when their
+// real backend landed: kwin-helper.ts plus the `buddy:helper-status`,
+// `buddy:install-helper` and `buddy:remove-helper` channels on all three of the
+// surfaces this feature has (shared/types.ts + preload.ts, ipc-handlers.ts,
+// remote-shim.ts). Exactly the lifecycle this registry is for — the popup was
+// designed and reviewed against a fake, and the fake told us what to build. The
+// fakes in mock-shim.ts stay, so the workbench can still show the not-added,
+// added and not-supported states without a KDE desktop; only the "no real
+// backend" claim goes. `no MOCK_ONLY entry has since gained a real channel` in
+// workbench-mock-contract.test.ts is what forces this deletion.
+// The eight voice-prompting rows (`voice.status`, `.download`, `.start`,
+// `.stop`, `.cancel`, `.onEvent`, `.sendAudio`, `.micAccess`) came off the same
+// way on 2026-09-05, the moment preload.ts gained the real `voice` namespace and
+// main/voice/voice-handlers.ts registered the six channels behind it. The fake
+// in mock-shim.ts STAYS — the workbench still needs a mic that "hears" a
+// scripted sentence with no speech engine downloaded — only the "no real
+// backend" claim goes.
+// The four Sign-in-with-ChatGPT rows (`chatgpt.status`, `chatgpt.signIn`,
+// `chatgpt.cancelSignIn`, `chatgpt.signOut`) were listed here while the Settings
+// card and the first-run screen were designed against a fake account (design
+// 2026-09-04), and came off when the real backend landed on all five surfaces
+// (backend design 2026-09-05: main/providers/chatgpt-auth.ts, the four
+// `chatgpt:*` handlers, preload / remote-shim / remote-server / Android). Same
+// rule, same reason as the rows above: the fake in mock-shim.ts stays so the
+// workbench can still pin signed-out / waiting / signed-in / blocked without a
+// browser round-trip — only the "no real backend" claim goes.
+// `native.onSessionContext` came off on 2026-09-10 when the real backend landed:
+// NativeSessionHost.buildSessionContext, emitted from wire(), forwarded by
+// ipc-handlers as `native:session-context`, with `native:session-context-text`
+// answering the panel's on-demand read of one file. Same lifecycle as every row
+// above — the panel was designed and reviewed against a fake, the fake told us
+// what to build, and the fakes in mock-shim.ts STAY so the workbench can still
+// show the trimmed and everything-fit states without a local model. Only the
+// "no real backend" claim goes.
+//
+// The two contribution-workspace rows (`dev.setupWorkspace`, `dev.setupStatus`) were listed
+// here on 2026-09-10 while the Contribute screen was designed ahead of its backend, and came
+// off the same day when it landed. Exactly the lifecycle this registry is for — the UI was
+// built against a fake, and the fake said what to build. Their fakes in mock-shim.ts STAY:
+// the workbench has no git, no network and no ~/YouCoded. Only the "no real backend" claim
+// goes. They are deliberately desktop-only, which ipc-channels.test.ts's DESKTOP_ONLY set
+// enforces rather than leaving implicit.
+//
+// Add a row the moment you design a channel ahead of its backend; delete the row, never the
+// guard, when it ships. An empty list is the healthy state.
 export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
+  // Browser encryption is an approved design with no backend: the Advanced section and its
+  // screen render only under the workbench preview. Delete this row when it ships.
+  { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // First-run local models (2026-09-14): `firstRun.localSetup`, `.localDownload`,
+  // `.resumeLocalDownload`, `.connectLocalApp` and `claudeCode.install` were designed
+  // here ahead of their backend and came off when the real channels landed. The fakes
+  // in mock-shim.ts stay so the setup card and the band stay reviewable.
+  // Remote access batches 2 and 3 (questions deck 2026-09-10) designed three channels
+  // ahead of their backend; all three came off on 2026-09-10 when the real channels
+  // landed. Batch 2: `on.remoteConversationStatus` (the host tells the phone where its
+  // copy of the conversation stands) and `remote.rehydrate` (Refresh on the may-be-behind
+  // strip). Batch 3: `artifacts.download` — main/remote-download.ts mints the link,
+  // remote-server.ts serves GET /download/<token>, preload declares it, the shim opens it,
+  // and Android's catch-all answers unsupported by design. The fakes in mock-shim.ts stay
+  // so the status strip, the too-large card and the Download button stay reviewable
+  // without a host.
   // Specialists stage two — plans (design mockup, 2026-09-05). The plan card
   // and its Settings row are built against these; the backend (the
   // `propose_plan` tool, schema + validator, executor + journal, budgets as

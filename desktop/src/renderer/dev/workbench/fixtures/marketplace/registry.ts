@@ -1168,7 +1168,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "civic-report",
     "displayName": "Civic Report",
-    "description": "Run the civic-report skill",
+    "description": "Use when the user asks for a report on their representatives, wants to research candidates before voting, or wants to understand who represents their address. Handles federal reps deeply, state officials as name-level stubs.",
     "category": "personal",
     "prompt": "/civic-report",
     "source": "marketplace",
@@ -1182,7 +1182,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "encyclopedia-compile",
     "displayName": "Encyclopedia Compile",
-    "description": "Run the encyclopedia-compile skill",
+    "description": "Compiles the user's Encyclopedia — a single, narratively coherent life history document — from eight modular source files. Invoke when the user says \"compile my encyclopedia\", \"build the encyclopedia\", or similar. Supports four detail levels to control how much intimate personal detail appears in the output.",
     "category": "personal",
     "prompt": "/encyclopedia-compile",
     "source": "marketplace",
@@ -1196,7 +1196,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "encyclopedia-interviewer",
     "displayName": "Encyclopedia Interviewer",
-    "description": "Run the encyclopedia-interviewer skill",
+    "description": "Conducts focused interview sessions to fill gaps in the Encyclopedia system's modular source files. Proactively identifies missing backstory, stale data, and contradictions, then runs a structured interview to address them.",
     "category": "personal",
     "prompt": "/encyclopedia-interviewer",
     "source": "marketplace",
@@ -1210,7 +1210,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "encyclopedia-librarian",
     "displayName": "Encyclopedia Librarian",
-    "description": "Run the encyclopedia-librarian skill",
+    "description": "Produces purpose-built reports and briefings from the Encyclopedia system's modular source files — career briefs, person briefings, period reviews, political profiles, and topic syntheses, with an optional deep-search mode.",
     "category": "personal",
     "prompt": "/encyclopedia-librarian",
     "source": "marketplace",
@@ -1224,7 +1224,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "brainstorming",
     "displayName": "Brainstorming",
-    "description": "Run the brainstorming skill",
+    "description": "Use this before any creative work — creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation.",
     "category": "development",
     "prompt": "/brainstorming",
     "source": "marketplace",
@@ -1238,7 +1238,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "dispatching-parallel-agents",
     "displayName": "Dispatching Parallel Agents",
-    "description": "Run the dispatching-parallel-agents skill",
+    "description": "Use when facing 2+ independent tasks that can be worked on without shared state or sequential dependencies.",
     "category": "development",
     "prompt": "/dispatching-parallel-agents",
     "source": "marketplace",
@@ -1252,7 +1252,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "executing-plans",
     "displayName": "Executing Plans",
-    "description": "Run the executing-plans skill",
+    "description": "Use when you have a written implementation plan to execute in a separate session with review checkpoints.",
     "category": "development",
     "prompt": "/executing-plans",
     "source": "marketplace",
@@ -1266,7 +1266,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "theme-builder",
     "displayName": "Theme Builder",
-    "description": "Run the theme-builder skill",
+    "description": "Build immersive YouCoded theme packs. Invoke as /theme-builder \"your vibe description\" — start from a general vibe, a detailed brief, or your own wallpaper.",
     "category": "personal",
     "prompt": "/theme-builder",
     "source": "marketplace",
@@ -1280,7 +1280,7 @@ export const INSTALLED_SKILLS = [
   {
     "id": "marketplace-publisher",
     "displayName": "Marketplace Publisher",
-    "description": "Run the marketplace-publisher skill",
+    "description": "Conversational assistant that helps users publish their plugins (skills, commands, hooks, MCPs, agents) to the WeCoded marketplace — disk discovery, plugin rebuild, secret sanitization, and PR creation.",
     "category": "personal",
     "prompt": "/marketplace-publisher",
     "source": "marketplace",

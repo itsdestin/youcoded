@@ -59,10 +59,15 @@ interface MarketplaceState {
   favorites: string[];
   themeFavorites: string[];
   installingIds: Set<string>;
-  installError: Map<string, { message: string; at: number }>;
+  /** Which operation each in-flight key is running, so the footer can name it. */
+  installOps: Map<string, InstallOp>;
+  installError: Map<string, InstallFailure>;
   // Loading/error state
   loading: boolean;
   error: string | null;
+  /** Why the installed-theme list alone failed to load, or null. Only the Library's
+   *  Themes tab reports it — the rest of the marketplace loaded fine. */
+  themesError: string | null;
 }
 
 interface MarketplaceActions {
@@ -107,6 +112,25 @@ export function installTrackingKey(kind: 'skill' | 'theme', idOrSlug: string): s
   return `${kind}:${idOrSlug}`;
 }
 
+/** The three mutations that share one install-progress key. */
+export type InstallOp = 'install' | 'uninstall' | 'update';
+/** A recent failure for a key: which operation failed, in its own words. */
+export type InstallFailure = { op: InstallOp; message: string; at: number };
+
+/**
+ * The failure a mutation channel ANSWERED, or null when it answered success.
+ *
+ * WHY (error inventory 2026-09-10, false message 14): skills:install and the theme
+ * install/uninstall channels resolve { status: 'failed', error }; skills:update, theme
+ * update and a bundled-plugin uninstall resolve { ok: false, error }. None of them
+ * throws for these, so a provider that only catches reports every one as nothing.
+ */
+function answeredFailure(res: unknown): string | null {
+  const r = res as { status?: unknown; ok?: unknown; error?: unknown } | null | undefined;
+  if (!r || (r.status !== 'failed' && r.ok !== false)) return null;
+  return typeof r.error === 'string' && r.error ? r.error : 'no reason was given';
+}
+
 export function MarketplaceProvider({ children }: { children: React.ReactNode }) {
   const [skillEntries, setSkillEntries] = useState<SkillEntry[]>([]);
   const [themeEntries, setThemeEntries] = useState<ThemeRegistryEntryWithStatus[]>([]);
@@ -116,7 +140,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [favorites, setFavoritesState] = useState<string[]>([]);
   const [themeFavorites, setThemeFavoritesState] = useState<string[]>([]);
   const [installingIds, setInstallingIds] = useState<Set<string>>(() => new Set());
-  const [installError, setInstallError] = useState<Map<string, { message: string; at: number }>>(() => new Map());
+  const [installOps, setInstallOps] = useState<Map<string, InstallOp>>(() => new Map());
+  const [installError, setInstallError] = useState<Map<string, InstallFailure>>(() => new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Guard against stale fetchAll responses when rapid install/uninstall triggers concurrent fetches
@@ -135,6 +160,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // wouldn't appear in the drawer until app restart. Refresh after each
   // mutator below.
   const { refreshInstalled: refreshDrawerSkills } = useSkills();
+
+  // Why the theme list alone failed to load, or null. WHY separate from `error` (code review
+  // 2026-09-11, F4): the theme list is deliberately non-blocking — a failure must not blank
+  // the plugins — so it was caught to [] and the Library's Themes tab said "No themes
+  // installed yet." to someone with themes. Kept apart so only the Themes tab reports it.
+  const [themesError, setThemesError] = useState<string | null>(null);
 
   // Fetch all marketplace data in parallel on mount
   const fetchAll = useCallback(async () => {
@@ -160,7 +191,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         feat,
       ] = await Promise.all([
         window.claude.skills.listMarketplace(),
-        claude().theme.marketplace.list().catch(() => []),
+        claude().theme.marketplace.list()
+          .then((list: unknown) => { if (gen === fetchGeneration.current) setThemesError(null); return list; })
+          .catch((err: any) => {
+            if (gen === fetchGeneration.current) setThemesError(err?.message || 'the theme list could not be read');
+            return [];
+          }),
         window.claude.skills.list(),
         window.claude.skills.getFavorites(),
         claude().appearance.getFavoriteThemes().catch(() => []),
@@ -213,14 +249,19 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // Cleared in `finally` AFTER `fetchAll()` resolves — clearing before would
   // briefly flash Install → Installed because installed-state derivation
   // hasn't caught up.
-  const markInstalling = useCallback((key: string) => {
+  // WHY the operation is recorded with the key (error inventory 2026-09-10, false
+  // message 14): only the key was kept, so InstallingFooterStrip said "Installing" and
+  // "Failed to install" for uninstalls and updates too.
+  const markInstalling = useCallback((key: string, op: InstallOp) => {
     setInstallingIds(prev => { const n = new Set(prev); n.add(key); return n; });
+    setInstallOps(prev => { const n = new Map(prev); n.set(key, op); return n; });
   }, []);
   const clearInstalling = useCallback((key: string) => {
     setInstallingIds(prev => { const n = new Set(prev); n.delete(key); return n; });
+    setInstallOps(prev => { const n = new Map(prev); n.delete(key); return n; });
   }, []);
-  const recordInstallError = useCallback((key: string, message: string) => {
-    setInstallError(prev => { const n = new Map(prev); n.set(key, { message, at: Date.now() }); return n; });
+  const recordInstallError = useCallback((key: string, op: InstallOp, message: string) => {
+    setInstallError(prev => { const n = new Map(prev); n.set(key, { op, message, at: Date.now() }); return n; });
     // Auto-clear after 6s
     setTimeout(() => {
       setInstallError(prev => {
@@ -231,11 +272,21 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     }, 6500);
   }, []);
 
+  // Every mutation below has the same two halves, for the same two reasons
+  // (error inventory 2026-09-10, false message 14):
+  //   1. The ANSWER is read. These channels mostly RESOLVE their failures —
+  //      { status: 'failed', error } or { ok: false, error } — instead of throwing,
+  //      and the old code awaited them and carried on: no message, install
+  //      telemetry posted for installs that never happened, a failed theme starred.
+  //   2. The screen refresh runs AFTER the mutation's own try. Inside it, a refresh
+  //      that failed was recorded as "Failed to install" for an install that worked.
+  //      fetchAll reports its own failures through `error`.
   const installSkill = useCallback(async (id: string) => {
     const key = installTrackingKey('skill', id);
-    markInstalling(key);
+    markInstalling(key, 'install');
     try {
-      await window.claude.skills.install(id);
+      const failure = answeredFailure(await window.claude.skills.install(id));
+      if (failure) throw new Error(failure);
       // Fire install telemetry after successful local install. Non-blocking — we
       // never fail a local install because the Worker is down. Skip silently when
       // signed out (anonymous installs = no telemetry).
@@ -250,11 +301,16 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       } catch (err) {
         console.warn("[marketplace] install telemetry threw (non-fatal):", err);
       }
+    } catch (err: any) {
+      recordInstallError(key, 'install', err?.message || '');
+      clearInstalling(key);
+      throw err;
+    }
+    try {
       await fetchAll();  // Refresh state BEFORE clearing installing flag
       await refreshDrawerSkills();  // Keep CommandDrawer in sync after install
-    } catch (err: any) {
-      recordInstallError(key, err?.message || 'Install failed');
-      throw err;
+    } catch (err) {
+      console.warn('[marketplace] refresh after install failed:', err);
     } finally {
       clearInstalling(key);
     }
@@ -262,14 +318,21 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const uninstallSkill = useCallback(async (id: string) => {
     const key = installTrackingKey('skill', id);
-    markInstalling(key);
+    markInstalling(key, 'uninstall');
     try {
-      await window.claude.skills.uninstall(id);
+      // A bundled plugin is refused with the code 'bundled' — a word, not a reason.
+      const failure = answeredFailure(await window.claude.skills.uninstall(id));
+      if (failure) throw new Error(failure === 'bundled' ? 'it comes with YouCoded and cannot be removed' : failure);
+    } catch (err: any) {
+      recordInstallError(key, 'uninstall', err?.message || '');
+      clearInstalling(key);
+      throw err;
+    }
+    try {
       await fetchAll();
       await refreshDrawerSkills();  // Keep CommandDrawer in sync after uninstall
-    } catch (err: any) {
-      recordInstallError(key, err?.message || 'Uninstall failed');
-      throw err;
+    } catch (err) {
+      console.warn('[marketplace] refresh after uninstall failed:', err);
     } finally {
       clearInstalling(key);
     }
@@ -277,30 +340,35 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const installTheme = useCallback(async (slug: string) => {
     const key = installTrackingKey('theme', slug);
-    markInstalling(key);
+    markInstalling(key, 'install');
     try {
-      const res = await claude().theme.marketplace.install(slug);
+      // theme-marketplace:install RESOLVES { status: 'failed' } for a theme that never
+      // landed on disk. Stopping here keeps it out of the download count AND out of
+      // favorites — both used to happen for a failed install.
+      const failure = answeredFailure(await claude().theme.marketplace.install(slug));
+      if (failure) throw new Error(failure);
       // Task 22: tell the Worker a theme was installed, so theme cards can show
       // a download count. Themes are recorded under a `theme:<slug>` id, which
       // is how /stats tells them apart from plugins. Same rules as the skill
       // path above: only when signed in, never blocks, and a Worker failure is
       // logged but never fails the install the user actually asked for.
-      // The status check matters — theme-marketplace:install RESOLVES with
-      // { status: 'failed' } instead of throwing, so without it a theme that
-      // never landed on disk would still be counted as a download.
-      if (res?.status !== 'failed') {
-        try {
-          const signedIn = await claude().account.signedIn();
-          if (signedIn) {
-            const stat = await claude().marketplaceApi.install(`theme:${slug}`);
-            if (!stat.ok) console.warn("[marketplace] theme install telemetry failed:", stat.status, stat.message);
-          }
-        } catch (err) {
-          console.warn("[marketplace] theme install telemetry threw (non-fatal):", err);
+      try {
+        const signedIn = await claude().account.signedIn();
+        if (signedIn) {
+          const stat = await claude().marketplaceApi.install(`theme:${slug}`);
+          if (!stat.ok) console.warn("[marketplace] theme install telemetry failed:", stat.status, stat.message);
         }
+      } catch (err) {
+        console.warn("[marketplace] theme install telemetry threw (non-fatal):", err);
       }
       // Auto-favorite on install (mirrors skills)
       try { await claude().appearance.favoriteTheme(slug, true); } catch {}
+    } catch (err: any) {
+      recordInstallError(key, 'install', err?.message || '');
+      clearInstalling(key);
+      throw err;
+    }
+    try {
       // Fix: reload ThemeProvider's userThemes BEFORE fetchAll flips the
       // "Apply theme" button on. Otherwise the user can click Apply before
       // chokidar's debounced theme:reload event fires (~200ms), and the
@@ -308,9 +376,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       await reloadUserThemes();
       await fetchAll();
       await refreshDrawerSkills();  // Keep CommandDrawer in sync after theme install
-    } catch (err: any) {
-      recordInstallError(key, err?.message || 'Install failed');
-      throw err;
+    } catch (err) {
+      console.warn('[marketplace] refresh after theme install failed:', err);
     } finally {
       clearInstalling(key);
     }
@@ -318,18 +385,24 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const uninstallTheme = useCallback(async (slug: string) => {
     const key = installTrackingKey('theme', slug);
-    markInstalling(key);
+    markInstalling(key, 'uninstall');
     try {
-      await claude().theme.marketplace.uninstall(slug);
+      const failure = answeredFailure(await claude().theme.marketplace.uninstall(slug));
+      if (failure) throw new Error(failure);
+    } catch (err: any) {
+      recordInstallError(key, 'uninstall', err?.message || '');
+      clearInstalling(key);
+      throw err;
+    }
+    try {
       // Fix: same reasoning as installTheme — keep userThemes in sync with
       // disk so the active-theme fallback can correctly detect the removed
       // slug and revert to the default theme.
       await reloadUserThemes();
       await fetchAll();
       await refreshDrawerSkills();  // Keep CommandDrawer in sync after theme uninstall
-    } catch (err: any) {
-      recordInstallError(key, err?.message || 'Uninstall failed');
-      throw err;
+    } catch (err) {
+      console.warn('[marketplace] refresh after theme uninstall failed:', err);
     } finally {
       clearInstalling(key);
     }
@@ -339,24 +412,34 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // from source and overwriting files at the same install path. Config in
   // ~/.claude/youcoded-config/<id>.json is untouched.
   const update = useCallback(async (id: string, type: 'skill' | 'theme') => {
-    const key = `${type}:${id}`;
-    markInstalling(key);
+    const key = installTrackingKey(type, id);
+    markInstalling(key, 'update');
+    let result: any;
     try {
-      const result = type === 'theme'
+      result = type === 'theme'
         ? await claude().theme.marketplace.update(id)
         : await (window as any).claude.skills.update(id);
+      // Both update channels answer { ok: false, error }. Rejecting carries the same
+      // reason to UpdateButton, which shows a rejection's message beside the button.
+      const failure = answeredFailure(result);
+      if (failure) throw new Error(failure);
+    } catch (err: any) {
+      recordInstallError(key, 'update', err?.message || '');
+      clearInstalling(key);
+      throw err;
+    }
+    try {
       // Fix: theme update overwrites manifest + assets on disk; reload so
       // the in-memory theme picks up the new tokens/assets immediately.
       if (type === 'theme') await reloadUserThemes();
       await fetchAll();
       await refreshDrawerSkills();  // Keep CommandDrawer in sync after update — plugin update can change skill manifest
-      return result;
-    } catch (err: any) {
-      recordInstallError(key, err?.message || 'Update failed');
-      throw err;
+    } catch (err) {
+      console.warn('[marketplace] refresh after update failed:', err);
     } finally {
       clearInstalling(key);
     }
+    return result;
   }, [fetchAll, reloadUserThemes, refreshDrawerSkills, markInstalling, clearInstalling, recordInstallError]);
 
   const setFavorite = useCallback(async (id: string, favorited: boolean) => {
@@ -469,9 +552,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     favorites,
     themeFavorites,
     installingIds,
+    installOps,
     installError,
     loading,
     error,
+    themesError,
     installSkill,
     uninstallSkill,
     installTheme,
@@ -483,7 +568,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     publishSkill,
   }), [
     skillEntries, themeEntries, featured, packages, updateAvailable, installedSkills,
-    favorites, themeFavorites, installingIds, installError, loading, error,
+    favorites, themeFavorites, installingIds, installError, loading, error, themesError,
     installSkill, uninstallSkill, installTheme, uninstallTheme, update,
     setFavorite, favoriteTheme, fetchAll, publishSkill,
   ]);

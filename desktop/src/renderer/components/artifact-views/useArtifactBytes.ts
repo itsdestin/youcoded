@@ -4,6 +4,9 @@ export interface ArtifactBytesState {
   bytes: Uint8Array | null;
   loading: boolean;
   error: string | null;
+  /** The file's real size when the host refused with `too-large` — a phone
+   *  shows it on the card that offers Download instead of a preview. */
+  sizeBytes?: number;
 }
 
 // Decode a base64 string to bytes in the renderer. atob is available in both
@@ -36,7 +39,7 @@ export function useArtifactBytes(absolutePath: string): ArtifactBytesState {
         if (res?.ok && typeof res.base64 === 'string') {
           setState({ bytes: base64ToBytes(res.base64), loading: false, error: null });
         } else {
-          setState({ bytes: null, loading: false, error: res?.error ?? 'read-failed' });
+          setState({ bytes: null, loading: false, error: res?.error ?? 'read-failed', sizeBytes: res?.sizeBytes });
         }
       })
       .catch((e: any) => {

@@ -176,3 +176,91 @@ describe('WindowRegistry', () => {
     });
   });
 });
+
+// Remote access batch 2, design §2 (T3): the registry answers the remote
+// snapshot's two questions — is a session's copy still arriving in its new
+// window, and which session is the desktop showing.
+describe('WindowRegistry — transfer gaps and focus for the remote snapshot', () => {
+  let reg: WindowRegistry;
+  beforeEach(() => {
+    reg = new WindowRegistry();
+    reg.registerWindow(1, 1);
+    reg.registerWindow(2, 2);
+    reg.registerWindow(9, 9, 'buddy');
+  });
+
+  it('transferSession moves ownership and opens a gap; a stale source is refused', () => {
+    reg.assignSession('s', 1);
+    expect(reg.transferSession('s', 2, 1)).toBe(false);   // window 2 does not own it
+    expect(reg.isPendingTransfer('s')).toBe(false);
+    expect(reg.transferSession('s', 1, 2)).toBe(true);
+    expect(reg.getOwner('s')).toBe(2);
+    expect(reg.isPendingTransfer('s')).toBe(true);
+  });
+
+  it('isPendingTransfer never consumes the mark the first page read needs', () => {
+    reg.assignSession('s', 1);
+    reg.transferSession('s', 1, 2);
+    expect(reg.isPendingTransfer('s')).toBe(true);
+    expect(reg.isPendingTransfer('s')).toBe(true);
+    expect(reg.consumeInheritedByTransfer('s', 2)).toBe(true);
+    expect(reg.isPendingTransfer('s')).toBe(false);
+  });
+
+  it('a closed inheriting window leaves no gap behind', () => {
+    reg.assignSession('s', 1);
+    reg.transferSession('s', 1, 2);
+    reg.unregisterWindow(2);
+    expect(reg.isPendingTransfer('s')).toBe(false);
+  });
+
+  it('focus: the last-focused main window\'s selection, else the leader\'s, else nothing', () => {
+    expect(reg.getFocusSessionId()).toBeNull();
+    reg.setSelectedSession(1, 'a');
+    expect(reg.getFocusSessionId()).toBe('a');           // nothing focused yet → leader
+    reg.setSelectedSession(2, 'b');
+    reg.noteFocused(2);
+    expect(reg.getFocusSessionId()).toBe('b');
+    reg.noteFocused(9);                                    // a buddy is not "the desktop showing"
+    expect(reg.getFocusSessionId()).toBe('b');
+    reg.setSelectedSession(9, 'buddy-sel');
+    reg.unregisterWindow(2);
+    expect(reg.getFocusSessionId()).toBe('a');
+    reg.setSelectedSession(1, null);
+    expect(reg.getFocusSessionId()).toBeNull();
+  });
+
+  it('a selection reported by an unknown window is ignored, and so is a value no session id could be', () => {
+    reg.setSelectedSession(404, 'x');
+    reg.noteFocused(404);
+    expect(reg.getFocusSessionId()).toBeNull();
+    reg.setSelectedSession(1, 'x'.repeat(10_000));
+    expect(reg.getFocusSessionId()).toBeNull();
+  });
+
+  it('focus: a last-focused window with no selection falls back to the leader\'s', () => {
+    reg.setSelectedSession(1, 'leader-sel');
+    reg.noteFocused(2);
+    expect(reg.getFocusSessionId()).toBe('leader-sel');
+  });
+
+  it('a transfer gap counts as pending only for a bounded time — the window\'s own loading flag covers the rest', () => {
+    // A session whose first page can never resolve (a shell, an exited session with no
+    // transcript) re-marks and gives up; an unbounded mark degraded every snapshot for
+    // the life of that window (T3 review, 3).
+    reg.assignSession('s', 1);
+    const t0 = 1_000_000;
+    reg.transferSession('s', 1, 2, t0);
+    expect(reg.isPendingTransfer('s', t0 + 1_000)).toBe(true);
+    expect(reg.isPendingTransfer('s', t0 + 60_000)).toBe(false);
+    // The one-shot read-to-EOF mark itself is untouched by the bound.
+    expect(reg.consumeInheritedByTransfer('s', 2)).toBe(true);
+  });
+
+  it('a session that exits takes its gap with it', () => {
+    reg.assignSession('s', 1);
+    reg.transferSession('s', 1, 2);
+    reg.releaseSession('s');
+    expect(reg.isPendingTransfer('s')).toBe(false);
+  });
+});

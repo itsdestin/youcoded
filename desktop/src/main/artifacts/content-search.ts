@@ -14,6 +14,7 @@
 // words they remember into a search box, not a regex surface. Desktop-only —
 // Android has no ripgrep binary (D2), the Kotlin side is a stub.
 import { spawn } from 'child_process';
+import { SENSITIVE_SEGMENTS, SENSITIVE_BASENAMES, SENSITIVE_SUBPATHS } from '../../shared/artifacts/editable-path-policy';
 import { resolveRgPath } from '../harness/tools/grep';
 
 export interface ContentHit {
@@ -46,6 +47,19 @@ const SNIPPET_MAX_CHARS = 200;
 
 /** Parse one line of `rg --json` output into a hit, or null for the other
  * event types (begin/end/summary) and malformed lines. Pure — unit-pinned. */
+/**
+ * ripgrep globs for the sensitive set (shared/artifacts/editable-path-policy):
+ * a bare name matches that file or directory at any depth, the subpaths are
+ * anchored with `**`, and dotenv is the same trio isDotenvBasename accepts.
+ * Built from the shared sets so the search cannot drift from the reads.
+ */
+const SENSITIVE_GLOBS: readonly string[] = [
+  ...[...SENSITIVE_SEGMENTS].map((seg) => `!${seg}`),
+  ...[...SENSITIVE_BASENAMES].map((base) => `!${base}`),
+  '!.env', '!.env.*', '!.envrc',
+  ...SENSITIVE_SUBPATHS.map((sub) => `!**${sub}**`),
+];
+
 export function parseRgJsonLine(line: string): ContentHit | null {
   if (!line) return null;
   let evt: any;
@@ -79,6 +93,12 @@ export function searchProjectContent(projectRoot: string, query: string): Promis
     // rg respects .gitignore in git projects; these keep non-git projects from
     // drowning in dependency/bookkeeping noise and match the discovery pass.
     '--glob', '!.git', '--glob', '!.youcoded', '--glob', '!node_modules',
+    // The same private paths artifacts:get and read-binary refuse. WHY here
+    // too: `--hidden` walks dot-directories, so a search for "BEGIN" inside a
+    // root that holds .ssh or .env used to print the matching lines of the very
+    // files every other read hides — and over remote access (batch 3) a phone
+    // can search a root (2026-09-10 review of T6, finding 1).
+    ...SENSITIVE_GLOBS.flatMap((g) => ['--glob', g]),
     '--', q, '.',
   ];
 

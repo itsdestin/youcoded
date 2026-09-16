@@ -5,11 +5,19 @@
   and our self-signed ("ad-hoc", identity '-') build only LAUNCHES because the
   entitlements grant disable-library-validation - without it macOS refuses to load
   the app's native modules (terminal, PDF text) and the app dies on users' Macs
-  while CI's smoke test can stay green. Until 2026-09-04 these three keys came from
-  electron-builder's own bundled template, which a future version could trim
-  without any check going red. Owning the file pins them. Content is byte-for-byte
-  what the template grants today, so nothing changes for users.
-  electron-builder picks this file up by name from buildResources (assets/).
+  while CI's smoke test can stay green. Until 2026-09-04 the first three keys came
+  from electron-builder's own bundled template, which a future version could trim
+  without any check going red. Owning the file pins them.
+
+  NO LONGER byte-for-byte the template: on 2026-09-05 voice prompting added a
+  FOURTH key, com.apple.security.device.audio-input. Without it the hardened
+  runtime DENIES the microphone; the thing that TERMINATES the app is the other
+  half of the requirement, NSMicrophoneUsageDescription in electron-builder.yml,
+  which macOS demands before it will even show a permission prompt. Both are
+  needed and they fail differently.
+  electron-builder picks this file up by name from buildResources (assets/) - but
+  ONLY for the top-level .app. See entitlements.mac.inherit.plist beside this file
+  for the helper processes, which are where the microphone is actually opened.
 -->
 <plist version="1.0">
   <dict>
@@ -18,6 +26,8 @@
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
     <true/>
   </dict>
 </plist>

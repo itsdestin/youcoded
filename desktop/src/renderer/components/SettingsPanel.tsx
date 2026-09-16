@@ -4,6 +4,8 @@ declare const __APP_VERSION__: string;
 declare const __BUILD_CHANNEL__: string;
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
+
 import { QRCodeSVG } from 'qrcode.react';
 import { isAndroid } from '../platform';
 import { useCurrentPlatform } from '../state/platform';
@@ -11,27 +13,28 @@ import ThemeScreen from './ThemeScreen';
 import SyncSection from './SyncPanel';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { useTheme } from '../state/theme-context';
-import { MODELS } from './StatusBar';
-import { CLOSE_PROMPT_SUPPRESS_KEY } from './CloseSessionPrompt';
-import { ModelInfoTooltip } from './ModelPickerPopup';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { Scrim } from './overlays/Overlay';
 import { useEscClose } from '../hooks/use-esc-close';
 import AboutPopup from './AboutPopup';
 import { DevelopmentPopup } from './development/DevelopmentPopup';
+import { HelpPopup } from './HelpPopup';
 import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import { ContributePopup } from './development/ContributePopup';
 import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
-import ModelProvidersSection from './ModelProvidersPopup';
-import PermissionsSection from './PermissionsSection';
-import SpecialistsSection, { SPECIALISTS_EXPLAINER_INTRO, SPECIALISTS_EXPLAINER_SECTIONS } from './SpecialistsSection';
-import { PERMISSIONS_EXPLAINER_INTRO, PERMISSIONS_EXPLAINER_SECTIONS } from './permissions/permissions-explainer';
 import { DonateConfirm } from './DonateConfirm';
+import AssistantSettingsRow from './assistant-settings/AssistantSettings';
+import type { AssistantDefaults } from './assistant-settings/pages';
 import { formatVersionLine } from '../../shared/version-line';
+// The Linux/KDE buddy helper's three-state answer. Typed centrally so the popup
+// and the launch path in App.tsx cannot drift apart on what `needed` means.
+import type { BuddyHelperStatus } from '../../shared/types';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
 import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, Callout, StatusStrip, ErrorState, FieldError } from './ui';
+import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
 // The typeof guard covers paths where the define isn't applied (unit tests).
@@ -57,14 +60,13 @@ const REMOTE_ACCESS_EXPLAINER: { intro: string; sections: ExplainerSection[] } =
         { term: 'Enabled', text: 'Turns the remote server on or off. When off, no other device can connect to this computer.' },
         { term: 'Password', text: "A short word or phrase you'll type on your phone or tablet to prove it's really you. Required by default." },
         { term: 'Keep awake', text: "Stops your computer from going to sleep so it stays ready to respond. Set to a few hours during a session, or 'Off' to let it sleep normally." },
-        { term: 'Skip password on Tailscale', text: 'If a device is already on your private Tailscale network, you trust it and skip the password. Convenient, but only turn on if you trust everyone on your Tailscale.' },
       ],
     },
     {
       heading: 'Common issues',
       bullets: [
         { term: '"Tailscale not installed"', text: 'Click "Set Up Remote Access" and follow the prompts. It downloads about 50MB and asks you to sign in through a browser.' },
-        { term: '"VPN not active"', text: 'Tailscale is installed but turned off. Open the Tailscale app on your computer and switch it on.' },
+        { term: '"Switched off" or "Not signed in"', text: 'Tailscale is installed but not running. The Remote Access panel has a button that fixes whichever one it is.' },
         { term: "Phone can't connect", text: 'Make sure Tailscale is also installed on your phone and signed in to the same account. Both devices need it running at the same time.' },
         { term: "QR code won't scan", text: 'Tap "Copy link" instead, send the link to your phone (text it to yourself), and open it in your phone\'s browser.' },
         { term: 'Forgot the password', text: 'Just type a new one into the password box and hit "Set". The old one is replaced — there\'s nothing to recover.' },
@@ -78,9 +80,36 @@ interface RemoteConfig {
   enabled: boolean;
   port: number;
   hasPassword: boolean;
-  trustTailscale: boolean;
   keepAwakeHours: number;
   clientCount: number;
+  // True when the current password is shorter than the 8-char minimum (a
+  // password set before the rule, or by hand-editing the config file). Drives a
+  // gentle note; never forces a change. 2026-09-10 security review, #5.
+  weakPassword?: boolean;
+}
+
+// The minimum length for a new remote-access password. Mirrors
+// MIN_REMOTE_PASSWORD_LENGTH in main/remote-config.ts (renderer can't import
+// from main). 2026-09-10 security review, #5.
+const MIN_REMOTE_PASSWORD_LENGTH = 8;
+
+// Make a memorable, easy-to-type passphrase like `abcd-efgh-jkmn`: three groups
+// of four letters, drawn from an alphabet with the visually ambiguous characters
+// (i, l, o) removed. Uses the browser CSPRNG. Well over the 8-char minimum.
+function generateRemotePassphrase(): string {
+  const alphabet = 'abcdefghjkmnpqrstuvwxyz'; // 23 chars, no i/l/o
+  // Rejection sampling (draw fresh bytes, discard those in the biased tail) so
+  // every letter is equally likely — a plain `byte % 23` slightly favours the
+  // first few letters. The bias is tiny here, but a password generator should
+  // not have one at all.
+  const max = 256 - (256 % alphabet.length); // 253 → bytes 253..255 discarded
+  const chars: string[] = [];
+  const buf = new Uint8Array(1);
+  while (chars.length < 12) {
+    crypto.getRandomValues(buf);
+    if (buf[0] < max) chars.push(alphabet[buf[0] % alphabet.length]);
+  }
+  return `${chars.slice(0, 4).join('')}-${chars.slice(4, 8).join('')}-${chars.slice(8, 12).join('')}`;
 }
 
 const KEEP_AWAKE_OPTIONS = [
@@ -91,18 +120,52 @@ const KEEP_AWAKE_OPTIONS = [
   { label: '24h', value: 24 },
 ];
 
-interface TailscaleInfo {
+export interface TailscaleInfo {
   installed: boolean;
   connected: boolean;
+  /**
+   * WHICH prerequisite is missing, from Tailscale's own backend state. Optional because
+   * the Android bridge answers this channel too and can only see whether the app is
+   * installed. Absent means "we do not know" — never a reason to guess one.
+   */
+  state?: 'not-installed' | 'signed-out' | 'stopped' | 'running' | 'unknown';
   ip: string | null;
   hostname: string | null;
   url: string | null;
 }
 
-interface ClientInfo {
+/**
+ * The end-of-setup check (contract row R1). It reports what the host itself says — the
+ * listener's own state — never what the settings were set to. It also cannot say the
+ * other device works, because no other device has been contacted.
+ */
+export interface SetupCheck {
+  listening: boolean;
+  /** The address a device would open, when there is one. */
+  address: string | null;
+  /** Why it is not listening, in the words the server or the OS used. Never invented. */
+  reason: string | null;
+}
+
+/**
+ * A row in the device list. Contract R7/R11: a device that has paired stays here, named,
+ * marked Online or Offline, until it is unpaired. The old shape was a live CONNECTION —
+ * an address and how long ago it connected — so a device that closed its browser vanished
+ * and could never be unpaired.
+ */
+/** What the listener is actually doing, straight from the server. */
+interface RemoteStatus {
+  state: 'listening' | 'stopped' | 'failed';
+  reason?: string;
+  port: number;
+}
+
+interface RemoteDeviceRow {
   id: string;
-  ip: string;
-  connectedAt: number;
+  name: string;
+  online: boolean;
+  createdAt: number;
+  lastSeenAt: number;
 }
 
 interface Props {
@@ -132,6 +195,13 @@ interface Props {
   // Providers section isn't mounted in AndroidSettings).
   providersAutoOpen?: boolean;
   onProvidersAutoOpenHandled?: () => void;
+  specialistsAutoOpen?: boolean;
+  onSpecialistsAutoOpenHandled?: () => void;
+  // Help & feedback → "Show me around" replays the buddy's tour (first-run
+  // guide design 2026-09-10 §1.6). Desktop-only: the tour does not ship on the
+  // phone or in the browser, so those variants leave it undefined and the row
+  // just closes the popup.
+  onShowMeAround?: () => void;
 }
 
 function timeAgo(timestamp: number): string {
@@ -188,7 +258,7 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
   );
 }
 
-export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled }: Props) {
+export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, specialistsAutoOpen, onSpecialistsAutoOpenHandled, onShowMeAround }: Props) {
   useEscClose(open, onClose);
   // Slide polish: track animation window so CSS can reduce backdrop-filter cost
   // and suppress scrollbar-thumb while the 300ms transform is running. Also
@@ -297,6 +367,9 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
                 onSyncAutoOpenHandled={onSyncAutoOpenHandled}
                 providersAutoOpen={providersAutoOpen}
                 onProvidersAutoOpenHandled={onProvidersAutoOpenHandled}
+                specialistsAutoOpen={specialistsAutoOpen}
+                onSpecialistsAutoOpenHandled={onSpecialistsAutoOpenHandled}
+                onShowMeAround={onShowMeAround}
               />
             )}
           </div>
@@ -316,9 +389,12 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
 // color="red" maps to tone="danger" (the theme's destructive token, replacing the
 // raw red-600); the default maps to the app accent, replacing green-600.
 
-export function Toggle({ enabled, onToggle, color = 'green', label }: { enabled: boolean; onToggle: () => void; color?: 'green' | 'red'; label?: string }) {
+export function Toggle({ enabled, onToggle, color = 'green', label, disabled }: { enabled: boolean; onToggle: () => void; color?: 'green' | 'red'; label?: string; disabled?: boolean }) {
   return (
     <UiToggle
+      // The primitive already dims and blocks a disabled switch; this wrapper just
+      // never passed it through, so a caller could not express "shown, not operable".
+      disabled={disabled}
       checked={enabled}
       // The primitive hands back the next state; every call site here is a plain
       // flip, so we discard it and keep the existing zero-arg handlers intact.
@@ -670,6 +746,8 @@ function SoundButton() {
 function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTheme }: { onSendInput?: (text: string) => void; onRunCommand?: (command: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void }) {
   const { activeTheme, allThemes } = useTheme();
   const [open, setOpen] = useState(false);
+  // The first-run tour moving on closes this dialog (guide-events.ts).
+  useGuideReset(useCallback(() => setOpen(false), []));
   // ThemeScreen fills this Dialog but does not own it, so it cannot reach the
   // shell's header. Both view flags live here and drive title/onBack; the
   // component gets them back as props. Same lift K12 did for `showInfo`,
@@ -692,6 +770,7 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
 
   return (
     <>
+      <div data-guide-anchor="appearance">
       <SettingRow
         icon={
           <div className="flex rounded-sm overflow-hidden w-full h-full">
@@ -704,7 +783,10 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
         title="Appearance"
         description={activeTheme.name}
         onClick={() => setOpen(true)}
+        // data-guide-anchor (wrapper): the tour's "make it yours" stop presses
+        // this row so the theme grid it rings is really open.
       />
+      </div>
 
       {/* D1: one header for all three of ThemeScreen's views. */}
       <Dialog
@@ -778,10 +860,18 @@ function BuddyIcon() {
 // usable because the shim sets __PLATFORM__ to the host's 'desktop' on auth:ok.
 const isDesktopShell = () => !!(window as any).claude?.window;
 
-function BuddyButton() {
+// Exported for tests/buddy-helper-states.test.tsx, which drives design §4's
+// three-state table through this component directly. Rendering the whole
+// SettingsPanel to reach one popup would pull in every other settings screen.
+export function BuddyButton() {
   const [enabled, setEnabled] = useState<boolean>(() =>
     localStorage.getItem('youcoded-buddy-enabled') === '1',
   );
+  // The preference is the single source of truth, and this row is not its only
+  // writer — see the status-broadcast effect below for the full list.
+  const syncEnabledToPreference = useCallback(() => {
+    setEnabled(localStorage.getItem('youcoded-buddy-enabled') === '1');
+  }, []);
   // "Hidden until restart": the bar's hide button dismisses the buddy for
   // this run only (localStorage preference untouched). Main broadcasts
   // buddy:status-changed so this row updates live, with an inline Show-now
@@ -789,69 +879,96 @@ function BuddyButton() {
   const [dismissed, setDismissed] = useState(false);
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
-  // Task 8: KDE-only "pin above other windows" toggle. Gated on the real OS
-  // platform (not the app-shell 'electron'/'android'/'browser' axis in
-  // ../platform) since it must not render on Windows/macOS desktop builds.
+  // Gates the KDE helper lookup below. The real OS platform, not the app-shell
+  // 'electron'/'android'/'browser' axis in ../platform, because it must not fire
+  // on Windows or macOS desktop builds.
   const platform = useCurrentPlatform();
-  const [keepAboveEnabled, setKeepAboveEnabled] = useState(false);
-  // Transient, non-persisted: set when a toggle action's setKeepAbove
-  // resolves false (KWin unreachable right now), cleared on the next
-  // successful apply or when the popup is reopened. Never a guessed cause —
-  // see toggleKeepAbove below for why this specific copy is accurate.
-  const [keepAboveHint, setKeepAboveHint] = useState<string | null>(null);
+
+  // The Linux/KDE helper (docs/active/design/2026-09-04-linux-buddy-helper/ §4).
+  // THREE facts, not two:
+  //   needed    — this app cannot move its own windows here (native Wayland only)
+  //   supported — a helper could work on this desktop at all (KDE 6 on Wayland)
+  //   installed — the helper script is loaded in the compositor right now
+  // null until we've asked; on Windows and macOS we never ask, and none of this
+  // renders. Reading `supported` WITHOUT `needed` is the mistake this comment
+  // exists to prevent: on Linux X11 the desktop reports supported:false (KWin is
+  // not Wayland) while the buddy works perfectly, so a gate on `supported` alone
+  // would tell those users their buddy is "not yet supported" and take it away.
+  const [helper, setHelper] = useState<BuddyHelperStatus | null>(null);
+  const [consent, setConsent] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installError, setInstallError] = useState<string | null>(null);
+  // The undo half (decide-uninstall#D-1). Separate flags from the install ones:
+  // the two actions live in different states of the popup and must never share a
+  // spinner or an error line.
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  // Why the buddy would not appear, in the desktop's own words (design §5). The
+  // main process is what refuses — the settings switch is not the only thing
+  // that turns the buddy on — so this holds ITS reason rather than a guess made
+  // here. Cleared on the next attempt.
+  const [showError, setShowError] = useState<string | null>(null);
+
+  // Re-asked every time the popup opens, not once at launch (B5 review, F2).
+  // `supported` is not a stable fact: a DBus timeout during a busy boot comes
+  // back as "not supported", and asking once would then read "Not yet supported
+  // on this desktop" with a dead switch for the rest of the session, on a
+  // desktop the helper fully supports. The row is mounted for the whole session,
+  // so "once" really did mean "once, at app launch". One DBus call per open.
+  useEffect(() => {
+    if (!isDesktopShell() || platform !== 'linux' || !open) return;
+    let alive = true;
+    window.claude.buddy?.helperStatus?.()
+      .then((h: BuddyHelperStatus) => { if (alive) setHelper(h); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [platform, open]);
 
   useEffect(() => {
     if (!isDesktopShell()) return;
     let alive = true;
     window.claude.buddy?.getStatus?.()
-      .then((s: { dismissed: boolean; keepAbove?: boolean }) => {
+      .then((s: { dismissed: boolean; visible?: boolean }) => {
         if (!alive) return;
         setDismissed(!!s?.dismissed);
-        setKeepAboveEnabled(!!s?.keepAbove);
+        syncEnabledToPreference();
       })
       .catch(() => {});
     const off = window.claude.buddy?.onStatusChanged?.(
-      (s: { dismissed: boolean }) => setDismissed(!!s?.dismissed),
+      (s: { dismissed: boolean; visible?: boolean }) => {
+        setDismissed(!!s?.dismissed);
+        // WHY re-read the preference on every broadcast (B5 review, F1): this
+        // row is mounted for the whole session and seeded its switch ONCE, from
+        // localStorage, during the first render — before three other things can
+        // turn the buddy off. The one-shot "hidden after the update" migration
+        // writes the preference from App.tsx; so does a refused show() on the
+        // launch path; and main puts the buddy away by itself if the KDE script
+        // stops running mid-session. None of them could reach this switch.
+        //
+        // The user-visible cost was the headline flow of the whole feature:
+        // update, buddy correctly gone, open Settings — and the row says "On —
+        // floating on your desktop" with the switch on. The first click reads as
+        // "turn off" and does nothing visible; only the second offers the
+        // helper. A switch that says on while nothing is on screen is a switch
+        // that lies, which is the standard the refusal path already meets.
+        syncEnabledToPreference();
+      },
     );
     return () => { alive = false; off?.(); };
   }, []);
 
-  // Controller ruling (2026-07-22): the toggle is a saved PREFERENCE, not a
-  // live KWin-state indicator — the plan copy itself ("KDE only. No effect
-  // on other desktops.") already establishes that semantics, and it must
-  // display/persist the user's request in both directions, exactly like
-  // `toggle` below and like getStatus()'s mount re-hydration (which reads
-  // the persisted request, not a live probe).
+  // The "Pin buddy above other windows (KDE only)" switch was removed on
+  // 2026-09-04 (review B-2). It existed because raising the window was the only
+  // thing the app could do on Wayland; the helper now pins the buddy itself, and
+  // without the helper the buddy cannot be switched on at all — so the control
+  // had nothing left to control.
   //
-  // Reconciling the visual state against applyKwinKeepAbove's result was
-  // tried and rejected in two forms: symmetric revert makes the toggle
-  // permanently un-flippable on GNOME (every apply resolves false, so it
-  // would always snap back); asymmetric (enable-only) revert let a failed
-  // OFF silently display "off" while the window stayed pinned — a new,
-  // opposite contradiction, not a fix (see the WHY comment on
-  // BuddyOverlayManager's applyKeepAbove call site for why that stale-
-  // pinned edge is acceptable to just leave alone).
-  //
-  // So: flip and keep the local state unconditionally. The REAL result only
-  // drives a transient, honest inline hint — never a guessed cause (Destin's
-  // error-message rule): `false` means exactly "qdbus was missing or the
-  // DBus call failed", which is what the copy below says, nothing more.
-  const toggleKeepAbove = useCallback(() => {
-    const next = !keepAboveEnabled;
-    setKeepAboveEnabled(next);
-    const KWIN_UNREACHABLE_HINT =
-      "Couldn't reach KWin — the preference is saved; it's applied whenever the buddy window is (re)created on KDE Plasma.";
-    window.claude.buddy?.setKeepAbove?.(next)
-      .then((ok: boolean) => setKeepAboveHint(ok ? null : KWIN_UNREACHABLE_HINT))
-      .catch(() => setKeepAboveHint(KWIN_UNREACHABLE_HINT));
-  }, [keepAboveEnabled]);
-
-  // The hint describes the last toggle action, not persistent state —
-  // clear it whenever the popup is reopened so a stale failure from a
-  // previous session/click doesn't linger indefinitely.
-  useEffect(() => {
-    if (open) setKeepAboveHint(null);
-  }, [open]);
+  // Correction 2026-09-04 (design §7): the sentence that used to sit here said
+  // kwin-keep-above.ts "stays; the helper is what drives them". That is wrong and
+  // would have sent a future session to the wrong file. kwin-keep-above.ts is
+  // DEAD on this path — both its call sites pass the overlay window's caption,
+  // and chooseBuddyStrategy never picks the overlay strategy on Linux. The helper
+  // script sets keepAbove on the buddy window itself and does not call it.
 
   useEffect(() => {
     if (!open) return;
@@ -862,19 +979,164 @@ function BuddyButton() {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  const toggle = useCallback(() => {
-    const next = !enabled;
-    setEnabled(next);
-    localStorage.setItem('youcoded-buddy-enabled', next ? '1' : '0');
-    if (next) window.claude.buddy?.show?.();
-    else window.claude.buddy?.hide?.();
-  }, [enabled]);
+  // WHY a generation counter (B5 review, F7): switching on now AWAITS main,
+  // which itself awaits a DBus round trip before creating the window. Two quick
+  // clicks — on, then off — let the hide land first, after which the pending
+  // show() resolves and puts the buddy on screen with the switch reading Off.
+  // A stale resolution is ignored rather than allowed to overwrite the newer
+  // intent.
+  const applyGeneration = useRef(0);
 
-  const showNow = useCallback(() => {
-    window.claude.buddy?.show?.(); // show() clears the dismissed flag main-side
+  const applyEnabled = useCallback(async (next: boolean) => {
+    const generation = ++applyGeneration.current;
+    setEnabled(next);
+    setShowError(null);
+    localStorage.setItem('youcoded-buddy-enabled', next ? '1' : '0');
+    if (!next) {
+      window.claude.buddy?.hide?.();
+      return;
+    }
+    // WHY switching on is no longer fire-and-forget (design §5): the app itself
+    // can refuse to put the buddy on screen — on a Wayland desktop with no
+    // helper it would appear stuck in one spot and refuse to be dragged, which
+    // is the whole bug this feature removes. If it refuses, the switch must not
+    // be left sitting in the "on" position: a switch that says on while nothing
+    // is on screen is a switch that lies.
+    let refusal: { ok: boolean; reason?: string } | void;
+    try {
+      refusal = await window.claude.buddy?.show?.();
+      if (generation !== applyGeneration.current) return; // the user changed their mind
+    } catch {
+      // A throwing bridge (remote/Android stubs) is not a refusal, and this
+      // control does not render there anyway — leave the switch as the user set
+      // it rather than snapping it back for a reason we cannot name.
+      return;
+    }
+    if (refusal && refusal.ok === false) {
+      setEnabled(false);
+      localStorage.setItem('youcoded-buddy-enabled', '0');
+      // The desktop's OWN sentence, shown as it was written. Never replaced with
+      // a guess here (docs/error-message-standards.md).
+      if (refusal.reason) setShowError(refusal.reason);
+    }
   }, []);
 
-  const status = !enabled
+  const toggle = useCallback(() => {
+    const next = !enabled;
+    // WHY switching ON is intercepted: on a Linux desktop where the app cannot
+    // move its own windows, the buddy cannot be dragged unless a small helper
+    // sits in the user's KDE settings, and adding that changes their desktop.
+    // Deck Q-1 — ask at the moment the buddy is turned on, never during
+    // first-run and never silently.
+    //
+    // Gated on `needed`, NOT on "this is Linux" and not on `supported`: a KDE
+    // user on X11, or on Wayland whose windows are really XWayland ones, moves
+    // his own buddy perfectly well today and must never be stopped by a consent
+    // card for something he does not need.
+    if (next && helper?.needed && helper.supported && !helper.installed) {
+      setInstallError(null);
+      setConsent(true);
+      return;
+    }
+    void applyEnabled(next);
+  }, [enabled, helper, applyEnabled]);
+
+  const addHelper = useCallback(async () => {
+    setInstalling(true);
+    setInstallError(null);
+    try {
+      const r = await window.claude.buddy?.installHelper?.();
+      if (r?.ok) {
+        // Keep `needed`/`supported` from the answer we already have instead of
+        // re-asserting them: this path is only reachable when both were true,
+        // and rebuilding the whole status here is how the third fact would get
+        // silently dropped the next time one is added.
+        setHelper((h) => ({ ...(h ?? { needed: true, supported: true }), installed: true }));
+        setConsent(false);
+        await applyEnabled(true);
+        return;
+      }
+    } catch { /* falls through to the same honest message */ }
+    // Fix 2026-09-04 (design §11): the button used to stay on "Adding…" forever
+    // when the install failed — `installing` was only ever set true, so the only
+    // way back was to close and reopen the popup. Clear it before showing the
+    // error so "Add helper" is clickable again for a retry.
+    setInstalling(false);
+    // Non-committal on purpose (docs/error-message-standards.md): we know the
+    // install did not succeed, we do not know why, so we do not guess a cause.
+    setInstallError("Couldn't add the helper to your KDE settings.");
+  }, [applyEnabled]);
+
+  // R10, amended by decide-uninstall#D-1: removal is the user's to run, from this
+  // popup, on any Linux. The old consent card promised the helper went away when
+  // YouCoded was uninstalled, which is false — the AppImage build has no uninstall
+  // step at all — so this control is what makes the new sentence true.
+  //
+  // On success the buddy is switched OFF as well: no helper, no buddy (R4). Doing
+  // it here rather than leaving the buddy running keeps the popup honest, since
+  // the moment the script leaves KWin the buddy can no longer be moved.
+  //
+  // …but ONLY where the helper is what makes the buddy movable. This button also
+  // appears in the state where no helper is needed at all — the user added one on
+  // Wayland and has since logged into X11 — and there the buddy moves by itself.
+  // Switching it off there would take away something that was working, for no
+  // reason the user could trace back to the button they pressed.
+  const removeHelper = useCallback(async () => {
+    setRemoving(true);
+    setRemoveError(null);
+    try {
+      const r = await window.claude.buddy?.removeHelper?.();
+      if (r?.ok) {
+        // `needed` and `supported` are preserved, not re-asserted. This control
+        // is reachable in a state where NO helper is needed here at all — the
+        // user added it on Wayland and is now logged into X11 — and hardcoding
+        // `needed: true` there would flip a working buddy into the consent flow
+        // the moment they removed a helper they were not using.
+        setHelper((h) => ({ ...(h ?? { needed: false, supported: false }), installed: false }));
+        if (helper?.needed) await applyEnabled(false);
+        setRemoving(false);
+        return;
+      }
+    } catch { /* falls through to the same honest message */ }
+    setRemoving(false);
+    // Same shape as the install failure above, and for the same reason: we know
+    // it did not succeed and we do not know why, so we say exactly that and
+    // nothing more (docs/error-message-standards.md).
+    setRemoveError("Couldn't remove the helper from your KDE settings.");
+  }, [applyEnabled, helper]);
+
+  const showNow = useCallback(() => {
+    // Routed through applyEnabled so a refusal is handled the same way here as
+    // it is at the switch: show() clears the dismissed flag main-side, but it
+    // can also come back "no" (design §5), and the row must not go on claiming
+    // the buddy is on when the desktop just declined to put it there.
+    void applyEnabled(true);
+  }, [applyEnabled]);
+
+  // ── Design §4's three-state table, resolved once and read everywhere below ──
+  //
+  // THE ONE THAT MATTERS MOST is that all of this stays false when no helper is
+  // needed. Windows, macOS, Linux/X11 and Linux-Wayland-through-XWayland all
+  // report needed:false, and there this popup must look exactly as it looked
+  // before the helper existed — no consent card, no disabled row, no mention of
+  // a helper at all. The earlier version of this file keyed off `supported`
+  // alone, which is false on X11 for the unrelated reason that KWin is not
+  // running Wayland, and would have greeted every KDE X11 user with "Not yet
+  // supported on this desktop" and a dead switch — taking away a buddy that
+  // works today.
+  //
+  // The one exception is Remove helper, which follows `installed` on its own:
+  // someone can add the helper on Wayland and then log into X11, and R10
+  // promises they can take it out again from these settings whenever they like.
+  const helperUnsupported = !!helper?.needed && !helper.supported;
+  const canRemoveHelper = !!helper?.installed;
+
+  // On a Linux desktop the helper cannot run on, the buddy is genuinely
+  // unavailable rather than off — deck Q-2R. Saying "Off" there would invite
+  // the user to switch on something that cannot work.
+  const status = helperUnsupported
+    ? 'Not yet supported on this desktop'
+    : !enabled
     ? 'Off'
     : dismissed
     ? 'Hidden until restart'
@@ -890,13 +1152,19 @@ function BuddyButton() {
         icon={<BuddyIcon />}
         title="Buddy Floater"
         description={status}
-        onClick={() => setOpen(true)}
+        // The failure line is cleared on the way IN, so a warning from an earlier
+        // attempt is never the first thing in a freshly-opened popup. This row is
+        // always mounted (only the dialog closes), so the state would otherwise
+        // survive indefinitely.
+        onClick={() => { setRemoveError(null); setShowError(null); setOpen(true); }}
       />
 
       {/* maxHeight="none" preserves this one's existing behavior — it was the only
           popup of the seven with no height ceiling, and it has no scroll container,
-          so inheriting the shell's 80vh default would silently CLIP the Linux
-          keep-above row instead of letting the popup grow. */}
+          so inheriting the shell's 80vh default would silently CLIP the popup's
+          taller states instead of letting it grow. (Written for the Linux
+          keep-above row, which review B-2 deleted; the consent card and the
+          Remove helper action are what make this popup tall now.) */}
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
@@ -911,49 +1179,97 @@ function BuddyButton() {
                 descriptions now, and the border-t between them goes: the rows
                 are carded, so the rule was drawing a line between two things
                 that were already separated. */}
+            {/* Deck Q-1: the one-time ask lives HERE — at the moment the buddy is
+                switched on. Not in first-run setup, and never silently, because
+                saying yes writes a file into the user's own KDE settings. */}
+            {consent ? (
+              <div className="px-4 py-4 space-y-3">
+                <div className="text-sm font-medium text-fg">Let the buddy be moved?</div>
+                <div className="text-xs text-fg-dim leading-relaxed">
+                  On Linux, apps aren&rsquo;t allowed to move their own windows. YouCoded can add a
+                  small helper to your KDE settings that moves it on the buddy&rsquo;s behalf.
+                  Without this helper, the buddy floater cannot be enabled.
+                  <br /><br />
+                  {/* Replaced 2026-09-04 (decide-uninstall#D-1, design §6). The old
+                      sentence ended "and it is removed when you uninstall YouCoded",
+                      which is not true for most Linux users: the AppImage build has
+                      no uninstall step, and on deb/rpm/pacman the cleanup would run
+                      as root against a per-user KDE config. Destin picked the honest
+                      wording plus the Remove helper control below. Verbatim — do not
+                      reword without another deck. */}
+                  It only ever touches the buddy&rsquo;s own window. You can remove it again any
+                  time from this menu.
+                </div>
+                {installError && <Callout tone="warning">{installError}</Callout>}
+                <div className="flex gap-2 pt-1">
+                  <Button onClick={addHelper} disabled={installing}>
+                    {installing ? 'Adding\u2026' : 'Add helper'}
+                  </Button>
+                  <Button variant="ghost" onClick={() => setConsent(false)}>Not now</Button>
+                </div>
+              </div>
+            ) : (
             <div className="px-4 py-4 space-y-2">
-              <SettingRow
-                variant="item"
-                title="Show buddy floater"
-                description={
-                  <>
-                    A small always-on-top mascot that stays visible even when the app is minimized.
-                    {enabled && dismissed && (
-                      <>
-                        <br />
-                        Hidden until restart{' · '}
-                        <button onClick={showNow} className="text-accent hover:underline">Show now</button>
-                      </>
-                    )}
-                  </>
-                }
-                control={<Toggle enabled={enabled} onToggle={toggle} label="Show buddy floater" />}
-              />
-              {/* Task 8: Linux-only — Electron's setAlwaysOnTop is a no-op on
-                  Wayland; this opt-in runs a KWin scripting DBus call instead,
-                  which only does anything on KDE Plasma (see kwin-keep-above.ts). */}
-              {platform === 'linux' && (
+              {/* Deck Q-2R: on a Linux desktop the helper cannot run on, this is
+                  not a switch the user should be invited to flip — the buddy
+                  cannot be positioned there at all. Row goes read-only and says
+                  so, instead of offering an action that would do nothing. */}
+              {helperUnsupported ? (
                 <SettingRow
                   variant="item"
-                  title="Pin buddy above other windows (KDE only)"
+                  title="Show buddy floater"
+                  description="Not yet supported on this desktop. The buddy needs KDE Plasma on Linux — other desktops do not let apps place their own windows."
+                  disabled
+                />
+              ) : (
+                <SettingRow
+                  variant="item"
+                  title="Show buddy floater"
                   description={
                     <>
-                      Requires KDE Plasma. No effect on other desktops.
-                      {/* Honest, non-committal per-action feedback — NOT the toggle's
-                          own state (that's the preference, above). Only appears right
-                          after a click that couldn't reach KWin; see toggleKeepAbove. */}
-                      {keepAboveHint && (
+                      A small always-on-top mascot that stays visible even when the app is minimized.
+                      {enabled && dismissed && (
                         <>
                           <br />
-                          {keepAboveHint}
+                          Hidden until restart{' \u00b7 '}
+                          <button onClick={showNow} className="text-accent hover:underline">Show now</button>
                         </>
                       )}
                     </>
                   }
-                  control={<Toggle enabled={keepAboveEnabled} onToggle={toggleKeepAbove} label="Pin buddy above other windows" />}
+                  control={<Toggle enabled={enabled} onToggle={toggle} label="Show buddy floater" />}
                 />
               )}
+
+              {/* The switch bounced back because the app refused to put the buddy
+                  on screen (design §5). The sentence is the desktop's own — this
+                  file does not write one, and does not guess a cause. */}
+              {showError && <Callout tone="warning">{showError}</Callout>}
+
+              {/* R10 (amended by decide-uninstall#D-1): the undo for "Add helper".
+                  It renders ONLY when the helper is actually in the user's KDE
+                  settings, so the single-row popup Destin signed off (R6) is still
+                  exactly what a new Linux user sees — this second control cannot
+                  appear until they have added the helper themselves. It is also
+                  never shown on Windows or macOS, where there is no helper.
+
+                  Gated on `installed` ALONE, not on `needed` (design §4, second
+                  row). Someone can add the helper on Wayland and then log into
+                  X11: the script is still sitting in their KDE settings, and if
+                  this button vanished with the rest of the helper UI, hand-editing
+                  a KDE config file would be the only way to get it back out. */}
+              {canRemoveHelper && (
+                <>
+                  {removeError && <Callout tone="warning">{removeError}</Callout>}
+                  <div className="flex justify-end">
+                    <Button variant="ghost" size="sm" onClick={removeHelper} disabled={removing}>
+                      {removing ? 'Removing\u2026' : 'Remove helper'}
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
+            )}
       </Dialog>
     </>
   );
@@ -961,14 +1277,247 @@ function BuddyButton() {
 
 // ─── Remote settings popup button ─────────────────────────────────────────
 
+/**
+ * The mock secure-setup stages, drawn with the banner's OWN vocabulary — a status strip for
+ * a state, a warning callout for something to read first, an ErrorState for a failure.
+ * WHY no bespoke panel: round-2 review rejected one for not looking like the app.
+ */
+function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAction) => void) {
+  if (view.stage === 'checking') {
+    return <StatusStrip tone="busy" detail="Keep YouCoded open">Checking this computer&apos;s connection…</StatusStrip>;
+  }
+  if (view.stage === 'checked') {
+    // Straight through to the real one — see the note on RemoteAccessView.check.
+    return renderSetupProgress('checked', '', view.check ?? null, () => act({ type: 'check' }), () => act({ type: 'report' }), () => {}, () => {});
+  }
+  if (view.stage === 'conflict') {
+    return (
+      <ErrorState
+        mode="recoverable"
+        message="Tailscale is already using this address for another service. Nothing was replaced. Check that service before trying again."
+        onRetry={() => act({ type: 'check' })}
+        variant="inline"
+      />
+    );
+  }
+  if (view.stage === 'error') {
+    return (
+      <ErrorState
+        mode="general"
+        title="Unable to check the connection."
+        explainer="We don't know why yet. Diagnose sends the log to Claude to find out."
+        onReportBug={() => act({ type: 'report' })}
+        onDiagnose={() => act({ type: 'diagnose' })}
+      />
+    );
+  }
+  if (view.stage === 'disabled') {
+    return (
+      <StatusStrip tone="idle" action={<Button size="sm" onClick={() => act({ type: 'check' })}>Turn on</Button>}>
+        Remote access is off.
+      </StatusStrip>
+    );
+  }
+  if (view.prerequisite === 'not-installed') {
+    return (
+      <StatusStrip tone="idle" action={<Button size="sm" onClick={() => act({ type: 'prerequisite' })}>Install Tailscale</Button>}>
+        Not set up yet.
+      </StatusStrip>
+    );
+  }
+  if (view.prerequisite === 'sign-in-required') {
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={() => act({ type: 'prerequisite' })}>Sign in</Button>}>
+        Tailscale is installed, but you&apos;re not signed in yet.
+      </StatusStrip>
+    );
+  }
+  return (
+    <StatusStrip tone="idle" action={<Button size="sm" onClick={() => act({ type: 'consent' })}>Set up</Button>}>
+      Not set up yet.
+    </StatusStrip>
+  );
+}
+
+/**
+ * The server's reason, said in words. WHY not just show what came back: a beta tester
+ * reading `listen EADDRINUSE: address already in use 100.82.14.7:9900` had no idea what
+ * was wrong or what to do, and the error standard asks for detail that is accurate AND
+ * specific — not for the raw text of whichever layer spoke last.
+ *
+ * Only codes we actually recognise are translated, and the original is kept after the
+ * explanation. Anything unrecognised is passed through untouched rather than described
+ * with a guess.
+ */
+export function plainReason(reason: string): string {
+  if (/EADDRINUSE/.test(reason)) {
+    return `Another program on this computer is already using that address, so remote access could not start. Close it and try again. (${reason})`;
+  }
+  if (/EACCES/.test(reason)) {
+    return `This computer would not let YouCoded use that address. (${reason})`;
+  }
+  if (/EADDRNOTAVAIL/.test(reason)) {
+    return `That address is not on this computer any more — Tailscale may have changed it. Try again. (${reason})`;
+  }
+  return reason;
+}
+
+export type SetupStatus = 'idle' | 'confirm' | 'installing' | 'authenticating' | 'checking' | 'checked' | 'error';
+
+/**
+ * The prerequisite the host can actually observe, one status line and one button each
+ * (contract row R5). WHY it is driven by `tailscale.state` and not by `connected` alone:
+ * "signed out" and "switched off" need different next steps, and the panel used to send
+ * everyone to the same place — or, when the state was simply unknown, tell them to go
+ * open an app that may not be the problem.
+ *
+ * Exported for `remote-setup-flow.test.tsx`: these two are the whole of what the user
+ * reads during setup, and reaching them through the full Settings tree would test the
+ * tree instead of the copy.
+ */
+export function renderPrerequisite(
+  tailscale: TailscaleInfo | null,
+  hasPassword: boolean,
+  onRunSetup: () => void,
+  onConnect: () => void,
+) {
+  const notSetUp = (
+    <StatusStrip tone="idle" action={<Button size="sm" onClick={onRunSetup}>Set up</Button>}>
+      Not set up yet.
+    </StatusStrip>
+  );
+  if (!tailscale?.installed) return notSetUp;
+  if (tailscale.state === 'signed-out') {
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Sign in</Button>}>
+        Tailscale is installed, but you&apos;re not signed in yet.
+      </StatusStrip>
+    );
+  }
+  if (tailscale.state === 'stopped') {
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Turn on</Button>}>
+        Tailscale is installed, but it&apos;s switched off.
+      </StatusStrip>
+    );
+  }
+  if (!tailscale.connected) {
+    // The honest fallback: installed, not connected, and Tailscale did not say why.
+    // The old copy asserted the VPN was off and told the user to go turn it on.
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Connect</Button>}>
+        Tailscale is installed, but it isn&apos;t connected.
+      </StatusStrip>
+    );
+  }
+  if (!hasPassword) {
+    // Connected, but nothing can pair without a password — the field is directly below.
+    return <StatusStrip tone="warn">Set a password below to finish enabling remote access.</StatusStrip>;
+  }
+  if (!tailscale.url) {
+    // Installed, connected, password set — and still no address. Tailscale's status gave no
+    // IP and the fallback lookup failed too. This used to fall off the end of the function
+    // to "Not set up yet." with a Set up button, which walks a fully configured machine back
+    // into the installer. What is actually missing is the address, so that is what it says.
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Try again</Button>}>
+        Tailscale is connected, but it hasn&apos;t given this computer an address yet.
+      </StatusStrip>
+    );
+  }
+  return notSetUp;
+}
+
+/**
+ * Setup in motion, and the check that ends it. WHY the last step is a check and not a
+ * success message: the old flow said "Tailscale is connected" the moment the auth command
+ * returned, which is a claim about a setting rather than about the server. It now asks the
+ * host what its listener is doing and repeats that answer, and it says plainly that no
+ * other device has been tried — because none has.
+ */
+export function renderSetupProgress(
+  setupStatus: SetupStatus,
+  setupError: string,
+  setupCheck: SetupCheck | null,
+  onRunSetup: () => void,
+  onReportIssue: () => void,
+  onCancelSetup: () => void,
+  onConfirmSetup: () => void,
+) {
+  if (setupStatus === 'confirm') {
+    return (
+      <div className="space-y-2">
+        <p className="text-3xs text-fg-2 text-center">This will download and install Tailscale (~50MB) for secure remote access.</p>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCancelSetup} className="flex-1">Cancel</Button>
+          <Button onClick={onConfirmSetup} className="flex-1">Install</Button>
+        </div>
+      </div>
+    );
+  }
+  if (setupStatus === 'installing') {
+    // K5. Every branch below was its own shape: centred green text, centred muted
+    // text, a bare button with no message at all. The WORDS were mostly fine —
+    // seven of eleven carry over verbatim. It was eleven shapes.
+    return <StatusStrip tone="busy" detail="This may take a few minutes">Installing Tailscale…</StatusStrip>;
+  }
+  if (setupStatus === 'authenticating') {
+    return <StatusStrip tone="busy" detail="Check your browser to sign in to Tailscale">Waiting for Tailscale sign-in…</StatusStrip>;
+  }
+  if (setupStatus === 'checking') {
+    return <StatusStrip tone="busy" detail="A few seconds. Leave YouCoded open.">Checking this computer&apos;s connection…</StatusStrip>;
+  }
+  if (setupStatus === 'checked' && setupCheck) {
+    if (setupCheck.listening) {
+      return (
+        <StatusStrip tone="ok" detail="No device has connected yet — pair one below to try it.">
+          {setupCheck.address ? `This computer is listening at ${setupCheck.address}.` : 'This computer is listening.'}
+        </StatusStrip>
+      );
+    }
+    return setupCheck.reason ? (
+      <ErrorState mode="recoverable" message={plainReason(setupCheck.reason)} onRetry={onRunSetup} variant="inline" />
+    ) : (
+      <ErrorState
+        mode="general"
+        title="Remote access isn't listening yet."
+        explainer="We don't know why yet. Diagnose sends the log to Claude to find out."
+        onReportBug={onReportIssue}
+        onDiagnose={onReportIssue}
+      />
+    );
+  }
+  if (setupStatus === 'error') {
+    // `{setupError || 'Setup failed'}` replaced a missing reason with a hardcoded
+    // guess and left the user two words and no next step — the exact pattern
+    // docs/error-message-standards.md forbids. When we HAVE the real reason we show
+    // it with Retry; when we do not, we say so without inventing a cause and hand
+    // over the two actions the standard mandates.
+    return setupError ? (
+      <ErrorState mode="recoverable" message={plainReason(setupError)} onRetry={onRunSetup} variant="inline" />
+    ) : (
+      <ErrorState
+        mode="general"
+        title="Unable to set up remote access."
+        explainer="The installer didn't say why. Diagnose sends the log to Claude to find out."
+        onReportBug={onReportIssue}
+        onDiagnose={onReportIssue}
+      />
+    );
+  }
+  return null;
+}
+
 interface RemoteButtonProps {
+  mockView?: RemoteAccessView;
+  mockAction?: (action: RemoteAccessAction) => void;
   config: RemoteConfig | null;
   tailscale: TailscaleInfo | null;
-  clients: ClientInfo[];
+  clients: RemoteDeviceRow[];
   loading: boolean;
   hasActiveSession: boolean;
   newPassword: string;
-  passwordStatus: 'idle' | 'saving' | 'saved';
+  passwordStatus: 'idle' | 'saving' | 'saved' | 'too-short';
   copied: boolean;
   showSetupQR: boolean;
   showAddDevice: boolean;
@@ -977,42 +1526,89 @@ interface RemoteButtonProps {
   onToggleEnabled: () => void;
   /** Why the server refused to start, shown under the Enabled toggle. */
   enableError: string;
-  onToggleTailscaleTrust: () => void;
   onSetKeepAwake: (hours: number) => void;
   onRunSetup: () => void;
   onConfirmSetup: () => void;
   onCancelSetup: () => void;
-  setupStatus: 'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error';
+  setupStatus: SetupStatus;
   setupError: string;
-  onDisconnectClient: (id: string) => void;
+  /** The result of the end-of-setup check, once it has run. */
+  setupCheck: SetupCheck | null;
+  onUnpairDevice: (deviceId: string) => void;
+  status: RemoteStatus | null;
   onCopyLink: () => void;
   onSetShowSetupQR: (v: boolean) => void;
   onSetShowAddDevice: (v: boolean) => void;
   /**
    * Opens the app's existing bug-report surface (BugReportPopup, which wraps
    * dev:summarize-issue + dev:submit-issue). Both actions on a general
-   * ErrorState land here: "Report bug" files it, "Diagnose with Claude" is the
+   * ErrorState land here: "Report bug" files it, "Diagnose with the assistant" is the
    * same popup's summarize path, which collects the logs. One destination, no
    * invented flow.
    */
-  onReportIssue: () => void;
+  onReportIssue: (context?: ReportContext) => void;
 }
 
-function RemoteButton({
+function RemoteButton(props: RemoteButtonProps) {
+  // WHY the controls stay and are disabled rather than hidden: host administration is
+  // refused over the remote socket, so leaving them live means a phone taps them and gets
+  // an error every time; hiding them contradicts contract row R4, which promises Enabled,
+  // Password and Keep awake stay exactly where they are. Disabled, with the reason, is the
+  // only option that is both true and keeps the panel recognisable.
+  const [hostOnly, setHostOnly] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void import('../platform').then(({ isRemoteMode, onConnectionModeChange }) => {
+      if (!live) return;
+      setHostOnly(isRemoteMode());
+      onConnectionModeChange(mode => { if (live) setHostOnly(mode === 'remote'); });
+    });
+    return () => { live = false; };
+  }, []);
+  let {
   config, tailscale, clients, loading,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
-  onSetNewPassword, onSetPassword, onToggleEnabled, enableError, onToggleTailscaleTrust,
-  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, onDisconnectClient, onCopyLink,
+  onSetNewPassword, onSetPassword, onToggleEnabled, enableError,
+  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, setupCheck, onUnpairDevice, status, onCopyLink,
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
-}: RemoteButtonProps) {
-  const [open, setOpen] = useState(false);
+  } = props;
+  const [open, setOpen] = useState(!!props.mockView);
+  const [mockPassword, setMockPassword] = useState('');
+  const [mockSaved, setMockSaved] = useState(false);
+  const [mockAwake, setMockAwake] = useState(4); // WHY 4: matches the Before capture's fixture, so the deck shows only the changes under review
+  const [mockAdd, setMockAdd] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
   // showInfo flips the popup body to the plain-language explainer view.
   // Reset to false whenever the popup re-opens so users always start on the
   // main settings, not whichever screen they last viewed.
   const [showInfo, setShowInfo] = useState(false);
+  // Browser encryption gets its OWN screen inside this dialog rather than sitting inline
+  // (Destin, round 4: "this whole browser protection menu should be hidden behind a second
+  // level popup"). The main panel stays short; the explanation gets the room it needs.
+  const [showEncryption, setShowEncryption] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  // WHY: Dialog owns one scroll region and keeps its position across a view swap, so a
+  // sub-screen opened from the bottom of a long panel started scrolled past its own first
+  // sentence. Navigating within a dialog should start at the top, like opening a page.
+  useEffect(() => {
+    const region = popupRef.current?.querySelector('.scroll-fade');
+    if (region) region.scrollTop = 0;
+  }, [showEncryption, showInfo]);
   // No scroll ref here any more — Dialog owns the scroll region and its edge
   // fades for both views.
+
+  // WHY Add Device scrolls itself into view: it is appended at the BOTTOM of a panel
+  // taller than the dialog, so on a normal window pressing it changed nothing you could
+  // see. A tester pressed it, saw no result, and only found the QR code by scrolling.
+  const addDeviceRef = useRef<HTMLElement>(null);
+  const [justOpenedAddDevice, setJustOpenedAddDevice] = useState(false);
+  useEffect(() => {
+    if (!justOpenedAddDevice) return;
+    // Feature-checked, not assumed: jsdom has no scrollIntoView, and neither did some of
+    // the Android WebView builds this same bundle runs in.
+    addDeviceRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+    setJustOpenedAddDevice(false);
+  }, [justOpenedAddDevice]);
 
   useEffect(() => {
     if (!open) setShowInfo(false);
@@ -1027,26 +1623,103 @@ function RemoteButton({
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  const hasClients = clients.length > 0;
-  // Green: enabled + Tailscale installed + VPN active. Gray otherwise (disabled, or VPN not connected).
-  const isFullyConnected = config?.enabled && tailscale?.installed && tailscale?.connected;
+  // WHY this explicit MOCK_ONLY gate: reviewed mockups must not replace real host settings before the contract/backend exists.
+  const previewApi = (window.claude?.remote as unknown as { preview?: () => RemoteAccessPreview } | undefined)?.preview;
+  const servicePreview = typeof previewApi === 'function' ? previewApi() : undefined;
+  const preview = props.mockView && props.mockAction ? { act: props.mockAction } : servicePreview;
+  const storedView = React.useSyncExternalStore(
+    servicePreview?.subscribe ?? (() => () => {}), servicePreview?.getView ?? (() => null),
+  );
+  const previewView = props.mockView ?? storedView;
+  // WHY reuse the original body: mock review must retain familiar controls, while every write stays local.
+  if (previewView && preview) {
+    loading = false;
+    // WHY these are derived rather than hardcoded: a beta tester read three controls that
+    // disagreed with each other — "Not set up yet." above "Status: Connected", an Enabled
+    // switch already on for a machine with no Tailscale, an IP shown while signed out, a
+    // "Change password..." placeholder before any password existed, and devices marked
+    // Online under "Remote access is off." Every one was the MOCK contradicting itself,
+    // not the panel, and a mockup that lies is worse than no mockup: it is what the review
+    // decks are cut from.
+    const ready = previewView.prerequisite === 'ready' || !previewView.prerequisite;
+    const working = previewView.stage === 'ready'
+      || (previewView.stage === 'checked' && !!previewView.check?.listening);
+    config = {
+      enabled: previewView.stage !== 'disabled' && previewView.stage !== 'setup' && ready,
+      hasPassword: ready,
+      port: 9900, keepAwakeHours: mockAwake,
+      clientCount: previewView.stage === 'disabled' ? 0 : previewView.devices.length,
+    };
+    tailscale = {
+      installed: previewView.prerequisite !== 'not-installed',
+      connected: ready,
+      state: previewView.prerequisite === 'not-installed' ? 'not-installed'
+        : previewView.prerequisite === 'sign-in-required' ? 'signed-out'
+          : 'running',
+      // No address until the network is actually up, and ONE address throughout: the mock
+      // used to answer a bare IP here and a different tailnet hostname in Add Device, with
+      // nothing saying they were the same machine.
+      ip: ready ? '100.82.14.7' : null,
+      hostname: ready ? 'home-laptop' : null,
+      url: working ? previewView.address : null,
+    };
+    newPassword = mockPassword; passwordStatus = mockSaved ? 'saved' : 'idle';
+    onSetNewPassword = value => { setMockPassword(value); setMockSaved(false); };
+    onSetPassword = () => { if (mockPassword.trim()) { setMockSaved(true); setMockPassword(''); } };
+    onSetKeepAwake = setMockAwake;
+    onToggleEnabled = () => preview.act({ type: previewView.stage === 'disabled' ? 'check' : 'disable' });
+    showAddDevice = mockAdd && working; onSetShowAddDevice = setMockAdd;
+    onRunSetup = () => preview.act({ type: 'prerequisite' });
+    onCopyLink = () => { void navigator.clipboard.writeText(previewView.address); };
+    enableError = '';
+  }
+  const deviceRows: RemoteDeviceRow[] = previewView
+    ? previewView.devices.map(d => ({
+        id: d.id, name: d.name,
+        // Nothing is Online while the listener is off — that combination is not a state
+        // the real host can produce, and it read as "off, but still connected".
+        online: d.online && previewView.stage !== 'disabled',
+        createdAt: 0, lastSeenAt: 0,
+      }))
+    : clients;
+  const unpair = (deviceId: string) => {
+    if (previewView && preview) preview.act({ type: 'revoke', deviceId });
+    else onUnpairDevice(deviceId);
+  };
+  const hasClients = deviceRows.length > 0;
+  // WHY this reads `status` and not `config.enabled`: the indicator used to go green
+  // because the switch was on, so a server whose port never bound still reported Connected
+  // and the reason was only in a log nobody sees.
+  const listening = status?.state === 'listening';
+  const isFullyConnected = previewView
+    ? previewView.stage === 'ready' || (previewView.stage === 'checked' && !!previewView.check?.listening)
+    : listening && tailscale?.installed && tailscale?.connected;
   const statusText = loading
     ? 'Loading...'
-    : !config?.enabled
-      ? 'Disabled'
-      : isFullyConnected
-        ? hasClients
-          ? `Connected · ${clients.length} client${clients.length > 1 ? 's' : ''}`
-          : 'Connected'
-        : tailscale?.installed
-          ? 'Tailscale VPN not active'
-          : 'Enabled · No Tailscale';
+    : status?.state === 'failed'
+      ? 'Not running'
+      : !config?.enabled || status?.state === 'stopped'
+        ? 'Disabled'
+        : isFullyConnected
+          ? hasClients
+            ? `Connected · ${deviceRows.filter(d => d.online).length} online`
+            : 'Connected'
+          : tailscale?.installed
+            ? 'Tailscale not connected'
+            : 'Enabled · No Tailscale';
 
   // Tailscale is the transport under a fully-connected session — the old UI
   // showed a separate "Tailscale" tag next to the title whenever installed;
   // folding it into the subtitle only when it adds information (fully
-  // connected) avoids a redundant "Tailscale VPN not active · Tailscale".
-  const subtitle = isFullyConnected ? `${statusText} · Tailscale` : statusText;
+  // connected) avoids a redundant "Tailscale not connected · Tailscale".
+  const previewLabels = { setup: 'Set up secure access', consent: 'Ready to connect', checking: 'Checking connection…', checked: 'Setup checked', ready: 'Ready to connect', conflict: 'Address in use', error: 'Check failed', disabled: 'Remote access is off' };
+  // WHY `checked` cannot be one label: it is the state that carries an ANSWER, and the
+  // answer can be no. A single "Setup checked" meant the settings list read as finished
+  // while the panel inside showed the failure — the row is where a problem gets noticed.
+  const previewSubtitle = previewView?.stage === 'checked'
+    ? (previewView.check?.listening ? 'Connected' : 'Not running')
+    : previewView ? previewLabels[previewView.stage] : '';
+  const subtitle = previewView ? previewSubtitle : isFullyConnected ? `${statusText} · Tailscale` : statusText;
 
   return (
     <>
@@ -1067,26 +1740,74 @@ function RemoteButton({
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
-        title={showInfo ? 'About Remote Access' : 'Remote Access'}
-        onBack={showInfo ? () => setShowInfo(false) : undefined}
-        headerActions={showInfo ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
+        title={showInfo ? 'About Remote Access' : showEncryption ? 'Browser encryption' : 'Remote Access'}
+        onBack={showInfo ? () => setShowInfo(false) : showEncryption ? () => setShowEncryption(false) : undefined}
+        // WHY: Workbench catch-all APIs can return a truthy Promise; only a rendered preview view replaces the legacy Info action.
+        headerActions={showInfo || showEncryption ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
         size="panel"
         fill
         panelRef={popupRef}
       >
-            {showInfo ? (
+            {showEncryption && previewView && preview ? (
+              // pb-9 clears the scroll region's 36px bottom fade. Without it this screen's
+              // one primary action sat under the gradient, half-cut at 1440x900 and out of
+              // sight in a short window — a tester clicked around it and never found it.
+              <div className="space-y-4 text-sm pb-9">
+                <p className="text-fg-2">
+                  Your connection is already private either way — Tailscale encrypts everything
+                  between your devices.
+                </p>
+                <div>
+                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">What this adds</h4>
+                  <p className="text-fg-2 text-xs">
+                    A certificate, so your phone&apos;s browser can verify the connection. Browsers only
+                    allow the microphone, copy buttons and the font picker on a connection they can
+                    verify, so turning this on is what makes those work on a phone.
+                  </p>
+                </div>
+                <Callout tone="warning" title={previewView.browserEncryption === 'on' ? 'Already done:' : 'This cannot be undone:'}>
+                  {previewView.browserEncryption === 'on'
+                    ? 'This computer\u2019s name is now on a public list of issued certificates. Turning this off does not remove it, and renaming the computer does not either. Only the name is public. Your conversations and files are not.'
+                    : 'This computer\u2019s name is added to a public list of issued certificates. The list is permanent: turning this off later does not remove it, and renaming the computer does not either. Only the name is public. Your conversations and files are not.'}
+                </Callout>
+                <div>
+                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">You will also need</h4>
+                  <p className="text-fg-2 text-xs">
+                    To turn on certificates for your Tailscale account, on their website. YouCoded cannot
+                    do that part for you.
+                  </p>
+                </div>
+                <SettingRow
+                  variant="item"
+                  title="Browser encryption"
+                  description={previewView.browserEncryption === 'on'
+                    ? 'On — your phone can use the microphone, copy buttons and font picker.'
+                    : 'Off'}
+                  control={<Toggle
+                    enabled={previewView.browserEncryption === 'on'}
+                    onToggle={() => preview.act({ type: 'advanced' })}
+                    label="Browser encryption"
+                  />}
+                />
+                {previewView.stage === 'consent' && (
+                  <Button onClick={() => preview.act({ type: 'check' })} className="w-full">
+                    I understand — continue
+                  </Button>
+                )}
+              </div>
+            ) : showInfo ? (previewView ? <p className="text-xs text-fg-2">On your phone: install Tailscale and sign in to the same account. Then tap Add Device here and scan the code. A paired phone can use the assistant, not just read conversations — so keep this computer awake while you are away from it.</p> : (
               <SettingsExplainer
                 intro={REMOTE_ACCESS_EXPLAINER.intro}
                 sections={REMOTE_ACCESS_EXPLAINER.sections}
               />
-            ) : (
-            <div className="space-y-6">
+            )) : (
+            <div className="space-y-4">
                 {loading ? (
                   <LoadingState what="remote access" />
                 ) : (
                   <>
                     {/* Setup banner — shown when no clients connected */}
-                    {!hasClients && (
+                    {(previewView ? previewView.stage !== 'ready' && previewView.stage !== 'consent' : !hasClients) && (
                       // Info callouts are accent-tinted, warnings are amber. The
                       // amber "setup required" boxes below stay amber — they're a
                       // true warning status, not information.
@@ -1095,7 +1816,12 @@ function RemoteButton({
                           Remote access lets you use YouCoded from any device — phone, tablet, or another computer.
                         </p>
 
-                        {tailscale?.installed && tailscale.url && config?.hasPassword ? (
+                        {/* WHY setup-in-motion is tested BEFORE the ready branch: the end-of-setup
+                            check is the last thing the user sees, and the moment Tailscale comes up
+                            the branch below it would take over and hide the answer. */}
+                        {previewView && preview ? renderPreviewSetup(previewView, preview.act)
+                          : setupStatus !== 'idle' ? renderSetupProgress(setupStatus, setupError, setupCheck, onRunSetup, onReportIssue, onCancelSetup, onConfirmSetup)
+                          : tailscale?.installed && tailscale.url && config?.hasPassword ? (
                           showSetupQR ? (
                             <div className="mt-2">
                               {/* Remind users that Tailscale must be installed + running on the receiving device too */}
@@ -1125,77 +1851,7 @@ function RemoteButton({
                               </Button>
                             </div>
                           )
-                        ) : setupStatus === 'confirm' ? (
-                          <div className="space-y-2">
-                            <p className="text-3xs text-fg-2 text-center">This will download and install Tailscale (~50MB) for secure remote access.</p>
-                            <div className="flex gap-2">
-                              <Button variant="secondary" onClick={onCancelSetup} className="flex-1">Cancel</Button>
-                              <Button onClick={onConfirmSetup} className="flex-1">Install</Button>
-                            </div>
-                          </div>
-                        ) : setupStatus === 'installing' ? (
-                          // K5. Every branch below was its own shape: centred
-                          // green text, centred muted text, a bare button with no
-                          // message at all. The WORDS were mostly fine — seven of
-                          // eleven carry over verbatim. It was eleven shapes.
-                          <StatusStrip tone="busy" detail="This may take a few minutes">
-                            Installing Tailscale…
-                          </StatusStrip>
-                        ) : setupStatus === 'authenticating' ? (
-                          <StatusStrip tone="busy" detail="Check your browser to sign in to Tailscale">
-                            Waiting for Tailscale sign-in…
-                          </StatusStrip>
-                        ) : setupStatus === 'done' ? (
-                          // Was "Tailscale installed and connected!" — the only
-                          // exclamation mark in the settings family. A status
-                          // strip says what you can do next (Destin, 2026-07-28).
-                          <StatusStrip tone="ok">Tailscale is connected. You can pair a device now.</StatusStrip>
-                        ) : setupStatus === 'error' ? (
-                          // `{setupError || 'Setup failed'}` replaced a missing
-                          // reason with a hardcoded guess and left the user two
-                          // words and no next step — the exact pattern
-                          // docs/error-message-standards.md forbids. When we HAVE
-                          // the real reason we show it with Retry; when we do not,
-                          // we say so without inventing a cause and hand over the
-                          // two actions the standard mandates.
-                          setupError ? (
-                            <ErrorState
-                              mode="recoverable"
-                              message={setupError}
-                              onRetry={onRunSetup}
-                              variant="inline"
-                            />
-                          ) : (
-                            <ErrorState
-                              mode="general"
-                              title="Unable to set up remote access."
-                              explainer="The Tailscale installer didn't report a reason. Diagnosing will collect the setup log so Claude can look at what happened."
-                              onReportBug={onReportIssue}
-                              onDiagnose={onReportIssue}
-                            />
-                          )
-                        ) : tailscale?.installed && !tailscale.connected ? (
-                          // Fix: Tailscale is installed but VPN is off — tailscale.url is null in this state,
-                          // so we used to fall through to the install-button branch and pretend it wasn't installed.
-                          <StatusStrip tone="warn">
-                            Tailscale is installed, but the VPN isn&apos;t active. Open the Tailscale app and turn it on, then come back here.
-                          </StatusStrip>
-                        ) : tailscale?.installed && !config?.hasPassword ? (
-                          // Installed + connected but no password yet — guide the user down to the password field
-                          // rather than re-prompting to install.
-                          <StatusStrip tone="warn">
-                            Set a password below to finish enabling remote access.
-                          </StatusStrip>
-                        ) : (
-                          // Was a bare button with no message. A status strip
-                          // says what state you are in, then offers the way out.
-                          <StatusStrip
-                            tone="idle"
-                            action={<Button size="sm" onClick={onRunSetup}>Set up</Button>}
-                          >
-                            Not set up yet.
-                          </StatusStrip>
-                        )}
+                        ) : renderPrerequisite(tailscale, !!config?.hasPassword, onRunSetup, onConfirmSetup)}
                       </div>
                     )}
 
@@ -1209,21 +1865,34 @@ function RemoteButton({
                       <SettingRow
                         variant="item"
                         title="Enabled"
-                        onClick={onToggleEnabled}
-                        control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} label="Remote access server enabled" />}
+                        onClick={hostOnly ? undefined : onToggleEnabled}
+                        control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} disabled={hostOnly} label="Remote access server enabled" />}
                       />
+                      {hostOnly && (
+                        <p className="text-2xs text-fg-muted pb-2">Change these on the computer itself.</p>
+                      )}
                       {/* The server is started from the toggle now, so it can fail
                           (port already bound, permission denied). Show the real
                           reason here — the toggle has already snapped back off. */}
                       {enableError && (
-                        <FieldError as="p" size="2xs" className="pb-2">{enableError}</FieldError>
+                        <FieldError as="p" size="2xs" className="pb-2">{plainReason(enableError)}</FieldError>
+                      )}
+                      {/* A bind failure was logged and nowhere else. Specific and accurate
+                          when the OS gave us a reason; never a guess. */}
+                      {!enableError && status?.state === 'failed' && (
+                        <FieldError as="p" size="2xs" className="pb-2">
+                          {status.reason ? `Not running: ${plainReason(status.reason)}` : 'Not running.'}
+                        </FieldError>
                       )}
 
                       <div className="py-2">
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-xs text-fg-2">Password</span>
+                          {/* "Saved", not "Set": the button beside this one also says Set,
+                              so the row read as two identical controls, one of which did
+                              nothing when clicked. */}
                           {config?.hasPassword && (
-                            <span className="text-3xs text-green-400">Set</span>
+                            <span className="text-3xs text-green-400">Saved</span>
                           )}
                         </div>
                         {/* The Set button moves INSIDE the field (change 77): this is a
@@ -1238,16 +1907,43 @@ function RemoteButton({
                             onChange={(e) => onSetNewPassword(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
                             aria-label="Remote access password"
+                            disabled={hostOnly}
                           />
                           <Button
                             variant="secondary"
                             size="sm"
                             onClick={onSetPassword}
-                            disabled={!newPassword.trim() || passwordStatus === 'saving'}
+                            disabled={hostOnly || !newPassword.trim() || passwordStatus === 'saving'}
                           >
                             {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
                           </Button>
                         </InputGroup>
+                        {/* Length rule + a one-tap generator + the disconnect warning
+                            (2026-09-10 security review, #5). The hint turns into the
+                            error when a too-short password is submitted. */}
+                        <div className="flex items-center justify-between mt-1.5">
+                          <span className={`text-3xs ${passwordStatus === 'too-short' ? 'text-red-400' : 'text-fg-muted'}`}>
+                            {passwordStatus === 'too-short'
+                              ? `Use at least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`
+                              : `At least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={hostOnly}
+                            onClick={() => onSetNewPassword(generateRemotePassphrase())}
+                          >
+                            Generate
+                          </Button>
+                        </div>
+                        <p className="text-3xs text-fg-muted mt-1">
+                          Changing the password disconnects every device; each reconnects with the new one.
+                        </p>
+                        {config?.weakPassword && passwordStatus !== 'too-short' && (
+                          <p className="text-3xs text-amber-400 mt-1">
+                            Your current password is short. Consider setting a longer one.
+                          </p>
+                        )}
                       </div>
 
                       <div className="py-2">
@@ -1275,9 +1971,16 @@ function RemoteButton({
                         no variant. Destin's call (spec §11.8 A): plain `secondary`. Unlike the
                         orange billing button, nothing here is a warning — the blue was decorative,
                         not signal. */}
-                    {tailscale?.installed && tailscale?.connected && tailscale?.url && config?.hasPassword && (
+                    {(previewView || (tailscale?.installed && tailscale?.connected && tailscale?.url && config?.hasPassword)) && (
                       <Button
-                        onClick={() => onSetShowAddDevice(!showAddDevice)}
+                        // WHY consent counts as ready: the default setup is complete and
+                        // pairing works; the optional level is only being considered. And
+                        // WHY a listening `checked` counts: that screen tells the user in
+                        // so many words to pair a device below, and a tester clicked this
+                        // button four times before accepting it was dead.
+                        disabled={!!previewView && previewView.stage !== 'ready' && previewView.stage !== 'consent'
+                          && !(previewView.stage === 'checked' && previewView.check?.listening)}
+                        onClick={() => { onSetShowAddDevice(!showAddDevice); setJustOpenedAddDevice(!showAddDevice); }}
                         variant="secondary"
                         className="w-full py-2"
                       >
@@ -1291,27 +1994,34 @@ function RemoteButton({
                     {/* Remote Clients section */}
                     {hasClients && (
                       <section>
-                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Connected Devices</h3>
+                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Devices</h3>
 
                         <div className="space-y-1">
-                          {clients.map(client => (
-                            // K6: an item list is a K2 row with a status dot in
-                            // the icon slot. The action was a bare ✕ with no
-                            // accessible name and no focus ring — change 41
-                            // banned those app-wide and this one survived the
-                            // sweep, announcing itself to a screen reader as
-                            // the literal character.
+                          {deviceRows.map(row => (
+                            // K6: an item list is a K2 row with a status dot in the icon
+                            // slot. One shape for the mockup and the real panel — a preview
+                            // that renders differently is not evidence about the app.
                             <SettingRow
-                              key={client.id}
+                              key={row.id}
                               variant="item"
-                              icon={<span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />}
-                              title={client.ip}
-                              description={timeAgo(client.connectedAt)}
-                              control={
-                                <Button variant="ghost" size="sm" onClick={() => onDisconnectClient(client.id)}>
-                                  Disconnect
-                                </Button>
-                              }
+                              icon={<span className={`w-2 h-2 rounded-full shrink-0 ${row.online ? 'bg-green-500' : 'bg-fg-faint'}`} />}
+                              title={row.name}
+                              description={revoking === row.id
+                                ? 'Unpair this device? It must pair again to reconnect.'
+                                : hostOnly ? `${row.online ? 'Online' : 'Offline'} · unpair on the computer itself`
+                                  : row.online ? 'Online' : 'Offline'}
+                              // WHY disabled rather than live on a phone: the host refuses this
+                              // over the remote socket, exactly as it refuses the password. Left
+                              // live, the row vanished from the list while the device kept full
+                              // access — the refusal came back as an ordinary value and nothing
+                              // read it. The refusal is a rejection now, and the button is not
+                              // offered here at all.
+                              control={revoking === row.id
+                                ? <div className="flex gap-1">
+                                    <Button variant="ghost" size="sm" onClick={() => setRevoking(null)}>Cancel</Button>
+                                    <Button variant="danger-outline" size="sm" onClick={() => { unpair(row.id); setRevoking(null); }}>Confirm unpair</Button>
+                                  </div>
+                                : <Button variant="ghost" size="sm" disabled={hostOnly} aria-label={`Unpair ${row.name}`} onClick={() => setRevoking(row.id)}>Unpair</Button>}
                             />
                           ))}
                         </div>
@@ -1320,7 +2030,7 @@ function RemoteButton({
 
                     {/* Add Device overlay */}
                     {showAddDevice && tailscale?.url && (
-                      <section className="bg-inset/50 rounded-lg p-3">
+                      <section ref={addDeviceRef} className="bg-inset/50 rounded-lg p-3">
                         <div className="flex items-center justify-between mb-2">
                           <h3 className="text-xs font-medium text-fg-2">Add Device</h3>
                           {/* NOT a K6 action — this dismisses the whole
@@ -1343,9 +2053,24 @@ function RemoteButton({
                       </section>
                     )}
 
+                    {/* The optional second level. It sits BELOW the working setup, as its own
+                        eyebrow section, because the default is complete on its own — this is
+                        an upgrade, not an unfinished step (Destin, 2026-09-10). */}
+                    {previewView && preview && (previewView.stage === 'ready' || previewView.stage === 'consent') && (
+                      <section>
+                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Advanced</h3>
+                        <SettingRow
+                          variant="item"
+                          title="Browser encryption"
+                          description={previewView.browserEncryption === 'on' ? 'On' : 'Off'}
+                          onClick={() => setShowEncryption(true)}
+                        />
+                      </section>
+                    )}
+
                     {/* Tailscale section */}
                     <section>
-                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Tailscale</h3>
+                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Tailscale</h3>
 
                       {tailscale?.installed ? (
                         // space-y-1 replaces the py-2 each bare row used to carry
@@ -1367,16 +2092,31 @@ function RemoteButton({
                                   Connected{tailscale.hostname ? ` · ${tailscale.hostname}` : ''}
                                 </span>
                               ) : (
-                                <span className="text-fg-muted">VPN not active</span>
+                                <span className="text-fg-muted">{
+                                  tailscale.state === 'signed-out' ? 'Not signed in'
+                                    : tailscale.state === 'stopped' ? 'Switched off'
+                                      : 'Not connected'
+                                }</span>
                               )
                             }
                           />
-                          <SettingRow variant="item" title="IP" value={tailscale.ip ?? '—'} />
+                          {/* WHY the address lives here and not only behind Add Device: it
+                              appeared during setup and then disappeared the moment setup
+                              finished, so at the one point a user wants to type it into a
+                              phone there was nowhere to look it up. An IP on its own is not
+                              that address — the port is half of it — which is why this row
+                              replaces the bare IP rather than sitting beside it. */}
                           <SettingRow
                             variant="item"
-                            title="Skip password on Tailscale"
-                            onClick={onToggleTailscaleTrust}
-                            control={<Toggle enabled={!!config?.trustTailscale} onToggle={onToggleTailscaleTrust} label="Skip password on Tailscale" />}
+                            title="Address"
+                            value={tailscale.url
+                              ? <button
+                                  type="button"
+                                  onClick={onCopyLink}
+                                  className="font-mono text-3xs text-fg-2 hover:text-fg underline decoration-dotted underline-offset-2"
+                                  title="Copy this address"
+                                >{copied ? 'Copied' : tailscale.url}</button>
+                              : tailscale.ip ?? '—'}
                           />
                         </div>
                       ) : (
@@ -1384,13 +2124,16 @@ function RemoteButton({
                           <p className="text-xs text-fg-muted mb-2">
                             Tailscale is not installed. It creates a secure private network so you can access YouCoded from anywhere.
                           </p>
-                          <Button
+                          {/* WHY hidden in the preview: the setup banner above already offers
+                              Install, and two identical actions in one dialog is the duplicate
+                              this review is meant to remove, not reproduce. */}
+                          {!previewView && <Button
                             variant="secondary"
                             onClick={onRunSetup}
                             disabled={setupStatus === 'installing' || setupStatus === 'authenticating'}
                           >
                             {setupStatus === 'installing' ? 'Installing...' : setupStatus === 'authenticating' ? 'Authenticating...' : 'Install Tailscale'}
-                          </Button>
+                          </Button>}
                         </div>
                       )}
                     </section>
@@ -1403,490 +2146,13 @@ function RemoteButton({
   );
 }
 
-// ─── Defaults popup button ────────────────────────────────────────────────
-
-const MODEL_LABELS: Record<string, string> = {
-  sonnet: 'Sonnet',
-  'opus[1m]': 'Opus',
-  haiku: 'Haiku',
-  fable: 'Fable',
-};
-
-interface PermissionOverrides {
-  approveAll: boolean;
-  protectedConfigFiles: boolean;
-  protectedDirectories: boolean;
-  compoundCdRedirect: boolean;
-  compoundCdGit: boolean;
-}
-
-const OVERRIDES_DEFAULT: PermissionOverrides = {
-  approveAll: false,
-  protectedConfigFiles: false,
-  protectedDirectories: false,
-  compoundCdRedirect: false,
-  compoundCdGit: false,
-};
-
-// Per-category override toggles for the Advanced section
-const OVERRIDE_CATEGORIES: { key: keyof Omit<PermissionOverrides, 'approveAll'>; label: string; description: string }[] = [
-  { key: 'protectedConfigFiles', label: 'Config files', description: '.bashrc, .gitconfig, .mcp.json' },
-  { key: 'protectedDirectories', label: 'Protected directories', description: '.git/, .claude/ paths' },
-  { key: 'compoundCdRedirect', label: 'cd + redirect commands', description: 'Compound cd with output redirection' },
-  { key: 'compoundCdGit', label: 'cd + git commands', description: 'Compound cd with git operations' },
-];
-
-function SkipPermissionsSection({ defaults, onDefaultsChange }: {
-  defaults: { skipPermissions: boolean; permissionOverrides?: PermissionOverrides };
-  onDefaultsChange: (updates: any) => void;
-}) {
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const overrides = { ...OVERRIDES_DEFAULT, ...defaults.permissionOverrides };
-
-  const updateOverride = useCallback((key: keyof PermissionOverrides, value: boolean) => {
-    onDefaultsChange({ permissionOverrides: { ...overrides, [key]: value } });
-  }, [overrides, onDefaultsChange]);
-
-  const handleApproveAllToggle = useCallback(() => {
-    if (!overrides.approveAll) {
-      // Turning ON — show confirmation popup
-      setConfirmOpen(true);
-    } else {
-      // Turning OFF — immediate
-      updateOverride('approveAll', false);
-    }
-  }, [overrides.approveAll, updateOverride]);
-
-  return (
-    <section>
-      {/* K2: "Skip Permissions" was a K1 SECTION LABEL doing a row title's job —
-          an uppercase eyebrow heading labelling a single control. K1's rule is
-          that a section label never labels one control; if a control needs a
-          label, it is this row's title. The consequence line was the other
-          retired shape (a <p> below the whole row); it belongs in the left
-          column under the title, where every other description lives. */}
-      {/* K9 — danger zone. One shape: a "Danger zone" K1 label, the consequence
-          in a K4 danger callout, and the control, callout and control kept
-          together.
-
-          TWO DOCUMENTED DEVIATIONS, both approved 2026-07-28:
-
-          1. PLACEMENT. K9 says a danger zone is always LAST in its menu; this
-             one stays mid-menu. The rule exists so you cannot stumble into a
-             destructive ACTION, and a toggle you must deliberately flip is a
-             different risk from a Delete button — moving the most important
-             setting in Session Defaults to the bottom would de-emphasise it to
-             buy consistency that protects against nothing here.
-
-          2. ORDER. The callout sits AFTER the control, not before it. K9's
-             order assumes a button ("read this, then press"); for a toggle the
-             sentence is a consequence of the state you just turned on, and it
-             only exists while the toggle is on. Above the row it would push the
-             control down every time you flipped it. */}
-      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Danger zone</h3>
-      <SettingRow
-        variant="item"
-        title="Skip Permissions"
-        description="New sessions will skip tool approval"
-        control={
-          <Toggle
-            enabled={defaults.skipPermissions}
-            onToggle={() => onDefaultsChange({ skipPermissions: !defaults.skipPermissions })}
-            color="red"
-            label="Skip Permissions"
-          />
-        }
-      />
-      {defaults.skipPermissions && (
-        // Was a raw `text-[#DD4444]` span inside the row's description — the
-        // fixed status red, which theme packs cannot restyle. The Callout's
-        // danger tone rides the destructive token instead (change 17).
-        <Callout tone="danger" className="mt-2">
-          Claude will execute tools without asking for approval.
-        </Callout>
-      )}
-      {defaults.skipPermissions && (
-        <>
-          {/* Advanced expandable section */}
-          <button
-            onClick={() => setAdvancedOpen(!advancedOpen)}
-            className="flex items-center gap-1.5 mt-3 group"
-          >
-            <svg
-              className="w-3 h-3 text-fg-faint transition-transform"
-              style={{ transform: advancedOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}
-              strokeLinecap="round" strokeLinejoin="round"
-            >
-              <path d="M9 5l7 7-7 7" />
-            </svg>
-            <span className="text-3xs text-fg-muted group-hover:text-fg-2 transition-colors">Advanced</span>
-          </button>
-
-          {advancedOpen && (
-            <div className="mt-2 ml-1 border-l border-edge-dim pl-3 space-y-3">
-              {/* Approve All toggle. K2: these were text-3xs/text-4xs — a third
-                  and fourth type size used to signal nesting depth. The indent
-                  rail to the left already says "nested"; the rows take the one
-                  item density like every other in-menu row. */}
-              <SettingRow
-                variant="item"
-                title="Auto-approve all"
-                description="Silently approve all protected requests"
-                control={<Toggle enabled={overrides.approveAll} onToggle={handleApproveAllToggle} color="red" label="Auto-approve all" />}
-              />
-
-              {/* Separator */}
-              <div className="flex items-center gap-2">
-                <div className="flex-1 border-t border-edge-dim" />
-                <span className="text-4xs text-fg-muted">or approve by category</span>
-                <div className="flex-1 border-t border-edge-dim" />
-              </div>
-
-              {/* Per-category toggles */}
-              {OVERRIDE_CATEGORIES.map(({ key, label, description }) => (
-                <SettingRow
-                  key={key}
-                  variant="item"
-                  title={label}
-                  description={description}
-                  // 40% + pointer-events-none, not the row's own `disabled`: this
-                  // is "superseded by approve-all", not "unavailable", and the
-                  // existing resting opacity is what the spec approved.
-                  className={overrides.approveAll ? 'opacity-40 pointer-events-none' : ''}
-                  control={<Toggle enabled={overrides[key]} onToggle={() => updateOverride(key, !overrides[key])} label={`Auto-approve ${label}`} />}
-                />
-              ))}
-            </div>
-          )}
-
-          {/* Confirmation popup for Approve All — L3 destructive, theme-driven glass */}
-          {confirmOpen && createPortal(
-            <>
-              <Dialog
-                open
-                onClose={() => setConfirmOpen(false)}
-                layer={3}
-                destructive
-                size="prompt"
-                // The `&#9888;` glyph goes with the hand-rolled header the spec
-                // named. HTML entities do not decode inside a string PROP (only
-                // in JSX text), so carrying it here would have rendered the
-                // literal characters — and Dialog's `destructive` already tints
-                // the whole panel, which is the same signal without the glyph.
-                title="This is extremely dangerous"
-                scrollBody={false}
-              >
-                <div className="px-4 py-3 space-y-2">
-                  {/* K9: this was the hand-rolled block the spec named — a
-                      `bg-red-600/10` header strip carrying a `&#9888;` glyph and
-                      an `text-[#DD4444]` heading, which is a FOURTH red beside
-                      the destructive token, the fixed status red, and the
-                      red-600 the strip itself used. The title is Dialog's now
-                      (with `destructive`, which already tints the panel) and the
-                      consequence is a danger Callout. Copy is unchanged
-                      throughout — it was specific, it was accurate, and it is
-                      the strongest warning in the app for good reason. */}
-                  <Callout tone="danger">
-                    <strong>This setting is not recommended or condoned by Claude, Anthropic, or YouCoded.</strong>{' '}
-                    Do not enable this unless you fully understand the consequences.
-                  </Callout>
-                  <p className="text-3xs text-fg-dim leading-relaxed">
-                    Full auto-approve silently grants <strong>every</strong> remaining permission request with zero human review. Claude will be able to:
-                  </p>
-                  <ul className="text-3xs text-fg-muted space-y-1 ml-3 list-disc">
-                    <li>Overwrite your <code className="text-fg-dim">.git/</code> history and repository internals</li>
-                    <li>Modify shell config files (<code className="text-fg-dim">.bashrc</code>, <code className="text-fg-dim">.gitconfig</code>, <code className="text-fg-dim">.zshrc</code>)</li>
-                    <li>Rewrite <code className="text-fg-dim">.claude/</code> configuration and MCP settings</li>
-                    <li>Execute compound commands that bypass path resolution safety checks</li>
-                    <li>Execute compound commands that bypass bare repository attack protections</li>
-                  </ul>
-                  <p className="text-3xs text-destructive-fg/80 leading-relaxed font-medium">
-                    These protections exist for a reason. Disabling them means a single bad model output could corrupt your repository, hijack your shell environment, or escalate access beyond this project. There is no undo.
-                  </p>
-                  <div className="flex gap-2 pt-2">
-                    <Button variant="secondary" onClick={() => setConfirmOpen(false)} className="flex-1">
-                      Cancel
-                    </Button>
-                    {/* Change 59: was stock bg-red-600/70 + text-white — a second
-                        red beside the app's #DD4444, and white-on-pale on packs
-                        that soften --destructive. Filled danger commits. */}
-                    <Button
-                      variant="danger"
-                      onClick={() => { updateOverride('approveAll', true); setConfirmOpen(false); }}
-                      className="flex-1"
-                    >
-                      I understand, enable anyway
-                    </Button>
-                  </div>
-                </div>
-              </Dialog>
-            </>,
-            document.body,
-          )}
-        </>
-      )}
-    </section>
-  );
-}
-
-interface DefaultsButtonProps {
-  defaults: { skipPermissions: boolean; model: string; projectFolder: string; permissionOverrides?: PermissionOverrides };
-  onDefaultsChange: (updates: Partial<{ skipPermissions: boolean; model: string; projectFolder: string; permissionOverrides: PermissionOverrides }>) => void;
-}
-
-function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
-  const [open, setOpen] = useState(false);
-  const popupRef = useRef<HTMLDivElement>(null);
-  // Close-session prompt suppression — reads/writes localStorage directly since
-  // this is a UI preference, not a session default backed by sessionDefaults.
-  const [closePromptDisabled, setClosePromptDisabled] = useState(
-    () => localStorage.getItem(CLOSE_PROMPT_SUPPRESS_KEY) === '1',
-  );
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (popupRef.current && !popupRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  const handleBrowseFolder = useCallback(async () => {
-    try {
-      const folder = await (window as any).claude.dialog.openFolder();
-      if (folder) onDefaultsChange({ projectFolder: folder });
-    } catch {}
-  }, [onDefaultsChange]);
-
-  const summaryParts: string[] = [];
-  summaryParts.push(MODEL_LABELS[defaults.model] || 'Sonnet');
-  if (defaults.skipPermissions) summaryParts.push('Skip Perms');
-
-  return (
-    <>
-      <SettingRow
-        icon={
-          <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-            <line x1="4" y1="7" x2="20" y2="7" /><circle cx="8" cy="7" r="2.2" fill="var(--panel)" />
-            <line x1="4" y1="17" x2="20" y2="17" /><circle cx="16" cy="17" r="2.2" fill="var(--panel)" />
-          </svg>
-        }
-        title="Defaults"
-        description={summaryParts.join(' · ')}
-        onClick={() => setOpen(true)}
-      />
-
-      <Dialog
-        open={open}
-        onClose={() => setOpen(false)}
-        title="Session Defaults"
-        size="panel"
-        panelRef={popupRef}
-      >
-                {/* Default Model */}
-                <section>
-                  <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Default Model</h3>
-                  {/* K3: three short options -> segmented. The info tooltip
-                      rides in the label, which is a ReactNode. */}
-                  <SegmentedTabs
-                    variant="contained"
-                    aria-label="Default Model"
-                    value={defaults.model}
-                    onChange={(id) => onDefaultsChange({ model: id })}
-                    tabs={MODELS.map((m) => ({
-                      id: m,
-                      label: (
-                        <>
-                          {MODEL_LABELS[m] || m}
-                          <ModelInfoTooltip model={m} />
-                        </>
-                      ),
-                    }))}
-                  />
-                </section>
-
-                {/* Skip Permissions */}
-                <SkipPermissionsSection defaults={defaults} onDefaultsChange={onDefaultsChange} />
-
-                {/* Default Project Folder.
-
-                    K7: this was a <button> wearing the FIELD surface — bg-inset,
-                    border-edge-dim, rounded-md — so it read as a text box you
-                    could type into, and nothing about it said "this opens a
-                    folder picker". A value chosen ELSEWHERE (an OS dialog, a
-                    picker, another screen) is a value row plus a Change button:
-                    here is the value, here is how to change it.
-
-                    The uppercase "Project Folder" eyebrow was also a K1 section
-                    label doing a row title's job — the same violation K2 already
-                    retired at Skip Permissions and Close-session prompt. */}
-                <SettingRow
-                  variant="item"
-                  title="Project folder"
-                  // The path lives in the description, not the `value` slot: a
-                  // filesystem path is long and must wrap, and `value` is
-                  // shrink-0 so it would push the buttons off the row.
-                  description={defaults.projectFolder || 'Home directory (default)'}
-                  control={
-                    <div className="flex items-center gap-1 shrink-0">
-                      {defaults.projectFolder && (
-                        <Button variant="ghost" size="sm" onClick={() => onDefaultsChange({ projectFolder: '' })}>
-                          Reset
-                        </Button>
-                      )}
-                      <Button variant="secondary" size="sm" onClick={handleBrowseFolder}>
-                        Change
-                      </Button>
-                    </div>
-                  }
-                />
-
-                {/* Close-session prompt — toggle off to skip the tag-before-closing
-                    popup and destroy sessions immediately. Mirrors the "Don't show
-                    again" checkbox inside the prompt itself. */}
-                {/* K2: the other K1-label-as-row-title violation, and the one the
-                    spec called out by name. "Close-session prompt" was an
-                    uppercase section eyebrow labelling exactly one switch. */}
-                <SettingRow
-                  variant="item"
-                  title="Close-session prompt"
-                  description="Show tag options when closing a session"
-                  control={
-                    // Was a hand-rolled 32x18 track with an inline var(--accent)
-                    // background; one geometry now (change 16). The state is stored
-                    // INVERTED (closePromptDisabled), so `checked` is the negation —
-                    // the switch reads as "show the prompt".
-                    <UiToggle
-                      checked={!closePromptDisabled}
-                      onChange={(show) => {
-                        const next = !show;
-                        setClosePromptDisabled(next);
-                        if (next) {
-                          localStorage.setItem(CLOSE_PROMPT_SUPPRESS_KEY, '1');
-                        } else {
-                          localStorage.removeItem(CLOSE_PROMPT_SUPPRESS_KEY);
-                        }
-                      }}
-                      aria-label="Close-session prompt"
-                    />
-                  }
-                />
-      </Dialog>
-    </>
-  );
-}
-
-// ─── Permissions (M5 item 2a) ──────────────────────────────────────────────
-
-// Settings → Permissions: every "Always allow" a native session remembered,
-// with a way to take it back. The list itself lives in PermissionsSection.tsx;
-// this is only the row + the Dialog frame + the (i) explainer toggle, which is
-// the same shape Remote Access, Backup & Sync and Appearance already use.
-//
-// NOT gated on window.claude.native.supported, unlike ModelProvidersSection
-// above. remote-shim.ts hardcodes that flag false, so copying the gate would
-// render nothing over remote access — the one transport where revoking a grant
-// from a phone matters. Spec 2026-08-11, "Open item for Phase 1 review".
-//
-// No popupRef / outside-click effect here: <Dialog>'s own Scrim already calls
-// onClose. The older popups in this file predate that and keep a duplicate
-// handler; new ones should not grow one.
-function PermissionsButton() {
-  const [open, setOpen] = useState(false);
-  // Flips the dialog body to the plain-language explainer. Reset on every
-  // re-open so the user always lands on the list, not on whichever view they
-  // happened to leave behind (same reason RemoteButton resets its showInfo).
-  const [showInfo, setShowInfo] = useState(false);
-
-  useEffect(() => {
-    if (!open) setShowInfo(false);
-  }, [open]);
-
-  return (
-    <>
-      <SettingRow
-        icon={
-          // Shield + check: an approval you granted, not a lock you're behind.
-          <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 3l7 3v5.5c0 4.3-2.9 8.1-7 9.5-4.1-1.4-7-5.2-7-9.5V6l7-3z" />
-            <path d="M9 12l2 2 4-4" />
-          </svg>
-        }
-        title="Permissions"
-        description="Things you approved with “Always allow”"
-        onClick={() => setOpen(true)}
-      />
-
-      <Dialog
-        open={open}
-        onClose={() => setOpen(false)}
-        title={showInfo ? 'About Permissions' : 'Permissions'}
-        onBack={showInfo ? () => setShowInfo(false) : undefined}
-        headerActions={showInfo ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
-        size="panel"
-        fill
-      >
-        {showInfo ? (
-          <SettingsExplainer
-            intro={PERMISSIONS_EXPLAINER_INTRO}
-            sections={PERMISSIONS_EXPLAINER_SECTIONS}
-          />
-        ) : (
-          <PermissionsSection />
-        )}
-      </Dialog>
-    </>
-  );
-}
-
-// Settings → Specialists (1c): the two model tiers helpers run on, and the
-// roster of everything the assistant can hire (built-in, your folder, the
-// project's folder, Claude Code agent files) with any loader warnings. Same
-// row + Dialog + (i) shape as Permissions directly above it. Not gated on
-// native.supported for the same reason Permissions isn't.
-function SpecialistsButton({ cwd }: { cwd?: string }) {
-  const [open, setOpen] = useState(false);
-  const [showInfo, setShowInfo] = useState(false);
-  useEffect(() => { if (!open) setShowInfo(false); }, [open]);
-  return (
-    <>
-      <SettingRow
-        icon={
-          // Two people, one slightly behind: helpers.
-          <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="9" cy="8" r="3.2" />
-            <path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" />
-            <path d="M16 5.5a3 3 0 0 1 0 5.6" />
-            <path d="M17.5 14.5c2 .6 3.5 2.4 3.5 4.5" />
-          </svg>
-        }
-        title="Specialists"
-        description="Helpers your assistant can hire, and the models they run on"
-        onClick={() => setOpen(true)}
-      />
-      <Dialog
-        open={open}
-        onClose={() => setOpen(false)}
-        title={showInfo ? 'About Specialists' : 'Specialists'}
-        onBack={showInfo ? () => setShowInfo(false) : undefined}
-        headerActions={showInfo ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
-        size="panel"
-        fill
-      >
-        {showInfo ? (
-          <SettingsExplainer intro={SPECIALISTS_EXPLAINER_INTRO} sections={SPECIALISTS_EXPLAINER_SECTIONS} />
-        ) : (
-          <SpecialistsSection cwd={cwd} />
-        )}
-      </Dialog>
-    </>
-  );
-}
-
 // ─── Tier selector popup ───────────────────────────────────────────────────
+
+/** Same dialog and body as Settings; the candidate provides no real settings callbacks. */
+export function RemoteAccessMockPanel({ view, onAction }: { view: RemoteAccessView; onAction: (action: RemoteAccessAction) => void }) {
+  const noop = () => {};
+  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" setupCheck={null} onUnpairDevice={noop} status={null} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
+}
 
 // Mirrors PackageTier.kt — descriptions list the actual packages each tier
 // installs, matching the native first-run TierPickerScreen labels.
@@ -2304,12 +2570,15 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
   const [loading, setLoading] = useState(true);
   const [tier, setTier] = useState('CORE');
   const [aboutInfo, setAboutInfo] = useState<{ version: string; build: string } | null>(null);
-  const [defaults, setDefaults] = useState({ skipPermissions: false, model: 'sonnet', projectFolder: '', permissionOverrides: { ...OVERRIDES_DEFAULT } });
+  const [defaults, setDefaults] = useState<AssistantDefaults>({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showDevMenu, setShowDevMenu] = useState(false);
-  const [showBugReport, setShowBugReport] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  // WHY the context object doubles as the open flag: two states that must agree
+  // (is it open / what is it about) drift; one cannot.
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   const [showContribute, setShowContribute] = useState(false);
 
   const claude = (window as any).claude;
@@ -2334,7 +2603,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
     Promise.all([
       claude.android?.getTier?.() ?? 'CORE',
       claude.android?.getAbout?.() ?? { version: 'unknown', build: '' },
-      claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '', permissionOverrides: { ...OVERRIDES_DEFAULT } },
+      claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '' },
     ]).then(([t, about, defs]) => {
       setTier(t?.tier || t || 'CORE');
       setAboutInfo(about);
@@ -2374,6 +2643,11 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
         {/* Account leads the stack — your identity is the first thing settings should show (Destin, 2026-07-08) */}
         <AccountSection />
 
+        {/* Assistant settings sits right under Account (Destin, 2026-09-08) — the
+            same row as desktop, with the pages the phone can serve today —
+            General. (Originally added here as Q-6b, 2026-09-05.) */}
+        <AssistantSettingsRow platform="android" defaults={defaults} onDefaultsChange={handleDefaultsChange} />
+
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
         {/* No <BuddyButton /> on Android — the floater relies on an Electron always-on-top window that Android doesn't support yet */}
@@ -2391,7 +2665,34 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
 
         <ConnectToDesktopButton />
 
-        <DefaultsButton defaults={defaults} onDefaultsChange={handleDefaultsChange} />
+        {/* Help & feedback — the tour, tips, the community, bug reports, the
+            version (first-run guide design 2026-09-10 §1.6). Sits above
+            Development on purpose: a new user's help is this row; Development
+            stays for contributors. */}
+        <div data-guide-anchor="help">
+        <SettingRow
+          icon={
+            <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M9.2 9.2 a2.8 2.8 0 1 1 4 2.6 c-.9 .5 -1.2 1 -1.2 2" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          }
+          title="Help & feedback"
+          description="Tour, tips, community, bug reports"
+          onClick={() => setShowHelp(true)}
+          // data-guide-anchor (on the wrapper below): the tour's last stop
+          // presses this row to open the page it talks about. SettingRow
+          // forwards no data attributes, hence the wrapper.
+        />
+        </div>
+        <HelpPopup
+          open={showHelp}
+          onClose={() => setShowHelp(false)}
+          onOpenBug={() => { setShowHelp(false); setReportContext({}); }}
+          version={aboutInfo?.version}
+          build={aboutInfo?.build}
+        />
 
         {/* Development — bug reports, contributions, known issues */}
         <SettingRow
@@ -2405,16 +2706,16 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
             </svg>
           }
           title="Development"
-          description="Report a bug, contribute, or browse known issues"
+          description="Report a bug or help improve the app"
           onClick={() => setShowDevMenu(true)}
         />
         <DevelopmentPopup
           open={showDevMenu}
           onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setShowBugReport(true); }}
+          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
           onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
         />
-        <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+        <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
         {/* Keyboard shortcuts intentionally omitted on Android — no physical keyboard. */}
@@ -2462,7 +2763,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
 
 // ─── Desktop Settings (existing, unchanged) ─────────────────────────────────
 
-function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled }: {
+function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, specialistsAutoOpen, onSpecialistsAutoOpenHandled, onShowMeAround }: {
   open: boolean;
   onClose: () => void;
   onSendInput: (text: string) => void;
@@ -2480,26 +2781,35 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   // Deep-link the Model Providers popup open (provider-error bubble jump).
   providersAutoOpen?: boolean;
   onProvidersAutoOpenHandled?: () => void;
+  specialistsAutoOpen?: boolean;
+  onSpecialistsAutoOpenHandled?: () => void;
+  // Help & feedback → Show me around (see Props above).
+  onShowMeAround?: () => void;
 }) {
   const [config, setConfig] = useState<RemoteConfig | null>(null);
   const [tailscale, setTailscale] = useState<TailscaleInfo | null>(null);
-  const [clients, setClients] = useState<ClientInfo[]>([]);
+  const [clients, setClients] = useState<RemoteDeviceRow[]>([]);
+  const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null);
   const [newPassword, setNewPassword] = useState('');
-  const [passwordStatus, setPasswordStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [passwordStatus, setPasswordStatus] = useState<'idle' | 'saving' | 'saved' | 'too-short'>('idle');
   const [loading, setLoading] = useState(true);
   const [showAddDevice, setShowAddDevice] = useState(false);
   const [showSetupQR, setShowSetupQR] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [defaults, setDefaults] = useState({ skipPermissions: false, model: 'sonnet', projectFolder: '', permissionOverrides: { ...OVERRIDES_DEFAULT } });
-  const [setupStatus, setSetupStatus] = useState<'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error'>('idle');
+  const [defaults, setDefaults] = useState<AssistantDefaults>({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
+  const [setupStatus, setSetupStatus] = useState<SetupStatus>('idle');
   const [setupError, setSetupError] = useState('');
+  const [setupCheck, setSetupCheck] = useState<SetupCheck | null>(null);
   // Populated when IPC.REMOTE_SET_CONFIG reports the server failed to bind.
   const [enableError, setEnableError] = useState('');
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showDevMenu, setShowDevMenu] = useState(false);
-  const [showBugReport, setShowBugReport] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  // WHY the context object doubles as the open flag: two states that must agree
+  // (is it open / what is it about) drift; one cannot.
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   const [showContribute, setShowContribute] = useState(false);
 
   useEffect(() => {
@@ -2507,6 +2817,12 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     setLoading(true);
     setShowAddDevice(false);
     setShowSetupQR(false);
+    // WHY the setup state resets on open: the check result now stays on screen instead of
+    // clearing itself after three seconds, so the panel must not reopen tomorrow still
+    // showing yesterday's answer.
+    setSetupStatus('idle');
+    setSetupError('');
+    setSetupCheck(null);
     const claude = (window as any).claude;
     if (!claude?.remote) { setLoading(false); return; }
     // Fix: defer IPC calls until after the 300ms slide-in animation. detectTailscale
@@ -2515,12 +2831,14 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     Promise.all([
       claude.remote.getConfig(),
       claude.remote.detectTailscale(),
-      claude.remote.getClientList(),
-      claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '', permissionOverrides: { ...OVERRIDES_DEFAULT } },
-    ]).then(([cfg, ts, cls, defs]: [RemoteConfig, TailscaleInfo, ClientInfo[], any]) => {
+      claude.remote.devices?.list?.() ?? [],
+      claude.remote.getStatus?.() ?? null,
+      claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '' },
+    ]).then(([cfg, ts, cls, st, defs]: [RemoteConfig, TailscaleInfo, RemoteDeviceRow[], RemoteStatus | null, any]) => {
       setConfig(cfg);
       setTailscale(ts);
       setClients(cls);
+      setRemoteStatus(st);
       setDefaults(defs);
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -2530,10 +2848,19 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
 
   const handleSetPassword = useCallback(async () => {
     if (!newPassword.trim()) return;
+    // Length rule (2026-09-10 security review, #5). Checked here for the message,
+    // and enforced again in the main handler, which returns false if it's short.
+    if (newPassword.length < MIN_REMOTE_PASSWORD_LENGTH) {
+      setPasswordStatus('too-short');
+      return;
+    }
     setPasswordStatus('saving');
     try {
-      await (window as any).claude.remote.setPassword(newPassword);
-      setConfig(prev => prev ? { ...prev, hasPassword: true } : prev);
+      const ok = await (window as any).claude.remote.setPassword(newPassword);
+      if (ok === false) { setPasswordStatus('too-short'); return; }
+      // A new password disconnects every paired device (the server invalidates
+      // tokens). Reflect that: not weak, and no clients until they reconnect.
+      setConfig(prev => prev ? { ...prev, hasPassword: true, weakPassword: false } : prev);
       setNewPassword('');
       setPasswordStatus('saved');
       setTimeout(() => setPasswordStatus('idle'), 2000);
@@ -2552,12 +2879,6 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     setConfig(prev => prev ? { ...prev, ...updated } : prev);
   }, [config]);
 
-  const handleToggleTailscaleTrust = useCallback(async () => {
-    if (!config) return;
-    const updated = await (window as any).claude.remote.setConfig({ trustTailscale: !config.trustTailscale });
-    setConfig(prev => prev ? { ...prev, ...updated } : prev);
-  }, [config]);
-
   const handleSetKeepAwake = useCallback(async (hours: number) => {
     const updated = await (window as any).claude.remote.setConfig({ keepAwakeHours: hours });
     setConfig(prev => prev ? { ...prev, ...updated } : prev);
@@ -2566,11 +2887,40 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const handleRunSetup = useCallback(() => {
     setSetupStatus('confirm');
     setSetupError('');
+    setSetupCheck(null);
   }, []);
 
   const handleCancelSetup = useCallback(() => {
     setSetupStatus('idle');
     setSetupError('');
+    setSetupCheck(null);
+  }, []);
+
+  /**
+   * The end-of-setup check (contract row R1). WHY it exists: setup used to declare
+   * success the moment `tailscale up` returned — a claim about a command, not about the
+   * server. This asks the host what its listener is actually doing and repeats that
+   * answer verbatim, including the reason when the answer is no.
+   *
+   * It stops there deliberately. Nothing here has contacted the user's other device, so
+   * nothing here may imply the other device works; the strip says a device still has to
+   * be paired.
+   */
+  const runSetupCheck = useCallback(async () => {
+    setSetupStatus('checking');
+    const remote = (window as any).claude?.remote;
+    const ts = await remote?.detectTailscale?.().catch(() => null);
+    if (ts) setTailscale(ts);
+    const st: RemoteStatus | null = await remote?.getStatus?.().catch(() => null) ?? null;
+    if (st) setRemoteStatus(st);
+    setSetupCheck({
+      listening: st?.state === 'listening',
+      address: ts?.url ?? null,
+      // The server's own reason when it has one. A missing status is not evidence of a
+      // cause, so it stays null and the panel says so rather than naming a culprit.
+      reason: st?.reason ?? null,
+    });
+    setSetupStatus('checked');
   }, []);
 
   const handleConfirmSetup = useCallback(async () => {
@@ -2578,12 +2928,17 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       // Check if already installed before trying to install
       const check = await (window as any).claude.remote.detectTailscale();
       if (check?.installed) {
-        // Already installed — skip to auth
+        // Already installed — skip to auth. This is also the path the Sign in and Turn
+        // on buttons take, which is why it must not go through the install confirmation.
         setSetupStatus('authenticating');
-        await (window as any).claude.remote.authTailscale();
-        setSetupStatus('done');
         setTailscale(check);
-        setTimeout(() => setSetupStatus('idle'), 3000);
+        const auth = await (window as any).claude.remote.authTailscale();
+        if (auth?.error) {
+          setSetupError(String(auth.error));
+          setSetupStatus('error');
+          return;
+        }
+        await runSetupCheck();
         return;
       }
 
@@ -2591,24 +2946,49 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       const result = await (window as any).claude.remote.installTailscale();
       if (result?.success) {
         setSetupStatus('authenticating');
-        await (window as any).claude.remote.authTailscale();
-        setSetupStatus('done');
-        const ts = await (window as any).claude.remote.detectTailscale();
-        setTailscale(ts);
-        setTimeout(() => setSetupStatus('idle'), 3000);
+        const auth = await (window as any).claude.remote.authTailscale();
+        if (auth?.error) {
+          setSetupError(String(auth.error));
+          setSetupStatus('error');
+          return;
+        }
+        await runSetupCheck();
       } else {
-        setSetupError(result?.error || 'Installation failed');
+        // WHY not `|| 'Installation failed'`: a hardcoded fallback reason is an invented
+        // cause. Empty means the installer said nothing, and the panel then shows the
+        // general error with Report bug / Diagnose instead of naming a culprit.
+        setSetupError(result?.error ? String(result.error) : '');
         setSetupStatus('error');
       }
     } catch (err) {
       setSetupError(String(err));
       setSetupStatus('error');
     }
+  }, [runSetupCheck]);
+
+  useEffect(() => {
+    // WHY subscribe as well as fetch: a bind failure happens once, seconds after launch.
+    // Fetching alone shows it only if the panel happened to be open at that moment.
+    const off = (window as any).claude?.remote?.onStatus?.((st: RemoteStatus) => setRemoteStatus(st));
+    return () => { if (typeof off === 'function') off(); };
   }, []);
 
-  const handleDisconnectClient = useCallback(async (clientId: string) => {
-    await (window as any).claude.remote.disconnectClient(clientId);
-    setClients(prev => prev.filter(c => c.id !== clientId));
+  const handleUnpairDevice = useCallback(async (deviceId: string) => {
+    // WHY the row goes even when the device is offline: unpairing is a change to the
+    // record, not to a connection. Disconnect used to be the only option and left the
+    // credential valid, so the device came straight back.
+    // WHY the answer is read: the host returns false for an id it does not have — a row
+    // the panel is showing from a stale list. Removing it regardless told the user a
+    // device had lost access when nothing had changed, which is the same false success
+    // in the other direction. On a refusal or a failure the list is re-read instead, so
+    // what is on screen is what the host actually has.
+    const removed = await (window as any).claude.remote.devices.unpair(deviceId).catch(() => false);
+    if (removed === false) {
+      const fresh = await (window as any).claude.remote.devices?.list?.().catch(() => null);
+      if (Array.isArray(fresh)) setClients(fresh);
+      return;
+    }
+    setClients(prev => prev.filter(c => c.id !== deviceId));
     setConfig(prev => prev ? { ...prev, clientCount: Math.max(0, prev.clientCount - 1) } : prev);
   }, []);
 
@@ -2636,6 +3016,23 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
             sign-in (Destin feedback, 2026-07-22). */}
         <AccountSection />
 
+        {/* Assistant settings sits right under Account (Destin, 2026-09-08) — ONE
+            row where Model Providers, Defaults, Permissions and Specialists were
+            four. The deep link that used to open Model Providers now opens this
+            panel on its first provider page. Provider pages self-gate on
+            native.supported, so over remote access the panel still shows
+            General, Permissions and Specialists — the three that never had the
+            gate. */}
+        <AssistantSettingsRow
+          defaults={defaults}
+          onDefaultsChange={handleDefaultsChange}
+          cwd={activeSessionCwd}
+          onOpenClaudePreferences={onOpenClaudePreferences}
+          autoOpen={providersAutoOpen || specialistsAutoOpen}
+          autoOpenPage={specialistsAutoOpen ? 'specialists' : 'cloud'}
+          onAutoOpenHandled={specialistsAutoOpen ? onSpecialistsAutoOpenHandled : onProvidersAutoOpenHandled}
+        />
+
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
         <BuddyButton />
@@ -2645,16 +3042,6 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
         <PerformanceButton />
 
         <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
-
-        {/* Model Providers — one popup gathering Claude Code, OpenRouter, and
-            Local Models (the Plan A/B/C native-runtime surfaces). Self-gated on
-            native.supported, so it renders nothing in production until Phase 2.
-            Desktop-authoritative — NOT mounted in AndroidSettings. */}
-        <ModelProvidersSection
-          onOpenClaudePreferences={onOpenClaudePreferences}
-          autoOpen={providersAutoOpen}
-          onAutoOpenHandled={onProvidersAutoOpenHandled}
-        />
 
         <RemoteButton
           config={config}
@@ -2671,35 +3058,53 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onSetPassword={handleSetPassword}
           onToggleEnabled={handleToggleEnabled}
           enableError={enableError}
-          onToggleTailscaleTrust={handleToggleTailscaleTrust}
           onSetKeepAwake={handleSetKeepAwake}
           onRunSetup={handleRunSetup}
           onConfirmSetup={handleConfirmSetup}
           onCancelSetup={handleCancelSetup}
           setupStatus={setupStatus}
           setupError={setupError}
-          onDisconnectClient={handleDisconnectClient}
+          setupCheck={setupCheck}
+          onUnpairDevice={handleUnpairDevice}
+          status={remoteStatus}
           onCopyLink={handleCopyLink}
           onSetShowSetupQR={setShowSetupQR}
           onSetShowAddDevice={setShowAddDevice}
-          onReportIssue={() => setShowBugReport(true)}
+          onReportIssue={(c) => setReportContext(c ?? {})}
         />
 
-        <DefaultsButton defaults={defaults} onDefaultsChange={handleDefaultsChange} />
 
-        {/* Permissions sits directly under Defaults because they are the two
-            halves of the same question: Defaults sets how much a NEW session
-            asks, Permissions lists the individual asks you already waived.
-            Desktop-authoritative — NOT mounted in AndroidSettings, whose
-            runtime stubs the permissions:* channels (M8 owns Android parity).
-            A phone reaching this over remote access reports platform 'browser',
-            so it renders DesktopSettings and still gets the screen. */}
-        <PermissionsButton />
 
-        {/* Specialists (1c) sits under Permissions: approving a hire is a
-            permission grant, and this is where its two model tiers and the
-            roster live. */}
-        <SpecialistsButton cwd={activeSessionCwd} />
+
+        {/* Help & feedback — the tour, tips, the community, bug reports, the
+            version (first-run guide design 2026-09-10 §1.6). Sits above
+            Development on purpose: a new user's help is this row; Development
+            stays for contributors. */}
+        <div data-guide-anchor="help">
+        <SettingRow
+          icon={
+            <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M9.2 9.2 a2.8 2.8 0 1 1 4 2.6 c-.9 .5 -1.2 1 -1.2 2" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          }
+          title="Help & feedback"
+          description="Tour, tips, community, bug reports"
+          onClick={() => setShowHelp(true)}
+          // data-guide-anchor (on the wrapper below): the tour's last stop
+          // presses this row to open the page it talks about. SettingRow
+          // forwards no data attributes, hence the wrapper.
+        />
+        </div>
+        <HelpPopup
+          open={showHelp}
+          onClose={() => setShowHelp(false)}
+          onShowMeAround={onShowMeAround}
+          onOpenBug={() => { setShowHelp(false); setReportContext({}); }}
+          version={desktopVersion}
+          channel={desktopChannel}
+        />
 
         {/* Development — bug reports, contributions, known issues */}
         <SettingRow
@@ -2713,16 +3118,16 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
             </svg>
           }
           title="Development"
-          description="Report a bug, contribute, or browse known issues"
+          description="Report a bug or help improve the app"
           onClick={() => setShowDevMenu(true)}
         />
         <DevelopmentPopup
           open={showDevMenu}
           onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setShowBugReport(true); }}
+          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
           onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
         />
-        <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+        <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
         {/* Keyboard Shortcuts */}

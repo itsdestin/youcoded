@@ -45,4 +45,44 @@ describe('fitInjection', () => {
     const r = fitInjection('FIRST-LINE' + 'x'.repeat(40_000), 1_000);
     expect(r.text.startsWith('FIRST-LINE')).toBe(true);
   });
+
+  // 2026-09-10. The old notice said "Ask for the rest if you need it" — naming no
+  // file and no one to ask. On a small model the Skill tool is not attached, so
+  // /name is the ONLY route into a skill: without a path, a cut skill was lost
+  // rather than deferred, and the notice was advice nobody could act on.
+  it('names the file to read, so a cut is recoverable rather than a dead end', () => {
+    const r = fitInjection('x'.repeat(40_000), 1_000, '.claude/skills/journal/SKILL.md');
+    expect(r.text).toContain('.claude/skills/journal/SKILL.md');
+    expect(r.text).toMatch(/read/i);
+  });
+
+  it('promises nothing it cannot deliver when there is no file to name', () => {
+    const r = fitInjection('x'.repeat(40_000), 1_000);
+    expect(r.text).toMatch(/truncated/i);
+    // General and non-committal beats a specific instruction the model cannot follow
+    // (error-message-standards.md). No "ask" advice with nobody to ask.
+    expect(r.text).not.toMatch(/ask for the rest/i);
+  });
+
+  it('the notice still fits inside the budget once the path is in it', () => {
+    const budgetTokens = 1_000;
+    const long = 'docs/some/deeply/nested/path/that/goes/on/SKILL.md'.repeat(3);
+    const r = fitInjection('x'.repeat(40_000), budgetTokens, long);
+    expect(r.text.length).toBeLessThanOrEqual(budgetTokens * 4);
+  });
+
+  // A slice at an exact character offset lands mid-word, and half a written
+  // instruction reads as a whole one. The root-instruction fitter has always cut
+  // on a line boundary; this one now does too.
+  it('cuts on a line boundary rather than mid-word', () => {
+    const body = Array.from({ length: 400 }, (_, i) => `line ${i} of the procedure`).join('\n');
+    const r = fitInjection(body, 100);
+    expect(r.truncated).toBe(true);
+    const kept = r.text.split('\n\n[...')[0];
+    // Every surviving line is a whole one, so the last is a complete instruction.
+    for (const line of kept.split('\n')) {
+      if (line === '') continue;
+      expect(line).toMatch(/^line \d+ of the procedure$/);
+    }
+  });
 });

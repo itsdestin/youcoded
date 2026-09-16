@@ -21,6 +21,11 @@ const KNOWN_KINDS = new Set([
   // 'stalled' (Task 6): parks the turn via TRANSCRIPT_THINKING_HEARTBEAT so the
   // stalled card can be looked at in the workbench — no backend involved.
   'stalled',
+  // 'session_error' (Sign in with ChatGPT, 2026-09-04): the provider failed the
+  // turn — NATIVE_SESSION_ERROR through the real reducer, so the error banner
+  // and its plan-limit variant are reviewable. Lines tagged optIn:"planLimit"
+  // are skipped unless includePlanLimit is set (same shape as 'stalled').
+  'session_error',
   // G-1 background Bash: the live run record a Bash card renders from
   // (fixture-loader.ts dispatches it as SHELL_RUN_CHANGED). Landed with the
   // card mockup in 69d066a3; this allowlist was missed, leaving the branch red.
@@ -28,6 +33,10 @@ const KNOWN_KINDS = new Set([
   // Specialists stage two (design mockup, 2026-09-05): the plan record a
   // `propose_plan` card renders from (dispatched as PLAN_CHANGED).
   'plan',
+  // 'session_context' (Step 3, 2026-08-17, broadened): seeds the session's
+  // STARTING context (SESSION_CONTEXT → SessionContextBanner + SessionContextPopup).
+  // No backend yet — MOCK_ONLY — but the line kind IS handled by the loader.
+  'session_context',
 ]);
 
 function fixtureFiles(dir: string): Array<{ name: string; raw: string }> {
@@ -135,7 +144,7 @@ describe('shipped fixtures replay', () => {
       // includeStalled here so the count means what it says: EVERY dispatchable
       // line really was dispatched. The parked-turn line is opt-in at the
       // workbench level (see the default-off case below), not un-dispatchable.
-      expect(loadFixture(name, raw, undefined, { includeStalled: true }).actions)
+      expect(loadFixture(name, raw, undefined, { includeStalled: true, includePlanLimit: true }).actions)
         .toHaveLength(dispatched);
     },
   );
@@ -211,7 +220,7 @@ describe('chat hydrate payload', () => {
     // when scenario=site's fixture (site.jsonl) was mapped in SESSION_FOR —
     // buildHydratePayload merges every mapped fixture unconditionally, not
     // just the active scenario's.
-    expect([...restored.keys()].sort()).toEqual(['site-1', 'wb-1', 'wb-11', 'wb-2']);
+    expect([...restored.keys()].sort()).toEqual(['site-1', 'wb-1', 'wb-11', 'wb-2', 'wb-3']);
 
     for (const [sessionId, session] of restored) {
       expect(session.timeline.length, `${sessionId} timeline`).toBeGreaterThan(0);

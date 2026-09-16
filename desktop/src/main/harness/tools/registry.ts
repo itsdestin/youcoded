@@ -16,6 +16,13 @@ export function defineTool<A>(
       try {
         const raw = await def.execute(args, ctx);
         const t = truncateOutput(raw.text, caps);
+        // Untrusted-content framing (types.ts `untrusted`): applied AFTER the
+        // pipeline cap, so the cap measures the content and the tag always
+        // closes; the notice composeNotice appends is harness prose and sits
+        // OUTSIDE the tag. Errors are the harness's own words, never wrapped.
+        const framed = def.untrusted && !raw.isError
+          ? `<untrusted-content source="${def.untrusted}">\n${t.text}\n</untrusted-content>`
+          : t.text;
         // The tool's own bound and the pipeline cap are independent; composeNotice
         // folds both into one line and uses the TOOL's widening advice, never a
         // default of ours. `def.moreHint` is that tool's STATIC vocabulary — the
@@ -27,7 +34,7 @@ export function defineTool<A>(
           t.truncated ? { shown: t.text.length, total: t.totalChars } : null,
           def.moreHint,
         );
-        return { ...raw, text: t.text + notice };
+        return { ...raw, text: framed + notice };
       } catch (err: any) {
         // Abort is only surfaced here when the tool THREW — the driver (Task 9)
         // owns interrupt semantics (it aborts the signal and stops the turn);

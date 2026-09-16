@@ -48,16 +48,123 @@ export interface HelperView {
   /** Total tool calls so far (a live step count the ledger only writes at the end). */
   toolCalls: number;
   group: 'needs-you' | 'working' | 'finished';
+  /** Which engine hired this helper. 'native' helpers come with a real ledger
+   *  record (name, model, background flag) and can be steered or stopped;
+   *  'claude-code' ones are SYNTHESIZED below from the Agent card alone, so
+   *  the popup must not offer controls the CC session cannot honor. */
+  kind: HelperKind;
+  /** CC only: the subagent type Claude Code launched ('Explore', 'Plan',
+   *  'general-purpose'). Absent for native hires, whose `run.title` already
+   *  names them. */
+  agentTypeLabel?: string;
+  /** True when nothing on this card carries a clock, so the status line must
+   *  NOT print an elapsed figure. A CC Agent card gets its start time from its
+   *  first timestamped segment; before any segment arrives there is genuinely
+   *  no start time, and `Date.now() - 0` would render "56y 3m" (status-bar
+   *  rule: a value we do not have renders nothing, never a fabricated one). */
+  elapsedUnknown?: boolean;
 }
+
+export type HelperKind = 'native' | 'claude-code';
 
 export interface SpecialistSummary {
   helpers: HelperView[];
   needsYou: number;
   working: number;
   finished: number;
+  /** The word this session's helpers are called, singular. Destin (2026-09-05):
+   *  a Claude Code session says "subagents" because that is what Claude Code
+   *  itself calls them everywhere else in its own output; the app's native
+   *  hires stay "specialists". A session is one runtime or the other, so a
+   *  mixed list is not a real case — if it ever happened, 'specialist' wins
+   *  because the native controls are the ones that need the precise word. */
+  noun: 'specialist' | 'subagent';
 }
 
-const EMPTY: SpecialistSummary = { helpers: [], needsYou: 0, working: 0, finished: 0 };
+const EMPTY: SpecialistSummary = { helpers: [], needsYou: 0, working: 0, finished: 0, noun: 'specialist' };
+
+function asText(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+/**
+ * A Claude Code subagent, in the shape the popup already knows how to draw.
+ *
+ * WHY this exists: the chip counts `tool.specialistRun`, a ledger record only
+ * the app's OWN engine writes — so in a Claude Code conversation the chip was
+ * silently absent even though the app was already tailing every subagent's log
+ * and rendering its Briefing/Activity/Report on the Agent card. Everything the
+ * chip needs is on that card; this reads it off rather than inventing a second
+ * counting path (Destin, 2026-09-05: "do the same for Claude Code subagents").
+ *
+ * Returns undefined for anything that is not a STARTED subagent — a non-Agent
+ * card, or an Agent call still waiting for the user's yes (nothing is running
+ * yet, so counting it as "working" would be a false statement on the bar).
+ */
+export function ccRunFromCard(
+  parentToolCallId: string,
+  tool: ToolCallState,
+): { run: SpecialistRunView; agentTypeLabel?: string; elapsedUnknown: boolean } | undefined {
+  // 'Agent' is Claude Code's subagent tool; 'Task' is the native harness's
+  // (ToolBody.tsx AgentView reads the same split). A card with neither name is
+  // not a helper at all.
+  if (tool.toolName !== 'Agent') return undefined;
+  if (tool.status === 'awaiting-approval' || tool.preparing) return undefined;
+
+  const agentType = asText(tool.input.subagent_type) || tool.agentType || 'general-purpose';
+  const description = asText(tool.input.description);
+  // The description is the only per-launch text, so it is the NAME here — two
+  // `general-purpose` helpers are otherwise indistinguishable in the list. The
+  // type still shows, as `agentTypeLabel`, on the line underneath.
+  const title = description || agentType;
+
+  // Earliest stamped segment = when this helper actually started working. CC
+  // stamps every segment it routes (chat-reducer applySubagentEvent), but a
+  // just-launched agent has no segment yet — hence elapsedUnknown rather than
+  // a zero that would render as a 56-year runtime.
+  let startedAt = Infinity;
+  let lastAt = 0;
+  let steps = 0;
+  for (const seg of tool.subagentSegments ?? []) {
+    if (seg.type === 'tool') steps++;
+    if (seg.timestamp === undefined) continue;
+    if (seg.timestamp < startedAt) startedAt = seg.timestamp;
+    if (seg.timestamp > lastAt) lastAt = seg.timestamp;
+  }
+  const elapsedUnknown = startedAt === Infinity;
+
+  const status: SpecialistRunView['status'] =
+    tool.status === 'running' ? 'running'
+      : tool.status === 'failed' ? 'failed'
+        : 'completed';
+
+  return {
+    run: {
+      // `agentId` is the id CC stamps on the log file; it is absent until the
+      // watcher binds the subagent to this card, so the card's own id is the
+      // fallback — either way this is stable for the life of the card, which
+      // is what the popup's React key and the snapshot cache key need.
+      childId: tool.agentId ?? tool.toolUseId,
+      parentToolCallId,
+      agentType,
+      title,
+      description: description && description !== title ? description : undefined,
+      // CC does not report whether a subagent is detached, and the app has no
+      // second signal for it — so this stays false rather than guessing.
+      background: false,
+      status,
+      startedAt: elapsedUnknown ? 0 : startedAt,
+      // A finished helper MUST carry an end time: without one the status line
+      // measures against Date.now(), so "Finished in 4m" would keep climbing
+      // every time the popup re-rendered. The last stamped segment is the
+      // closest thing CC gives us to a finish time.
+      endedAt: status === 'running' || elapsedUnknown ? undefined : lastAt,
+      steps: steps || undefined,
+    },
+    agentTypeLabel: agentType,
+    elapsedUnknown,
+  };
+}
 
 /** Everything the status-bar chip + popup need for one session. Recomputed on
  *  every session change but returned by reference only when the KEY changes,
@@ -75,18 +182,34 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
     const helpers: HelperView[] = [];
     const keyParts: string[] = [];
     for (const [id, tool] of session.toolCalls) {
-      const run = tool.specialistRun;
+      // A native hire brings its own ledger record; a Claude Code subagent has
+      // none, so one is derived from its Agent card (see ccRunFromCard). Both
+      // then flow through the SAME grouping and key below — the popup renders
+      // one shape, not two.
+      const cc = tool.specialistRun ? undefined : ccRunFromCard(id, tool);
+      const run = tool.specialistRun ?? cc?.run;
       if (!run) continue;
       const tools: AskSegment[] = [];
       for (const seg of tool.subagentSegments ?? []) if (seg.type === 'tool') tools.push(seg);
-      const asks = tools.filter(t => t.status === 'awaiting-approval' && !!t.requestId);
+      // CC subagent asks never nest (Claude Code does not tell the app WHICH
+      // subagent raised a permission prompt — chat-types.ts PERMISSION_REQUEST
+      // `specialist` is set only by the native ask router), so this list is
+      // always empty for a CC helper and its chip never turns amber. Decided
+      // with Destin 2026-09-05: working/finished only, rather than guess at
+      // attribution and risk pinning an ask on the wrong helper.
+      const asks = cc ? [] : tools.filter(t => t.status === 'awaiting-approval' && !!t.requestId);
       // A held ask on a finished run still counts as 'needs-you' — the ask is
       // still answerable even after the helper is gone (Task 12). Do not
       // fold this into 'finished': `run` (with `run.status`) is already
       // carried on HelperView below, which is how SpecialistAskBlock knows
       // whether to show its running-helper or finished-helper held-ask copy.
       const group: HelperView['group'] = asks.length > 0 ? 'needs-you' : run.status === 'running' ? 'working' : 'finished';
-      helpers.push({ run, parentToolCallId: id, tool, asks, toolCalls: tools.length, group });
+      helpers.push({
+        run, parentToolCallId: id, tool, asks, toolCalls: tools.length, group,
+        kind: cc ? 'claude-code' : 'native',
+        agentTypeLabel: cc?.agentTypeLabel,
+        elapsedUnknown: cc?.elapsedUnknown,
+      });
       // The card object is replaced immutably on EVERY change (reducer
       // `toolCalls.set(id, {...})`), so a version counter keyed on identity
       // would be ideal; a string key has to approximate it. Segment count +
@@ -95,7 +218,12 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
       const segs = tool.subagentSegments ?? [];
       const last = segs[segs.length - 1];
       keyParts.push([
-        run.childId, run.status, run.stale ? 's' : '', run.steps ?? '', run.model?.label ?? '', segs.length,
+        // `run.title` is in the key for the CC path: a synthesized helper takes
+        // its name from the Agent call's `description`, and Claude Code rewrites
+        // that tool_use line as the arguments stream in — so the name can change
+        // while nothing else on the card does. Stable (and therefore free) for a
+        // native hire, whose title is minted once at spawn.
+        run.childId, run.status, run.title, run.stale ? 's' : '', run.steps ?? '', run.model?.label ?? '', segs.length,
         last ? `${last.type}:${last.id}:${'content' in last ? last.content.length : (last as AskSegment).status}` : '',
         tools.slice(-4).map(t => `${t.toolUseId}:${t.status}${t.askHeld ? 'h' : ''}${t.response ? t.response.length : ''}`).join('+'),
         asks.map(a => a.requestId).join('+'),
@@ -109,6 +237,7 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
       needsYou: helpers.filter(h => h.group === 'needs-you').length,
       working: helpers.filter(h => h.group === 'working').length,
       finished: helpers.filter(h => h.group === 'finished').length,
+      noun: helpers.some(h => h.kind === 'native') ? 'specialist' : 'subagent',
     };
     cache.current = { key, value };
     return value;

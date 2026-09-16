@@ -66,15 +66,6 @@ class SyncService(
     private var pulling = false
     private var pushing = false
 
-    /**
-     * Flipped to true by RestoreService.executeRestore / undoRestore so the
-     * 15-minute background push loop skips its tick instead of uploading a
-     * half-restored state. Kept @Volatile since the push loop runs on a
-     * separate coroutine (Dispatchers.IO) and RestoreService writes from
-     * whatever thread invoked it via the bridge.
-     */
-    @Volatile
-    var restoreInProgress: Boolean = false
 
     /**
      * Non-null while a background bulk-conversations pull is running. Read by
@@ -138,12 +129,6 @@ class SyncService(
         pushJob = scope.launch {
             while (isActive) {
                 delay(PUSH_INTERVAL_MS)
-                // Restore in progress → skip this tick. Prevents uploading a
-                // half-swapped staging dir to the backup mid-restore.
-                if (restoreInProgress) {
-                    logBackup("INFO", "Push skipped — restore in progress", "sync.push")
-                    continue
-                }
                 // Check Wi-Fi preference before pushing
                 if (!shouldSyncNow()) {
                     logBackup("INFO", "Push skipped — not on Wi-Fi and Wi-Fi-only enabled", "sync.push")
@@ -448,8 +433,8 @@ class SyncService(
 
     /** Execute rclone with args.
      *
-     *  5-minute ceiling matches DriveRestoreAdapter.fetchInto's explicit
-     *  300s — bulk copy/sync of a single category can take minutes over
+     *  5-minute ceiling (the old restore adapter used the same explicit
+     *  300s) — bulk copy/sync of a single category can take minutes over
      *  cellular, and the 60s default would trip before a real hang. Quick
      *  rclone calls (listremotes, config show) are invoked through
      *  execCommand() directly with their own timeout, so this only applies

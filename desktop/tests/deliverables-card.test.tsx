@@ -84,7 +84,7 @@ describe('DeliverablesCard', () => {
     expect(screen.getByText('Couldn’t send')).toBeInTheDocument();
     expect(screen.getByText(/is a directory/)).toBeInTheDocument();
     expect(screen.queryByText(/not found/)).toBeNull();
-    expect(screen.getByTestId('sent-file-tile')).toHaveAttribute('title', expect.stringContaining('is a directory'));
+    expect(screen.getByTestId('sent-file-tile')).toHaveAttribute('data-hint', expect.stringContaining('is a directory'));
   });
 
   it('a failed tile with NO error text names the path and invents no cause', () => {
@@ -96,8 +96,8 @@ describe('DeliverablesCard', () => {
     render(<DeliverablesCard tools={[call('t1', ['/tmp/out'], { status: 'failed' })]} sessionId="s" />);
     expect(screen.getByText('Couldn’t send')).toBeInTheDocument();
     const tile = screen.getByTestId('sent-file-tile');
-    expect(tile).toHaveAttribute('title', '/tmp/out');
-    expect(tile.getAttribute('title')).not.toMatch(/could not|couldn|failed|not found|—/i);
+    expect(tile).toHaveAttribute('data-hint', '/tmp/out');
+    expect(tile.getAttribute('data-hint')).not.toMatch(/could not|couldn|failed|not found|—/i);
   });
 
   it('a running call shows Sending…', () => {

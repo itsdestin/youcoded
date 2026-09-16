@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../../state/chat-context';
 import { hookEventToAction } from '../../state/hook-dispatcher';
+import { decideFirstPage, FIRST_PAGE_RETRY_MS } from '../../state/first-page-retry';
 import UserMessage from '../UserMessage';
 import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
@@ -44,6 +45,10 @@ export function BubbleFeed({ sessionId }: Props) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
+  // Perf: wraps everything the feed renders so a ResizeObserver can watch the
+  // content GROW (the scroll container itself is height:100% and never resizes).
+  // Mirrors ChatView.tsx's contentRef — see the observer effect below.
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // Mirror state in a ref so async event handlers see fresh values
   // without needing to list state in useEffect deps (which would cause
@@ -100,6 +105,8 @@ export function BubbleFeed({ sessionId }: Props) {
             uuid: event.uuid,
             text: event.data.text,
             timestamp: event.timestamp,
+            // A slash command read from its command tags — MUST mirror App.tsx.
+            slashCommand: event.data.slashCommand,
             // Host-injected turn marker + header — MUST mirror App.tsx.
             injected: event.data.injected,
             injectedMeta: event.data.injectedMeta,
@@ -316,16 +323,28 @@ export function BubbleFeed({ sessionId }: Props) {
     // view, not a place to read back through a conversation.
     void (async () => {
       dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
-      try {
-        const page = await (window as any).claude?.detach?.requestTranscriptPage?.({ sessionId, beforeCursor: null });
-        if (cancelled) return;
-        if (page) {
-          dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
-        } else {
-          dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
+      // Retried, and on the same terms as the main window's first page
+      // (first-page-retry.ts). The floater has no scroll-up sentinel, so a
+      // single attempt that main could not resolve — a just-resumed session
+      // whose transcript path CC has not reported yet — silently showed a feed
+      // starting mid-conversation, with nothing to nudge it.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const page = await (window as any).claude?.detach?.requestTranscriptPage?.({ sessionId, beforeCursor: null });
+          if (cancelled) return;
+          if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
+          const decision = decideFirstPage(page, attempt);
+          if (decision === 'accept') {
+            dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+            return;
+          }
+          if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
+        } catch {
+          if (!cancelled) dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
+          return;
         }
-      } catch {
-        if (!cancelled) dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
+        await new Promise((r) => setTimeout(r, FIRST_PAGE_RETRY_MS));
+        if (cancelled) return;
       }
     })();
 
@@ -376,6 +395,11 @@ export function BubbleFeed({ sessionId }: Props) {
   }, [sessionId, dispatch]);
 
   // ── Auto-scroll ───────────────────────────────────────────────────────────
+  // Is the feed showing the timeline (rather than the "No messages yet" state)?
+  // Kept next to the render branch it mirrors, one screen down, and used as the
+  // ResizeObserver's re-attach trigger.
+  const hasContent = state.timeline.length > 0 || state.isThinking;
+
   const scrollToBottom = useCallback(() => {
     const c = scrollContainerRef.current;
     if (c) c.scrollTop = c.scrollHeight;
@@ -393,10 +417,50 @@ export function BubbleFeed({ sessionId }: Props) {
     return () => observer.disconnect();
   }, []);
 
-  // Auto-scroll when new content arrives and user is pinned to bottom
+  // Auto-scroll when new content arrives and user is pinned to bottom.
+  //
+  // Perf: state.lastActivityAt used to be a dep here. The reducer re-stamps that
+  // timestamp on EVERY streamed delta (and on tool events, heartbeats, …), and
+  // scrollToBottom reads scrollHeight — which, right after a commit that dirtied
+  // the DOM, is a forced synchronous layout of the whole document. So a streaming
+  // buddy window paid one forced reflow per token. The growth those deltas cause
+  // is now re-pinned by the ResizeObserver on contentRef below, which runs AFTER
+  // layout, where the same read is free. This is the exact twin of the ChatView
+  // fix (perf cycle 1, N2). Pinned by tests/bubblefeed-scroll-pin-deps.test.tsx.
   useEffect(() => {
     if (atBottomRef.current) scrollToBottom();
-  }, [state.timeline.length, state.lastActivityAt, state.isThinking, scrollToBottom]);
+  }, [state.timeline.length, state.isThinking, scrollToBottom]);
+
+  // Perf: the observer that took over per-token re-pinning from the timestamp
+  // dep above. It fires after layout, so reading scrollHeight in the callback
+  // costs nothing, and it also catches growth the reducer cannot see at all —
+  // a tool card expanding, an image or code block laying out a frame late.
+  // Ported from ChatView.tsx's "Watch the content wrapper's size" effect; the
+  // only changes are the pinned-to-bottom test (atBottomRef here, stickRef there)
+  // and the hasContent dep explained below.
+  //
+  // atBottomRef (not React state) for the same reason ChatView reads stickRef: a
+  // native session dispatches one delta per streamed token, so a state value is
+  // always a render behind and would undo a scroll the user just made.
+  //
+  // hasContent is a dep because — unlike ChatView, which always renders its
+  // wrapper -- this feed swaps the wrapper out for a height:100% empty state, so
+  // contentRef.current is null until the first entry arrives and the effect has
+  // to re-run to attach then.
+  useEffect(() => {
+    const node = contentRef.current;
+    if (!node) return;
+    let lastHeight = node.scrollHeight;
+    const observer = new ResizeObserver(() => {
+      const next = node.scrollHeight;
+      if (next > lastHeight && atBottomRef.current) {
+        scrollToBottom();
+      }
+      lastHeight = next;
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasContent, scrollToBottom]);
 
   // ── Memoize tool status for the current turn ──────────────────────────────
   const { hasAwaitingApproval, hasRunningTools, awaitingTools } = useMemo(() => {
@@ -424,12 +488,15 @@ export function BubbleFeed({ sessionId }: Props) {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div ref={scrollContainerRef} className="buddy-bubble-feed" style={{ overflowY: 'auto', height: '100%' }}>
-      {state.timeline.length === 0 && !state.isThinking ? (
+      {!hasContent ? (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
           <span style={{ color: 'var(--fg-muted)', fontSize: 13 }}>No messages yet</span>
         </div>
       ) : (
-        <>
+        // Perf: a real element rather than a fragment so the ResizeObserver above
+        // has something to observe. A plain auto-height block, and no CSS selects
+        // .buddy-bubble-feed or its children, so the entries lay out as before.
+        <div ref={contentRef}>
           {(() => {
             // Fade entries above the most recent compaction marker — Claude's
             // context no longer includes them, consistent with main ChatView.
@@ -538,7 +605,7 @@ export function BubbleFeed({ sessionId }: Props) {
           {state.isThinking && !hasAwaitingApproval && !hasRunningTools && !state.compactionPending && (
             <ThinkingIndicator />
           )}
-        </>
+        </div>
       )}
       <div ref={bottomRef} className="h-1" />
     </div>

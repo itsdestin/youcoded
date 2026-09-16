@@ -15,12 +15,14 @@ import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
-import { Dialog } from './ui';
+import { Dialog, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
 import { selectCacheReuse, selectReuseDisplay } from '../state/cache-reuse';
-import { CLAUDE_ALIASES, type ClaudeAlias } from '../../shared/model-ids';
+import { CLAUDE_ALIASES, CLAUDE_ALIAS_LABELS, type ClaudeAlias } from '../../shared/model-ids';
+import { formatTime12, formatDayLong, formatMonthDay } from '../../shared/time-format';
+import { usableOtherWindows, windowLengthLabel } from './plan-windows';
 
 // --- Session stats shape (written by statusline.sh to .session-stats-{id}.json) ---
 
@@ -41,6 +43,9 @@ interface StatusData {
   usage: {
     five_hour?: { utilization: number; resets_at: string };
     seven_day?: { utilization: number; resets_at: string };
+    /** Plan windows of any other length, with their length in minutes (a free
+     *  ChatGPT plan has one 30-day window and nothing else — W-2 = a). */
+    other?: Array<{ utilization: number; resets_at: string; minutes: number }>;
   } | null;
   updateStatus: {
     current: string;
@@ -68,12 +73,12 @@ const MODEL_DISPLAY: Record<ModelAlias | 'unknown', { label: string; color: stri
   // in the JSX, not here) like every other status-bar chip, with brand-colored
   // TEXT + a matching tinted BORDER.
   // CC sessions use the official Claude Code CLI mascot and adaptive brand token.
-  sonnet:      { label: 'Sonnet', color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
-  'opus[1m]':  { label: 'Opus',   color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
-  haiku:       { label: 'Haiku',  color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
+  sonnet:      { label: CLAUDE_ALIAS_LABELS.sonnet,     color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
+  'opus[1m]':  { label: CLAUDE_ALIAS_LABELS['opus[1m]'], color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
+  haiku:       { label: CLAUDE_ALIAS_LABELS.haiku,      color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
   // Fable 5 — most capable. Fuchsia text keeps it as the top/premium tier,
   // distinct from the Anthropic-orange aliases and the amber reserved for AUTO.
-  fable:       { label: 'Fable',  color: '#E879F9', border: 'rgba(232,121,249,0.35)',  icon: 'claudecode' },
+  fable:       { label: CLAUDE_ALIAS_LABELS.fable,      color: '#E879F9', border: 'rgba(232,121,249,0.35)',  icon: 'claudecode' },
   // Error state, not a real model — red like the high-danger usage threshold
   // (utilizationColor/contextColor) so it reads as "wrong", never as a normal pill.
   unknown:     { label: 'Model Unknown', color: '#DD4444', border: 'rgba(221,68,68,0.3)' },
@@ -243,15 +248,10 @@ function contextColor(pct: number): string {
   return 'text-[#4CAF50]';
 }
 
-const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-
-function formatTime12(d: Date): string {
-  let h = d.getHours();
-  const m = d.getMinutes();
-  const ampm = h >= 12 ? 'pm' : 'am';
-  h = h % 12 || 12;
-  return `${h}:${m.toString().padStart(2, '0')}${ampm}`;
-}
+// formatTime12 / formatDayLong moved to shared/time-format.ts (2026-09-05) so
+// the ChatGPT limit card formats its reset with the SAME hand-rolled clock as
+// these chips — it used to call toLocaleTimeString, which prints "18:43" on a
+// UK/EU machine while the chip beside it said "6:43pm". Chip output unchanged.
 
 function format5hReset(iso: string): string {
   try {
@@ -265,10 +265,48 @@ function format5hReset(iso: string): string {
 function format7dReset(iso: string): string {
   try {
     const d = new Date(iso);
-    return `Resets ${DAYS[d.getDay()]} @ ${formatTime12(d)}`;
+    return `Resets ${formatDayLong(d)} @ ${formatTime12(d)}`;
   } catch {
     return '';
   }
+}
+
+/** The reset line for a window of any length (words deck W-2 = a): shorter
+ *  than a day reads like the 5h chip (time only); up to a week reads like the
+ *  7d chip (weekday and time); longer than a week — the free ChatGPT plan's
+ *  30-day window — names the month and day, since a weekday alone is
+ *  ambiguous over a month ("Resets Oct 3 @ 6:43pm", the limit card's form). */
+function formatWindowReset(minutes: number, iso: string): string {
+  if (minutes < 1440) return format5hReset(iso);
+  if (minutes <= 7 * 1440) return format7dReset(iso);
+  try {
+    const d = new Date(iso);
+    return `Resets ${formatMonthDay(d)} @ ${formatTime12(d)}`;
+  } catch {
+    return '';
+  }
+}
+
+/** One plan-window chip — "5h: 42% Resets @ 6:43pm". Exactly the markup the
+ *  5h and 7d chips have always had, lifted into one function so the odd-length
+ *  windows (W-2 = a) draw the same way without a third copy. */
+function UsageChip({ label, utilization, reset, onClick, title }: {
+  label: string; utilization: number; reset: string; onClick: () => void; title: string;
+}) {
+  return (
+    <Tooltip text={title}>
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
+    >
+      <span>{label}:</span>
+      <span className={utilizationColor(utilization)}>
+        {utilization}%
+      </span>
+      <span className="text-fg-muted hidden sm:inline">{reset}</span>
+    </button>
+    </Tooltip>
+  );
 }
 
 /** Format token count as human-readable (e.g. 1234 -> "1.2k", 1234567 -> "1.2M") */
@@ -354,6 +392,11 @@ interface Props {
    *  auto-detect the brand color when the model id alone is ambiguous. Unused
    *  for CC sessions (they use MODEL_DISPLAY keyed on the alias). */
   modelProviderType?: string | null;
+  /** Whose windows `statusData.usage` holds. 'chatgpt' (a native session bound
+   *  to a Sign-in-with-ChatGPT provider, 2026-09-04) un-hides the two usage
+   *  chips that are otherwise Claude-Code-only and points them at Model
+   *  Providers instead of claude.ai. Absent → 'claude'. */
+  usagePlan?: 'claude' | 'chatgpt';
   /** The session's runtime. Gates the two Claude-subscription chips and the
    *  Fast toggle — see status-widgets.ts. Absent → treated as 'claude', so a
    *  caller that hasn't been wired yet hides nothing (spec §11). */
@@ -455,7 +498,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         id: 'context',
         label: 'Context %',
         defaultVisible: true,
-        description: 'How much of Claude\'s conversation memory remains. Lower means Claude may forget earlier context.',
+        description: 'How much of your assistant\'s conversation memory remains. Lower means it may forget earlier context.',
         bestFor: 'Everyone. When this drops below 20%, consider starting a new session to avoid lost context.',
       },
       {
@@ -469,15 +512,15 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         id: 'session-time',
         label: 'Session Duration',
         defaultVisible: false,
-        description: 'Total session time and how much of it Claude spent thinking (API time). Helps you understand your workflow pace.',
-        bestFor: 'Power users who want to see how much of a session is active Claude work vs your own thinking/typing time.',
+        description: 'Total session time and how much of it your assistant spent thinking (API time). Helps you understand your workflow pace.',
+        bestFor: 'Power users who want to see how much of a session is active assistant work vs your own thinking/typing time.',
       },
       {
         id: 'active-ratio',
         label: 'Active Ratio',
         defaultVisible: false,
-        description: 'What percentage of the session was Claude actively thinking (API time / wall time). Low means you\'re mostly reading; high means Claude is doing heavy lifting.',
-        bestFor: 'Understanding your workflow rhythm. A 5% ratio on a long session means you\'re mostly reviewing; 50%+ means Claude is cranking.',
+        description: 'What percentage of the session your assistant was actively thinking (API time / wall time). Low means you\'re mostly reading; high means it is doing heavy lifting.',
+        bestFor: 'Understanding your workflow rhythm. A 5% ratio on a long session means you\'re mostly reviewing; 50%+ means it is working hard.',
       },
     ],
   },
@@ -488,15 +531,15 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         id: 'tokens-in',
         label: 'Input Tokens',
         defaultVisible: false,
-        description: 'Cumulative input tokens sent to Claude this session. Includes your messages, files, and system context.',
+        description: 'Cumulative input tokens sent to your assistant this session. Includes your messages, files, and system context.',
         bestFor: 'Power users monitoring how much context is being sent. Helpful for optimizing large-file workflows.',
       },
       {
         id: 'tokens-out',
         label: 'Output Tokens',
         defaultVisible: false,
-        description: 'Cumulative output tokens Claude has generated this session. Higher means more verbose responses.',
-        bestFor: 'Users who want to understand how much Claude is writing. Useful for gauging response verbosity.',
+        description: 'Cumulative output tokens your assistant has generated this session. Higher means more verbose responses.',
+        bestFor: 'Users who want to understand how much your assistant is writing. Useful for gauging response verbosity.',
       },
       {
         id: 'cache-stats',
@@ -773,6 +816,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                               gets a reason today, but a dimmed row must never
                               carry a focusable element, full stop). */}
                           {isThemeRow && !reason && (
+                            <Tooltip text="Edit theme cycle">
                             <button
                               onClick={() => {
                                 setCycleEditorOpen(v => !v);
@@ -781,13 +825,13 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                               className={`flex-shrink-0 p-0.5 rounded-sm transition-colors ${
                                 showCycleEditor ? 'text-accent' : 'text-fg-faint hover:text-fg-muted'
                               }`}
-                              title="Edit theme cycle"
                               aria-label="Edit theme cycle"
                             >
                               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                               </svg>
                             </button>
+                            </Tooltip>
                           )}
 
                           {/* (i) info toggle — hidden for a dimmed row. The row
@@ -796,6 +840,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                               focusable element here would be the same defect as
                               leaving the checkbox tabbable. */}
                           {!reason && (
+                            <Tooltip text="More info">
                             <button
                               onClick={() => {
                                 setExpandedInfo(isExpanded ? null : w.id);
@@ -804,10 +849,10 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                               className={`flex-shrink-0 p-0.5 rounded-sm transition-colors ${
                                 isExpanded ? 'text-accent' : 'text-fg-faint hover:text-fg-muted'
                               }`}
-                              title="More info"
                             >
                               <InfoIcon />
                             </button>
+                            </Tooltip>
                           )}
                         </div>
 
@@ -834,14 +879,13 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                                 const inCycle = cycleList.includes(t.slug);
                                 const isOnly = inCycle && cycleList.length === 1;
                                 return (
+                                  <Tooltip key={t.slug} text={isOnly ? 'At least one theme must stay in the cycle' : ''}>
                                   <button
-                                    key={t.slug}
                                     onClick={() => toggleCycle(t.slug)}
                                     disabled={isOnly}
                                     className={`flex items-center gap-2 w-full px-1.5 py-1 rounded-sm text-left transition-colors ${
                                       isOnly ? 'opacity-50 cursor-not-allowed' : 'hover:bg-panel'
                                     }`}
-                                    title={isOnly ? 'At least one theme must stay in the cycle' : undefined}
                                   >
                                     <span
                                       className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
@@ -860,6 +904,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                                     />
                                     <span className="text-fg truncate">{t.name}</span>
                                   </button>
+                                  </Tooltip>
                                 );
                               })}
                             </div>
@@ -894,7 +939,7 @@ const formatCostUsd = (usd: number) => (usd < 0.01 ? '<$0.01' : `$${usd.toFixed(
 const INPUT_NOTE = 'Input is counted per request — a long turn re-sends its history each step, and that is what you are billed for.';
 
 export default function StatusBar({
-  statusData, onRunSync, onOpenSync, model, modelProviderType, provider,
+  statusData, onRunSync, onOpenSync, model, modelProviderType, provider, usagePlan,
   permissionMode, onCyclePermission, fast, effort, onOpenModelPicker,
   sessionId, onDispatch,
   openTasksCounts, onOpenOpenTasks,
@@ -918,7 +963,18 @@ export default function StatusBar({
   // never renders here, whatever the user's saved on/off choice says. The choice
   // itself is untouched and returns the moment they switch back.
   const runtime: SessionRuntime = provider ?? 'claude';
-  const show = (id: WidgetId) => visible.has(id) && widgetApplies(id, runtime);
+  // A ChatGPT-plan session HAS rolling windows, so the two chips the runtime
+  // gate reserves for Claude Code apply again — fed with the ChatGPT windows
+  // App put in `usage` for exactly this session.
+  const chatgptWindows = usagePlan === 'chatgpt';
+  const show = (id: WidgetId) => visible.has(id)
+    && (widgetApplies(id, runtime) || (chatgptWindows && (id === 'usage-5h' || id === 'usage-7d')));
+  // Where a usage chip goes when clicked: the Claude account page, or — for a
+  // ChatGPT plan — the Model Providers row that shows the plan and its windows.
+  const openUsage = () => chatgptWindows
+    ? window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))
+    : window.claude.shell.openExternal('https://claude.ai/settings/usage');
+  const usageTitle = chatgptWindows ? 'Your ChatGPT plan — click to open Model Providers' : 'View usage on claude.ai';
   const ss = sessionStats; // shorthand
 
   // Native-runtime chips (Task 12). Non-null only for native sessions that have
@@ -978,7 +1034,12 @@ export default function StatusBar({
   const speedIsSessionAverage = outTokens != null && ss?.apiDuration != null && ss.apiDuration > 0;
 
   return (
-    <div className="status-bar flex flex-wrap items-center gap-x-2 gap-y-1 px-2 sm:px-3 py-1 text-3xs text-fg-muted">
+    <div
+      // select-none: every chip and label here is chrome, not highlightable or
+      // copyable (Destin, 2026-09-10). Its dialogs and hover hints portal out
+      // of this subtree, so their text is unaffected.
+      className="status-bar flex flex-wrap items-center gap-x-2 gap-y-1 px-2 sm:px-3 py-1 text-3xs text-fg-muted select-none"
+    >
       {/* Combined model + effort pill — clicking opens the full picker (same as /effort).
          Shift+Space still cycles models via the keyboard shortcut in App.tsx.
 
@@ -992,11 +1053,11 @@ export default function StatusBar({
         (() => {
           const nStyle = nativeChipStyle(model.modelId, modelProviderType);
           return (
+            <Tooltip text={`${model.modelId} — click to change model`}>
             <button
               onClick={onOpenModelPicker}
               className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors max-w-[14rem] truncate"
               style={{ color: nStyle.color, borderColor: nStyle.borderColor }}
-              title={`${model.modelId} — click to change model`}
             >
               {/* No effort segment: /effort and MAX_EFFORT_MODELS are Claude Code
                   concepts the native harness doesn't implement.
@@ -1006,19 +1067,20 @@ export default function StatusBar({
               {nStyle.icon && <ProviderIcon icon={nStyle.icon} className="flex-shrink-0" />}
               <span className="truncate min-w-0">{model.label}</span>
             </button>
+            </Tooltip>
           );
         })()
       ) : (
         (() => {
           const display = ccChipDisplay(model);
           return (
+            <Tooltip text={model.kind === 'unknown'
+              ? "YouCoded couldn't confirm which model this session is using — click to set one explicitly"
+              : 'Click to change model and effort (Shift+Space cycles model)'}>
             <button
               onClick={onOpenModelPicker}
               className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors"
               style={{ color: display.color, borderColor: display.border }}
-              title={model.kind === 'unknown'
-                ? "YouCoded couldn't confirm which model this session is using — click to set one explicitly"
-                : 'Click to change model and effort (Shift+Space cycles model)'}
             >
               {display.icon && <ProviderIcon icon={display.icon} className="flex-shrink-0" />}
               <span>{display.label}</span>
@@ -1029,6 +1091,7 @@ export default function StatusBar({
                 </>
               )}
             </button>
+            </Tooltip>
           );
         })()
       ))}
@@ -1038,18 +1101,22 @@ export default function StatusBar({
           is a control that lies (spec §1). Not a registry widget, so it takes
           the runtime gate directly rather than going through show(). */}
       {fast && runtime === 'claude' && (
+        <Tooltip text="Fast mode on — click to configure">
         <button
           onClick={onOpenModelPicker}
           className="flex items-center px-1.5 py-0.5 rounded-sm border border-yellow-500/40 bg-yellow-500/15 text-yellow-500 cursor-pointer hover:brightness-125 transition-colors"
-          title="Fast mode on — click to configure"
           aria-label="Fast mode on"
         >
           <FastIcon className="w-3 h-3" />
         </button>
+        </Tooltip>
       )}
 
       {/* Permission mode chip — always second */}
       {permissionMode && (
+        <Tooltip text={permissionMode === 'unknown'
+          ? "YouCoded couldn't confirm this session's permission mode — click to set one explicitly"
+          : 'Click to cycle permission mode (Shift+Tab)'}>
         <button
           onClick={onCyclePermission}
           className="px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors"
@@ -1058,18 +1125,22 @@ export default function StatusBar({
             color: PERMISSION_DISPLAY[permissionMode].color,
             borderColor: PERMISSION_DISPLAY[permissionMode].border,
           }}
-          title={permissionMode === 'unknown'
-            ? "YouCoded couldn't confirm this session's permission mode — click to set one explicitly"
-            : 'Click to cycle permission mode (Shift+Tab)'}
         >
           <span className="sm:hidden">{PERMISSION_DISPLAY[permissionMode].shortLabel}</span>
           <span className="hidden sm:inline">{PERMISSION_DISPLAY[permissionMode].label}</span>
         </button>
+        </Tooltip>
       )}
 
       {/* Session tags & note — fixed control (design §"In-session surface").
           Hidden on Android (touch UI deferred); shown on desktop + remote. */}
-      {!isAndroid() && <SessionTagsChip sessionId={sessionId ?? null} />}
+      {/* data-guide-anchor: the first-run tour's tags stop rings this chip —
+          it is the everyday way to tag a session or leave it a note. */}
+      {!isAndroid() && (
+        <span data-guide-anchor="tags-notes" className="inline-flex">
+          <SessionTagsChip sessionId={sessionId ?? null} />
+        </span>
+      )}
 
       {/* Open Tasks chip — hidden when 0 open OR when widget is toggled off.
           Counts are derived at App root to share one useSessionTasks instance
@@ -1086,33 +1157,28 @@ export default function StatusBar({
       {/* Specialists (1c) — hidden when the conversation has no helpers. */}
       <SpecialistsChip sessionId={sessionId} />
 
-      {/* Rate limits */}
+      {/* Rate limits — one chip per window the plan reports, in the order
+          5h, 7d, then any other length (W-2 = a: a free ChatGPT plan shows a
+          single "30d:" chip). A plan with no windows shows no chips. The chip
+          markup is one recipe (UsageChip) so the approved 5h/7d output is
+          byte-identical to before — pinned in plan-windows-other.test.tsx. */}
       {show('usage-5h') && usage?.five_hour != null && (
-        <button
-          onClick={() => window.claude.shell.openExternal('https://claude.ai/settings/usage')}
-          className="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
-          title="View usage on claude.ai"
-        >
-          <span>5h:</span>
-          <span className={utilizationColor(usage.five_hour.utilization)}>
-            {usage.five_hour.utilization}%
-          </span>
-          <span className="text-fg-muted hidden sm:inline">{format5hReset(usage.five_hour.resets_at)}</span>
-        </button>
+        <UsageChip label="5h" utilization={usage.five_hour.utilization}
+          reset={format5hReset(usage.five_hour.resets_at)} onClick={openUsage} title={usageTitle} />
       )}
       {show('usage-7d') && usage?.seven_day != null && (
-        <button
-          onClick={() => window.claude.shell.openExternal('https://claude.ai/settings/usage')}
-          className="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
-          title="View usage on claude.ai"
-        >
-          <span>7d:</span>
-          <span className={utilizationColor(usage.seven_day.utilization)}>
-            {usage.seven_day.utilization}%
-          </span>
-          <span className="text-fg-muted hidden sm:inline">{format7dReset(usage.seven_day.resets_at)}</span>
-        </button>
+        <UsageChip label="7d" utilization={usage.seven_day.utilization}
+          reset={format7dReset(usage.seven_day.resets_at)} onClick={openUsage} title={usageTitle} />
       )}
+      {/* Odd-length windows ride on the Customize toggle of the approved chip
+          they most resemble: a multi-day window follows "7d Usage", a
+          sub-day one follows "5h Usage" — there is no per-length toggle. */}
+      {usableOtherWindows(usage?.other).map((w, i) => (
+        show(w.minutes >= 1440 ? 'usage-7d' : 'usage-5h') ? (
+          <UsageChip key={`${w.minutes}-${i}`} label={windowLengthLabel(w.minutes)} utilization={w.utilization}
+            reset={formatWindowReset(w.minutes, w.resets_at)} onClick={openUsage} title={usageTitle} />
+        ) : null
+      ))}
 
       {/* Context remaining — clickable opens ContextPopup (compact/clear actions + explainer).
           Renders as a percentage or as "used / window" per the contextDisplay pref;
@@ -1169,19 +1235,20 @@ export default function StatusBar({
               // Compact and Clear — had no native implementation and would have
               // been dead buttons. Both are real now, so this opens the SAME
               // ContextPopup the Claude Code chip does.
+              <Tooltip text={`Context: ${nativeChips.contextPct}% of the model's window remaining${
+                  nativeContextLength ? ` (${nativeChips.contextUsedTokens.toLocaleString()} of ${nativeContextLength.toLocaleString()} tokens used)` : ''
+                }`}>
               <button
                 onClick={() => setContextPopupOpen(true)}
                 aria-haspopup="dialog"
                 aria-label={`Context: ${nativeChips.contextPct}% remaining. Click to manage context.`}
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors"
-                title={`Context: ${nativeChips.contextPct}% of the model's window remaining${
-                  nativeContextLength ? ` (${nativeChips.contextUsedTokens.toLocaleString()} of ${nativeContextLength.toLocaleString()} tokens used)` : ''
-                }`}
               >
                 <span>Context:</span>
                 <span className={contextColor(nativeChips.contextPct)}>{pill.value}</span>
                 {pill.suffix && <span>{pill.suffix}</span>}
               </button>
+              </Tooltip>
             );
           })()}
 
@@ -1218,6 +1285,7 @@ export default function StatusBar({
           //     chip (checkpoint #2); silence stays the answer there.
           if (ccCost == null && nativeTotals?.anyUnpriced) {
             return (
+              <Tooltip text={"This provider bills for usage, but no price is available for this model here, so the session cost can't be totalled."}>
               <span
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
                 // "available", not "published" (Task 22): the price lookup
@@ -1226,13 +1294,13 @@ export default function StatusBar({
                 // looks identical to a model that genuinely has no rate.
                 // Saying "no price is published" asserts a cause nobody
                 // checked — docs/error-message-standards.md forbids that.
-                title={"This provider bills for usage, but no price is available for this model here, so the session cost can't be totalled."}
               >
                 <span className="text-fg-muted">Cost:</span>
                 {/* Muted, not accent-coloured: this is an ABSENCE of a figure,
                     not an alert. Same treatment as the Reuse chip's "New". */}
                 <span className="text-fg-muted">not listed</span>
               </span>
+              </Tooltip>
             );
           }
           return null;
@@ -1273,9 +1341,9 @@ export default function StatusBar({
               : '')
             + ' Not exact — a few models charge more above very large prompts.';
         return (
+          <Tooltip text={title}>
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
-            title={title}
           >
             <span className="text-fg-muted">Cost:</span>
             <span className="text-fg-2">{formatCostUsd(cost)}</span>
@@ -1283,6 +1351,7 @@ export default function StatusBar({
                 and this bar is already crowded. */}
             {specialistCost > 0 && <span className="text-fg-muted">· specialists</span>}
           </span>
+          </Tooltip>
         );
       })()}
 
@@ -1293,15 +1362,16 @@ export default function StatusBar({
           arrive. An empty chip is furniture that teaches the user to ignore
           the bar. */}
       {show('session-time') && ss?.duration != null && (
+        <Tooltip text={ss.apiDuration != null ? `Wall: ${formatDuration(ss.duration)} | API: ${formatDuration(ss.apiDuration)}` : 'Session duration'}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
-          title={ss.apiDuration != null ? `Wall: ${formatDuration(ss.duration)} | API: ${formatDuration(ss.apiDuration)}` : 'Session duration'}
         >
           <span>{formatDuration(ss.duration)}</span>
           {ss.apiDuration != null && (
             <span className="text-fg-muted hidden sm:inline">({formatDuration(ss.apiDuration)} API)</span>
           )}
         </span>
+        </Tooltip>
       )}
 
       {/* Input tokens. Rule 1 (spec §3): no value, no chip. In a native session
@@ -1318,13 +1388,14 @@ export default function StatusBar({
           measurement of 0 input tokens must still render, and a truthy check
           would wrongly swallow it too. */}
       {show('tokens-in') && inTokens != null && (
+        <Tooltip text={`Input tokens: ${inTokens.toLocaleString()}. ${SCOPE_NOTE} ${INPUT_NOTE}`}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
-          title={`Input tokens: ${inTokens.toLocaleString()}. ${SCOPE_NOTE} ${INPUT_NOTE}`}
         >
           <span className="text-fg-muted">In:</span>
           <span className="text-fg-2">{formatTokens(inTokens)}</span>
         </span>
+        </Tooltip>
       )}
 
       {/* Output tokens. Rule 1 (spec §3): no value, no chip. Session total for
@@ -1334,13 +1405,14 @@ export default function StatusBar({
           "no turn counted yet" into null, so a 0 reaching here is a real
           measurement (a turn that produced no output) and must render. */}
       {show('tokens-out') && outTokens != null && (
+        <Tooltip text={`Output tokens: ${outTokens.toLocaleString()}. ${SCOPE_NOTE}`}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
-          title={`Output tokens: ${outTokens.toLocaleString()}. ${SCOPE_NOTE}`}
         >
           <span className="text-fg-muted">Out:</span>
           <span className="text-fg-2">{formatTokens(outTokens)}</span>
         </span>
+        </Tooltip>
       )}
 
       {/* Cache efficiency. WHY the ?? nativeTotals fallback: sessionStats is written
@@ -1363,13 +1435,14 @@ export default function StatusBar({
         if (cr == null) return null;
         const cc = cacheCreationTotal;
         return (
+          <Tooltip text={`Cache read: ${cr.toLocaleString()} | Cache created: ${(cc ?? 0).toLocaleString()}. ${SCOPE_NOTE}`}>
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
-            title={`Cache read: ${cr.toLocaleString()} | Cache created: ${(cc ?? 0).toLocaleString()}. ${SCOPE_NOTE}`}
           >
             <span className="text-fg-muted">Cached:</span>
             <span className="text-[#4CAF50]">{formatTokens(cr)}</span>
           </span>
+          </Tooltip>
         );
       })()}
 
@@ -1408,9 +1481,9 @@ export default function StatusBar({
             ? `None of this turn's prompt came from cache; all ${prompt} tokens were read fresh. Caches expire after a few minutes idle, and reset when the model or tool list changes.`
             : `Reused ${(reuse.readTokens ?? 0).toLocaleString()} of this turn's ${prompt} prompt tokens from cache — that part was cheaper and faster than re-reading it.`;
         return (
+          <Tooltip text={title}>
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
-            title={title}
           >
             <span className="text-fg-muted">Reuse:</span>
             {display.kind === 'first-turn' && <span className="text-fg-muted">New</span>}
@@ -1420,21 +1493,23 @@ export default function StatusBar({
               </span>
             )}
           </span>
+          </Tooltip>
         );
       })()}
 
       {/* Active ratio — derived: apiDuration / duration. Rule 1 (spec §3): no
           value, no chip. */}
       {show('active-ratio') && ss?.duration != null && ss?.apiDuration != null && ss.duration > 0 && (
+        <Tooltip text={`Claude thinking: ${formatDuration(ss.apiDuration)} of ${formatDuration(ss.duration)} total`}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
-          title={`Claude thinking: ${formatDuration(ss.apiDuration)} of ${formatDuration(ss.duration)} total`}
         >
           <span className="text-fg-muted">Active:</span>
           <span className="text-fg-2">
             {Math.round((ss.apiDuration / ss.duration) * 100)}%
           </span>
         </span>
+        </Tooltip>
       )}
 
       {/* Output speed — derived: outputTokens / apiDuration. Rule 1 (spec §3):
@@ -1445,15 +1520,16 @@ export default function StatusBar({
           nativeChips and this chip renders with the generic string below — do
           not "simplify" this back to one branch. */}
       {show('output-speed') && speedTokPerSec != null && (
+        <Tooltip text={speedIsSessionAverage ? `${outTokens!.toLocaleString()} output tokens in ${formatDuration(ss!.apiDuration!)} of model time — this session's average, not its current speed.` : 'Output tokens per second on the last turn'}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
-          title={speedIsSessionAverage ? `${outTokens!.toLocaleString()} output tokens in ${formatDuration(ss!.apiDuration!)} of model time — this session's average, not its current speed.` : 'Output tokens per second on the last turn'}
         >
           <span className="text-fg-muted">Speed:</span>
           <span className="text-fg-2">
             {speedTokPerSec} tok/s
           </span>
         </span>
+        </Tooltip>
       )}
 
       {/* Code changes — lines added/removed.
@@ -1472,23 +1548,24 @@ export default function StatusBar({
           ? `Lines added: ${added ?? 0} | Lines removed: ${removed ?? 0}`
           : `${SCOPE_NOTE} Counts edits made through the model's editing tools; edits made by shell commands are not counted.`;
         return (
+          <Tooltip text={title}>
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
-            title={title}
           >
             <span className="text-[#4CAF50]">+{added ?? 0}</span>
             <span className="text-[#DD4444]">-{removed ?? 0}</span>
             <span className="text-fg-muted hidden sm:inline">lines</span>
           </span>
+          </Tooltip>
         );
       })()}
 
       {/* Git branch — reads from statusline.sh's .gitbranch-{sessionId} file */}
       {show('git-branch') && gitBranch && (
+        <Tooltip text={`Git: ${gitBranch}`}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border"
           style={{ color: '#0D9488', borderColor: 'rgba(13,148,136,0.35)' }}
-          title={`Git: ${gitBranch}`}
         >
           {/* Branch icon (octicon git-branch) */}
           <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -1496,6 +1573,7 @@ export default function StatusBar({
           </svg>
           <span>{gitBranch}</span>
         </span>
+        </Tooltip>
       )}
 
       {/* The background restore-pull chip was removed in sync-legacy-demolition —
@@ -1513,25 +1591,27 @@ export default function StatusBar({
         const label = isFailing ? 'Sync Failing' : 'Sync Warning';
         const styleClass = isFailing ? warnStyles.danger : warnStyles.warn;
         return (
+          <Tooltip text={isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}>
           <button
             onClick={handler}
             className={`px-1.5 py-0.5 rounded-sm border text-4xs sm:text-3xs ${styleClass} ${handler ? 'cursor-pointer hover:brightness-125 transition-all' : ''}`}
-            title={isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}
           >
             {label}
           </button>
+          </Tooltip>
         );
       })()}
 
       {/* Theme pill */}
       {show('theme') && (
+        <Tooltip text="Click to cycle theme">
         <button
           onClick={cycleTheme}
           className="px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
-          title="Click to cycle theme"
         >
           {activeTheme.name}
         </button>
+        </Tooltip>
       )}
 
       {/* Platform announcement — ★ orange pill, truncates long copy.
@@ -1542,22 +1622,29 @@ export default function StatusBar({
       {show('announcement') &&
         statusData.announcement?.message &&
         !isExpired(statusData.announcement.expires) && (
+        <Tooltip text={statusData.announcement.message}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border truncate max-w-[280px]"
           style={{
             color: '#EA580C',
             borderColor: 'rgba(234,88,12,0.35)',
           }}
-          title={statusData.announcement.message}
         >
           <span aria-hidden>★</span>
           <span className="truncate">{statusData.announcement.message}</span>
         </span>
+        </Tooltip>
       )}
 
       {/* Version pill — shows YouCoded app version, glows yellow when update available.
          Click opens the in-app UpdatePanel (changelog + Update Now) — no more raw URL jumps. */}
       {show('version') && updateStatus && (
+        <Tooltip text={
+            (devLabel ? `Dev instance: ${devLabel} — ` : '') +
+            (updateStatus.update_available
+              ? `Update available: v${updateStatus.latest} — click to download`
+              : `YouCoded v${updateStatus.current}`)
+          }>
         <button
           onClick={() => setUpdatePanelOpen(true)}
           className={`px-1.5 py-0.5 rounded-sm border cursor-pointer transition-colors hidden sm:inline-flex ${
@@ -1572,12 +1659,6 @@ export default function StatusBar({
               ? 'bg-[rgba(234,179,8,0.12)] border-[rgba(234,179,8,0.5)] hover:bg-[rgba(234,179,8,0.22)] animate-[version-glow_2s_steps(16)_infinite]'
               : 'bg-panel border-edge-dim hover:bg-inset'
           }`}
-          title={
-            (devLabel ? `Dev instance: ${devLabel} — ` : '') +
-            (updateStatus.update_available
-              ? `Update available: v${updateStatus.latest} — click to download`
-              : `YouCoded v${updateStatus.current}`)
-          }
         >
           {updateStatus.update_available ? (
             <span className="text-[#EAB308] font-medium">
@@ -1593,16 +1674,18 @@ export default function StatusBar({
             <span className="text-accent font-medium ml-1">· {devLabel}</span>
           )}
         </button>
+        </Tooltip>
       )}
 
       {/* Customize widget — pencil icon opens config popup, always last */}
+      <Tooltip text="Customize Status Bar">
       <button
         onClick={() => setPopupOpen(true)}
         className="ml-auto flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
-        title="Customize Status Bar"
       >
         <PencilIcon />
       </button>
+      </Tooltip>
 
       {/* Config popup — centered modal with grouped widgets + (i) info */}
       <WidgetConfigPopup

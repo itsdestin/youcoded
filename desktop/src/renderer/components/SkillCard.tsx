@@ -38,6 +38,25 @@ const typeLabels: Record<string, string> = {
   plugin: 'Plugin',
 };
 
+// Bare icon-only entry point to the same plugin detail page as PluginBadge
+// (below) — sits in the card's top-right corner, left of the favorite star,
+// so the marketplace link is reachable without reading the bottom-row text
+// pill. Same stopPropagation reasoning as PluginBadge.
+function MarketplaceIconButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      title="Show Marketplace Detail Page"
+      className="p-1 rounded-md bg-panel text-fg-dim hover:text-fg hover:bg-inset transition-colors"
+    >
+      <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 21v-7.5a.75.75 0 0 1 .75-.75h3a.75.75 0 0 1 .75.75V21m-4.5 0H2.36m11.14 0H18m0 0h3.64m-1.39 0V9.349M3.75 21V9.349m0 0a3.001 3.001 0 0 0 3.75-.615A2.993 2.993 0 0 0 9.75 9.75c.896 0 1.7-.393 2.25-1.016a2.993 2.993 0 0 0 2.25 1.016c.896 0 1.7-.393 2.25-1.016a3.001 3.001 0 0 0 3.75.614m-16.5 0a3.004 3.004 0 0 1-.621-4.72l1.189-1.19A1.5 1.5 0 0 1 5.378 3h13.243a1.5 1.5 0 0 1 1.06.44l1.19 1.189a3 3 0 0 1-.621 4.72M6.75 18h3.75a.75.75 0 0 0 .75-.75V13.5a.75.75 0 0 0-.75-.75H6.75a.75.75 0 0 0-.75.75v3.75c0 .414.336.75.75.75Z" />
+      </svg>
+    </button>
+  );
+}
+
 // Clickable plugin-name pill. Shared between the source tag and this pill so
 // the click-to-plugin-detail affordance looks identical everywhere. stops
 // propagation so the card's own onClick doesn't also fire.
@@ -117,8 +136,16 @@ function SkillCardImpl({ skill, onClick, favorite, pluginBadge }: Props) {
       className="relative layer-surface !rounded-lg card-interactive p-3 text-left flex flex-col cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       style={{ boxShadow: 'none' }}
     >
-      {favorite && (
-        <FavoriteStar corner size="sm" filled={favorite.filled} onToggle={favorite.onToggle} />
+      {(favorite || pluginBadge) && (
+        // Each icon carries its OWN bg-panel + hover:bg-inset — two distinct
+        // bare icons, not one shared pill. (A single background behind both
+        // read as one button when hovering the card — rejected 2026-09-06.)
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5">
+          {pluginBadge && <MarketplaceIconButton onClick={pluginBadge.onClick} />}
+          {favorite && (
+            <FavoriteStar size="sm" bg filled={favorite.filled} onToggle={favorite.onToggle} />
+          )}
+        </div>
       )}
       <span className="text-sm font-medium text-fg leading-tight">{skill.displayName}</span>
       <span className="text-2xs text-fg-muted mt-1 leading-snug line-clamp-2 flex-1">{skill.description}</span>

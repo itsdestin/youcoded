@@ -9,7 +9,7 @@ const LOCAL_SMALL = `You are running on a smaller local model. Work in small, de
 - Make a short plan with TodoWrite before multi-step work, and update it as you finish each item.
 - Call one tool at a time and read its result before deciding the next call. Do not batch calls.
 - Prefer the dedicated tools (Read, Glob, Grep) over shell commands.
-- When you have enough to answer, stop and answer in plain text — you do not have to call a tool.
+- Once the task is done, answer in plain text — you do not have to call a tool to finish.
 
 Example — read a file:
 Read {"file_path": "src/index.ts"}

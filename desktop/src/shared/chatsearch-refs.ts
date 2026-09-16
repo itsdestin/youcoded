@@ -99,7 +99,7 @@ export const COPY = {
   // page; both are the same operation (reading this transcript) so the same
   // wording is honest for either.
   errReadUnknownTitle: 'Unable to read this transcript.',
-  errReadUnknownExplainer: "The read didn't report a reason. Diagnosing will collect the app's logs so Claude can look at what happened.",
+  errReadUnknownExplainer: "The read didn't report a reason. Diagnosing will collect the app's logs so the assistant can look at what happened.",
   // The tag/note popover's dialog role needs an accessible name (a
   // screen-reader user hears it) — every user-facing sentence for this
   // feature lives in COPY, aria-label included.
@@ -187,7 +187,10 @@ export interface TranscriptMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
-  /** Ordinal in the FULL conversation — `before: seq` pages backwards. */
+  /** Byte offset of this message's line in its transcript: increasing through
+   *  the conversation and unique within it, so it keys a bubble and
+   *  `before: seq` pages backwards. Not a message count — reading only the end
+   *  of a large file (transcript-reader.ts) means nobody counted from the top. */
   seq: number;
   /** Tool calls that ran between the previous kept message and this one. */
   droppedToolCalls: number;
@@ -200,6 +203,11 @@ export interface ChatsearchReadRequest {
   tail: number;
   /** Return messages with seq < before. Omit for the newest slice. */
   before?: number;
+  /** The project folder's slug when the caller already knows it (a Resume
+   *  list row does). Lets main open the file directly instead of looking the id
+   *  up in the search index; validated there, and a wrong or stale hint only
+   *  falls back to that lookup. */
+  projectSlug?: string;
 }
 
 export type ChatsearchReadResponse =

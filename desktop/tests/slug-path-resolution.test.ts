@@ -18,32 +18,32 @@ describe('walkSlugParts', () => {
   beforeAll(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'slug-')); });
   afterAll(() => { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best-effort */ } });
 
-  it('prefers a hyphenated folder over a greedy shorter sibling (the home-dir bug)', () => {
+  it('prefers a hyphenated folder over a greedy shorter sibling (the home-dir bug)', async () => {
     fs.mkdirSync(path.join(tmp, 'youcoded'));      // the stray sibling that caused the greedy misfire
     fs.mkdirSync(path.join(tmp, 'youcoded-dev'));  // the real project folder
     // Before the fix this returned <tmp>/youcoded/dev (nonexistent); now it must
     // pick the real folder.
-    expect(walkSlugParts(tmp, ['youcoded', 'dev'])).toBe(path.join(tmp, 'youcoded-dev'));
+    expect(await walkSlugParts(tmp, ['youcoded', 'dev'])).toBe(path.join(tmp, 'youcoded-dev'));
   });
 
-  it('still resolves a genuinely nested path when no hyphenated form exists', () => {
+  it('still resolves a genuinely nested path when no hyphenated form exists', async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'slug2-'));
     fs.mkdirSync(path.join(base, 'proj', 'sub'), { recursive: true });
-    expect(walkSlugParts(base, ['proj', 'sub'])).toBe(path.join(base, 'proj', 'sub'));
+    expect(await walkSlugParts(base, ['proj', 'sub'])).toBe(path.join(base, 'proj', 'sub'));
     fs.rmSync(base, { recursive: true, force: true });
   });
 
-  it('resolves a deep hyphenated folder several levels down', () => {
+  it('resolves a deep hyphenated folder several levels down', async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), 'slug3-'));
     fs.mkdirSync(path.join(base, 'a', 'b', 'my-project'), { recursive: true });
     fs.mkdirSync(path.join(base, 'a', 'b', 'my')); // decoy shorter sibling
-    expect(walkSlugParts(base, ['a', 'b', 'my', 'project'])).toBe(path.join(base, 'a', 'b', 'my-project'));
+    expect(await walkSlugParts(base, ['a', 'b', 'my', 'project'])).toBe(path.join(base, 'a', 'b', 'my-project'));
     fs.rmSync(base, { recursive: true, force: true });
   });
 
-  it('falls back to a naive join when nothing on the path exists', () => {
+  it('falls back to a naive join when nothing on the path exists', async () => {
     const base = path.join(tmp, 'ghost'); // never created
-    expect(walkSlugParts(base, ['a', 'b'])).toBe(path.join(base, 'a-b'));
+    expect(await walkSlugParts(base, ['a', 'b'])).toBe(path.join(base, 'a-b'));
   });
 });
 
@@ -61,20 +61,20 @@ function rootsFor(real: string): { posixRoot?: string; winRoot?: string } {
 }
 
 describe('inversion chain (spec §5.4a)', () => {
-  it('forward walk recovers a punctuated folder the split walk cannot', () => {
+  it('forward walk recovers a punctuated folder the split walk cannot', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'inv-')));
     const real = path.join(root, 'PAF 574 - Diversity, Ethics, & Public Change');
     fs.mkdirSync(real, { recursive: true });
     const slug = ccProjectSlug(real);
-    expect(forwardResolveSlug(slug, rootsFor(real))).toBe(real);
+    expect(await forwardResolveSlug(slug, rootsFor(real))).toBe(real);
   });
 
-  it('BACKTRACKS past sibling a to reach a-b (the 57be5e14 failure shape)', () => {
+  it('BACKTRACKS past sibling a to reach a-b (the 57be5e14 failure shape)', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'inv-')));
     fs.mkdirSync(path.join(root, 'a', 'x'), { recursive: true });          // wrong subtree exists
     const real = path.join(root, 'a-b', 'x');
     fs.mkdirSync(real, { recursive: true });
-    expect(forwardResolveSlug(ccProjectSlug(real), rootsFor(real))).toBe(real);
+    expect(await forwardResolveSlug(ccProjectSlug(real), rootsFor(real))).toBe(real);
   });
 
   // The fixture above doesn't actually exercise backtracking: 'a-b' has the
@@ -85,22 +85,22 @@ describe('inversion chain (spec §5.4a)', () => {
   // (longer encoding) but is a dead end (no child matches what's left of the
   // slug), so only genuine backtracking — unwinding to try the shorter 'a'
   // and descending into its real 'b-c' child — reaches the real path.
-  it('BACKTRACKS off a longer-encoded decoy that dead-ends, onto the shorter real path', () => {
+  it('BACKTRACKS off a longer-encoded decoy that dead-ends, onto the shorter real path', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'inv-')));
     fs.mkdirSync(path.join(root, 'a-b', 'zzz'), { recursive: true }); // decoy: longer encoding, no matching child
     const real = path.join(root, 'a', 'b-c');
     fs.mkdirSync(real, { recursive: true });
-    expect(forwardResolveSlug(ccProjectSlug(real), rootsFor(real))).toBe(real);
+    expect(await forwardResolveSlug(ccProjectSlug(real), rootsFor(real))).toBe(real);
   });
 
-  it('DECLINES on a capped slug instead of returning a plausible wrong path', () => {
+  it('DECLINES on a capped slug instead of returning a plausible wrong path', async () => {
     const long = '/x/' + 'b'.repeat(300);
     const capped = ccProjectSlug(long);
     expect(capped.length).toBeGreaterThan(200);
-    expect(forwardResolveSlug(capped, { posixRoot: '/' })).toBeNull();
+    expect(await forwardResolveSlug(capped, { posixRoot: '/' })).toBeNull();
   });
 
-  it('over-cap resolves via option 1 (R1 from a recorded cwd)', () => {
+  it('over-cap resolves via option 1 (R1 from a recorded cwd)', async () => {
     // build a fake projects dir containing the capped slug dir with one transcript
     const projects = fs.mkdtempSync(path.join(os.tmpdir(), 'projs-'));
     const long = '/x/' + 'b'.repeat(300);
@@ -111,6 +111,6 @@ describe('inversion chain (spec §5.4a)', () => {
     // leaving this on process.platform would silently fail on Windows CI
     // (see transcript-cwd.test.ts's same seam — adapted here per Task 8's
     // platform-seam review fix, which the brief's original snippet predates).
-    expect(r1CwdForDir(dir, 'linux')).toBe(long);
+    expect(await r1CwdForDir(dir, 'linux')).toBe(long);
   });
 });

@@ -31,8 +31,8 @@ interface ContextEditorOverlayProps {
 
 // Scope label for the meta strip (mirrors ContextTab's GROUP_META labels).
 const SCOPE_LABEL: Record<ContextScope, string> = {
-  project: 'This project',
-  global: 'Global',
+  project: 'Project instructions',
+  global: 'Global instructions',
   memory: 'Memory',
 };
 

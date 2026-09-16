@@ -7,6 +7,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { CatalogModel, ModelBinding, ProviderStatus } from '../../shared/provider-types';
+import { DEFAULT_CONTEXT_PREFERENCES, type ContextPreferences } from '../../shared/context-preferences';
+import { cloudContextLength } from './cloud-context';
 
 const CACHE_FILE = 'provider-catalog-cache.json';
 const TTL_MS = 24 * 60 * 60 * 1000; // 24h, marketplace-cache precedent
@@ -34,6 +36,13 @@ export class ModelCatalog {
   private readonly cachePath: string;
   // Plan B: injected by ipc-handlers as () => engineManager.catalogModels().
   private readonly localModels: (() => Promise<CatalogModel[]>) | null;
+  // Sign in with ChatGPT (backend design §4.3): injected as
+  // () => chatgptAuth.models(). That function is cache-first and never waits
+  // on the network — get() runs in front of sessions on EVERY provider, so a
+  // stale hourly stamp kicks a background refresh and the cached rows come
+  // back now. Null under the kill switch or in tests without it.
+  private readonly chatgptModels: (() => Promise<CatalogModel[]>) | null;
+  private readonly contextPreferences: () => ContextPreferences;
   // In-memory copy of the last cache we returned (ROADMAP 2026-08-11: every
   // ensureFresh() re-read + re-parsed the whole catalog file from disk, twice
   // per session start). SERVED only while its own fetchedAt is inside the TTL
@@ -51,10 +60,17 @@ export class ModelCatalog {
               // opts.ttlMs is TEST-ONLY (same convention as SecretsStore's
               // maxRetries) — lets the stale-fallback tests force expiry
               // without poking private fields. Production callers omit it.
-              opts?: { ttlMs?: number; localModels?: () => Promise<CatalogModel[]> }) {
+              opts?: {
+                ttlMs?: number;
+                localModels?: () => Promise<CatalogModel[]>;
+                chatgptModels?: () => Promise<CatalogModel[]>;
+                contextPreferences?: () => ContextPreferences;
+              }) {
     this.cachePath = path.join(cacheDir, CACHE_FILE);
     this.ttlMs = opts?.ttlMs ?? TTL_MS;
     this.localModels = opts?.localModels ?? null;
+    this.chatgptModels = opts?.chatgptModels ?? null;
+    this.contextPreferences = opts?.contextPreferences ?? (() => DEFAULT_CONTEXT_PREFERENCES);
   }
 
   /** null on missing/corrupt. Unlike providers.json (user data — read errors
@@ -232,7 +248,24 @@ export class ModelCatalog {
 
   /** Catalog rows scoped to the ENABLED providers passed in. Never throws. */
   async get(providers: ProviderStatus[]): Promise<CatalogModel[]> {
-    const cache = await this.ensureFresh();
+    // ensureFresh() IS the network — it fetches OpenRouter and models.dev
+    // unconditionally, 15 s abort apiece, and on a total failure it returns
+    // WITHOUT memoizing, so the next call pays the same price again. Only two
+    // provider families can consume what it fetches; a call that has none of
+    // them must not pay for it.
+    //
+    // WHY this matters more than it looks: a purely LOCAL, offline user — the
+    // exact person the bundled engine exists for — has one enabled provider,
+    // 'local'. Before this gate, every session create, resume and model swap
+    // stalled inside the profile resolver on two doomed fetches. MEASURED
+    // 2026-09-05 against a network that accepts and never answers: 4 fetches
+    // and 15.1 s per get(), repeated on every single call. With the gate: 0
+    // fetches, 0 ms.
+    //
+    // Reads `p.enabled` because the loop below does: a DISABLED OpenRouter row
+    // contributes no models, so it must not drag the network in either.
+    const needsNetwork = providers.some((p) => p.enabled && (p.type === 'openrouter' || MODELSDEV_KEY[p.type]));
+    const cache = needsNetwork ? await this.ensureFresh() : EMPTY_CACHE;
     const out: CatalogModel[] = [];
     for (const p of providers) {
       if (!p.enabled) continue; // disabled providers contribute nothing
@@ -245,6 +278,19 @@ export class ModelCatalog {
         // engine runs, cache scan when stopped). Failure degrades to "no
         // local rows" — get() keeps its never-throws contract.
         try { out.push(...await this.localModels()); } catch { /* engine unavailable */ }
+      } else if (p.type === 'chatgpt' && p.ready && this.chatgptModels) {
+        // `ready` here, not just `enabled` (§4.6): when OpenAI blocks the
+        // account the cached model list is deliberately kept (so the card can
+        // still say who is signed in), but those models must leave the
+        // catalog. The two pickers filter on ready themselves; the app's own
+        // ModelSearch tool does not — without this gate the assistant is
+        // offered plan models it cannot use, hands a task to one, and the user
+        // gets "Codex is disabled for this workspace." instead of an answer.
+        // Rows are the plan's own manifest, parsed and cached by ChatGptAuth
+        // (id = slug, no pricing — the plan is not per-token, and an absent
+        // price must read as absent, never $0). A throwing source degrades
+        // to no ChatGPT rows; get() keeps its never-throws contract.
+        try { out.push(...await this.chatgptModels()); } catch { /* account unavailable */ }
       }
       // openai-compatible custom endpoints still have no catalog (user types a model id).
     }
@@ -256,6 +302,10 @@ export class ModelCatalog {
   async contextLengthFor(binding: ModelBinding, providers: ProviderStatus[]): Promise<number | null> {
     const models = await this.get(providers);
     const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
-    return hit?.contextLength ?? null;
+    // WHY resolve here, not in get(): catalog metadata describes capability;
+    // the saved preference limits only the session's operating budget. Read it
+    // afresh on create/resume/model switch without invalidating the model cache.
+    const type = providers.find((p) => p.id === binding.providerId)?.type;
+    return cloudContextLength(type, hit, this.contextPreferences());
   }
 }

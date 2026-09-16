@@ -21,7 +21,7 @@ import type { NativeSlashAction, DispatcherResult } from './slash-command-dispat
  *  and HarnessSession.compactNow. */
 const COMPACT_REFUSAL: Record<string, string> = {
   'turn-in-flight':
-    "Can't compact while Claude is still working. Stop the current turn (or wait for it to finish) and try again.",
+    "Can't compact while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
   'nothing-to-compact':
     'Nothing to compact yet — there needs to be at least a couple of exchanges before there’s anything to summarize.',
   // Deliberately NOT phrased as a total failure: compactNow prunes BEFORE it
@@ -92,7 +92,7 @@ export async function runNativeSlashAction(
 /** Copy for a refused /clear. Same discipline as COMPACT_REFUSAL above. */
 const CLEAR_REFUSAL: Record<string, string> = {
   'turn-in-flight':
-    "Can't clear while Claude is still working. Stop the current turn (or wait for it to finish) and try again.",
+    "Can't clear while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
   'not-live': "This session isn't running, so there's nothing to clear.",
 };
 
@@ -147,7 +147,7 @@ const SKILL_REFUSAL: Record<string, string> = {
   // needs in order to pick.
   'ambiguous': '',
   'turn-in-flight':
-    "Can't start a skill while Claude is still working. Stop the current turn (or wait for it to finish) and try again.",
+    "Can't start a skill while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
   'not-live': "This session isn't running, so there's nothing to run the skill in.",
 };
 
@@ -205,6 +205,10 @@ export function routeSlashResult(provider: string | undefined, result: Dispatche
   // Anything not explicitly native is treated as Claude Code. Routing to a
   // harness a session may not have would strand the input entirely.
   const isNative = provider === 'native';
+  // A shell session is neither: it has a PTY, but the thing on the other end is
+  // the user's shell, not Claude Code. It is grouped with native here so a
+  // command's PTY text is REPORTED as unavailable rather than typed into it.
+  const noClaudeCode = isNative || provider === 'shell';
 
   // BEFORE the `handled` check on purpose — see the WHY above.
   if (isNative && result.nativeAction) return { via: 'native', action: result.nativeAction };
@@ -213,7 +217,7 @@ export function routeSlashResult(provider: string | undefined, result: Dispatche
     // A native session has no PTY, and this command has no harness equivalent
     // yet. Return the command so the caller can TELL the user — the pre-M3
     // behavior was `guardedPtySend` returning false into a discarded value.
-    if (isNative) return { via: 'none-native-no-pty', command: result.alsoSendToPty.trim() };
+    if (noClaudeCode) return { via: 'none-native-no-pty', command: result.alsoSendToPty.trim() };
     return { via: 'pty', text: result.alsoSendToPty };
   }
   return { via: 'none' };

@@ -245,6 +245,21 @@ fun appendVersion(
                 )
             )
         }
+
+        // Retention (mirror of artifact-store.ts appendVersionsDirect). WHY
+        // HERE: pruning lives in the writer, in the same cycle that appends, so
+        // artifacts.json is bounded BY CONSTRUCTION. That is why there is no
+        // migration, no one-shot repair and no startup scan — the first
+        // question a reader asks. An already-oversized file heals on its next
+        // write; one that is never written again was never growing.
+        //
+        // It sweeps EVERY record so an oversized file heals in one write rather
+        // than file-by-file, and it runs BELOW the dedupe early-return above,
+        // so "a re-opened conversation writes nothing" still holds.
+        //
+        // Policy and safety floor: VersionRetention.kt.
+        pruneSidecarVersions(sidecar)
+
         sidecar.updatedAt = now
 
         if (writeSidecar(projectRoot, expectedUpdatedAt, sidecar, replaceAny)) return true

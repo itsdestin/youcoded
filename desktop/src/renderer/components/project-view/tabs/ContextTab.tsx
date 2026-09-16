@@ -1,7 +1,7 @@
 // ContextTab — the agent-context files for one project, grouped by scope
 // (Task 4.1). Surfaces CLAUDE.md/AGENTS.md, rules, and memory notes in three
-// teaching groups (This project / Global / Memory), each with a plain-language
-// description and an (i) info button. Rows match the prototype's ctxRow:
+// teaching groups (Project instructions / Global instructions / Memory), each
+// with a plain-language description and an (i) info button. Rows match the prototype's ctxRow:
 // icon avatar + basename + a plain-text load badge + a one-line description +
 // size. Rows use `bg-panel border border-edge-dim rounded-lg` (NOT .layer-surface,
 // whose overflow:hidden + flex compression clips text).
@@ -31,9 +31,12 @@ interface ContextTabProps {
 
 // Per-scope teaching copy. Descriptions are EXACT and intentionally have NO
 // trailing periods (the wording was specified verbatim by the user).
+// WHY the labels: the tab is now "Instructions & Memories", so the scopes read
+// "Global instructions" and "Project instructions" — "Global"/"This project"
+// alone no longer said what the group contained.
 const GROUP_META: Record<ContextScope, { label: string; desc: string }> = {
-  project: { label: 'This project', desc: 'May be loaded for conversations in this project' },
-  global: { label: 'Global', desc: 'Loaded before every conversation on this device' },
+  project: { label: 'Project instructions', desc: 'May be loaded for conversations in this project' },
+  global: { label: 'Global instructions', desc: 'Loaded before every conversation on this device' },
   memory: { label: 'Memory', desc: 'Recalled when relevant to a conversation' },
 };
 

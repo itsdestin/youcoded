@@ -1,0 +1,27 @@
+{
+ "accounts": [
+  {
+   "id": "00000000-0000-4000-8000-000000000000",
+   "account_user_id": "user-REDACTED",
+   "account_user_role": "account-owner",
+   "structure": "personal",
+   "plan_type": "free",
+   "is_zdr": false,
+   "is_openai_internal": false,
+   "account_residency_region": "no_constraint",
+   "can_access_with_session": true,
+   "enable_account_switching": false,
+   "is_deactivated": false,
+   "is_fedramp_compliant_workspace": false,
+   "workspace_backend_origin": "NO_CONSTRAINT",
+   "account_routing_override": "NO_CONSTRAINT",
+   "name": null,
+   "profile_picture_url": null,
+   "sso_connection_name": null
+  }
+ ],
+ "default_account_id": "00000000-0000-4000-8000-000000000000",
+ "account_ordering": [
+  "00000000-0000-4000-8000-000000000000"
+ ]
+}

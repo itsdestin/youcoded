@@ -48,6 +48,40 @@ class TranscriptWatcher(
             result = ANSI_REGEX.replace(result, "")
             return result.trim()
         }
+
+        private val COMMAND_NAME_REGEX = Regex("""<command-name>([\s\S]*?)</command-name>""")
+        private val COMMAND_ARGS_REGEX = Regex("""<command-args>([\s\S]*?)</command-args>""")
+
+        /** "/name args" from a slash-command line, or null when the line is not one. Mirrors the
+         *  desktop's slashCommandText: its tags strip to nothing, so the typed command never
+         *  confirmed on the device that sent it (2026-09-11 order investigation). */
+        fun slashCommandText(raw: String): String? {
+            val name = COMMAND_NAME_REGEX.find(raw)?.groupValues?.get(1)?.let { ANSI_REGEX.replace(it, "").trim() }
+            if (name.isNullOrEmpty()) return null
+            val args = COMMAND_ARGS_REGEX.find(raw)?.groupValues?.get(1)?.let { ANSI_REGEX.replace(it, "").trim() } ?: ""
+            val command = if (name.startsWith("/")) name else "/$name"
+            return if (args.isEmpty()) command else "$command $args"
+        }
+
+        /** The text of a queued message a person typed; "" for a queued line that must stay hidden
+         *  (a background-task notice, or a message another Claude Code session sent in); null for any
+         *  other line. Mirrors the desktop's queuedPromptText: Claude Code records a message typed
+         *  while it is working ONLY as this attachment (2026-09-11 order investigation). */
+        fun queuedPromptText(obj: JSONObject): String? {
+            if (obj.optString("type") != "attachment") return null
+            val a = obj.optJSONObject("attachment") ?: return null
+            if (a.optString("type") != "queued_command" || a.optString("commandMode") != "prompt") return null
+            if (a.has("origin") && a.optJSONObject("origin")?.optString("kind") != "human") return ""
+            val raw = when (val prompt = a.opt("prompt")) {
+                is String -> prompt
+                is JSONArray -> (0 until prompt.length())
+                    .mapNotNull { prompt.optJSONObject(it) }
+                    .filter { it.optString("type") == "text" }
+                    .joinToString("\n") { it.optString("text", "") }
+                else -> ""
+            }
+            return stripSystemTags(raw)
+        }
     }
 
     private val _events = MutableSharedFlow<TranscriptEvent>(extraBufferCapacity = 1000)
@@ -205,6 +239,9 @@ class TranscriptWatcher(
 
         when (type) {
             "user" -> parseUserLine(obj, sessionId, uuid, timestamp, state)
+            "attachment" -> queuedPromptText(obj)?.takeIf { it.isNotBlank() }?.let {
+                _events.tryEmit(TranscriptEvent.UserMessage(sessionId, uuid, timestamp, it))
+            }
             "assistant" -> parseAssistantLine(obj, sessionId, uuid, timestamp, state)
             "progress" -> parseProgressLine(obj, sessionId, state)
             // "file-history-snapshot" — skip
@@ -257,6 +294,10 @@ class TranscriptWatcher(
                 val cleaned = stripSystemTags(content)
                 if (cleaned.isNotBlank()) {
                     _events.tryEmit(TranscriptEvent.UserMessage(sessionId, uuid, timestamp, cleaned))
+                } else {
+                    slashCommandText(content)?.let {
+                        _events.tryEmit(TranscriptEvent.UserMessage(sessionId, uuid, timestamp, it, slashCommand = true))
+                    }
                 }
             }
             return
@@ -302,9 +343,14 @@ class TranscriptWatcher(
             // If no tool_result and has promptId, it's a user message
             if (!hasToolResult && obj.has("promptId")) {
                 // Extract text from content blocks
-                val text = stripSystemTags(extractTextFromContent(content))
+                val raw = extractTextFromContent(content)
+                val text = stripSystemTags(raw)
                 if (text.isNotBlank()) {
                     _events.tryEmit(TranscriptEvent.UserMessage(sessionId, uuid, timestamp, text))
+                } else {
+                    slashCommandText(raw)?.let {
+                        _events.tryEmit(TranscriptEvent.UserMessage(sessionId, uuid, timestamp, it, slashCommand = true))
+                    }
                 }
             }
         }

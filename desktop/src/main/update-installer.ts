@@ -16,11 +16,31 @@ import { randomUUID } from 'crypto';
 import { spawn as nodeSpawn, type SpawnOptions } from 'child_process';
 import type { UpdateInstallErrorCode, UpdateDownloadResult, UpdateProgressEvent, UpdateLaunchResult } from '../shared/update-install-types';
 
-// Domains we'll accept release-asset downloads from. GitHub Releases sometimes
-// redirects the download URL from github.com -> objects.githubusercontent.com;
-// both need to be allowed. A malicious metadata response that tried to point
-// us elsewhere (e.g. an attacker-controlled CDN) would be rejected here.
-const ALLOWED_HOSTS = new Set(['github.com', 'objects.githubusercontent.com']);
+// Domains we'll accept release-asset downloads from. GitHub Releases redirects
+// the download URL from github.com to a CDN host; both need to be allowed. A
+// malicious metadata response that tried to point us elsewhere (an
+// attacker-controlled CDN) would be rejected here.
+// 2026-09-10: GitHub moved release-asset downloads to
+// release-assets.githubusercontent.com, which was NOT on this list — so the
+// in-app Update button had been failing 'url-rejected' for everyone. Added
+// alongside the older objects.githubusercontent.com (still used for some assets).
+const ALLOWED_HOSTS = new Set([
+  'github.com',
+  'objects.githubusercontent.com',
+  'release-assets.githubusercontent.com',
+]);
+
+/** Whether a URL is HTTPS and on the GitHub release-download allowlist. Used by
+ *  the manifest/signature fetch too, which shares the same trust boundary but
+ *  not the installer-extension check. */
+export function isAllowedUpdateHost(urlString: string): boolean {
+  try {
+    const u = new URL(urlString);
+    return u.protocol === 'https:' && ALLOWED_HOSTS.has(u.host);
+  } catch {
+    return false;
+  }
+}
 
 // Whitelist of extensions we know how to launch. Prevents path-traversal payloads
 // that smuggle arbitrary file types into userData/update-cache/.
@@ -358,10 +378,17 @@ export function cleanupStaleDownloads(cacheDir: string): void {
  * so `1.2.3` does not accidentally match `YouCoded-Setup-1.2.30.exe`, and `2.0`
  * does not match `1.2.0.exe`.
  *
- * Covers electron-builder patterns:
- *   Windows: YouCoded-Setup-{version}.exe
- *   macOS:   YouCoded-{version}[-arm64].dmg
+ * Covers the release names set in electron-builder.yml (nsis/dmg artifactName):
+ *   Windows: YouCoded-Installer-{version}.exe
+ *   macOS:   YouCoded-Installer-{version}-{arm64|x64}.dmg
  *   Linux:   YouCoded-{version}.AppImage | youcoded_{version}_amd64.deb
+ *
+ * WHY the Windows/macOS names carry a dash before the version: releases up to
+ * 1.3.0-beta.76 used electron-builder's default "YouCoded Setup 1.2.4.exe", which
+ * GitHub publishes as "YouCoded.Setup.1.2.4.exe" — a DOT before the version, so
+ * this regex never matched a real Windows download and every reopen of the
+ * update popup downloaded the installer again. tests/installer-artifact-names
+ * pins the dash in the config.
  */
 function buildVersionRegex(expectedVersion: string): RegExp {
   const escaped = expectedVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

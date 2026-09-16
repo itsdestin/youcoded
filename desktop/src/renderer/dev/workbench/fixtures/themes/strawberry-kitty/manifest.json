@@ -75,8 +75,8 @@
     "rig": "assets/mascot-rig.svg",
     "idle": "assets/mascot-idle.svg",
     "welcome": "assets/mascot-welcome.svg",
-    "shocked": "assets/mascot-shocked.svg",
-    "dizzy": "assets/mascot-dizzy.svg"
+    "inquisitive": "assets/mascot-inquisitive.svg",
+    "shocked": "assets/mascot-shocked.svg"
   },
   "custom_css": "::selection { background: rgba(217,78,107,0.32); color: var(--fg); }"
 }

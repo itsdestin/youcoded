@@ -51,18 +51,15 @@ interface RunOpts {
   slotFree?: boolean;
   writerBusy?: boolean;
   spawn?: ReturnType<typeof vi.fn>;
+  spawnBackground?: ReturnType<typeof vi.fn>;
   release?: ReturnType<typeof vi.fn>;
   // Task 12, item 3: the per-conversation spawn budget is a SEPARATE gate from
   // the concurrency slot above (reserve) — default true (budget available)
   // so every existing test in this file, which never cares about the budget,
   // keeps passing unmodified.
   budgetOk?: boolean;
-  // Task 14 — both undefined by default so every pre-Task-14 test in this
-  // file (which never touches model resolution: no args.model, and every
-  // built-in specialist's modelPreference is unset) keeps compiling and
-  // passing with the exact same behavior as before this task: task.ts only
-  // reaches for ctx.binding / ctx.services.models when a tier or specific id
-  // was actually requested.
+  // Production native sessions always wire both. Tests may override them for
+  // a specific provider/catalog scenario; the helper supplies a safe default.
   binding?: ModelBinding;
   models?: { designated: DelegatedModels; catalog: () => Promise<CatalogModel[] | null> };
   // Task 4 (plan 1c) — undefined means "use BUILTIN_ROSTER" (createTaskTool's
@@ -70,19 +67,27 @@ interface RunOpts {
   // built-in roster unmodified; only the new per-cwd-roster tests below pass
   // a fake one.
   roster?: SpecialistRoster;
+  listStatus?: string | null;
 }
 
 function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
   const tool = createTaskTool(opts.roster);
   const spawn = opts.spawn ?? vi.fn(async () => ({ childId: 'child-1', report: 'done' }));
   const release = opts.release ?? vi.fn();
+  const defaultBinding: ModelBinding = { providerId: 'openrouter', modelId: 'openai/gpt-5.6-fable' };
+  const defaultModels = {
+    designated: { get: () => null } as DelegatedModels,
+    catalog: async (): Promise<CatalogModel[]> => [
+      { id: 'deepseek/deepseek-v4-flash-0731', providerId: 'openrouter', label: 'DeepSeek V4 Flash 0731' },
+    ],
+  };
   const ctx: ToolContext = {
     sessionId: 'parent-1',
     cwd: '/work',
     signal: new AbortController().signal,
     readRegistry: new Map(),
     todos: [],
-    ...(opts.binding ? { binding: opts.binding } : {}),
+    binding: opts.binding ?? defaultBinding,
     services: {
       specialists: {
         reserve: (parentId: string, reserveOpts: { writer: boolean }) => {
@@ -96,9 +101,11 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
         },
         release,
         trySpendSpawnBudget: () => opts.budgetOk !== false,
+        listStatus: () => opts.listStatus ?? null,
         spawn,
+        ...(opts.spawnBackground ? { spawnBackground: opts.spawnBackground } : {}),
       },
-      ...(opts.models ? { models: opts.models } : {}),
+      models: opts.models ?? defaultModels,
     },
   };
   return tool.execute(
@@ -106,6 +113,27 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
     ctx,
   );
 }
+
+describe('Task tool — list: true (2026-09-09, replaces the per-turn status block)', () => {
+  it('returns the host\'s status text, and never spawns', async () => {
+    const spawn = vi.fn();
+    const r = await runTaskTool({ list: true, description: undefined, prompt: undefined, work_dir: undefined }, { spawn, listStatus: 'Nadia (explorer): running — 12s' });
+    expect(r.text).toBe('Nadia (explorer): running — 12s');
+    expect(r.isError).toBeFalsy();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('says so plainly when nothing is running or pending', async () => {
+    const r = await runTaskTool({ list: true, description: undefined, prompt: undefined, work_dir: undefined }, { listStatus: null });
+    expect(r.text).toBe('No specialists or background commands are running or awaiting delivery in this conversation.');
+  });
+
+  it('is described to the model as ask-once, never a loop', () => {
+    const tool = createTaskTool();
+    expect((tool.inputSchema as any).shape.list.description).toContain('never in a loop');
+    expect(tool.description).not.toContain('<specialists-status>');
+  });
+});
 
 describe('Task tool — typed refusals (plan 1a)', () => {
   it('refuses an unknown specialist with the available list', async () => {
@@ -301,7 +329,7 @@ describe('Task tool — typed refusals (plan 1a)', () => {
         services: { specialists: { reserve: () => ({ ok: true, token }), release, spawn, spawnBackground, trySpendSpawnBudget: () => true } },
       };
       const r = await tool.execute(
-        { description: 'find the bug', prompt: 'a'.repeat(60), agent: 'explorer', work_dir: '.', background: true } as any,
+        { description: 'find the bug', prompt: 'a'.repeat(60), agent: 'explorer', work_dir: '.', background: true, model: 'parent' } as any,
         ctx,
       );
       expect(spawn).not.toHaveBeenCalled();
@@ -328,7 +356,7 @@ describe('Task tool — typed refusals (plan 1a)', () => {
         services: { specialists: { reserve: () => ({ ok: true, token }), release, spawn: vi.fn(), spawnBackground, trySpendSpawnBudget: () => true } },
       };
       const r = await tool.execute(
-        { description: 'x', prompt: 'a'.repeat(60), agent: 'explorer', work_dir: '.', background: true } as any,
+        { description: 'x', prompt: 'a'.repeat(60), agent: 'explorer', work_dir: '.', background: true, model: 'parent' } as any,
         ctx,
       );
       expect(r.isError).toBe(true);
@@ -356,17 +384,17 @@ describe('Task tool — typed refusals (plan 1a)', () => {
         },
       },
     };
-    await tool.execute({ description: 'x', prompt: 'a'.repeat(50), agent: 'explorer', work_dir: '.' } as any, ctx);
+    await tool.execute({ description: 'x', prompt: 'a'.repeat(50), agent: 'explorer', work_dir: '.', model: 'parent' } as any, ctx);
     expect(release).toHaveBeenCalledWith(token);
   });
 });
 
 // ---------------------------------------------------------------------------
 // Task 14 — the `model` input's resolution. Every test in this block sets
-// opts.binding + opts.models explicitly; every test ABOVE this block
-// deliberately does not, and stays green unmodified, because 'parent' (the
-// default when no args.model and no specialist.modelPreference) never
-// touches either.
+// opts.binding + opts.models explicitly. The few direct-context tests above
+// opt into model: 'parent' because their subject is reservation ownership,
+// not automatic model selection. An omitted model now resolves to budget and
+// therefore requires both production bindings.
 // ---------------------------------------------------------------------------
 // 2026-08-16 (Destin's 1b hands-on, Test 8): the parent model hired the
 // read-only explorer to run `git log` because the roster said only
@@ -403,7 +431,7 @@ describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
   const DOCS_WRITER: SpecialistDefinition = {
     id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
     systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
-    stepCap: 10, reportBudgetTokens: 500, source: 'personal',
+    reportBudgetTokens: 500, source: 'personal',
     grantScope: 'user', fingerprint: 'aaaaaaaaaaaa',
   };
   const FAKE_ROSTER: SpecialistRoster = {
@@ -453,7 +481,7 @@ describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
     const FILE_WORKER: SpecialistDefinition = {
       id: 'repo-worker', displayName: 'Repo Worker', description: 'A worker a repo shipped.',
       systemPrompt: 'Do repo work.', allowedTools: ['Read', 'Write', 'Bash'], charter: 'read-write',
-      stepCap: 25, reportBudgetTokens: 2000, source: 'claude-code',
+      reportBudgetTokens: 2000, source: 'claude-code',
       grantScope: 'project', fingerprint: 'bbbbbbbbbbbb',
     };
     const MIXED_ROSTER: SpecialistRoster = {
@@ -481,7 +509,7 @@ describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
     const mk = (over: Partial<SpecialistDefinition>): SpecialistDefinition => ({
       id: 'code-reviewer', displayName: 'code-reviewer', description: 'Reviews code.',
       systemPrompt: 'Review.', allowedTools: ['Read', 'Grep'], charter: 'read-only',
-      stepCap: 10, reportBudgetTokens: 500, source: 'claude-code',
+      reportBudgetTokens: 500, source: 'claude-code',
       grantScope: 'project', fingerprint: 'f1f1f1f1f1f1', ...over,
     });
     const rosterOf = (d: SpecialistDefinition): SpecialistRoster =>
@@ -562,10 +590,10 @@ describe('Task tool — one roster lookup per id, per tool instance (D2)', () =>
   const BASE: SpecialistDefinition = {
     id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
     systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
-    stepCap: 10, reportBudgetTokens: 500, source: 'claude-code',
+    reportBudgetTokens: 500, source: 'claude-code',
     grantScope: 'project', fingerprint: 'aaaaaaaaaaaa',
   };
-  const ARGS = { agent: 'docs-writer', work_dir: '/proj', description: 'd', prompt: 'a'.repeat(60) };
+  const ARGS = { agent: 'docs-writer', work_dir: '/proj', description: 'd', prompt: 'a'.repeat(60), model: 'parent' };
 
   /** A roster whose resolve() hands back a FRESH object every call — exactly
    *  what SpecialistCatalog does after a reload, and the only way a second
@@ -688,31 +716,39 @@ describe('Task tool — model resolution (Task 14)', () => {
     const budgetBinding: ModelBinding = { providerId: 'openrouter', modelId: 'cheap-model' };
     const designated = await designatedWith({ budget: budgetBinding });
     const spawn = vi.fn(async () => ({ childId: 'child-1', report: 'done' }));
+    const catalog = vi.fn(async () => null);
     const r = await runTaskTool(
       { agent: 'explorer', model: 'budget' },
-      { spawn, binding: PARENT_BINDING, models: { designated, catalog: async () => null } },
+      { spawn, binding: PARENT_BINDING, models: { designated, catalog } },
     );
     expect(r.isError).toBeFalsy();
+    expect(catalog).not.toHaveBeenCalled();
     expect(spawn).toHaveBeenCalledWith('parent-1', expect.objectContaining({ binding: budgetBinding }));
     // No fallback note — the tier WAS configured.
     expect(r.text).toBe('done');
   });
 
-  it('model: "frontier" with no tier configured falls back to the parent binding AND appends the honest note', async () => {
+  it('passes the resolved automatic binding into a background specialist launch', async () => {
+    const spawnBackground = vi.fn(async () => ({ childId: 'child-bg', title: 'Explorer' }));
+    const r = await runTaskTool(
+      { agent: 'explorer', background: true },
+      { spawnBackground },
+    );
+    expect(r.isError).toBeFalsy();
+    expect(spawnBackground).toHaveBeenCalledWith('parent-1', expect.objectContaining({
+      binding: { providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash-0731' },
+    }));
+  });
+
+  it('model: "frontier" refuses safely when its curated model is unavailable', async () => {
     const designated = await designatedWith({});
     const spawn = vi.fn(async () => ({ childId: 'child-1', report: 'done' }));
     const r = await runTaskTool(
       { agent: 'explorer', model: 'frontier' },
-      { spawn, binding: PARENT_BINDING, models: { designated, catalog: async () => null } },
+      { spawn, binding: PARENT_BINDING, models: { designated, catalog: async () => [] } },
     );
-    expect(r.isError).toBeFalsy();
-    // Falls back to the PARENT's own binding — resolveDelegatedBinding
-    // returns it explicitly (fellBack: true), so task.ts passes it through
-    // like any other resolved binding; createChild would have landed on the
-    // exact same value via its own opts.binding ?? parent.session.binding
-    // default even without this.
-    expect(spawn).toHaveBeenCalledWith('parent-1', expect.objectContaining({ binding: PARENT_BINDING }));
-    expect(r.text).toBe('done\n\n(No frontier model is designated — using this conversation\'s model.)');
+    expect(r).toEqual({ text: 'SPECIALIST_MODEL_UNAVAILABLE:frontier', isError: true });
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('a specific model id that IS in the live catalog resolves and spawns on it', async () => {
@@ -744,14 +780,13 @@ describe('Task tool — model resolution (Task 14)', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('omitting model (and an unset specialist.modelPreference) never touches ctx.binding or ctx.services.models', async () => {
-    // No `binding`, no `models` in opts — if task.ts reached for either when
-    // it shouldn't, this would throw a "configuration error" result instead
-    // of spawning normally, which is exactly what this test pins against.
+  it('omitting model uses the provider-matched automatic budget model', async () => {
     const spawn = vi.fn(async () => ({ childId: 'child-1', report: 'done' }));
     const r = await runTaskTool({ agent: 'explorer' }, { spawn });
     expect(r.isError).toBeFalsy();
-    expect(spawn).toHaveBeenCalledWith('parent-1', expect.not.objectContaining({ binding: expect.anything() }));
+    expect(spawn).toHaveBeenCalledWith('parent-1', expect.objectContaining({
+      binding: { providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash-0731' },
+    }));
   });
 
   // Task 5 (plan 1c) — the ledger record (and later the run view) needs to
@@ -782,25 +817,30 @@ describe('Task tool — model resolution (Task 14)', () => {
       model: { label: 'gpt-5', via: 'named', fallback: false },
     }));
 
-    // via: 'parent' — no model requested, no specialist preference: falls
-    // back to the conversation's own binding.
+    // via: 'budget' — no model requested means the safe automatic tier.
     const spawn3 = vi.fn(async () => ({ childId: 'child-3', report: 'done' }));
-    await runTaskTool({ agent: 'explorer' }, { spawn: spawn3, binding: PARENT_BINDING });
+    await runTaskTool({ agent: 'explorer' }, { spawn: spawn3 });
     expect(spawn3).toHaveBeenCalledWith('parent-1', expect.objectContaining({
-      model: { label: 'parent-model', via: 'parent', fallback: false },
+      model: { label: 'deepseek/deepseek-v4-flash-0731', via: 'budget', fallback: false },
     }));
 
-    // via: 'frontier' with a genuine fallback (the tier isn't configured) —
-    // fallback: true, and the label is honestly the PARENT's model, not a
-    // frontier model that was never actually used.
+    // via: 'frontier' — the unset tier resolves to its provider-matched
+    // curated model, never to the conversation parent.
     const designated4 = await designatedWith({});
     const spawn4 = vi.fn(async () => ({ childId: 'child-4', report: 'done' }));
     await runTaskTool(
       { agent: 'explorer', model: 'frontier' },
-      { spawn: spawn4, binding: PARENT_BINDING, models: { designated: designated4, catalog: async () => null } },
+      {
+        spawn: spawn4,
+        binding: PARENT_BINDING,
+        models: {
+          designated: designated4,
+          catalog: async () => [{ id: 'moonshotai/kimi-k3', providerId: 'openrouter', label: 'Kimi K3' }],
+        },
+      },
     );
     expect(spawn4).toHaveBeenCalledWith('parent-1', expect.objectContaining({
-      model: { label: 'parent-model', via: 'frontier', fallback: true },
+      model: { label: 'moonshotai/kimi-k3', via: 'frontier', fallback: false },
     }));
   });
 });
@@ -991,7 +1031,7 @@ describe('Task tool — task_id management surface (Task 6)', () => {
     const DOCS_WRITER: SpecialistDefinition = {
       id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
       systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
-      stepCap: 10, reportBudgetTokens: 500, source: 'claude-code',
+      reportBudgetTokens: 500, source: 'claude-code',
       grantScope: 'project', fingerprint: 'bbbbbbbbbbbb',
     };
     const ROSTER: SpecialistRoster = {

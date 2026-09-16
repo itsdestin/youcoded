@@ -45,8 +45,15 @@ export const PROSE_RUBRIC: RubricItem[] = [
   },
   {
     id: 'padding',
+    // Destin, 2026-09-05, after the prompt-doctrine run scored a closing "want me
+    // to fix any of these?" as padding on two cells: offering to do the next piece
+    // of work is behaviour the product WANTS, so the rubric was wrong, not the
+    // answer. Without this carve-out the case argues against a shipped intention
+    // every time it runs.
     ask:
       'Is there a sentence that could be deleted without losing any information? Score HIGH when there is not. '
+      + 'A closing offer to do the next step ("want me to fix these?") is NOT padding — it is a useful handoff; '
+      + 'do not count it. Restating what was already said, narrating the process, and filler openers ARE padding. '
       + 'Quote the most deletable sentence; if nothing is deletable, quote the densest sentence as evidence '
       + 'that there is no padding.',
   },

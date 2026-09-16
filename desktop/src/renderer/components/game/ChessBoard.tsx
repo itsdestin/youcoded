@@ -231,11 +231,16 @@ export default function ChessBoard({ connection, treatment = 'outline' }: Props)
 
       <StatusLine play={play} canMove={canMove} isPlaying={isPlaying} opponent={state.opponent} />
 
+      {/* WHY the cqh clamp (2026-09-09): the board was `w-full aspect-square`, so in a pane
+          wider than it is tall — the app zoomed to 135 % on a laptop, or any short window —
+          it grew taller than the room and the shell's overflow-hidden cut off ranks 8–5 (the
+          promo footage). The shell's game area is a size container (ArcadeShell), so the
+          board is its full width OR the container's height less ~11rem (the status line,
+          the game chat's few lines, paddings), whichever is smaller. A tall pane is
+          unchanged; a short one gets a smaller board and keeps the chat. Where no container
+          is queryable the unit falls back to the viewport, which is also fine. */}
       <div className="relative">
-        {/* aspect-square + w-full: the board takes the pane's width and stays
-            square at ANY pane width, which is what makes §4.3's per-game
-            default a real lever rather than a number in a config. */}
-        <div className="w-full aspect-square grid grid-cols-8 grid-rows-8 rounded-md overflow-hidden border border-edge">
+        <div className="aspect-square mx-auto grid grid-cols-8 grid-rows-8 rounded-md overflow-hidden border border-edge" style={{ width: 'min(100%, calc(100cqh - 11rem))' }}>
           {[...ranks].map((rank, r) =>
             [...files].map((file, c) => {
               const name = `${file}${rank}`;

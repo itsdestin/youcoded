@@ -64,7 +64,7 @@ describe.skipIf(!posix)('BashOutput', () => {
     const a = await BashOutputTool.execute({ shell_id: run.shellId }, ctx());
     expect(a.text).toMatch(new RegExp(`^${run.shellId} · running · \\d+s\\none$`));
     const b = await BashOutputTool.execute({ shell_id: run.shellId }, ctx());
-    expect(b.text).toMatch(new RegExp(`^No new output from ${run.shellId} since your last look \\(still running · \\d+s\\)\\. You'll be told when it finishes\\.$`));
+    expect(b.text).toMatch(new RegExp(`^No new output from ${run.shellId} since your last look \\(still running · \\d+s\\)\\. You'll be told when it finishes — do NOT poll for it\\.$`));
     await run.exited;
     const c = await BashOutputTool.execute({ shell_id: run.shellId }, ctx());
     expect(c.text).toMatch(new RegExp(`^${run.shellId} · exited 0 · \\d+s\\ntwo$`));

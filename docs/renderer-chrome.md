@@ -24,6 +24,26 @@ Thresholds enforced by `wecoded-themes/scripts/audit-contrast.mjs` (CI `validate
 - **User bubble text:** `on-accent` vs `accent` ≥ 4.5 (Strawberry Kitty's `#D94E6B` on white was 4.0 → darkened to `#CC4060` = 4.7).
 - **chat-pane bg == drawer-pane bg** (both `--canvas`) so the two windows read as one content surface. drawer-pane briefly used `--inset` during the chrome-glass refactor — looked like a different window. Change both in the same edit; the audit doesn't catch this mismatch.
 
+### Status colours (added 2026-09-05)
+
+`StatusDot.tsx` `STATUS_LABEL` is the app's whole status vocabulary, and it is what the session
+pills in the header show all day: **green = Working, blue = Response Ready, amber = Needs a Look,
+red = Needs Input**. A new surface that picks its own colour for a state does not merely look
+different — it tells the user the opposite of what they already read. The specialists popup
+shipped with a BLUE "Working" pill until Destin caught it on the review deck (2026-09-05).
+
+The status colours are declared "constant across all themes" in `globals.css`
+(`--color-green-400: #4CAF50`, `red-400`, `amber-700`), which is exactly why **they must never
+carry the word**. Measured on the helpers popup's own pill fill: `#4CAF50` as text is 1.97:1 on
+light, 1.81:1 on creme, 1.50:1 on meadow-mist, against a 4.5:1 floor — it passes only on the
+three dark themes. `amber-500` is worse (1.52 / 1.41 / 1.19:1). Put the colour in the ring and
+the tint and leave the word on `text-fg`/`text-fg-2`; `SessionStrip.tsx` `STATUS_PILL` is the
+pattern, and its own comment records the same finding from 2026-08-28.
+
+The UI review sweep measures this for free — a `scripts/ui-review/plans/` shot with
+`probe: false` opts OUT of the painted-pixel contrast probe, and `contrast.md` then says so
+rather than coming back empty.
+
 ## Header bar
 
 - **No `min-w-0` on the left cluster** — it collapses below the settings gear's `shrink-0` width, letting SessionStrip paint over the gear. Left + right `flex-1` columns stay symmetric (both omit `min-w-0`); truncate an individual child instead.
@@ -53,7 +73,7 @@ Full layer system: workspace `docs/shared-ui-architecture.md → Overlay Layer S
 
 ## Remote access state sync
 
-- **Remote clients hydrate via `chat:hydrate` on connect** — `remote-server.ts::replayBuffers()` calls `requestChatSnapshot(webContents)` (the renderer's `RemoteSnapshotExporter` serializes `ChatState`), then pushes ONE `chat:hydrate` to the connecting client. The old `transcriptBuffers` replay buffer was removed (two sources of truth → ordering/dedup bugs). Backfill new remote state by extending `serializeChatState`/`deserializeChatState` in `state/chat-types.ts` — no sidecar buffer.
+- **Remote clients hydrate via `chat:hydrate` on connect** — `remote-server.ts::restoreClient()` (run when the client says `client:ready`, or after a 5 s fallback for an older page) calls `requestMergedChatSnapshot()` (`main/chat-snapshot.ts`: asks EVERY main window's `RemoteSnapshotExporter` in parallel and takes each session from its owner window, omitting — and marking `degraded` — a session whose owner did not answer, is mid-transfer, or is still loading history; `focus` names what the desktop shows), then pushes ONE `chat:hydrate` to the connecting client. The old `transcriptBuffers` replay buffer was removed (two sources of truth → ordering/dedup bugs). Backfill new remote state by extending `serializeChatState`/`deserializeChatState` in `state/chat-types.ts` — no sidecar buffer.
 - **`attentionState` is authoritative on DESKTOP only.** `useAttentionClassifier` reads the xterm PTY buffer every 1s (Electron only). Remote browsers have no PTY and MUST NOT run their own classifier (CLI-version regex would drift across two sites). Flow: App's `statusData` handler diffs `attentionMap` against the previous map → `useRemoteAttentionSync` fires `remote:attention-changed` → main caches in `lastAttentionBySession` → `buildStatusData()` folds `attentionMap` into `status:data` → broadcast on change. The shim diffs `attentionMap` vs `prevAttentionRef` before dispatching `ATTENTION_STATE_CHANGED` — load-bearing (else every 10s tick thrashes the reducer).
 - **`RemoteSnapshotExporter` is Electron-only by design** — mounted in `App.tsx` inside `ChatProvider`, guards on `typeof window.claude.onChatExportSnapshot === 'function'`. On remote browsers that API doesn't exist (remote-shim doesn't expose it), so it short-circuits. Intentional, not a parity bug.
-- **`chat:export-snapshot` has a 2s timeout** — `requestChatSnapshot()` resolves `{sessions:[]}` on timeout. With the 500ms PTY-replay delay in `replayBuffers`, worst case before a new remote sees PTY output is ~2500ms when the renderer is unresponsive. Shortening it makes the degenerate case (renderer still booting at connect) hydrate empty and fall back to live events.
+- **`chat:export-snapshot` has a 2s timeout** — a window that does not answer in time counts as unanswered, so the sessions it owns are omitted and the snapshot is `degraded`. The PTY and hook replays follow the hydrate in the same pass (the old 500 ms guess is gone — `tests/remote-readiness.test.ts` guards against its return), so worst case before a new remote sees PTY output is the 2 s when the renderer is unresponsive. Shortening it makes the degenerate case (renderer still booting at connect) hydrate empty and fall back to live events.

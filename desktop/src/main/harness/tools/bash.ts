@@ -411,7 +411,12 @@ function bashDescription(): string {
     'A foreground command still running at its timeout (default 2 minutes, max 10 via `timeout`) is ' +
     'handed off to the background the same way instead of being killed — except a leading `sleep`, ' +
     'which simply times out. Only a foreground command changes your working directory; a background ' +
-    'or handed-off command never changes it and never carries `persistent_env`.'
+    'or handed-off command never changes it and never carries `persistent_env`. ' +
+    // Destin's workbench draft (2026-09-04): a command waiting on a y/N prompt
+    // sits until the timeout hands it to the background, and nothing ever
+    // answers it.
+    'A command that might prompt for input hangs: pass its non-interactive flag ' +
+    '(`-y`, `--yes`, `--non-interactive`, or the tool\'s equivalent) whenever a command could ask a question.'
   );
 }
 

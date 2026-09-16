@@ -6,7 +6,9 @@ describe('resolvePreset', () => {
     const p = resolvePreset('coder');
     expect(p.manifest.id).toBe('coder');
     expect(p.defaultMode).toBe('auto-edit');
-    expect(p.body.toLowerCase()).toContain('todo');   // coder body mentions the todo plan
+    // 2026-09-05: the TodoWrite planning rule moved to prompts/shared-doctrine.ts
+    // (said once for both presets); the coder body is recognised by its verify rule.
+    expect(p.body).toContain('Verify your work');
     expect(p.presetRules).toEqual([]);
   });
   it('resolves assistant with ask default mode', () => {

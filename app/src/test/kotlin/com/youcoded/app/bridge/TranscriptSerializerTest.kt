@@ -20,6 +20,14 @@ class TranscriptSerializerTest {
     // ── userMessage ──────────────────────────────────────────────────────────
 
     @Test
+    fun `userMessage marks a slash command only when it is one`() {
+        val command = TranscriptSerializer.userMessage("s1", "u1", 1L, "/reload-plugins", slashCommand = true)
+        assertEquals(true, command.getJSONObject("data").getBoolean("slashCommand"))
+        val ordinary = TranscriptSerializer.userMessage("s1", "u1", 1L, "hello")
+        assertEquals(false, ordinary.getJSONObject("data").has("slashCommand"))
+    }
+
+    @Test
     fun `userMessage has correct type`() {
         val result = TranscriptSerializer.userMessage("s1", "u1", 1000L, "Hello")
         assertEquals("user-message", result.getString("type"))

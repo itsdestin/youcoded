@@ -31,17 +31,27 @@ function extractCwd(lineText: string): string | null {
   } catch { return null; }
 }
 
-/** Bounded head read — R2 never needs more than the first lines, and some
- *  transcripts are >13MB. */
-function headText(filePath: string): string | null {
+// WHY (perf/main-thread-async-reads, Task 2): every read in this file ran on
+// fs.*Sync — the Resume Browser calls into firstCwd/r1CwdForDir once per
+// project slug on every browse (session-browser.ts), so a large
+// ~/.claude/projects tree froze the main thread for the whole scan. Bounded
+// head read — R2 never needs more than the first lines, and some
+// transcripts are >13MB.
+async function headText(filePath: string): Promise<string | null> {
+  let fh: fs.promises.FileHandle | null = null;
   try {
-    const fd = fs.openSync(filePath, 'r');
-    try {
-      const buf = Buffer.alloc(HEAD_BYTES);
-      const n = fs.readSync(fd, buf, 0, HEAD_BYTES, 0);
-      return buf.toString('utf8', 0, n);
-    } finally { fs.closeSync(fd); }
+    fh = await fs.promises.open(filePath, 'r');
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, HEAD_BYTES, 0);
+    return buf.toString('utf8', 0, bytesRead);
   } catch { return null; }
+  // WHY .catch on close: a rejection thrown inside `finally` REPLACES the
+  // function's return value. An uncaught close failure would turn a successful
+  // read into a throw that climbs firstCwd -> r1CwdForDir -> resolveSlugToPath,
+  // which session-browser.ts awaits outside any try — so the whole Resume
+  // Browser listing would reject and show nothing. The old sync code returned
+  // null here; a failed close must stay invisible, never cost the listing.
+  finally { await fh?.close().catch(() => {}); }
 }
 
 /** R2 — session origin.
@@ -51,8 +61,8 @@ function headText(filePath: string): string | null {
  *  `process.platform` here instead of only inside `isForeignCwd` itself —
  *  otherwise a POSIX fixture silently only tests correctly on POSIX runners
  *  (this exact gap turned 4 tests wrong on the Windows CI leg). */
-export function firstCwd(filePath: string, platform: NodeJS.Platform = process.platform): string | null {
-  const head = headText(filePath);
+export async function firstCwd(filePath: string, platform: NodeJS.Platform = process.platform): Promise<string | null> {
+  const head = await headText(filePath);
   if (head === null) return null;
   const lines = head.split('\n').slice(0, R2_SCAN_CAP);
   for (const l of lines) {
@@ -63,9 +73,9 @@ export function firstCwd(filePath: string, platform: NodeJS.Platform = process.p
 }
 
 /** Every cwd in the file — full read; used by R1's exhaustive tier. */
-export function allCwds(filePath: string, platform: NodeJS.Platform = process.platform): string[] {
+export async function allCwds(filePath: string, platform: NodeJS.Platform = process.platform): Promise<string[]> {
   let raw: string;
-  try { raw = fs.readFileSync(filePath, 'utf8'); } catch { return []; }
+  try { raw = await fs.promises.readFile(filePath, 'utf8'); } catch { return []; }
   const out: string[] = [];
   for (const l of raw.split('\n')) {
     const cwd = extractCwd(l);
@@ -77,16 +87,16 @@ export function allCwds(filePath: string, platform: NodeJS.Platform = process.pl
 /** R1 — directory identity. Tier 1 (cheap): each file's first cwd. Tier 2
  *  (exhaustive): every cwd in every file. Lowercased compare matches
  *  buildSlugToName's Windows case-drift convention (reconciler.ts). */
-export function r1CwdForDir(dirPath: string, platform: NodeJS.Platform = process.platform): string | null {
+export async function r1CwdForDir(dirPath: string, platform: NodeJS.Platform = process.platform): Promise<string | null> {
   const dirName = path.basename(dirPath).toLowerCase();
   let files: string[] = [];
-  try { files = fs.readdirSync(dirPath).filter(f => f.endsWith('.jsonl')); } catch { return null; }
+  try { files = (await fs.promises.readdir(dirPath)).filter(f => f.endsWith('.jsonl')); } catch { return null; }
   for (const f of files) {
-    const cwd = firstCwd(path.join(dirPath, f), platform);
+    const cwd = await firstCwd(path.join(dirPath, f), platform);
     if (cwd && ccProjectSlug(cwd).toLowerCase() === dirName) return cwd;
   }
   for (const f of files) {
-    for (const cwd of allCwds(path.join(dirPath, f), platform)) {
+    for (const cwd of await allCwds(path.join(dirPath, f), platform)) {
       if (!isForeignCwd(cwd, platform) && ccProjectSlug(cwd).toLowerCase() === dirName) return cwd;
     }
   }

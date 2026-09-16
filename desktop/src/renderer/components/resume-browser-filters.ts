@@ -114,6 +114,15 @@ export function groupSessions<T extends PastSessionLike>(
 // conversation surfaces at the top of the Projects filter dropdown. Display
 // label is the last path segment (matches the group header convention in
 // ResumeBrowser.tsx).
+// Chip label rule (design guide G-19): nothing picked → the category; one picked
+// → its name; more → the category and a count. Pure, so the rule the deck
+// approved (round 1, S-5) is testable without rendering the browser.
+export function pickLabel(category: string, pickedNames: string[]): { text: string; count?: number } {
+  if (pickedNames.length === 0) return { text: category };
+  if (pickedNames.length === 1) return { text: pickedNames[0] };
+  return { text: category, count: pickedNames.length };
+}
+
 export function getAvailableProjects<T extends PastSessionLike>(
   sessions: T[],
 ): Array<{ path: string; label: string; count: number }> {

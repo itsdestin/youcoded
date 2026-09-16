@@ -20,7 +20,6 @@ export interface SpecialistDefinition {
   // reads this field yet. delegated-models.ts's resolveRequestedModel (called
   // from tools/task.ts) is the first reader.
   modelPreference?: 'parent' | 'budget' | 'frontier';
-  stepCap: number;                  // wired to the child's harness.limits.maxSteps (Task 5)
   reportBudgetTokens: number;       // static half of the headroom-aware cap (Task 7)
   // Task 2 (plan 1c): where this definition came from. Task 4's
   // permissionSubject needs it to tell a built-in (stable id, shared grant

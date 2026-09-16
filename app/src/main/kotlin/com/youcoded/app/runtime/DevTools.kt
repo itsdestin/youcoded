@@ -258,6 +258,42 @@ object DevTools {
     private const val PROBE_TIMEOUT_SECONDS = 5L
 
     /**
+     * One run of `claude auth status` → the JSON string the shared React UI
+     * reads as a ClaudeAccountStatus.
+     *
+     * KOTLIN MIRROR of statusFromOutput() in
+     * desktop/src/main/providers/claude-account.ts — the two must agree, because
+     * the SAME React model menu consumes both. Its decision table, verbatim:
+     *   unparsable output  → unknown     (never "signed out" — see below)
+     *   loggedIn != true   → signed-out
+     *   authMethod != claude.ai → signed-in, apiKey:true, no plan
+     *   otherwise          → signed-in with email + subscriptionType
+     *
+     * WHY unparsable is `unknown` and not `signed-out`: a definite "signed out"
+     * greys every Claude model out of the picker. A CLI that changed its output,
+     * or a shell profile printing a banner onto stdout, must not do that to an
+     * install that works. Pure and internal-visible so the unit tests can drive
+     * the table without a subprocess.
+     */
+    internal fun claudeAuthStatusJson(stdout: String): String {
+        val parsed = try {
+            JSONObject(stdout.trim())
+        } catch (_: Exception) {
+            return """{"state":"unknown"}"""
+        }
+        if (!parsed.optBoolean("loggedIn", false)) return """{"state":"signed-out"}"""
+        val apiKey = parsed.optString("authMethod") != "claude.ai"
+        val out = JSONObject()
+        out.put("state", "signed-in")
+        out.put("apiKey", apiKey)
+        parsed.optString("email").takeIf { it.isNotBlank() }?.let { out.put("email", it) }
+        if (!apiKey) {
+            parsed.optString("subscriptionType").takeIf { it.isNotBlank() }?.let { out.put("plan", it) }
+        }
+        return out.toString()
+    }
+
+    /**
      * Probe a Termux-env command's `--version` (or similar) and return a
      * one-line summary. Best-effort — never throws. The env map must
      * already include LD_PRELOAD / LD_LIBRARY_PATH from Bootstrap.

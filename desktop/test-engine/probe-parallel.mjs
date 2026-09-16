@@ -9,17 +9,19 @@
 //     (the server's continuous-batching scheduler ran them together)
 // Follows the probe-tools.mjs convention: this script does NOT spawn a
 // server. Launch one yourself first, matching engine-supervisor.ts's real
-// router-mode spawn (src/main/engine/engine-supervisor.ts:285-306):
+// router-mode spawn (src/main/engine/engine-supervisor.ts, the spawn(); context length and
+// auto-sleep live in the preset's [*] section since 2026-09-05, NOT on the
+// command line — a -c here outranks every preset):
 //
 //   llama-server --host 127.0.0.1 --port 8199 --no-webui --jinja \
-//     --models-dir <cacheDir> --models-max 2 --sleep-idle-seconds 300 \
-//     -c <contextSize>
+//     --models-dir <cacheDir> --models-max 2 --spec-default --cache-type-k q8_0 \
+//     --models-preset <models.ini>
 //
 // To test the `-np/--parallel` slot count, add it to that same command:
 //
 //   llama-server --host 127.0.0.1 --port 8199 --no-webui --jinja \
-//     --models-dir <cacheDir> --models-max 2 --sleep-idle-seconds 300 \
-//     -c <contextSize> --parallel 4
+//     --models-dir <cacheDir> --models-max 2 --spec-default --cache-type-k q8_0 \
+//     --models-preset <models.ini> --parallel 4
 //
 // Usage: node test-engine/probe-parallel.mjs <baseURL> <modelId> [N,N,...]
 // WHY the optional third argument (2026-09-04, stage-two probe re-run): the

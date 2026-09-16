@@ -586,3 +586,38 @@ describe('motion vocabulary', () => {
     expect(strip).not.toMatch(/'max-width 200ms ease, opacity 150ms ease'/);
   });
 });
+
+describe('the microphone budgets every frame it presents', () => {
+  // Guard for whole-branch review F3. The mic is the app's only element that
+  // animates for MINUTES at a time under the user's direct attention, so it is
+  // the worst possible place to lose this. The comment in globals.css claimed
+  // this file pinned it and this file said nothing about voice at all.
+  const globals = read('styles', 'globals.css');
+  const button = read('components', 'VoiceButton.tsx');
+
+  it('steps the breathing ring rather than smoothing it', () => {
+    expect(globals).toMatch(/\.voice-mic-on\s*\{[^}]*steps\(/);
+  });
+
+  it('steps the recording dot', () => {
+    expect(globals).toMatch(/\.voice-rec-dot\s*\{[^}]*steps\(/);
+  });
+
+  it('steps the loudness bars, which move for the whole dictation', () => {
+    // `linear` here is a frame every refresh for as long as the mic is open:
+    // the height transition retriggers on every level event, ten a second.
+    expect(globals).toMatch(/\.voice-bar\s*\{\s*transition:\s*height\s+\d+ms\s+steps\(/);
+    expect(globals).not.toMatch(/\.voice-bar\s*\{\s*transition:[^}]*linear/);
+  });
+
+  it('steps the level ring — the motion that actually ships', () => {
+    // The other two are round-2 alternatives reachable only from the workbench;
+    // this inline transition is what every user sees.
+    expect(button).toMatch(/transition:\s*'box-shadow\s+\d+ms\s+steps\(\d+\)'/);
+    expect(button).not.toMatch(/transition:\s*'box-shadow[^']*linear'/);
+  });
+
+  it('keeps the ring on whole-pixel steps, so it repaints only when the level moves a step', () => {
+    expect(button).toMatch(/\$\{2 \+ Math\.round\(level \* 7\)\}px/);
+  });
+});

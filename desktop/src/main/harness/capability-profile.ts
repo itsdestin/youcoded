@@ -3,6 +3,9 @@
 // harness NEVER branches on a model-name string (only the registry matcher does).
 import { KNOWN_MODELS, matchKnownModel, type KnownModelEntry } from './known-models';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS } from './specialists/limits';
+// Type-only: the app-wide list of provider kinds, used below ONLY to check that
+// this file's own copy of that list has not fallen behind it.
+import type { ProviderType } from '../../shared/provider-types';
 
 export type ToolPresentation = 'full' | 'simplified';
 export type PromptVariant = 'anthropic' | 'gpt' | 'default' | 'local-small';
@@ -86,17 +89,45 @@ export interface CapabilityProfile {
 
 export type ProfileProviderType =
   | 'local-engine' | 'openrouter' | 'openai-compatible'
-  | 'anthropic' | 'openai' | 'google';
+  | 'anthropic' | 'openai' | 'google'
+  // Sign in with ChatGPT (design §4.8): the user's own ChatGPT plan, reached
+  // through OpenAI's sign-in instead of a key. The models behind it are the
+  // GPT-5.x family, so everywhere below it is treated exactly like the
+  // direct 'openai' provider — same prompt flavour, same "roomy hosted
+  // window" sizing, same vision default. It was missing from this list for
+  // one review round, and the effect was silent: a plan model fell through
+  // to the "unmeasured local model" path and got a 2k injection budget, no
+  // skill catalog, the generic prompt and no images (review R3-1).
+  | 'chatgpt';
+
+// Guard against that ever happening again. The app has TWO lists of provider
+// kinds: ProviderType in shared/provider-types.ts (what the settings screen
+// and the provider registry use) and ProfileProviderType just above (what
+// the harness sizes sessions from). The host passes a registry row's type
+// straight into resolveProfile, so the two lists must name the SAME
+// providers. The two lines below are pure type arithmetic — they add no
+// code to the built app — and `tsc` refuses to compile the moment a name
+// exists in one list but not the other. Its error names the stray member,
+// e.g. `Type '"chatgpt"' does not satisfy the constraint 'never'`. Adding a
+// provider to the shared union therefore FORCES a visit to this file, which
+// is the point: every set below (FRONTIER_PROVIDERS, VISION_PROVIDERS,
+// cloudVariant, …) needs a deliberate yes/no for a new provider.
+type AssertNever<T extends never> = T;
+type _HarnessKnowsEveryProvider = AssertNever<Exclude<ProviderType, ProfileProviderType>>;
+type _SharedKnowsEveryHarnessProvider = AssertNever<Exclude<ProfileProviderType, ProviderType>>;
 
 // LAYER 1 — discovered truth (a later task fills contextLength from the real engine).
 export interface DiscoveredModel {
   providerType: ProfileProviderType; modelId: string; contextLength: number | null;
-  /** Per-model vision fact sourced from a catalog that can actually answer it
-   *  (today: OpenRouter's architecture.input_modalities — see model-catalog.ts).
-   *  Optional because most construction sites cannot answer this yet (no
-   *  catalog lookup wired at the call site) — `undefined` here means "not
-   *  discovered", not "no". visionFor() treats it as the middle precedence
-   *  layer: below the KNOWN_MODELS registry, above the provider-type default. */
+  /** Per-model vision fact sourced from a catalog that can actually answer it:
+   *  OpenRouter's architecture.input_modalities (see model-catalog.ts), and —
+   *  since design §E5 — the identically-named field llama-server reports for a
+   *  LOCAL model it paired a vision projector with (see
+   *  EngineManager.catalogModels). Optional because most construction sites
+   *  cannot answer this (no catalog lookup wired at the call site) —
+   *  `undefined` here means "not discovered", not "no". visionFor() treats it
+   *  as the middle precedence layer: below the KNOWN_MODELS registry, above the
+   *  provider-type default. */
   supportsVision?: boolean;
   /** Task 13 — the engine's live parallel-slot count (llama-server's
    *  `total_slots`; `n_slots` on older builds), read from the SAME
@@ -162,7 +193,10 @@ export const CLOUD_DEFAULT: CapabilityProfile = {
 
 function cloudVariant(t: ProfileProviderType): PromptVariant {
   if (t === 'anthropic') return 'anthropic';
-  if (t === 'openai') return 'gpt';
+  // 'chatgpt' serves the same GPT-5.x models as a direct OpenAI key (design
+  // §4.8: gpt-5.6-terra / gpt-5.6-luna / gpt-5.5 / gpt-5.4-mini), so it gets
+  // the one prompt overlay written for GPT models — not the generic one.
+  if (t === 'openai' || t === 'chatgpt') return 'gpt';
   return 'default';
 }
 
@@ -173,7 +207,14 @@ function cloudVariant(t: ProfileProviderType): PromptVariant {
 // 'openai-compatible' is deliberately NOT here: provider-registry documents it as
 // the Ollama / LM Studio shape, so an unmeasured one is a local model in disguise
 // and gets the conservative treatment.
-const FRONTIER_PROVIDERS: ReadonlySet<ProfileProviderType> = new Set(['anthropic', 'openai', 'google', 'openrouter']);
+//
+// 'chatgpt' IS here: it is OpenAI's own hosted service, and every model the plan
+// offers has a 272k window (Phase 0 findings, youcoded-dev
+// docs/active/investigations/2026-09-05-chatgpt-phase0-findings.md — every listed
+// manifest row carries context_window). A null here must still mean "not measured", exactly
+// as it does for 'openai' — otherwise a GPT-5.6 on the plan would be sized as a
+// 2k-budget local model while the same GPT-5.6 over OpenRouter got 20k.
+const FRONTIER_PROVIDERS: ReadonlySet<ProfileProviderType> = new Set(['anthropic', 'openai', 'google', 'openrouter', 'chatgpt']);
 
 /** M3 item 5 — how much may be injected, and may the skill catalog ride at all.
  *  A function of the WINDOW rather than the provider, so a 128k local model is
@@ -351,10 +392,26 @@ export function effectiveContextForModel(loadedContext: number | null, modelId: 
 // multimodal. openrouter / openai-compatible / local-engine are deliberately NOT
 // here: they are transports, not models — the same endpoint serves vision and
 // text-only models — so those resolve from the registry, then a DISCOVERED
-// per-model fact (openrouter's catalog can supply one — see DiscoveredModel's
-// supportsVision comment), and only then this provider-type default.
-const VISION_PROVIDERS = new Set<ProfileProviderType>(['anthropic', 'openai', 'google']);
+// per-model fact (openrouter's catalog supplies one, and so does the local
+// engine's own /models — see DiscoveredModel's supportsVision comment), and
+// only then this provider-type default.
+//
+// 'chatgpt' joins: unlike openrouter it is NOT a transport that could serve any
+// model — it only ever serves the plan's GPT-5.x models, all of which accept
+// text + image input (Phase 0 findings, the manifest's input_modalities). Without it here, images could not
+// be sent to a GPT-5.6 on the plan at all: there is no registry row for these
+// ids and the host only discovers per-model vision facts for openrouter.
+const VISION_PROVIDERS = new Set<ProfileProviderType>(['anthropic', 'openai', 'google', 'chatgpt']);
 
+/** NOTE for anyone tracing the catalog's careful "don't know" (undefined)
+ *  posture: it ends HERE. This returns a boolean, because the harness has no
+ *  third thing to do with an unknown — so an undiscovered answer becomes
+ *  `false` via the provider-type default below. That is deliberate and it is
+ *  the safe direction: a wrong `false` only means the model is told the picture
+ *  cannot be delivered, while a wrong `true` fails the entire turn with a
+ *  provider error. Preserving `undefined` all the way up the catalog is still
+ *  what makes THAT choice available here rather than being made by accident
+ *  three layers down. */
 function visionFor(d: DiscoveredModel, registry: KnownModelEntry[]): boolean {
   const known = matchKnownModel(d.modelId, registry);
   // Registry wins wherever it has an opinion — it is the one place a modelId is
@@ -381,11 +438,17 @@ export function resolveProfile(d: DiscoveredModel, registry: KnownModelEntry[] =
   // any base/registry object) and spread onto every return site below so the
   // known-model registry — which has no field for this — can never override
   // it either way.
+  // 'chatgpt' is deliberately NOT included: its wire is OpenAI's, which has no
+  // image-inside-a-tool-result block, so it takes the same adapter split as
+  // 'openai'.
   const nativeImageToolResults = d.providerType === 'anthropic';
   // PROVIDER-TYPE fact like nativeImageToolResults, computed once here and
   // spread onto every return below so no registry entry or layer can override
   // it: only a model running on the user's own machine gets the prompt-reading
   // notice. See the field's doc comment for why 'openai-compatible' counts.
+  // 'chatgpt' is deliberately NOT included: it is a hosted service, and the
+  // notice exists to explain a minutes-long local prefill that hosted models
+  // never have.
   const announcePrefill = d.providerType === 'local-engine' || d.providerType === 'openai-compatible';
   if (d.providerType !== 'local-engine') {
     return { ...CLOUD_DEFAULT, promptVariant: cloudVariant(d.providerType), ...sizing, mcpToolBudgetTokens, supportsVision, nativeImageToolResults, announcePrefill };

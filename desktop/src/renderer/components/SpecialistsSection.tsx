@@ -4,11 +4,12 @@ import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import { Button, EmptyState, ErrorState, FieldError, LoadingState, SettingRow, TextInput, Toggle } from './ui';
 import type { ExplainerSection } from './SettingsExplainer';
 import { refreshSpecialistRoster, useSpecialistRoster, provenanceWithinGroup, NOT_IMPLEMENTED_ON_MOBILE } from '../hooks/useSpecialists';
+import { AUTOMATIC_SPECIALIST_MODEL_COPY, SPECIALIST_DEFAULTS_CHANGED_EVENT } from './SpecialistModelUnavailable';
 
 // Specialists 1c — Settings → Specialists. Two things, in the order a person
 // needs them: (1) the two model tiers the assistant can hire onto (Destin's
-// 2026-08-12 ruling: user-designated, never auto-priced; unset falls back to
-// the conversation's model, honestly), and (2) the roster — every specialist
+// 2026-09-15 ruling: explicit choices are global overrides; otherwise use a
+// reviewed model matching the conversation provider), and (2) the roster — every specialist
 // the assistant can hire right now, where it came from, what it may do, and
 // any narrowing the loader applied to a file (spec §2: a stripped tool is a
 // VISIBLE warning, never a silent edit). No editor: that is later marketplace
@@ -39,8 +40,8 @@ export const SPECIALISTS_EXPLAINER_SECTIONS: ExplainerSection[] = [
   {
     heading: 'The two model tiers',
     paragraphs: [
-      'When your assistant hires a helper it can ask for the budget model (cheap, fast, good for searching and reading) or the frontier model (the strongest you have, for judgment calls). You choose which real model each name means here. If a tier is not set, the helper simply uses the conversation’s own model — and the assistant is told so.',
-      'Nothing is picked for you by price. These two names are the only automatic choices your assistant can make; it may name a specific model only when you ask it to.',
+      'When your assistant hires a helper it can ask for the Budget model (fast and efficient for searching and reading) or the Frontier model (stronger for code reviews and judgment calls). If a tier is not set, YouCoded chooses a reviewed model that matches the conversation’s provider.',
+      'A model you choose here overrides the automatic choice for every provider. If the reviewed model is unavailable, the helper does not start and its card brings you back here. The assistant may name a specific model only when you ask it to.',
     ],
   },
   {
@@ -147,6 +148,11 @@ export default function SpecialistsSection({ cwd }: {
       const res = await window.claude.specialists.setDelegatedModel(tier, binding);
       if (res && res.ok === false) { setTiers(prev); setTierWriteError(`Couldn’t save the ${tier} model. ${res.error ?? ''}`.trim()); return; }
       await loadTiers();
+      if (binding) {
+        // WHY the failed Task card waits for confirmed persistence, not the
+        // optimistic picker value, before it offers to try the hire again.
+        window.dispatchEvent(new CustomEvent(SPECIALIST_DEFAULTS_CHANGED_EVENT, { detail: { tier } }));
+      }
     } catch (e) { setTiers(prev); setTierWriteError((e as Error).message); }
   };
 
@@ -263,9 +269,10 @@ export default function SpecialistsSection({ cwd }: {
           Available specialists{roster.status === 'ready' ? ` · ${definitions.length}` : ''}
           {warningCount ? ` · ${warningCount} warning${warningCount === 1 ? '' : 's'}` : ''}
         </h3>
+        {/* Fix (UX review 1, U27): an empty padded div sat here above the first
+            group and read as a missing row; the first group's top border now
+            starts the card. */}
         <div className="rounded-lg bg-inset/50">
-          <div className="px-3 py-2.5">
-          </div>
           {roster.status === 'loading' ? (
             <div className="border-t border-edge-dim px-3 py-3">
               <LoadingState what="specialists" variant="inline" />
@@ -400,19 +407,20 @@ function TierRow({ tier, title, hint, value, loaded, onPick, onClear }: {
           line and shrank the picker — the destructive one should read as
           secondary to the thing it undoes, not as its equal. */}
       <div className="space-y-1.5">
-        <ModelPicker value={choice} onSelect={onPick} includeClaude={false} />
+        <ModelPicker
+          value={choice}
+          onSelect={onPick}
+          includeClaude={false}
+          emptyLabel={loaded ? AUTOMATIC_SPECIALIST_MODEL_COPY : 'Loading models…'}
+        />
         {value && (
           <Button size="sm" variant="ghost" className="w-full" onClick={onClear} title={`Unset the ${tier} model`}>Clear</Button>
         )}
       </div>
-      {/* Destin (workbench pass): an UNSET tier now says nothing at all. It used
-          to carry an amber "Not set — helpers use the conversation's model",
-          which put a caution colour on the default state and explained the
-          fallback on every row forever. The ⓘ explainer says it once instead.
-          The whole element is dropped rather than emptied — an empty div keeps
-          its line-height and leaves a gap under the button.
-          Fix (Task 13): the loading case was a bare "Loading…" — every loading
-          state in this app names what it's waiting on. */}
+      {/* Destin (2026-09-15 review): the unset explanation belongs INSIDE the
+          selector as its current value, not on a separate line beneath it.
+          The status line below therefore exists only while loading or when a
+          concrete override is selected. */}
       {(!loaded || value) && (
         <div className="text-2xs">
           {!loaded

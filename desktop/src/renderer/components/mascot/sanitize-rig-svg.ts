@@ -1,3 +1,5 @@
+import DOMPurify from 'dompurify';
+
 /**
  * Sanitizes a theme-provided rig SVG before it is inlined into the buddy DOM.
  *
@@ -5,12 +7,55 @@
  * in our renderer with access to window.claude. Everything that can run
  * script or reach the network is stripped; only static drawing content,
  * same-document references (#id) and embedded data:image/* rasters survive.
- * Registry-side CI validation is a follow-up — THIS function is the guarantee.
  *
- * Pure (DOMParser is available in the renderer and jsdom tests). Returns the
- * serialized sanitized SVG, or null when the input isn't a parseable SVG.
+ * Three passes, and the LAST one is the guarantee (2026-09-10 security review):
+ *  1. Parse as XML and keep only elements and text. The markup is read as XML
+ *     here but re-read as HTML when React inlines it, and the two readers
+ *     disagree about where a comment or a `<?…?>` ends — text hidden inside one
+ *     came back as a live `<img onerror>` in the page.
+ *  2. The tag blocklist, compared case-insensitively (XML is case-sensitive, so
+ *     `<FOREIGNOBJECT>` walked past a lowercase match), and the attribute scrub.
+ *  3. DOMPurify over the serialized result. It parses with the same HTML parser
+ *     the page uses, so whatever survives it is exactly what the page will build.
+ * wecoded-themes CI (scripts/audit-svg-safety.mjs) rejects the same tricks at
+ * submission, but a hand-installed theme never passes through it.
+ *
+ * Returns the sanitized SVG markup, or null when the input isn't a parseable SVG.
  */
-const BLOCKED_TAGS = ['script', 'foreignObject', 'iframe', 'object', 'embed', 'link', 'meta', 'style', 'animate', 'animateTransform', 'animateMotion', 'set'];
+const BLOCKED_TAGS = new Set([
+  'script', 'foreignobject', 'iframe', 'object', 'embed', 'link', 'meta', 'style',
+  'animate', 'animatetransform', 'animatemotion', 'set',
+]);
+
+/** An embedded raster image, the only external-looking href a rig may keep. */
+const DATA_IMAGE_RASTER = /^data:image\/(?:png|jpe?g|gif|webp|avif);/i;
+
+const ELEMENT_NODE = 1;
+const TEXT_NODE = 3;
+const CDATA_SECTION_NODE = 4;
+
+const PURIFY_SVG = {
+  USE_PROFILES: { svg: true, svgFilters: true },
+  // `<use href="#part">` reuses a part of the same drawing, a documented rig
+  // capability DOMPurify leaves out by default. DOMPurify still strips any href
+  // on it that is not a same-document reference.
+  ADD_TAGS: ['use'],
+  FORBID_TAGS: ['style', 'animate', 'animateTransform', 'animateMotion', 'set', 'foreignObject'],
+};
+
+/** Pass 3 on its own, for SVG markup assembled from an already-inlined rig (the
+ *  buddy's peek hands re-serialize part of the live rig with outerHTML).
+ *
+ *  Fails CLOSED (2026-09-10 review): if DOMPurify reports itself unsupported it
+ *  returns the INPUT unchanged, which for the peek-hands path — no XML/blocklist
+ *  pre-pass — would be a silent total bypass. An empty string renders nothing;
+ *  sanitizeRigSvg then falls back to the default buddy. DOMPurify is supported in
+ *  Electron, the Android WebView and every remote browser, so this only guards a
+ *  should-never-happen. */
+export function purifySvgMarkup(markup: string): string {
+  if (!DOMPurify.isSupported) return '';
+  return DOMPurify.sanitize(markup, PURIFY_SVG);
+}
 
 export function sanitizeRigSvg(svgText: string): string | null {
   let doc: Document;
@@ -22,9 +67,20 @@ export function sanitizeRigSvg(svgText: string): string | null {
   const root = doc.documentElement;
   if (!root || root.tagName.toLowerCase() !== 'svg' || doc.querySelector('parsererror')) return null;
 
-  for (const tag of BLOCKED_TAGS) {
-    // SVG is case-sensitive but sloppy authors aren't — match both spellings.
-    doc.querySelectorAll(`${tag}, ${tag.toLowerCase()}`).forEach((el) => el.remove());
+  // Pass 1 — elements and text only. Copy childNodes before walking: removing
+  // from a live NodeList while iterating it skips the next sibling.
+  const keepElementsAndText = (node: Node): void => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType === ELEMENT_NODE) keepElementsAndText(child);
+      else if (child.nodeType === CDATA_SECTION_NODE) node.replaceChild(doc.createTextNode(child.nodeValue ?? ''), child);
+      else if (child.nodeType !== TEXT_NODE) node.removeChild(child);
+    }
+  };
+  keepElementsAndText(root);
+
+  // Pass 2 — blocklist, then attributes.
+  for (const el of Array.from(root.getElementsByTagName('*'))) {
+    if (BLOCKED_TAGS.has(el.localName.toLowerCase())) el.parentNode?.removeChild(el);
   }
 
   const scrub = (el: Element): void => {
@@ -35,10 +91,14 @@ export function sanitizeRigSvg(svgText: string): string | null {
       if (name.startsWith('on')) {
         el.removeAttribute(attr.name);
       } else if (name === 'href' || name === 'xlink:href') {
-        if (!(value.startsWith('#') || value.toLowerCase().startsWith('data:image/'))) {
+        // Same-document refs and embedded RASTER data URIs only. Restricted to
+        // real raster types (2026-09-10 review): `data:image/svg+xml` is another
+        // document — browsers sandbox script inside an <image>, but the type list
+        // makes that a design choice here, not a reliance on that sandboxing.
+        if (!(value.startsWith('#') || DATA_IMAGE_RASTER.test(value))) {
           el.removeAttribute(attr.name);
         }
-      } else if (name === 'style' && /url\s*\(\s*['"]?\s*(?!#|data:image\/)/i.test(value)) {
+      } else if (name === 'style' && /url\s*\(\s*['"]?\s*(?!#|data:image\/(?:png|jpe?g|gif|webp|avif))/i.test(value)) {
         // fill:url(https://…) can exfiltrate via fetch — allow only #refs/data images.
         el.removeAttribute(attr.name);
       }
@@ -47,5 +107,7 @@ export function sanitizeRigSvg(svgText: string): string | null {
   };
   scrub(root);
 
-  return new XMLSerializer().serializeToString(root);
+  // Pass 3 — the guarantee.
+  const clean = purifySvgMarkup(new XMLSerializer().serializeToString(root));
+  return /^\s*<svg[\s>]/i.test(clean) ? clean : null;
 }

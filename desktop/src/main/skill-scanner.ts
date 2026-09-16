@@ -13,6 +13,9 @@ import { SkillEntry } from '../shared/types';
  *      that may live at non-cache `installPath`s
  *   3. `~/.claude/skills/` — USER-authored local skills (source: 'self')
  *
+ * Project-local `.claude/skills/` are scanned separately by scanProjectSkills().
+ * A project cwd must never enter this global, cacheable installed-skills inventory.
+ *
  * Curated metadata (`skill-registry.json`) is consulted ONLY to enrich entries
  * already discovered on disk — never to inject fake "installed" entries.
  * That earlier behavior caused the marketplace UI to badge uninstalled
@@ -28,7 +31,7 @@ export function scanSkills(): SkillEntry[] {
     id: string,
     fallbackName: string,
     fallbackDesc: string,
-    inferredSource: 'youcoded-core' | 'self' | 'plugin',
+    inferredSource: 'youcoded-core' | 'self' | 'project' | 'plugin',
     pluginName?: string,
     // The directory holding this skill's SKILL.md. Every call site already
     // computed it to find the skill at all; keeping it lets the native harness
@@ -96,7 +99,14 @@ export function scanSkills(): SkillEntry[] {
               ? e.name
               : `${pluginEntry.name}:${e.name}`;
             const source = pluginEntry.name.startsWith('youcoded') ? 'youcoded-core' : 'plugin';
-            addSkill(skillId, e.name, '', source, pluginEntry.name, path.join(skillsDir, e.name));
+            const skillDir = path.join(skillsDir, e.name);
+            // WHY: this loop used to pass '' for fallbackDesc, so every plugin
+            // skill without a curated registry entry fell back to the generic
+            // "Run the X skill" string even though its SKILL.md has a real
+            // description (the same one the Skill tool shows Claude). Read it,
+            // same as Pass 3 (user skills) already does below.
+            const meta = readSkillMeta(path.join(skillDir, 'SKILL.md'));
+            addSkill(skillId, e.name, meta.description || '', source, pluginEntry.name, skillDir);
           }
         }
       } catch {}
@@ -123,7 +133,9 @@ export function scanSkills(): SkillEntry[] {
         for (const entry of skillEntries) {
           if (entry.isDirectory()) {
             const skillId = `${pluginSlug}:${entry.name}`;
-            addSkill(skillId, entry.name, '', 'plugin', pluginSlug, path.join(skillsDir, entry.name));
+            const skillDir = path.join(skillsDir, entry.name);
+            const meta = readSkillMeta(path.join(skillDir, 'SKILL.md'));
+            addSkill(skillId, entry.name, meta.description || '', 'plugin', pluginSlug, skillDir);
           }
         }
       } catch {}
@@ -134,11 +146,14 @@ export function scanSkills(): SkillEntry[] {
         for (const entry of cmdEntries) {
           if (entry.isDirectory()) {
             const cmdId = `${pluginSlug}:${entry.name}`;
+            const cmdDir = path.join(commandsDir, entry.name);
             // A commands/ entry is a slash command, not a skill — it may hold no
-            // SKILL.md at all. Recording the directory anyway is honest: the
-            // catalog reports "installed but unreadable" rather than pretending
-            // the entry has no home on disk.
-            addSkill(cmdId, entry.name, '', 'plugin', pluginSlug, path.join(commandsDir, entry.name));
+            // SKILL.md at all, so meta.description is often empty and the
+            // generic fallback still applies. Recording the directory anyway is
+            // honest: the catalog reports "installed but unreadable" rather than
+            // pretending the entry has no home on disk.
+            const meta = readSkillMeta(path.join(cmdDir, 'SKILL.md'));
+            addSkill(cmdId, entry.name, meta.description || '', 'plugin', pluginSlug, cmdDir);
           }
         }
       } catch {}
@@ -196,6 +211,33 @@ export function scanSkills(): SkillEntry[] {
   return skills;
 }
 
+/** Scan one project's skills separately: they are a session-scoped capability,
+ * not app-wide installed inventory. This prevents the Skills screen / remote
+ * client from borrowing workflows from whichever project was active last. */
+export function scanProjectSkills(projectCwd: string): SkillEntry[] {
+  const projectSkillsDir = path.join(projectCwd, '.claude', 'skills');
+  const skills: SkillEntry[] = [];
+  for (const entry of readdirSafe(projectSkillsDir)) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(projectSkillsDir, entry.name);
+    const skillFile = path.join(skillDir, 'SKILL.md');
+    if (!fs.existsSync(skillFile)) continue;
+    const meta = readSkillMeta(skillFile);
+    skills.push({
+      id: entry.name,
+      displayName: meta.name || entry.name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+      description: meta.description || '',
+      category: 'other',
+      prompt: `/${entry.name}`,
+      source: 'project',
+      type: 'plugin',
+      visibility: 'private',
+      skillDir,
+    });
+  }
+  return skills;
+}
+
 function loadCuratedRegistry(): Record<string, Omit<SkillEntry, 'id'>> {
   try {
     const registryPath = path.join(__dirname, '..', 'renderer', 'data', 'skill-registry.json');
@@ -223,7 +265,27 @@ function readSkillMeta(skillMdPath: string): { name?: string; description?: stri
     if (!fm) return {};
     const body = fm[1];
     const name = /^name:\s*["']?([^"'\n]+)["']?\s*$/m.exec(body)?.[1]?.trim();
-    const description = /^description:\s*["']?([^"'\n]+)["']?\s*$/m.exec(body)?.[1]?.trim();
-    return { name, description };
+    return { name, description: readFrontmatterDescription(body) };
   } catch { return {}; }
+}
+
+// `description:` is sometimes a YAML folded/literal block scalar
+// (`description: >` or `description: |`) rather than a plain scalar on one
+// line — every youcoded-encyclopedia skill uses this form for its long
+// trigger text. A single-line regex captures the block indicator itself
+// (">") instead of the text, which is worse than the generic fallback it was
+// meant to replace, so walk the following indented lines and join them.
+function readFrontmatterDescription(body: string): string | undefined {
+  const lines = body.split('\n');
+  const idx = lines.findIndex((l) => /^description:\s*/.test(l));
+  if (idx === -1) return undefined;
+  const inline = /^description:\s*(.*)$/.exec(lines[idx])?.[1]?.trim() ?? '';
+  if (!/^[|>][+-]?\d*$/.test(inline)) {
+    return inline.replace(/^["']|["']$/g, '').trim() || undefined;
+  }
+  const collected: string[] = [];
+  for (let i = idx + 1; i < lines.length && /^\s+\S/.test(lines[i]); i++) {
+    collected.push(lines[i].trim());
+  }
+  return collected.join(' ').trim() || undefined;
 }

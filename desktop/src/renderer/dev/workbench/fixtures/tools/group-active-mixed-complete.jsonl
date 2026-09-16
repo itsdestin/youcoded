@@ -1,0 +1,6 @@
+{"type":"text","text":"Checking the current state, then reading the file I'm about to change, then writing the update — this last step is still running in this fixture."}
+{"type":"tool_use","id":"toolu_01AM1","name":"Bash","input":{"command":"git status","description":"Repo status"}}
+{"tool_use_id":"toolu_01AM1","type":"tool_result","content":"On branch active-mixed\nnothing to commit, working tree clean","is_error":false}
+{"type":"tool_use","id":"toolu_01AM2","name":"Read","input":{"file_path":"/workspace/src/renderer/AppShell.tsx"}}
+{"tool_use_id":"toolu_01AM2","type":"tool_result","content":"     1→import React from 'react';\n     2→export function AppShell() { return null; }\n","is_error":false}
+{"type":"tool_use","id":"toolu_01AM3","name":"Write","input":{"file_path":"/workspace/src/renderer/AppShell.tsx"}}

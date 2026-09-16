@@ -19,7 +19,7 @@ import { useMemo, useState } from 'react';
 import type { TagRecord } from '../../../shared/tags';
 import { TAG_COLORS, DEFAULT_TAG_COLOR, TagColor } from '../../../shared/tags';
 import { TagRegistryApi } from '../../hooks/useTagRegistry';
-import { Button, Dialog, EmptyState, InputGroup, TextInput, Toggle } from '../ui';
+import { Button, Dialog, EmptyState, ErrorState, InputGroup, TextInput, Toggle } from '../ui';
 
 export function TagManagerPopup({ open, onClose, registry, layer = 2 }: {
   open: boolean;
@@ -79,10 +79,26 @@ export function TagManagerPopup({ open, onClose, registry, layer = 2 }: {
       )}
 
       <div className="flex flex-col gap-1">
-        {visible.length === 0 ? (
-          <EmptyState message={showArchived ? 'No tags yet' : 'No tags yet — create one above'} />
+        {/* WHY (error inventory 2026-09-10, false message 16): a failed read used to reach
+            this list as [] and read "No tags yet — create one above" to someone with tags.
+            With nothing ever loaded, the failure IS the answer. With tags from an earlier
+            read, they stay — they are real — and one line says they may be out of date. */}
+        {registry.error && registry.tags.length === 0 ? (
+          <ErrorState variant="inline" message={`Couldn't load your tags: ${registry.error}`} onRetry={registry.reload} />
         ) : (
-          visible.map((t) => <ManagedTagRow key={t.id} tag={t} registry={registry} />)
+          <>
+            {/* Tags DID load before, so a failed refresh is reported whether or not any of
+                them are visible — with every loaded tag archived and hidden it used to drop
+                out, leaving a bare "No tags yet" (code review 2026-09-11, F9). */}
+            {registry.error && (
+              <ErrorState variant="inline" message="Couldn't refresh your tags — showing the last ones loaded." onRetry={registry.reload} />
+            )}
+            {visible.length === 0 ? (
+              <EmptyState message={showArchived ? 'No tags yet' : 'No tags yet — create one above'} />
+            ) : (
+              visible.map((t) => <ManagedTagRow key={t.id} tag={t} registry={registry} />)
+            )}
+          </>
         )}
       </div>
 

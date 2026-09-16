@@ -295,6 +295,49 @@ function deriveDestructiveFg(destructive: string, canvas: string, panel: string)
 }
 
 /**
+ * The one amber every warning is drawn in, before the theme gets a say. Tailwind
+ * amber-400 — the colour the app has always used for a warning.
+ */
+export const WARNING_BASE = '#FBBF24';
+
+/**
+ * Derive the amber a warning is actually painted in, per theme.
+ *
+ * WHY (contract R30, measured 2026-09-06): warnings were drawn in one fixed
+ * amber. On a dark theme that is crisp — 9.5:1 on Halftone Dimension. On a pale
+ * theme it is not: the same amber on Meadow Mist's pale-green card measured
+ * 1.05:1, roughly the same brightness as the card behind it. It was legible only
+ * if you already knew it was there, and it did not read as a warning at all.
+ * Themes are user-installable, so no per-theme colour can fix this — a theme
+ * nobody has written yet has to come out right on its own.
+ *
+ * Same shape as deriveDestructiveFg: mix the amber toward white (dark themes) or
+ * black (light themes) in 2% steps until it clears AA against every surface a
+ * warning is painted on, and return it unchanged when it already passes — so
+ * dark themes, where the amber is already crisp, see no change whatsoever.
+ *
+ * The surfaces are panel, inset AND their half-and-half blend, because the
+ * warning card is `bg-inset/50` sitting on a panel: the pixels behind the text
+ * are literally that mix, and checking only the two endpoints would let a
+ * straddling pair through. Canvas is in the set too — the same amber marks
+ * warnings out on the page itself.
+ */
+function deriveWarningFg(canvas: string, panel: string, inset: string): string {
+  const blend = mixHex(inset, panel, 0.5);
+  const worst = (c: string) => Math.min(
+    contrastRatio(c, canvas), contrastRatio(c, panel),
+    contrastRatio(c, inset), contrastRatio(c, blend),
+  );
+  if (worst(WARNING_BASE) >= 4.5) return WARNING_BASE;
+  const target = rgbLuminance(...parseHex(canvas)) < 0.5 ? '#FFFFFF' : '#000000';
+  for (let t = 0.02; t <= 1.0001; t += 0.02) {
+    const candidate = mixHex(WARNING_BASE, target, t);
+    if (worst(candidate) >= 4.5) return candidate;
+  }
+  return target;
+}
+
+/**
  * Nudge a DERIVED link colour until it is actually readable.
  *
  * WHY: the accent-vs-fg distance guard below only asks "is this link
@@ -419,6 +462,9 @@ export function computeOverlayTokens(
     // Text-on-surface variant. See deriveDestructiveFg — --destructive is a FILL
     // colour and cannot also serve as legible text on a dark canvas.
     '--destructive-fg': deriveDestructiveFg(destructive, tokens.canvas, tokens.panel),
+    // The amber warnings are painted in, made readable on THIS theme's surfaces.
+    // See deriveWarningFg — one fixed amber vanished on pale themes.
+    '--warning-fg': deriveWarningFg(tokens.canvas, tokens.panel, tokens.inset),
     '--code': code,
     '--link': link,
     '--link-hover': linkHover,
@@ -433,6 +479,58 @@ export function computeOverlayTokens(
 const IMPLICIT_GLASS_OPACITY = 0.77;
 
 const LAYOUT_ATTRS = ['data-chrome-style', 'data-input-style', 'data-bubble-style', 'data-header-style', 'data-statusbar-style'] as const;
+
+// WHY: Reduced Effects (applyThemeToDom's `reducedEffects` flag) has its own
+// [data-reduced-effects] rules in globals.css, but those are selector-specific
+// to the app's own chrome — they say nothing about a community theme's
+// custom_css, which can keep a forever animation running on permanent chrome
+// (.header-bar etc.) with Reduced Effects ON, the one setting a user reaches
+// for to make the app stop moving. Rather than banning animation for every
+// theme author (a change to what they shipped), read the selectors the theme
+// itself animates and cancel exactly those, only while the setting is on.
+//
+// Matches the unprefixed longhand/shorthand AND -webkit-animation(-name):
+// sanitizeCSS (theme-validator.ts) strips only script/URL injection vectors,
+// not vendor prefixes, and Golden Sunbreak's own custom_css already ships
+// other -webkit- properties — so a theme is free to use the legacy prefix and
+// this must not miss it. The negative lookahead skips `animation: none` (and
+// `-webkit-animation: none`) so a theme that's already off gets no useless
+// override rule.
+const ANIMATION_DECL = /(^|[\s;{])(-webkit-)?animation(-name)?\s*:\s*(?!none\b)/;
+
+/** Reads every rule a theme's injected <style> animates and returns an
+ *  `animation: none !important` override per selector, so applyThemeToDom
+ *  can neutralise exactly the theme's own forever-animations under Reduced
+ *  Effects. Detection uses each rule's cssText, not the animationName
+ *  longhand, because jsdom's CSSOM does not expand shorthands and Chromium
+ *  does — cssText is stable in both.
+ *
+ *  WHY selectorText is checked BEFORE the nested-cssRules branch: jsdom
+ *  (unlike Chromium) exposes an (empty) `cssRules` on every CSSRule,
+ *  including plain CSSStyleRule — an empty CSSRuleList is a truthy object,
+ *  so checking `rule.cssRules` first would treat EVERY rule as a grouping
+ *  rule and never read a single style rule's selector. Checking
+ *  `selectorText` first is correct in both engines and is not a jsdom-only
+ *  workaround: a real CSSMediaRule/CSSKeyframesRule has no selectorText, so
+ *  it still falls through to the nested walk exactly as intended. */
+export function buildReducedOverrides(styleEl: HTMLStyleElement): string {
+  const sheet = styleEl.sheet as CSSStyleSheet | null;
+  if (!sheet) return '';
+  const selectors = new Set<string>();
+  const walk = (rules: CSSRuleList) => {
+    for (const rule of Array.from(rules)) {
+      const style = rule as CSSStyleRule;
+      if (style.selectorText) {
+        if (ANIMATION_DECL.test(style.cssText)) selectors.add(style.selectorText);
+        continue;
+      }
+      const nested = (rule as CSSGroupingRule).cssRules;
+      if (nested) walk(nested); // @media/@supports/@keyframes, …
+    }
+  };
+  try { walk(sheet.cssRules); } catch { return ''; } // a cross-origin sheet would throw; ours never is
+  return Array.from(selectors).map((s) => `${s} { animation: none !important; }`).join('\n');
+}
 
 /** Applies a full ThemeDefinition to the live DOM. Only call from renderer process.
  *  When reducedEffects is true, glassmorphism, particles, and overlay effects are suppressed. */
@@ -569,6 +667,36 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   } else if (customEl) {
     customEl.textContent = '';
   }
+
+  // 7a. Reduced Effects for theme-injected animation.
+  //
+  // WHY: see ANIMATION_DECL/buildReducedOverrides above for what this reads.
+  // Off → this sheet is empty and #theme-custom is byte-identical to before
+  // this feature existed, so nothing changes for users who don't touch the
+  // setting.
+  //
+  // WHY reposition on EVERY apply, not only at creation: #theme-custom is
+  // created lazily (only once a theme HAS custom_css). A theme with none,
+  // followed by one that has custom_css, creates #theme-custom on the
+  // SECOND apply — by which point #theme-custom-reduced may already exist
+  // from the first apply's fallback append to the end of <head>. Without
+  // reasserting adjacency here, the override sheet would sit BEFORE the
+  // theme's own rules and lose ties on specificity. Must come AFTER
+  // #theme-custom so equal-specificity rules win by source order.
+  const reducedCSSId = 'theme-custom-reduced';
+  let reducedEl = document.getElementById(reducedCSSId) as HTMLStyleElement | null;
+  if (!reducedEl) {
+    reducedEl = document.createElement('style');
+    reducedEl.id = reducedCSSId;
+  }
+  if (customEl) {
+    if (reducedEl.previousElementSibling !== customEl) {
+      customEl.insertAdjacentElement('afterend', reducedEl);
+    }
+  } else if (!reducedEl.isConnected) {
+    document.head.appendChild(reducedEl);
+  }
+  reducedEl.textContent = reducedEffects && customEl ? buildReducedOverrides(customEl) : '';
 
   // 7b. Engine overrides style tag — removed in the glassmorphism refactor.
   //     Manifest fields flow through --panels-* / --bubble-* CSS variables which

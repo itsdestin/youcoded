@@ -139,3 +139,123 @@ describe('scanGgufCache is scanLocalDownloads filtered to complete sets', () => 
     ]);
   });
 });
+
+// ── Vision models live in a folder of their own (design §E2) ────────────────
+// llama-server only pairs a model with its `mmproj*.gguf` when the two sit
+// together in ONE subdirectory of --models-dir, and it then names that model by
+// the FOLDER. Every claim below was probed against the pinned b10665 on
+// 2026-09-05 before it was written down; the scan has to agree with the router
+// about what exists and what it is called, or the app offers models the engine
+// will not serve (the 2026-08-16 class of bug).
+
+function touchIn(sub: string, name: string, bytes = 8) {
+  fs.mkdirSync(path.join(dir, sub), { recursive: true });
+  fs.writeFileSync(path.join(dir, sub, name), Buffer.alloc(bytes));
+}
+
+describe('scanLocalDownloads — one level of folders', () => {
+  it('a model folder is ONE download, and the projector is NOT one of its parts', () => {
+    touchIn('V-Q4_K_M', 'V-Q4_K_M.gguf', 10);
+    touchIn('V-Q4_K_M', 'mmproj-F16.gguf', 4);
+    touchIn('V-Q4_K_M', 'V-Q4_K_M.gguf.download.json', 100);
+    const downloads = scanLocalDownloads(dir);
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0]).toEqual({
+      modelId: 'V-Q4_K_M',
+      firstFileName: 'V-Q4_K_M.gguf',
+      subdir: 'V-Q4_K_M',
+      // 1, not 2: counting the projector as a published part is what would let
+      // a half-arrived model read as complete.
+      partsDeclared: 1, partsPresent: 1,
+      // 10, not 14: bytesPublished stays the model's own weights, which is what
+      // the engine-off model list reports as a model's size.
+      bytesPublished: 10, bytesPartial: 0,
+      hasPartial: false, hasManifest: true,
+      hasProjector: true, visionBytes: 4,
+    });
+    expect(isComplete(downloads[0])).toBe(true);
+  });
+
+  it('the id is the FOLDER name, not the file inside it', () => {
+    // Probed: a cache dir holding `weird-folder/C-Q8_0.gguf` served the model
+    // under the id `weird-folder`. Deriving the id from the filename here would
+    // hand the app an id GET /models does not answer to.
+    touchIn('Weird-Name', 'C-Q8_0.gguf', 9);
+    const [d] = scanLocalDownloads(dir);
+    expect(d.modelId).toBe('Weird-Name');
+    expect(d.firstFileName).toBe('C-Q8_0.gguf');
+  });
+
+  it('a split set inside a folder is ONE model, named by the folder', () => {
+    touchIn('S-Q8_0-00001-of-00002', 'S-Q8_0-00001-of-00002.gguf', 10);
+    touchIn('S-Q8_0-00001-of-00002', 'S-Q8_0-00002-of-00002.gguf', 20);
+    const [d] = scanLocalDownloads(dir);
+    expect(d).toMatchObject({
+      modelId: 'S-Q8_0-00001-of-00002', subdir: 'S-Q8_0-00001-of-00002',
+      partsDeclared: 2, partsPresent: 2, bytesPublished: 30,
+    });
+    expect(isComplete(d)).toBe(true);
+  });
+
+  it('TWO levels deep is not a model — the router does not look there either', () => {
+    // Probed: `deep/inner/B-Q8_0.gguf` was absent from GET /models entirely.
+    // Listing it here would offer a row that can never load.
+    touchIn(path.join('deep', 'inner'), 'B-Q8_0.gguf', 10);
+    expect(scanLocalDownloads(dir)).toEqual([]);
+  });
+
+  it('a projector still arriving is in-flight bytes of the same download', () => {
+    // The second leg of one job: the weights are published and the model works,
+    // so the SET is complete, but the folder is not finished downloading.
+    touchIn('V-Q4_K_M', 'V-Q4_K_M.gguf', 10);
+    touchIn('V-Q4_K_M', 'mmproj-F16.gguf.partial', 7);
+    const [d] = scanLocalDownloads(dir);
+    expect(d).toMatchObject({
+      modelId: 'V-Q4_K_M', partsPresent: 1, bytesPublished: 10,
+      hasProjector: false, visionBytes: 0, bytesPartial: 7, hasPartial: true,
+    });
+    expect(isComplete(d)).toBe(true);
+  });
+
+  it('a projector sitting FLAT is not a model row of its own', () => {
+    // Real repos ship names like `gemma-3-12b-it.mmproj-f16.gguf`, which the
+    // quant grammar would happily read as a model called `gemma-3-12b-it`.
+    touch('Flat-Q4_K_M.gguf', 5);
+    touch('gemma-3-12b-it.mmproj-f16.gguf', 900);
+    expect(scanLocalDownloads(dir).map((d) => d.modelId)).toEqual(['Flat-Q4_K_M']);
+  });
+
+  it('a folder holding ONLY a projector is still a row — or it can never be deleted', () => {
+    // The leftover of a download whose weights were removed, or of a move that
+    // stopped half way. It can be gigabytes, and a row that is never listed is
+    // also a row the user has no way to get rid of. Never complete, so it is
+    // never offered as a model.
+    touchIn('Orphan-Q4_K_M', 'mmproj-F16.gguf', 900);
+    const [d] = scanLocalDownloads(dir);
+    expect(d).toMatchObject({
+      modelId: 'Orphan-Q4_K_M', subdir: 'Orphan-Q4_K_M',
+      partsDeclared: 1, partsPresent: 0, bytesPublished: 0,
+      hasProjector: true, visionBytes: 900,
+    });
+    expect(isComplete(d)).toBe(false);
+    expect(scanGgufCache(dir)).toEqual([]);
+  });
+
+  it('a folder with no GGUFs at all is not a row', () => {
+    // The other half of the rule above: "empty folder" must stay invisible, or
+    // any stray directory in the cache dir becomes a phantom model.
+    touchIn('NotAModel', 'readme.txt', 10);
+    fs.mkdirSync(path.join(dir, 'Empty'), { recursive: true });
+    expect(scanLocalDownloads(dir)).toEqual([]);
+  });
+
+  it('a flat model and a folder model are listed side by side', () => {
+    touch('Flat-Q4_K_M.gguf', 5);
+    touchIn('V-Q4_K_M', 'V-Q4_K_M.gguf', 10);
+    touchIn('V-Q4_K_M', 'mmproj-F16.gguf', 4);
+    expect(scanGgufCache(dir)).toEqual([
+      { id: 'Flat-Q4_K_M', sizeBytes: 5, loaded: false, state: 'unloaded' },
+      { id: 'V-Q4_K_M', sizeBytes: 10, loaded: false, state: 'unloaded' },
+    ]);
+  });
+});

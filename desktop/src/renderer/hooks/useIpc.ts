@@ -1,9 +1,10 @@
+import type { VoiceBridge } from '../../shared/voice-types';
 import { useEffect, useRef } from 'react';
 // M1 Task 3: native.send's declared return type below was stale (`void`) from
 // before Task 2 switched the IPC channel to invoke/ack. shared/types.ts (not
 // main-only) is the existing exception to the "no cross-boundary import"
 // comment just below — native-send.ts already imports it the same way.
-import type { NativeSendResult } from '../../shared/types';
+import type { NativeSendResult, SessionContext, SessionContextText } from '../../shared/types';
 
 // Discriminated union for IPC calls that can fail with a structured error.
 // Using a local type (not imported from main) keeps the renderer/main boundary
@@ -23,6 +24,7 @@ declare global {
         create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; model?: string; provider?: 'claude' | 'native'; resumeSessionId?: string; binding?: { providerId: string; modelId: string } }) => Promise<any>;
         destroy: (sessionId: string) => Promise<boolean>;
         list: () => Promise<any[]>;
+        canSend?: () => boolean;
         sendInput: (sessionId: string, text: string) => void;
         resize: (sessionId: string, cols: number, rows: number) => void;
         signalReady: (sessionId: string) => void;
@@ -52,7 +54,7 @@ declare global {
       };
       on: {
         sessionCreated: (cb: (info: any) => void) => (...args: any[]) => void;
-        sessionDestroyed: (cb: (id: string) => void) => (...args: any[]) => void;
+        sessionDestroyed: (cb: (id: string, exitCode?: number, focusSessionId?: string | null) => void) => (...args: any[]) => void;
         ptyOutput: (cb: (sessionId: string, data: string) => void) => (...args: any[]) => void;
         hookEvent: (cb: (event: any) => void) => (...args: any[]) => void;
         statusData: (cb: (data: any) => void) => (...args: any[]) => void;
@@ -109,16 +111,29 @@ declare global {
         cancel: (jobId: string) => Promise<{ success: boolean }>;
         launch: (jobId: string, filePath: string) => Promise<import('../../shared/update-install-types').UpdateLaunchResult>;
         getCachedDownload: (version: string) => Promise<import('../../shared/update-install-types').UpdateCachedDownload | null>;
+        // Beta update channel. `betaChannel` is the saved answer (null = never
+        // chosen); `effective` is what the next check will use, which for an
+        // unchosen install is whether this build is itself a pre-release.
+        getBetaChannel: () => Promise<{ betaChannel: boolean | null; effective: boolean }>;
+        setBetaChannel: (enabled: boolean) => Promise<{ betaChannel: boolean | null; effective: boolean }>;
         onProgress: (handler: (ev: import('../../shared/update-install-types').UpdateProgressEvent) => void) => () => void;
       };
       remote: {
         getConfig: () => Promise<any>;
-        setPassword: (pw: string) => Promise<void>;
+        // Returns false when the password is under the minimum length (2026-09-10
+        // security review #5); true on success.
+        setPassword: (pw: string) => Promise<boolean>;
         setConfig: (config: any) => Promise<void>;
         detectTailscale: () => Promise<any>;
         getClientCount: () => Promise<number>;
         getClientList: () => Promise<any[]>;
-        disconnectClient: (id: string) => Promise<void>;
+        getStatus: () => Promise<{ state: string; reason?: string; port: number } | null>;
+        onStatus: (cb: (status: any) => void) => () => void;
+        devices: {
+          list: () => Promise<any[]>;
+          rename: (deviceId: string, name: string) => Promise<boolean>;
+          unpair: (deviceId: string) => Promise<boolean>;
+        };
         broadcastAction: (action: any) => void;
       };
       off: (channel: string, handler: (...args: any[]) => void) => void;
@@ -238,8 +253,13 @@ declare global {
       };
       // App-level defaults (skipPermissions, model, projectFolder).
       defaults: {
-        get: () => Promise<{ skipPermissions: boolean; model: string; projectFolder: string }>;
-        set: (updates: Partial<{ skipPermissions: boolean; model: string; projectFolder: string }>) => Promise<any>;
+        // `startModel` — Assistant settings Q-3a (2026-09-05): one default
+        // across every provider. Optional because installs that only ever set
+        // the Claude alias (`model`) have no such field; `model` stays the
+        // fallback and is kept in step on a Claude pick. Persisted by the same
+        // defaults store, which spreads whatever keys it is given.
+        get: () => Promise<{ skipPermissions: boolean; model: string; projectFolder: string; startModel?: import('../components/model/ModelPicker').ModelChoice; startModelLabel?: { provider: string; model: string } }>;
+        set: (updates: Partial<{ skipPermissions: boolean; model: string; projectFolder: string; startModel: import('../components/model/ModelPicker').ModelChoice; startModelLabel: { provider: string; model: string } }>) => Promise<any>;
       };
       // Anonymous analytics opt-out — read/write the gate the analytics-service
       // checks on launch. Shape mirrors preload.ts + remote-shim.ts (Phase 6).
@@ -254,12 +274,35 @@ declare global {
         // Environment snapshot (git/claude/network/perms) prepended to log
         // tail by the bug-report flow. See dev-tools.ts gatherDiagnostics().
         diagnostics: () => Promise<string>;
-        summarizeIssue: (args: { kind: string; description: string; log?: string }) => Promise<{ title: string; summary: string; flagged_strings: string[] }>;
+        // `assisted: false` means NOTHING rewrote the text — the fields are the user's
+        // own words. A caller that presents them as a result is lying to the user; say
+        // `unavailable` instead (design review F17).
+        summarizeIssue: (args: { kind: string; description: string; log?: string }) => Promise<{ title: string; summary: string; flagged_strings: string[]; assisted?: boolean; unavailable?: string }>;
         // WHY: body is now assembled in the main process; renderer passes raw fields (Fix 2).
-        submitIssue: (args: { kind: 'bug' | 'feature'; title: string; summary: string; description: string; log?: string; label: string }) => Promise<{ ok: boolean; url?: string; fallbackUrl?: string }>;
+        // `summary` is OPTIONAL as of 2026-09-10: AI help is a separate choice, so a ticket
+        // written and sent with no provider call has no summary to pass (contract R12).
+        // The result is a DISCRIMINATED union for the same reason R23 exists — the old
+        // `{ ok: boolean; url?: string }` could not carry a reason, so a failed submit had
+        // nothing to say and the caller silently opened a browser tab instead.
+        submitIssue: (args: { kind: string; title: string; summary?: string; description: string; log?: string; label: string; browserOnly?: boolean }) => Promise<
+          | { ok: true; url: string }
+          | { ok: false; needsBrowser: true; fallbackUrl: string; truncated: boolean }
+          | { ok: false; error: string; fallbackUrl: string }>;
         installWorkspace: () => Promise<{ path: string; alreadyInstalled: boolean } | { error: string }>;
         onInstallProgress: (handler: (line: string) => void) => () => void;
         openSessionIn: (args: { cwd: string; initialInput?: string }) => Promise<{ id: string }>;
+        // Contribution workspace as a managed project (contract R9/R10). NO real
+        // backend yet — registered in dev/workbench/mock-only.ts, which is the
+        // backend to-do list. Deliberately NOT installWorkspace(): that one clones
+        // into a fixed folder and pulls into an existing one, both ruled out by R9.
+        setupWorkspace: () => Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+        // Setup runs in the main process, so closing the dialog cannot cancel it. The
+        // screen asks where it got to when it reopens — which is what makes "you can
+        // close this and it carries on" a true statement rather than a hopeful one.
+        setupStatus: () => Promise<{ state: 'idle' | 'running' | 'ready' | 'failed'; path?: string; error?: string }>;
+        /** Forget a finished outcome. Without it one failure makes the start button
+         *  unreachable for the rest of the session (code review C12). */
+        clearSetupStatus: () => Promise<void>;
       };
       // GPU / performance preference — multiGpuDetected: false means the
       // Performance section in Settings hides itself (no hardware to toggle).
@@ -308,11 +351,22 @@ declare global {
         // Per-session native permission mode (StatusBar chip, Task 13). Returns
         // the APPLIED mode — authoritative; the chip renders the return value.
         setPermissionMode: (sessionId: string, mode: 'ask' | 'auto-edit' | 'full-auto') => Promise<'ask' | 'auto-edit' | 'full-auto'>;
+        // Push: a session's mode was seeded or changed anywhere. Returns unsubscribe.
+        onPermissionMode?: (cb: (e: { sessionId: string; mode: string }) => void) => () => void;
+        getContextPreferences: () => Promise<import('../../shared/context-preferences').ContextPreferences>;
+        setContextPreferences: (patch: Partial<import('../../shared/context-preferences').ContextPreferences>) => Promise<import('../../shared/context-preferences').ContextPreferences>;
+        getStepGuard: () => Promise<number | null>;
+        setStepGuard: (value: number | null) => Promise<number | null>;
         sessionsList: () => Promise<any[]>;
         killShell: (sessionId: string, shellId: string) => Promise<{ ok: true } | { ok: false; reason: string }>;   // G-1
         // Per-session bound-model residency push (2026-07-14): { sessionId,
         // modelId, state: 'unloaded'|'loading'|'loaded'|'sleeping', sizeBytes }.
         onModelState: (cb: (s: any) => void) => () => void;
+        // "What the assistant was given" (2026-09-10). onSessionContext returns
+        // its unsubscribe fn; sessionContextText answers { error } rather than
+        // throwing, so the panel shows a line instead of an unhandled rejection.
+        sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) => Promise<SessionContextText | { error: string }>;
+        onSessionContext: (cb: (e: { sessionId: string; context: SessionContext | null }) => void) => () => void;
       };
       // Provider registry — native runtime model providers (desktop-only; the
       // Android/remote stubs reject with not-implemented).
@@ -376,14 +430,36 @@ declare global {
         status: () => Promise<any>;
         install: () => Promise<any>;
         restart: () => Promise<any>;
-        // Plan C context-length knob — persists -c and reboots the engine.
+        // Plan C context-length knob — a thin alias for setConfig({contextSize}).
         setContext: (contextSize: number) => Promise<any>;
+        /** Every engine-wide setting in one write: the context length and the two
+         *  speed switches. The value saves immediately; it reaches the engine
+         *  once the reply that is streaming right now has finished, which is what
+         *  the returned status's `configApplyPending` reports. */
+        setConfig: (patch: {
+          contextSize?: number;
+          speed?: Partial<import('../../shared/engine-types').EngineSpeedSettings>;
+        }) => Promise<any>;
         onInstallProgress: (cb: (p: any) => void) => () => void;
         onStatusChanged: (cb: (s: any) => void) => () => void;
         // Live per-model residency (2026-07-14).
         models: () => Promise<import('../../shared/engine-types').EngineModel[]>;
         onModelsChanged: (cb: (models: import('../../shared/engine-types').EngineModel[]) => void) => () => void;
+        // 2026-09-05 local-engine upgrades. Real on every surface now; the
+        // workbench keeps a fake for each so the flows can be walked without a
+        // machine, a PTY or a running engine.
+        /** What a faster backend needs before it can be installed (Linux ROCm). */
+        prereqs: (backend: string) => Promise<import('../../shared/engine-types').EnginePrereqs>;
+        /** Open a plain-shell session in the app and TYPE an install command onto
+         *  its prompt — nothing is run; the user presses Enter. Resolves with the
+         *  session it made, which the renderer then selects (App.tsx's
+         *  session-created handler already focuses a new session). */
+        runInTerminal: (command: string) => Promise<{ sessionId: string }>;
       };
+      // Voice prompting (2026-09-05 deck). Optional: absent on hosts with no
+      // speech engine yet (remote browser, older builds) — the composer hides
+      // the mic when it is undefined. Shape: shared/voice-types.ts.
+      voice?: VoiceBridge;
       // Model manager (Plan C) — curated catalog, HF search, downloads, endpoint
       // detectors, engine backend switch. Task 9's Local Models panel consumes
       // these. onDownloadProgress returns an unsubscribe.
@@ -404,6 +480,22 @@ declare global {
         // Create-time / swap memory guard + [Reload Model] (2026-07-14).
         memoryCheck: (modelId: string) => Promise<{ verdict: 'ok' | 'tight' | 'too-large'; headline: string; detail: string }>;
         load: (modelId: string) => Promise<boolean>;
+        // 2026-09-05 local-engine upgrades. Real on every surface now.
+        /** One model's engine settings as STORED (deck Q-2). The stored shape,
+         *  not the four fields the dialog writes: the dialog also shows whether
+         *  the last save is still waiting on a streaming reply, and why the
+         *  model last failed to load. */
+        settings: (modelId: string) => Promise<import('../../shared/model-manager-types').StoredModelSettings>;
+        /** Save one model's settings, and remember (or forget) the memory
+         *  warning for it — `dismissMemoryWarning` replaced the separate
+         *  `models.dismissMemoryWarning` channel, so there is ONE write for
+         *  everything this dialog owns. */
+        setSettings: (
+          modelId: string,
+          patch: import('../../shared/model-manager-types').ModelSettingsWrite,
+        ) => Promise<import('../../shared/model-manager-types').StoredModelSettings>;
+        /** Fetch the vision projector for a model already on disk and move both into a folder (S-3). */
+        addVision: (modelId: string) => Promise<{ downloadId: string }>;
       };
       // Platform integration for hardware back button (Android). On desktop,
       // both methods are no-op stubs (preload.ts). On Android, notifyStackState

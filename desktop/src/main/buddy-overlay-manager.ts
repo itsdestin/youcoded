@@ -400,6 +400,7 @@ export class BuddyOverlayManager implements BuddyManager {
   // mascot moves via DOM/CSS transform inside it, driven entirely by the
   // renderer, so main never needs a per-frame drag target here.
   moveMascot(_targetX: number, _targetY: number): void {}
+  moveMascotFromPointer(_localDx: number, _localDy: number): void {}
 
   // WHY no-op: see moveMascot — drag-release snap detection also has to
   // live renderer-side for the overlay model, since there's no per-mascot

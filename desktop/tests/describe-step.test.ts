@@ -73,7 +73,7 @@ describe('describeStep', () => {
 
   it('describes the auth step', () => {
     expect(describeStep(state({ currentStep: 'AUTHENTICATE' })))
-      .toBe('Sign in with your Claude account to finish setup.');
+      .toBe('Sign in with an account, or run a model on this computer, to finish setup.');
   });
 
   it('describes the developer-mode step', () => {
@@ -88,14 +88,62 @@ describe('describeStep', () => {
       .toBe('All set. Opening YouCoded…');
   });
 
-  it('describes an error state when lastError is set', () => {
+  it('describes an error state when a prerequisite actually failed', () => {
     const s = state({
       currentStep: 'INSTALL_PREREQUISITES',
       lastError: 'Could not download Node.js',
+      prerequisites: [
+        { name: 'node', displayName: 'Node.js', status: 'failed', error: 'network' },
+        { name: 'git', displayName: 'Git', status: 'waiting' },
+        { name: 'claude', displayName: 'Claude Code', status: 'waiting' },
+        { name: 'auth', displayName: 'Sign in', status: 'waiting' },
+      ],
+    });
+    // No "or skip for now": the skip link was removed from this screen
+    // (review 2026-09-05 P-6), so the copy offered an escape that is not there.
+    expect(describeStep(s)).toBe('Something went wrong. You can retry the last step.');
+    expect(describeStep(s)).not.toContain('skip');
+  });
+
+  // The OpenRouter button sets lastError without anything failing (first-run.ts
+  // handleOpenRouterNotBuilt). Nothing went wrong and there is no Try Again
+  // button beside it, so the headline must stay the step's own line — the
+  // "coming in a later update" sentence is rendered underneath on its own.
+  it('keeps the step headline when lastError is set but no prerequisite failed', () => {
+    const s = state({
+      currentStep: 'AUTHENTICATE',
+      lastError: 'OpenRouter sign-in is coming in a later update.',
     });
     expect(describeStep(s)).toBe(
-      'Something went wrong. You can retry the last step or skip for now.',
+      'Sign in with an account, or run a model on this computer, to finish setup.',
     );
+  });
+
+  // Nothing failed and there is no other control on the screen (no sign-in
+  // buttons on the install step) — Try Again is the only way forward, so the
+  // headline that introduces it stays.
+  it('describes an error state when the run itself failed off-step (no disk space)', () => {
+    const s = state({
+      currentStep: 'INSTALL_PREREQUISITES',
+      lastError: 'Insufficient disk space: 210 MB available (need >= 500 MB)',
+    });
+    expect(describeStep(s)).toBe('Something went wrong. You can retry the last step.');
+  });
+
+  // A ChatGPT / Claude sign-in that times out DOES mark the auth prerequisite
+  // failed, so that case keeps the error headline and its Try Again button.
+  it('describes an error state when a sign-in failed', () => {
+    const s = state({
+      currentStep: 'AUTHENTICATE',
+      lastError: 'Sign-in timed out. Try again?',
+      prerequisites: [
+        { name: 'node', displayName: 'Node.js', status: 'installed' },
+        { name: 'git', displayName: 'Git', status: 'installed' },
+        { name: 'claude', displayName: 'Claude Code', status: 'installed' },
+        { name: 'auth', displayName: 'Sign in', status: 'failed', error: 'Timed out' },
+      ],
+    });
+    expect(describeStep(s)).toBe('Something went wrong. You can retry the last step.');
   });
 
   it('falls back to the generic install message when nothing specific is installing', () => {

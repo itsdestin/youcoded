@@ -59,6 +59,13 @@ export interface LoadOptions {
    * default view is the same conversation, just not parked.
    */
   includeStalled?: boolean;
+  /** Replay `{"type":"session_error", "optIn":"planLimit", …}` lines — the
+   *  used-up-ChatGPT-plan card (design 2026-09-04). Off by default for the same
+   *  reason as `includeStalled`: the chatgpt fixture is the shared ChatGPT
+   *  session, and an error card over it belongs to one review, not every one.
+   *  `?planLimit=1` turns it on. A session_error line with no `optIn` always
+   *  replays. */
+  includePlanLimit?: boolean;
 }
 
 // Fixed base timestamp, not Date.now(): fixtures must replay identically on
@@ -68,7 +75,14 @@ const FIXTURE_T0 = 1_753_800_000_000;
 /** A fixture line's own `timestamp` (epoch ms) when it has one, else the
  *  synthetic clock every other action here uses — one second per action, so
  *  fixture order IS time order and a note's `at` can be placed among rows. */
-function fixtureTime(parsed: { timestamp?: unknown }, index: number): number {
+function fixtureTime(parsed: { timestamp?: unknown; elapsedMs?: unknown }, index: number): number {
+  // `elapsedMs` anchors a line to LOAD time — "this happened N ms ago" — the
+  // same trick a RUNNING specialist_run record uses below, and for the same
+  // reason: a Claude Code subagent card takes its start time from its first
+  // stamped segment, so a fixed FIXTURE_T0 makes a still-working helper read
+  // "Working · 9680h 0m" instead of a plausible runtime. Settled records keep
+  // fixed stamps and stay reproducible.
+  if (typeof parsed.elapsedMs === 'number') return Date.now() - parsed.elapsedMs;
   return typeof parsed.timestamp === 'number' ? parsed.timestamp : FIXTURE_T0 + index * 1000;
 }
 
@@ -188,6 +202,26 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'session_error' && typeof parsed.text === 'string') {
+        // The provider failed the turn: same action App dispatches for a
+        // 'session-error' transcript event, replayed through the real reducer
+        // so the error banner (and its plan-limit variant) is reviewable.
+        if (parsed.optIn === 'planLimit' && !opts.includePlanLimit) continue;
+        const action: ChatAction = { type: 'NATIVE_SESSION_ERROR', sessionId, message: parsed.text };
+        state = chatReducer(state, action);
+        actions.push(action);
+      } else if (parsed.type === 'session_context') {
+        // Step 3 (2026-08-17, broadened): a session's STARTING context. Replays
+        // the same SESSION_CONTEXT action the host will fire, so the session
+        // context panel + strip render in the workbench through the real
+        // reducer. Works for cloud (full) and local (trimmed) sessions alike.
+        const action: ChatAction = {
+          type: 'SESSION_CONTEXT',
+          sessionId,
+          context: parsed.context ?? null,
+        };
+        state = chatReducer(state, action);
+        actions.push(action);
       } else if (parsed.type === 'tool_use') {
         const action: ChatAction = {
           type: 'TRANSCRIPT_TOOL_USE',
@@ -259,17 +293,21 @@ export function loadFixture(
       } else if (parsed.type === 'subagent_text' || parsed.type === 'subagent_thinking') {
         // Specialists 1c: a child's stamped text/reasoning → nested segment on
         // the parent Task card (`parent` = the Task tool_use id).
+        // fixtureTime, not the raw synthetic clock, so these lines can carry
+        // `elapsedMs` like the tool lines below — a running helper's segments
+        // have to sit near NOW or its card states a runtime in years.
+        const at = fixtureTime(parsed, actions.length);
         const action: ChatAction = parsed.type === 'subagent_text'
           ? {
               type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId,
               uuid: `${name}-satxt-${actions.length}`, text: parsed.text,
-              timestamp: FIXTURE_T0 + actions.length * 1000,
+              timestamp: at,
               parentAgentToolUseId: parsed.parent,
             }
           : {
               type: 'TRANSCRIPT_ASSISTANT_REASONING', sessionId,
               uuid: `${name}-sathk-${actions.length}`, text: parsed.text,
-              timestamp: FIXTURE_T0 + actions.length * 1000,
+              timestamp: at,
               parentAgentToolUseId: parsed.parent,
             };
         state = chatReducer(state, action);
@@ -405,7 +443,23 @@ export function loadFixture(
         : b,
     );
 
-    return { blocks: refreshed, actions };
+    // A `tool_use` with no matching `tool_result`/`permission_request` line
+    // never got a block above (the "wait for the matching tool_result" skip),
+    // so a genuinely still-running tool — no approval needed, just mid-flight —
+    // was silently invisible in the gallery; there was no fixture shape for
+    // "spinner, no result yet" at all. Anything left over in toolCalls at the
+    // end IS that state, so append it here. Appended in call order (a Map
+    // preserves insertion order), not interleaved with its original text
+    // line — good enough for "still running" fixtures, which put it last.
+    const seenIds = new Set(refreshed.filter((b): b is Extract<FixtureBlock, { kind: 'tool' }> => b.kind === 'tool').map((b) => b.tool.toolUseId));
+    const stillRunning: FixtureBlock[] = [];
+    for (const tool of finalSession?.toolCalls.values() ?? []) {
+      if (!seenIds.has(tool.toolUseId) && tool.status === 'running') {
+        stillRunning.push({ kind: 'tool', tool });
+      }
+    }
+
+    return { blocks: [...refreshed, ...stillRunning], actions };
   } catch (err) {
     return {
       blocks: [],

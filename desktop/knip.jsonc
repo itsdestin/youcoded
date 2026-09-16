@@ -46,12 +46,21 @@
   // the `binaries` category stays at its default (error), so a NEW unlisted
   // binary still fails CI.
   "ignoreBinaries": [
+    // Creates a named pipe for tests/remote-download.test.ts, which proves a pipe
+    // swapped in for a downloaded file cannot freeze a file thread on the host.
+    // A POSIX utility (coreutils), not an npm package: Node has no mkfifo API.
+    "mkfifo",
     // Linux socket-stats tool, engine-supervisor.ts: which process holds the port.
     "ss",
     // Windows process lister, sync-service.ts: is this sync PID still alive.
     "tasklist",
     // The Drive/cloud sync transport, sync-service.ts — users install it themselves.
-    "rclone"
+    "rclone",
+    // glibc's shared-library cache lister, engine/rocm-prereqs.ts: does this
+    // machine already have the AMD libraries the ROCm engine build loads?
+    // Part of glibc itself on every Linux distribution, and its ABSENCE is a
+    // handled case there (the check falls back to /opt/rocm/lib).
+    "ldconfig"
   ],
 
   "ignoreDependencies": [

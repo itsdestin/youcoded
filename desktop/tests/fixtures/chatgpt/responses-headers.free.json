@@ -1,0 +1,19 @@
+{
+ "status": 200,
+ "headers": {
+  "x-codex-active-limit": "premium",
+  "x-codex-credits-balance": "",
+  "x-codex-credits-has-credits": "False",
+  "x-codex-credits-unlimited": "False",
+  "x-codex-plan-type": "free",
+  "x-codex-primary-over-secondary-limit-percent": "0",
+  "x-codex-primary-reset-after-seconds": "2592000",
+  "x-codex-primary-reset-at": "1791189238",
+  "x-codex-primary-used-percent": "0",
+  "x-codex-primary-window-minutes": "43200",
+  "x-codex-secondary-reset-after-seconds": "0",
+  "x-codex-secondary-reset-at": "",
+  "x-codex-secondary-used-percent": "0",
+  "x-codex-secondary-window-minutes": "0"
+ }
+}

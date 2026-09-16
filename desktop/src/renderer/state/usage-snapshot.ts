@@ -36,6 +36,13 @@ export interface StatuslineStats {
 export interface SubscriptionUsage {
   five_hour?: { utilization: number; resets_at: string };
   seven_day?: { utilization: number; resets_at: string };
+  /** Windows that are neither 5 hours nor 7 days long, tagged with their
+   *  length in minutes. Only the ChatGPT plan reports these today (a free
+   *  account has ONE 30-day window and nothing else — Phase 0, 2026-09-05);
+   *  Claude's cache never writes the key. Mirrors `ChatGptUsage.other`
+   *  (shared/chatgpt-types.ts). Words deck W-2 = a: the screens draw each of
+   *  these labelled by its real length, after the 5h and 7d bars. */
+  other?: Array<{ utilization: number; resets_at: string; minutes: number }>;
 }
 
 /** Drop any usage window whose reset time has already passed.
@@ -54,12 +61,26 @@ export function pruneExpiredUsage(
 ): SubscriptionUsage | null {
   if (!usage || typeof usage !== 'object') return null;
   const out: SubscriptionUsage = {};
+  // One rule for every window: gone once its reset time is behind us; kept
+  // when the reset is unknown or unparseable (guessing "expired" would hide a
+  // real number).
+  const live = (win: { utilization: number; resets_at: string } | null | undefined) => {
+    if (!win || win.utilization == null) return false;
+    const t = win.resets_at ? Date.parse(win.resets_at) : NaN;
+    return !(Number.isFinite(t) && t <= now);
+  };
   for (const key of ['five_hour', 'seven_day'] as const) {
     const win = usage[key];
-    if (!win || win.utilization == null) continue;
-    const t = win.resets_at ? Date.parse(win.resets_at) : NaN;
-    if (Number.isFinite(t) && t <= now) continue;
-    out[key] = win;
+    if (live(win)) out[key] = win!;
+  }
+  // The odd-length windows (W-2 = a) age out the same way; the key is dropped
+  // outright when none survive so `other: []` never reads as "has windows".
+  if (Array.isArray(usage.other)) {
+    // Number.isFinite, not `typeof === 'number'`: NaN is a number, and a
+    // window whose length failed to parse used to survive pruning and paint a
+    // chip reading "NaNh".
+    const rest = usage.other.filter((w) => w && Number.isFinite(w.minutes) && w.minutes > 0 && live(w));
+    if (rest.length) out.other = rest;
   }
   return Object.keys(out).length ? out : null;
 }
@@ -81,6 +102,10 @@ export interface UsageSnapshotInput {
   /** Claude Code's context reading (percent REMAINING), if any. */
   contextPercent: number | null;
   usage: SubscriptionUsage | null;
+  /** Which plan `usage` belongs to. Absent → 'claude' (every caller before
+   *  Sign in with ChatGPT). App picks the ChatGPT windows for a session bound
+   *  to a 'chatgpt' provider (hooks/use-provider-type.ts). */
+  subscriptionPlan?: 'claude' | 'chatgpt';
   /** True for a YouCoded-runtime session. Gates every native fallback below. */
   isNative: boolean;
   session: UsageSnapshotSession | undefined;
@@ -107,7 +132,7 @@ export function lastTurnUsage(session: UsageSnapshotSession | undefined): TurnUs
  * session may have no data for a few seconds.
  */
 export function buildUsageSnapshot(input: UsageSnapshotInput): UsageSnapshot | null {
-  const { sessionId, now, stats, contextPercent: ctx, usage, isNative, session } = input;
+  const { sessionId, now, stats, contextPercent: ctx, usage, isNative, session, subscriptionPlan } = input;
 
   // Native fallback (spec §10). The statusline is written by Claude Code, which
   // a native session never runs — so without this every session figure below
@@ -208,5 +233,11 @@ export function buildUsageSnapshot(input: UsageSnapshotInput): UsageSnapshot | n
     fiveHourResetsAt: usage?.five_hour?.resets_at ?? null,
     sevenDayUtilization: usage?.seven_day?.utilization ?? null,
     sevenDayResetsAt: usage?.seven_day?.resets_at ?? null,
+    // The plan's odd-length windows (a free ChatGPT plan's single 30-day one),
+    // carried whole so the card can draw them after the two above. Left
+    // undefined — not an empty list — when there are none, so every snapshot
+    // built before this field existed compares equal to one built now.
+    ...(usage?.other?.length ? { otherWindows: usage.other } : {}),
+    subscriptionPlan: subscriptionPlan ?? 'claude',
   };
 }

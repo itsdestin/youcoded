@@ -31,6 +31,21 @@ function fixture(body: string): SkillEntry {
 }
 
 describe('skill catalog', () => {
+  it('loads a project-local skill when given that session’s cwd', () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-project-catalog-'));
+    try {
+      const skillDir = path.join(project, '.claude', 'skills', 'wrap-up');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: Wrap up\n---\nImprove the workspace.');
+
+      expect(createSkillCatalog(undefined, project).load('wrap-up')).toMatchObject({
+        id: 'wrap-up', body: 'Improve the workspace.', file: path.join(skillDir, 'SKILL.md'),
+      });
+    } finally {
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   it('loads a skill body from its directory', () => {
     const skill = createSkillCatalog([fixture('---\nname: demo\n---\nStep one. Step two.')]).load('demo');
     expect(skill.body).toContain('Step one');

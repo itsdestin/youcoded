@@ -1,0 +1,14 @@
+/* WHY: mark bundled artwork, never blanket-paint authored community SVGs.
+   A narrow rim preserves the pale silhouette at icon/game sizes. */
+svg[data-default-mascot="rig"] #rig-body > path:first-child,
+svg[data-default-mascot="rig"] [id^="rig-arm-"] > path:first-child,
+svg[data-default-mascot="rig"] [id^="rig-leg-"] > rect:first-child,
+[data-default-mascot="icon"] svg > path,
+[data-default-mascot="icon"] svg > rect,
+[data-default-mascot="icon"] svg > g > path:not([data-mascot-face]) {
+  stroke: var(--default-mascot-rim, none);
+  stroke-width: 0.85;
+  paint-order: stroke fill;
+}
+[data-default-mascot="icon"][data-soft-palette="true"] svg { color: var(--default-icon-body); }
+[data-default-mascot="icon"][data-soft-palette="true"] svg circle { fill: var(--default-mascot-catchlight); }

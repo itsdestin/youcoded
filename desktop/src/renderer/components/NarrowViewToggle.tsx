@@ -14,6 +14,7 @@
 // ArtifactContext and platform mocks to render at all.
 
 import { ChatIcon, TerminalIcon } from './Icons';
+import { Tooltip } from './ui';
 
 export type ViewMode = 'chat' | 'terminal';
 
@@ -30,16 +31,17 @@ export default function NarrowViewToggle({ viewMode, onToggleView }: Props) {
     // data-view-toggle: what ViewToggleHint's coach mark points at. Both
     // toggle variants carry it so the hint follows the breakpoint switch.
     <div data-view-toggle className="bg-inset rounded-md p-0.5 shrink-0">
+      <Tooltip text={label} placement="bottom">
       <button
         onClick={() => onToggleView(nextView)}
         className="coarse-hit px-2 py-1 rounded-[var(--radius-toggle)] transition-colors flex items-center text-fg-dim hover:text-fg-2"
-        title={label}
         aria-label={label}
       >
         {nextView === 'terminal'
           ? <TerminalIcon className="w-4 h-4" />
           : <ChatIcon className="w-4 h-4" />}
       </button>
+      </Tooltip>
     </div>
   );
 }

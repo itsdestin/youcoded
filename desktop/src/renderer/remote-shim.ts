@@ -3,9 +3,14 @@
  * Provides the same API surface as the Electron preload bridge.
  */
 
+// Type-only, so nothing is added to the bundle the Android WebView loads.
+import type { VoiceReadiness } from '../shared/voice-types';
+
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
-import { REMOTE_UNSUPPORTED_EVENT, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
+import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
+import { REMOTE_RECONNECTED_EVENT } from './remote-events';
+import type { FirstRunState } from '../shared/first-run-types';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
 interface MarketplaceUser {
@@ -22,12 +27,37 @@ interface PendingRequest {
   resolve: (value: any) => void;
   reject: (reason: any) => void;
   timeout: ReturnType<typeof setTimeout>;
+  type: string;
+  /** Sent, no reply, timed out: it MAY have run. Asked about on reconnect, never retried. */
+  outcomeUnknown?: boolean;
 }
+
+/**
+ * Ids whose fate the host could not tell us, announced as a window event.
+ *
+ * NOTHING LISTENS TO THIS YET. The sentence here used to read "The UI reads this to say so
+ * plainly", which was not true: the reconciliation runs and the event fires, and the person
+ * is told nothing either way. Sending is still safe — a request is never re-run — but the
+ * "we don't know whether that happened" state has no screen. Filed as an open item in
+ * docs/roadmap/remote-access.md rather than invented at review time.
+ */
+export const OUTCOME_UNKNOWN_EVENT = 'youcoded:outcome-unknown';
 
 export type RemoteConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 
 let ws: WebSocket | null = null;
 let messageId = 0;
+/**
+ * Bumped on every socket. Request ids were `msg-N` from a per-page-load counter, so two
+ * devices — or the same device after a reload — produced the same ids, and a host answering
+ * "did this run?" could answer about somebody else's request.
+ */
+let connectionGeneration = 0;
+/** Rehydration is for coming BACK: on a first connect the caller's own queued mount-time
+ *  fetches already flush, and re-asking would double every connection's traffic. */
+let hasConnectedBefore = false;
+/** Set from auth:ok, so an id names the device it came from. */
+let myDeviceId = '';
 const pending = new Map<string, PendingRequest>();
 const listeners = new Map<string, Set<Callback>>();
 let connectionState: RemoteConnectionState = 'disconnected';
@@ -38,10 +68,284 @@ const MAX_RECONNECT_DELAY = 30_000;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 
+/** Why a sign-in did not complete, attached to the error connect() rejects with.
+ *
+ * WHY the kinds (Destin, 2026-09-11: the password screen "flickering before loading back into
+ * the thing without actually needing a password"): every failure used to look alike, so a page
+ * load with no signal yet was treated like a computer that had unpaired the phone, and the
+ * saved key was deleted. Only `refused` is the computer's answer about the key; the other
+ * kinds say nothing about it. */
+export type SignInFailure =
+  | { kind: 'refused'; reason: string }
+  | { kind: 'unreachable' | 'closed' };
+export type SavedKeySignInEvent =
+  | { type: 'refused'; reason: string }
+  | { type: 'failed'; kind: 'unreachable' | 'closed' };
+
+/** Refusals that mean the saved key can never sign in again. `no-password-configured` is not
+ *  one: remote access is switched off on the computer, and the key works again once it is on. */
+const KEY_IS_DEAD = new Set(['revoked', 'unknown', 'invalid-credentials']);
+
+/** Which row this browser has on each computer, kept apart from the key. WHY (Destin, 2026-09-11:
+ *  "each sign in seems to create a new device entry in the remote access menu? even though all
+ *  the same device"): the row id lived only inside the key, so losing the key lost the row, and
+ *  the next password sign-in paired a new one. Keyed by computer, so no other computer is told. */
+const DEVICE_ROWS_KEY = 'youcoded-remote-device-rows';
+function readDeviceRows(): Record<string, string> {
+  try {
+    const rows = JSON.parse(localStorage.getItem(DEVICE_ROWS_KEY) ?? '{}');
+    return rows && typeof rows === 'object' ? rows : {};
+  } catch { return {}; }
+}
+function rememberDeviceRow(host: string, deviceId: string): void {
+  try { localStorage.setItem(DEVICE_ROWS_KEY, JSON.stringify({ ...readDeviceRows(), [host]: deviceId })); } catch { /* storage blocked */ }
+}
+function deviceRowFor(host: string): string | undefined {
+  const id = readDeviceRows()[host];
+  return typeof id === 'string' && id ? id : undefined;
+}
+
+/** The sign-in screen, told how the saved key's attempts go until one succeeds. */
+let savedKeyListener: ((e: SavedKeySignInEvent) => void) | null = null;
+/** Set by "Enter password instead": no more automatic attempts with the saved key. */
+let savedKeyStopped = false;
+
+/** Told when the computer refuses this device AFTER it had connected (unpaired, or its key
+ *  retired by a password change), so the page can leave the app for the password screen instead
+ *  of saying "Reconnecting" forever (review of the 2026-09-11 fixes, finding 4). */
+let credentialRefusedListener: ((reason: string) => void) | null = null;
+export function onCredentialRefused(cb: (reason: string) => void): void {
+  credentialRefusedListener = cb;
+}
+
+function noteRefusedAfterConnecting(reason: string): void {
+  // The next sign-in is a new pairing whose terminals start empty: resuming the old terminal
+  // positions would skip everything before them.
+  lastReadyHost = null;
+  credentialRefusedListener?.(reason);
+}
+
+/** Messages received from the computer. The wake check reads it: anything arriving after its
+ *  question proves the connection is alive, even when the reply itself is queued behind it. */
+let framesReceived = 0;
+/** When the last one arrived. The heartbeat below reads it: silence is what earns a question. */
+let lastFrameAt = 0;
+
+function signInError(message: string, failure: SignInFailure): Error {
+  return Object.assign(new Error(message), { signInFailure: failure });
+}
+
+function signInFailureOf(err: unknown): SignInFailure | null {
+  return (err as { signInFailure?: SignInFailure } | null)?.signInFailure ?? null;
+}
+
 /** Override WebSocket target — set by connectToHost(), cleared by disconnectFromHost() */
 let targetUrl: string | null = null;
+
+// Remote access batch 2 (design §1 A, §6): the readiness handshake.
+//
+// The host queues every broadcast for this client until it hears `client:ready`, then
+// restores in order (session list, snapshot, replays, the queue) and goes live. The shim
+// sends it the FIRST time App's chat:hydrate listener exists after auth:ok — that is the
+// moment the page can apply what the host sends — and never twice per connection: App
+// re-adds the listener on an effect re-run or a StrictMode double mount, and a second
+// client:ready must not restart the sequence.
+//
+// `clientReadySeq` is monotonic for the shim's LIFETIME, never per connection: the host
+// echoes it in chat:hydrate and the shim applies only the hydrate it last asked for, so a
+// slow answer to an earlier request (or an earlier connection) can never land on top of a
+// newer one. Refresh (remote:rehydrate, §6) draws from the same counter.
+let clientReadySeq = 0;
+let readySentThisGeneration = false;
+/** Whether this client held state from THIS host before the current connection. The host
+ *  uses it to decide what its restore may skip. Keyed on the host, not the shim's lifetime
+ *  (review of T1, finding 1): an Android page connects to its local bridge first, and a
+ *  later pairing to a desktop is a FIRST connect to that desktop, however many times the
+ *  bridge was reached before — and the same in reverse on the fallback to local. */
+let readyReconnect = false;
+let lastReadyHost: string | null = null;
+
+// Remote access batch 2 (design §6, contract R13–R15): where this page's copy of the
+// conversation stands. The shim alone knows it — the connection state, which hydrate it
+// asked for last, whether that hydrate was degraded, and (from App's report) whether the
+// apply kept any session of the phone's own. App only renders the strip.
+type ConversationPhase = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
+let conversationPhase: ConversationPhase | null = null;
+/** Set around a close that is not a drop: leaving a paired computer, or a host that refused
+ *  this device for good. Neither is "reconnecting" (T4 review, 3 and 13). */
+let suppressReconnectingPhase = false;
+/** The hydrate most recently handed to the page, waiting for App's report. */
+let lastHydrate: { seq: number | undefined; degraded: boolean } | null = null;
+let noHydrateTimer: ReturnType<typeof setTimeout> | null = null;
+/** A restore that never answers must not leave the strip busy forever. */
+const NO_HYDRATE_MS = 10_000;
+
+function setConversationPhase(phase: ConversationPhase): void {
+  // The Android app on its own local bridge never hydrates from a computer: a phase there
+  // would end as "may be out of date" with a Refresh that has nothing to refresh.
+  if (isAndroidLocal()) return;
+  conversationPhase = phase;
+  dispatchEvent('remote:conversation-status', { phase });
+}
+
+/** This page no longer describes a computer's copy (it left the host): forget the phase so a
+ *  late subscriber is not told a stale one. */
+function forgetConversationPhase(): void {
+  conversationPhase = null;
+  lastHydrate = null;
+  if (noHydrateTimer) { clearTimeout(noHydrateTimer); noHydrateTimer = null; }
+}
+
+function armNoHydrateTimer(): void {
+  if (noHydrateTimer) clearTimeout(noHydrateTimer);
+  const seqAtArm = clientReadySeq;
+  noHydrateTimer = setTimeout(() => {
+    noHydrateTimer = null;
+    if (conversationPhase === 'restoring' && clientReadySeq === seqAtArm) setConversationPhase('incomplete');
+  }, NO_HYDRATE_MS);
+}
+
+/** App's report after it applied a hydrate: which sessions the apply kept. */
+function reportHydrate(report: { seq?: number; kept?: string[] } | undefined): void {
+  if (!lastHydrate || report?.seq !== lastHydrate.seq) return;
+  if (report?.seq !== undefined && report.seq !== clientReadySeq) return;   // an older ask
+  if (noHydrateTimer) { clearTimeout(noHydrateTimer); noHydrateTimer = null; }
+  const kept = Array.isArray(report?.kept) ? report!.kept : [];
+  setConversationPhase(lastHydrate.degraded || kept.length > 0 ? 'incomplete' : 'complete');
+}
+
+/** Refresh (§6): ask the host for a fresh copy under the next seq. */
+function requestRehydrate(): Promise<{ ok: boolean }> {
+  // Not while the socket is down: the reconnect's own restore brings a fresh copy, and a
+  // queued Refresh would run a second one right behind it.
+  if (connectionState !== 'connected') return Promise.resolve({ ok: false });
+  const seq = ++clientReadySeq;
+  setConversationPhase('restoring');
+  armNoHydrateTimer();
+  return invoke('remote:rehydrate', { seq }).then((r: { ok?: boolean } | undefined) => {
+    // A host that answers without refreshing (T4 review, 1): the strip must not stay busy.
+    if (!r?.ok && clientReadySeq === seq) setConversationPhase('incomplete');
+    return { ok: !!r?.ok };
+  }).catch(() => {
+    // A host that cannot refresh (an older desktop, the Android runtime): say the copy
+    // may still be behind, which is true, rather than stay busy.
+    if (clientReadySeq === seq) setConversationPhase('incomplete');
+    return { ok: false };
+  });
+}
+
+// Remote access batch 2 (design §7): how much of each session's terminal this page has
+// drawn, as the host's own stream positions. Every pty:output from a batch-2 host carries
+// the buffer's `epoch` and the chunk's `offset`; the end of the last chunk is what a
+// reconnect reports, and the host answers with exactly the units past it — or, when the
+// epoch changed (a host restart, a session recreated) or the offset is no longer held, a
+// pty:reset followed by the whole buffer. An older host sends neither field; nothing is
+// reported for it and a reconnect replays in full, as before.
+const ptyOffsets = new Map<string, { epoch: string; units: number }>();
+
+function collectPtyOffsets(): Record<string, { epoch: string; units: number }> {
+  return Object.fromEntries(ptyOffsets);
+}
+
+// Remote access batch 2 (design §1 C): terminal frames that arrive before the terminal
+// for that session has a listener. The restore sends the terminal replay the moment the
+// phone says it is ready, and TerminalView's listener is a React effect that registers
+// after commit — without a backlog the head of the replay was gone. Bounded per session
+// in UTF-16 units; overflow drops the oldest, so a long-idle tab still draws the tail.
+// `pty:raw-bytes` is deliberately not here: no desktop host emits it.
+const PTY_BACKLOG_MAX_UNITS = 256 * 1024;
+/** How far past the cut the trim looks for a line break before cutting where it is. An
+ *  Ink redraw can run hundreds of KB without one (T2 re-review, 10). */
+const LINE_BREAK_SEARCH_UNITS = 4096;
+/** Permission answers sent from this page and not yet replied to (T2 review, 1). */
+const answersInFlight = new Set<string>();
+type PtyBacklogEntry = { kind: 'output'; data: string } | { kind: 'reset' };
+const ptyBacklog = new Map<string, { entries: PtyBacklogEntry[]; units: number }>();
+
+function backlogPty(sessionId: string, entry: PtyBacklogEntry): void {
+  let b = ptyBacklog.get(sessionId);
+  if (!b) { b = { entries: [], units: 0 }; ptyBacklog.set(sessionId, b); }
+  b.entries.push(entry);
+  if (entry.kind === 'output') b.units += entry.data.length;
+  // Over the cap, trim the OLDEST output and keep its tail (T2 review, 5). Dropping whole
+  // entries threw away a restore's entire replay — one frame of up to 4M units — the
+  // moment one more frame arrived, while the saved offset already counted it as drawn,
+  // so no later reconnect would ever send it again. A terminal needs the tail; the cut
+  // moves forward to a line break when there is one, so it rarely lands mid-sequence.
+  while (b.units > PTY_BACKLOG_MAX_UNITS) {
+    const idx = b.entries.findIndex((e) => e.kind === 'output');
+    if (idx < 0) break;
+    const oldest = b.entries[idx] as { kind: 'output'; data: string };
+    const excess = b.units - PTY_BACKLOG_MAX_UNITS;
+    if (oldest.data.length <= excess) {
+      b.entries.splice(idx, 1);
+      b.units -= oldest.data.length;
+      continue;
+    }
+    let cut = excess;
+    const nl = oldest.data.indexOf('\n', cut);
+    if (nl >= 0 && nl - cut <= LINE_BREAK_SEARCH_UNITS && nl + 1 < oldest.data.length) cut = nl + 1;
+    b.entries[idx] = { kind: 'output', data: oldest.data.slice(cut) };
+    b.units -= cut;
+  }
+}
+
+/** Hand a session's backlog to the listener that just registered, in arrival order. */
+function drainPtyBacklog(sessionId: string): void {
+  const b = ptyBacklog.get(sessionId);
+  if (!b) return;
+  ptyBacklog.delete(sessionId);
+  for (const entry of b.entries) {
+    if (entry.kind === 'reset') dispatchEvent(`pty:reset:${sessionId}`);
+    else dispatchEvent(`pty:output:${sessionId}`, entry.data);
+  }
+}
+
+function forgetPtySession(sessionId: string): void {
+  ptyOffsets.delete(sessionId);
+  ptyBacklog.delete(sessionId);
+}
+
+function maybeSendClientReady(): void {
+  if (connectionState !== 'connected' || readySentThisGeneration) return;
+  if (!listeners.get('chat:hydrate')?.size) return;   // App has not mounted its handler yet
+  readySentThisGeneration = true;
+  fire('client:ready', { seq: ++clientReadySeq, reconnect: readyReconnect, ptyOffsets: collectPtyOffsets() });
+  armNoHydrateTimer();
+}
 /** Whether to preserve __PLATFORM__ on next auth:ok (prevents desktop overwriting 'android') */
 let preservePlatform = false;
+
+/** The one sentence shown when a voice call is refused because this device is
+ *  paired to another computer.
+ *
+ *  WHO ACTUALLY READS THIS, which is not who the first draft addressed: a plain
+ *  remote browser tab never gets the namespace at all (it is deleted below), so it
+ *  draws no mic and reaches no sentence. The only reader is a PHONE that paired to
+ *  a desktop mid-session — and for that reader the old wording, about browsers and
+ *  encrypted connections, was an unverified cause for someone who is not in a
+ *  browser. Their real reason is simpler: while paired, the phone talks to the
+ *  desktop, and the desktop has no voice over that bridge. It is also actionable,
+ *  which the old sentence was not — disconnecting brings the mic straight back.
+ *  Found reviewing T7, 2026-09-05; see docs/error-message-standards.md.
+ *
+ *  (Why voice is off in a remote browser at all, for the reader of this file: a
+ *  browser only hands a page the microphone on an encrypted connection, and remote
+ *  access is still plain http. Destin decided on the voice questions deck, Q-7,
+ *  that it stays off until that changes rather than shipping a button that fails.) */
+const VOICE_REMOTE_REASON =
+  'Voice typing is off while you are connected to another computer. '
+  + "Disconnect to use this phone's microphone.";
+
+/** Is this client the Android app talking to its OWN on-device bridge?
+ *
+ *  `file:` means the page was loaded out of the APK (a browser tab is http/https),
+ *  and no `targetUrl` means it has not been pointed at someone's desktop. Both
+ *  halves are needed: `!targetUrl` ALONE is also true of a plain remote browser
+ *  tab, which is precisely where the microphone must not appear. */
+function isAndroidLocal(): boolean {
+  return location.protocol === 'file:' && !targetUrl;
+}
 
 // Fix: queue application messages sent before the WS auth handshake completes,
 // then flush on auth:ok. Without this, first-mount fetches (skills.list etc.)
@@ -50,11 +354,49 @@ let preservePlatform = false;
 // appear in the command drawer." Bound at MAX_QUEUE to prevent unbounded
 // growth if a real flow ever fans out faster than the auth handshake.
 const MAX_QUEUE = 256;
-let pendingSendQueue: string[] = [];
+/** How long a request waits for an answer, and therefore how long a queued message can
+ *  still have somebody waiting on it. The two must be the same number. */
+const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Queued while the socket is down, with the time each was queued.
+ *
+ * WHY the timestamp: the queue is what makes a FIRST connect work — mount-time reads fire
+ * before auth and would otherwise be lost — but it was also replaying requests whose caller
+ * had already been told, thirty seconds earlier, that they failed. So an action you were
+ * told did not happen could happen minutes later. Anything older than the request timeout
+ * is dropped at flush instead: nobody is still waiting on it, and the honest outcome for a
+ * caller that already gave up is nothing at all.
+ */
+let pendingSendQueue: { data: string; at: number }[] = [];
 
 function setConnectionState(state: RemoteConnectionState) {
+  const was = connectionState;
   connectionState = state;
+  // Batch 2 (§6): leaving `connected` after a first successful connect is a drop —
+  // the strip says "reconnecting" and the phone keeps what it shows.
+  if (was === 'connected' && state !== 'connected' && hasConnectedBefore && !suppressReconnectingPhase) setConversationPhase('reconnecting');
+  if (was === 'connected' && state !== 'connected') failRequestsCutOffByDrop();
+  // The watch runs only while there is something to watch.
+  if (state === 'connected') startHeartbeat(); else stopHeartbeat();
   stateChangeCallback?.(state);
+}
+
+/**
+ * Requests sent on a connection that just dropped can never be answered: the host replies on the
+ * socket a request came from. WHY fail them now (review of the 2026-09-11 fixes, finding 3): each
+ * used to wait out its 30 s, by which time the reconnect had already asked the host about the
+ * requests it knew were lost, so one that ran was reported as timed out and never checked. Marked
+ * "may have run" here, so the reconnect's sign-in asks. The Android app's own bridge cannot
+ * answer that question, so there they are simply dropped.
+ */
+function failRequestsCutOffByDrop(): void {
+  for (const [id, entry] of pending) {
+    if (entry.outcomeUnknown) continue;
+    clearTimeout(entry.timeout);
+    if (isAndroidLocal()) pending.delete(id);
+    else entry.outcomeUnknown = true;
+    entry.reject(new Error('Lost the connection before the computer answered.'));
+  }
 }
 
 export function onConnectionStateChange(cb: (state: RemoteConnectionState) => void) {
@@ -77,21 +419,175 @@ function getWsUrl(): string {
   return `${proto}//${location.host}/ws`;
 }
 
-function send(msg: any): void {
+/**
+ * What each outbound channel is, and therefore what happens to it while the socket is down.
+ *
+ * Contract row R2: a message typed while the connection is down waits as a draft until you
+ * press Send yourself; nothing runs again on its own. The old behaviour was the opposite —
+ * everything queued and the queue was flushed on the next auth:ok, so a request that had
+ * already timed out and told the user it failed could execute minutes later.
+ *
+ *   'user-action' — something the person did. Refused while disconnected; the composer keeps
+ *                   the text. NEVER queued, because queueing is what makes it run twice.
+ *   'read'        — safe to SEND again, because sending it twice lands where sending it once
+ *                   does. Usually because it asks rather than changes; `session:resize` is
+ *                   the exception that made the older wording ("asking changes nothing")
+ *                   false, since a resize does change the host and is still safe to repeat.
+ *   'transport'   — the connection talking about itself.
+ *
+ * An unclassified channel fails remote-message-kinds.test.ts. That is deliberate: the way
+ * this goes wrong again is a new channel quietly defaulting to the queue.
+ */
+export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'transport'>> = {
+  'session:input': 'user-action',
+  'session:resize': 'read',
+  'session:terminal-ready': 'transport',
+  'native:interrupt': 'user-action',
+  'native:retry': 'user-action',
+  'ui:action': 'user-action',
+  'system:notify-stack-state': 'transport',
+  // Batch 2: the readiness handshake is the connection talking about itself. Sent only
+  // while connected (maybeSendClientReady checks), so it is never queued anyway.
+  'client:ready': 'transport',
+  // A theme change made on this phone, told to the computer and other phones. The change is
+  // already saved (appearance:set); a copy queued while offline could replay an old theme over
+  // a newer one chosen on the computer meanwhile, so it is never queued.
+  'appearance:broadcast': 'user-action',
+};
+
+/**
+ * Re-issued once on reconnect. WHY this exists at all: deleting the flush queue would
+ * otherwise bring back the cold-start bug where installed plugins never appeared in the
+ * command drawer — the mount-time fetches fired before auth and were lost. Reads only, and
+ * a test asserts that.
+ */
+export const REHYDRATE_ON_RECONNECT: readonly string[] = [
+  'skills:list',
+  'commands:list',
+  'remote:get-config',
+  'remote:status',
+  // The file lists a phone was showing when it dropped (remote access batch 3,
+  // design §8). Re-issued with the arguments they were last asked with — see
+  // lastReadPayload — because a bare list-all-files names no project and is a
+  // request the host can only refuse.
+  'artifacts:list-all-files',
+  'artifacts:list-session',
+];
+
+/**
+ * The payload each REHYDRATE_ON_RECONNECT channel was last invoked with, so the
+ * re-issue asks the same question. Channels that take no arguments simply never
+ * appear here and are re-issued bare, as before.
+ */
+const lastReadPayload = new Map<string, unknown>();
+
+function send(msg: any): boolean {
   const data = JSON.stringify(msg);
   // Only send directly when both the socket is OPEN AND auth has completed.
   // If OPEN but still 'authenticating', the auth message has been sent but
-  // 'auth:ok' hasn't arrived — the bridge rejects application messages here,
-  // so we still queue.
+  // 'auth:ok' hasn't arrived — the bridge rejects application messages here.
   if (ws?.readyState === WebSocket.OPEN && connectionState === 'connected') {
     ws.send(data);
-    return;
+    return true;
   }
+  // A person's action is never held for later: the composer keeps the text and they send it
+  // when they choose. Everything else waits for auth, which lands within the connect.
+  if (MESSAGE_KIND[msg?.type] === 'user-action') return false;
   if (pendingSendQueue.length >= MAX_QUEUE) {
     console.warn('[remote-shim] send queue overflow — dropping oldest');
     pendingSendQueue.shift();
   }
-  pendingSendQueue.push(data);
+  pendingSendQueue.push({ data, at: Date.now() });
+  return true;
+}
+
+/**
+ * The stored credential is `<deviceId>:<secret>`.
+ *
+ * WHY a value with no colon is sent as a device id with no secret: that is a credential from
+ * the retired token file. The host answers "unknown", which is terminal, so the client stops
+ * and asks for the password once rather than retrying a credential that can never work.
+ */
+function splitCredential(stored: string): { deviceId: string; secret?: string } {
+  const at = stored.indexOf(':');
+  return at === -1 ? { deviceId: stored } : { deviceId: stored.slice(0, at), secret: stored.slice(at + 1) };
+}
+
+/** A name for this device's row in the host's list — never its address. */
+function describeThisDevice(): string {
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+  const os = /Android/i.test(ua) ? 'Android' : /iPhone|iPad/i.test(ua) ? 'iPhone' : /Mac/i.test(ua) ? 'Mac' : /Windows/i.test(ua) ? 'Windows' : /Linux/i.test(ua) ? 'Linux' : '';
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  return os ? `${browser} on ${os}` : browser;
+}
+
+/**
+ * Ask the host whether the requests we lost the answers to actually ran.
+ *
+ * WHY it can answer "unknown" and that is not a bug: the host keeps a short ring of
+ * completed ids, so anything older — or anything at all after the host restarted — is
+ * genuinely not knowable. Saying so is the honest option; guessing "done" or silently
+ * retrying are both worse.
+ */
+function reconcileUnknownOutcomes(): void {
+  const ids = [...pending.entries()].filter(([, e]) => e.outcomeUnknown).map(([id]) => id);
+  if (ids.length === 0) return;
+  invoke('remote:request-outcome', { ids }).then((res: { outcomes?: Record<string, string> }) => {
+    const outcomes = res?.outcomes ?? {};
+    for (const id of ids) {
+      const entry = pending.get(id);
+      if (!entry) continue;
+      pending.delete(id);
+      window.dispatchEvent(new CustomEvent(OUTCOME_UNKNOWN_EVENT, {
+        detail: { id, type: entry.type, outcome: outcomes[id] === 'completed' ? 'completed' : 'unknown' },
+      }));
+    }
+  }).catch(() => { /* still unknown; the entries stay marked */ });
+}
+
+/**
+ * A host-relative path made absolute on the host this client is paired to.
+ * WHY not always location.origin (design R2-10): the Android app's page is
+ * file:// and its host lives in the stored target (`ws://host:port/ws`); a
+ * phone browser has no stored target and the page's own origin IS the host.
+ */
+function absoluteHostUrl(hostRelative: string): string {
+  if (targetUrl) {
+    const u = new URL(targetUrl);
+    const proto = u.protocol === 'wss:' ? 'https:' : 'http:';
+    return `${proto}//${u.host}${hostRelative}`;
+  }
+  return `${location.origin}${hostRelative}`;
+}
+
+/** Open a link the way a "Save" would: an anchor with `download`, clicked, removed. */
+function openAsDownload(url: string, name: string): void {
+  const a = document.createElement('a');
+  a.href = url;
+  // The attribute is honoured same-origin (the phone browser); cross-origin
+  // (the Android app's file:// page) the host's Content-Disposition does the
+  // same job, and WebViewHost.kt routes /download/ to the download manager.
+  a.setAttribute('download', name);
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  try { a.click(); } finally { a.remove(); }
+}
+
+/** Ask again for the state a fresh mount would have fetched. Reads only. */
+function rehydrate(): void {
+  for (const channel of REHYDRATE_ON_RECONNECT) {
+    // A list the phone never asked for has nothing to re-ask.
+    if ((channel === 'artifacts:list-all-files' || channel === 'artifacts:list-session') && !lastReadPayload.has(channel)) continue;
+    invoke(channel, lastReadPayload.get(channel)).catch(() => { /* a reconnect is not the place to surface a read failure */ });
+  }
+  // Tell the page. Screens holding a per-SOCKET subscription on the host (the
+  // project watcher) have to subscribe again on the new socket; the shim cannot
+  // do it for them because it does not know which root they show. Only ever
+  // reached on a reconnect — the caller guards on hasConnectedBefore.
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent(REMOTE_RECONNECTED_EVENT));
+  }
 }
 
 // Flush queued application messages once auth:ok has resolved.
@@ -99,9 +595,12 @@ function send(msg: any): void {
 // the bridge rejects application traffic before auth completes.
 function flushSendQueue(): void {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const queued = pendingSendQueue;
+  const cutoff = Date.now() - REQUEST_TIMEOUT_MS;
+  const queued = pendingSendQueue.filter(item => item.at >= cutoff);
+  const dropped = pendingSendQueue.length - queued.length;
+  if (dropped > 0) console.warn(`[remote-shim] dropped ${dropped} queued message(s) older than the request timeout`);
   pendingSendQueue = [];
-  for (const data of queued) {
+  for (const { data } of queued) {
     try { ws.send(data); } catch (e) {
       console.error('[remote-shim] flush failed:', e);
     }
@@ -112,17 +611,29 @@ function flushSendQueue(): void {
 // operations (rclone copy of 100s of files over cellular, git push of a large
 // repo, etc.) can legitimately take minutes. Callers pass a larger timeoutMs
 // for those — see `sync.force` below.
+// Mirror of preload's `unwrap`: main answers {ok:false,error} and never throws
+// across the bridge, but the naming UI shows its ErrorState from a caught
+// error and keeps the last saved value.
+async function unwrapRemote(p: Promise<any>): Promise<void> {
+  const r = await p;
+  if (!r || r.ok !== true) throw new Error(r?.error || 'That could not be saved.');
+}
+
 function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Promise<any> {
-  const timeoutMs = opts?.timeoutMs ?? 30_000;
+  const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
-    const id = `msg-${++messageId}`;
+    const id = `${myDeviceId || 'anon'}:${connectionGeneration}:${++messageId}`;
     const timeout = setTimeout(() => {
-      if (pending.has(id)) {
-        pending.delete(id);
-        reject(new Error(`Request ${type} timed out`));
-      }
+      const entry = pending.get(id);
+      if (!entry) return;
+      // WHY the entry stays: the request was SENT, so it may have run. Dropping it here is
+      // what let the app tell you an action failed when it had actually succeeded and only
+      // the reply was lost. It is now marked, asked about on reconnect, and never retried.
+      entry.outcomeUnknown = true;
+      reject(new Error(`Request ${type} timed out`));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timeout });
+    pending.set(id, { resolve, reject, timeout, type });
+    if (REHYDRATE_ON_RECONNECT.includes(type)) lastReadPayload.set(type, payload);
     send({ type, id, payload });
   });
 }
@@ -142,18 +653,181 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
 // toast per poll would be unusable.
 const announced = new Set<string>();
 
+/**
+ * When this connection finished authenticating, and how long after that we stay quiet.
+ *
+ * WHY a quiet window at all: connecting a phone announced TEN of these at once, because
+ * mounting the app fetches skills, commands, themes, the marketplace, project files and
+ * presence before the person has looked at anything. None of it was asked for, none of it
+ * was actionable, and the first thing a new phone did was list what does not work.
+ *
+ * This notice earns its place LATER — when someone opens a panel and it is empty, the
+ * explanation is worth having. So: the boot fetches go to the console, and anything after
+ * the app has settled goes on screen, because by then it followed something the user did.
+ */
+let connectedAt = 0;
+const BOOT_QUIET_MS = 4000;
+
+/** Called when auth completes, so the quiet window is measured from a real connection
+ *  rather than from page load — a slow tailnet hop would otherwise spend it waiting. */
+export function markConnectedForNotices(): void {
+  connectedAt = Date.now();
+}
+
+/** Channels whose `{ ok:false, error }` answer is a FAILURE to re-throw, not a
+ *  value to hand back.
+ *
+ *  remote-server.ts answers `{ ok:false, error }` when a handler throws. On the
+ *  desktop the SAME failure arrives as a thrown Error the caller catches and
+ *  shows; over the remote link, resolving it hands the caller a success — so
+ *  the click does nothing, with no message, no retry and no clue. Worse for a
+ *  channel whose answer gets rendered: the failure object has none of the real
+ *  fields, so the component falls back to its defaults and redraws a screen the
+ *  user believes is true.
+ *
+ *  MEMBERSHIP RULE: a channel belongs here when its SUCCESS shape is a plain
+ *  object or record that can never itself be `{ ok:false }`. A channel that
+ *  legitimately RETURNS `{ ok:false }` as data must stay out, or a real answer
+ *  would be thrown away as an error.
+ *
+ *  Exported and hoisted to module scope on purpose: pinned by
+ *  tests/remote-shim-reject.test.ts, because deleting an entry restores a bug
+ *  no other test in the suite can see.
+ *
+ *  KNOWN GAP, filed rather than fixed here: `models:installed` answers the same
+ *  `{ ok:false }` object and is NOT in this list, and LocalModelsSection casts
+ *  its answer straight to an array and filters it. That predates this list. */
+export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
+  // Reads a phone loads at start, answered by the host since 2026-09-11. A failure there comes
+  // back as { ok:false, error } and must reach the caller's catch, not land as a "list".
+  'theme:list',
+  'commands:list',
+  'appearance:get-favorite-themes',
+  // Installing Claude Code (first-run local models, F-5): the phone refuses with
+  // { ok:false }. Resolved as a value, the Settings card would read it as an
+  // install that finished.
+  'claude-code:install',
+  // Host administration is refused over the remote socket (desktop IPC only). Without
+  // these the refusal `{ ok:false }` resolves as an ordinary value, so a phone that
+  // tried to change the host password saw the field's success tick for a change that never
+  // happened — a false success on the one surface where it matters most.
+  'remote:set-password',
+  'remote:set-config',
+  // Same refusal, same reason: renaming and unpairing decide who may reach this computer.
+  // Left out of this set, an unpair on a phone removed the row from the list while the
+  // device kept full access — the false success this list exists to prevent, on the one
+  // action where believing it is most dangerous.
+  'remote:devices:rename',
+  'remote:devices:unpair',
+  // Success is `{ sessionId }`.
+  'engine:run-in-terminal',
+  // Success is the engine STATUS object. Without this a failed speed-switch
+  // save redraws the card from a failure object: every field missing, so both
+  // speed switches read ON and the faster-engine list reads empty, and the user
+  // is told nothing went wrong.
+  'engine:set-config',
+  // Success is the PREREQUISITES object. Without this a failed check falls into
+  // the card's remaining branch, which prints a specific diagnosis of the user's
+  // machine ("AMD's software comes from AMD's own repository") for a check that
+  // never reached a verdict — an error message guessing a cause, which
+  // docs/error-message-standards.md forbids.
+  'engine:prereqs',
+  // Success is a settings record / a settings record / a { downloadId }. A
+  // refused save — a context length under the floor, an engine option the
+  // binary does not know — has to reach the dialog's error line.
+  'models:settings', 'models:set-settings', 'models:add-vision',
+  'native:get-step-guard', 'native:set-step-guard',
+  'native:get-context-preferences', 'native:set-context-preferences',
+]);
+
+/** What a `<channel>:response` payload MEANS, as one pure decision.
+ *
+ *  Extracted from handleMessage so it can be tested at all: the dispatcher
+ *  needs a live socket and a pending request before it will run a line, so the
+ *  rule that decides whether a user sees their error or a silent success had no
+ *  reachable test. Anything that stops consulting REJECT_ON_NOT_OK now fails
+ *  tests/remote-shim-reject.test.ts.
+ *
+ *   'unsupported' — the host does not implement this channel at all.
+ *   'failure'     — the host's handler threw; re-throw it to the caller.
+ *   'value'       — an ordinary answer. */
+export function responseOutcome(channel: string, payload: unknown): 'unsupported' | 'failure' | 'value' {
+  if (!payload || typeof payload !== 'object') return 'value';
+  if ((payload as { unsupported?: unknown }).unsupported === true) return 'unsupported';
+  if ((payload as { ok?: unknown }).ok === false && REJECT_ON_NOT_OK.has(channel)) return 'failure';
+  return 'value';
+}
+
 function noteUnsupported(channel: string): void {
+  // WHY an unnamed channel says nothing at all: the fallback name IS the channel id, and a
+  // toast reading "terminal:get-screen-text isn't available via remote access yet." tells a
+  // non-developer nothing they can act on — it only says something is broken. The console
+  // warning below still names it for whoever is fixing it.
+  if (!hasFeatureName(channel)) {
+    console.warn(`[remote-shim] not available over remote access (unnamed): ${channel}`);
+    return;
+  }
   const feature = remoteFeatureName(channel);
   if (announced.has(feature)) return;
   announced.add(feature);
-  console.warn(`[remote-shim] not available over remote access: ${channel}`);
+  // WHY the host matters: the phone's own bridge answers `unsupported` too
+  // (since 2026-09-10, for any channel it has no handler for), and a phone
+  // doing no remote access must not be told "via remote access".
+  const host = isAndroidLocal() ? 'phone' : 'remote';
+  console.warn(`[remote-shim] not available on this host (${host}): ${channel}`);
+  // The app's own boot fetches are not something the person did. Recorded, not announced.
+  if (connectedAt === 0 || Date.now() - connectedAt < BOOT_QUIET_MS) return;
   window.dispatchEvent(new CustomEvent(REMOTE_UNSUPPORTED_EVENT, {
-    detail: { channel, feature, message: remoteUnsupportedMessage(channel) },
+    detail: { channel, feature, message: remoteUnsupportedMessage(channel, host) },
   }));
 }
 
-function fire(type: string, payload: any): void {
-  send({ type, payload });
+/** A rejection shaped exactly like the host's `unsupported` refusal, minus the
+ *  notice. WHY: a few channels are asked for AUTOMATICALLY — on launch, on
+ *  opening Settings — and the phone's bridge cannot answer them until the
+ *  rebuild. Every caller already handles the rejection; what none of them
+ *  wants is a toast about it on an ordinary screen. Until 2026-09-10 the
+ *  bridge answered these with a bare `{error}` object that RESOLVED, which
+ *  crashed Project View (a status object with no `spaces`) and threw inside
+ *  the chat reducer on every launch. */
+function refuseQuietlyOnPhone(channel: string): Promise<never> {
+  return Promise.reject(new Error(`remote-unsupported: ${channel}`));
+}
+
+/** Settle one pending request from the host's answer. THE only place a
+ *  response resolves or rejects a caller's promise.
+ *
+ *  WHY this is exported and takes the entry, rather than the rule alone being
+ *  extracted: a test over the RULE proves what the rule says, not what the
+ *  dispatcher does with it. Both of these left the whole suite green while the
+ *  original bug was fully restored — resolving in the `failure` arm, and
+ *  resolving before the switch and leaving it dead. Settling here, and nowhere
+ *  else in the response path, is what a test can actually hold. */
+export function applyResponse(
+  entry: { resolve: (value: unknown) => void; reject: (err: Error) => void },
+  channel: string,
+  payload: unknown,
+): void {
+  switch (responseOutcome(channel, payload)) {
+    case 'unsupported':
+      noteUnsupported(channel);
+      entry.reject(new Error(`remote-unsupported: ${channel}`));
+      return;
+    // A handler that answered `{ ok:false, error }` is a FAILURE — resolving it
+    // hands the caller a failure dressed as a success. See REJECT_ON_NOT_OK.
+    case 'failure':
+      entry.reject(new Error(String((payload as { error?: unknown })?.error ?? 'The request failed.')));
+      return;
+    default:
+      entry.resolve(payload);
+      return;
+  }
+}
+
+/** Returns false when the action was refused because the connection is down, so the caller
+ *  can keep what the person typed instead of clearing it. */
+function fire(type: string, payload: any): boolean {
+  return send({ type, payload });
 }
 
 function addListener(channel: string, cb: Callback): Callback {
@@ -163,6 +837,10 @@ function addListener(channel: string, cb: Callback): Callback {
     listeners.set(channel, set);
   }
   set.add(cb);
+  // The hydrate handler is the last thing App mounts before it can apply a restore.
+  if (channel === 'chat:hydrate') maybeSendClientReady();
+  // The terminal's first listener takes everything that arrived before it existed.
+  if (channel.startsWith('pty:output:') && set.size === 1) drainPtyBacklog(channel.slice('pty:output:'.length));
   return cb;
 }
 
@@ -187,7 +865,13 @@ function dispatchEvent(type: string, ...args: any[]): void {
   }
 }
 
-function handleMessage(data: string): void {
+function handleMessage(data: string, generation: number): void {
+  // WHY the stamp: the stale-socket guard used to cover auth:ok only. A late frame from a
+  // socket the connect timeout abandoned — or one replaced by a reconnect — was still
+  // dispatched into the page as if it came from the current host connection (R2-17).
+  if (generation !== connectionGeneration) return;
+  framesReceived++;
+  lastFrameAt = Date.now();
   let msg: any;
   try { msg = JSON.parse(data); } catch { return; }
 
@@ -220,21 +904,43 @@ function handleMessage(data: string): void {
     // fast-fail we wanted, without changing the type callers receive.
     //
     // noteUnsupported still fires first, so the explanatory toast is unaffected.
-    if (payload && typeof payload === 'object' && payload.unsupported === true) {
-      const channel = String(type).replace(/:response$/, '');
-      noteUnsupported(channel);
-      entry.reject(new Error(`remote-unsupported: ${channel}`));
-      return;
-    }
-    entry.resolve(payload);
+    // The ONLY place a response settles a caller's promise — see applyResponse.
+    applyResponse(entry, String(type).replace(/:response$/, ''), payload);
     return;
   }
 
   // Push events — dispatch to registered listeners
   switch (type) {
-    case 'pty:output':
-      dispatchEvent('pty:output', payload.sessionId, payload.data);              // global (App.tsx mode detection)
-      dispatchEvent(`pty:output:${payload.sessionId}`, payload.data);            // per-session (TerminalView)
+    case 'pty:output': {
+      const sid: string = payload.sessionId;
+      // A frame from a different stream than the one this terminal drew — the host
+      // restarted, or the session was recreated — with no restore pass to say so: clear
+      // the terminal first instead of appending the new stream to the old screen
+      // (T2 review, 12).
+      const drawn = ptyOffsets.get(sid);
+      if (drawn && typeof payload.epoch === 'string' && drawn.epoch !== payload.epoch) {
+        if (listeners.get(`pty:output:${sid}`)?.size) dispatchEvent(`pty:reset:${sid}`);
+        else backlogPty(sid, { kind: 'reset' });
+      }
+      if (typeof payload.epoch === 'string' && typeof payload.offset === 'number') {
+        ptyOffsets.set(sid, { epoch: payload.epoch, units: payload.offset + String(payload.data ?? '').length });
+      }
+      dispatchEvent('pty:output', sid, payload.data);                            // global (App.tsx mode detection)
+      if (listeners.get(`pty:output:${sid}`)?.size) dispatchEvent(`pty:output:${sid}`, payload.data);   // per-session (TerminalView)
+      else backlogPty(sid, { kind: 'output', data: String(payload.data ?? '') });
+      break;
+    }
+    case 'pty:reset': {
+      // The host cannot continue this terminal from where we were: clear it, then the
+      // full buffer follows on the same ordered channel (and the same backlog).
+      const sid: string = payload.sessionId;
+      if (typeof payload.epoch === 'string') ptyOffsets.set(sid, { epoch: payload.epoch, units: 0 });
+      if (listeners.get(`pty:output:${sid}`)?.size) dispatchEvent(`pty:reset:${sid}`);
+      else backlogPty(sid, { kind: 'reset' });
+      break;
+    }
+    case 'hook:replay-complete':
+      dispatchEvent('hook:replay-complete', payload);
       break;
     case 'pty:raw-bytes':
       // Per-session dispatch only — no global consumer (xterm is per-session).
@@ -243,18 +949,29 @@ function handleMessage(data: string): void {
       dispatchEvent(`pty:raw-bytes:${payload.sessionId}`, payload.data);
       break;
     case 'hook:event':
+      // T2 review (1): for a NATIVE ask the host announces a resolution BEFORE it replies
+      // to the answer that caused it, so the answering phone would hear "resolved" first
+      // and mark its own answer "Answered on the computer". An answer this shim has in
+      // flight is ours — hide that one resolution; every other device still gets it. (A
+      // Claude Code ask replies first — the relay announces on a microtask — and the card
+      // is already answered when the resolution lands, so the reducer ignores it.)
+      if (payload?.type === 'PermissionResolved' && answersInFlight.has(payload?.payload?._requestId)) break;
       dispatchEvent('hook:event', payload);
       break;
     case 'session:created':
       dispatchEvent('session:created', payload);
       break;
     case 'session:destroyed':
+      forgetPtySession(payload?.sessionId || payload);
       // Forward exitCode alongside id so the chat reducer can surface
       // 'session-died' when a turn was in flight. Default 0 for older bridges.
       dispatchEvent(
         'session:destroyed',
         payload.sessionId || payload,
         typeof payload?.exitCode === 'number' ? payload.exitCode : 0,
+        // Batch 2 (§3): what the desktop is showing, so a phone whose conversation went
+        // away can open it. Null from a host that does not send it.
+        typeof payload?.focus?.sessionId === 'string' ? payload.focus.sessionId : null,
       );
       break;
     case 'session:renamed':
@@ -316,9 +1033,20 @@ function handleMessage(data: string): void {
       dispatchEvent('github:connect-done', payload);
       break;
     case 'chat:hydrate':
+      // Only the hydrate this client last asked for (see clientReadySeq). A host from
+      // before the handshake sends none — apply that as it always was.
+      if (payload?.seq !== undefined && payload.seq !== clientReadySeq) {
+        console.warn('[remote-shim] ignoring stale chat:hydrate seq', payload.seq, 'latest', clientReadySeq);
+        return;
+      }
+      // Remembered BEFORE the page applies it: App's handler reports synchronously.
+      lastHydrate = { seq: payload?.seq, degraded: payload?.degraded === true };
       // Full chat state snapshot sent by the host when a remote client connects.
       // Dispatched into the chat reducer via window.claude.on.chatHydrate in App.tsx.
       dispatchEvent('chat:hydrate', payload);
+      break;
+    case 'appearance:sync':
+      dispatchEvent('appearance:sync', payload);
       break;
     case 'theme:reload':
       // Fix: without this case, Android theme installs never refreshed the
@@ -351,6 +1079,10 @@ function handleMessage(data: string): void {
       // WHY: native.onModelState subscribers (ChatView banner) listen here.
       dispatchEvent('native:model-state', payload);
       break;
+    case 'native:permission-mode':
+      // WHY: native.onPermissionMode subscribers (the status-bar chip) listen here.
+      dispatchEvent('native:permission-mode', payload);
+      break;
     case 'system:back':
       // Android hardware back press → routed to useDismissTop via the
       // window.claude.system.onBack subscriber registered in App.tsx. No
@@ -376,6 +1108,19 @@ function handleMessage(data: string): void {
       // forwarder). window.claude.on.shellEvent subscribers get the ShellEvent.
       dispatchEvent('native:shell-event', payload);
       break;
+    case 'native:session-context':
+      // "What the assistant was given" — push-only (ipc-handlers.ts's
+      // nativeHost.on('session-context', …) forwarder). A client that connects
+      // LATER does not need this case: the record travels inside chat:hydrate.
+      dispatchEvent('native:session-context', payload);
+      break;
+    case 'voice:event':
+      // Voice typing push events from the ANDROID host (readiness / level /
+      // partial words / final / heartbeat / error). window.claude.voice.onEvent
+      // subscribers get the payload verbatim. Broadcast — no sessionId, because
+      // there is one microphone on the device, not one per conversation.
+      dispatchEvent('voice:event', payload);
+      break;
     case 'social:presence-event':
       // Presence relay (Task 6). The host forwards one presence event (server
       // protocol frame or synthetic connection-state event). window.claude.social
@@ -388,8 +1133,20 @@ function handleMessage(data: string): void {
 
 export function connect(passwordOrToken: string, isToken = false): Promise<string> {
   return new Promise((resolve, reject) => {
+    const generation = ++connectionGeneration;
+    // One socket at a time. WHY retire the previous one (review of the 2026-09-11 fixes, finding
+    // 2): an attempt left running — "Enter password instead" while offline, or the Android app
+    // going back to its own runtime — kept its handlers, and they wrote through the shared `ws`.
+    // Its late open set "authenticating" over a working connection and sent a second sign-in on
+    // it; its late close set "disconnected". Every handler below is bound to its own socket.
+    if (ws) retireSocket(ws);
     setConnectionState('connecting');
-    ws = new WebSocket(getWsUrl());
+    const socket = new WebSocket(getWsUrl());
+    ws = socket;
+    const isCurrent = () => generation === connectionGeneration && ws === socket;
+    // Decided now, not when the close arrives: by then the Android app may already have gone back
+    // to its own runtime, which changes the answer (finding 1).
+    const localBridge = location.protocol === 'file:' && !targetUrl;
 
     // Track whether the socket ever got to OPEN. Lets onclose tell the difference
     // between "couldn't reach host" (TCP refused, Android cleartext block,
@@ -400,16 +1157,18 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
 
     // Timeout if WebSocket stays in CONNECTING state (network unreachable, etc.)
     const connectTimeout = setTimeout(() => {
-      if (ws && ws.readyState === WebSocket.CONNECTING) {
+      if (isCurrent() && socket.readyState === WebSocket.CONNECTING) {
         console.error('[remote-shim] connect timeout to', getWsUrl());
-        ws.close();
+        // Retired, not only closed: its close event must not run the close handler below as well.
+        retireSocket(socket);
         ws = null;
         setConnectionState('disconnected');
-        reject(new Error('Connection timed out'));
+        reject(signInError('Connection timed out', { kind: 'unreachable' }));
       }
     }, 15_000);
 
-    ws.onopen = () => {
+    socket.onopen = () => {
+      if (!isCurrent()) return;
       didOpen = true;
       clearTimeout(connectTimeout);
       setConnectionState('authenticating');
@@ -421,55 +1180,121 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       const authMsg = isLocalBridge && bridgeToken
         ? { type: 'auth', token: bridgeToken }
         : isToken
-          ? { type: 'auth', token: passwordOrToken }
-          : { type: 'auth', password: passwordOrToken };
-      ws!.send(JSON.stringify(authMsg));
+          ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true }
+          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, previousDeviceId: deviceRowFor(getWsUrl()) };
+      socket.send(JSON.stringify(authMsg));
     };
 
     let authResolved = false;
+    // The computer answered auth:failed on THIS socket. Its close must not start a reconnect:
+    // the same credential gets the same answer, and a loop of refusals is what trips the host's
+    // slowdown for every other device.
+    let refused = false;
 
-    ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
       if (!authResolved) {
         let msg: any;
         try { msg = JSON.parse(event.data); } catch { return; }
 
         if (msg.type === 'auth:ok') {
+          // WHY the guard: without it a late auth:ok from a socket we already replaced
+          // rebinds the CURRENT connection's handlers to the dead one.
+          if (!isCurrent()) return;
+          myDeviceId = msg.deviceId ?? myDeviceId;
+          if (typeof msg.deviceId === 'string' && msg.deviceId) rememberDeviceRow(getWsUrl(), msg.deviceId);
           authResolved = true;
           reconnectDelay = 1000; // Reset backoff on success
           reconnectAttempts = 0;
+          // Signed in: the sign-in screen is gone, and a later drop is the strip's to report.
+          savedKeyListener = null;
+          savedKeyStopped = false;
           console.log('[remote-shim] auth:ok from', getWsUrl());
           setConnectionState('connected');
+          markConnectedForNotices();
+          // WHY remote mode is declared HERE and not only in connectToHost: that function is
+          // the ANDROID pairing path, and it was the only thing that ever set 'remote'. A
+          // plain phone BROWSER opening the host's address goes through connect() instead,
+          // so isRemoteMode() stayed false on the one surface the flag exists to describe.
+          //
+          // Everything keyed on it was therefore inert there: the attention classifier kept
+          // polling the host for terminal text (which is what still put a channel id on
+          // Destin's screen after I had "fixed" it), the theme kept trying to load a
+          // wallpaper that only exists on the host, and Unpair stayed enabled on a phone.
+          //
+          // The test is the local bridge, not the platform string: an Android WebView on
+          // file:// talks to a runtime on the same device and is genuinely local, while the
+          // server tells every client `platform: 'desktop'`, so getPlatform() cannot answer
+          // this. connectToHost still declares it explicitly for the Android-paired case,
+          // which IS file:// and IS remote.
+          if (!isAndroidLocal()) {
+            void import('./platform').then(({ setConnectionMode }) => setConnectionMode('remote'));
+          }
+
           // Fix: drain any messages queued during the cold-start window
           // (mount-time fetches that fired before auth completed). Must be
           // here, not in ws.onopen — the bridge rejects pre-auth traffic.
           flushSendQueue();
-          // Store token for reconnection
-          const token = msg.token;
-          localStorage.setItem('youcoded-remote-token', token);
+          if (hasConnectedBefore) rehydrate();
+          // Readiness (batch 2): a new connection generation may send client:ready once.
+          // On a reconnect App's listener is still registered, so it goes out right here;
+          // on a first connect App mounts after this, and addListener sends it.
+          readySentThisGeneration = false;
+          // Batch 2 (§6): until the hydrate this connection asks for is applied.
+          setConversationPhase('restoring');
+          readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
+          // Terminal positions are the OLD host's stream positions — meaningless to a
+          // different host, which would only answer them with a reset anyway.
+          if (!readyReconnect) { ptyOffsets.clear(); ptyBacklog.clear(); }
+          lastReadyHost = getWsUrl();
+          maybeSendClientReady();
+          hasConnectedBefore = true;
+          reconcileUnknownOutcomes();
+          // The secret comes back exactly once, at pairing; later connections answer with
+          // the device id alone, so keep what is already stored.
+          const token = msg.secret
+            ? `${msg.deviceId}:${msg.secret}`
+            : (localStorage.getItem('youcoded-remote-token') ?? msg.deviceId ?? '');
+          if (token) localStorage.setItem('youcoded-remote-token', token);
           // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
           // the desktop server responds with platform:"electron" but we're still on a phone
           if (!preservePlatform) {
             const platform = msg.platform || 'browser';
             (window as any).__PLATFORM__ = platform;
           }
+          // Naming capability, straight off the handshake — no extra round
+          // trip, and settled before the first paint that could show a naming
+          // control. Absent on a host that has no naming backend (an Android
+          // phone running Claude Code locally), which leaves every naming
+          // control hidden rather than broken.
+          const naming = (window as any).claude?.sessionNaming;
+          if (naming) naming.available = msg.sessionNaming === true;
           resolve(token);
           // Switch to normal message handling
-          ws!.onmessage = (e) => handleMessage(e.data as string);
+          socket.onmessage = (e) => handleMessage(e.data as string, generation);
         } else if (msg.type === 'auth:failed') {
+          if (!isCurrent()) return;
           authResolved = true;
-          console.error('[remote-shim] auth:failed', msg.reason);
+          refused = true;
+          const reason = String(msg.reason || 'refused');
+          console.error('[remote-shim] auth:failed', reason);
+          // Forget the saved key only when the computer will never take it, and only when it was
+          // the key that was tried: a mistyped password says nothing about the saved one.
+          if (isToken && KEY_IS_DEAD.has(reason)) localStorage.removeItem('youcoded-remote-token');
           setConnectionState('disconnected');
-          reject(new Error(msg.reason || 'Authentication failed'));
-          ws!.close();
+          reject(signInError(msg.reason || 'Authentication failed', { kind: 'refused', reason }));
+          socket.close();
         }
         return;
       }
 
-      handleMessage(event.data as string);
+      handleMessage(event.data as string, generation);
     };
 
-    ws.onclose = (event) => {
+    socket.onclose = (event) => {
       clearTimeout(connectTimeout);
+      // A socket that is no longer the current one (disconnect() closed it, or a newer attempt
+      // replaced it) must not change the state of the one that is.
+      if (!isCurrent()) return;
       if (!authResolved) {
         const url = getWsUrl();
         const code = event.code;
@@ -490,16 +1315,30 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         } else {
           message = `Connection closed before auth (code ${code}${reason ? `: ${reason}` : ''}).`;
         }
-        reject(new Error(message));
+        reject(signInError(message, { kind: didOpen ? 'closed' : 'unreachable' }));
         return;
       }
 
+      // The Android app's own bridge keeps its old retry: its token comes from the page address,
+      // and a refusal there during start-up is not an answer about a saved key.
+      if (refused && !localBridge) {
+        setConnectionState('disconnected');
+        return;
+      }
+
+      if (isTerminalClose(event.code)) suppressReconnectingPhase = true;
       setConnectionState('disconnected');
+      suppressReconnectingPhase = false;
       // Attempt reconnection — local bridge uses its own retry (token comes
       // from the URL each time), remote connections use stored session tokens.
-      const isLocalBridge = location.protocol === 'file:' && !targetUrl;
-      if (isLocalBridge) {
+      if (localBridge) {
         retryLocalBridge();
+      } else if (isTerminalClose(event.code)) {
+        // Unpaired or retired: the credential can never work again. Forget it so the next
+        // attempt asks for the password once, rather than retrying forever.
+        localStorage.removeItem('youcoded-remote-token');
+        console.warn('[remote-shim] host refused this device permanently:', event.code, event.reason);
+        noteRefusedAfterConnecting(event.code === 4003 ? 'revoked' : event.code === 4004 ? 'retired' : 'unsupported-version');
       } else {
         const storedToken = localStorage.getItem('youcoded-remote-token');
         if (storedToken) {
@@ -508,15 +1347,33 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       }
     };
 
-    ws.onerror = () => {
+    socket.onerror = () => {
       // onclose will fire after this
     };
   });
 }
 
+/**
+ * A close code the host uses to say "do not come back with this credential": unpaired,
+ * retired, or a version it cannot serve. Retrying any of these is guaranteed to fail, and
+ * on upgrade day every device retrying at once is what would trip the host's own limiter.
+ */
+function isTerminalClose(code: number): boolean {
+  return code === 4003 || code === 4004 || code === 4005;
+}
+
 function scheduleReconnect(token: string): void {
-  // After too many failures, give up and fall back to local mode
-  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+  // WHY only a real local bridge falls back: this path deleted the saved address and
+  // credential and connected to 'android-local', which does not exist in a browser. A phone
+  // that lost signal in a lift came back unpaired.
+  const hasLocalBridge = location.protocol === 'file:';
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && !hasLocalBridge) {
+    // Keep retrying, slowly, and keep the pairing. Disconnected is a state to show, not a
+    // reason to forget who you are.
+    reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
+    reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+  }
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && hasLocalBridge) {
     // Reconnect-fallback: switching to local bridge means any messages
     // queued for the prior remote host are wrong-destination. Drop them
     // here — disconnect() isn't on this path (ws.onclose only schedules
@@ -532,6 +1389,7 @@ function scheduleReconnect(token: string): void {
     localStorage.removeItem('youcoded-remote-target');
     localStorage.removeItem('youcoded-remote-token');
     // Reconnect to local bridge
+    forgetConversationPhase();
     connect('android-local', false).catch(() => {});
     import('./platform').then(({ setConnectionMode }) => setConnectionMode('local'));
     return;
@@ -543,11 +1401,212 @@ function scheduleReconnect(token: string): void {
     reconnectAttempts++;
     try {
       await connect(token, true);
-    } catch {
+    } catch (err) {
       reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
-      scheduleReconnect(token);
+      onSavedKeyAttemptFailed(err, token);
     }
   }, reconnectDelay);
+}
+
+/** One attempt with the saved key failed: tell the sign-in screen, then try again, unless the
+ *  computer refused the key or the person chose to type the password instead. */
+function onSavedKeyAttemptFailed(err: unknown, token: string): void {
+  const failure = signInFailureOf(err);
+  if (failure?.kind === 'refused') {
+    savedKeyListener?.({ type: 'refused', reason: failure.reason });
+    if (hasConnectedBefore) noteRefusedAfterConnecting(failure.reason);
+    if (location.protocol === 'file:' && targetUrl) {
+      // The Android app paired to a computer that will never take its key goes back to its own
+      // runtime now, which is where MAX_RECONNECT_ATTEMPTS used to land it after minutes. Any
+      // other refusal (remote access switched off on the computer) keeps the pairing and keeps
+      // trying slowly, as it always did: deleting it would unpair the phone (finding 1).
+      if (KEY_IS_DEAD.has(failure.reason)) reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+      scheduleReconnect(token);
+    }
+    return;
+  }
+  savedKeyListener?.({ type: 'failed', kind: failure?.kind ?? 'closed' });
+  if (savedKeyStopped) return;
+  scheduleReconnect(token);
+}
+
+/**
+ * Sign in with the key this browser saved at pairing, when the page loads. Returns false when
+ * there is none, so the page asks for the password.
+ *
+ * WHY here and not in the page (it was `connect(token).catch(() => removeItem(key))` in
+ * index.tsx): that deleted the key on ANY failure and never tried again, so a phone whose
+ * browser reloaded the tab before its network came back had to type the password.
+ */
+export function startSavedKeySignIn(listener: (e: SavedKeySignInEvent) => void): boolean {
+  const token = localStorage.getItem('youcoded-remote-token');
+  if (!token) return false;
+  savedKeyListener = listener;
+  savedKeyStopped = false;
+  connect(token, true).catch((err) => onSavedKeyAttemptFailed(err, token));
+  return true;
+}
+
+/** "Try now": attempt at once instead of waiting out the backoff. */
+export function retrySavedKeyNow(): void {
+  const token = localStorage.getItem('youcoded-remote-token');
+  if (!token || connectionState === 'connecting' || connectionState === 'authenticating') return;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  savedKeyStopped = false;
+  connect(token, true).catch((err) => onSavedKeyAttemptFailed(err, token));
+}
+
+/** "Enter password instead": no more automatic attempts. The key stays; a page reload tries it. */
+export function stopSavedKeySignIn(): void {
+  savedKeyStopped = true;
+  savedKeyListener = null;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+}
+
+/** How long the wake check waits, with nothing at all arriving, before calling the connection
+ *  dead. 10 s, not 5: right after waking a phone's radio and tunnel can take several seconds to
+ *  come back, and a reply can queue behind a catch-up already on its way (review finding 3). */
+const WAKE_CHECK_TIMEOUT_MS = 10_000;
+/** How often the page looks at whether the computer is still talking, while it is in front. */
+const HEARTBEAT_INTERVAL_MS = 10_000;
+/** Silence that earns a question. Longer than the interval so a busy connection is never asked. */
+const HEARTBEAT_IDLE_MS = 12_000;
+/** How long that question may go unanswered before the connection is replaced. Shorter than the
+ *  wake check's: the page is in front, the radio is up, and a person may be waiting on a tap. */
+const HEARTBEAT_REPLY_MS = 5_000;
+/** Hidden for longer than the computer's own patience (its check runs every 20 s and it gives up
+ *  after three): its side is already gone, so the page reconnects on sight instead of asking. */
+const HIDDEN_TOO_LONG_MS = 60_000;
+let wakeCheckInFlight = false;
+/** When the page was last hidden, or 0 if it is showing. Read once, by the wake check. */
+let hiddenSince = 0;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * The phone just woke, came back to this tab, or regained its network: make sure the connection
+ * is real before the screens it is about to open ask it for anything.
+ *
+ * WHY (Destin, 2026-09-11: the project list was empty, then "randomly popped back in"): after
+ * sleep a phone can hold a socket the computer already closed, which only times out much later,
+ * or sit out a reconnect backoff of up to 30 s. Every request made meanwhile timed out after
+ * 30 s, and the screens that asked stayed empty. Down: reconnect now. Up: one quick question,
+ * and a connection that cannot answer it is replaced at once rather than waited on.
+ */
+export function checkConnectionAfterWake(): void {
+  // The Android app's own bridge is on the same device; the first sign-in has its own screen.
+  if (isAndroidLocal()) return;
+  const hiddenFor = hiddenSince ? Date.now() - hiddenSince : 0;
+  hiddenSince = 0;
+  if (!hasConnectedBefore) {
+    // Still on the sign-in screen, trying the saved key: the network coming back is the moment to
+    // try again, not the end of a backoff of up to a minute (finding 6).
+    if (savedKeyListener && !savedKeyStopped && connectionState === 'disconnected') retrySavedKeyNow();
+    return;
+  }
+  if (connectionState === 'connecting' || connectionState === 'authenticating') return;
+  const token = localStorage.getItem('youcoded-remote-token');
+  if (connectionState === 'disconnected') {
+    if (token && !savedKeyStopped) reconnectNow(token);
+    return;
+  }
+  // Away longer than the computer waits: it has already closed its side, so a question here
+  // would only wait out its own deadline for an answer that can never come — ten seconds of a
+  // phone that looks connected and answers nothing. Replace the connection now.
+  if (hiddenFor >= HIDDEN_TOO_LONG_MS) {
+    if (ws) abandonSocket(ws);
+    if (token && !savedKeyStopped) reconnectNow(token);
+    return;
+  }
+  probeConnection(WAKE_CHECK_TIMEOUT_MS, 'after waking');
+}
+
+/**
+ * Ask the computer one cheap question and replace the connection if nothing at all comes back in
+ * time. Shared by the wake check and the heartbeat; only the deadline differs.
+ */
+function probeConnection(timeoutMs: number, why: string): void {
+  const socket = ws;
+  if (!socket || wakeCheckInFlight) return;
+  const token = localStorage.getItem('youcoded-remote-token');
+  wakeCheckInFlight = true;
+  const generation = connectionGeneration;
+  const framesAtSend = framesReceived;
+  const id = `${myDeviceId || 'anon'}:${generation}:${++messageId}`;
+  const settle = () => { clearTimeout(timeout); pending.delete(id); wakeCheckInFlight = false; };
+  const timeout = setTimeout(() => {
+    settle();
+    if (generation !== connectionGeneration || ws !== socket || connectionState !== 'connected') return;
+    if (framesReceived > framesAtSend) return;   // the computer is talking: the connection is alive
+    console.warn(`[remote-shim] no answer ${why}; replacing the connection`);
+    abandonSocket(socket);
+    if (token) reconnectNow(token);
+  }, timeoutMs);
+  // Any answer proves the socket is alive, including an older computer's "unsupported" — so
+  // both outcomes settle the same way. Not invoke(): a check that timed out must not be kept
+  // and asked about after the reconnect like a request the person made.
+  pending.set(id, { resolve: settle, reject: settle, timeout, type: 'remote:ping' });
+  try {
+    socket.send(JSON.stringify({ type: 'remote:ping', id }));
+  } catch {
+    settle();
+    abandonSocket(socket);
+    if (token) reconnectNow(token);
+  }
+}
+
+/**
+ * While the page is in front, watch for a connection that stopped answering.
+ *
+ * WHY (Destin, 2026-09-11: buttons "feel unresponsive", and the dev log showed his phone's
+ * socket dying every 55-90 s): the computer notices a dead connection within about a minute, but
+ * the page noticed nothing at all until the person switched away and back. A tap meanwhile went
+ * into a socket that no longer existed and said nothing for the full 30 s request timeout. The
+ * page cannot send a protocol ping from a browser, so it asks the same cheap question the wake
+ * check does — and only when the computer has gone quiet, so a busy connection costs nothing.
+ */
+function startHeartbeat(): void {
+  if (heartbeatTimer || isAndroidLocal() || typeof setInterval !== 'function') return;
+  lastFrameAt = Date.now();
+  heartbeatTimer = setInterval(() => {
+    if (connectionState !== 'connected' || !ws) return;
+    // A hidden page is the wake check's business: browsers freeze its timers anyway, and a
+    // phone in a pocket has nothing to feel slow about.
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (Date.now() - lastFrameAt < HEARTBEAT_IDLE_MS) return;
+    probeConnection(HEARTBEAT_REPLY_MS, 'from the computer');
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopHeartbeat(): void {
+  if (!heartbeatTimer) return;
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+}
+
+/** Stop listening to a socket that is dead or about to be, and report the drop. Its handlers go
+ *  first: a closing handshake on a dead connection can take far longer than the check did, and
+ *  a late frame or close from it must not reach the page or the connection that replaces it. */
+function abandonSocket(socket: WebSocket): void {
+  retireSocket(socket);
+  if (ws === socket) ws = null;
+  setConnectionState('disconnected');
+}
+
+/** Detach a socket's handlers and close it, so nothing it does afterwards reaches the page. */
+function retireSocket(socket: WebSocket): void {
+  socket.onopen = null;
+  socket.onmessage = null;
+  socket.onclose = null;
+  socket.onerror = null;
+  try { socket.close(); } catch { /* already gone */ }
+}
+
+/** Connect with the saved key now, dropping any backoff: the conditions that made it grow changed. */
+function reconnectNow(token: string): void {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  reconnectDelay = 1000;
+  reconnectAttempts = 0;
+  connect(token, true).catch((err) => onSavedKeyAttemptFailed(err, token));
 }
 
 /**
@@ -585,8 +1644,14 @@ export function retryLocalBridge(): void {
 
 function disconnect(): void {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  // A new generation, so a frame still buffered from the socket being closed is dropped by
+  // handleMessage's stamp instead of landing in the page between here and the next connect.
+  connectionGeneration++;
+  suppressReconnectingPhase = true;
   if (ws) { ws.close(); ws = null; }
   setConnectionState('disconnected');
+  suppressReconnectingPhase = false;
+  forgetConversationPhase();
   localStorage.removeItem('youcoded-remote-token');
   // Drop any pre-auth queued messages on every disconnect() path. Covered
   // paths: explicit disconnect() calls, connectToHost (calls disconnect
@@ -770,6 +1835,19 @@ async function pickAndUploadFiles(): Promise<string[]> {
 
 /** Install the window.claude shim. Call once on app startup in browser mode. */
 export function installShim(): void {
+  // Wake checks (2026-09-11): see checkConnectionAfterWake. Guarded for pages without a DOM.
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') checkConnectionAfterWake();
+      // Remembered so the wake check knows whether the computer can still be there at all.
+      else hiddenSince = Date.now();
+    });
+  }
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('online', () => checkConnectionAfterWake());
+    // A page restored from the browser's back/forward cache kept its old socket object.
+    window.addEventListener('pageshow', (e) => { if ((e as PageTransitionEvent).persisted) checkConnectionAfterWake(); });
+  }
   // Android WebView (file://) always starts in local mode — clear any stale remote target
   // that could redirect connect('android-local') to a dead remote server
   if (location.protocol === 'file:') {
@@ -791,6 +1869,22 @@ export function installShim(): void {
     // has no process env, and the label describes the DEV INSTANCE you're sitting
     // in front of, not the host it happens to be talking to.
     devLabel: null,
+    // Session naming. `available` starts FALSE and is set by the one-time probe
+    // below, because a phone running Claude Code locally has no naming backend
+    // at all — no provider registry, no ownership store — and the UI decides
+    // whether the feature exists by asking this object. Painting the settings
+    // card and the rename pencil and only then failing would be worse than not
+    // offering them: naming-api.ts treats available:false exactly like a host
+    // that never heard of naming, which is today's behaviour there.
+    sessionNaming: {
+      available: false,
+      get: () => invoke('session-naming:get'),
+      set: (value: unknown) => unwrapRemote(invoke('session-naming:set', { value })),
+      title: (sessionId: string, fallback: string) =>
+        invoke('session-naming:title', { sessionId, fallback }),
+      rename: (sessionId: string, title: string) =>
+        unwrapRemote(invoke('session-naming:rename', { sessionId, title })),
+    },
     session: {
       create: (opts: any) => invoke('session:create', opts),
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
@@ -808,6 +1902,9 @@ export function installShim(): void {
       loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) =>
         invoke('session:history', { sessionId, projectSlug, count: count || 10, all: all || false }),
       switch: (sessionId: string) => invoke('session:switch', { sessionId }),
+      // Shape parity with preload (batch 2 §2). A phone or browser has no desktop window
+      // whose selection main could cache, and the host ignores the channel anyway.
+      noteSelected: (_sessionId: string | null) => {},
       // Set a named flag on a past session (complete, priority; helpful retired).
       setFlag: (sessionId: string, flag: string, value: boolean) =>
         invoke('session:set-flag', { sessionId, flag, value }),
@@ -819,10 +1916,16 @@ export function installShim(): void {
         invoke('session:set-note', { sessionId, note }),
       // Read a session's applied tag ids + note (used by the in-session Tag chip).
       getMeta: (sessionId: string) => invoke('session:get-meta', { sessionId }),
+      canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
-      respondToPermission: (requestId: string, decision: object) => invoke('permission:respond', { requestId, decision }),
+      // Tracked while in flight so the host's resolution of THIS answer is not shown as
+      // "answered elsewhere" (see the hook:event case). Cleared when the reply settles.
+      respondToPermission: (requestId: string, decision: object) => {
+        answersInFlight.add(requestId);
+        return invoke('permission:respond', { requestId, decision }).finally(() => { answersInFlight.delete(requestId); });
+      },
     },
     // Tag registry CRUD (custom user-defined tags shared across sessions).
     // Args wrapped as objects to match this transport's handler read-shape
@@ -846,6 +1949,25 @@ export function installShim(): void {
         const channel = `pty:raw-bytes:${sessionId}`;
         const handler = addListener(channel, cb);
         return () => removeListener(channel, handler);
+      },
+      // Batch 2 (§7): "clear the terminal, a full redraw follows". Register it BEFORE
+      // ptyOutputForSession — the backlog drains on the output listener.
+      ptyResetForSession: (sessionId: string, cb: () => void) => {
+        const channel = `pty:reset:${sessionId}`;
+        const handler = addListener(channel, cb);
+        return () => removeListener(channel, handler);
+      },
+      // Batch 2 (§6): where this page's copy stands. A late subscriber (App mounts after
+      // auth:ok) is told the current phase at once — it missed the push.
+      remoteConversationStatus: (cb: Callback) => {
+        const handler = addListener('remote:conversation-status', cb);
+        if (conversationPhase) cb({ phase: conversationPhase });
+        return () => removeListener('remote:conversation-status', handler);
+      },
+      // Batch 2 (§7): the asks still open after a reconnect's hook replay.
+      hookReplayComplete: (cb: Callback) => {
+        const handler = addListener('hook:replay-complete', cb);
+        return () => removeListener('hook:replay-complete', handler);
       },
       hookEvent: (cb: Callback) => addListener('hook:event', cb),
       statusData: (cb: Callback) => addListener('status:data', cb),
@@ -1073,8 +2195,8 @@ export function installShim(): void {
         window.open('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md', '_blank');
       },
       // On the ANDROID host, go through the bridge: React runs under file://
-      // there, and window.open from a promise callback is a no-op (the same
-      // trap SessionService.kt's sync:restore:browse-url comment records) — a
+      // there, and window.open from a promise callback is a no-op (a trap the
+      // old restore wizard's browse-url handler hit first, 2026-05) — a
       // link tile in the Deliverables card would be a dead button. The bridge
       // fires Intent.ACTION_VIEW, which always works. `targetUrl` means we are
       // a REMOTE browser talking to a desktop server instead, where opening a
@@ -1114,6 +2236,15 @@ export function installShim(): void {
         error: 'remote-unsupported' as const,
       }),
       getCachedDownload: async (_version: string) => null,
+      // Unlike download/launch, the channel is a HOST setting, not a local
+      // process — a paired desktop can answer both, so these go over the socket
+      // instead of stubbing. Android has no in-app updater and no branch for
+      // them, so it answers `{ok:false, unsupported:true}`; the About toggle is
+      // desktop-gated and never calls them there.
+      getBetaChannel: (): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
+        invoke('update:get-beta-channel'),
+      setBetaChannel: (enabled: boolean): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
+        invoke('update:set-beta-channel', { enabled }),
       onProgress: (_handler: (ev: any) => void) => {
         // No-op on remote browsers — they never emit progress.
         return () => {};
@@ -1122,13 +2253,26 @@ export function installShim(): void {
     remote: {
       getConfig: () => invoke('remote:get-config'),
       setPassword: (password: string) => invoke('remote:set-password', password),
-      setConfig: (updates: { enabled?: boolean; trustTailscale?: boolean }) =>
+      setConfig: (updates: { enabled?: boolean }) =>
         invoke('remote:set-config', updates),
       detectTailscale: () => invoke('remote:detect-tailscale'),
       getClientCount: () => invoke('remote:get-client-count'),
       getClientList: () => invoke('remote:get-client-list'),
-      disconnectClient: (clientId: string) => invoke('remote:disconnect-client', clientId),
+      getStatus: () => invoke('remote:status'),
+      // No push channel over the socket yet: a remote client reads the state when it opens
+      // the panel. Returning a no-op unsubscribe keeps the caller's cleanup honest.
+      onStatus: () => () => {},
+      // Renaming and unpairing are refused over this socket by design; list is read-only.
+      devices: {
+        list: () => invoke('remote:devices:list').then((r: { devices?: unknown[] }) => r?.devices ?? []),
+        rename: (deviceId: string, name: string) => invoke('remote:devices:rename', { deviceId, name }),
+        unpair: (deviceId: string) => invoke('remote:devices:unpair', { deviceId }),
+      },
       broadcastAction: (action: any) => fire('ui:action', action),
+      // Batch 2 (§6): Refresh on the may-be-behind strip, and App's report of what its
+      // hydrate kept (the shim derives incomplete/complete from it).
+      rehydrate: () => requestRehydrate(),
+      reportHydrate: (report: { seq?: number; kept?: string[] }) => reportHydrate(report),
     },
     model: {
       getPreference: () => invoke('model:get-preference'),
@@ -1146,10 +2290,15 @@ export function installShim(): void {
       favoriteTheme: (slug: string, favorited: boolean) =>
         invoke('appearance:favorite-theme', { slug, favorited }),
       getFavoriteThemes: () => invoke('appearance:get-favorite-themes', {}),
-      // Cross-window appearance sync is Electron-only; single-window hosts
-      // don't need these but renderer code calls them unconditionally.
-      broadcast: (_prefs: Record<string, any>) => {},
-      onSync: (_cb: (prefs: Record<string, any>) => void) => () => {},
+      // WHY these are real now (Destin, 2026-09-11: the phone kept an old theme until it was
+      // reloaded): a phone is one more window on the computer's appearance. A change here
+      // goes to the computer to pass on; a change there arrives as appearance:sync.
+      // tests/remote-appearance-sync.test.ts.
+      broadcast: (prefs: Record<string, any>) => { fire('appearance:broadcast', prefs); },
+      onSync: (cb: (prefs: Record<string, any>) => void) => {
+        const handler = addListener('appearance:sync', cb);
+        return () => removeListener('appearance:sync', handler);
+      },
     },
     defaults: {
       get: () => invoke('defaults:get'),
@@ -1204,7 +2353,10 @@ export function installShim(): void {
     // browsers + Android (PITFALLS parity rule). onEvent returns an
     // unsubscribe function to match preload's shape.
     syncSpaces: {
-      status: () => invoke('syncspaces:status'),
+      // The phone has no Sync Spaces engine (audit 2026-09-10); status is polled
+      // on mount by Settings, Project View and the folder switcher, so it is
+      // refused without a notice — see refuseQuietlyOnPhone.
+      status: () => (isAndroidLocal() ? refuseQuietlyOnPhone('syncspaces:status') : invoke('syncspaces:status')),
       enable: (enabled: boolean) => invoke('syncspaces:enable', { enabled }),
       // Optional spaceId narrows to one space (Project View "Sync now"); omit for all.
       syncNow: (spaceId?: string) => invoke('syncspaces:sync-now', { spaceId }),
@@ -1271,18 +2423,35 @@ export function installShim(): void {
         invoke('artifacts:list-project', { projectId, opts }),
       listAllFiles: (projectId: string, opts?: { force?: boolean }) =>
         invoke('artifacts:list-all-files', { projectId, opts }),
+      // One tapped chat path, resolved on the host (remote-server.ts, same
+      // root gate as the other reads). Its { ok:false, error } answers are DATA
+      // the caller words for the person (not-found, not-allowed…), so this
+      // channel is deliberately NOT in REJECT_ON_NOT_OK. On the Android app the
+      // bridge answers not-implemented-on-mobile and the caller falls back.
+      resolvePath: (projectRoot: string, filePath: string) =>
+        invoke('artifacts:resolve-path', { projectRoot, path: filePath }),
       listProjectsIndex: (opts?: { withCounts?: boolean }) =>
         invoke('artifacts:list-projects-index', opts ?? {}),
       // This transport sends an OBJECT payload, not positional args — `full`
       // has to be spread in by name or it is dropped silently.
       get: (projectRoot: string, artifactId: string, opts?: { full?: boolean }) =>
         invoke('artifacts:get', { projectRoot, artifactId, full: opts?.full }),
-      // NOT bridged by remote-server.ts — this and artifacts:get both fall to
-      // its `default:` case and answer { unsupported: true }, so the artifact
-      // pane opens nothing at all from a remote browser against a desktop host.
-      // Kept wired for when that bridge lands (ROADMAP #remote).
+      // Bridged by remote-server.ts since batch 3 (with the phone's smaller
+      // preview ceiling — over it the host answers too-large with the size).
       readBinary: (absolutePath: string) =>
         invoke('artifacts:read-binary', { absolutePath }),
+      // Save a copy to this device (batch 3, §10). The host mints a short-lived
+      // link bound to this socket; the link is opened through an <a download>
+      // so the browser's own download UI shows progress and the finished file,
+      // and the file is saved, never displayed (R20). A refusal is data — the
+      // card shows it — so this channel is not in REJECT_ON_NOT_OK.
+      download: async (absolutePath: string, opts?: { projectRoot?: string; artifactId?: string }) => {
+        const res = await invoke('artifacts:download', { absolutePath, ...opts });
+        if (!res || res.ok !== true || typeof res.url !== 'string') return res;
+        const url = absoluteHostUrl(res.url);
+        openAsDownload(url, typeof res.name === 'string' ? res.name : '');
+        return { ...res, url };
+      },
       save: (projectRoot: string, projectId: string, projectName: string,
              artifactId: string, content: string, sessionId: string,
              opts?: { baseMtimeMs?: number; confirmed?: boolean }) =>
@@ -1374,8 +2543,61 @@ export function installShim(): void {
     // server reads named fields off `payload`, never positional arguments.
     chatsearch: {
       resolve: (shortIds: string[]) => invoke('chatsearch:resolve', { shortIds }),
-      read: (req: { provider: string; id: string; tail: number; before?: number }) =>
+      read: (req: { provider: string; id: string; tail: number; before?: number; projectSlug?: string }) =>
         invoke('chatsearch:read', req),
+    },
+    // Voice typing — the PHONE's half of window.claude.voice.
+    //
+    // Written as a plain, unconditional `voice: {` rather than a conditional
+    // spread on purpose: the workbench's contract scan
+    // (tests/workbench-mock-contract.test.ts) finds a namespace by looking for
+    // its name at exactly this indentation, and `...(androidLocal ? {voice} : {})`
+    // would be invisible to it. The namespace is instead DELETED after this
+    // object is built, whenever this client is not the Android app on its own
+    // bridge — see the isAndroidLocal() check at the end of installShim().
+    //
+    // `sendAudio` and `micAccess` are deliberately missing, unlike preload's
+    // copy: on a phone Android's own speech recognition owns the microphone, and
+    // the app window's permission prompt owns the permission question, so no
+    // audio and no permission query ever passes through here. Every caller tests
+    // `typeof bridge.sendAudio === 'function'` instead of assuming. Both gaps are
+    // written down in the workspace rule .claude/rules/ipc-bridge.md.
+    voice: {
+      // Every method below refuses the moment this client is pointed at someone
+      // else's desktop.
+      //
+      // WHY a test inside each method, when the namespace is already deleted for
+      // anything but the Android app: pairing to a desktop mid-session only flips
+      // the `targetUrl` variable — it does NOT rebuild window.claude, and the
+      // composer captured this bridge once when it mounted. Without these tests a
+      // phone that pairs to a desktop while the mic is open would keep a live
+      // microphone running and send voice:* to a host that has no such handlers,
+      // which is a hang, not an error. This is the same per-call shape the
+      // `android` namespace below already uses.
+      status: (): Promise<VoiceReadiness> =>
+        targetUrl
+          // Answer, don't reject: the composer shows this sentence on its card,
+          // so the user reads why there is no microphone instead of watching a
+          // button go quietly dead.
+          ? Promise.resolve({ state: 'unavailable', reason: VOICE_REMOTE_REASON })
+          : invoke('voice:status'),
+      download: (): Promise<void> =>
+        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invoke('voice:download'),
+      start: (): Promise<void> =>
+        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invoke('voice:start'),
+      stop: (): Promise<void> =>
+        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invoke('voice:stop'),
+      cancel: (): Promise<void> =>
+        targetUrl ? Promise.reject(new Error(VOICE_REMOTE_REASON)) : invoke('voice:cancel'),
+      onEvent: (cb: (e: unknown) => void) => {
+        // Refuses the same way: once we are talking to a desktop, no voice event
+        // can ever arrive, so subscribe to nothing and hand back an unsubscribe
+        // that callers can still call unconditionally.
+        if (targetUrl) return () => {};
+        const handler: Callback = (payload: any) => cb(payload);
+        addListener('voice:event', handler);
+        return () => removeListener('voice:event', handler);
+      },
     },
     // System namespace — hardware back button bridge for Android.
     // notifyStackState: React tells Android whether the dismissal stack is
@@ -1420,15 +2642,38 @@ export function installShim(): void {
       },
       openSessionIn: (args: { cwd: string; initialInput?: string }) =>
         invoke('dev:open-session-in', args),
+      // WHY these are here even though the server has no handler for them
+      // (code review C6): this namespace is HAND-BUILT, so a member that is
+      // merely absent is `undefined`, and calling it throws
+      // "window.claude.dev.setupWorkspace is not a function" — a raw JavaScript
+      // error shown to a phone user as the explanation for why setup failed.
+      // Routing them through invoke() means the server answers `unsupported`,
+      // the shim rejects with `remote-unsupported: dev:setup-workspace`, and
+      // plainMessage turns that into "Developer tools isn't available via remote
+      // access yet." Desktop-only has to be a REFUSAL, not an omission.
+      setupWorkspace: () =>
+        invoke('dev:setup-workspace'),
+      setupStatus: () =>
+        invoke('dev:setup-status'),
+      clearSetupStatus: () =>
+        invoke('dev:setup-clear'),
     },
     // First-run is desktop-only — return COMPLETE so the renderer never enters first-run mode
     firstRun: {
       getState: () => Promise.resolve({ currentStep: 'COMPLETE' }),
       retry: () => Promise.resolve(),
-      startAuth: (_mode: string) => Promise.resolve(),
-      submitApiKey: (_key: string) => Promise.resolve(),
+      // Same widened type as preload's (FirstRunState['authMode']); still a no-op here.
+      startAuth: (_mode: FirstRunState['authMode']) => Promise.resolve(),
+      submitApiKey: (_key: string, _service?: string) => Promise.resolve(),
       devModeDone: () => Promise.resolve(),
       skip: () => Promise.resolve(),
+      // First-run local models (2026-09-14). First-run never shows here, and the
+      // band above the message box describes the HOST's first download, which a
+      // phone has no way to read — so every one answers "nothing".
+      localSetup: () => Promise.resolve(null),
+      connectLocalApp: (_baseUrl: string, _name: string) => Promise.resolve({ ok: false, message: 'Setup runs on the computer itself.' }),
+      localDownload: (_sessionId?: string | null) => Promise.resolve(null),
+      resumeLocalDownload: (_sessionId?: string | null) => Promise.resolve(),
       onStateChanged: (_cb: Callback) => (() => {}),
     },
     // Android-only bridge methods — when connected to a remote desktop, these
@@ -1522,12 +2767,16 @@ export function installShim(): void {
       // TypeError, not a no-op.
       claimPending: () => Promise.resolve([] as any[]),
       replayLiveState: (_sid: string) => Promise.resolve(),
-      // A REAL call, not a stub. requestTranscriptReplay above shipped as a
-      // no-op and silently gave the phone no history for months; paging is the
-      // phone's only way back through a long conversation, so it must reach the
-      // desktop.
+      // A REAL call, not a stub, when a desktop is on the other end.
+      // requestTranscriptReplay above shipped as a no-op and silently gave the
+      // phone no history for months; paging is the only way back through a long
+      // conversation, so it must reach the desktop.
+      // On the phone's OWN bridge there is no pager (deliberately absent since
+      // 2026-08-27, see tests/transcript-page-channel-parity.test.ts): App.tsx
+      // asks for the first page of every session on launch, so the refusal is
+      // quiet — the callers already treat it as "no older messages".
       requestTranscriptPage: (req: { sessionId: string; beforeCursor?: unknown; claudeSessionId?: string; projectSlug?: string }) =>
-        invoke('transcript:page', {
+        isAndroidLocal() ? refuseQuietlyOnPhone('transcript:page') : invoke('transcript:page', {
           sessionId: req.sessionId,
           beforeCursor: req.beforeCursor ?? null,
           claudeSessionId: req.claudeSessionId,
@@ -1556,7 +2805,7 @@ export function installShim(): void {
       // the pointer; throwing would spam the console on any platform where
       // the buddy mascot window somehow loaded remote-shim (shouldn't happen,
       // but the cost of being defensive is one line).
-      moveMascot: (_t: { targetX: number; targetY: number }) => { /* desktop-only */ },
+      moveMascot: (_t: { localDx: number; localDy: number }) => { /* desktop-only */ },
       onAttentionSummary: () => () => { /* no-op unsubscribe */ },
       // ── Buddy upgrades — same desktop-only contract as the methods above.
       // dragEnded is a no-op (not a throw): it fires from a pointer handler and
@@ -1582,11 +2831,32 @@ export function installShim(): void {
       // no browser/Android equivalent); same desktop-only-throw contract as
       // openMain/dismiss/getStatus above.
       setKeepAbove: () => { throw new Error('Buddy is desktop-only in this version'); },
+      // ── The Linux/KDE buddy helper (design §4) ──
+      // Answered locally, not thrown and not sent over the wire. Two reasons.
+      // First, the honest answer really is this one: a phone or a remote browser
+      // has no buddy window at all, so nothing here needs a helper and the whole
+      // helper UI stays hidden — which is exactly what needed:false renders.
+      // Second, asking the DESKTOP would be wrong even though it can answer:
+      // the reply would describe the desktop's screen, not this browser's, and
+      // an "Add helper" button on a phone would change a machine the user is not
+      // looking at.
+      //
+      // The two actions still throw, matching openMain/dismiss/getStatus above:
+      // they are user-driven writes that genuinely cannot happen from here, and
+      // the file's contract is that a stray remote call is loud rather than
+      // silently successful.
+      helperStatus: async () => ({ needed: false, supported: false, installed: false }),
+      installHelper: () => { throw new Error('Buddy is desktop-only in this version'); },
+      removeHelper: () => { throw new Error('Buddy is desktop-only in this version'); },
     },
     // Remote clients do not participate in buddy attention aggregation —
     // main-process aggregation is desktop-Electron only.
     attention: {
       report: () => { /* no-op: buddy attention summary is desktop-only */ },
+      // Resolves empty rather than throwing: App's mount effect calls this
+      // unconditionally, and remote clients get their dot colours from
+      // status:data's attentionMap instead (see useAttentionSummary).
+      getSummary: () => Promise.resolve({ anyNeedsAttention: false, perSession: {} }),
     },
     // WHY: useAttentionClassifier calls window.claude.terminal.getScreenText
     // every 1s on Electron to read the xterm PTY buffer for attention state
@@ -1635,14 +2905,33 @@ export function installShim(): void {
       setBinding: (sessionId: string, binding: unknown) => invoke('native:set-binding', { sessionId, binding }),
       setPermissionMode: (sessionId: string, mode: string) => invoke('native:set-permission-mode', { sessionId, mode }),
       getPermissionMode: (sessionId: string) => invoke('native:get-permission-mode', { sessionId }),
+      getContextPreferences: () => invoke('native:get-context-preferences'),
+      setContextPreferences: (patch: unknown) => invoke('native:set-context-preferences', { patch }),
+      getStepGuard: () => invoke('native:get-step-guard'),
+      setStepGuard: (value: number | null) => invoke('native:set-step-guard', { value }),
       sessionsList: () => invoke('native:sessions-list'),
       // G-1: NOT gated on `supported` — a phone must be able to Stop a command
       // running on the DESKTOP, whose runtime is the one that owns it.
       killShell: (sessionId: string, shellId: string) => invoke('native:kill-shell', { sessionId, shellId }),
+      // One file's text for the session-context panel. NOT gated on `supported`,
+      // for the same reason killShell is not: the desktop owns the session and
+      // its files, and a phone looking at that chat must be able to read them.
+      sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) =>
+        invoke('native:session-context-text', { sessionId, kind, id }),
+      onSessionContext: (cb: (e: unknown) => void) => {
+        const handler: Callback = (payload: any) => cb(payload);
+        addListener('native:session-context', handler);
+        return () => removeListener('native:session-context', handler);
+      },
       onModelState: (cb: (s: unknown) => void) => {
         const handler: Callback = (payload: any) => cb(payload);
         addListener('native:model-state', handler);
         return () => removeListener('native:model-state', handler);
+      },
+      onPermissionMode: (cb: (e: { sessionId: string; mode: string }) => void) => {
+        const handler: Callback = (payload: any) => cb(payload);
+        addListener('native:permission-mode', handler);
+        return () => removeListener('native:permission-mode', handler);
       },
     },
     // Provider registry — WS transport. upsert sends the config as the whole
@@ -1655,6 +2944,32 @@ export function installShim(): void {
       test: (id: string) => invoke('provider:test', { id }),
       setKey: (id: string, key: string) => invoke('provider:set-key', { id, key }),
       catalog: () => invoke('provider:catalog'),
+    },
+    // Sign in with ChatGPT (backend design 2026-09-05 §5) — WS transport, no
+    // payload (none of the four takes an argument). `supported: false` on
+    // purpose (review R1-9): the renderer gates the card on `=== true`, and a
+    // remote browser cannot run the sign-in — the browser tab and the
+    // 127.0.0.1:1455 listener live on the desktop. The four invokes still exist
+    // so the five-surface parity test holds and a remote caller gets an honest
+    // answer (status real, sign-in false, cancel / sign-out real) instead of
+    // an undefined namespace.
+    chatgpt: {
+      supported: false,
+      status: () => invoke('chatgpt:status'),
+      signIn: () => invoke('chatgpt:sign-in'),
+      cancelSignIn: () => invoke('chatgpt:cancel-sign-in'),
+      signOut: () => invoke('chatgpt:sign-out'),
+    },
+    // Claude Code's live sign-in (2026-09-09). Real over the wire: remote-server
+    // answers from the DESKTOP's probe, which is the machine the session
+    // actually runs on. A browser has no `claude` binary of its own, so asking
+    // locally would be meaningless.
+    claudeCode: {
+      status: (opts?: { refresh?: boolean }) => invoke('claude-code:status', opts),
+      // Installs on the DESKTOP (remote-server runs the installer). A phone has
+      // no installer and refuses with {ok:false}, which REJECT_ON_NOT_OK turns
+      // into an error the Settings card shows.
+      install: () => invoke('claude-code:install'),
     },
     // WebSearch providers (Phase 2 Plan B) — WS transport. Object payloads match
     // remote-server's WS case reads (payload.backend / payload.key).
@@ -1710,6 +3025,17 @@ export function installShim(): void {
       // Plan C context-length knob. Object payload matches remote-server's
       // WS case read (payload.contextSize).
       setContext: (contextSize: number) => invoke('engine:set-context', { contextSize }),
+      // Every engine-wide setting in one write. The payload IS the patch —
+      // remote-server reads the whole object, not a named field.
+      setConfig: (patch: { contextSize?: number; speed?: { speculative?: boolean; compressCache?: boolean } }) =>
+        invoke('engine:set-config', patch),
+      // Opens a plain-shell session on the HOST machine and types the command
+      // onto its prompt (never runs it). The remote client selects the returned
+      // session the same way the desktop renderer does — through the
+      // session:created broadcast that follows.
+      runInTerminal: (command: string) => invoke('engine:run-in-terminal', { command }) as Promise<{ sessionId: string }>,
+      // Object payload matches remote-server's WS case read (payload.backend).
+      prereqs: (backend: string) => invoke('engine:prereqs', { backend }),
       onInstallProgress: (cb: (p: unknown) => void) => {
         const handler: Callback = (payload: any) => cb(payload);
         addListener('engine:install-progress', handler);
@@ -1740,6 +3066,14 @@ export function installShim(): void {
       delete: (id: string) => invoke('models:delete', { id }),
       installed: () => invoke('models:installed'),
       resume: (modelId: string) => invoke('models:resume', { modelId }),
+      // Per-model settings + vision (2026-09-05). Object payloads, matching how
+      // remote-server's WS cases read them (payload.modelId / payload.patch).
+      // These read and write the HOST machine's engine — the remote browser is
+      // only a window onto it — so the answers are the same ones the desktop
+      // window gets.
+      settings: (modelId: string) => invoke('models:settings', { modelId }),
+      setSettings: (modelId: string, patch: unknown) => invoke('models:set-settings', { modelId, patch }),
+      addVision: (modelId: string) => invoke('models:add-vision', { modelId }) as Promise<{ downloadId: string }>,
       detectEndpoints: () => invoke('endpoints:detect'),
       setBackend: (backend: string) => invoke('engine:set-backend', { backend }),
       memoryCheck: (modelId: string) => invoke('models:memory-check', { modelId }),
@@ -1751,4 +3085,14 @@ export function installShim(): void {
       },
     },
   };
+
+  // The one intentional gap in the shared shape: voice typing exists on the
+  // Android app and on the desktop, and NOWHERE else. Deleting the namespace
+  // here — rather than never writing it above — is what lets the workbench's
+  // indent-anchored contract scan still see it in the source.
+  //
+  // A remote browser tab reaches this line (its page is http/https, not file:),
+  // so it gets no `voice` at all, the composer's `supported` is false, and no
+  // microphone button is drawn: contract row R7.
+  if (!isAndroidLocal()) delete (window as any).claude.voice;
 }

@@ -1,14 +1,18 @@
 // Resume-time title re-apply for native sessions.
 //
 // WHY this module exists: the renderer names a resumed session 'Resuming…' as a
-// placeholder, and the ONLY thing that ever renames a native session pill is
-// native-title-feeder.ts's onTitle — which fires only when the feeder GENERATES
-// a title. An already-titled session never regenerates (that guard is correct),
-// so nothing re-pushed the stored name and the pill stayed on the placeholder
-// for the life of the session. This puts the stored title back on the live
-// session right after the resume completes.
+// placeholder, and the only thing that renames a native session pill is an
+// automatic naming pass (session-namer.ts), which fires when a name is
+// GENERATED. A session that already has a name is not renamed at every reply
+// (that is the point), so nothing re-pushed the stored name and the pill stayed
+// on the placeholder for the life of the session. This puts the stored title
+// back on the live session right after the resume completes.
 //
-// Deps are injected (same pattern as native-title-feeder.ts) because the real
+// It also carries a name the user typed: the manual name is projected onto
+// ConversationRecord.title (conversations/service.ts), so the stored title read
+// here is already the effective one.
+//
+// Deps are injected (same pattern as session-namer.ts) because the real
 // collaborators are a Conversation Store read and two IPC sends — and because a
 // fake that cannot fail certifies the bug it should catch (youcoded #177).
 import { isRealSessionName } from '../shared/session-title';

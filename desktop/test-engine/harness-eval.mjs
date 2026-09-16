@@ -1185,6 +1185,30 @@ async function fetchPrices(roster, parsePriceCatalog, judgeModelId) {
  * --max-spend has. A total with no caveats next to it is a number someone will
  * act on.
  */
+/** A plan that compares two or more BUILD arms with one run each cannot separate
+ *  a real difference from run-to-run noise, and the judged items are where that
+ *  bites: on 2026-09-05 the SAME build, case, model and judge scored
+ *  plain-language 1 then 4, and unexplained-jargon 0 then 2, on two runs a few
+ *  hours apart — a 2-3 point swing, which is the size of most effects anyone
+ *  runs this tool to find. A session read that swing as a finding, reported it,
+ *  and had to retract it after the second run.
+ *
+ *  The report already says "one run is noise, not evidence" in prose. Prose did
+ *  not stop it, so this prints at the moment the money is about to be spent and
+ *  names the flag that fixes it. It WARNS rather than refuses: a single run is a
+ *  legitimate smoke test, and one arm's plan (no comparison) needs no repeats. */
+function comparisonNoiseWarning(plan, cells) {
+  const armCount = new Set(cells.map((c) => c.buildId)).size;
+  const repeats = plan.repeats ?? 1;
+  if (armCount < 2 || repeats > 1) return null;
+  return [
+    `  ! This plan compares ${armCount} build arms with ONE run each, so it cannot tell a real`,
+    '    difference from run-to-run noise. Measured 2026-09-05: the same build, case, model and',
+    '    judge moved 2-3 points on judged items between two runs — the size of most effects.',
+    '    Add --repeats <n> (or "repeats" in the plan) before reading any gap as a finding.',
+  ].join('\n');
+}
+
 function printEstimate(estimate, cells, {
   fetchError, formatUsd, judgeCostLines, judgeModelId, judgePrice,
 }) {
@@ -1569,6 +1593,8 @@ async function main(argv) {
   printEstimate(estimate, cells, {
     fetchError, formatUsd, judgeCostLines, judgeModelId, judgePrice,
   });
+  const noise = comparisonNoiseWarning(plan, cells);
+  if (noise) console.log(`\n${noise}`);
 
   if (dryRun) {
     // Deliberately BEFORE any key handling: --dry-run must work on a machine
@@ -1811,5 +1837,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
 export {
   readPlanFile, loadInstructionTexts, expandPlanFile, cellResultPath, resolveRunsDir, runCell, workerEnv, redactKey, loadGraders,
-  loadApiKey, scrubProcessTitle, runMatrix, fetchKeyUsage, DEFAULT_CELL_TIMEOUT_MS,
+  loadApiKey, scrubProcessTitle, runMatrix, fetchKeyUsage, comparisonNoiseWarning, DEFAULT_CELL_TIMEOUT_MS,
 };

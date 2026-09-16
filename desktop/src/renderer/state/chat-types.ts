@@ -1,4 +1,4 @@
-import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent } from '../../shared/types';
+import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -131,6 +131,15 @@ export interface UsageSnapshot {
   fiveHourResetsAt: string | null;
   sevenDayUtilization: number | null;
   sevenDayResetsAt: string | null;
+  /** Plan windows that are neither 5 hours nor 7 days long, each with its
+   *  length in minutes (a free ChatGPT plan reports one 30-day window and no
+   *  others — words deck W-2 = a, 2026-09-05). Absent, not empty, when the
+   *  plan has none; the card draws them after the two bars above. */
+  otherWindows?: Array<{ utilization: number; resets_at: string; minutes: number }>;
+  /** Whose windows the four fields above are: the Claude subscription (the
+   *  default, and the only plan before 2026-09-04) or the ChatGPT plan a
+   *  native session is bound to. The card names the plan in its scope line. */
+  subscriptionPlan?: 'claude' | 'chatgpt';
 
   // --- Native (YouCoded-runtime) sessions (spec §10) ---
   // A native session runs no Claude Code statusline, so the fields above are
@@ -153,6 +162,26 @@ export interface UsageSnapshot {
   specialistRuns?: number;
 }
 
+// Step 3 (2026-08-17, broadened "context transparency"): what the native harness
+// began the session with — a full accounting of the assistant's starting
+// context, truncated or not. The session-start panel renders this at the top of
+// every session (local or cloud), so the user can see the system prompt,
+// project instructions (as truncated), skills, and tools the assistant was
+// given — with outlinks to the real files.
+//
+// Every "was there a truncation" question is answered by a sub-field: an
+// all-null record is a session that started with everything fully loaded.
+//
+// This REPLACES the truncation-only record (2026-08-17 v1): the banner could
+// only say "something was cut". The panel can account for everything, and
+// truncation falls out naturally as the difference between the raw file and the
+// truncated copy shown.
+// MOVED to shared/types.ts on 2026-09-10, when main started building it: the
+// harness is the only thing that knows what a session was given, and a renderer
+// type main has to import is the wrong way round. Re-exported here so the
+// components that already import it from chat-types keep working.
+export type { SessionContext, SessionContextSkill, SessionContextText };
+
 // Thin divider entry — shown when a slash command produced a side-effect
 // worth marking in the conversation history (e.g. /clear, /compact).
 // Permanent so the user can scroll back and see that "these messages end here."
@@ -160,7 +189,7 @@ export interface SystemMarker {
   id: string;
   timestamp: number;
   label: string;                                // e.g. "Conversation cleared"
-  variant?: 'clear' | 'compact' | 'info'; // For styling hooks
+  variant?: 'clear' | 'compact' | 'info' | 'model'; // For styling hooks
   // Optional long-form text the marker can reveal on click. Currently only
   // set on compact markers — the actual conversation summary CC produced.
   summary?: string;
@@ -199,7 +228,10 @@ export type TimelineEntry =
   // (Destin, 1b hands-on: "these reports just shouldn't be rendering at all
   // in chat … should only register as a task completion toolcard").
   // `injectedMeta` is the structured header (who/what/status/steps).
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta }
+  // `uuid` (remote access batch 2): the transcript line this entry was confirmed or
+  // created from. A hydrate uses it to tell an echo the phone has not applied yet from
+  // older history the two copies simply loaded to different depths.
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -336,7 +368,7 @@ export interface SessionChatState {
    * screen; `loading` is the one-in-flight-page guard that makes paging
    * idempotent (a second request for the same page can never start).
    */
-  history: { cursor: PageCursor | null; hasMore: boolean; loading: boolean };
+  history: { cursor: PageCursor | null; hasMore: boolean; loading: boolean; hydrated?: boolean };
   seenUuids: Set<string>;
   /**
    * Task 12: messages the native host FIFO'd behind an in-flight turn
@@ -358,6 +390,16 @@ export interface SessionChatState {
    *  as events arrive rather than walked on demand — see session-totals.ts for
    *  why, and for exactly what is counted. */
   totals: SessionTotals;
+  /**
+   * Step 3 (2026-08-17, broadened): the session's STARTING context — model,
+   * window, system prompt, project instructions (as truncated), skills, tools,
+   * dropped MCP servers. Null = the host hasn't reported it yet. Lives here
+   * (not a timeline entry) so it survives resume — the accounting is a fact
+   * about the session's prompt, which is rebuilt on resume. Set by the
+   * SESSION_CONTEXT action (native session start / resume). Drives the
+   * session-start context panel + the "Context was trimmed" banner.
+   */
+  sessionContext: SessionContext | null;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -388,6 +430,7 @@ export function createSessionChatState(): SessionChatState {
     queuedMessages: [],
     history: { cursor: null, hasMore: false, loading: false },
     totals: emptyTotals(),
+    sessionContext: null,
   };
 }
 
@@ -482,6 +525,16 @@ export type ChatAction =
       type: 'NATIVE_SESSION_ERROR';
       sessionId: string;
       message: string;
+    }
+  | {
+      // Step 3 (2026-08-17, broadened): the session's STARTING context, reported
+      // by the native harness on session start/resume. Sets
+      // SessionChatState.sessionContext — the session-start panel + the
+      // "Context was trimmed" banner both render from it. null = host hasn't
+      // reported yet (or reported a fully-loaded session).
+      type: 'SESSION_CONTEXT';
+      sessionId: string;
+      context: SessionContext | null;
     }
   | {
       // Plan 2b: another device took over this session's lease. The holder side
@@ -630,11 +683,33 @@ export type ChatAction =
       requestId: string;
     }
   | {
+      // Remote access batch 2 (§7): the host says this ask was answered on
+      // another device (hook:event PermissionResolved). Clears the ask with a
+      // neutral note; a no-op unless the card is still awaiting.
+      type: 'PERMISSION_RESOLVED_ELSEWHERE';
+      sessionId: string;
+      requestId: string;
+      // A desktop window clears the card without the "answered elsewhere" note — the
+      // note would name the wrong device there (T2 re-review, 4).
+      silent?: boolean;
+    }
+  | {
+      // Remote access batch 2 (§7): the host finished replaying open asks on a
+      // reconnect and lists the ones still open — every awaiting card not in
+      // the list was answered while this client was away.
+      type: 'PERMISSION_REPLAY_COMPLETE';
+      sessionId: string;
+      pendingRequestIds: string[];
+    }
+  | {
       type: 'TRANSCRIPT_USER_MESSAGE';
       sessionId: string;
       uuid: string;
       text: string;
       timestamp: number;
+      // A slash command read from its command tags (TranscriptEvent.data.slashCommand). It starts
+      // no turn: many commands get no reply, and a watching device would stay "thinking".
+      slashCommand?: boolean;
       // Host-injected user-role turn (TranscriptEvent.data.injected, e.g.
       // 'specialist-report') + its structured header. Carried onto the
       // timeline entry so the renderer draws a compact report card, not a bubble.
@@ -784,6 +859,17 @@ export type ChatAction =
       markerId: string;       // Stable id so the divider survives re-renders
       timestamp: number;
     }
+  // Typed `/model <alias>` in chat: replaces the raw "/model opus" bubble with
+  // a thin divider, same shape as /clear's. Dispatched only after the PTY send
+  // actually went through (slash-command-dispatcher.ts) — never optimistic
+  // about a switch that may have been refused.
+  | {
+      type: 'MODEL_SWITCH_MARKER';
+      sessionId: string;
+      markerId: string;
+      timestamp: number;
+      label: string;           // e.g. "Model switched to Opus"
+    }
   // Spinner card shown during /compact. Sets compactionPending flag + inserts
   // a 'compacting' timeline entry so users see *something* is happening.
   | {
@@ -870,6 +956,10 @@ export interface SerializedSessionChatState {
   // it comes back as empty totals, which read as "nothing counted yet" rather
   // than as a crash or a wrong number.
   totals?: SessionTotals;
+  // Step 3 (2026-08-17): survives resume — the accounting is a fact about the
+  // session's prompt, which IS rebuilt on resume. Optional so a pre-field
+  // snapshot from an older host still deserializes.
+  sessionContext?: SessionContext | null;
 }
 
 export interface SerializedChatState {
@@ -880,6 +970,10 @@ export interface SerializedChatState {
   // without it, both look like a valid empty snapshot. Optional so a payload
   // from a pre-field host still deserializes.
   degraded?: true;
+  // Remote access batch 2 (§2, R2): the session the desktop is showing (its
+  // last-focused main window's selection), so a phone with no place of its own
+  // opens it. Optional so a payload from a pre-field host still deserializes.
+  focus?: { sessionId: string | null };
 }
 
 export function serializeChatState(state: ChatState): SerializedChatState {
@@ -915,6 +1009,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         // inherited loading:true would never fetch again.
         history: { ...s.history, loading: false },
         totals: s.totals,
+        sessionContext: s.sessionContext,
       },
     ]);
   }
@@ -970,6 +1065,8 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       // Older hosts (and a pre-field snapshot) predate totals — default to
       // empty totals rather than undefined.
       totals: ser.totals ?? emptyTotals(),
+      // Older hosts predate sessionContext — default null (no panel/banner).
+      sessionContext: ser.sessionContext ?? null,
     });
   }
   return result;

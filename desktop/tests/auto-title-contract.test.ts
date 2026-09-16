@@ -61,11 +61,40 @@ describe('Auto-Title reminder contract', () => {
     }
   });
 
-  it('the reminder still fires on a real interval (the drift-tracking half must survive)', () => {
+  it('the reminder still fires on a real interval where nothing schedules it', () => {
+    // The timer is the fallback for a runtime that does not write a mode file
+    // (Android today). Deleting it would stop naming conversations there.
     for (const script of [desktop, android]) {
       expect(script).toMatch(/INTERVAL=120/);
       expect(script).toMatch(/INTERVAL=600/);
       expect(script).toMatch(/ELAPSED" -lt "\$INTERVAL/);
+    }
+  });
+
+  it('Off and Basic stop the request, rather than discarding a title already paid for', () => {
+    for (const script of [desktop, android]) {
+      expect(script).toMatch(/naming-mode/);
+      // The gate must EXIT, not fall through and emit anyway.
+      expect(script).toMatch(/\[ "\$MODE" = "ai" \] \|\| exit 0/);
+    }
+  });
+
+  it('AI naming asks only when the app scheduled a review, and asks once', () => {
+    for (const script of [desktop, android]) {
+      expect(script).toMatch(/ASK_FILE="\$TOPIC_DIR\/ask-\$SESSION_ID"/);
+      expect(script).toMatch(/\[ -f "\$ASK_FILE" \] \|\| exit 0/);
+      // Consumed BEFORE the reminder is emitted: two tool calls inside one
+      // reply must not produce two title requests.
+      const consume = script.indexOf('rm -f "$ASK_FILE"');
+      const emit = script.indexOf('hookSpecificOutput');
+      expect(consume).toBeGreaterThan(-1);
+      expect(consume).toBeLessThan(emit);
+    }
+  });
+
+  it('the ask files are pruned like the topic and marker files', () => {
+    for (const script of [desktop, android]) {
+      expect(script).toMatch(/-name "ask-\*" -mtime \+30 -delete/);
     }
   });
 

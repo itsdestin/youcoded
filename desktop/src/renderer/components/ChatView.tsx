@@ -19,6 +19,8 @@ import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
+import { SessionContextBanner } from './SessionContextBanner';
+import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
@@ -28,14 +30,27 @@ import { useActiveProject } from '../hooks/useActiveProject';
 import { assistantName } from '../utils/assistant-name';
 import { ContentFindBar } from './ContentFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
+import { CardKeysLiveContext } from '../state/card-keys-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
+import { Tooltip, StatusStrip, Button } from './ui';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
  *  short enough that it can never feel like the view is fighting you. Any user
  *  input releases it immediately. */
 const ANCHOR_SETTLE_MS = 700;
+
+/** Retry budget for a page main could not LOCATE (`unresolved`) — as opposed to
+ *  a page that genuinely does not exist. The usual cause is a just-resumed
+ *  Claude Code session whose SessionStart hook has not reported its transcript
+ *  path yet, so the window that matters is a second or two; the cap exists so a
+ *  transcript that never resolves cannot become a permanent background poll for
+ *  as long as the conversation stays open. Doubling from 400ms, capped: 8
+ *  attempts span ~13s. */
+const UNRESOLVED_RETRY_MS = 400;
+const UNRESOLVED_RETRY_MAX_MS = 3000;
+const UNRESOLVED_RETRY_LIMIT = 8;
 
 interface Props {
   sessionId: string;
@@ -60,6 +75,11 @@ interface Props {
    *  provider-config error bubble (missing/disabled key) can jump the user
    *  straight to the fix. App owns Settings open-state, so it passes this down. */
   onOpenProviderSettings?: () => void;
+  /** Plan-limit card's Switch Providers button (Sign in with ChatGPT): opens
+   *  the model picker. The banner shows it only for a plan-limit error. */
+  onSwitchProviders?: () => void;
+  /** Plan-limit card's Upgrade plan button: opens OpenAI's upgrade page. */
+  onUpgradePlan?: () => void;
   // Task 12 (docked strip, replaces Task 11's UserMessage-bubble affordances):
   // App owns the native:queue-remove invoke, the QUEUED_MESSAGE_REMOVED
   // dispatch, the toast state, and the input-bar ref the Edit flow refills —
@@ -69,11 +89,40 @@ interface Props {
   // session's ChatView instance.
   onCancelQueued?: (sessionId: string, queueId: string) => void;
   onEditQueued?: (sessionId: string, queueId: string, text: string) => void;
+  /** Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say so"):
+   *  where a PHONE's copy of this conversation stands. `reconnecting` and
+   *  `restoring` show a quiet busy strip; `incomplete` says the copy may be
+   *  behind the computer and offers Refresh. Undefined / `complete` shows
+   *  nothing. Only ever set on a remote client — App owns the subscription. */
+  conversationStatus?: 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
+  /** Asks the host for a fresh copy — the strip's Refresh. */
+  onRefreshConversation?: () => void;
 }
 
-export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onCancelQueued, onEditQueued }: Props) {
+export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
+
+  // What the conversation strip shows: the live status, plus a 2.5 s "Up to
+  // date" after a refresh so the person can see it worked (tester U9). An
+  // initial `complete` — the desktop, or a phone that connected cleanly —
+  // shows nothing; only a transition OUT of restoring/incomplete earns the beat.
+  const [stripStatus, setStripStatus] = useState<'reconnecting' | 'restoring' | 'incomplete' | 'up-to-date' | null>(null);
+  const prevStatusRef = useRef<typeof conversationStatus>(undefined);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = conversationStatus;
+    if (conversationStatus === 'complete') {
+      if (prev === 'restoring' || prev === 'incomplete') {
+        setStripStatus('up-to-date');
+        const t = window.setTimeout(() => setStripStatus(null), 2500);
+        return () => window.clearTimeout(t);
+      }
+      setStripStatus(null);
+      return;
+    }
+    setStripStatus(conversationStatus ?? null);
+  }, [conversationStatus]);
   const { showTimestamps, reducedEffects } = useTheme();
 
   // Motion on a SESSION SWITCH only.
@@ -151,6 +200,16 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // Ctrl+F find-over-chat-history. Searches the message timeline (contentRef)
   // via the same CSS-Highlight ContentFindBar the artifact viewer uses.
   const [findOpen, setFindOpen] = useState(false);
+
+  // "What the assistant was given" — opened ONLY from the strip above the
+  // conversation. It used to open itself once per session; Destin chose "never"
+  // on review-5 Q-1, with the note that the strip carries the warning state
+  // instead. WHY that is the safer default even though the panel matters most on
+  // a small model: a panel nobody asked for lands exactly when they were about to
+  // type, and an interruption you did not ask for is the fastest way to teach
+  // someone to dismiss a warning unread. The strip is amber when something was
+  // cut, which is the signal that has to earn the click.
+  const [contextPopupOpen, setContextPopupOpen] = useState(false);
 
   // Single pass — compute all tool status flags, memoized to avoid re-iterating
   // the Map on every render (toolCalls is a new ref on every reducer dispatch)
@@ -321,15 +380,50 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
     return null;
   }, []);
 
+  /** Backoff state for `unresolved` answers. Load-bearing: an unresolved answer
+   *  ends in HISTORY_PAGE_FAILED, which clears `loading`, which re-runs the
+   *  observer effect, which re-observes a sentinel that is still on screen and
+   *  fires immediately — a request-per-frame busy loop without this gate. */
+  const unresolvedRetryRef = useRef({ attempts: 0, notBefore: 0 });
+  const unresolvedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The timer fires long after the closure that scheduled it went stale. */
+  const loadOlderPageRef = useRef<() => void>(() => {});
+
   const loadOlderPage = useCallback(async () => {
     const cursor = history.cursor;
     if (!cursor || history.loading) return;
+    if (Date.now() < unresolvedRetryRef.current.notBefore) return;
     // Announce FIRST: `loading` is the one-in-flight guard, so a second sentinel
     // hit in the same frame must already see it set.
     dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId });
     try {
       const page = await (window as any).claude?.detach?.requestTranscriptPage?.({ sessionId, beforeCursor: cursor });
+      // Main could not LOCATE the transcript — NOT "this is the beginning of the
+      // conversation". Recording it as a page would write hasMore:false and a
+      // null cursor into the reducer, which removes the sentinel for good and
+      // makes the rest of the conversation unreachable in this window (Destin,
+      // 2026-09-07). Treat it as a failed fetch, which keeps the cursor, and
+      // retry on a timer so it heals without needing a gesture the user may not
+      // even be able to make — at the top of the list there is nothing left to
+      // scroll, so nothing would re-trigger the sentinel.
+      if (page?.unresolved) {
+        const retry = unresolvedRetryRef.current;
+        if (retry.attempts < UNRESOLVED_RETRY_LIMIT) {
+          const delay = Math.min(UNRESOLVED_RETRY_MS * 2 ** retry.attempts, UNRESOLVED_RETRY_MAX_MS);
+          retry.attempts += 1;
+          retry.notBefore = Date.now() + delay;
+          if (unresolvedTimerRef.current) clearTimeout(unresolvedTimerRef.current);
+          unresolvedTimerRef.current = setTimeout(() => {
+            unresolvedTimerRef.current = null;
+            unresolvedRetryRef.current.notBefore = 0;
+            void loadOlderPageRef.current();
+          }, delay);
+        }
+        dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
+        return;
+      }
       if (page) {
+        unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
         // Captured HERE, one statement before the prepend — not before the await,
         // where a round-trip's worth of streaming could have moved everything.
         prependAnchorRef.current = captureScrollAnchor();
@@ -344,12 +438,27 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
     }
   }, [dispatch, sessionId, history.cursor, history.loading, captureScrollAnchor]);
 
+  useEffect(() => { loadOlderPageRef.current = loadOlderPage; });
+
+  // A pending retry belongs to the conversation that scheduled it. Switching
+  // sessions (this component is reused per session id) must not fire it against
+  // the new one, and must give the new one a full budget of its own.
+  useEffect(() => {
+    unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
+    return () => {
+      if (unresolvedTimerRef.current) clearTimeout(unresolvedTimerRef.current);
+      unresolvedTimerRef.current = null;
+    };
+  }, [sessionId]);
+
   useEffect(() => {
     if (!history.hasMore || history.loading || !history.cursor) return;
     // No IntersectionObserver (an exotic WebView): fall back to nothing rather
     // than eagerly loading the whole conversation, which is the cost this
-    // feature exists to avoid. The keyboard/scrollbar still reach the top; the
-    // scroll handler below covers that case.
+    // feature exists to avoid. There is NO scroll-handler backstop — this
+    // observer is the only trigger for an older page, so on such a WebView the
+    // conversation simply does not page. (A comment here used to promise "the
+    // scroll handler below covers that case"; there has never been one.)
     if (typeof IntersectionObserver === 'undefined') return;
     const el = historySentinelRef.current;
     const root = scrollContainerRef.current;
@@ -852,6 +961,9 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   }, [state.modelState, state.modelInfo, state.modelLoadedBytes, state.modelEverResident, state.isThinking]);
 
   return (
+    // WHY: every open session's ChatView stays mounted, and waiting cards listen
+    // for keys on `window` — only the chat on screen may answer them.
+    <CardKeysLiveContext.Provider value={visible}>
     <div
       // Fix: previously toggled display:none/flex, which forced a full reflow of
       // both views on every chat↔terminal toggle (the #1 cause of visual jank
@@ -910,10 +1022,12 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               h-full centering it replaces) so it clears a FLOATING header pill,
               which sits below --top-chrome-height by its own margin; otherwise
               the text tucked slightly behind the pill. Provider-aware: native
-              (local/cloud) sessions shouldn't be told to talk to "Claude". */}
+              sessions must not be told to talk to a vendor's name. */}
           {state.timeline.length === 0 && !state.isThinking && (
             <div
-              className="absolute inset-x-0 flex items-center justify-center text-fg-muted text-sm pointer-events-none"
+              // select-none: a hint, not content. Ctrl+A must not paint it
+              // (Destin, 2026-09-10).
+              className="absolute inset-x-0 flex items-center justify-center text-fg-muted text-sm pointer-events-none select-none"
               style={{ top: 'var(--top-chrome-bottom, 3rem)', bottom: 'var(--bottom-chrome-height, 5rem)' }}
             >
               Start a conversation with {assistantName(provider)}
@@ -939,17 +1053,62 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               onClose={() => setFindOpen(false)}
             />
           )}
+          {/* Remote access batch 2 (questions deck 2026-09-10, Q-3 "keep it, say
+              so"): where the phone's copy of this conversation stands. Its own
+              ROW above the messages, like the find bar — not inside the scroller,
+              because the chat sticks to its newest message and a strip at the
+              top of the scroll content was never on screen (measured 2026-09-10).
+              `.find-row` clears the overlaid header the same way. Desktop never
+              sets the prop, so nothing changes there. */}
+          {stripStatus && (
+            <div className={`find-row px-3 pb-2 shrink-0${findOpen ? ' !mt-0' : ''}`} data-conversation-status={stripStatus}>
+              {stripStatus === 'incomplete' ? (
+                // Wording per the first phone tester (U11, 2026-09-10): "behind
+                // your computer" read as a place, not a time.
+                <StatusStrip
+                  tone="warn"
+                  detail="The last refresh didn’t finish, so newer messages may be missing."
+                  action={<Button size="sm" onClick={onRefreshConversation}>Refresh</Button>}
+                >
+                  This conversation may be out of date.
+                </StatusStrip>
+              ) : stripStatus === 'reconnecting' ? (
+                <StatusStrip tone="busy" detail="Your draft is safe. It sends once you’re reconnected.">
+                  Reconnecting to your computer…
+                </StatusStrip>
+              ) : stripStatus === 'restoring' ? (
+                // No draft line here: the connection IS back (tester U8).
+                <StatusStrip tone="busy" detail="Loading the newest messages…">
+                  Catching up with your computer…
+                </StatusStrip>
+              ) : (
+                // A beat of "Up to date" after a refresh, so it visibly worked
+                // (tester U9) — then the row goes away on its own.
+                <StatusStrip tone="ok">Up to date.</StatusStrip>
+              )}
+            </div>
+          )}
           {/* flex-1 min-h-0 (was h-full): with the find row in flow above it,
               h-full would overflow the pane by the row's height and clip the
               last message under the input bar. chat-scroll--below-find-row
               drops the header-clearing padding-top while the row is open —
               the content no longer starts under the header, it starts under
               the row. */}
-          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen ? ' chat-scroll--below-find-row' : ''}`}>
+          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || stripStatus ? ' chat-scroll--below-find-row' : ''}`}>
            {/* The arrival class is on the CONTENT wrapper, not the scroller:
                animating transform on the scroll container would make it a
                containing block and disturb useStickToBottom's measurements. */}
            <div ref={contentRef} className={arriving ? 'switch-arrival' : undefined}>
+        {/* Step 3 (2026-08-17, broadened): the session's starting-context strip
+            — every session shows one, and clicking it opens the full accounting
+            (SessionContextPopup). Mounted above the first message so it also
+            shows on a fresh session before any timeline exists. in-view opts it
+            into the same wallpaper glassmorphism as the timeline bubbles. */}
+        {state.sessionContext && (
+          <div className="px-4 pt-3 in-view">
+            <SessionContextBanner context={state.sessionContext} onOpen={() => setContextPopupOpen(true)} />
+          </div>
+        )}
         {/* Paged history: crossing this loads the previous ~30 turns. Rendered
             only while there IS older history, so reaching the beginning of the
             conversation stops the fetching for good. */}
@@ -1087,20 +1246,20 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               const folded = folding.isFolded(key!);
               const foldHeight = folded ? folding.heightOf(key!) : undefined;
               return (
+                <Tooltip key={key!} text={isPreCompaction
+                    ? (archiveKind === 'clear'
+                      ? 'Cleared — still here to read, but not in Claude\'s context'
+                      : 'Archived by compaction — not in Claude\'s active context')
+                    : ''}>
                 <div
-                  key={key!}
                   ref={attachEntry}
                   data-entry-key={key!}
                   className={`timeline-entry in-view${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
                   style={folded && foldHeight ? { height: foldHeight } : undefined}
-                  title={isPreCompaction
-                    ? (archiveKind === 'clear'
-                      ? 'Cleared — still here to read, but not in Claude\'s context'
-                      : 'Archived by compaction — not in Claude\'s active context')
-                    : undefined}
                 >
                   {folded && foldHeight ? null : content}
                 </div>
+                </Tooltip>
               );
               });
             })()}
@@ -1179,6 +1338,8 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     // Provider-config errors (missing/disabled key) show an
                     // "Open Settings" button that deep-links to Model Providers.
                     onOpenProviderSettings={onOpenProviderSettings}
+                    onSwitchProviders={onSwitchProviders}
+                    onUpgradePlan={onUpgradePlan}
                     // Stalled card only. Retry re-runs the PARKED STEP — it is
                     // deliberately NOT the native-send helper the old TODO here
                     // pointed at, which sends a new user message and would fork
@@ -1281,6 +1442,17 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
           Jump to bottom
         </button>
       )}
+
+      {/* Step 3 (2026-08-17, broadened): the session-start context panel —
+          "what the assistant began with". Auto-opens once per session (see the
+          effect above); the strip stays clickable afterwards. */}
+      <SessionContextPopup
+        open={contextPopupOpen}
+        onClose={() => setContextPopupOpen(false)}
+        context={state.sessionContext}
+        sessionId={sessionId}
+      />
     </div>
+    </CardKeysLiveContext.Provider>
   );
 }

@@ -9,7 +9,7 @@
 // One place knows the on-disk layout (<skillDir>/SKILL.md). Do not add a second.
 import * as fs from 'fs';
 import * as path from 'path';
-import { scanSkills } from '../../skill-scanner';
+import { scanProjectSkills, scanSkills } from '../../skill-scanner';
 import type { SkillEntry } from '../../../shared/types';
 
 export interface LoadedSkill {
@@ -68,10 +68,16 @@ function stripFrontmatter(raw: string): string {
   return afterFence === -1 ? '' : raw.slice(afterFence + 1);
 }
 
-export function createSkillCatalog(entries: SkillEntry[] = scanSkills()): SkillCatalog {
-  const byId = new Map(entries.map((e) => [e.id, e]));
+export function createSkillCatalog(entries?: SkillEntry[], projectCwd?: string): SkillCatalog {
+  // Project skills take precedence only within this catalog. The global scanner
+  // deliberately excludes them, because its app-wide inventory has no cwd.
+  const discovered = entries ?? [
+    ...(projectCwd ? scanProjectSkills(projectCwd) : []),
+    ...scanSkills(),
+  ].filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index);
+  const byId = new Map(discovered.map((e) => [e.id, e]));
   return {
-    list: () => entries.map((e) => ({ id: e.id, description: e.description })),
+    list: () => discovered.map((e) => ({ id: e.id, description: e.description })),
     load(id: string): LoadedSkill {
       // Exact id first, then BARE NAME. scanSkills namespaces plugin skills as
       // `<plugin>:<skill>` (wecoded-themes-plugin:theme-builder), but users — and
@@ -80,7 +86,7 @@ export function createSkillCatalog(entries: SkillEntry[] = scanSkills()): SkillC
       // missing (Destin, 2026-07-28).
       let entry = byId.get(id);
       if (!entry) {
-        const qualified = entries.filter((e) => e.id.slice(e.id.lastIndexOf(':') + 1) === id);
+        const qualified = discovered.filter((e) => e.id.slice(e.id.lastIndexOf(':') + 1) === id);
         // Ambiguity is refused, never guessed: two plugins can ship the same
         // skill name, and silently picking one runs the wrong plugin's code.
         if (qualified.length > 1) throw new SkillAmbiguous(id, qualified.map((e) => e.id));

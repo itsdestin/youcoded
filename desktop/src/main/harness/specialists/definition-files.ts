@@ -22,8 +22,6 @@ export const NATIVE_CHILD_TOOLS = ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Gre
 // accidentally hold write/execute power.
 export const READ_ONLY_DEFAULT_TOOLS = ['Read', 'Glob', 'Grep'];
 
-// Matches the built-ins' common stepCap (registry.ts EXPLORER/RESEARCHER).
-export const DEFAULT_STEP_CAP = 25;
 export const DEFAULT_REPORT_BUDGET_TOKENS = 2000;
 
 export type LoadedDefinition = {
@@ -137,20 +135,18 @@ function capDescription(description: string): { description: string; fullDescrip
 function mapModelPreference(
   raw: string | undefined,
   normalize: (v: string) => 'parent' | 'budget' | 'frontier' | undefined,
-): { modelPreference: 'parent' | 'budget' | 'frontier'; warning?: string } {
+): { modelPreference?: 'parent' | 'budget' | 'frontier'; warning?: string } {
   if (raw === undefined || raw.trim() === '') {
-    return { modelPreference: 'parent' };
+    return {};
   }
   const mapped = normalize(raw.trim());
   if (mapped !== undefined) {
     return { modelPreference: mapped };
   }
   return {
-    modelPreference: 'parent',
-    // WHY: "using the default (parent)" is meaningless to a reader who
-    // hasn't seen this codebase's internal name for the setting — spell out
-    // what "parent" means, the same gloss the starter file uses.
-    warning: `model: "${raw.trim()}" isn't recognized — using the default: the same model your main assistant is already running on`,
+    // WHY an unrecognized value stays unset: manufacturing `parent` here
+    // turns invalid frontmatter into permission to inherit an expensive model.
+    warning: `model: "${raw.trim()}" isn't recognized — using the automatic Budget model`,
   };
 }
 
@@ -245,16 +241,8 @@ export function loadPersonalDefinition(filePath: string, raw: string): Definitio
   );
   if (modelWarning) warnings.push(modelWarning);
 
-  // --- stepCap / reportBudgetTokens ---
-  let stepCap = DEFAULT_STEP_CAP;
-  if (data.stepCap !== undefined) {
-    const n = parseNumeric(data.stepCap);
-    if (n !== undefined) {
-      stepCap = n;
-    } else {
-      warnings.push(`stepCap must be a number — using the default (${DEFAULT_STEP_CAP})`);
-    }
-  }
+  // Legacy `stepCap` is intentionally ignored so existing personal files keep
+  // loading after the per-specialist step-limit contract was removed.
   let reportBudgetTokens = DEFAULT_REPORT_BUDGET_TOKENS;
   if (data.reportBudgetTokens !== undefined) {
     const n = parseNumeric(data.reportBudgetTokens);
@@ -277,7 +265,6 @@ export function loadPersonalDefinition(filePath: string, raw: string): Definitio
     allowedTools,
     charter,
     modelPreference,
-    stepCap,
     reportBudgetTokens,
     source: 'personal',
     // ~/.youcoded/specialists/ is the user's own folder by construction, so a
@@ -363,17 +350,15 @@ export function loadClaudeCodeDefinition(
 
   // --- model ---
   const { modelPreference, warning: modelWarning } = mapModelPreference(asString(data.model), (v) => {
-    if (v === 'inherit' || v === 'sonnet') return 'parent';
-    if (v === 'haiku') return 'budget';
+    if (v === 'inherit') return 'parent';
+    if (v === 'haiku' || v === 'sonnet') return 'budget';
     if (v === 'opus') return 'frontier';
     return undefined;
   });
   if (modelWarning) warnings.push(modelWarning);
 
-  // --- maxTurns -> stepCap ---
-  let stepCap = DEFAULT_STEP_CAP;
-  const maxTurns = parseNumeric(data.maxTurns);
-  if (maxTurns !== undefined) stepCap = maxTurns;
+  // Legacy `maxTurns` is intentionally ignored so existing Claude Code agent
+  // files keep loading after the per-specialist step-limit contract was removed.
 
   // reportBudgetTokens has no CC frontmatter equivalent — always the default.
   const reportBudgetTokens = DEFAULT_REPORT_BUDGET_TOKENS;
@@ -402,7 +387,6 @@ export function loadClaudeCodeDefinition(
     allowedTools,
     charter: deriveCharter(allowedTools),
     modelPreference,
-    stepCap,
     reportBudgetTokens,
     source: 'claude-code',
     grantScope,
@@ -429,7 +413,6 @@ name: Example Specialist
 description: A short, one-line summary of what this helper is for. The assistant reads this to decide when to hire it — keep it under 300 characters.
 tools: [Read, Glob, Grep]
 model: parent
-stepCap: 25
 reportBudgetTokens: 2000
 id: example
 version: 1
@@ -442,7 +425,6 @@ What each field above does:
 - description: the one-line summary the assistant reads to decide when to hire this helper.
 - tools: what this helper is allowed to use. Options are Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch, TodoWrite. Leave this out entirely and the helper gets read-only access (Read, Glob, Grep) — no editing files, no running commands.
 - model: which model tier runs this helper. "parent" uses the same model as your main assistant, "budget" uses your configured cheaper model, "frontier" uses your configured stronger model.
-- stepCap: the most actions this helper can take before it has to stop and report back.
 - reportBudgetTokens: roughly how long this helper's final report is allowed to be.
 - id, version, author: optional bookkeeping fields, safe to leave as-is or remove.
 

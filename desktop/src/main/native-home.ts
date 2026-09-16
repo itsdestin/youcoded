@@ -112,7 +112,12 @@ export class NativeHome {
     );
   }
 
-  private sessionPath(slug: string, sessionId: string): string {
+  /** Absolute path of one session's JSONL. PUBLIC because the private
+   *  continuation manifest must name the exact transcript file it describes
+   *  (accepted-history-store.ts digests it) — SessionStore.transcriptPath is
+   *  the one caller outside this class, so the path convention still lives
+   *  here and nowhere else. */
+  sessionFilePath(slug: string, sessionId: string): string {
     return path.join(this.dir, 'sessions', slug, `${sessionId}.jsonl`);
   }
 
@@ -124,7 +129,7 @@ export class NativeHome {
    * per transcript event).
    */
   async appendSessionLine(slug: string, sessionId: string, obj: unknown): Promise<void> {
-    const p = this.sessionPath(slug, sessionId);
+    const p = this.sessionFilePath(slug, sessionId);
     fs.mkdirSync(path.dirname(p), { recursive: true });
     // Crash-torn-tail guard: if a previous process died mid-append, the file
     // can end WITHOUT a newline. Appending directly would fuse this record
@@ -150,7 +155,7 @@ export class NativeHome {
   }
 
   readSessionLines(slug: string, sessionId: string): unknown[] {
-    const p = this.sessionPath(slug, sessionId);
+    const p = this.sessionFilePath(slug, sessionId);
     let raw: string;
     try {
       raw = fs.readFileSync(p, 'utf8');
@@ -186,7 +191,7 @@ export class NativeHome {
    * readSessionLines does.
    */
   readSessionHead(slug: string, sessionId: string, maxBytes = 262144): unknown[] {
-    const p = this.sessionPath(slug, sessionId);
+    const p = this.sessionFilePath(slug, sessionId);
     let buf: Buffer;
     let bytesRead: number;
     let fileSize: number;

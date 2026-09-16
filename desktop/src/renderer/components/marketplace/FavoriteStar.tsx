@@ -8,10 +8,16 @@ interface Props {
   /** When true, the star is absolutely positioned to sit in the corner of a
    *  card. Default false for header/inline use. */
   corner?: boolean;
+  /** Opaque bg-panel backdrop WITHOUT the corner positioning — for a caller
+   *  that already places this inside its own absolutely-positioned wrapper
+   *  alongside sibling icons (e.g. SkillCard's marketplace icon + star pair),
+   *  where each icon needs its own distinct backdrop rather than one shared
+   *  pill covering both. */
+  bg?: boolean;
 }
 
 export default function FavoriteStar({
-  filled, disabled = false, disabledReason, onToggle, size = 'md', corner = false,
+  filled, disabled = false, disabledReason, onToggle, size = 'md', corner = false, bg = false,
 }: Props) {
   const px = size === 'sm' ? 14 : 16;
   // Fix: dropped `bg-panel/80 backdrop-blur-sm`. The card behind is already
@@ -25,7 +31,10 @@ export default function FavoriteStar({
   // card and eliminates the per-star compositing layer.
   const positioning = corner
     ? 'absolute top-1.5 right-1.5 bg-panel'
-    : '';
+    // `bg` is scoped to callers that opted in (SkillCard's icon pair) — it
+    // also gets the hover backdrop; `corner`'s existing callers (marketplace
+    // tiles, ThemeScreen) keep their prior look untouched.
+    : (bg ? 'bg-panel hover:bg-inset' : '');
   return (
     <button
       type="button"

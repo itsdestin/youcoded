@@ -63,6 +63,13 @@
     "vignette": 0.18,
     "noise": 0
   },
+  "mascot": {
+    "rig": "assets/mascot-rig.svg",
+    "idle": "assets/mascot-idle.svg",
+    "welcome": "assets/mascot-welcome.svg",
+    "inquisitive": "assets/mascot-inquisitive.svg",
+    "shocked": "assets/mascot-shocked.svg"
+  },
   "custom_css": "::selection { background: rgba(139, 71, 184, 0.3); color: var(--fg); } [data-theme=\"cotton-candy-sky\"] h1, [data-theme=\"cotton-candy-sky\"] h2 { text-shadow: 0 0 12px rgba(139, 71, 184, 0.18); }",
   "contentHash": "sha256:5305d87a1a4a634dfba1a459657748dc251c473ddac6634a03ac06bc5903d720"
 }

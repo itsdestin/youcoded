@@ -4,6 +4,7 @@ import { NativeHome } from '../src/main/native-home';
 import { SessionStore } from '../src/main/harness/session-store';
 import { NativeSessionHost, SUBAGENT_DISPLAY_TYPES, mergeChildEvents } from '../src/main/harness/native-session-host';
 import { PermissionStore } from '../src/main/harness/permission-store';
+import { PermissionModeStore } from '../src/main/harness/permission-mode-store';
 import { nativeStoreSlug } from '../src/main/slug-encoding';
 import { CROSS_PROJECT_SLUG } from '../src/shared/permission-types';
 import type { PermissionRule } from '../src/shared/permission-types';
@@ -228,6 +229,50 @@ describe('NativeSessionHost', () => {
     expect(history![1].data.text).toBe('Hi there');   // coalesced on disk
   });
 
+  it('fresh roots persist and use one exact step-guard snapshot', async () => {
+    const readGuard = vi.fn(() => 12);
+    const guarded = new NativeSessionHost(
+      new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      new SpecialistCatalog({ claudeUserDir: null }), readGuard,
+    );
+    await guarded.create({ sessionId: 'guarded', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    expect(readGuard).toHaveBeenCalledTimes(1);
+    expect(new SessionStore(new NativeHome(root)).readHeader('guarded', root)?.stepGuard).toBe(12);
+    expect((guarded as any).live.get('guarded').session.opts.harness.limits.maxSteps).toBe(12);
+    await guarded.destroyAll();
+  });
+
+  it('resume uses the stored snapshot despite preference changes, while old and malformed headers use no guard', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    let preference = 14;
+    const guarded = new NativeSessionHost(
+      store, factory, NO_CONTEXT, async () => null, async () => null,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      new SpecialistCatalog({ claudeUserDir: null }), () => preference,
+    );
+    await guarded.create({ sessionId: 'stored', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    await guarded.destroyAll();
+    preference = 99;
+    await guarded.resume('stored', root);
+    expect((guarded as any).live.get('stored').session.opts.harness.limits.maxSteps).toBe(14);
+    await guarded.destroyAll();
+
+    const headerBase = { v: 1, harnessId: 'assistant', binding: { providerId: 'openrouter', modelId: 'm' }, cwd: root, createdAt: Date.now() };
+    await store.create({ ...headerBase, sessionId: 'old' });
+    await new NativeHome(root).appendSessionLine(nativeStoreSlug(root), 'bad', { ...headerBase, sessionId: 'bad', stepGuard: 'oops' });
+    for (const id of ['old', 'bad']) {
+      const resumed = new NativeSessionHost(
+        store, factory, NO_CONTEXT, async () => null, async () => null,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        new SpecialistCatalog({ claudeUserDir: null }), () => 77,
+      );
+      expect(await resumed.resume(id, root)).toBe(true);
+      expect((resumed as any).live.get(id).session.opts.harness.limits.maxSteps).toBeUndefined();
+      await resumed.destroyAll();
+    }
+  });
+
   it('resume rebuilds a live session whose history includes the stored exchange', async () => {
     await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
     host.send('s-1', 'hello');       // M1: dispatch-only — wait for the turn separately
@@ -291,6 +336,95 @@ describe('NativeSessionHost', () => {
   // Promise<boolean>) — 'not-live' replaces the old bare `false`.
   it('send to an unknown session returns failed/not-live, does not throw', () => {
     expect(host.send('ghost', 'x')).toEqual({ status: 'failed', reason: 'not-live' });
+  });
+
+  // ── A message typed while the session is still STARTING (2026-09-06) ───────
+  //
+  // Destin made a session on a local model and typed straight away. The app told
+  // him "This session is no longer running. Start or resume it to send messages."
+  // Both halves were false — the session had never run, the engine was loading a
+  // 29 GB model, and a minute later the same session answered him normally.
+  // send() had ONE reason code for "not in the live map", covering both a session
+  // that has ENDED and one that has not STARTED. These four pin the split and the
+  // holding queue that makes the refusal unnecessary in the first place.
+
+  it('a message typed while the session is still starting is HELD, not refused', async () => {
+    // create() is async; this is the real window, entered before its first await
+    // settles — exactly where Destin's message landed.
+    const creating = host.create({ sessionId: 's-warmup', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const ack = host.send('s-warmup', 'hello from the starting gate');
+    expect(ack.status, 'held, not refused').toBe('queued');
+    const turns: string[] = [];
+    host.on('transcript-event', (e) => { if (e.type === 'turn-complete') turns.push('t'); });
+    await creating;
+    await waitForTurnComplete(host, 1);
+    await host.drain('s-warmup');
+    // Delivered — and delivered ONCE. The settle window matters: a duplicate
+    // sits in the send queue and only runs AFTER the first turn completes, so
+    // reading the transcript the instant turn 1 lands cannot see it. Held open
+    // until the queue has had every chance to produce a second turn.
+    await new Promise((r) => setTimeout(r, 300));
+    await host.drain('s-warmup');
+    expect(turns.length, 'exactly one turn ran').toBe(1);
+    const history = host.getHistory('s-warmup')!;
+    const typed = history.filter((e) => e.type === 'user-message');
+    expect(typed).toHaveLength(1);
+    expect(typed[0].data.text).toBe('hello from the starting gate');
+    expect(history.map((e) => e.type)).toEqual(['user-message', 'assistant-text', 'turn-complete']);
+  });
+
+  it('several messages typed during startup arrive in the order they were typed', async () => {
+    const creating = host.create({ sessionId: 's-warmup2', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    expect(host.send('s-warmup2', 'first').status).toBe('queued');
+    expect(host.send('s-warmup2', 'second').status).toBe('queued');
+    await creating;
+    await waitForTurnComplete(host, 2);
+    await host.drain('s-warmup2');
+    const typed = host.getHistory('s-warmup2')!.filter((e) => e.type === 'user-message').map((e) => e.data.text);
+    expect(typed).toEqual(['first', 'second']);
+  });
+
+  it('a session that has ENDED still gets the ended message, not the starting one', async () => {
+    // The whole point of the split: this must NOT become "starting".
+    await host.create({ sessionId: 's-gone', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    await host.destroy('s-gone');
+    expect(host.send('s-gone', 'x')).toEqual({ status: 'failed', reason: 'not-live' });
+    // And an id nothing ever created is the same case.
+    expect(host.send('never-existed', 'x')).toEqual({ status: 'failed', reason: 'not-live' });
+  });
+
+  it('startup refuses with its OWN reason once ten messages are already waiting', async () => {
+    const creating = host.create({ sessionId: 's-warmup3', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    for (let i = 0; i < 10; i++) expect(host.send('s-warmup3', `m${i}`).status).toBe('queued');
+    // The eleventh cannot be held — and it must say "starting", never
+    // "no longer running", because the session is starting.
+    expect(host.send('s-warmup3', 'm10')).toEqual({ status: 'failed', reason: 'starting' });
+    await creating;
+    await host.destroy('s-warmup3');
+  });
+
+  it('a message still waiting for the session to start can be taken back', async () => {
+    const creating = host.create({ sessionId: 's-warmup4', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const ack = host.send('s-warmup4', 'oops, wrong thing') as { status: 'queued'; queueId: string };
+    expect(host.removeQueued('s-warmup4', ack.queueId), 'Cancel reaches a held message').toBe(true);
+    await creating;
+    await host.drain('s-warmup4');
+    expect(host.getHistory('s-warmup4')!.filter((e) => e.type === 'user-message')).toHaveLength(0);
+    await host.destroy('s-warmup4');
+  });
+
+  it('a session that never comes up does not hold the message for ever', async () => {
+    // A failed create must release what it was holding — otherwise a typed
+    // message sits in memory for the life of the app, attached to nothing.
+    const store = new SessionStore(new NativeHome(root));
+    vi.spyOn(store, 'create').mockRejectedValue(new Error('disk is full'));
+    const doomed = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    const creating = doomed.create({ sessionId: 's-doomed', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    expect(doomed.send('s-doomed', 'held').status).toBe('queued');
+    await expect(creating).rejects.toThrow();
+    // Back to the honest answer for a session that is not coming.
+    expect(doomed.send('s-doomed', 'again')).toEqual({ status: 'failed', reason: 'not-live' });
+    await doomed.destroyAll();
   });
 
   // The old 'overlapping send() does not reject: second resolves false' pin is
@@ -810,6 +944,36 @@ describe('NativeSessionHost', () => {
       );
       await h.create({ sessionId: 'v', cwd: root, binding: { providerId: 'openrouter', modelId: 'vision-model' } });
       expect(profileOf(h, 'v').supportsVision).toBe(true);
+      await h.destroyAll();
+    });
+
+    // T18 / design §E5 — the same wiring, now for a LOCAL model. This is the
+    // whole point of the task: a local model that ships a vision projector must
+    // reach a session with supportsVision: true, exactly as an OpenRouter
+    // vision model does. local-engine is deliberately NOT in VISION_PROVIDERS
+    // (it is a transport — the same engine serves vision and text-only GGUFs),
+    // and 'mystery-3b' matches no KNOWN_MODELS entry, so the closure's `true`
+    // is the ONLY thing in the system that can make this assertion pass.
+    it('a discovered supportsVision:true reaches the profile of a LOCAL-ENGINE binding too (T18)', async () => {
+      const h = new NativeSessionHost(
+        new SessionStore(new NativeHome(root)), factory, contextAndSlotsFor as any, providerTypeFor as any,
+        async () => true,
+      );
+      await h.create({ sessionId: 'lv', cwd: root, binding: { providerId: 'local', modelId: 'mystery-3b' } });
+      expect(profileOf(h, 'lv').supportsVision).toBe(true);
+      await h.destroyAll();
+    });
+
+    // And the text-only half: a local model whose router row said `["text"]`
+    // resolves to a hard false, so the harness tells it the picture cannot be
+    // delivered rather than sending bytes the model cannot read.
+    it('a discovered supportsVision:false keeps a LOCAL-ENGINE profile text-only (T18)', async () => {
+      const h = new NativeSessionHost(
+        new SessionStore(new NativeHome(root)), factory, contextAndSlotsFor as any, providerTypeFor as any,
+        async () => false,
+      );
+      await h.create({ sessionId: 'lt', cwd: root, binding: { providerId: 'local', modelId: 'mystery-3b' } });
+      expect(profileOf(h, 'lt').supportsVision).toBe(false);
       await h.destroyAll();
     });
 
@@ -1345,6 +1509,77 @@ describe('NativeSessionHost', () => {
       expect(h.getPermissionMode('s3')).toBe('ask');
       await h.destroyAll();
     });
+
+    // The reported bug: "Ask first" on a Coder conversation silently came back
+    // as Auto-edit after a resume or an app restart, while the chip still said
+    // ASK FIRST. A fresh host stands in for the restart.
+    const hostWithHome = () => new NativeSessionHost(
+      new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null, undefined,
+      undefined, undefined, undefined, undefined, undefined, new NativeHome(root),
+    );
+
+    it('a resume restores the mode the user chose, not the preset default', async () => {
+      const h = hostWithHome();
+      await h.create({ sessionId: 'kept', cwd: root, binding, presetId: 'coder' });
+      h.setPermissionMode('kept', 'ask');
+      const saved = new PermissionModeStore(new NativeHome(root));
+      await vi.waitFor(() => expect(saved.get('kept')).toBe('ask'));
+      await h.destroyAll();
+
+      const restarted = hostWithHome();
+      expect(await restarted.resume('kept', root)).toBe(true);
+      expect(restarted.getPermissionMode('kept')).toBe('ask');
+      await restarted.destroyAll();
+    });
+
+    // No saved-file store here (no NativeHome passed), so only the in-memory
+    // copy can carry the choice across close → reopen in one app run.
+    it('a close and reopen in the same app run keeps the chosen mode in memory', async () => {
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null);
+      await h.create({ sessionId: 'mem', cwd: root, binding, presetId: 'coder' });
+      h.setPermissionMode('mem', 'ask');
+      await h.destroy('mem');
+      expect(await h.resume('mem', root)).toBe(true);
+      expect(h.getPermissionMode('mem')).toBe('ask');
+      await h.destroyAll();
+    });
+
+    it('rapid changes save the latest mode, whatever order the saves finish in', async () => {
+      const saved = new PermissionModeStore(new NativeHome(root));
+      let current: 'ask' | 'full-auto' = 'full-auto';
+      const first = saved.set('rapid', () => current);   // started while on full-auto
+      current = 'ask';                                    // the user moved on
+      await Promise.all([first, saved.set('rapid', () => current)]);
+      expect(saved.get('rapid')).toBe('ask');
+    });
+
+    it('a resume with nothing saved starts from the preset default', async () => {
+      const h = hostWithHome();
+      await h.create({ sessionId: 'unsaved', cwd: root, binding, presetId: 'coder' });
+      await h.destroyAll();
+      const restarted = hostWithHome();
+      expect(await restarted.resume('unsaved', root)).toBe(true);
+      expect(restarted.getPermissionMode('unsaved')).toBe('auto-edit');
+      await restarted.destroyAll();
+    });
+
+    // The chip used to read the mode before create() had set it and keep the
+    // 'ask' fallback; the push is what corrects it, so it must carry the REAL
+    // mode, and every change must be pushed too.
+    it('pushes the real mode when a session starts, resumes, or changes', async () => {
+      const h = hostWithHome();
+      const pushed: Array<{ sessionId: string; mode: string }> = [];
+      h.on('permission-mode', (e) => pushed.push(e));
+      await h.create({ sessionId: 'p1', cwd: root, binding, presetId: 'coder' });
+      expect(pushed).toEqual([{ sessionId: 'p1', mode: 'auto-edit' }]);
+      h.setPermissionMode('p1', 'full-auto');
+      expect(pushed.at(-1)).toEqual({ sessionId: 'p1', mode: 'full-auto' });
+      await h.destroy('p1');
+      pushed.length = 0;
+      expect(await h.resume('p1', root)).toBe(true);
+      expect(pushed).toEqual([{ sessionId: 'p1', mode: 'full-auto' }]);
+      await h.destroyAll();
+    });
   });
 
   // ---- M1: per-session FIFO send queue + honest sent/queued/failed result ----
@@ -1445,6 +1680,100 @@ describe('NativeSessionHost', () => {
       const interruptIdx = types.indexOf('user-interrupt');
       const survivorMsgIdx = events.findIndex((e) => e.type === 'user-message' && e.data.text === 'queued-survivor');
       expect(survivorMsgIdx).toBeGreaterThan(interruptIdx); // the queue only drains AFTER the interrupt settles turn 1
+    });
+
+    // 2026-09-09 — Stop means quiet. Before this, a background report that
+    // landed after Stop started a fresh model turn on its own (isIdle() was
+    // true the moment the turn ended, and the delivery pass runs at every
+    // turn's tail). Pinned here as the composition the two older pins never
+    // covered together: "the queue survives Stop" + "delivery is idle-boundary".
+    describe('Stop holds background deliveries until the next user message', () => {
+      const shellNotice = (n: string) => ({
+        text: `[Background command ${n} finished · exit 0 · 1s]\n$ echo ${n}\n${n}\nFull log: /tmp/${n}.txt`,
+        meta: { kind: 'shell' as const, runs: [] },
+      });
+      const settle = () => new Promise((r) => setTimeout(r, 80));
+
+      it('a notice that arrives AFTER Stop is not delivered as a turn — it is spliced in before the next user message', async () => {
+        const events: any[] = [];
+        host.on('transcript-event', (e) => events.push(e));
+        host.send(id, 'long');
+        await new Promise((r) => setImmediate(r));
+        host.interrupt(id);
+        await (host as any).live.get(id).running;
+        expect(events.map((e) => e.type)).toContain('user-interrupt');
+        // The helper finishes while the user is (deliberately) silent.
+        const n = shellNotice('sh-after');
+        (host as any).queueHostNotice(id, n.text, n.meta);
+        await settle();
+        expect(host.isIdle(id)).toBe(true);                                         // nothing woke the session
+        expect(events.filter((e) => e.data?.injected)).toEqual([]);                  // nothing was delivered
+        expect(events.filter((e) => e.type === 'turn-complete')).toEqual([]);       // and no turn ran
+
+        host.send(id, 'next');
+        await waitForTurnComplete(host, 1);
+        const types = events.map((e) => e.type);
+        const injectedIdx = events.findIndex((e) => e.data?.injected === 'shell-complete');
+        const nextIdx = events.findIndex((e) => e.type === 'user-message' && e.data.text === 'next');
+        expect(injectedIdx).toBeGreaterThan(types.indexOf('user-interrupt'));
+        expect(injectedIdx).toBeLessThan(nextIdx);                                   // context for the message, not a turn of its own
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(1);   // exactly ONE model turn: the user's
+        expect(events[injectedIdx].data.text).toContain('sh-after');
+        // The model's own history has the report right before the user's words.
+        const history = (host as any).live.get(id).session.history as Array<{ role: string; content: unknown }>;
+        const hi = history.findIndex((m) => typeof m.content === 'string' && m.content.includes('sh-after'));
+        const hn = history.findIndex((m) => m.content === 'next');
+        expect(hi).toBeGreaterThanOrEqual(0);
+        expect(hi).toBeLessThan(hn);
+      });
+
+      it('a notice queued DURING the turn that was stopped is held too — the interrupted turn\'s tail delivers nothing', async () => {
+        const events: any[] = [];
+        host.on('transcript-event', (e) => events.push(e));
+        host.send(id, 'long');
+        await new Promise((r) => setImmediate(r));
+        const n = shellNotice('sh-during');
+        (host as any).queueHostNotice(id, n.text, n.meta);   // parent busy: only parked
+        host.interrupt(id);
+        await (host as any).live.get(id).running;
+        await settle();
+        expect(events.filter((e) => e.data?.injected)).toEqual([]);
+        expect(events.filter((e) => e.type === 'turn-complete')).toEqual([]);
+        expect(host.isIdle(id)).toBe(true);
+        host.send(id, 'next');
+        await waitForTurnComplete(host, 1);
+        const injectedIdx = events.findIndex((e) => e.data?.injected === 'shell-complete');
+        const nextIdx = events.findIndex((e) => e.type === 'user-message' && e.data.text === 'next');
+        expect(injectedIdx).toBeGreaterThanOrEqual(0);
+        expect(injectedIdx).toBeLessThan(nextIdx);
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(1);
+      });
+
+      it('a message the user queued before pressing Stop still runs, with the held notice spliced in ahead of it', async () => {
+        const events: any[] = [];
+        host.on('transcript-event', (e) => events.push(e));
+        host.send(id, 'long');
+        host.send(id, 'queued-survivor');
+        await new Promise((r) => setImmediate(r));
+        const n = shellNotice('sh-queued');
+        (host as any).queueHostNotice(id, n.text, n.meta);
+        host.interrupt(id);
+        await waitForTurnComplete(host, 1);     // the survivor's turn
+        const types = events.map((e) => e.type);
+        const injectedIdx = events.findIndex((e) => e.data?.injected === 'shell-complete');
+        const survivorIdx = events.findIndex((e) => e.type === 'user-message' && e.data.text === 'queued-survivor');
+        expect(injectedIdx).toBeGreaterThan(types.indexOf('user-interrupt'));
+        expect(injectedIdx).toBeLessThan(survivorIdx);
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(1);
+        // And the hold is spent: a later notice, with nothing stopped since, is a turn of its own again.
+        // (Wait for the pass itself to settle first — a notice that lands in the sliver between the
+        // tail's drain and inFlight clearing is parked until the next boundary, as it always was.)
+        await (host as any).live.get(id).running;
+        const later = shellNotice('sh-later');
+        (host as any).queueHostNotice(id, later.text, later.meta);
+        await waitForTurnComplete(host, 1);     // counts from here: the notice's own turn
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(2);
+      });
     });
 
     it('a failed turn (factory throw) does not strand the queue', async () => {
@@ -2237,13 +2566,16 @@ describe('NativeSessionHost', () => {
       });
     });
 
-    it("an external-directory Read is declined instantly, factually, by the wired ask router — not the config-error stub (mutation-proof pin for createChild's askUser wiring)", async () => {
+    it("an external-directory Write is declined instantly, factually, by the wired ask router — not the config-error stub (mutation-proof pin for createChild's askUser wiring)", async () => {
       // Important review fix: the Task 5.5 Step 4 pin (stepCap, below) exercises
       // askUser only through the max_steps gate, which short-circuits identically
       // whether `askUser: childAskRouter(...)` is wired or deleted from createChild
       // — so that pin alone cannot catch the wiring being dropped. This drives a
       // DIFFERENT askUser call site: the external-directory forced ask
-      // (harness-session.ts checkPathGuard 'external' verdict, ~:1830-1852). With
+      // (harness-session.ts checkPathGuard 'external' verdict). The vehicle is a
+      // WRITE, and must stay one: since 2026-09-05 a read outside the workspace
+      // raises no ask at all (READ_ONLY_PATH_TOOLS), so a Read here would pin
+      // nothing — it would pass with the router wired OR deleted. With
       // the router wired, it denies this instantly (never reaching the broker —
       // see child-ask-router.ts) with FACTUAL copy naming the real constraint —
       // Task 8 deliberately dropped the old "user declined" wording here since no
@@ -2254,15 +2586,16 @@ describe('NativeSessionHost', () => {
       // router's copy AND the absence of the config-error copy discriminates
       // router-wired from router-missing.
       const external = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-external-'));
-      const outsideFile = path.join(external, 'secret.txt');
-      fs.writeFileSync(outsideFile, 'outside the jail');
-      const readOutside = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Read', { file_path: outsideFile }), finishChunk('tool-calls')),
+      const outsideFile = path.join(external, 'planted.txt');
+      const writeOutside = () => scriptedModel([
+        stream(toolCallChunk('c1', 'Write', { file_path: outsideFile, content: 'x' }), finishChunk('tool-calls')),
         stream(...textChunks('t', 'done'), finishChunk('stop')),
       ]) as any;
-      const { h } = await withParent(async () => readOutside());
+      const { h } = await withParent(async () => writeOutside());
       const { childId } = await h.createChild('root-1', {
-        specialist: EXPLORER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
+        // WORKER, not EXPLORER: the read-only charter does not attach Write at all,
+        // so the call would die as an unknown tool before reaching the ask router.
+        specialist: resolveSpecialist('worker')!, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
       });
       const asks: any[] = [];
       h.on('hook-event', (e) => asks.push(e));
@@ -2324,46 +2657,6 @@ describe('NativeSessionHost', () => {
       expect(res.data.isError).toBe(true);
       expect(res.data.toolResult).toMatch(/read-only charter/i);
       expect(fs.existsSync(path.join(root, 'charter.txt'))).toBe(false);
-      await h.destroyAll();
-    });
-
-    // Task 5.5 step 4 — the behavioral pin the ask-policy/ask-router exists
-    // for. Four paths in harness-session call askUser directly, bypassing
-    // decide(); the step-cap gate is one of them. Plan 1a's childAskPolicy
-    // denied this instantly so the turn could never hang; plan 1b Task 8
-    // routes it to the parent's card instead — still never hangs (the
-    // timeout redirect guarantees an eventual answer), but it is no longer
-    // instant and an ask now genuinely reaches the host.
-    it("stepCap is enforced: the turn ends with stopReason 'max_steps' once the routed ask times out — never hangs", async () => {
-      const CAPPED = { ...EXPLORER, stepCap: 2 };   // definition-driven, not a global
-      // A model that never stops calling tools (scriptedModel replays its last
-      // script forever), so only the step cap can end this turn.
-      const loops = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Glob', { pattern: '*.ts' }), finishChunk('tool-calls')),
-      ]) as any;
-      const { h } = await withParentFastAskHold(20, async () => loops());
-      const { childId } = await h.createChild('root-1', {
-        specialist: CAPPED, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const events: any[] = [];
-      const asks: any[] = [];
-      h.on('hook-event', (e) => asks.push(e));
-      childSession(h, childId).on('transcript-event', (e: any) => events.push(e));
-
-      await childSession(h, childId).send('go');   // must SETTLE — a hang fails by timeout
-
-      const done = events.find((e) => e.type === 'turn-complete');
-      expect(done).toBeDefined();
-      expect(done.data.stopReason).toBe('max_steps');
-      // The DEFINITION's cap is what stopped it, not the model-tier default:
-      // exactly two steps ran. Without the harness.limits.maxSteps wiring this
-      // model would loop to stepBudgetFor(modelId) — same stopReason, ~25 steps.
-      expect(events.filter((e) => e.type === 'tool-use')).toHaveLength(2);
-      // Task 8: the ask DOES now reach the host — under the PARENT's id, never
-      // answered here, ended only by the timeout redirect.
-      const maxStepsAsk = asks.find((e) => e.type === 'PermissionRequest');
-      expect(maxStepsAsk?.sessionId).toBe('root-1');
-      expect(maxStepsAsk?.payload.tool_name).toBe('max_steps');
       await h.destroyAll();
     });
 
@@ -3798,9 +4091,13 @@ describe('NativeSessionHost', () => {
   // transcript .jsonl AND the delegation ledger sidecars, not just the
   // specialist-report spill files it exists for. Narrowed to a dedicated
   // sessions/<slug>/specialist-reports/ subdirectory both writeSessionArtifact
-  // writes into and toolWiring exempts — nothing else in a project's harness
-  // storage should ever be Read/Grep/Glob-able without the external_directory
-  // ask a genuinely foreign path requires.
+  // writes into and toolWiring exempts.
+  //
+  // These cases assert checkPathGuard's VERDICT, which 2026-09-05 did not
+  // change. What changed is the price of an 'external' verdict: for Read/Grep/
+  // Glob it is now zero (READ_ONLY_PATH_TOOLS in harness-session.ts), so the
+  // scoping below no longer keeps another conversation's transcript unreadable
+  // — it keeps the exemption honest, and keeps a write-shaped tool fenced.
   describe('specialist report spill scoping (Important 5, final review)', () => {
     it('the wired internalReadRoots is the specialist-reports subdirectory, not the whole per-project sessions dir', async () => {
       const home = new NativeHome(root);
@@ -3863,7 +4160,9 @@ describe('NativeSessionHost', () => {
       const slug = nativeStoreSlug(root);
       // A DIFFERENT conversation's own transcript, living in the SAME
       // per-project sessions/<slug>/ directory the old (too-wide) exemption
-      // covered — this must still require the external_directory ask.
+      // covered — this must still come back 'external', i.e. outside the jail
+      // and never silently exempt. (A Read of it no longer costs a card; a
+      // write-shaped tool still does. See the describe comment above.)
       const otherTranscript = path.join(home.root, 'sessions', slug, 'some-other-session-id.jsonl');
       const { checkPathGuard } = await import('../src/main/harness/tools/guards');
       const session = (h as any).live.get('root-1').session;
@@ -3876,12 +4175,12 @@ describe('NativeSessionHost', () => {
     });
   });
 
-  // Task 5 (plan 1b): the per-turn specialist status block. wire() attaches
-  // opts.specialistStatus to every ROOT session; this suite pins what that
-  // callback reports given a stamped ledger, reaching the private ledger
+  // Task 5 (plan 1b), retired to on-demand on 2026-09-09: buildSpecialistStatus
+  // now answers the Task tool's `list: true` (toolServices.listStatus) instead of
+  // a per-turn block; this suite pins what it reports given a stamped ledger, reaching the private ledger
   // directly (same pattern the Task 2 tests above use) rather than driving a
   // real specialist run end-to-end.
-  describe('specialist status block (Task 5, plan 1b)', () => {
+  describe('specialist status text (Task 5, plan 1b — on demand since 2026-09-09)', () => {
     it('the host status block lists running and undelivered-finished specialists and omits delivered ones', async () => {
       const store = new SessionStore(new NativeHome(root));
       const h = new NativeSessionHost(
@@ -3906,8 +4205,7 @@ describe('NativeSessionHost', () => {
         status: 'completed', startedAt: Date.now(), endedAt: Date.now(), delivered: true, owner: OWNER, missedSteers: [],
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
 
       expect(status).toBeTruthy();
       expect(status).toContain('Nadia');
@@ -3928,8 +4226,7 @@ describe('NativeSessionHost', () => {
       );
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      expect(rootSession.opts.specialistStatus?.()).toBeNull();
+      expect((h as any).buildSpecialistStatus('root-1', root)).toBeNull();
 
       await h.destroyAll();
     });
@@ -3954,8 +4251,7 @@ describe('NativeSessionHost', () => {
         status: 'running', startedAt: Date.now(), delivered: false, owner: OWNER, missedSteers: [],
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
 
       expect(status).toBeTruthy();
       expect(status).not.toContain('step 0');
@@ -3983,8 +4279,7 @@ describe('NativeSessionHost', () => {
         status: 'running', startedAt: Date.now(), delivered: false, owner: OWNER, missedSteers: [], stale: true,
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
 
       expect(status).toContain('no activity for at least 2m');
 
@@ -4028,8 +4323,7 @@ describe('NativeSessionHost', () => {
         missedSteers: [],
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
       const lines = (status ?? '').split('\n');
 
       const failedLine = lines.find((l) => l.startsWith('Fiona'));
@@ -5021,6 +5315,22 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     await host.create({ sessionId: 'p1', cwd: root, binding });
   });
   afterEach(async () => { await host.destroyAll(); rmHostRoot(root); });
+
+  // 2026-09-09: the on-demand list (Task list: true) covers background
+  // commands as well as specialists — one answer to "what am I waiting on?".
+  it.skipIf(!posix)('listStatus names background commands alongside specialists, and is null when nothing is running', async () => {
+    const listStatus = (host as any).live.get('p1').session.opts.toolServices.specialists.listStatus as (id: string) => string | null;
+    expect(listStatus('p1')).toBeNull();
+    const run = startIn('p1', 'sleep 5', 'tl');
+    const text = listStatus('p1');
+    expect(text).toContain('Background commands:');
+    expect(text).toContain(`${run.shellId} · running`);
+    expect(text).toContain('sleep 5');
+    expect(text).not.toContain('Specialists:');   // none delegated in this conversation
+    await reg('p1').kill(run.shellId, 'assistant');
+    expect(listStatus('p1')).toContain('stopped');   // finished runs still list, with their state, as BashOutput does
+    expect(listStatus('nope')).toBeNull();
+  });
 
   it('every live session has a registry, reachable by the tool as ctx.shells', () => {
     expect(reg('p1')).toBeTruthy();

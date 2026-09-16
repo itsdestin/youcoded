@@ -60,6 +60,9 @@ type OverlayPanelProps = {
   onClick?: (e: React.MouseEvent) => void;
   children?: React.ReactNode;
   role?: string;
+  /** Needed by `Tooltip`, whose bubble is the target of the control's
+   *  `aria-describedby`. Already reaches the div through `...rest`. */
+  id?: string;
   'aria-modal'?: boolean;
   'aria-labelledby'?: string;
   'aria-label'?: string;

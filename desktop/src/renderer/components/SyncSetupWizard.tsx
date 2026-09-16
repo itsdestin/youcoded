@@ -14,6 +14,7 @@ import { Button, CloseButton, FieldError, TextInput, Toggle, Radio, RadioGroup, 
 import { isAndroid as checkIsAndroid } from '../platform';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { plainMessage } from '../utils/ipc-error';
 
 // Detect desktop OS so prereq warnings can show install steps specific to the
 // user's machine (iCloud setup on Windows differs from macOS, gh install varies, etc.)
@@ -93,18 +94,40 @@ function WizardHeader({ title, onBack, onClose }: { title: string; onBack?: () =
 
 // --- Main wizard component ---
 
+/**
+ * What became of the new destination's first backup, as the done step reports it.
+ *
+ * WHY four outcomes (error inventory 2026-09-10, false message 2): the done step used to
+ * say "Your first backup is syncing now" whatever happened — after a failed backup, and
+ * even with auto-backup off, when nothing was uploaded at all. Each outcome below is a
+ * different true sentence, so each is a different value.
+ *   finished — the backend confirmed the upload.
+ *   failed   — the backend answered that it did not finish; `error` is its own words.
+ *   unknown  — no answer came back (e.g. a remote timeout); it may or may not have run.
+ *   paused   — auto-backup is off for this destination, so no upload was attempted.
+ */
+export type FirstBackup =
+  | { kind: 'finished' }
+  | { kind: 'failed'; error: string }
+  | { kind: 'unknown' }
+  | { kind: 'paused' };
+
 interface SyncSetupWizardProps {
   /** Pre-selected backend type from the type picker (skips step 1) */
   initialType?: BackendType;
   /** Existing backend instances — used for "N already connected" hint and duplicate-destination warning */
   existingBackends: Array<{ type: BackendType; config: Record<string, string> }>;
-  /** Called when setup completes — passes the assembled backend instance */
+  /**
+   * Called when setup completes — passes the assembled backend instance.
+   * REJECT when the destination could not be saved: rejection is the only thing that
+   * keeps the wizard open on its error box. Resolve with the first backup's outcome.
+   */
   onComplete: (instance: {
     type: BackendType;
     label: string;
     syncEnabled: boolean;
     config: Record<string, string>;
-  }) => Promise<void>;
+  }) => Promise<FirstBackup>;
   onClose: () => void;
   /**
    * When set, skip the provider picker and land directly on the reconnect
@@ -142,6 +165,8 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
   // directly; the outer prereqs object was stored but never read. Found in
   // the 2026-08-06 unused-code sweep.
   const [error, setError] = useState<string | null>(null);
+  // Set just before the done step renders; null until then.
+  const [firstBackup, setFirstBackup] = useState<FirstBackup | null>(null);
 
   // Config fields — pre-populate label when jumping straight to auth/reconnect
   // so the Configure step has a sensible default even though selectType() was skipped.
@@ -327,16 +352,20 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
           config.ICLOUD_PATH = icloudPath || '';
         }
 
-        await onComplete({ type: backendType, label, syncEnabled, config });
+        const first = await onComplete({ type: backendType, label, syncEnabled, config });
 
         // Restore-from-backup was removed in Plan 2c (2026-07-14) — the dated
         // Drive/iCloud snapshot reshape orphaned the flat-path readers, so
         // there is no "we found existing data → restore vs start fresh" gate
         // anymore. New backends always start fresh; a redesigned restore will
         // land later around the local-models/accounts/platform work.
+        setFirstBackup(first);
         setStep('done');
-      } catch (e: any) {
-        setError(e.message || 'Something went wrong');
+      } catch (e: unknown) {
+        // WHY plainMessage: a rejected save arrives as "Error invoking remote method
+        // 'sync:add-backend': Error: <reason>" — forty characters of machinery in front
+        // of the one part a person can act on.
+        setError(plainMessage(e));
       }
       setSaving(false);
     };
@@ -568,11 +597,47 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
           <div className="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center mb-4">
             <span className="text-green-400 text-3xl">{'\u2713'}</span>
           </div>
-          <div className="text-fg font-medium text-sm mb-2">You're all set!</div>
-          <div className="text-fg-muted text-2xs mb-6 max-w-xs">
-            Your first backup is syncing now. Backups happen automatically every 15 minutes.
-            You can manage them anytime from the Sync panel.
-          </div>
+          <div className="text-fg font-medium text-sm mb-2">Backup added</div>
+          {/* WHY one sentence per outcome (error inventory 2026-09-10, false message 2):
+              this said "Your first backup is syncing now. Backups happen automatically
+              every 15 minutes." for every outcome. By the time this step renders, the first
+              backup has already finished or failed (onComplete awaits it), auto-backup may
+              be off so nothing ran, and the 15-minute timer was deleted — the service now
+              checks hourly while the app is open (sync-service.ts SNAPSHOT_POLL_INTERVAL_MS).
+              The check mark stays for every outcome: the destination WAS added. */}
+          {firstBackup?.kind === 'finished' && (
+            <div className="text-fg-muted text-2xs mb-6 max-w-xs">
+              Your first backup finished. YouCoded keeps backing up automatically while it's open.
+              You can manage this anytime from the Sync panel.
+            </div>
+          )}
+          {firstBackup?.kind === 'paused' && (
+            <div className="text-fg-muted text-2xs mb-6 max-w-xs">
+              Automatic backup is off for this destination, so nothing has been uploaded yet.
+              Use Upload now in its menu in the Sync panel whenever you want a copy.
+            </div>
+          )}
+          {firstBackup?.kind === 'failed' && (
+            <Callout
+              tone="warning"
+              title={
+                /* An empty reason means the upload never ran — another backup held the lock —
+                   so "didn't finish" would claim it started (code review 2026-09-11, F7). */
+                firstBackup.error ? "Your first backup didn't finish." : "Your first backup hasn't run yet."
+              }
+              className="mb-6 max-w-xs text-left"
+            >
+              {firstBackup.error && <div className="mb-1">{firstBackup.error}</div>}
+              YouCoded will try again automatically, or you can use Upload now in the Sync panel.
+            </Callout>
+          )}
+          {/* null cannot normally reach here (it is set just before this step); if it
+              does, "could not confirm" is the only sentence that is certainly true. */}
+          {(firstBackup === null || firstBackup.kind === 'unknown') && (
+            <Callout tone="warning" className="mb-6 max-w-xs text-left">
+              YouCoded couldn't confirm your first backup finished. The Sync panel shows where it stands.
+            </Callout>
+          )}
           <Button onClick={onClose} className="px-6 py-2">
             Done
           </Button>

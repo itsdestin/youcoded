@@ -3,23 +3,40 @@ import { useTheme } from '../../state/theme-context';
 import { useThemeMascot } from '../../hooks/useThemeMascot';
 import { useAnyAttentionNeeded } from '../../hooks/useAnyAttentionNeeded';
 import { MascotRig, type RigMotion } from '../mascot/MascotRig';
+import { purifySvgMarkup } from '../mascot/sanitize-rig-svg';
 import type { PoseName } from '../mascot/mascot-poses';
+import { defaultMascotPaint } from '../mascot/default-mascot-paint';
 
 const DRAG_THRESHOLD_PX = 4;
 // Drag velocity is normalized to the 80px buddy-window scale before feeding
 // the limb springs (spec §5: k = 80/size × 2.4) so trailing feels identical
 // at any render size (the buddy renders at 112px since the 2026-07-16 bump).
 const DRAG_VELOCITY_GAIN = (80 / 112) * 2.4;
-// Pointer-driven drag state. Anchor-based: we capture the cursor's offset
-// inside the 80×80 mascot at pointerdown (grabOffsetX/Y from e.clientX/Y)
-// and recompute the absolute target on every pointermove as
-// (e.screenX - grabOffsetX, e.screenY - grabOffsetY). This keeps the cursor
-// locked to the same pixel inside the mascot for the full drag, regardless
-// of HiDPI rounding, threshold deadzones, or edge-clamp rubber-banding.
-// A prior delta-based design caused visible drift on fractional-scale
-// (125 / 150%) Windows displays because each round-tripped dx/dy rounded
-// independently and the residual compounded. lastScreenX/Y + totalTravel
-// are only used to distinguish a genuine drag from a jittery click.
+// Pointer-driven drag state. Anchor-based, in the mascot window's OWN
+// coordinates: we capture the cursor's offset inside the mascot at pointerdown
+// (grabOffsetX/Y from e.clientX/Y) and send, every pointermove, how far the
+// cursor has strayed from it — (e.clientX - grabOffsetX, e.clientY -
+// grabOffsetY). Main adds that to where it knows the window is. The cursor
+// stays locked to the same pixel inside the mascot for the whole drag,
+// regardless of HiDPI rounding, threshold deadzones, or edge-clamp
+// rubber-banding, and nothing accumulates, so the per-move rounding drift that
+// sank an early delta-based design on fractional-scale (125 / 150%) displays
+// has nothing to compound into.
+//
+// WHY NOT e.screenX/Y, which this used until 2026-09-04: a renderer's screen
+// coordinates are its window's origin plus the cursor's position inside it, and
+// ON WAYLAND THAT ORIGIN NEVER UPDATES. Probe Round 8 moved the window to
+// 500,300 then 900,600 then 200,150 and window.screenX read 0 every time — so
+// each frame reported the cursor as having moved by exactly minus the distance
+// the window had just travelled, and the buddy bounced between two points as
+// fast as the pointer fired ("flickers all over the screen", Destin 2026-09-04).
+//
+// windowTravelX/Y is how far we have ASKED main to move the window since the
+// drag began. Added back to e.clientX it reconstructs a screen position that is
+// wrong by a constant (the window's unknown starting origin) but whose
+// DIFFERENCES are exact — which is all totalTravel and the limb-spring velocity
+// below ever look at. Without it both would read the cursor as motionless the
+// moment the window starts following it.
 interface DragState {
   grabOffsetX: number;
   grabOffsetY: number;
@@ -33,8 +50,10 @@ interface DragState {
   // legacy (non-overlay) path is untouched byte-for-byte.
   overlayOffsetX: number;
   overlayOffsetY: number;
-  lastScreenX: number;
-  lastScreenY: number;
+  lastVirtualX: number;
+  lastVirtualY: number;
+  windowTravelX: number;
+  windowTravelY: number;
   lastMoveTime: number;
   totalTravel: number;
   pointerId: number;
@@ -64,7 +83,7 @@ export interface OverlayDrive {
 
 export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = {}) {
   const attention = useAnyAttentionNeeded();
-  const { activeTheme, reducedEffects } = useTheme();
+  const { theme, activeTheme, reducedEffects } = useTheme();
 
   // Mascot resolution order (spec §3.5): theme rig → theme flat art →
   // first-party default rig. Flat art is the legacy tier: it gets the
@@ -128,11 +147,14 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   const hoverArmedRef = useRef(true);
   const onPointerEnter = useCallback(() => {
     if (dock.mode !== 'peeking') return;
+    // Already out for attention (see `peeking` below) — a swing-out whip here
+    // would jerk an upright buddy sideways for no reason.
+    if (attention) return;
     if (!hoverArmedRef.current) return; // still holding the post-drag/press state
     // Side peeks whip upright through the lean on the way out; top/bottom slide.
     if (dock.edge === 'left' || dock.edge === 'right') triggerSwing(dock.edge);
     setHopping(true);
-  }, [dock.mode, dock.edge, triggerSwing]);
+  }, [dock.mode, dock.edge, attention, triggerSwing]);
   const onPointerLeave = useCallback(() => {
     hoverArmedRef.current = true; // a real leave — the next enter is a genuine hover
     setHopping(false);
@@ -143,16 +165,22 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
     if (swingTimerRef.current) clearTimeout(swingTimerRef.current);
   }, []);
 
-  // Attention bounce: retrigger the CSS animation each time attention flips on.
-  const [bounceKey, setBounceKey] = useState(0);
-  useEffect(() => { if (attention) setBounceKey((k) => k + 1); }, [attention]);
-
   const [grabbed, setGrabbed] = useState(false);
 
   // A hop temporarily renders him as if he were docked: sink released, peek
   // pose dropped, grip mittens gone. Everything downstream reads `peeking`
   // rather than dock.mode so the three can't disagree mid-hop.
-  const peeking = dock.mode === 'peeking' && !hopping;
+  //
+  // Attention does the same, and must: the pose below lets attention win
+  // ('shocked'), so if the sink, lean and mittens still followed dock.mode he
+  // drew BOTH at once — raised arms flailing out of a body sunk and tipped into
+  // the edge, between the edge-pinned grip hands (Destin 2026-09-11: "I can see
+  // both the docked pose and the notification pose overlapping"). Main's own
+  // pop-out can't be relied on to arrive first: the attention broadcast lands a
+  // message ahead of it, and a buddy dragged onto an edge while something
+  // already needs you stays 'peeking' in main until attention next changes.
+  // Window position is flush to the edge in both states, so only this differs.
+  const peeking = dock.mode === 'peeking' && !hopping && !attention;
   const sidePeek = peeking && (dock.edge === 'left' || dock.edge === 'right');
   // Resting = 'idle' (open-eyed welcome face); the rig-authored chevron-eye
   // face lives in 'pressed', shown only while held (Destin 2026-07-16).
@@ -175,7 +203,9 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   // processes an already-stale cursor position. "Squishy" lag under fast
   // drags. rAF throttling keeps at most one move in flight per frame, always
   // targeting the latest cursor position.
-  const pendingTargetRef = useRef<{ targetX: number; targetY: number } | null>(null);
+  // What it holds depends on the path: overlay mode a window-local POSITION,
+  // three-window mode the cursor's OFFSET from the grab point (see DragState).
+  const pendingTargetRef = useRef<{ x: number; y: number } | null>(null);
   const rafIdRef = useRef<number | null>(null);
 
   const flushPendingMove = useCallback(() => {
@@ -183,8 +213,13 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
     const target = pendingTargetRef.current;
     if (!target) return;
     pendingTargetRef.current = null;
-    if (overlayDrive) overlayDrive.onDragMove({ x: target.targetX, y: target.targetY });
-    else window.claude?.buddy?.moveMascot?.(target);
+    if (overlayDrive) { overlayDrive.onDragMove({ x: target.x, y: target.y }); return; }
+    window.claude?.buddy?.moveMascot?.({ localDx: target.x, localDy: target.y });
+    // Record what we just asked for, HERE and not in the pointermove handler:
+    // several pointermoves can land in one frame and only this last one is
+    // sent, so counting them all would double-count the window's travel.
+    const st = dragRef.current;
+    if (st) { st.windowTravelX += target.x; st.windowTravelY += target.y; }
   }, [overlayDrive]);
 
   const cancelPendingMove = useCallback(() => {
@@ -230,8 +265,10 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
       grabOffsetY: e.clientY,
       overlayOffsetX: rect ? e.clientX - rect.left : 0,
       overlayOffsetY: rect ? e.clientY - rect.top : 0,
-      lastScreenX: e.screenX,
-      lastScreenY: e.screenY,
+      lastVirtualX: e.clientX,
+      lastVirtualY: e.clientY,
+      windowTravelX: 0,
+      windowTravelY: 0,
       lastMoveTime: performance.now(),
       totalTravel: 0,
       pointerId: e.pointerId,
@@ -242,13 +279,17 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const st = dragRef.current;
     if (!st) return;
-    const dx = e.screenX - st.lastScreenX;
-    const dy = e.screenY - st.lastScreenY;
+    // Cursor position reconstructed in a frame that does not move with the
+    // window (see DragState) — the only thing here that may be differenced.
+    const virtualX = st.windowTravelX + e.clientX;
+    const virtualY = st.windowTravelY + e.clientY;
+    const dx = virtualX - st.lastVirtualX;
+    const dy = virtualY - st.lastVirtualY;
     if (dx === 0 && dy === 0) return;
     const now = performance.now();
     const dt = Math.max(1, now - st.lastMoveTime);
-    st.lastScreenX = e.screenX;
-    st.lastScreenY = e.screenY;
+    st.lastVirtualX = virtualX;
+    st.lastVirtualY = virtualY;
     st.lastMoveTime = now;
     st.totalTravel += Math.abs(dx) + Math.abs(dy);
     // Only start forwarding moves once we've crossed the click-vs-drag
@@ -260,17 +301,17 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
       m.dragging = true;
       m.vx = 0.7 * m.vx + 0.3 * (dx / dt) * 16 * DRAG_VELOCITY_GAIN;
       m.vy = 0.7 * m.vy + 0.3 * (dy / dt) * 16 * DRAG_VELOCITY_GAIN;
-      // Absolute target: cursor position minus the offset captured at
-      // pointerdown, held constant for the drag. Three-window mode targets
-      // absolute SCREEN coords (moveMascot's IPC positions a real
-      // BrowserWindow); overlay mode targets WINDOW-LOCAL coords instead
-      // (the coordinates rule) — main/the reducer clamp against a
-      // window-local workArea there, not the desktop. Schedule (don't fire)
-      // — rAF coalesces multiple moves within a frame to the latest target
-      // so we don't queue stale positions behind main.
+      // Both paths are window-local, and both are recomputed from scratch
+      // against the anchor captured at pointerdown — nothing accumulates.
+      // Overlay mode wants a POSITION inside its screen-sized window (the
+      // coordinates rule: the reducer clamps against a window-local workArea);
+      // three-window mode wants the cursor's OFFSET from the grab point, which
+      // main turns into a screen position using the window position it owns.
+      // Schedule (don't fire) — rAF coalesces multiple moves within a frame to
+      // the latest one so we don't queue stale positions behind main.
       pendingTargetRef.current = overlayDrive
-        ? { targetX: e.clientX - st.overlayOffsetX, targetY: e.clientY - st.overlayOffsetY }
-        : { targetX: e.screenX - st.grabOffsetX, targetY: e.screenY - st.grabOffsetY };
+        ? { x: e.clientX - st.overlayOffsetX, y: e.clientY - st.overlayOffsetY }
+        : { x: e.clientX - st.grabOffsetX, y: e.clientY - st.grabOffsetY };
       if (rafIdRef.current === null) {
         rafIdRef.current = requestAnimationFrame(flushPendingMove);
       }
@@ -280,12 +321,11 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     // Flush any unsent move synchronously before release — otherwise the
     // mascot ends one frame behind the cursor's final resting position.
-    const pending = pendingTargetRef.current;
-    cancelPendingMove();
-    if (pending) {
-      if (overlayDrive) overlayDrive.onDragMove({ x: pending.targetX, y: pending.targetY });
-      else window.claude?.buddy?.moveMascot?.(pending);
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
     }
+    flushPendingMove(); // one path for sending, so windowTravel stays honest
 
     const st = dragRef.current;
     const wasClick = !!st && st.totalTravel <= DRAG_THRESHOLD_PX;
@@ -295,7 +335,7 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
       if (overlayDrive) overlayDrive.onTap();
       else if (window.claude?.buddy?.toggleChat) window.claude.buddy.toggleChat();
     }
-  }, [cancelPendingMove, endDrag, overlayDrive]);
+  }, [flushPendingMove, endDrag, overlayDrive]);
 
   // Safety net for "stuck being dragged": if the OS revokes pointer capture
   // (system modal, focus loss mid-drag) or a touch/pen device synthesizes
@@ -331,6 +371,15 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
         // touchAction: 'none' lets us capture the pointer cleanly without
         // the browser's default scroll/pan gestures interfering.
         touchAction: 'none',
+        // WHY: default rig paints fall back to yellow until this mascot-window
+        // wrapper supplies the same theme tint contract as every other rig host.
+        // Custom rigs with authored fills do not read these variables.
+        ['--rig-accent' as string]: 'var(--accent)',
+        ['--rig-on-accent' as string]: 'var(--on-accent)',
+        ['--rig-line' as string]: 'var(--fg)',
+        // WHY: default-only variables also reach cloned PeekHands and fetch-failure
+        // fallback art, without changing authored rigs' --rig-* token mapping.
+        ...defaultMascotPaint(theme),
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -351,7 +400,8 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
         // kept him pinned in the sunk position and only the pose changed (Destin
         // 2026-07-17: "swaps between peek and idle despite staying in the same
         // position"). The 380ms transform+rotate transitions carry the move.
-        data-dock-mode={hopping ? 'free' : dock.mode}
+        // Attention releases it the same way (see `peeking` above).
+        data-dock-mode={dock.mode === 'peeking' && !peeking ? 'free' : dock.mode}
         data-dock-edge={dock.edge ?? ''}
         data-swing={swing ?? ''}
       >
@@ -361,7 +411,9 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
             would swing the already-translated body around the stale center
             and out of the window (prototype splits the layers the same way). */}
         <div className="mascot-lean" style={{ width: '100%', height: '100%' }}>
-          <div key={bounceKey} className={attention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
+          {/* WHY: toggling the class restarts the attention bounce without a key
+              remount throwing away the rig's springs and the host PeekHands observes. */}
+          <div className={attention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
             {useRig ? (
               <div ref={rigHostRef} style={{ width: '100%', height: '100%' }}>
                 <MascotRig svgUrl={rigUrl} pose={pose} motionRef={motionRef} reducedEffects={reducedEffects} />
@@ -434,10 +486,12 @@ function PeekHands({ side, rigHostRef }: { side: 'left' | 'right'; rigHostRef: R
       clone.style.display = '';
       clone.removeAttribute('id'); // no duplicate ids in the document
       const pad = 0.4; // breathing room for the stroke
-      // Content comes from the already-sanitized inlined rig — safe to re-inline.
-      setHandSvg(
+      // Content comes from the already-sanitized inlined rig, but re-serializing
+      // live DOM and parsing it again is exactly where markup can change meaning
+      // (2026-09-10 security review), so it goes back through the final pass.
+      setHandSvg(purifySvgMarkup(
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bbox.x - pad} ${bbox.y - pad} ${bbox.width + pad * 2} ${bbox.height + pad * 2}" width="100%" height="100%">${clone.outerHTML}</svg>`,
-      );
+      ));
     };
     extract(); // the rig may already be present (peek toggled with a stable rig)
     const obs = new MutationObserver(extract);

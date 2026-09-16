@@ -161,3 +161,23 @@ case; a wrong number is survivable, a guess wearing a measurement's clothes is n
 Adding measured rows means re-reading `run.metrics.inputTokens` / `.outputTokens` from the
 saved transcripts of a real run; those files are git-ignored, so the numbers are transcribed
 into the table rather than read at run time. That is the drift risk.
+
+## Invariants that used to live in the rule
+
+Moved out of `.claude/rules/harness-evaluator.md` on 2026-09-05 when it went over its
+600-word budget. Each is about **changing** the evaluator, which is what this document is
+for; the rule kept what you need to **run** one. None is retired — every guard still runs.
+
+- **The grader always loads from the orchestrator's own build; only the worker loads the
+  cell's `dist`** — else a branch-vs-master run silently compares two *graders* too.
+  `paths.ts`: `graderRoot()` (ignores its argument on purpose) vs `harnessRoot(cell)`.
+  Guard: `harness-eval-orchestrator.test.ts`.
+- **A check has three states, and `never-ran` is not `passed`** — nothing was measured, and
+  the report must render it visibly differently. The first version keyed it on an empty
+  event list, unreachable in production, so a provider billing failure scored as a model
+  failure. Guards: `harness-eval-assertions.test.ts` (discrimination-tested),
+  `harness-eval-report.test.ts`.
+- **Every run ends in an answer or a labelled failure** — three FACT triggers each send a
+  second `WRAP_UP_PROMPT` turn with every tool denied. Scope per-turn scans to the *testing*
+  turn; an unscoped scan sees the wrap-up and mislabels a run that recovered. `runCase` never
+  throws for a run that produced events — round 5 lost four transcripts to a rejected promise.

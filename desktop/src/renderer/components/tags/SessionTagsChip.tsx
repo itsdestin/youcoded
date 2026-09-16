@@ -12,6 +12,7 @@ import type { TagRecord } from '../../../shared/tags';
 import { TagNoteEditor } from './TagNoteEditor';
 import { PRIORITY_TAG, PRIORITY_HINT } from './built-in-tags';
 import { TagManagerPopup } from './TagManagerPopup';
+import { Tooltip } from '../ui';
 
 export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   const [open, setOpen] = useState(false);
@@ -38,6 +39,7 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
 
   return (
     <>
+      <Tooltip text={meta.supported ? 'Tags & note for this session' : meta.unsupportedReason}>
       <button
         onClick={() => setOpen(true)}
         // Disabled for sessions the backend can't store meta for (Android, as
@@ -46,7 +48,6 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
         // META_UNSUPPORTED_FALLBACK.
         disabled={!sessionId || !meta.supported}
         className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim enabled:hover:bg-inset transition-colors max-w-[220px] disabled:opacity-50 disabled:cursor-not-allowed"
-        title={meta.supported ? 'Tags & note for this session' : meta.unsupportedReason}
       >
         {hasContent ? (
           <span className="flex items-center gap-1 overflow-hidden">
@@ -64,6 +65,7 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
           <span className="text-fg-muted">Add tags</span>
         )}
       </button>
+      </Tooltip>
       {open && createPortal(
         <>
           <Scrim layer={2} onClick={() => setOpen(false)} />

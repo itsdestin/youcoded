@@ -23,6 +23,7 @@ export class SearchService {
   async search(query: string, signal: AbortSignal): Promise<SearchOutcome> {
     const failures: string[] = [];
     let anyKey = false;
+    let keyReadFailed = false;
     for (const entry of await this.chain.get()) {
       // Defend the precondition HERE, don't trust the chain layer: search-chain.ts
       // filters to VALID_BACKENDS today, but that's an unstated cross-file
@@ -31,7 +32,17 @@ export class SearchService {
       // message (error-message-standards.md forbids). Surface a clean failure.
       const impl = this.backends[entry.backend];
       if (!impl) { failures.push(`${entry.backend}: no backend implementation registered`); continue; }
-      const key = entry.backend === 'ddg' ? null : await this.keys.getKey(entry.backend);
+      let key: string | null;
+      try {
+        key = entry.backend === 'ddg' ? null : await this.keys.getKey(entry.backend);
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // WHY: an unreadable saved key is not absent and is not a network error.
+        // Keep trying independent backends, especially keyless DuckDuckGo.
+        keyReadFailed = true;
+        failures.push(`${entry.backend}: ${error instanceof Error ? error.message : 'Could not read saved search credentials. Retry.'}`);
+        continue;
+      }
       if (key) anyKey = true;
       if (entry.requiresKey && !key) continue;
       try {
@@ -47,7 +58,7 @@ export class SearchService {
     }
     // These hints become the isError tool text the model may relay VERBATIM, so
     // phrase them as plain pass-through statements — no "tell the user:" meta.
-    const hint = anyKey
+    const hint = anyKey || keyReadFailed
       ? 'All configured search backends failed — this may be temporary.'
       : 'Web search has no API key configured; adding a free Tavily or Exa key in Settings → Providers makes it faster and more reliable.';
     throw new SearchUnavailableError(`Web search is unavailable right now. ${failures.join(' | ')}. ${hint}`);

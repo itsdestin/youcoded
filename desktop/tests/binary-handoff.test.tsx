@@ -15,7 +15,17 @@ describe('handoff copy', () => {
   it('names the format, not a generic refusal', () => {
     render(<BinaryFallback path="clip.mp4" absolutePath="/root/clip.mp4"
                            content={null} isEditable={false} contentInfo={null} />);
-    expect(screen.getByText(/can’t display \.mp4 files/i)).toBeInTheDocument();
+    // "yet" matters: every file type is clickable in chat now, so this panel is
+    // reached deliberately and has to read as a gap, not a refusal.
+    expect(screen.getByText(/can’t display \.mp4 files yet/i)).toBeInTheDocument();
+  });
+
+  it('offers the way out, under the same name the rest of the app uses', () => {
+    // SessionDrawer's toolbar, CsvView and XlsxView all say "Open externally";
+    // this button used to be the one place that said "Open in default app".
+    render(<BinaryFallback path="clip.mp4" absolutePath="/root/clip.mp4"
+                           content={null} isEditable={false} contentInfo={null} />);
+    expect(screen.getByRole('button', { name: /open externally/i })).toBeInTheDocument();
   });
 
   it('states size only when size is the true reason', () => {

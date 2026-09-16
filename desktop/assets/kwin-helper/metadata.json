@@ -1,0 +1,13 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Id": "youcodedbuddyhelper",
+        "Name": "YouCoded Buddy Helper",
+        "Description": "Lets the YouCoded buddy position and raise itself on Wayland, where an application is not allowed to do either. Only ever touches windows the app owns.",
+        "Version": "1.0",
+        "Authors": [{ "Name": "YouCoded" }],
+        "License": "MIT"
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "code/main.js"
+}

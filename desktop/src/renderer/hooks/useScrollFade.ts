@@ -39,6 +39,12 @@ export function useScrollFade<T extends HTMLElement>(externalRef?: RefObject<T |
       const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
       if (el.dataset.fadeTop !== String(top)) el.dataset.fadeTop = String(top);
       if (el.dataset.fadeBottom !== String(bottom)) el.dataset.fadeBottom = String(bottom);
+      // Sideways too, for a row of chips (`.scroll-fade-x`, 2026-09-10). A
+      // vertical caller reads neither attribute, so this costs it nothing.
+      const left = el.scrollLeft > 1;
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      if (el.dataset.fadeLeft !== String(left)) el.dataset.fadeLeft = String(left);
+      if (el.dataset.fadeRight !== String(right)) el.dataset.fadeRight = String(right);
     };
 
     update();

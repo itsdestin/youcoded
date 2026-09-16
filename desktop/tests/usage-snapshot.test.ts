@@ -230,6 +230,40 @@ describe('pruneExpiredUsage', () => {
     expect(pruneExpiredUsage(undefined, NOW)).toBeNull();
     expect(pruneExpiredUsage({}, NOW)).toBeNull();
   });
+  // Words deck W-2 = a (2026-09-05): a free ChatGPT plan reports one 30-day
+  // window under `other`, and it must age out exactly like the two named ones.
+  it('prunes an expired `other` window and keeps a live one', () => {
+    const u = {
+      five_hour: { utilization: 42, resets_at: '2026-09-03T13:00:00Z' },
+      other: [
+        { minutes: 43200, utilization: 3, resets_at: '2026-10-01T12:00:00Z' },
+        { minutes: 120, utilization: 90, resets_at: '2026-09-03T09:00:00Z' },
+      ],
+    };
+    expect(pruneExpiredUsage(u, NOW)).toEqual({ five_hour: u.five_hour, other: [u.other[0]] });
+  });
+  it('drops a window whose length did not parse, instead of letting it paint "NaNh"', () => {
+    // typeof NaN === 'number', so the first guard here let a broken window
+    // through and the status bar drew a chip labelled "NaNh".
+    const broken = { minutes: NaN, utilization: 12, resets_at: '2026-10-01T12:00:00Z' } as any;
+    const zero = { minutes: 0, utilization: 12, resets_at: '2026-10-01T12:00:00Z' } as any;
+    expect(pruneExpiredUsage({ other: [broken, zero] } as any, NOW)).toBeNull();
+  });
+  it('drops the `other` key when every entry has expired, and returns null when nothing is left', () => {
+    const expired = { minutes: 43200, utilization: 3, resets_at: '2026-09-03T09:00:00Z' };
+    expect(pruneExpiredUsage({ five_hour: { utilization: 42, resets_at: '2026-09-03T13:00:00Z' }, other: [expired] }, NOW))
+      .toEqual({ five_hour: { utilization: 42, resets_at: '2026-09-03T13:00:00Z' } });
+    expect(pruneExpiredUsage({ other: [expired] }, NOW)).toBeNull();
+    expect(pruneExpiredUsage({ other: [] }, NOW)).toBeNull();
+  });
+  it('carries live `other` windows into the snapshot, and omits the field when there are none', () => {
+    const other = [{ minutes: 43200, utilization: 3, resets_at: 'C' }];
+    const snap = buildUsageSnapshot({ ...base, isNative: true, session: nativeSession(turn()), usage: { other } });
+    expect(snap!.otherWindows).toEqual(other);
+    expect(snap!.fiveHourUtilization).toBeNull();
+    const plain = buildUsageSnapshot({ ...base, isNative: true, session: nativeSession(turn()), usage: { five_hour: { utilization: 1, resets_at: 'A' } } });
+    expect('otherWindows' in plain!).toBe(false);
+  });
   it('keeps a window with an unparseable reset time rather than guessing it expired', () => {
     const u = { five_hour: { utilization: 10, resets_at: 'garbage' } };
     expect(pruneExpiredUsage(u, NOW)).toEqual(u);

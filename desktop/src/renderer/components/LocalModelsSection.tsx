@@ -11,11 +11,12 @@
 // consequence-gated destructive actions.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import EngineCard from './EngineCard';
-import { Button, FieldError, InputGroup, ProgressBar, Callout, AnchorTip } from './ui';
+import { Button, FieldError, InputGroup, ProgressBar, Callout, AnchorTip, Toggle, TextInput, Select, SettingRow, Dialog } from './ui';
 import type {
   CuratedModel, QuantOption, FitEstimate, DownloadProgress,
-  InstalledLocalModel, DetectedEndpoint, HFSearchHit,
+  InstalledLocalModel, DetectedEndpoint, HFSearchHit, ModelSettingsWrite, StoredModelSettings,
 } from '../../shared/model-manager-types';
+import { plainMessage } from '../utils/ipc-error';
 import { stripSplitSuffix } from '../../shared/gguf-split';
 import { matchesQuery } from '../../shared/text-match';
 import { resolveModelBrand } from './provider-brand';
@@ -41,6 +42,52 @@ function fitColor(fit: FitEstimate['fit']): string {
   return fit === 'fits' ? 'text-green-600' : fit === 'tight' ? 'text-amber-500' : 'text-red-500';
 }
 
+/** The size under a downloadable model (deck S-2, Q-3 pick c; round 2 P-5): ONE
+ *  number — what the download takes on disk, model plus vision file — drawn with a
+ *  dotted underline. Hover (or tap) breaks it down: model, vision file, and the memory
+ *  the context adds while it runs, so "tight" is never a mystery but the row stays a
+ *  single line. An older main sends no breakdown: the number stands alone.
+ *
+ *  Exported (named) for the same reason LocalModelRow is: a test can pin every
+ *  state of the bubble without booting the whole section and its models API. */
+export function SizeLine({ q }: { q: { totalSizeBytes: number; quant: string; fit: FitEstimate; visionBytes?: number | null } }) {
+  const b = q.fit.breakdown;
+  const vision = b?.visionBytes ?? q.visionBytes ?? 0;
+  const download = q.totalSizeBytes + vision;
+  const number = <span className="underline decoration-dotted decoration-fg-faint underline-offset-2 cursor-help">{gb(download)}</span>;
+  if (!b) return <span className="text-fg-dim">{number} · {q.quant}</span>;
+  const ctxK = Math.round(b.contextLength / 1024);
+  // R1-25: when the estimator could not fully read this model's header it
+  // returns a CEILING for the context memory, not a reading. Printing a ceiling
+  // as an exact figure is fake precision, so the line reads "up to 1.6 GB".
+  //
+  // It hedges the TOTAL too, and that is the more important half: "Memory while
+  // running" is model + context, so a ceiling in one term makes the whole sum a
+  // ceiling — and that is the bigger, bolder number, and the one a user decides
+  // on. Hedging only the small print underneath would state the estimate as a
+  // reading in exactly the place it gets read.
+  const upTo = b.contextBytesIsUpperBound ? 'up to ' : '';
+  return (
+    <span className="text-fg-dim">
+      <AnchorTip label={`What ${gb(download)} is made of`} title="What this needs" trigger="hover" placement="bottom" align="start" widthClass="w-64" anchor={number}>
+        <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-2xs">
+          <dt className="text-fg-muted">Model file</dt><dd className="text-fg text-right">{gb(b.modelBytes)}</dd>
+          {vision > 0 && <><dt className="text-fg-muted">Vision file (sees images)</dt><dd className="text-fg text-right">{gb(vision)}</dd></>}
+          <dt className="text-fg-muted">Download</dt><dd className="text-fg text-right font-medium">{gb(download)}</dd>
+          <dt className="text-fg-muted pt-1">Memory while running</dt><dd className="text-fg text-right pt-1">{upTo}{gb(download + b.contextBytes)}</dd>
+          <dt className="text-fg-faint col-span-2">includes {upTo}{gb(b.contextBytes)} for a {ctxK}k context</dt>
+          {/* R8: the ONE thing the user can do about a tight or too-large
+              verdict, in the estimator's words — the renderer never composes
+              this sentence, so the advice a user reads and the verdict main
+              reached can never drift apart. Absent on a model that fits. */}
+          {b.advice && <dt className="text-fg-2 col-span-2 pt-1">{b.advice}</dt>}
+        </dl>
+      </AnchorTip>
+      {' · '}{q.quant}
+    </span>
+  );
+}
+
 // The few quants a non-technical user should see first (spec §4 — a raw 15–24
 // row list is hostile). Everything else hides behind "Show all N".
 const RECOMMENDED_QUANTS = new Set(['UD-Q4_K_XL', 'Q4_K_M', 'Q8_0']);
@@ -49,6 +96,40 @@ const key = (repo: string, quant: string) => `${repo}::${quant}`;
 
 export default function LocalModelsSection({ embedded = false }: { embedded?: boolean } = {}) {
   // Gate the ENTIRE section on native support (same pattern as ProvidersSection).
+  const supported = window.claude?.native?.supported === true;
+  if (!supported) return null;
+
+  return (
+    <section>
+      {!embedded && (
+        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Local Models</h3>
+      )}
+
+      <div className="space-y-4">
+        {/* Engine controls (install / backend / context length). */}
+        <EngineCard showDetails />
+
+        {/* One search-driven browser: installed + recommended by default, then
+            filters those AND searches Hugging Face as the user types. Replaces
+            the old separate Recommended / Installed / Add-from-HF sections. */}
+        <LocalModelBrowser />
+
+        {/* Other local apps (Ollama / LM Studio). */}
+        <OtherLocalApps />
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The Models card — search, installed and recommended, with its own data.
+ *
+ * WHY it is its own export (first-run local models, round 3 review B-3, Destin
+ * 2026-09-14: "this list should match the search/list provided in the assistant
+ * settings -> local models download screen"): first-run's "Choose a different
+ * model" renders THIS component, so the two lists cannot drift apart.
+ */
+export function LocalModelBrowser() {
   const supported = window.claude?.native?.supported === true;
 
   // One download subscription for the whole section; routed to rows by downloadId.
@@ -89,30 +170,13 @@ export default function LocalModelsSection({ embedded = false }: { embedded?: bo
   if (!supported) return null;
 
   return (
-    <section>
-      {!embedded && (
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Local Models</h3>
-      )}
-
-      <div className="space-y-4">
-        {/* Engine controls (install / backend / context length). */}
-        <EngineCard showDetails />
-
-        {/* One search-driven browser: installed + recommended by default, then
-            filters those AND searches Hugging Face as the user types. Replaces
-            the old separate Recommended / Installed / Add-from-HF sections. */}
-        <ModelBrowser
-          curated={curated}
-          installed={installed}
-          downloads={downloads}
-          quantOptsByKeyRef={quantOptsByKeyRef}
-          onRefreshInstalled={refreshInstalled}
-        />
-
-        {/* Other local apps (Ollama / LM Studio). */}
-        <OtherLocalApps />
-      </div>
-    </section>
+    <ModelBrowser
+      curated={curated}
+      installed={installed}
+      downloads={downloads}
+      quantOptsByKeyRef={quantOptsByKeyRef}
+      onRefreshInstalled={refreshInstalled}
+    />
   );
 }
 
@@ -196,9 +260,14 @@ function ModelBrowser({
   // Installed (filtered) + in-progress / partial downloads.
   const installedFiltered = (installed ?? []).filter((m) => matches(m.id, m.quant, m.quantDescription));
   // A download and its disk row are ONE row — matched on repo + quant, both of
-  // which a resumable row carries from its manifest (spec §3.5a). The NEWEST
-  // event wins, in any state: ulids sort by creation time, so after Resume the
-  // fresh attempt's events replace the failed attempt's error line.
+  // which a row carries from its manifest (spec §3.5a). The NEWEST event wins,
+  // in any state: ulids sort by creation time, so after Resume the fresh
+  // attempt's events replace the failed attempt's error line.
+  //
+  // COMPLETE rows are matched too, since T15: a vision model's weights finish
+  // before its projector does, so the row that has to show that second leg's
+  // progress is a complete one. The pair can only ever name one row — repo +
+  // quant fixes the filenames, and so the model id.
   const progressFor = (m: InstalledLocalModel): DownloadProgress | undefined =>
     m.repo
       ? Object.values(downloads)
@@ -323,7 +392,11 @@ function ModelBrowser({
 // One model repo — used for both recommended (autoResolve) and Hugging Face
 // (resolve-on-expand) rows. Collapsed: name + a quick Download of the default
 // quant. Expanded: the full quant list (recommended-first, "Show all N").
-function RepoCard({
+//
+// Exported (named) for the same reason SizeLine and LocalModelRow are: a test
+// can pin this card's page structure without booting the whole section and its
+// models API.
+export function RepoCard({
   repo, label, sub, preferredQuant, autoResolve, downloads, quantOptsByKeyRef, expanded, onToggle,
 }: {
   repo: string;
@@ -375,7 +448,7 @@ function RepoCard({
     if (!chosen) return;
     setDlError(null);
     try { await window.claude.models.download(repo, chosen); }
-    catch (e) { setDlError(e instanceof Error ? e.message : 'Could not start the download.'); }
+    catch (e) { setDlError(plainMessage(e, 'Could not start the download.')); }
   };
 
   // Recommended quants first; the rest hide behind "Show all N".
@@ -387,10 +460,29 @@ function RepoCard({
   return (
     <div className="bg-inset/50 rounded-lg px-3 py-2.5">
       <div className="flex items-start gap-2">
-        <button onClick={onToggle} className="flex items-start gap-2 min-w-0 flex-1 text-left">
-          <svg className={`w-3 h-3 mt-1 text-fg-muted transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-          </svg>
+        {/* Round 2 (P-1 note): the expand affordance is the same right-hand chevron every
+            navigating row has, turned down while open — never a leading "›" text toggle. */}
+        {/* WHY this expand trigger is a <div role="button"> and not a <button>:
+            the size figure inside it is itself a button (it opens the "What this
+            needs" bubble), and a button inside a button is invalid HTML. The
+            browser silently rearranges the page when it sees one — React printed
+            two errors every time Model Providers opened — and the inner button
+            can stop receiving its own presses, which would take the size
+            breakdown with it. Same shape SkillCard.tsx already uses for its
+            favourite star. The keyboard handler checks the event came from this
+            row itself, so pressing Enter on the size figure opens the bubble
+            instead of collapsing the card underneath it. */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onToggle}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget) return;
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); }
+          }}
+          aria-expanded={expanded}
+          className="flex items-start gap-2 min-w-0 flex-1 text-left"
+        >
           <LocalBrandMark id={repo} />
           <div className="min-w-0 flex-1">
             <p className="text-xs text-fg font-medium truncate">{label}</p>
@@ -399,8 +491,8 @@ function RepoCard({
               <p className="text-3xs text-fg-muted mt-0.5">Checking size…</p>
             )}
             {chosen && (
-              <p className="text-3xs mt-0.5">
-                <span className="text-fg-dim">{gb(chosen.totalSizeBytes)} · {chosen.quant}</span>
+              <p className="text-3xs mt-0.5" data-testid="repo-size-line">
+                <SizeLine q={chosen} />
                 {' · '}
                 <span className={fitColor(chosen.fit.fit)}>{chosen.fit.label}</span>
               </p>
@@ -409,7 +501,10 @@ function RepoCard({
               <p className="text-3xs text-amber-500 mt-0.5">Couldn't reach Hugging Face — expand to retry</p>
             )}
           </div>
-        </button>
+          <svg className={`w-4 h-4 mt-0.5 text-fg-muted transition-transform shrink-0 ${expanded ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
         {/* Inline row action -> sm, matching EngineCard's Install/Restart. */}
         {chosen && !dl && (
           <Button size="sm" onClick={() => void startDefault()} className="shrink-0">
@@ -581,6 +676,24 @@ export function LocalModelRow({
   const [busy, setBusy] = useState(false);
   // Failures of the buttons on this row (resume refused, delete failed).
   const [actionError, setActionError] = useState<string | null>(null);
+  // Per-model Settings disclosure (deck Q-2 pick a) — collapsed by default so a
+  // non-developer sees the row exactly as before; the controls inside each carry
+  // an (i). Only a complete model has settings to offer.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // S-3: fetch the vision file for a model whose family has one. Progress then
+  // arrives on the same download stream as any other download for this row.
+  const addVision = async () => {
+    setBusy(true);
+    setActionError(null);
+    // plainMessage, not e.message: Electron wraps the reason in "Error invoking
+    // remote method 'models:add-vision': …", and the reason here is often the
+    // operating system's own words about a file it could not move — which the
+    // user needs, and cannot find behind the prefix.
+    try { await window.claude.models.addVision(model.id); await onRefresh(); }
+    catch (e) { setActionError(plainMessage(e, 'Could not add vision to this model.')); }
+    finally { setBusy(false); }
+  };
 
   const live = progress && (progress.state === 'downloading' || progress.state === 'verifying')
     ? progress : undefined;
@@ -603,6 +716,10 @@ export function LocalModelRow({
   const downloadError = progress?.state === 'error' ? (progress.message ?? 'Download failed') : null;
   const error = actionError ?? downloadError;
 
+  // Every catch in this file goes through plainMessage, not e.message: Electron
+  // wraps the real reason in "Error invoking remote method '<channel>': Error: …",
+  // and these lines are the ONLY place the real reason (the disk guard's number,
+  // Hugging Face's status, the OS's word about a file) reaches the user.
   const resume = async () => {
     setBusy(true);
     setActionError(null);
@@ -612,7 +729,7 @@ export function LocalModelRow({
     } catch (e) {
       // Surface the real refusal (disk guard, already downloading, no manifest).
       // A resume that silently did nothing was the original PartialRow bug.
-      setActionError(e instanceof Error ? e.message : 'Could not resume the download.');
+      setActionError(plainMessage(e, 'Could not resume the download.'));
     } finally {
       setBusy(false);
     }
@@ -641,7 +758,7 @@ export function LocalModelRow({
       setConfirming(false);
       await onRefresh();
     } catch (e) {
-      setActionError(e instanceof Error ? e.message : 'Could not delete the model.');
+      setActionError(plainMessage(e, 'Could not delete the model.'));
     } finally {
       setBusy(false);
     }
@@ -725,15 +842,48 @@ export function LocalModelRow({
                 buttons beside it, and the tail is what tells two builds apart.
                 Native title is the app's documented tool for a plain hover hint
                 (ui/AnchorTip.tsx header). */}
-            <p className="text-xs text-fg font-medium truncate" title={model.id}>{displayName(model)}</p>
+            <p className="text-xs text-fg font-medium truncate flex items-center gap-1.5" title={model.id}>
+              <span className="truncate">{displayName(model)}</span>
+              {/* S-3 / round-2 P-6: an eye for a model that sees images, a page for
+                  text-only; the words live in the hover bubble. */}
+              {model.status === 'complete' && <ModalityMark vision={model.vision ?? 'none'} />}
+            </p>
             {subtitle && <p className="text-3xs text-fg-muted">{subtitle}</p>}
             {/* Its own line, in full — Destin, 2026-08-27 (A3). It is free to wrap;
                 the room came from the detail line above, which handed its state
                 word ("Downloading…") to the banner. */}
             {quality && <p className="text-3xs text-fg-muted">{quality}</p>}
+            {/* S-3: "Add vision (0.9 GB)" — the projector this download never fetched.
+                One step: download it and move the model into its own folder so the
+                engine pairs the two. A text line under the name rather than a third
+                button: three buttons beside the name squeezed it to one letter at
+                the dialog's width (seen in the first workbench capture). */}
+            {model.status === 'complete' && model.vision === 'available' && !live && !confirming && (
+              <p className="text-3xs">
+                <button
+                  type="button"
+                  onClick={() => void addVision()}
+                  disabled={busy}
+                  className="underline text-fg-2 hover:text-fg disabled:opacity-50"
+                >
+                  {busy ? 'Adding vision…' : `Add vision${model.visionBytes ? ` (${gb(model.visionBytes)})` : ''}`}
+                </button>
+              </p>
+            )}
           </div>
           {!confirming && (
             <div className="flex items-center gap-1.5 shrink-0">
+              {model.status === 'complete' && !live && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSettingsOpen((o) => !o)}
+                  aria-expanded={settingsOpen}
+                  aria-label={`Settings for ${displayName(model)}`}
+                >
+                  Settings
+                </Button>
+              )}
               {model.status === 'unfinished' && !live && (
                 <Button variant="secondary" size="sm" onClick={() => void resume()} disabled={busy}>
                   Resume
@@ -797,8 +947,343 @@ export function LocalModelRow({
           </div>
         )}
         {error && <FieldError as="p" className="mt-1">{error}</FieldError>}
+
+        {/* Round 2 P-14 (Destin): the settings open in a small dialog on its own layer,
+            not inline under the row. */}
+        {settingsOpen && (
+          <ModelSettingsDialog open modelId={model.id} name={displayName(model)} onClose={() => setSettingsOpen(false)} />
+        )}
       </div>
     </div>
+  );
+}
+
+// ── Per-model settings (deck Q-2, pick a; round 2 P-7) ───────────────────────
+
+/** How often a model's open Settings dialog re-asks main, in milliseconds.
+ *
+ *  ONE value, which the dialog itself reads — never a number the tests keep a
+ *  second copy of. This feature has already deleted one default that lived in
+ *  three places, and a test asserting against its own copy of an interval would
+ *  be the same mistake with a stopwatch.
+ *
+ *  It is overridable because eight guards have to watch a poll actually happen:
+ *  at the shipped two seconds they spent about 28 seconds of every suite run
+ *  waiting, and roughly double that on a FAILING run, since each broken guard
+ *  burns its whole timeout before giving up — heaviest exactly when somebody is
+ *  debugging. Same idiom as the engine manager's own `configApplyPollMs` seam.
+ *  Nothing in the app calls the setter. */
+const POLL = { ms: 2000 };
+export function setModelSettingsPollMs(ms: number): number {
+  const previous = POLL.ms;
+  POLL.ms = ms;
+  return previous;
+}
+
+const GPU_LAYER_CHOICES = ['auto', '0', '8', '16', '24', '32', '48', '64', 'all'] as const;
+
+/** One shape for every setting — the SettingRow every Settings screen uses — so
+ *  the panel reads as a list of labelled rows, not a form. Two rows in the open
+ *  (context length, keep loaded), two more behind an Advanced row that expands
+ *  in place. Explanations live in each row's description; an (i) only where a
+ *  concept needs more than a line. Saves on blur/toggle; the model reloads with
+ *  the new values on its next message. */
+function ModelSettingsDialog({ open, modelId, name, onClose }: { open: boolean; modelId: string; name: string; onClose: () => void }) {
+  // The STORED record, not just the four settings this dialog writes: main also
+  // keeps two things about a model that the user never sets and has to be told
+  // — why it last failed to load, and whether a save it has already made is
+  // still waiting for the reply on screen to finish.
+  const [settings, setSettings] = useState<StoredModelSettings | null>(null);
+  // TWO error slots, not one. A save failure is the user's — they pressed
+  // something and it did not work — and it stays until they try again. A READ
+  // failure is the poll's, and it must not outlive itself: the next read two
+  // seconds later succeeds and draws a working dialog, and a shared slot would
+  // leave a red "could not read this model's settings" line sitting under it
+  // for as long as the dialog is open. Sharing one slot also let a successful
+  // poll wipe a save failure the user still needed to see.
+  // A LIST, not a slot. Two saves can be in flight and both can be refused: a
+  // bad extra flag is checked by RUNNING the engine binary and fails seconds
+  // later, while a bad context length is refused at once. With one slot the
+  // late refusal overwrites the early one, so the user is told about the flag
+  // and never learns their context length was rejected — and which of the two
+  // survives depends purely on which finished last. Ordering is the wrong tool
+  // here: dropping the older failure would lose a refusal that really happened.
+  // Both are shown; identical sentences fold together, because the same message
+  // twice is noise rather than two facts.
+  const [saveErrors, setSaveErrors] = useState<string[]>([]);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [ctxDraft, setCtxDraft] = useState('');
+  const [flagsDraft, setFlagsDraft] = useState('');
+  const [advanced, setAdvanced] = useState(false);
+  // How many saves are running right now — a COUNT, not a flag: two overlapping
+  // saves would otherwise have the first one's cleanup announce that nothing is
+  // saving while the second is still in the air.
+  const savesInFlight = useRef(0);
+  // Bumped when a save STARTS. A read that was asked before that carries
+  // pre-save values, so its answer is dropped however late it arrives.
+  const saveTick = useRef(0);
+  // Every read is numbered, and an answer older than one already accepted is
+  // dropped. Two reads are in the air whenever one takes longer than the poll
+  // interval, and without this the slower of the two wins by finishing last.
+  const readSeq = useRef(0);
+  const acceptedRead = useRef(0);
+
+  useEffect(() => {
+    let alive = true;
+    // Mounted only while open (the row gates it), so this fetch happens on demand —
+    // an older bridge without the channel shows the error line instead of throwing.
+    const api = window.claude.models as { settings?: (id: string) => Promise<StoredModelSettings> };
+    const fetchSettings = api.settings;
+    if (typeof fetchSettings !== 'function') { setReadError('This version cannot read per-model settings.'); return; }
+    let first = true;
+    const read = () => {
+      if (savesInFlight.current > 0) return;
+      const seq = ++readSeq.current;
+      const askedAt = saveTick.current;
+      fetchSettings(modelId)
+        .then((st) => {
+          if (!alive) return;
+          // WHY the null check (from T20): over the remote link there is a window
+          // at start-up where the host has no engine wired yet, and the honest
+          // answer to "what are this model's settings" is nothing at all. Reading
+          // `st.contextLength` off it throws, and what the user would read is raw
+          // JavaScript — "Cannot read properties of null" — because plainMessage
+          // passes through a message it did not wrap. Say the true thing instead.
+          if (!st) { setReadError('This model\u2019s settings are not available yet. Try again in a moment.'); return; }
+          // THE CHECKS THAT MATTER ARE HERE, INSIDE THE ANSWER — not only before
+          // asking. Refusing to START a read during a save does nothing about a
+          // read already in the air, which carries the values main held BEFORE
+          // the save and lands after it. What the user saw: "Keep loaded" turned
+          // on, flipped itself off a moment later, then back on at the next
+          // poll — a setting that saved perfectly, with the screen saying
+          // otherwise, which is the exact confusion the poll was added to end.
+          if (seq <= acceptedRead.current) return;                              // a newer answer already landed
+          if (savesInFlight.current > 0 || saveTick.current !== askedAt) return; // a save overtook this read
+          acceptedRead.current = seq;
+          setReadError(null);
+          setSettings(st);
+          // The two text drafts are seeded ONCE. Re-seeding them on every poll
+          // would wipe whatever the user is halfway through typing.
+          if (first) {
+            first = false;
+            setCtxDraft(st.contextLength == null ? '' : String(st.contextLength));
+            setFlagsDraft(st.extraFlags);
+            // Open Advanced when this model failed to load: the box that most
+            // often causes it (extra engine flags) is inside Advanced, and a
+            // user told "it did not load" should not have to go hunting. The
+            // card above deliberately does NOT name the flags as the cause —
+            // an unreadable file and a machine out of memory arrive in exactly
+            // the same field.
+            if (st.lastLoadError) setAdvanced(true);
+          }
+        })
+        .catch((e) => { if (alive && first) setReadError(plainMessage(e, 'Could not read this model\u2019s settings.')); });
+    };
+    read();
+    // WHY this polls at all: there is no push channel for per-model settings.
+    // Both of the things main maintains here change WITHOUT the user doing
+    // anything — a pending save lands the moment the model goes quiet, and a
+    // load failure arrives whenever the model is next asked for. Fetched once,
+    // the dialog would sit there saying "Applies after the current reply" for
+    // as long as it is open, and the user would close it, reopen it and
+    // conclude the setting never stuck.
+    const timer = setInterval(read, POLL.ms);
+    return () => { alive = false; clearInterval(timer); };
+  }, [modelId]);
+
+  const save = async (patch: ModelSettingsWrite) => {
+    // A fresh attempt clears what the last one said; failures accumulate only
+    // within one round of attempts.
+    setSaveErrors([]);
+    savesInFlight.current += 1;
+    const myTick = ++saveTick.current;
+    try {
+      const next = await window.claude.models.setSettings(modelId, patch);
+      // SAVES ARE ORDERED THE SAME WAY READS ARE, and for a reachable reason:
+      // saving Extra engine flags makes main RUN the engine binary to check
+      // them, which takes seconds, while saving a toggle comes back at once.
+      // Type a flag, blur, then hit Keep loaded, and the slow flags answer lands
+      // last carrying the value from before the toggle — and the switch turns
+      // itself back off under the user's hand. Only the NEWEST save may repaint.
+      // Same start-up window as the read above (from T20): storing a null answer
+      // would blank the dialog back to "Loading settings…" for ever — the user
+      // flips a switch and the panel becomes a spinner that never resolves.
+      if (!next) throw new Error('That did not save \u2014 the engine is not ready yet. Try again in a moment.');
+      if (saveTick.current === myTick) setSettings(next);
+    }
+    // A failure is shown whichever save it came from: the user pressed that,
+    // and it did not work.
+    catch (e) {
+      const message = plainMessage(e, 'Could not save.');
+      setSaveErrors((prev) => (prev.includes(message) ? prev : [...prev, message]));
+    }
+    // `finally`, so a save that THROWS still lets the poll run again. Left
+    // suppressed, one failed save would freeze every live value in the dialog
+    // for as long as it stayed open.
+    finally { savesInFlight.current -= 1; }
+  };
+
+  const commitContext = () => {
+    if (!settings) return;
+    const raw = ctxDraft.trim();
+    if (raw === '') { if (settings.contextLength != null) void save({ contextLength: null }); return; }
+    const n = Math.floor(Number(raw));
+    if (!Number.isFinite(n) || n < 1024) { setCtxDraft(settings.contextLength == null ? '' : String(settings.contextLength)); return; }
+    if (n !== settings.contextLength) void save({ contextLength: n });
+  };
+
+  const gpuValue = settings ? (settings.gpuLayers === 'auto' ? 'auto' : String(settings.gpuLayers)) : 'auto';
+
+  // Layer 3: this sits on top of the Model Providers dialog (layer 2). `panel`
+  // width — the settings-screen width, so a row title, its hint and a Select fit
+  // side by side (at `prompt` width the GPU-layers title wrapped one word per line).
+  return (
+    <Dialog open={open} onClose={onClose} title="Model settings" subtitle={name} size="panel" layer={3}>
+      {readError && !settings && <FieldError as="p">{readError}</FieldError>}
+      {!settings && !readError && <p className="text-3xs text-fg-muted">Loading settings…</p>}
+      {settings && (
+    <div className="space-y-1.5" data-testid="model-settings">
+      {/* R26 / design §C2: why this model last failed to load, in the ENGINE'S
+          OWN WORDS. Never a cause we worked out here — a mistyped extra flag,
+          a file the engine cannot read and a machine out of memory all land in
+          this one field, and a guess would send the user to fix the wrong
+          thing. It sits at the top rather than beside the flags box because
+          that box is behind Advanced, and a message nobody opens is a message
+          nobody reads. Absent entirely when the model loaded fine. */}
+      {settings.lastLoadError && (
+        // "last time", not "did not load": main clears this only when the model
+        // loads successfully, so it legitimately outlives the problem — a user
+        // who fixed the flag an hour ago should not read a card that says the
+        // model is broken right now. `break-words` because engine errors carry
+        // long unbroken file paths that CSS will not break on its own.
+        <Callout tone="danger" title="This model failed to load last time">
+          <p className="text-2xs break-words">{settings.lastLoadError}</p>
+        </Callout>
+      )}
+      <SettingRow
+        variant="item"
+        title="Context length"
+        description="Blank uses the engine's setting."
+        control={(
+          <TextInput
+            id={`ctx-${modelId}`}
+            aria-label="Context length for this model"
+            type="number"
+            size="sm"
+            min={1024}
+            step={1024}
+            placeholder="Same as engine"
+            value={ctxDraft}
+            onChange={(e) => setCtxDraft(e.target.value)}
+            onBlur={commitContext}
+            onKeyDown={(e) => { if (e.key === 'Enter') commitContext(); }}
+            className="w-32"
+          />
+        )}
+      />
+      <SettingRow
+        variant="item"
+        title="Keep loaded"
+        description="Never put this model to sleep. Instant replies, memory held."
+        control={<Toggle checked={settings.keepLoaded} aria-label="Keep loaded" onChange={(next) => void save({ keepLoaded: next })} />}
+      />
+      <SettingRow
+        variant="item"
+        title="Advanced"
+        description={advanced ? undefined : 'Graphics-chip layers, extra engine flags'}
+        onClick={() => setAdvanced((o) => !o)}
+        expanded={advanced}
+      />
+      {advanced && (
+        <div className="space-y-1.5">
+          <SettingRow
+            variant="item"
+            title={(
+              <span className="flex items-center gap-1">
+                Layers on graphics chip
+                <AnchorTip label="About GPU layers" title="Layers on graphics chip" widthClass="w-72">
+                  A model is a stack of layers. Auto puts as many on the graphics chip as fit
+                  and runs the rest on the processor. Set a number only when Auto guesses
+                  wrong — for example to leave room for a second model.
+                </AnchorTip>
+              </span>
+            )}
+            description="Auto fits as many as the chip holds."
+            control={(
+              // The Select stretches to its container, so the container fixes the width —
+              // without this the row's title column collapsed to one word per line.
+              <span className="block w-24 shrink-0">
+                <Select
+                  size="sm"
+                  value={gpuValue}
+                  onChange={(v) => void save({ gpuLayers: v === 'auto' ? 'auto' : Number(v) })}
+                  options={GPU_LAYER_CHOICES.map((c) => ({ value: c === 'all' ? '999' : c, label: c === 'auto' ? 'Auto' : c === 'all' ? 'All' : c }))}
+                />
+              </span>
+            )}
+          />
+          <div className="rounded-lg bg-inset/50 px-3 py-2">
+            <p className="text-xs text-fg font-medium flex items-center gap-1">
+              Extra engine flags
+              <AnchorTip label="About extra engine flags" title="Extra engine flags" widthClass="w-72">
+                Anything else the llama.cpp engine accepts on its command line, passed
+                through as written when this model loads. A mistyped flag stops the model
+                from loading — the engine&rsquo;s own message then appears at the top of
+                this dialog.
+              </AnchorTip>
+            </p>
+            <TextInput
+              id={`flags-${modelId}`}
+              aria-label="Extra engine flags"
+              size="sm"
+              placeholder="e.g. --temp 0.6 --repeat-penalty 1.1"
+              value={flagsDraft}
+              onChange={(e) => setFlagsDraft(e.target.value)}
+              onBlur={() => { if (flagsDraft !== settings.extraFlags) void save({ extraFlags: flagsDraft }); }}
+              className="w-full mt-1.5 font-mono"
+            />
+          </div>
+        </div>
+      )}
+      {/* design §C2: a saved setting does NOT reach a model that is answering
+          right now — rewriting the engine's settings file mid-reply would drop
+          the model halfway through a sentence. So the save is held until this
+          model goes quiet, and this line is the only thing that tells the user
+          why the change they just made has not taken effect yet. */}
+      {settings.pendingApply && (
+        <p className="text-3xs text-fg-muted pt-1" data-testid="model-settings-pending">
+          Applies after the current reply.
+        </p>
+      )}
+      {saveErrors.map((message) => <FieldError as="p" key={message}>{message}</FieldError>)}
+    </div>
+      )}
+    </Dialog>
+  );
+}
+
+/** P-6: the modality mark beside an installed model's name — an eye when it sees
+ *  images, a page when it is text-only — with the words in a hover bubble. */
+function ModalityMark({ vision }: { vision: 'ready' | 'available' | 'none' }) {
+  const sees = vision === 'ready';
+  const icon = sees ? (
+    <svg className="w-3.5 h-3.5 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M2.5 12s3.5-6.5 9.5-6.5S21.5 12 21.5 12s-3.5 6.5-9.5 6.5S2.5 12 2.5 12z" />
+      <circle cx="12" cy="12" r="2.5" />
+    </svg>
+  ) : (
+    <svg className="w-3.5 h-3.5 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7 3h7l5 5v13H7z M14 3v5h5 M9.5 13h5 M9.5 16.5h5" />
+    </svg>
+  );
+  return (
+    <AnchorTip label={sees ? 'Sees images' : 'Text only'} title={sees ? 'Sees images' : 'Text only'} trigger="hover" widthClass="w-56" anchor={icon}>
+      {sees
+        ? 'You can attach pictures and screenshots; the model reads them.'
+        : vision === 'available'
+          ? 'Reads text only for now. Add its vision file below to let it see images.'
+          : 'Reads text only. This model family has no vision file.'}
+    </AnchorTip>
   );
 }
 
@@ -813,7 +1298,7 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
     try {
       await window.claude.models.download(repo, q);
     } catch (e) {
-      setDlError(e instanceof Error ? e.message : 'Could not start the download.');
+      setDlError(plainMessage(e, 'Could not start the download.'));
     }
   };
 
@@ -824,7 +1309,7 @@ function QuantDownloadRow({ repo, q, downloads }: { repo: string; q: QuantWithFi
           <p className="text-2xs text-fg font-medium">{q.quant}</p>
           <p className="text-3xs text-fg-muted">{q.description}</p>
           <p className="text-3xs mt-0.5">
-            <span className="text-fg-dim">{gb(q.totalSizeBytes)}</span>
+            <SizeLine q={q} />
             {' · '}
             <span className={fitColor(q.fit.fit)}>{q.fit.label}</span>
           </p>
@@ -875,7 +1360,7 @@ function OtherLocalApps() {
       });
       setAdded((prev) => ({ ...prev, [hit.baseUrl]: true }));
     } catch (e) {
-      setAddError((prev) => ({ ...prev, [hit.baseUrl]: e instanceof Error ? e.message : 'Could not add this endpoint.' }));
+      setAddError((prev) => ({ ...prev, [hit.baseUrl]: plainMessage(e, 'Could not add this endpoint.') }));
     }
   };
 

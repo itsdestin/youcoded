@@ -41,6 +41,7 @@ import { ArtifactThumbnail } from './ArtifactThumbnail';
 import { matchSessionArtifact } from './filepath-match';
 import { asString } from '../utils/tool-input';
 import { isSendUserLinkToolName } from '../../shared/send-user-link';
+import { Tooltip } from './ui';
 
 export const SENT_FILES_TOOL = 'SendUserFile';
 
@@ -185,6 +186,7 @@ export function SentFileTile({ path, sessionId, status, error, narrow, tileBg = 
   const sending = status === 'running' || status === 'awaiting-approval';
 
   return (
+    <Tooltip text={failed ? (error ? `${path} — ${error}` : path) : `Open ${name}`}>
     <button
       type="button"
       onClick={() => { void open(path); }}
@@ -193,7 +195,6 @@ export function SentFileTile({ path, sessionId, status, error, narrow, tileBg = 
       // verified, which is the shape `status-strip-authority.test.tsx` scans for
       // (docs/error-message-standards.md). The "Couldn't send" overlay already
       // tells the user it failed; the tooltip must not invent WHY.
-      title={failed ? (error ? `${path} — ${error}` : path) : `Open ${name}`}
       // data-file-path (absolute) lets the chat right-click menu recover the
       // real path for View in folder / Copy as path — left-click opens the
       // in-app artifact viewer.
@@ -236,6 +237,7 @@ export function SentFileTile({ path, sessionId, status, error, narrow, tileBg = 
         </span>
       </div>
     </button>
+    </Tooltip>
   );
 }
 
@@ -278,10 +280,10 @@ export function SentLinkTile({ link, status, error, narrow, compact = false }: {
     } catch { /* not parseable yet — fall back to the raw string above */ }
   }
   return (
+    <Tooltip text={failed ? (error ? `${link.url} — ${error}` : link.url) : `Open ${link.url}`}>
     <button
       type="button"
       onClick={() => { if (!failed) openExternalUrl(link.url); }}
-      title={failed ? (error ? `${link.url} — ${error}` : link.url) : `Open ${link.url}`}
       data-link-url={link.url}
       data-testid="sent-link-tile"
       className={`group flex flex-col w-full min-w-0 text-left rounded-lg bg-inset border border-edge hover:border-fg-muted overflow-hidden transition-colors ${failed ? 'opacity-70' : ''}`}
@@ -308,6 +310,7 @@ export function SentLinkTile({ link, status, error, narrow, compact = false }: {
         </span>
       </div>
     </button>
+    </Tooltip>
   );
 }
 

@@ -10,9 +10,21 @@
 // before any TerminalView mounts and calls registerTerminal(), so the
 // registry object is in place when the first getScreenText round-trip
 // arrives.
-import { getScreenText } from '../hooks/terminal-registry';
+import { getAtlasClears, getScreenText } from '../hooks/terminal-registry';
 
 (window as unknown as {
-  __terminalRegistry?: { getScreenText: (id: string, tailRows?: number) => string | null };
+  __terminalRegistry?: {
+    getScreenText: (id: string, tailRows?: number) => string | null;
+    readonly atlasClears: number;
+  };
 })
-  .__terminalRegistry = { getScreenText };
+  .__terminalRegistry = {
+    getScreenText,
+    // WHY a getter (2026-09-10): rig instrument — the perf rig reads
+    // `window.__terminalRegistry.atlasClears` over CDP before and after each
+    // session switch to count glyph-atlas clears per switch. A getter reads the
+    // live module counter; a plain property would freeze at 0 here.
+    get atlasClears() {
+      return getAtlasClears();
+    },
+  };

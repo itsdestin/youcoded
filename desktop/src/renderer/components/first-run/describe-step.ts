@@ -17,9 +17,35 @@ function activePrerequisite(prereqs: PrerequisiteState[]): PrerequisiteState | u
  * Single-sentence explainer for the first-run screen. Tells the user
  * what's happening right now and why, scoped to the current state.
  */
+/**
+ * Is "Try Again" the right answer to the message currently on screen?
+ *
+ * WHY it exists: `lastError` is the only channel the wizard has for saying
+ * anything to the user, and one CLICK reaches it without anything breaking —
+ * "Log in with OpenRouter" answers "coming in a later update". Try Again there
+ * re-runs the whole Node/Git/Claude install pass on a machine where nothing is
+ * wrong, and "Something went wrong. You can retry the last step." would be two
+ * false statements in one sentence.
+ *
+ * The test: a failed prerequisite always earns a retry. Otherwise it depends on
+ * whether the user has another way forward — on the sign-in step the three
+ * sign-in buttons are right there, so a message needs no button of its own;
+ * on every other step (a failed download, no disk space) Try Again is the only
+ * control on the screen and must stay.
+ *
+ * FirstRunView shows the button on exactly this test, so the headline and the
+ * button always agree.
+ */
+export function canRetry(state: FirstRunState): boolean {
+  if (state.prerequisites.some((p) => p.status === 'failed')) return true;
+  return state.currentStep !== 'AUTHENTICATE';
+}
+
 export function describeStep(state: FirstRunState): string {
-  if (state.lastError) {
-    return 'Something went wrong. You can retry the last step or skip for now.';
+  // The error's own words are always shown below the buttons; this headline
+  // only claims "something went wrong" where a retry is actually offered.
+  if (state.lastError && canRetry(state)) {
+    return 'Something went wrong. You can retry the last step.';
   }
 
   switch (state.currentStep) {
@@ -35,7 +61,11 @@ export function describeStep(state: FirstRunState): string {
     }
 
     case 'AUTHENTICATE':
-      return 'Sign in with your Claude account to finish setup.';
+      // Sign in with ChatGPT (design 2026-09-04): either plan finishes setup.
+      // First-run local models (2026-09-14, Q-1): so does a model on this
+      // computer, which needs no account — the line must not say every way in
+      // is a sign-in.
+      return 'Sign in with an account, or run a model on this computer, to finish setup.';
 
     case 'ENABLE_DEVELOPER_MODE':
       return "One Windows setting to enable, then we're done.";

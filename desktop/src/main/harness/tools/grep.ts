@@ -6,6 +6,7 @@ import * as path from 'path';
 import { z } from 'zod';
 import { defineTool } from './registry';
 import { resolveP, toPosix, shellCwdMissHint } from './guards';
+import { CREDENTIAL_EXCLUDE_GLOBS } from './credential-paths';
 import type { ResultBounds } from './types';
 
 /** Resolve the ripgrep binary the tool will actually spawn.
@@ -310,6 +311,12 @@ export const GrepTool = defineTool({
     // grepErrorMessage) — no local copy of `rg --type-list` to drift.
     if (args.type) rgArgs.push(`--type=${args.type}`);
     if (args.multiline) rgArgs.push('-U', '--multiline-dotall');
+    // Credential-directory exclusions (2026-09-10 security review). `--hidden`
+    // above means a search rooted at a PARENT of ~/.aws (whose own path the guard
+    // let through) would otherwise read the secret file. Pushed LAST so ripgrep,
+    // which lets the last matching glob win, cannot have them re-included by a
+    // caller glob like `**/.aws/credentials`.
+    for (const glob of CREDENTIAL_EXCLUDE_GLOBS) rgArgs.push('--glob', glob);
     // Hoisted so the exit-2 error message (below) can name the exact path that
     // failed, instead of a context-free "ripgrep error".
     const resolvedTarget = resolveP(args.path ?? '.', ctx.cwd);

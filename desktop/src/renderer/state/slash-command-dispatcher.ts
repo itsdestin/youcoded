@@ -17,6 +17,8 @@
 // extract-copy-blocks.ts still use the type). Found in the 2026-08-06 sweep.
 import type { ChatAction, TimelineEntry, UsageSnapshot, SessionChatState } from './chat-types';
 import { buildCopyPayload } from '../utils/extract-copy-blocks';
+import { copyText } from '../components/context-menu/clipboard';
+import { claudeAliasForModelId, CLAUDE_ALIAS_LABELS, type ClaudeAlias } from '../../shared/model-ids';
 
 export type ViewMode = 'chat' | 'terminal';
 
@@ -38,6 +40,16 @@ export interface DispatcherCallbacks {
   getSessionState?: (sessionId: string) => SessionChatState | undefined;
   /** Open the ModelPickerPopup — used by bare /model, /fast, /effort. */
   onOpenModelPicker?: () => void;
+  /**
+   * Typed `/model <alias>` — App.tsx owns the session model state, so this
+   * asks it to run the SAME guarded-PTY-send + optimistic-pill-update flow
+   * Shift+Space and the picker already use, rather than duplicating it here.
+   * Returns 'ineligible' for a session /model can't act on (native/shell —
+   * the dispatcher falls back to today's plain-text passthrough for those,
+   * unchanged), 'blocked' when the send was refused (a prompt is pending —
+   * App.tsx already toasted), or 'sent' once the PTY write actually happened.
+   */
+  onModelSwitchCommand?: (alias: ClaudeAlias) => 'sent' | 'blocked' | 'ineligible';
 }
 
 export interface DispatcherInput {
@@ -190,10 +202,15 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
     case '/fast':
     case '/effort': {
       // Bare commands (no args) open the unified ModelPickerPopup. With args,
-      // pass through to Claude Code's own handler — e.g. `/model sonnet`,
-      // `/fast on`, `/effort high` all still work because Claude Code parses them.
-      // We also opportunistically persist known args for /fast and /effort so
-      // the status bar chips stay in sync.
+      // Claude Code applies these itself — but ALL THREE are commands Claude
+      // Code answers locally, without ever calling the model. Sending them
+      // down the normal chat-message path (like plain text) makes InputBar
+      // dispatch USER_PROMPT, which starts the "thinking" spinner — and since
+      // no assistant turn is ever going to arrive to end it, the spinner spins
+      // forever (youcoded — /model, /fast, /effort typed with an argument).
+      // So every arg branch below sends straight to the PTY via alsoSendToPty
+      // (or the equivalent onModelSwitchCommand flow for /model) instead of
+      // falling through to the plain-text send at the bottom of InputBar.
       if (!args) {
         if (input.callbacks.onOpenModelPicker) {
           input.callbacks.onOpenModelPicker();
@@ -201,6 +218,39 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
         }
         return { handled: false };
       }
+
+      if (cmd === '/model') {
+        const alias = claudeAliasForModelId(args.trim());
+        // Only intercept args we can actually name a model for — an
+        // unrecognized argument (a raw dated model id, a typo) falls through
+        // to the passthrough branch below exactly as before, since we have
+        // nothing honest to show as a confirmation.
+        if (alias && input.callbacks.onModelSwitchCommand) {
+          const result = input.callbacks.onModelSwitchCommand(alias);
+          if (result === 'sent') {
+            if (input.sessionId) {
+              input.dispatch({
+                type: 'MODEL_SWITCH_MARKER',
+                sessionId: input.sessionId,
+                markerId: `model-switch-${Date.now()}`,
+                timestamp: Date.now(),
+                label: `Model switched to ${CLAUDE_ALIAS_LABELS[alias]}`,
+              });
+            }
+            return { handled: true };
+          }
+          if (result === 'blocked') {
+            // App.tsx already toasted ("Claude is waiting for your response").
+            // Swallow rather than let "/model opus" leak into Claude Code's
+            // live Ink menu as if it were a menu keystroke.
+            return { handled: true };
+          }
+          // 'ineligible' (native/shell session) — fall through to passthrough,
+          // unchanged from today: a native session has no PTY /model to run,
+          // so the text is just sent as an ordinary chat message.
+        }
+      }
+
       // Persist fast/effort local state (fire-and-forget) so chips update.
       const modesApi = (window as any).claude?.modes;
       if (cmd === '/fast' && modesApi) {
@@ -212,7 +262,12 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
           modesApi.set({ effort: lvl }).catch(() => {});
         }
       }
-      // Let the command pass through to PTY — Claude Code applies it.
+      if (cmd === '/fast' || cmd === '/effort') {
+        // Same local-command freeze as /model above — send straight to the
+        // PTY instead of through a plain-text chat turn.
+        return { handled: true, alsoSendToPty: `${cmd} ${args}\r` };
+      }
+      // Unrecognized /model argument — let Claude Code's own /model handle it.
       return { handled: false };
     }
 
@@ -234,10 +289,20 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
         return { handled: true };
       }
       if (payload.mode === 'single') {
-        // Single block — direct copy, no picker. Browser clipboard API works
-        // even when focus is on a textarea, unlike execCommand.
-        void navigator.clipboard.writeText(payload.content).catch(() => {});
-        input.callbacks.onToast?.('Copied to clipboard');
+        // Single block — direct copy, no picker.
+        // WHY wait for the write (error inventory 2026-09-10, false message 7): this
+        // toasted "Copied to clipboard" before, and regardless of, the write, so a
+        // refused clipboard read as a success. It also called
+        // navigator.clipboard.writeText directly, which does not exist on a remote
+        // browser over plain http — /copy threw there and said nothing at all.
+        // copyText tries the clipboard API first (it works with focus in a textarea),
+        // falls back to execCommand, and answers whether anything was copied.
+        // The dispatcher stays synchronous; the toast arrives when the write settles.
+        void copyText(payload.content).then((copied) => {
+          // Failure wording is Destin's (batch 1 deck, E-4): the old "select the text and copy it
+          // yourself" was unclear, since copying is what the user had just asked for.
+          input.callbacks.onToast?.(copied ? 'Copied to clipboard' : "Couldn't copy — please try again.");
+        });
         return { handled: true };
       }
       // Multi-block — show picker inline

@@ -727,7 +727,9 @@ describe('WebFetch', () => {
     const rawText = `Source: https://example.com/huge.txt\n\n${'a'.repeat(5 * 1024 * 1024)}`;
     const t = truncateOutput(rawText, { maxChars: 30_000 });
     const notice = composeNotice(r.bounds, t.truncated ? { shown: t.text.length, total: t.totalChars } : null, undefined);
-    expect(r.text).toBe(t.text + notice);
+    // 2026-09-04: WebFetch output is framed as untrusted content (registry.ts);
+    // the frame wraps the CAPPED text and the notice stays outside the tag.
+    expect(r.text).toBe(`<untrusted-content source="WebFetch">\n${t.text}\n</untrusted-content>` + notice);
     // composeNotice (truncate.ts, fixed alongside this round's B1 blocker)
     // renders total: null as "more may exist — exact total unknown", never a
     // tautological "N of at least N" (which read as "that's everything") and

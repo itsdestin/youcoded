@@ -188,14 +188,23 @@ export class McpRegistry {
 
   private async resolveEntry(entry: McpServerEntry): Promise<ResolvedMcpServer> {
     const missingSecrets: string[] = [];
-    const env = await this.decryptRefs(entry.envRefs, missingSecrets);
-    const headers = await this.decryptRefs(entry.headerRefs, missingSecrets);
-    return {
-      ...entry,
-      ...(env !== undefined ? { env } : {}),
-      ...(headers !== undefined ? { headers } : {}),
-      missingSecrets,
-    };
+    try {
+      const env = await this.decryptRefs(entry.envRefs, missingSecrets);
+      const headers = await this.decryptRefs(entry.headerRefs, missingSecrets);
+      return {
+        ...entry,
+        ...(env !== undefined ? { env } : {}),
+        ...(headers !== undefined ? { headers } : {}),
+        missingSecrets,
+      };
+    } catch (error) {
+      // WHY: one locked/unreadable key must not reject every enabled server.
+      // Discard partially decrypted maps; a later resolve retries this server.
+      return {
+        ...entry, missingSecrets,
+        credentialError: error instanceof Error ? error.message : 'Could not read saved MCP credentials. Retry.',
+      };
+    }
   }
 
   // Decrypts each ref, collecting any name whose ref no longer resolves into

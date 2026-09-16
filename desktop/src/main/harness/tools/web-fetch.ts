@@ -769,6 +769,7 @@ function htmlToMarkdown(document: Document, rawHtml: string): { title: string | 
 
 export const WebFetchTool = defineTool<z.infer<typeof inputSchema>>({
   name: 'WebFetch',
+  untrusted: 'WebFetch',
   description:
     'Fetch a web page and return its main content as Markdown. Only public http/https URLs — private and local addresses are blocked. Large pages are truncated.',
   // Compact form for small local models (simplified presentation).

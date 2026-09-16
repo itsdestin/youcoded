@@ -7,10 +7,27 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- WHY: voice prompting. Android only lets an app ASK the user for the
+         microphone at runtime if the app also declares it here up front; without
+         this line the request silently fails and the voice button is dead. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- WHY: declaring RECORD_AUDIO makes Google Play assume the app REQUIRES a
+         microphone and hide it from any device without one. Saying required=false
+         keeps YouCoded installable everywhere, exactly as the camera line above
+         does for the QR scanner. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <queries>
         <package android:name="com.tailscale.ipn" />
+        <!-- WHY: since Android 11, an app cannot even SEE other apps on the phone
+             unless it names them here. The speech recogniser is another app, so
+             without this entry SpeechRecognizer.isRecognitionAvailable() returns
+             false on every phone and voice prompting looks unsupported everywhere.
+             We target SDK 35, so the restriction definitely applies to us. -->
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
     </queries>
 
     <application

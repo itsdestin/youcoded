@@ -183,7 +183,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced, showAd
                 aria-label="Output Style"
                 className="w-full"
               />
-              <p className="text-2xs text-fg-muted mt-1.5">Preset name that tunes Claude's response style. Leave blank for default.</p>
+              <p className="text-2xs text-fg-muted mt-1.5">Preset name that tunes your assistant's response style. Leave blank for default.</p>
             </section>
 
             {/* Toggles */}

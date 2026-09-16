@@ -19,12 +19,22 @@ const VISIBLE_MS = 6000;
 
 export default function RemoteUnsupportedNotice() {
   const [notice, setNotice] = useState<RemoteUnsupportedDetail | null>(null);
+  // Features that arrived while this notice was already up. WHY: opening one screen can
+  // touch three unbridged channels at once, and each replacing the last produced a
+  // flicker of half-read sentences. They become one sentence instead.
+  const [also, setAlso] = useState<string[]>([]);
 
   useEffect(() => {
     const onUnsupported = (e: Event) => {
       const detail = (e as CustomEvent).detail as RemoteUnsupportedDetail | undefined;
       if (!detail) return;
-      setNotice(detail);
+      setNotice(prev => {
+        if (prev && prev.feature !== detail.feature) {
+          setAlso(list => (list.includes(detail.feature) ? list : [...list, detail.feature]));
+          return prev;
+        }
+        return detail;
+      });
     };
     window.addEventListener(REMOTE_UNSUPPORTED_EVENT, onUnsupported);
     return () => window.removeEventListener(REMOTE_UNSUPPORTED_EVENT, onUnsupported);
@@ -32,7 +42,7 @@ export default function RemoteUnsupportedNotice() {
 
   useEffect(() => {
     if (!notice) return;
-    const t = setTimeout(() => setNotice(null), VISIBLE_MS);
+    const t = setTimeout(() => { setNotice(null); setAlso([]); }, VISIBLE_MS);
     return () => clearTimeout(t);
   }, [notice]);
 
@@ -53,10 +63,17 @@ export default function RemoteUnsupportedNotice() {
           <path strokeLinecap="round" d="M12 8h.01M11 12h1v4h1" />
         </svg>
       </span>
-      <span className="min-w-0">{notice.message}</span>
+      <span className="min-w-0">
+        {notice.message}
+        {also.length > 0 && (
+          <span className="block text-fg-muted mt-0.5">
+            {also.length === 1 ? `${also[0]} either.` : `${also.slice(0, -1).join(', ')} and ${also[also.length - 1]} either.`}
+          </span>
+        )}
+      </span>
       {/* Same migration as CopyPicker's — the approved icon+ghost recipe,
           which this had reimplemented at a different size with no focus ring. */}
-      <CloseButton onClick={() => setNotice(null)} label="Dismiss" className="shrink-0 -mr-1 -mt-0.5" />
+      <CloseButton onClick={() => { setNotice(null); setAlso([]); }} label="Dismiss" className="shrink-0 -mr-1 -mt-0.5" />
     </div>
   );
 }

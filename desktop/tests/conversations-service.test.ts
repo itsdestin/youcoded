@@ -38,8 +38,11 @@ const h = vi.hoisted(() => {
     // (carry-forward 2) proves startConversationStore doesn't await it. Callers
     // attach .catch, so a never-resolving promise causes no unhandled rejection.
     reconcile: vi.fn((_opts: any) => new Promise<number>(() => {})),
-    mirrorIn: vi.fn((_o: any) => ({ copied: true })),
-    materializeOut: vi.fn((_o: any) => ({ copied: true })),
+    // async (mirrorIn/materializeOut are now Promise-returning) — the real
+    // service code calls .catch()/.then()/await on these, which a bare
+    // object return would break.
+    mirrorIn: vi.fn(async (_o: any) => ({ copied: true })),
+    materializeOut: vi.fn(async (_o: any) => ({ copied: true })),
     syncSpacesSyncNow: vi.fn(async (_spaceId?: string) => ({ ok: true })),
     // Awaitable variant (2026-07-18): flushSessionToSpace now pushes via this, not
     // the fire-and-forget syncSpacesSyncNow, so the handoff barrier is real.
@@ -113,8 +116,8 @@ describe('conversations service composition root', () => {
     h.store.setNote.mockReset().mockResolvedValue(undefined as any);
     h.store.remove.mockReset().mockResolvedValue(true as any);
     h.reconcile.mockReset().mockImplementation(() => new Promise<number>(() => {}));
-    h.mirrorIn.mockReset().mockReturnValue({ copied: true } as any);
-    h.materializeOut.mockReset().mockReturnValue({ copied: true } as any);
+    h.mirrorIn.mockReset().mockResolvedValue({ copied: true } as any);
+    h.materializeOut.mockReset().mockResolvedValue({ copied: true } as any);
     h.syncSpacesSyncNow.mockReset().mockResolvedValue({ ok: true } as any);
     h.syncSpacesSyncNowAwaited.mockReset().mockResolvedValue(undefined as any);
     h.savedFolders = [];
@@ -151,6 +154,32 @@ describe('conversations service composition root', () => {
     expect(opts.topicsDir).toBe(startOpts().topicsDir);
     expect(opts.device).toBe('test-device');
     expect(typeof opts.mirror).toBe('function');
+  });
+
+  // 1a — reconciler-driven mirrors run ONE AT A TIME. WHY: the reconciler mirrors
+  // every transcript it scans; started all at once, large copies fill libuv's 4
+  // threads and queue live chat reads, lease writes and dns lookups behind them.
+  it('reconciler mirrors never overlap: the next copy starts only after the previous settles', async () => {
+    let failFirst!: (err: Error) => void;
+    h.mirrorIn
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { failFirst = reject; }))
+      .mockResolvedValue({ copied: true } as any);
+    await freshService(startOpts());
+    const opts = h.reconcile.mock.calls[0][0];
+
+    opts.mirror(path.join(tmpRoot, 'projects', 'alpha', 'sess-1.jsonl'), 'alpha', 'sess-1');
+    opts.mirror(path.join(tmpRoot, 'projects', 'beta', 'sess-2.jsonl'), 'beta', 'sess-2');
+
+    await vi.waitFor(() => expect(h.mirrorIn).toHaveBeenCalledTimes(1));
+    // Fixed settle before a NEGATIVE assertion only: gives an overlapping second
+    // copy time to start (it would start within a microtask) before we say it didn't.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(h.mirrorIn).toHaveBeenCalledTimes(1);
+
+    // Release the first by FAILING it — a failed copy must not stop later ones.
+    failFirst(new Error('EBUSY'));
+    await vi.waitFor(() => expect(h.mirrorIn).toHaveBeenCalledTimes(2));
+    expect(h.mirrorIn.mock.calls[1][0].localJsonlPath).toContain('sess-2.jsonl');
   });
 
   // 1b — the reconciler is handed this device's known folders (managed projects
@@ -199,7 +228,10 @@ describe('conversations service composition root', () => {
     const arg = h.mirrorIn.mock.calls[0][0];
     expect(arg.localJsonlPath).toContain('claude-xyz.jsonl');
     expect(arg.localJsonlPath).toContain(startOpts().projectsDir);
-    expect(h.syncSpacesSyncNow).toHaveBeenCalledWith('personal');
+    // WHY vi.waitFor: the sync nudge is now CHAINED after mirrorIn resolves
+    // (not fired in parallel) — see service.ts noteTranscriptEvent's WHY — so
+    // it lands a promise-chain hop or two later than mirrorIn's own call.
+    await vi.waitFor(() => expect(h.syncSpacesSyncNow).toHaveBeenCalledWith('personal'));
   });
 
   // 4 — a personal 'synced'/updated event materializes records that resolve
@@ -282,6 +314,34 @@ describe('conversations service composition root', () => {
     await vi.waitFor(() => expect(h.materializeOut).toHaveBeenCalled());
     expect(h.materializeOut).toHaveBeenCalledTimes(1);
     expect(h.materializeOut.mock.calls[0][0].localJsonlPath).toContain(`${idleRec.id}.jsonl`);
+  });
+
+  // New (review round 1, IMPORTANT finding): the live-session check at the top
+  // of the sweep and materializeOut's actual rename are no longer adjacent —
+  // several threadpool steps separate them, and a resume can land in that gap
+  // (SessionStart re-acquiring this id, or a takeover resuming right after
+  // materializeOne). service.ts passes `shouldCommit: () => !sessions.has(id)`
+  // so the real transcript-mirror re-checks liveness right before its rename.
+  // Since materializeOut is mocked here, this test instead proves the WIRING:
+  // the closure reads LIVE state at call time, not a value snapshotted when
+  // the sweep started — calling it again after a session starts must flip.
+  it('the shouldCommit passed to materializeOut reflects a session that starts WHILE the copy is pending', async () => {
+    const idleDir = path.join(tmpRoot, 'resume-mid-copy-proj');
+    fs.mkdirSync(idleDir, { recursive: true });
+    const rec = {
+      id: 'aaaabbbb-cccc-dddd-eeee-ffff00001111', provider: 'claude',
+      projectName: 'resume-mid-copy-proj', originalPath: idleDir,
+      transcriptRef: 'claude/transcripts/resume-mid-copy-proj/aaaabbbb-cccc-dddd-eeee-ffff00001111.jsonl',
+    };
+    const svc = await freshService(startOpts());
+    h.store.list.mockImplementation(async (p: string) => (p === 'claude' ? [rec] : []));
+    fireSync({ type: 'synced', spaceId: 'personal', updated: true, pushed: false });
+    await vi.waitFor(() => expect(h.materializeOut).toHaveBeenCalled());
+    const shouldCommit = h.materializeOut.mock.calls[0][0].shouldCommit;
+    expect(typeof shouldCommit).toBe('function');
+    expect(shouldCommit()).toBe(true); // no live session yet — safe to commit
+    svc.noteSessionStarted(rec.id, idleDir, 'claude'); // resume lands mid-copy
+    expect(shouldCommit()).toBe(false); // same closure, now refuses the rename
   });
 
   // Bug 2 Part 2 (Plan 2b Task 7): noteSessionEnded releases the per-session
@@ -819,7 +879,7 @@ describe('conversations service composition root', () => {
       const dir = path.join(tmpRoot, 'missing-source-proj');
       fs.mkdirSync(dir, { recursive: true }); // project dir exists; the TRANSCRIPT file does not
       const id = 'missing-source-1';
-      h.mirrorIn.mockReturnValueOnce({ copied: false }); // what the real mirrorIn returns for an absent local file
+      h.mirrorIn.mockResolvedValueOnce({ copied: false }); // what the real mirrorIn returns for an absent local file
       svc.noteSessionStarted(id, dir, 'native');
       const p = svc.flushSessionToSpace(id);
       // Absent local file reads size 0 on every probe → quiescent immediately

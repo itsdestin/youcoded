@@ -61,10 +61,26 @@ describe('remote-shim unsupported-channel reporting', () => {
     ws.receive({ type: 'auth:ok', token: 'tok', platform: 'browser' });
     await connectPromise;
     shim.installShim();
+    // Past the boot-quiet window. These tests are about what a PERSON ran into — they
+    // open a panel and it is empty, and the notice explains why. The first seconds after
+    // a connection are the app's own mount fetches, which are deliberately silent now:
+    // ten of them announced at once was the first thing a new phone showed Destin.
+    // Only the clock is faked; the shim's own timers are real.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 10_000);
   });
   afterEach(() => {
+    vi.useRealTimers();
     window.removeEventListener(unsupportedEvent, listener);
     delete (globalThis as any).WebSocket;
+  });
+
+  it('says nothing during the app\u2019s own mount fetches', async () => {
+    // The complaint, in one test: "i just get spammed with a bunch of random x/y/z isnt
+    // available via remote access yet the second i connect."
+    vi.setSystemTime(Date.now() - 10_000); // back inside the quiet window
+    await callUnsupported(() => (window as any).claude.social.listFriends());
+    expect(events).toHaveLength(0);
   });
 
   /** Issue a call and answer it with the server's unsupported response. */

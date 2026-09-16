@@ -13,6 +13,19 @@ import '@testing-library/jest-dom/vitest';
 import ResumeBrowser from '../src/renderer/components/ResumeBrowser';
 import { claudeAliasForModelId, isPlaceholderModelId } from '../src/shared/model-ids';
 
+// These pin the SINGLE-COLUMN browser — the layout a phone, a narrow window or
+// Android gets, where clicking a card still expands the resume controls inside
+// it. On a wide desktop the same click fills the preview panel instead and the
+// controls live in the card at its foot (the 2026-09-10 design rounds), so
+// without this stub jsdom (which has no matchMedia, hence "wide") would run
+// these against a layout whose cards deliberately never expand.
+(window as any).matchMedia = (q: string) => ({
+  matches: q === '(max-width: 639.98px)',
+  media: q,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+});
+
 beforeAll(() => {
   if (typeof window.ResizeObserver === 'undefined') {
     window.ResizeObserver = class {

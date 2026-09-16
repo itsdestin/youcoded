@@ -1,11 +1,13 @@
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { writeFile, unlink } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-
-const execFileAsync = promisify(execFile);
+// WHY imported rather than declared here: the qdbus binary list and the exec
+// wrapper now live in kde-dbus.ts, so this file and the buddy work-area
+// resolver discover qdbus the same way instead of keeping two copies that can
+// drift. Nothing about THIS file's behaviour changed — execQdbus with no
+// options is the same execFile call, and the candidate loop below is untouched.
+import { QDBUS_CANDIDATES, execQdbus } from './kde-dbus';
 
 // WHY a fixed plugin name (not per-invocation): KWin's Scripting DBus
 // interface keys loaded scripts by pluginName, and unloadScript() takes that
@@ -13,10 +15,6 @@ const execFileAsync = promisify(execFile);
 // calls means a stale/never-unloaded script from a crashed prior run gets
 // silently replaced rather than accumulating under new names.
 const PLUGIN_NAME = 'youcoded-buddy-keepabove';
-
-// Modern Plasma 6 ships `qdbus6`; some distros/older Plasma still resolve
-// only `qdbus`. Try the current name first, fall back to the legacy one.
-const QDBUS_CANDIDATES = ['qdbus6', 'qdbus'];
 
 /**
  * Pure builder for the one-shot KWin script that pins (or unpins) the
@@ -68,7 +66,7 @@ export async function applyKwinKeepAbove(title: string, keepAbove: boolean): Pro
       // leaking the script under PLUGIN_NAME on a partial failure).
       let loaded = false;
       try {
-        const { stdout } = await execFileAsync(qdbus, [
+        const stdout = await execQdbus(qdbus, [
           'org.kde.KWin',
           '/Scripting',
           'org.kde.kwin.Scripting.loadScript',
@@ -82,7 +80,7 @@ export async function applyKwinKeepAbove(title: string, keepAbove: boolean): Pro
         const id = stdout.trim();
         if (!id || Number.isNaN(Number(id))) continue;
         loaded = true;
-        await execFileAsync(qdbus, [
+        await execQdbus(qdbus, [
           'org.kde.KWin',
           `/Scripting/Script${id}`,
           'org.kde.kwin.Script.run',
@@ -103,7 +101,7 @@ export async function applyKwinKeepAbove(title: string, keepAbove: boolean): Pro
           // that keepAbove was left half-set), but leaving the plugin name
           // loaded either way just wastes a slot until the next call
           // replaces it, so don't let a failed unload block the retry loop.
-          await execFileAsync(qdbus, [
+          await execQdbus(qdbus, [
             'org.kde.KWin',
             '/Scripting',
             'org.kde.kwin.Scripting.unloadScript',

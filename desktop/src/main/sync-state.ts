@@ -657,7 +657,8 @@ export async function forceSync(): Promise<{
     return {
       success: result.success,
       output: result.backends.join(', ') || 'No backends configured',
-      error: result.errors > 0 ? `${result.errors} backend(s) had errors` : '',
+      // Shown to the user as the reason (Backup & Sync row, setup wizard) — plain words, no ids.
+      error: result.errors > 0 ? "Some backups didn't finish." : '',
     };
   } catch (e: any) {
     return { success: false, output: '', error: e.message || 'SyncService push failed' };
@@ -679,7 +680,8 @@ export async function pushBackend(id: string): Promise<{
     const result = await syncServiceInstance.push({ force: true, backendId: id });
     return {
       success: result.success,
-      error: result.errors > 0 ? `Push to ${id} had errors` : '',
+      // Shown to the user as the reason (Backup & Sync row, setup wizard) — plain words, no ids.
+      error: result.errors > 0 ? "Some files didn't upload." : '',
     };
   } catch (e: any) {
     return { success: false, error: e.message || `Push to ${id} failed` };

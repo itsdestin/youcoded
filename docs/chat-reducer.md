@@ -261,6 +261,27 @@ state the cursor never described. Subagent events are included only for `Agent`
 tool_uses INSIDE the page: a throwaway `SubagentIndex` is primed from the page and
 `SubagentWatcher.getHistory` skips whatever it cannot bind.
 
+**Which file a page is read from** is a separate question from how it is read, and it has
+its own module (`main/transcript-page-source.ts`). `TranscriptWatcher.pageSourceFor`
+answers only for a session it is actively tailing, and there are three ordinary moments
+when it is not: before CC's `SessionStart` hook reports the transcript path on a resume,
+after `session-exit` tears the watcher down (the conversation stays on screen and
+scrollable), and in the buddy floater, which never watched one. So the resolved path is
+remembered per session — from a validated request locator, or read back from the watcher
+when the hook starts it — and any later request answers from memory. Only the FIRST page
+request carries a locator; every one after it has just a cursor.
+<!-- verify: {"path": "youcoded/desktop/src/main/transcript-page-source.ts", "contains": "rememberLocator"} -->
+
+**"Could not locate it" is not "this is the beginning."** Both were an empty page with
+`hasMore: false` until 2026-09-07, and the renderer records the second — dropping the
+cursor and the scroll-up sentinel for good, so the rest of the conversation became
+unreachable in that window. `TranscriptPageResult.unresolved` separates them, on
+`ipc-handlers.ts` AND `remote-server.ts` (the same React renderer runs over the remote
+bridge). Callers retry rather than record: `ChatView` on a bounded backoff — at the top of
+the list there is no scroll gesture left to re-trigger the sentinel, so it must heal on a
+timer — and `App`/the buddy floater through `renderer/state/first-page-retry.ts`.
+<!-- verify: {"path": "youcoded/desktop/src/shared/types.ts", "contains": "unresolved[?]: true"} -->
+
 **No overlap, by construction.** `startWatching` starts the live tailer at end-of-file
 for an existing file (it used to start at byte 0, re-emitting the whole transcript on
 every resume) and `getStartOffset()` is the byte the first page reads UP TO. Page =

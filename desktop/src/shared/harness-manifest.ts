@@ -58,6 +58,23 @@ export const NATIVE_TOOL_NAMES = [
  *  delegation, so a session that cannot delegate has nothing for it to do. */
 export const CONDITIONAL_TOOL_NAMES = ['Skill', 'Task', 'ModelSearch'] as const;
 
+// Fix: with `limits.maxTokens` left undefined, streamText omits `max_tokens`
+// from the request entirely — and OpenRouter's fallback for an uncapped
+// request is to reserve the MODEL's own advertised max output against the
+// account balance up front (65,536 for Claude Opus 5), for EVERY message,
+// even a one-line reply. That's what was producing "exceed your available
+// credits given your current in-flight requests" 402s far more often than
+// real spend justified: two ordinary overlapping requests could each try to
+// reserve 65k+ tokens' worth of credit. The battery runner hit the same
+// defect in 2026-08-10 and got its own cap (BATTERY_MAX_OUTPUT_TOKENS,
+// eval/run-case.ts) — this is the equivalent fix for real app sessions,
+// which that incident's note explicitly left uncapped as out of scope.
+// 16,000 tokens (~12,000 words) comfortably covers any single real reply
+// (measured single-step outputs in that incident topped out near 2,200
+// tokens) while cutting the reservation to a fraction of a frontier model's
+// full advertised max.
+export const DEFAULT_MAX_OUTPUT_TOKENS = 16_000;
+
 export const ASSISTANT_PRESET: HarnessManifest = {
   schema: 1,
   id: 'assistant',
@@ -66,9 +83,8 @@ export const ASSISTANT_PRESET: HarnessManifest = {
   systemPrompt: 'You are a helpful, careful assistant inside YouCoded.',
   tools: [...NATIVE_TOOL_NAMES],
   permissionPolicy: 'ask',
-  // No maxSteps override → the step budget is chosen by MODEL tier at runtime
-  // (harness-session.ts → stepBudgetFor): frontier models get a higher ceiling,
-  // others keep the conservative default.
+  // Ordinary roots add maxSteps only from their persisted creation snapshot.
+  limits: { maxTokens: DEFAULT_MAX_OUTPUT_TOKENS },
 };
 
 export const CODER_PRESET: HarnessManifest = {
@@ -79,7 +95,8 @@ export const CODER_PRESET: HarnessManifest = {
   systemPrompt: 'You are a capable coding agent inside YouCoded.',
   tools: [...NATIVE_TOOL_NAMES],
   permissionPolicy: 'auto-edit',
-  // Step budget chosen by model tier at runtime (see ASSISTANT_PRESET note).
+  // Ordinary roots add maxSteps only from their persisted creation snapshot.
+  limits: { maxTokens: DEFAULT_MAX_OUTPUT_TOKENS },
 };
 
 export const PRESETS: HarnessManifest[] = [ASSISTANT_PRESET, CODER_PRESET];

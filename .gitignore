@@ -50,7 +50,7 @@ terminal-emulator-vendored/build/
 # Electron runtime debug logs — machine-specific, leak local paths
 *.log
 
-# Built React UI bundle (copied from desktop build) — except placeholder
-app/src/main/assets/web/*
-!app/src/main/assets/web/index.html
+# Built React UI bundle (copied from desktop build). Nothing here is tracked:
+# Gradle's bundleWebUi task regenerates the folder before every APK build.
+app/src/main/assets/web/
 .superpowers/

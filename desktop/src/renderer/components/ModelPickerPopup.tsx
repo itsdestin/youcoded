@@ -173,11 +173,33 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
   const [nativeError, setNativeError] = useState<string | null>(null);
   const [nativeSwapping, setNativeSwapping] = useState(false);
 
+  // Same problem, same fix as ModelPicker.tsx (Destin, 2026-09-06): this list
+  // refetched when the popup OPENED but could never catch up while it was
+  // already on screen, so a model you downloaded with this popup open stayed
+  // missing until you closed and reopened it. Bumping `reload` re-runs the fetch
+  // below. See ModelPicker.tsx for why this is the download push and not
+  // `engine.onModelsChanged` — nothing sends that channel.
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    const off = window.claude?.models?.onDownloadProgress?.((p: { state?: string }) => {
+      if (p?.state === 'done') setReload((n) => n + 1);
+    });
+    return () => { off?.(); };
+  }, []);
+
+  // The transient view state resets on OPEN only. It deliberately does not sit in
+  // the fetch effect below any more: that one now also re-runs when a download
+  // lands, and re-running it here would erase whatever the user had typed in the
+  // search box at that moment.
   useEffect(() => {
     if (!open || provider !== 'native') return;
     setNativeSearch('');
     setNativeError(null);
     setNativeSwapping(false);
+  }, [open, provider]);
+
+  useEffect(() => {
+    if (!open || provider !== 'native') return;
     Promise.all([
       window.claude.providers.catalog().catch(() => []),
       window.claude.providers.list().catch(() => []),
@@ -193,7 +215,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
       const b = row?.binding;
       setNativeBinding(b && b.providerId && b.modelId ? { providerId: b.providerId, modelId: b.modelId } : null);
     }).catch(() => {});
-  }, [open, provider, sessionId]);
+  }, [open, provider, sessionId, reload]);
 
   // Load persisted state when opening. We don't live-sync with external changes
   // (Claude Code doesn't broadcast these); the popup is the source of truth
@@ -351,13 +373,29 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 and no binding; a native one has a binding and no PTY), so the
                 other runtime's models are filtered out rather than offered and
                 then refused. */}
+            {/* No section label here — the dialog's own title ("Model" or
+                "Model & Effort") already says it, and repeating it as a
+                sub-header directly under a modal titled "Model" read as
+                duplicated text once the picker opens straight into view. */}
             <section>
-              <h3 className="block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Model</h3>
               <ModelPicker
                 value={isNative ? nativeValue : (currentModel ? { runtime: 'claude', alias: currentModel } : null)}
                 onSelect={(c) => { void applyChoice(c); }}
                 includeClaude={!isNative}
                 includeNative={isNative}
+                // This dialog's whole job is "change the model" — the picker IS
+                // the surface, so open straight to the favourites+search list
+                // instead of making the status-bar chip cost two clicks.
+                // 'inline' because the list must push Effort/Fast down rather
+                // than the shared component's default float-over-everything
+                // behaviour (built for a picker that's normally closed).
+                defaultOpen
+                layout="inline"
+                // Lead with what's actually running, not just favourites — the
+                // dialog opens with no click to get here, so a model you picked
+                // once but never starred should still be the first thing you see.
+                pinSelectedToTop
+                onManageModels={() => window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))}
               />
               {nativeError && <p className="text-xs text-destructive-fg mt-2">{nativeError}</p>}
               {nativeSwapping && <p className="text-xs text-fg-muted mt-2">Switching…</p>}

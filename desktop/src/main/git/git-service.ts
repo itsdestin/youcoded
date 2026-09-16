@@ -17,12 +17,9 @@ import type {
 export const LOG_PAGE = 20;
 const MAX_UNTRACKED_BYTES = 1024 * 1024; // beyond this, show as binary-style stub
 
-// %H = sha, %s = subject, %aI = author date ISO; 0x1f separates header fields,
-// LEADING 0x1e separates commits — rides with `--numstat` in the actual
-// `git log` call so each chunk also carries the file's historical path AND
-// its per-commit +/- counts (parseLogRecords reads both). Newlines in
-// subjects are impossible for %s.
-const LOG_FORMAT = '%x1e%H%x1f%s%x1f%aI';
+// WHY: NUL-delimit metadata as well as --numstat paths; control characters
+// such as 0x1e/0x1f are legal in filenames and commit subjects.
+const LOG_FORMAT = '%x00%H%x00%s%x00%aI%x00';
 
 interface Located {
   repoRoot: string;
@@ -101,7 +98,7 @@ export async function gitFileStatus(projectRoot: string, relPath: string): Promi
   if (!loc) return { ok: true, ...NOT_REPO };
   const { repoRoot, abs, rel } = loc;
 
-  const status = await execGit(repoRoot, ['status', '--porcelain=v2', '--branch', '--untracked-files=all', '--', rel]);
+  const status = await execGit(repoRoot, ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all', '--', rel]);
   if (status.code !== 0) return { ok: false, error: errText(status), ...NOT_REPO };
   const parsed = parsePorcelainV2(status.stdout);
   const entry = parsed.files.find((f) => f.path === rel) ?? null;
@@ -110,7 +107,7 @@ export async function gitFileStatus(projectRoot: string, relPath: string): Promi
   if (entry?.untracked) {
     counts = await worktreeAddCounts(abs);
   } else if (entry) {
-    const num = await execGit(repoRoot, ['diff', '--numstat', 'HEAD', '--', rel]);
+    const num = await execGit(repoRoot, ['diff', '--numstat', '-z', 'HEAD', '--', rel]);
     if (num.code === 0) {
       const m = parseNumstat(num.stdout).get(rel);
       counts = m ? { added: m.added, removed: m.removed } : { added: 0, removed: 0 };
@@ -148,7 +145,7 @@ export async function gitFileReview(
 
   // Whole-repo status: branch + this file's entry + the repo-wide staged count
   // (the commit button label counts everything a commit would include).
-  const status = await execGit(repoRoot, ['status', '--porcelain=v2', '--branch', '--untracked-files=all']);
+  const status = await execGit(repoRoot, ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all']);
   if (status.code !== 0) return fail<GitFileReviewResult>(base, errText(status));
   const parsed = parsePorcelainV2(status.stdout);
   const entry = parsed.files.find((f) => f.path === rel) ?? null;
@@ -192,7 +189,7 @@ export async function gitFileReview(
   // LOG_FORMAT WHY).
   const log = await execGit(repoRoot, [
     'log', '--follow', `--max-count=${LOG_PAGE + 1}`, `--skip=${skip}`,
-    `--pretty=format:${LOG_FORMAT}`, '--numstat', '--', rel,
+    `--pretty=format:${LOG_FORMAT}`, '--numstat', '-z', '--', rel,
   ]);
   // git log exits 0 with empty output for a path with no commits (e.g. untracked)
   const rawEntries = log.code === 0 ? parseLogRecords(log.stdout) : [];
@@ -301,7 +298,7 @@ export async function gitDiscard(projectRoot: string, relPath: string): Promise<
   // plain non-repo dir as a path-safety violation.
   if (loc === 'outside') return { ok: false, error: 'path-outside-project' };
   if (!loc) return { ok: false, error: 'not-a-git-repository' };
-  const status = await execGit(loc.repoRoot, ['status', '--porcelain=v2', '--untracked-files=all', '--', loc.rel]);
+  const status = await execGit(loc.repoRoot, ['status', '--porcelain=v2', '-z', '--untracked-files=all', '--', loc.rel]);
   if (status.code !== 0) return { ok: false, error: errText(status) };
   const entry = parsePorcelainV2(status.stdout).files.find((f) => f.path === loc.rel);
   if (!entry) return { ok: true }; // nothing to discard — already clean

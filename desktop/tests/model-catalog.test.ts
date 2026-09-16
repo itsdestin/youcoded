@@ -4,6 +4,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import { ModelCatalog } from '../src/main/providers/model-catalog';
+import type { ContextPreferences } from '../src/shared/context-preferences';
+import type { ProviderStatus } from '../src/shared/provider-types';
 
 const OPENROUTER_PAYLOAD = { data: [
   { id: 'meta-llama/llama-3-8b', name: 'Llama 3 8B', context_length: 8192, pricing: { prompt: '0.00000005', completion: '0.0000001' } },
@@ -43,6 +45,54 @@ describe('ModelCatalog', () => {
       { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: false, builtIn: true, hasKey: true, ready: false },
     ] as any);
     expect(models).toHaveLength(0);
+  });
+
+  // The COST property, pinned in both directions. Nothing guarded it before,
+  // which is how a local-only session start silently acquired two internet
+  // fetches when the vision resolver started reading the catalog for local
+  // models (T18): ensureFresh() runs before get() looks at WHICH providers it
+  // was handed, so a call that cannot consume either source still paid for
+  // both. MEASURED 2026-09-05 on a network that accepts and never answers:
+  // 4 fetches, 15.1 s per get(), and no memoization, so it repeated on every
+  // create / resume / model swap.
+  describe('does not touch the network for a provider list no catalog source can serve', () => {
+    const LOCAL = { id: 'local', type: 'local-engine', label: 'Local models', enabled: true, builtIn: true, hasKey: false, ready: true };
+    const CUSTOM = { id: 'ollama', type: 'openai-compatible', label: 'Ollama', enabled: true, builtIn: false, hasKey: false, ready: true };
+
+    it('local-engine alone: zero fetches, and the local rows still come back', async () => {
+      const local = new ModelCatalog(dir, fetchMock, {
+        localModels: async () => [{ id: 'tiny-Q4_K_M', providerId: 'local', label: 'tiny-Q4_K_M' }],
+      });
+      const models = await local.get([LOCAL] as any);
+      // Both halves matter: zero fetches is the fix, and the rows still
+      // arriving is proof the fix did not just short-circuit get() itself.
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(models.map((m) => m.id)).toEqual(['tiny-Q4_K_M']);
+    });
+
+    it('openai-compatible alone: zero fetches (it has no catalog at all)', async () => {
+      expect(await cat.get([CUSTOM] as any)).toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('a DISABLED OpenRouter beside a local provider still costs nothing', async () => {
+      // A disabled provider contributes no models, so it must not drag the
+      // network in either — the gate reads `enabled` exactly as the loop does.
+      await cat.get([LOCAL, { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: false, builtIn: true, hasKey: true, ready: false }] as any);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('but an ENABLED OpenRouter beside the local provider DOES fetch — the gate is not over-broad', async () => {
+      const models = await cat.get([LOCAL, { id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true, builtIn: true, hasKey: true, ready: true }] as any);
+      expect(fetchMock).toHaveBeenCalled();
+      expect(models.some((m) => m.providerId === 'openrouter')).toBe(true);
+    });
+
+    it('and a models.dev provider (anthropic) beside the local one DOES fetch', async () => {
+      const models = await cat.get([LOCAL, { id: 'anth1', type: 'anthropic', label: 'Anthropic', enabled: true, builtIn: false, hasKey: true, ready: true }] as any);
+      expect(fetchMock).toHaveBeenCalled();
+      expect(models.some((m) => m.providerId === 'anth1')).toBe(true);
+    });
   });
 
   it('serves from disk cache within TTL (single fetch pair across two calls)', async () => {
@@ -89,6 +139,45 @@ describe('ModelCatalog', () => {
     await cat.get(providers);
     expect(await cat.contextLengthFor({ providerId: 'openrouter', modelId: 'meta-llama/llama-3-8b' }, providers)).toBe(8192);
     expect(await cat.contextLengthFor({ providerId: 'openrouter', modelId: 'unknown' }, providers)).toBeNull();
+  });
+
+  it('uses current cloud preferences by provider type without rewriting or refetching catalog metadata', async () => {
+    let preferences: ContextPreferences = { openrouter: 'standard', chatgpt: 'standard' };
+    const providers: ProviderStatus[] = [
+      { id: 'my-router', type: 'openrouter', label: 'Router', enabled: true, builtIn: false, hasKey: true, ready: true },
+      { id: 'chatgpt', type: 'chatgpt', label: 'Plan', enabled: true, builtIn: true, hasKey: false, ready: true },
+    ];
+    const planRow = { id: 'plan-model', providerId: 'chatgpt', label: 'Plan model', contextLength: 272000, maxContextLength: 872000 };
+    const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter')
+      ? { data: [{ id: 'large', name: 'Large', context_length: 1048576 }] } : {} }));
+    const catalog = new ModelCatalog(dir, fetch, {
+      chatgptModels: async () => [planRow], contextPreferences: () => preferences,
+    });
+    const router = { providerId: 'my-router', modelId: 'large' };
+    const plan = { providerId: 'chatgpt', modelId: 'plan-model' };
+    expect(await catalog.contextLengthFor(router, providers)).toBe(272000);
+    expect(await catalog.contextLengthFor(plan, providers)).toBe(272000);
+    preferences = { openrouter: 'long', chatgpt: 'standard' };
+    expect(await catalog.contextLengthFor(router, providers)).toBe(1048576);
+    expect(await catalog.contextLengthFor(plan, providers)).toBe(272000);
+    preferences = { openrouter: 'standard', chatgpt: 'long' };
+    expect(await catalog.contextLengthFor(router, providers)).toBe(272000);
+    expect(await catalog.contextLengthFor(plan, providers)).toBe(872000);
+    expect(await catalog.get(providers)).toEqual([
+      { id: 'large', providerId: 'my-router', label: 'Large', contextLength: 1048576 }, planRow,
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(2); // Only the initial two-source discovery.
+    expect(planRow.contextLength).toBe(272000);
+  });
+
+  it('uses lower cloud defaults with no preference getter and preserves local-model windows', async () => {
+    const cloud = { id: 'openrouter', type: 'openrouter', label: 'Router', enabled: true, builtIn: true, hasKey: true, ready: true } as const;
+    const local = { id: 'local', type: 'local-engine', label: 'Local', enabled: true, builtIn: true, hasKey: false, ready: true } as const;
+    const catalog = new ModelCatalog(dir, async () => ({ ok: true, json: async () => ({ data: [{ id: 'large', context_length: 2000000 }] }) }), {
+      localModels: async () => [{ id: 'local-model', label: 'Local model', providerId: 'local', contextLength: 2000000 }],
+    });
+    expect(await catalog.contextLengthFor({ providerId: 'openrouter', modelId: 'large' }, [cloud])).toBe(272000);
+    expect(await catalog.contextLengthFor({ providerId: 'local', modelId: 'local-model' }, [local])).toBe(2000000);
   });
 
   it('malformed upstream rows are skipped, not crashed on', async () => {
@@ -276,6 +365,56 @@ describe('ModelCatalog', () => {
         { id: 'local', type: 'local-engine', label: 'Local', enabled: true, builtIn: true, hasKey: false, ready: true } as any,
       ]);
       expect(models).toEqual([]);
+    });
+  });
+
+  // Sign in with ChatGPT (backend design §4.3): rows come from an injected
+  // source (ChatGptAuth.models(), cache-first); the catalog never prices them.
+  describe('ChatGPT plan source', () => {
+    const CHATGPT_ROW = { id: 'chatgpt', type: 'chatgpt', label: 'ChatGPT Plan', enabled: true, builtIn: true, hasKey: false, ready: true } as any;
+
+    it('get(): merges the injected ChatGPT rows for an enabled chatgpt provider, with no pricing', async () => {
+      const rows = [
+        { id: 'gpt-5.5', providerId: 'chatgpt', label: 'GPT-5.5', contextLength: 272000, supportsTools: true, supportsReasoning: true },
+        { id: 'gpt-5.4-mini', providerId: 'chatgpt', label: 'GPT-5.4 Mini', contextLength: 272000, supportsTools: true },
+      ];
+      const cat = new ModelCatalog(dir, fetchMock, { chatgptModels: async () => rows });
+      const models = await cat.get([CHATGPT_ROW]);
+      expect(models).toEqual(rows);
+      // The plan is not per-token: absent means absent, never $0.
+      expect(models.every((m) => m.pricing === undefined)).toBe(true);
+      expect(await cat.contextLengthFor({ providerId: 'chatgpt', modelId: 'gpt-5.5' }, [CHATGPT_ROW])).toBe(272000);
+    });
+
+    it('get(): a throwing ChatGPT source degrades to no ChatGPT rows (never rejects)', async () => {
+      const cat = new ModelCatalog(dir, fetchMock, { chatgptModels: async () => { throw new Error('boom'); } });
+      const models = await cat.get([CHATGPT_ROW]);
+      expect(models).toEqual([]);
+    });
+
+    // §4.6: when OpenAI blocks the account the registry keeps the row listed
+    // (ready: false) so the card can still show who is signed in and offer Sign
+    // out — but the models must leave the catalog. ChatGptAuth deliberately
+    // keeps its cached list through a block, so `enabled` alone would still
+    // hand them out. The two pickers filter on ready themselves; the app's own
+    // ModelSearch tool reads the catalog raw, so without this gate the
+    // assistant would be offered plan models it cannot use and the user would
+    // get "Codex is disabled for this workspace." instead of an answer.
+    it('get(): a BLOCKED plan (ready:false) contributes no models even though the cache still holds them', async () => {
+      const cat = new ModelCatalog(dir, fetchMock, {
+        chatgptModels: async () => [{ id: 'gpt-5.5', providerId: 'chatgpt', label: 'GPT-5.5' }],
+      });
+      expect(await cat.get([{ ...CHATGPT_ROW, ready: false }])).toEqual([]);
+      // Sanity: the same source with ready:true DOES contribute — so the empty
+      // result above is the gate, not a broken fixture.
+      expect(await cat.get([CHATGPT_ROW])).toHaveLength(1);
+    });
+
+    it('get(): no source injected (kill switch) or provider disabled → nothing for the plan', async () => {
+      const none = new ModelCatalog(dir, fetchMock);
+      expect(await none.get([CHATGPT_ROW])).toEqual([]);
+      const cat = new ModelCatalog(dir, fetchMock, { chatgptModels: async () => [{ id: 'gpt-5.5', providerId: 'chatgpt', label: 'GPT-5.5' }] });
+      expect(await cat.get([{ ...CHATGPT_ROW, enabled: false }])).toEqual([]);
     });
   });
 });

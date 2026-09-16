@@ -4,7 +4,9 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+  <!-- The lavender tile behind the mascot, same colour as the desktop icon
+       (scripts/build-icons.mjs TILE). The launcher crops this layer to its own shape. -->
   <path
-      android:fillColor="#1c1c1c"
+      android:fillColor="#E7D4EF"
       android:pathData="M0,0h108v108H0z"/>
 </vector>

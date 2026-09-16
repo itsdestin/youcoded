@@ -3,10 +3,8 @@
 // Why it exists: the root tsconfig.json is the BUILD config (`npm run build` runs
 // bare `tsc`, and its "rootDir": "src" / "include": ["src/**/*"] must stay that way
 // or tests would be type-checked and emitted into dist/). That left tests/ outside
-// every TypeScript program, so the language server never indexed it — and Serena's
-// find_referencing_symbols silently reported ZERO references for symbols that tests
-// use heavily (verified 2026-07-28 on ErrorState: 3 real call sites in
-// tests/ui-primitives.test.tsx, none of them returned).
+// the build's TypeScript program. This separate editor project keeps test call sites
+// visible to language-server reference searches without changing build output.
 //
 // A "no references" answer that omits tests is exactly the false negative the
 // "never assert a negative from a single search" rule in CLAUDE.md exists to prevent,

@@ -46,7 +46,11 @@ export function sessions(): SessionInfo[] {
       createdAt: 1_753_785_000_000,
       provider: 'native',
       harnessId: 'coder',
-      model: 'openai/gpt-5.6-sol',
+      // Sign in with ChatGPT (design 2026-09-04): this session is bound to the
+      // ChatGPT plan's catalog (fixtures/providers.ts), so the status bar, the
+      // usage card and the plan-limit card can be reviewed on a real session.
+      // Was 'openai/gpt-5.6-sol' (an OpenRouter id); nothing else keyed on it.
+      model: 'gpt-5.6-sol',
     },
     {
       id: 'wb-4',

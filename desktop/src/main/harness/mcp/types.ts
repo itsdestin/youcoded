@@ -57,4 +57,7 @@ export type ResolvedMcpServer = McpServerEntry & {
   /** Names (the envRefs/headerRefs keys) of any secret that failed to
    *  resolve. Empty array means every secret resolved. */
   missingSecrets: string[];
+  /** Saved credentials exist but could not be read. Retryable, not needs-setup;
+   *  never connect or project partial env/headers while this is present. */
+  credentialError?: string;
 };

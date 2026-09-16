@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createConversationStore, ConversationStore } from './conversation-store';
+import { createNamingStore, NamingStore } from './naming-store';
+import { NamingRecord, effectiveName, isManuallyNamed, normalizeManualName } from './naming-core';
 import { log } from '../logger';
 import { NativeHome } from '../native-home';
 import type { ConversationRecord, PortableModelRef } from './store-core';
@@ -53,6 +55,11 @@ interface SessionCtx {
 }
 
 let store: ConversationStore | null = null;
+// Session name OWNERSHIP (who chose the name). Deliberately a SECOND store:
+// see naming-store.ts for why it cannot be fields on ConversationRecord.
+// It shares the conversation store's lifecycle but not its record shape,
+// its healer or its activity-ranked merge.
+let namingStore: NamingStore | null = null;
 // WHY: IPC meta handlers go live (main.ts:745) before the store starts
 // (main.ts:1701, fire-and-forget), so a tag/flag/note set in that boot window
 // used to vanish while the store?. chains silently no-op'd — the IPC handler
@@ -149,7 +156,7 @@ export function emitConversationMetaChanged(): void {
 }
 
 export async function startConversationStore(opts?: {
-  conversationsRoot?: string; projectsDir?: string; topicsDir?: string; device?: string;
+  conversationsRoot?: string; namesRoot?: string; projectsDir?: string; topicsDir?: string; device?: string;
   nativeHomeRoot?: string;  // tests only — production reads ~/.youcoded
   // Fix: main.ts passes true so the startup reconcile/materialize kicks below
   // land as PENDING instead of running, giving the one-shot slug repair a
@@ -178,6 +185,11 @@ export async function startConversationStore(opts?: {
   nativeHomeRootOpt = opts?.nativeHomeRoot;
   device = opts?.device ?? os.hostname();
   store = createConversationStore(root);
+  // Sibling of Conversations, never inside it — older clients scan and
+  // rewrite that directory and would drop what they do not recognise.
+  namingStore = createNamingStore(
+    opts?.namesRoot ?? (personalRoot ? path.join(personalRoot, 'ConversationNames') : path.join(root, '..', 'ConversationNames')),
+  );
   storePhase = 'ready';
   await settlePendingMetaWrites();
 
@@ -241,6 +253,7 @@ export function stopConversationStore(): void {
   // dangling from a PRIOR store's slug-repair run (or a caller that paused
   // and never resumed) must not silently carry into the next start and stick
   // every future sweep trigger in "pending" forever.
+  namingStore = null;
   pauseDepth = 0;
   reconcilePending = false;
   materializePending = false;
@@ -348,7 +361,7 @@ export function containedTranscriptPath(root: string, ref: string): string | nul
 // The on-disk transcript path for this session, on THIS device.
 // 'claude' -> ~/.claude/projects/<ccProjectSlug(cwd)>/<id>.jsonl (CC's own convention).
 // 'native' -> ~/.youcoded/sessions/<nativeStoreSlug(cwd)>/<id>.jsonl — mirrors
-// NativeHome's private sessionPath() exactly (the FROZEN app-private rule —
+// NativeHome's sessionFilePath() exactly (the FROZEN app-private rule —
 // raw slug, NOT ccProjectSlug's drive-letter uppercasing — see
 // harness/session-store.ts's slug-divergence comment for why the two
 // deliberately diverge).
@@ -411,19 +424,18 @@ export function noteTranscriptEvent(claudeSessionId: string, ev: TranscriptEvent
     upsertNow();
     if (ctx) {
       const key = path.basename(ctx.cwd);
-      try {
-        // Mirror the fresh local transcript into the durable space copy so it
-        // rides the personal-space sync. Best-effort — the reconciler re-mirrors.
-        mirrorIn({
-          localJsonlPath: localJsonlPath(ctx.cwd, claudeSessionId, sessionProvider),
-          spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, sessionProvider),
-        });
-      } catch { /* best-effort; the reconciler catches up */ }
-      // Prompt push (design §2): conversations move faster than the engine's
-      // quiet-window debounce, so nudge a sync now. syncSpace is single-flight —
-      // bursts coalesce. Wrapped in Promise.resolve so a sync/throwing stub
-      // can't produce an unhandled rejection either.
-      Promise.resolve(syncSpacesSyncNow('personal')).catch(() => { /* the poll covers a miss */ });
+      // Mirror the fresh local transcript into the durable space copy so it
+      // rides the personal-space sync, THEN nudge the sync — chained (not
+      // parallel) so the nudge can never fire while the copy is still in
+      // flight and push the space's PREVIOUS (pre-copy) size. Both halves are
+      // best-effort: the reconciler re-mirrors, and the 120s poll covers a
+      // missed nudge.
+      void mirrorIn({
+        localJsonlPath: localJsonlPath(ctx.cwd, claudeSessionId, sessionProvider),
+        spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, sessionProvider),
+      }).catch(() => { /* best-effort; the reconciler catches up */ }).then(() => {
+        Promise.resolve(syncSpacesSyncNow('personal')).catch(() => { /* the poll covers a miss */ });
+      }).catch(() => { /* review round 1: a synchronous throw inside the .then above must not become an unhandled rejection */ });
     }
     return;
   }
@@ -437,16 +449,107 @@ export function noteTranscriptEvent(claudeSessionId: string, ev: TranscriptEvent
   }
 }
 
-// Carry-forward 5: the auto-title flows call this — the topic-watcher for
-// 'claude' sessions (~/.claude/topics -> broadcastRename), and the native
-// title feeder (native-title-feeder.ts, Task 7) for 'native' ones, which has
-// no topic file to watch and instead generates a title from a single bound-
-// model call at first turn-complete. setTitle is timestamp-less — it never
-// fabricates activity. No user-rename path exists for conversations yet
-// (Plan 2b/2c scope).
+// The raw title writer. setTitle is timestamp-less — it never fabricates
+// activity. Two callers: setManualSessionName below, projecting a name the
+// user typed so every existing reader (Resume Browser, chatsearch, remote,
+// older clients on other devices) shows it; and noteAutomaticTitle, which
+// adds the ownership gate. Generated titles must use THAT one.
 export function noteTitleChanged(claudeSessionId: string, title: string, sessionProvider: SessionProvider): Promise<MetaWriteResult> {
   return metaWrite(() => store!.setTitle(sessionProvider, claudeSessionId, title));
 }
+
+/**
+ * The AUTOMATIC title write. Identical to noteTitleChanged except that it
+ * refuses when the user has named this conversation by hand — which is the
+ * "a name you chose is never replaced" promise, enforced at the disk write so
+ * a future automatic writer cannot forget it. Every generated-title path must
+ * use this; noteTitleChanged stays the raw writer for the manual projection.
+ *
+ * A caller that ALSO paints the live pill must check ownership itself before
+ * broadcasting: this refuses the write, it cannot un-send a broadcast.
+ */
+export async function noteAutomaticTitle(
+  claudeSessionId: string, title: string, sessionProvider: SessionProvider,
+): Promise<MetaWriteResult> {
+  if (await isSessionNameOwned(sessionProvider, claudeSessionId)) return { ok: true };
+  // Remember it as THE automatic name as well as writing the projection: it is
+  // what Use automatic name puts back, immediately, instead of leaving the row
+  // on the manual name until the next review comes round.
+  await mutateNamingRecord(sessionProvider, claudeSessionId, (cur) => (
+    cur.manual ? cur : { ...cur, auto: title, autoAt: new Date().toISOString() }
+  )).catch(() => null);
+  return noteTitleChanged(claudeSessionId, title, sessionProvider);
+}
+
+/* ── Session name ownership ──────────────────────────────────────────────
+ * The naming sidecar is the authority on WHO chose a conversation's name;
+ * ConversationRecord.title is kept as the compatibility projection so every
+ * existing reader (Resume Browser, chatsearch, remote, older clients on other
+ * devices) shows the right text without knowing this store exists.
+ */
+
+/** The ownership record, or null when there is none / the store is off. */
+export async function getNamingRecord(
+  sessionProvider: SessionProvider, sessionId: string,
+): Promise<NamingRecord | null> {
+  if (!namingStore) return null;
+  try { return await namingStore.get(sessionProvider, sessionId); } catch { return null; }
+}
+
+/** Read-modify-write the ownership record under its cross-process lock. */
+export async function mutateNamingRecord(
+  sessionProvider: string, sessionId: string, fn: (cur: NamingRecord) => NamingRecord,
+): Promise<NamingRecord | null> {
+  if (!namingStore) return null;
+  return namingStore.mutate(sessionProvider, sessionId, fn);
+}
+
+/** True when the user has chosen this conversation's name by hand. */
+export async function isSessionNameOwned(
+  sessionProvider: SessionProvider, sessionId: string,
+): Promise<boolean> {
+  return isManuallyNamed(await getNamingRecord(sessionProvider, sessionId));
+}
+
+/**
+ * The name to show, given whatever the caller already had. Manual name wins,
+ * then the stored automatic name, then the caller's fallback — so a session
+ * with no ownership record looks exactly as it did before this store existed.
+ */
+export async function resolveSessionName(
+  sessionProvider: SessionProvider, sessionId: string, fallback: string,
+): Promise<{ name: string; manual: boolean }> {
+  return effectiveName(await getNamingRecord(sessionProvider, sessionId), fallback);
+}
+
+/**
+ * Save a name the user typed. Refuses blank input: clearing is a separate,
+ * explicitly-chosen action, so an accidental Save on an empty box must not
+ * silently hand the conversation back to automatic naming.
+ *
+ * Saving the SAME text still establishes ownership — that is the point of the
+ * button for someone who likes the generated name and wants it to stop moving.
+ */
+export async function setManualSessionName(
+  sessionProvider: SessionProvider, sessionId: string, raw: string,
+): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
+  const name = normalizeManualName(raw);
+  if (!name) return { ok: false, error: 'Enter a name.' };
+  if (!namingStore) {
+    return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
+  }
+  const at = new Date().toISOString();
+  try {
+    await namingStore.mutate(sessionProvider, sessionId, (cur) => ({ ...cur, manual: name, manualAt: at }));
+  } catch {
+    return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
+  }
+  // Project into the record AFTER ownership is durable, so a crash between the
+  // two leaves the user owning the name rather than owning nothing.
+  await metaWrite(() => store!.setTitle(sessionProvider, sessionId, name));
+  return { ok: true, name };
+}
+
 
 // C1: resolve which store bucket a meta write lands in. `knownNative` is the
 // caller's SYNCHRONOUS isNativeSessionId(id) result — true only when the record
@@ -613,9 +716,16 @@ async function materializeSweep(): Promise<void> {
     const local = resolveLocalProject(rec, managed, saved);
     if (!local) continue;
     try {
-      materializeOut({
+      // WHY shouldCommit (review round 1): the check above and the rename
+      // inside materializeOut are no longer adjacent — several threadpool
+      // steps run between them, and a resume (SessionStart re-acquiring this
+      // id, or a takeover) can land in that gap. Re-checking liveness right
+      // before the rename closes it; see materializeOut's WHY for the full
+      // shape.
+      await materializeOut({
         spaceTranscriptPath: src,
         localJsonlPath: localJsonlPath(local, rec.id, sessionProvider),
+        shouldCommit: () => !sessions.has(rec.id),
       });
     } catch { /* per-record isolation — one bad copy must not abort the sweep */ }
   }
@@ -717,7 +827,10 @@ export async function materializeOne(id: string, cwd?: string): Promise<void> {
   // CC is now appending to (the sweep's live-session invariant).
   if (sessions.has(id)) return;
   try {
-    materializeOut({ spaceTranscriptPath: src, localJsonlPath: localPath });
+    // WHY shouldCommit: same gap as materializeSweep above — a resume
+    // (takeover.ts:220 resumes right after this call) can land between the
+    // check above and the rename.
+    await materializeOut({ spaceTranscriptPath: src, localJsonlPath: localPath, shouldCommit: () => !sessions.has(id) });
   } catch { /* grow-only copy failed — startup sweep catches up */ }
 }
 
@@ -752,7 +865,10 @@ export async function flushSessionToSpace(claudeSessionId: string): Promise<void
   const key = path.basename(ctx.cwd);
   const localPath = localJsonlPath(ctx.cwd, claudeSessionId, ctx.provider);
   await waitForQuiescence(localPath); // best-effort wait; push regardless of the result
-  try { mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, ctx.provider) }); }
+  // MIRROR-BEFORE-RELEASE is load-bearing (see below): this copy must be
+  // AWAITED, not fire-and-forget, or the sync barrier just below could run
+  // before the transcript actually lands in the space.
+  try { await mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, ctx.provider) }); }
   catch { /* best-effort; the reconciler re-mirrors */ }
   // MIRROR-BEFORE-RELEASE is load-bearing: genuinely AWAIT the push so the final
   // turn is in the space before the requester pulls. syncSpacesSyncNow would be
@@ -761,6 +877,17 @@ export async function flushSessionToSpace(claudeSessionId: string): Promise<void
   // can't wedge the handoff.
   try { await syncSpacesSyncNowAwaited('personal', HANDOFF_SYNC_TIMEOUT_MS); } catch { /* the poll covers a miss */ }
 }
+
+// WHY one chain for every reconciler-driven mirror (2026-09-10): the reconciler
+// calls mirror() for EVERY transcript it scans, at startup and on each interval
+// tick. When mirrorIn was synchronous those copies ran one after another; now
+// async, fire-and-forget would start them all at once, and on a first run or a
+// long offline catch-up a few large copies fill all 4 libuv threads for seconds —
+// queueing live chat updates (tailer reads), Resume Browser reads, lease writes
+// and dns lookups behind them. Chaining restores one-at-a-time. Module-level (not
+// per run) so a new 30-minute pass also queues behind an unfinished earlier one.
+// Turn-complete and flush mirrors do NOT use this chain — they stay independent.
+let reconcileMirrorTail: Promise<unknown> = Promise.resolve();
 
 function runReconcile(): void {
   // Fix: quiesced for the slug repair — see pauseSweeps' WHY. resumeSweeps()
@@ -788,12 +915,22 @@ function runReconcile(): void {
     // + the Conversations root. Best-effort — a throw here must not abort the scan.
     mirror: (localPath: string, projectKey: string, sessionId: string) => {
       if (heldForks.has(sessionId)) return; // fork hold — frozen until resolved
-      try {
-        // WHY hardcoded 'claude': the reconciler scans ~/.claude/projects only
-        // — it is CC-only by definition, not a stopgap (reconciler.ts:115,182,188
-        // are the same call, kept for the same reason).
-        mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spaceTranscriptPath(projectKey, sessionId, 'claude') });
-      } catch { /* best-effort */ }
+      // WHY hardcoded 'claude': the reconciler scans ~/.claude/projects only
+      // — it is CC-only by definition, not a stopgap (reconciler.ts:115,182,188
+      // are the same call, kept for the same reason).
+      // WHY .catch not try/catch: this closure's type is `=> void` (safeMirror
+      // in reconciler.ts wraps the call in a synchronous try/catch that can no
+      // longer see an async rejection) — the reconciler never depended on the
+      // copy's completion, so .catch is the fire-and-forget best-effort.
+      // WHY queued on reconcileMirrorTail: see its declaration above — reconciler
+      // copies run one at a time. The .catch sits on the chain itself, so one
+      // failed copy never stops the copies queued after it. The destination is
+      // resolved NOW (not inside .then) so a bad path still throws synchronously
+      // into safeMirror's try/catch, exactly as before.
+      const dest = spaceTranscriptPath(projectKey, sessionId, 'claude');
+      reconcileMirrorTail = reconcileMirrorTail
+        .then(() => mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: dest }))
+        .catch(() => { /* best-effort */ });
     },
   }).catch(() => { /* reconciler failure must never break startup (carry-forward 2) */ });
 }

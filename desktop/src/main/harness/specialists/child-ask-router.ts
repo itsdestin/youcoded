@@ -3,28 +3,25 @@ import { rememberedRuleFor, type HarnessSessionOpts } from '../harness-session';
 import type { PermissionRule } from '../../../shared/permission-types';
 import { SPECIALIST_ASK_HOLD_MS } from './limits';
 
-// Task 11: harness-session.ts uses these two literal strings as the synthetic
-// toolName for the budget asks (max_steps / doom_loop) — see harness-
-// session.ts:1610/2003. Neither ever supports "Always allow", even for a root
-// session: harness-session.ts only reads AskDecision.always at the ONE call
-// site that gates on decide() (the normal gated-tool ask), never at either of
-// these. A routed copy of the same ask must not gain a capability the direct
-// (root-session) version never had. Exported (Task 11 fix pass, Finding 2) so
-// native-session-host.ts's onLateResponse can apply the SAME exclusion to a
-// LATE "Always allow" — a budget ask can still time out and be routed, so the
-// late path needs to refuse it exactly like the in-time path does.
-export const BUDGET_ASK_TOOL_NAMES = new Set(['max_steps', 'doom_loop']);
+// Task 11: doom_loop is a synthetic budget ask that never supports "Always
+// allow", even for a root session: harness-session.ts only reads
+// AskDecision.always at the ONE call site that gates on decide() (the normal
+// gated-tool ask), never for doom_loop. A routed copy of the same ask must not
+// gain a capability the direct (root-session) version never had. Exported
+// (Task 11 fix pass, Finding 2) so native-session-host.ts's onLateResponse can
+// apply the SAME exclusion to a LATE "Always allow".
+export const BUDGET_ASK_TOOL_NAMES = new Set(['doom_loop']);
 
 // Child ask routing (plan 1b, Task 8). Replaces child-ask-policy.ts's
 // deny-everything stub: a specialist child has no user of its own, but it now
-// has a PARENT that does. max_steps, doom_loop, and a decide-originated ask
-// (today only the deny-listed-inside-a-granted-envelope case — see
+// has a PARENT that does. doom_loop and a decide-originated ask (today only
+// the deny-listed-inside-a-granted-envelope case — see
 // child-permissions.ts branch 5) re-register on the broker under the
 // PARENT's sessionId, with the specialist's identity attached, so the
 // existing permission card renders it exactly like any other ask. The child
 // waits up to SPECIALIST_ASK_HOLD_MS; if nobody answers by then, the call
 // resolves with ASK_REDIRECT_MESSAGE so the child can keep making progress
-// instead of hanging silently until its own step/time budget runs out.
+// instead of remaining blocked on an unanswered parent permission card.
 //
 // Interactive (AskUserQuestion) and external-forced asks are the two
 // exceptions that STILL deny instantly, exactly as child-ask-policy.ts always
@@ -106,8 +103,8 @@ export function childAskRouter(deps: ChildAskRouterDeps): NonNullable<HarnessSes
     // here — the external branch above already returned before this point, so
     // an externally-forced ask can never reach here at all. The budget-ask
     // exclusion below is the one exception that DOES still need a check:
-    // max_steps/doom_loop reach this same code path (they're not filtered out
-    // above), but never support "Always allow" even for a root session.
+    // doom_loop reaches this same code path (it is not filtered out above),
+    // but never supports "Always allow" even for a root session.
     //
     // Fix (Important 6, final review): rememberedRuleFor (harness-session.ts)
     // is the ONE function that turns (toolName, subject, grantScope) into the

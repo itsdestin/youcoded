@@ -2,14 +2,16 @@
 
 Tracks every YouCoded touchpoint to the bundled llama.cpp engine
 (`llama-server`), mirroring the `cc-dependencies.md` discipline. Populated
-starting Phase 1 of the platform roadmap (see youcoded-dev
-`docs/superpowers/specs/2026-07-09-platform-vision-roadmap.md` and ADR 007).
+starting Phase 1 of the platform roadmap (see the workspace archive's
+`docs/archive/specs/2026-07-09-platform-vision-roadmap.md` and ADR 007).
 
 ## Pinned version
 
 **`b10665`** — pinned 2026-08-27. Empirically verified on Linux x64 (Vulkan build)
 against the real binary via `desktop/test-engine/`: probe-health, probe-models,
-probe-chat, probe-download and probe-tools all PASS (see Verification below).
+probe-chat, probe-download and probe-tools all PASS at the bump, and probe-speed,
+probe-presets, probe-vision and probe-headers all PASS against the same pin
+(2026-09-04/05) — nine probes in total. See Verification below.
 Previously `b9992`, pinned 2026-07-13 (Phase 1 Plan B), verified on Windows x64 (CPU).
 
 **Why this bump:** b9992 could not read the `qwen4exp` architecture — a fresh
@@ -38,14 +40,33 @@ gates on the `/models` status and sends the model-less `/props` otherwise, never
 `total_slots ?? n_slots` for older builds.
 
 **Bump procedure** (same discipline as a Claude Code bump):
-1. `node desktop/scripts/generate-engine-pin.mjs <new-tag>` → paste rows into
-   `desktop/src/main/engine/engine-pin.ts`, bump `ENGINE_VERSION`.
+1. `node desktop/scripts/generate-engine-pin.mjs <new-tag> --binary <path-to-the-new-llama-server>`
+   → paste the rows AND the `ARG_ALIASES` block into
+   `desktop/src/main/engine/engine-pin.ts`, bump `ENGINE_VERSION`. Without
+   `--binary` the alias table is not regenerated and the script says so.
 2. Re-verify archive layouts (`binaryRelPath`) — Windows `.zip` is flat, macOS/
    Linux `.tar.gz` nest under `llama-<tag>/` (the generator templates the tag in;
    confirm it still holds).
-3. Re-run `desktop/test-engine/probe-{health,models,chat}.mjs --binary <path>`
-   with a small GGUF in `test-engine/cache/`. All three must PASS.
-4. Update this file with anything that changed.
+3. **Re-check the ROCm target list.** `gfxTargets` on the two ROCm rows is read
+   out of upstream's `.github/workflows/release.yml` at the tag (`gpu_targets:`
+   in the `ubuntu-24-rocm` and `windows-rocm` matrices) and the two platforms do
+   NOT share a list. Upstream edits these between builds; a chip that drops off
+   still gets offered ROCm and then dies with no kernel image at the first
+   token. The generator refuses to emit a ROCm row it cannot read targets for.
+4. **Re-check the CUDA runtime asset.** The Windows CUDA row carries a second
+   archive (`cudart-…`, `EngineAsset.runtime`); the generator refuses the row if
+   it cannot find one with a usable digest, because a CUDA build without its
+   runtime cannot boot on a PC that has no toolkit on PATH.
+5. **Re-run ALL NINE probes** in `desktop/test-engine/`, with a small GGUF in
+   `test-engine/cache/`. `probe-{health,models,chat,download,tools,speed,presets,
+   vision}.mjs --binary <path>`, plus `probe-headers.mjs`, which needs no binary
+   and no local model (it reads real Hugging Face headers). Every one must PASS.
+   `probe-presets.mjs` is the cheapest and the most load-bearing: `models.ini` is
+   the one file where a single unrecognised key stops every local model loading.
+6. **Confirm `--list-devices` still parses.** Its block is frozen into every
+   install's `.complete` marker and feeds the memory estimator and the engine
+   card's hardware line; a format change silently turns both into "we don't know".
+7. Update this file with anything that changed.
 
 **How a bump REACHES users:** `EngineManager.autoUpdateOnLaunch()`, fired
 fire-and-forget from `registerIpcHandlers`. It updates an existing install to the
@@ -73,11 +94,24 @@ Guard: `desktop/tests/engine-auto-update.test.ts`.
 
 ### `llama-server` CLI flags — spawn shape (engine-supervisor.ts)
 
-Exact router-mode arg list (no `-m`):
+Exact router-mode arg list (no `-m`), b10665 / 2026-09-05:
 ```
 --host 127.0.0.1 --port <ENGINE_PORT> --no-webui --jinja
---models-dir <cacheDir> --models-max 2 -c <contextSize> --sleep-idle-seconds 300
+--models-dir <cacheDir> --models-max 2
+[--spec-default]            # unless engine.speed.speculative === false
+[--cache-type-k q8_0]       # unless engine.speed.compressCache === false
+--models-preset <NativeHome.root>/engine/models.ini
 ```
+**`-c` and `--sleep-idle-seconds` are NOT on the command line any more.** They moved
+into the preset file's `[*]` section (design §C2) because llama-server merges the
+ROUTER's own arguments OVER every preset (`preset.merge(base_preset)`,
+server-models.cpp) — a `-c` left here silently outranks, and so defeats, every
+per-model context length. The ONE case they come back is the recovery boot that has
+no usable preset file:
+```
+--sleep-idle-seconds 900 -c <contextSize>      # only when presetPath === null
+```
+<!-- verify: {"path": "youcoded/desktop/src/main/engine/engine-supervisor.ts", "contains": "models-preset"} -->
 - **`--models-dir <cacheDir>` is LOAD-BEARING.** It is what makes the router
   DISCOVER manually-placed GGUFs and auto-load them by filename id. Verified
   b9992: WITHOUT it, `GET /models` returns `{"data":[]}` and every
@@ -95,14 +129,40 @@ Exact router-mode arg list (no `-m`):
   stderr so a startup exit surfaces the engine's REAL message instead of a guess.
 - **`--models-max 2`** — the router's LRU default is 4; 2 bounds RAM on consumer
   machines while keeping chat↔utility switching cheap.
-- **`--sleep-idle-seconds 300` (2026-07-14)** — the router frees an idle model's
-  memory after 5 min (status → `'sleeping'`) and wakes it on the next request.
-  Verified b9992. FINER-grained than the engine-wide idle stop (`idleMs`, 10 min)
-  which tears down the whole process — the two are complementary. `SLEEP_IDLE_SECONDS`
-  in `engine-supervisor.ts`; the flag presence is pinned in `engine-supervisor.test.ts`.
+- **Auto-sleep after 15 minutes — now `[*] sleep-idle-seconds = 900` in the preset
+  file, NOT a command-line flag.** The router frees an idle model's memory (status →
+  `'sleeping'`) and wakes it on the next request. Verified b9992. FINER-grained than the
+  engine-wide idle stop (`idleMs`, 25 min) which tears down the whole process — the two
+  are complementary, and "Keep loaded" on a model turns BOTH off for it
+  (`sleep-idle-seconds = -1` in its section, and `hasKeepLoadedResident()` holds the
+  engine timer). `SLEEP_IDLE_SECONDS` still lives in `engine-supervisor.ts` because the
+  preset writer reads it. **`engine-supervisor.test.ts` now pins the flag's ABSENCE from
+  the command line** — it only reappears on the recovery boot that has no usable preset.
+  (Raised 5→15 min and 10→25 min on 2026-09-07 per Destin.)
+- **Speed flags (2026-09-04), both measured on b10665, Qwen3.5-9B Q8_0, Z13 Vulkan;
+  guard: `test-engine/probe-speed.mjs` (flags reach the model child AND the drafter fires).
+  Both are now user switches (`engine.speed` in config.json, `engine:set-config`) and
+  both DEFAULT ON, so an untouched config spawns exactly the command line that shipped
+  before they existed. Turning one off needs a fresh spawn — they are command-line
+  arguments, not preset values.**
+  - **`--spec-default`** — llama.cpp's draft-FREE speculative decoding (n-gram lookup
+    against the prompt; `--spec-type` was `none` by default). A 736-token "rewrite this
+    file with one change" reply went **16 → 104 tok/s** (768 drafted, 673–722 accepted);
+    a 700-token essay was 9.0 → 9.3 tok/s with `draft_n` absent — the drafter simply
+    never fires on novel prose, so no measured penalty. This is the shape of every
+    Edit/Write tool call. The router forwards it to each model child (probe-pinned).
+  - **`--cache-type-k q8_0`** — 8-bit KEY cache. `llama-bench` at 16,384 tokens of
+    depth: generation 11.4 → 16.2 tok/s, prompt 281 → 452 tok/s, half the K memory.
+  - **V cache is deliberately left f16.** `-ctv q8_0` measured a further prompt-speed
+    gain (598 tok/s at depth) but **is a FATAL load error whenever flash attention is
+    off** — verified with `-fa off -ctv q8_0`: `quantized V cache requires flash_attn to
+    be enabled`, the model never loads. `-fa` is `auto`, so a CPU fallback or a GPU
+    without FA support would break every local send. `-ctk q8_0 -fa off` boots fine
+    (also verified). `engine-supervisor.test.ts` pins the ABSENCE of `--cache-type-v`.
 - **`--jinja`** from day one so Phase 2 tool calling needs no process-shape change.
-- **`-c` is inherited by every loaded model instance** — confirmed: the router
-  writes each model's preset with `ctx-size = <-c>` (seen in `/models` `status`).
+- **The context length every model inherits is `[*] ctx-size` in the preset file** —
+  the router writes each model child's command line from it (visible in `/models`
+  `status.args` WITHOUT loading the model). A model with its own section overrides it.
 
 ### Model discovery: `--models-dir` vs `LLAMA_CACHE` (engine-supervisor, cache-scan, engine-manager)
 
@@ -110,7 +170,10 @@ Exact router-mode arg list (no `-m`):
   id the router exposes is the **filename minus `.gguf`** — this EXACTLY matches
   `cache-scan.ts`'s `ggufIdFromFileName`, so the engine-off list (cache scan) and
   the engine-on list (`GET /models`) agree. Pinned by `probe-models.mjs`
-  (router ids == scan ids).
+  (router ids == scan ids). **It ALSO serves one level of subdirectories, and a model
+  in one is named by the FOLDER, not the file** — that is where a vision model lives,
+  because `--mmproj` is only paired inside a single folder. Details and the three
+  probed traps: "GGUF cache layout" below.
 - **`LLAMA_CACHE`** (still set in the env) only tracks `llama-server`'s own `-hf`
   AUTO-DOWNLOADED models in a structured layout; `--cache-list` shows `0` for a
   flat dropped GGUF. It is effectively **vestigial**: Plan C does NOT use
@@ -122,7 +185,49 @@ Exact router-mode arg list (no `-m`):
   invokes `-hf`. (Any new probe — including Plan C's `probe-download.mjs` — MUST
   spawn with `--models-dir`, or it falsely reports empty and mis-blames the
   downloader.)
-- **`--models-preset PATH`** (INI) and `--cache-list` exist but are unused today.
+- **`--models-preset PATH`** is now LOAD-BEARING (see "Per-model settings" below). `--cache-list` still exists and is unused.
+
+### Per-model settings: the preset file (`model-presets.ts`, probe-presets.mjs)
+
+`--models-preset <NativeHome.root>/engine/models.ini`, an INI file the app rewrites
+before EVERY spawn (the router reads it once, at startup). Grammar transcribed from
+llama.cpp's `common/preset.cpp` (`parse_ini_from_file` + `load_from_ini`); every fact
+below PROBED on b10665, 2026-09-05.
+
+- **`[*]` is the global section and cascades into every model.** A model's own
+  `[<router id>]` section overrides single keys and inherits the rest. Probed: `[*]
+  sleep-idle-seconds = 77` reached a model child that had its own section setting only
+  `ctx-size`.
+- **A sectioned model reports `source: "preset"` in `GET /models`, and its `status.args`
+  shows the child's exact command line WITHOUT loading the model.** That is how
+  `probe-presets.mjs` proves all of this in milliseconds instead of gigabytes.
+- **ANY defect is FATAL for the whole server, not for one model.** `option 'x' not
+  recognized in preset 'y'` → exit 1; `failed to parse server config file: <path>` →
+  exit 1; `preset file does not exist` → exit 1 (probed with a missing file);
+  `failed to open server preset file: <p>` → exit 1 (probed with `chmod 000`). A
+  RUNNING engine survives — `?reload=1` just 500s and the old presets stay in force —
+  so nothing looks broken until the next spawn, at which point every local model is
+  gone. `EngineSupervisor` therefore retries: once without the section the engine
+  named, then once without the preset file at all (`presetInForce()` reports which).
+- **A section whose name matches no file on disk becomes a GHOST row that can never
+  load.** Sections are emitted only for ids `scanGgufCache` actually found.
+- **A value is cut at the first `#` or `;`, SILENTLY** (llama.cpp's value rule stops at
+  a comment start), so `alias = a#b` becomes `a`. No error, wrong setting — which is
+  why those two characters are refused at save time.
+- **llama.cpp strips only `models-dir/max/preset/autoload`, `api-key` and the two
+  `ssl-*-file` from a per-model preset** (`unset_reserved_args(preset, false)`,
+  server-models.cpp). It does NOT strip `model`, `mmproj`, `alias`, `hf-repo`,
+  `model-url`, `docker-repo` or `rpc` — so the app keeps its own reserved denylist, and
+  `probe-presets.mjs` asserts every key on it is a real option on the pinned build
+  (47 today; the probe prints the count it checked, so this number cannot drift).
+- **The router's own command line merges OVER every preset**, so `cache-type-k` and
+  `cache-type-v` are settable-looking and would do nothing per model.
+- **`GET /props?model=<id>` is REQUIRED to read a model's real context window.** Bare
+  `/props` is the ROUTER's dummy and answers `n_ctx: 0` even while a model is loaded
+  and serving. The id is a filename, so it is URL-encoded.
+- **A context change needs no restart** — write the file, then `GET /models?reload=1`.
+  A SPEED switch does need a fresh spawn (command-line flags).
+<!-- verify: {"path": "youcoded/desktop/src/main/engine/model-presets.ts", "contains": "models.ini"} -->
 
 ### Health / readiness (engine-supervisor readiness poll)
 
@@ -149,6 +254,18 @@ Observed b9992 shape:
   `engine-supervisor.test.ts`.
 - **No `size` field** on `/models` rows — `sizeBytes` comes from the cache scan,
   merged in by id (the loading banner needs the model size).
+- **`architecture.input_modalities` is now CONSUMED, not just observed (design
+  §E5).** `listModels` keeps the array on `EngineModel.inputModalities`,
+  `EngineManager.catalogModels` turns `includes('image')` into
+  `CatalogModel.supportsVision`, and the session's vision resolver in
+  `ipc-handlers.ts` reads that field for a local binding exactly as it already
+  did for an OpenRouter one. Re-captured verbatim from **b10665, 2026-09-05**:
+  a model in a folder beside its `mmproj-*.gguf` reports
+  `{"input_modalities":["text","image"],"output_modalities":["text"]}`, the same
+  model flat reports `["text"]`. If this field is ever renamed or dropped
+  upstream, every local vision model silently becomes text-only — a row we
+  cannot read leaves `supportsVision` UNSET (never a guessed `false`), and
+  `probe-vision.mjs` is the check that catches it on an engine bump.
 - **Per-model state polling (2026-07-14):** the supervisor polls `GET /models`
   every 1.5 s while running (400 ms while a load is in flight) and emits `models-changed` only on an (id→state)
   diff (llama-server has no push channel). `ipc-handlers` joins this with the
@@ -205,6 +322,10 @@ context window.
   2026-09-04 on b10665). **Only name a model that `GET /models` reports `loaded`** — on this
   build `?model=` autoloads (or wakes) the named model and blocks until it is resident; the
   app sends the model-less `/props` for any other status (see the b10665 notes above).
+  **Do NOT "fix" a zero here by putting `-c` back on the command line** — that flag
+  outranks every per-model preset and is exactly what the settings file exists to keep
+  off the command line. The fallback when `/props` is uninformative is the CONFIGURED
+  context size (this model's own setting, else the engine-wide one), not a constant.
 - **Verified by `test-engine/probe-tools.mjs`** — fires a tool-y prompt (asserts
   schema-valid JSON args), a plain prompt (asserts no forced call), and prints the
   `/props?model=` `n_ctx` and `total_slots` (the probe names the model up front, so on
@@ -224,9 +345,127 @@ context window.
   version-dependent; the generator templates the tag in). Do NOT revert to
   `build/bin/llama-server` (a stale guess). Enforced by `engine-acquisition`'s
   post-unpack existence check (fails loudly, never installs a broken dir).
-- **There is NO upstream Linux CUDA asset** — CUDA opt-in (Plan C) is Windows-only.
+- **Twelve rows are pinned (`ENGINE_ASSETS`), and two of them are ROCm** —
+  `win-rocm-7.14-x64` and `ubuntu-rocm-7.14-x64`, added 2026-09-05. There is still NO
+  upstream Linux CUDA asset, so CUDA remains a Windows-x64 offer; `pickAsset` is what
+  decides that, never a platform list repeated elsewhere. Still NOT pinned at b10665:
+  `win-cuda-13.3-x64`, `win-cuda-13.4-arm64`, `ubuntu-sycl-fp16/fp32-x64`,
+  `win-sycl-x64`, `*-openvino-*`, `win-opencl-adreno-arm64`, `android-arm64`.
+- **The Windows CUDA zip does NOT contain the CUDA runtime — so the pin carries a
+  SECOND archive for it.** `EngineAsset.runtime` on the CUDA row names
+  `cudart-llama-bin-win-cuda-12.4-x64.zip` (373 MB) with its own sha256;
+  `engine-acquisition.install()` downloads it, verifies it, and unpacks it into the
+  SAME directory as the engine (not a sibling — those DLLs have to sit beside
+  `llama-server.exe`). Pressing "Switch to CUDA" is therefore a 238 MB engine plus a
+  373 MB runtime, 611 MB in one operation, and `probeDownloadSize()` reports both parts.
+  The cudart archive carries no version tag in its NAME, so the generator does not
+  template one in. If the runtime is missing or its hash is wrong the INSTALL is
+  abandoned — nothing half-unpacked is ever renamed into place — but only the corrupt
+  runtime archive's bytes are deleted; the engine archive beside it is deliberately
+  KEPT, so a retry reuses those (already checksum-verified) bytes. (The engine archive's own hash failure deletes
+  ITS bytes, because there is nothing left to retry with.)
+- **The two ROCm rows carry NO `runtime`, for two DIFFERENT reasons.** The Windows
+  ROCm zip genuinely is self-contained (it bundles `amdhip64_7.dll`). The Linux
+  tarball is NOT: listing b10665's 62 entries on 2026-09-05 found `libggml-hip.so` but
+  no `libamdhip64`, `hipblas`, `rocblas` or `amd_comgr` at all. It has no runtime row
+  because upstream publishes none — the HIP and BLAS libraries must already be on the
+  machine. That is what `rocm-prereqs.ts` checks before Linux ROCm is offered, and why
+  Windows needs no such check.
+- **`gfxTargets` — the AMD chips each ROCm build was COMPILED for — is per-row, and
+  the two rows are NOT the same list.** Read out of upstream's
+  `.github/workflows/release.yml` at the tag (`gpu_targets:` in the `ubuntu-24-rocm`
+  and `windows-rocm` matrices). At b10665: Windows has 20 targets including
+  `gfx1103`/`gfx1153`; Linux has 22 including the four CDNA parts
+  (`gfx908`/`gfx90a`/`gfx942`/`gfx950`) that Windows lacks. **`backendOptions()` checks
+  that list on LINUX ONLY.** Windows is offered ROCm with no gfx check at all, because
+  the kfd topology the target is read from is a Linux kernel interface and Windows
+  publishes no equivalent — so `gfxTarget` is always null there and a check would refuse
+  every Windows chip. On Linux the check reads THAT ROW's list, never "the pin's gfx
+  list": a shared list would offer ROCm to a Linux chip with no machine code in the
+  archive, which dies at the first token. The generator refuses to emit a ROCm row it
+  cannot read targets for.
+- **Every install records the build's own device list.** After unpacking (and after
+  the runtime, if any), `engine-acquisition` runs `llama-server --list-devices` and
+  freezes the parsed block into the `.complete` marker: each device's engine-printed
+  id (`Vulkan0`, `CUDA0`, `ROCm0`, `Metal0`), name, total/free MiB, and an `isGpu`
+  flag. `totalMiB: null` means "printed in a shape this parser could not measure",
+  never "this chip has no memory" — a zero would read downstream as a machine with no
+  graphics memory. `isGpu: false` marks a software renderer (llvmpipe, SwiftShader):
+  forced into view on the Z13, llvmpipe reported 124,406 MiB of "VRAM", which is
+  simply system RAM. The probe is capped twice — a 15 s SIGKILL timeout AND a hard
+  17 s deadline the whole call races — because `execFile`'s own timeout only SIGNALS
+  a child, and one wedged inside a GPU driver never dies (measured: a child with
+  `trap '' TERM` left the promise unsettled past 30 s, i.e. an install frozen forever).
+  Cost when healthy: ~70 ms. An install made before this field existed is backfilled
+  lazily, once per process, success OR failure.
 - Windows unpack MUST use System32 `bsdtar` (reads both `.zip` and `.tar.gz`); a
   bare `tar` on PATH can resolve to Git's GNU tar, which cannot read `.zip`.
+
+#### ROCm vs Vulkan, measured
+
+**ROCm is not simply faster than Vulkan. It is a trade, and on the one machine we
+have measured it loses the half a user actually watches.** The UI shipped
+`Switch to ROCm (faster on AMD)` from 2026-09-05 to 2026-09-06; that claim was
+never measured. When it was, it was wrong.
+
+Measured 2026-09-05. Same llama.cpp build (**b10665**), same models, same
+machine, **200 tokens forced** (`n_predict`), a **non-repeating** prompt (so
+nothing came out of the prefix cache), **speculative decoding OFF**, one model
+loaded at a time. Rates are llama-server's own `timings.prompt_per_second` /
+`timings.predicted_per_second`.
+
+| Model / backend | Prompt reading (t/s) | Writing the reply (t/s) |
+|---|---:|---:|
+| Qwen3.5-9B Q8 — ROCm | 769.6 | 14.41 |
+| Qwen3.5-9B Q8 — **Vulkan** | 639.8 | **21.01** |
+| Qwen3.8-27B Q8 — ROCm | 239.9 | 4.98 |
+| Qwen3.8-27B Q8 — **Vulkan** | 197.3 | **6.17** |
+
+ROCm reads prompts **~20% faster** and writes replies **24–46% slower**. Reading
+happens once, before the first word appears; writing is what the user sits and
+watches, so "faster" was false for the part that matters.
+
+Sanity check on the numbers themselves: generation is memory-bandwidth-bound, and
+Vulkan reaches **~72%** of this chip's theoretical bandwidth on BOTH models while
+ROCm reaches **50–57%**. Two independent models agreeing on the same shortfall is
+a coherent result, not run-to-run noise.
+
+**Scope — read this before generalising.** ONE machine, ONE chip: an AMD Strix
+Halo APU (Radeon 8060S, `gfx1151`, unified memory), Linux, engine b10665. It is
+evidence about Strix Halo, and it is the reason ROCm is offered as an optional
+build rather than recommended — see `OPTIONAL_BACKENDS` in `EngineCard.tsx` and
+`BACKEND_LABELS` in `gpu-detector.ts`. It is **not** evidence about discrete
+Radeon cards, about CDNA parts, about Windows ROCm, or about a later engine
+build. Re-measuring on a different part, or on a newer build, is how this changes
+— not an assumption that upstream fixed it.
+<!-- verify: {"path": "youcoded/desktop/src/main/models/gpu-detector.ts", "contains": "reads faster, writes slower"} -->
+
+### CLI alias table (`ARG_ALIASES` in engine-pin.ts, generated by generate-engine-pin.mjs)
+
+llama-server accepts up to THREE spellings of most options — short (`-c`), long
+(`--ctx-size`) and environment (`LLAMA_ARG_CTX_SIZE`) — and its preset file accepts all
+three too. So anything that reasons about option NAMES (writing `models.ini`, or
+refusing to let a user override a reserved option in Advanced → extra flags) has to
+collapse them to one name first, or `--ctk` sails past a denylist that only knows
+`cache-type-k`.
+
+- **274 entries at b10665**, generated from that binary's own `--help`. Read it as
+  `ARG_ALIASES[key] ?? key`: only the alternate spellings are listed, and a canonical
+  name maps to itself by absence.
+- **Regenerated ONLY with `--binary`.** `node desktop/scripts/generate-engine-pin.mjs
+  <tag> --binary <path>` emits the `ARG_ALIASES` block along with the asset rows;
+  without `--binary` the table is not regenerated and the script says so. A bump that
+  skips it leaves the app reasoning about the previous build's option names.
+- **A negated spelling keeps its own `no-` name** (`nkvo` → `no-kv-offload`, `no-webui`
+  → `no-ui`) rather than folding into the positive. Folding would rewrite a user's
+  `--no-mmap` into `mmap` and silently do the opposite of what they asked.
+- **The object is PROTOTYPE-LESS (`Object.create(null)`) on purpose.** A plain object
+  literal answers `constructor`, `toString`, `valueOf`, `hasOwnProperty` and
+  `__proto__` with an inherited FUNCTION — not nullish, so `?? key` never fires. A user
+  typing `--valueOf 1` would get a Function as their "canonical" option name, sail past
+  a string denylist, and be written into `models.ini`, where an unrecognised key makes
+  llama-server exit 1 at startup with nothing on screen tracing it back.
+<!-- verify: {"path": "youcoded/desktop/src/main/engine/engine-pin.ts", "contains": "ARG_ALIASES"} -->
 
 ### GGUF cache layout + downloader naming contract (cache-scan.ts, Plan C model-downloader.ts)
 
@@ -249,6 +488,42 @@ first part and cache-scan sums the parts' sizes into one entry.
   downloaded on a 32 GB dev box. **PASS on b9992** (Windows x64 Vulkan,
   `Qwen3-0.6B-Q4_K_M` single + `Qwen3-0.6B-SPLIT-00001-of-00002`), 2026-07-14 —
   router discovered both ids from `--models-dir` and served the split model.
+- **One level of folders, named by the FOLDER — VERIFIED b10665, 2026-09-05
+  (design §E2).** A model that ships a vision projector cannot live flat: the
+  router only passes `--mmproj` when the model and an `mmproj*.gguf` sit together
+  in ONE subdirectory of `--models-dir`. Probed with SmolVLM-256M laid out both
+  ways — flat, `input_modalities` was `["text"]` and no `--mmproj` was passed;
+  in a folder, `["text","image"]`, `--mmproj` passed, and a solid-red PNG came
+  back answered "Red." Three further facts that `cache-scan.ts` depends on, all
+  probed the same day:
+  - **The id is the FOLDER's name, not the file's.** `weird-folder/C-Q8_0.gguf`
+    was served as `weird-folder`. So the downloader must name the folder exactly
+    what the flat layout would have called the model, or the app and the router
+    disagree about what a model is called.
+  - **Two levels deep is invisible.** `deep/inner/B-Q8_0.gguf` was absent from
+    `GET /models` entirely (checked with `--models-max 16`, so it is not a cap).
+  - **A name collision is resolved NON-DETERMINISTICALLY — never reason about
+    which copy "wins".** `<cacheDir>/X.gguf` and `<cacheDir>/X/` are one model id
+    to the router: it serves exactly one of the two and silently drops the other.
+    On ONE server, one cache dir: `ACOLL-Q4_K_M.gguf` beside
+    `ACOLL-Q4_K_M/ACOLL-Q4_K_M.gguf` was served from the FLAT file
+    (`input_modalities: ["text"]`), while `BCOLL-Q4_K_M` — the same pair, created
+    in the opposite order — was served from the FOLDER (`["text","image"]`). The
+    outcome tracks directory-entry order, which is the filesystem's and not the
+    app's, so it cannot be predicted from the layout or from creation order.
+    `ModelDownloader.start` refuses to create the pair from EITHER end.
+    **Before moving a flat model into its folder (§E4 / T17), read this:** do not
+    order that move on an assumption that a half-populated folder is ignored
+    while the flat file is still there. It may shadow the working model instead,
+    and the user's model then stops loading with nothing on screen to explain it.
+  A split set inside a folder is one model, named by the folder, loaded from its
+  part 1. `probe-download.mjs` pins both folder ids; `probe-vision.mjs` pins the
+  pairing and the image round-trip. **The FLAT half of that comparison — the same two
+  files side by side reporting `["text"]` with no `--mmproj` — was measured by hand on
+  2026-09-05 and is NOT in any probe**, so an engine bump re-verifies that a folder
+  works, not that flat still fails. Extending `probe-vision.mjs` to lay the pair out
+  both ways would close that; until it does, treat the flat result as a dated
+  measurement, not a guard.
 - **Router hot-reload of `--models-dir` after boot — RESOLVED 2026-08-16.** The
   router discovers GGUFs at BOOT and re-scans ONLY when asked: `GET /models?reload=1`
   (any non-empty value) re-runs `load_models()`. Its `need_reload` dirty flag is set
@@ -282,10 +557,26 @@ first part and cache-scan sums the parts' sizes into one entry.
 
 ## Verification
 
-`desktop/test-engine/` holds dev-run smoke probes (spawn the real engine, assert
-health + `/models` parity + **`?reload=1` picking up a post-boot file** + a streamed
-tool-less chat round-trip). Re-run all three on every engine bump — analogous to
-`test-conpty/` on a CC bump. The original three PASS on b9992 (Windows x64 CPU,
+`desktop/test-engine/` holds twelve `probe-*.mjs` files against the real binary, of
+which **NINE are engine-bump gates** — analogous to `test-conpty/` on a CC bump:
+`probe-health` (the router SKELETON boots and answers `/health` — it spawns the
+RECOVERY shape, not the shipped one; see its header), `probe-models` (id parity + `?reload=1`
+picking up a post-boot file), `probe-chat` (streamed round-trip), `probe-download`
+(flat-basename ↔ router id, single AND split), `probe-tools` (`--jinja` constrained
+tool call + real `/props` `n_ctx`), `probe-speed` (both speed flags reach the model
+child and the drafter fires), `probe-presets` (the `models.ini` grammar, the fatal-key
+behaviour, and that every reserved key is a real option on this build), `probe-vision`
+(the folder layout, `input_modalities`, and a real image answered) and `probe-headers`
+(no binary needed — real Hugging Face headers in one 1 MB range request).
+
+**`desktop/test-engine/README.md` is the one place that decides which probes a bump
+re-runs, and why the other three are excluded** — `probe-parallel` and
+`probe-prefix-cache` are one-off MEASUREMENTS with no pass/fail (their findings are
+the "Parallel slots" and "KV prefix reuse" sections below), and `probe-shell-command`
+is about the "Run in terminal" path, not the engine. Do not re-derive that list from
+a directory listing, or from a count in this file.
+
+The original three PASS on b9992 (Windows x64 CPU,
 Qwen3-0.6B-Q4_K_M.gguf), 2026-07-13; the `?reload=1` assertion was added 2026-08-16
 and PASSES on b9992 (Linux x64 Vulkan, Qwen3.5-2B-Q8_0). **That assertion is the
 only guard that can see upstream dropping the rescan** — the unit tests mock fetch,
@@ -296,13 +587,34 @@ PASS on b9992 (Windows x64 Vulkan), 2026-07-14 — also re-run on every engine b
 `probe-tools.mjs` (Plan C: `--jinja` constrained tool-call round-trip + never-force +
 real `/props` `n_ctx`) runs against an already-running engine — re-run on every engine
 bump; verified live during acceptance on the Linux dev box.
+`probe-speed.mjs` (2026-09-04: `--spec-default` + `--cache-type-k q8_0` reach the model
+CHILD's cmdline and the drafter fires on an echo task at ≥50% acceptance) — re-run on
+every engine bump. **PASS on b10665** (Linux x64 Vulkan, `Qwen3.5-2B-Q8_0`): 640 drafted,
+573 accepted (90%), 281 tok/s; probe-tools also PASSED against a router carrying both
+flags on the same day, so grammar-constrained tool calls and n-gram drafting coexist.
+
+`probe-presets.mjs` (2026-09-05: the `[*]` cascade, a per-model override, `source:
+"preset"`, a bad key being FATAL in either section, and every reserved key being a real
+option) — **PASS on b10665**, Linux x64 Vulkan. It loads no weights: `GET /models`
+renders each model's full child command line without reading the model.
+`probe-vision.mjs` (2026-09-05: SmolVLM-256M in a folder is listed under the FOLDER's
+name, reports `input_modalities` including `image`, and answers a solid-red PNG with
+"red"; the same two files laid out flat report `["text"]` and pass no `--mmproj`) —
+**PASS on b10665**, Linux x64 Vulkan.
+`probe-headers.mjs` (2026-09-05: one 1 MB range request reaches every curated repo's
+architecture keys) — **PASS**; on its first run it found that Gemma 4's larger models
+write `head_count_kv` as a per-LAYER array, which the reader was dropping.
 
 **b10665 bump, 2026-08-27 (Linux x64 Vulkan, `Qwen3.5-2B-Q8_0` + `Qwen3-0.6B-Q4_K_M`):**
-all five PASS — health, models (id parity + `?reload=1`), chat (streamed, 47 t/s),
-download (single-file AND `-00001-of-00002` split served), tools (schema-valid
-constrained call + never-force held). Archive layout unchanged: Linux/macOS `.tar.gz`
-still nest under `llama-<tag>/`, and the pinned sha256 for
+the five that existed then all PASS — health, models (id parity + `?reload=1`), chat
+(streamed, 47 t/s), download (single-file AND `-00001-of-00002` split served), tools
+(schema-valid constrained call + never-force held). Archive layout unchanged:
+Linux/macOS `.tar.gz` still nest under `llama-<tag>/`, and the pinned sha256 for
 `llama-b10665-bin-ubuntu-vulkan-x64.tar.gz` was verified against the downloaded file.
+The four newer probes (speed, presets, vision, headers) were added 2026-09-04/05
+against this same pin and each is recorded PASS above, on the dates given. Those four
+results are the ones from the local-engine-upgrades build; they were not re-run for
+this documentation pass.
 
 **`GET /models` lists one row per FILE, so a split set is N rows, not one.** Measured
 on b10665: a cache holding `Qwen3-0.6B-SPLIT-00001-of-00002` + `-00002-of-00002`

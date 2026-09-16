@@ -39,6 +39,9 @@ const bubbleConvos = import.meta.glob('./fixtures/bubbles/*.jsonl', {
 const SESSION_FOR: Record<string, string> = {
   'claude-code': 'wb-1',
   native: 'wb-2',
+  // Sign in with ChatGPT (2026-09-04): wb-3 is bound to the ChatGPT plan's
+  // catalog (fixtures/sessions.ts), and this is the conversation on it.
+  chatgpt: 'wb-3',
   specialists: 'wb-11',
   // Landing-page embed (scenario=site): site.jsonl plays into the one session
   // that scenario seeds (fixtures/sessions.ts siteSessions), not wb-2.
@@ -54,6 +57,13 @@ const SESSION_FOR: Record<string, string> = {
 function stalledRequested(): boolean {
   if (typeof location === 'undefined') return false;
   return new URLSearchParams(location.search).get('stalled') === '1';
+}
+
+/** `?planLimit=1`: replay the chatgpt fixture's used-up-plan error (see
+ *  LoadOptions.includePlanLimit). Same node-test guard as stalledRequested(). */
+function planLimitRequested(): boolean {
+  if (typeof location === 'undefined') return false;
+  return new URLSearchParams(location.search).get('planLimit') === '1';
 }
 
 function seedRequested(): string | null {
@@ -168,7 +178,7 @@ export function buildHydratePayload(): SerializedChatState {
       continue;
     }
 
-    const { actions, error } = loadFixture(name, raw, sessionId, { includeStalled: stalledRequested() });
+    const { actions, error } = loadFixture(name, raw, sessionId, { includeStalled: stalledRequested(), includePlanLimit: planLimitRequested() });
     if (error) { console.warn(`[workbench] ${error}`); continue; }
 
     state = chatReducer(state, { type: 'SESSION_INIT', sessionId });

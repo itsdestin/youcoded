@@ -1,6 +1,15 @@
 #!/usr/bin/env node
 // Probe: router-mode spawn + /health readiness (engine-supervisor coupling).
-// Spawns llama-server with the EXACT flag set engine-supervisor.ts uses.
+//
+// WHAT IT ACTUALLY BOOTS, and what it does not: the router-mode SKELETON plus
+// `-c` on the command line. That is engine-supervisor's RECOVERY shape — the
+// boot it falls back to when no preset file can be written — not the shape that
+// normally ships, which carries --models-preset, --spec-default and
+// --cache-type-k q8_0, and NO -c at all (design §C2; a -c on the command line
+// merges over every preset and defeats each model's own context length).
+// Do not copy this arg list as "what the app runs".
+// The shipped shape is covered instead by probe-presets.mjs (the preset path)
+// and probe-speed.mjs (the two speed flags reaching the model child).
 import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -11,9 +20,11 @@ if (!binary || binary.startsWith('--')) { console.error('usage: probe-health.mjs
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PORT = 9971;
 
-// Mirrors engine-supervisor.ts: router mode (no -m), --no-webui --jinja,
-// --models-dir <cache> (what actually serves dropped GGUFs), --models-max 2,
-// -c <contextSize>.
+// Router mode (no -m), --no-webui --jinja, --models-dir <cache> (what actually
+// serves dropped GGUFs), --models-max 2, and -c to give the boot a context
+// length without needing a preset file. See the header: this is the recovery
+// shape, deliberately, because what is under test here is that the router
+// SKELETON starts and answers /health at all.
 const child = spawn(binary, [
   '--host', '127.0.0.1', '--port', String(PORT),
   '--no-webui', '--jinja', '--models-dir', path.join(here, 'cache'), '--models-max', '2', '-c', '4096',

@@ -170,6 +170,31 @@ describe('UpdatePanel — error states', () => {
     render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
     expect(await screen.findByRole('button', { name: /update now/i })).toBeInTheDocument();
   });
+
+  it('signature-invalid: blocks the update, explains, and offers NO browser fallback (2026-09-10 #7)', async () => {
+    (window as any).claude.update.launch.mockResolvedValue({ success: false, error: 'signature-invalid' });
+    render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
+    fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /update blocked/i })).toBeInTheDocument());
+    // The disabled button can't be retried, the honest sentence is shown, and the
+    // "Open in browser instead" workaround is deliberately absent.
+    expect(screen.getByRole('button', { name: /update blocked/i })).toBeDisabled();
+    expect(screen.getByText(/couldn't be verified/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /open in browser instead/i })).not.toBeInTheDocument();
+  });
+
+  it('verify-failed: offers a retry but NOT the raw-binary browser fallback (2026-09-10 #7 review)', async () => {
+    (window as any).claude.update.launch.mockResolvedValue({ success: false, error: 'verify-failed' });
+    render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
+    fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+    const retry = await screen.findByRole('button', { name: /retry download/i });
+    expect(retry).toBeEnabled();
+    // The "Open in browser instead" link opens the raw installer — the very file
+    // that failed verification — so it must be absent here.
+    expect(screen.queryByRole('button', { name: /open in browser instead/i })).not.toBeInTheDocument();
+  });
 });
 
 describe('UpdatePanel — close behavior', () => {

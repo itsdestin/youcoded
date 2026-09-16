@@ -654,7 +654,7 @@ describe('state family', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Report bug' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Diagnose with Claude' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Diagnose with the assistant' }));
     expect(onReportBug).toHaveBeenCalled();
     expect(onDiagnose).toHaveBeenCalled();
   });

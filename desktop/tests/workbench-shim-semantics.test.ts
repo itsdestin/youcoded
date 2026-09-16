@@ -8,6 +8,18 @@ setLatency(0);
 const shim = () => createMockShim(createStore('default')) as any;
 
 describe('mock shim Proxy semantics', () => {
+  it('persists independent context defaults and rejects refused writes', async () => {
+    const store = createStore('default');
+    const c = createMockShim(store);
+    await c.native.setContextPreferences({ openrouter: 'long' });
+    await expect(c.native.setContextPreferences({ chatgpt: 'long' })).resolves.toEqual({ openrouter: 'long', chatgpt: 'long' });
+    const copy = await c.native.getContextPreferences();
+    copy.chatgpt = 'standard';
+    expect(await c.native.getContextPreferences()).toEqual({ openrouter: 'long', chatgpt: 'long' });
+    store.refuseWrites = true;
+    await expect(c.native.setContextPreferences({ chatgpt: 'standard' })).rejects.toThrow('refusing writes');
+    expect(await c.native.getContextPreferences()).toEqual({ openrouter: 'long', chatgpt: 'long' });
+  });
   // Each of these pins a specific way the catch-all can silently break the app
   // it is standing in for. They are cheap to keep and expensive to rediscover.
 
@@ -237,6 +249,39 @@ describe('mock shim Proxy semantics', () => {
     expect(await c.account.signedIn()).toBe(false);
     expect(await c.account.user()).toBeNull();
     expect(await c.account.refresh()).toBeNull();
+  });
+
+  // `?fail=` exists for review shots of LOAD failures. A read that runs on app mount
+  // (the skills list, the installed plugins, the tag registry) is out of reach of a
+  // shot's `eval`, which only runs after boot — so the failure has to be in the fake
+  // from the first call. Nested paths must work too: the theme list is
+  // `theme.marketplace.list`.
+  it('?fail= makes the named channels reject and leaves the rest alone', async () => {
+    vi.stubGlobal('location', { search: '?fail=skills.list,theme.marketplace.list' });
+    const c = shim();
+    await expect(c.skills.list()).rejects.toThrow(/Mock failure/);
+    await expect(c.theme.marketplace.list()).rejects.toThrow(/Mock failure/);
+    await expect(c.skills.listMarketplace()).resolves.toBeDefined();
+    vi.unstubAllGlobals();
+  });
+
+  // `?update=available` exists because the update pill and its panel only render once
+  // status:data carries an update, which no scenario ever sent.
+  it('?update=available puts an update on status:data', async () => {
+    vi.stubGlobal('location', { search: '?update=available' });
+    const c = shim();
+    let got: any = null;
+    c.on.statusData((d: any) => { got = d; });
+    expect(got?.updateStatus).toMatchObject({ update_available: true });
+    // Nothing downloaded yet, so the panel offers a download rather than a launch.
+    expect(await c.update.getCachedDownload('1.3.0')).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
+  it('no update is offered without the switch', async () => {
+    let got: any = null;
+    shim().on.statusData((d: any) => { got = d; });
+    expect(got?.updateStatus ?? null).toBeNull();
   });
 
   it('applies latency to channel results when set', async () => {

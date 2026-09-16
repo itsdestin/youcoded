@@ -9,6 +9,7 @@
 // (optimistic apply, revert on `{ok:false}` or a thrown error) exactly, just
 // scoped to one id instead of a session list.
 import { useEffect, useState } from 'react';
+import { plainMessage } from '../utils/ipc-error';
 
 export interface PreviewMetaState {
   /** Applied tag ids (not labels — see chatsearch-refs.ts's note on the
@@ -16,19 +17,29 @@ export interface PreviewMetaState {
   tags: string[];
   note: string;
   loading: boolean;
+  /** Why the tags and note could NOT be read, or null when they were (possibly as none).
+   *  WHY (code review 2026-09-11, F1, on error inventory false message 12): a failed read
+   *  used to load as an empty note, and saveNote writes the WHOLE text — so typing in the
+   *  preview sheet replaced a stored note nobody was shown. The drawer shows this reason
+   *  instead of the editor, and the writers below refuse while it is set. */
+  unreadable: string | null;
 }
 
 export interface PreviewMetaApi extends PreviewMetaState {
   toggleTag: (tagId: string, next: boolean) => Promise<void>;
   saveNote: (note: string) => Promise<void>;
+  /** Read the tags and note again — the Retry on an `unreadable` failure. */
+  reload: () => void;
 }
 
-const EMPTY: PreviewMetaState = { tags: [], note: '', loading: false };
+const EMPTY: PreviewMetaState = { tags: [], note: '', loading: false, unreadable: null };
 
 /** id: the previewed conversation's id, or null when nothing is previewed —
  *  callers pass null rather than skipping the hook call (rules of hooks). */
 export function usePreviewMeta(id: string | null): PreviewMetaApi {
   const [state, setState] = useState<PreviewMetaState>(EMPTY);
+  // Bumped by reload(); a dependency of the read effect, so bumping it reads again.
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     // Cancelled flag: a fast re-preview (id changes again before the first
@@ -37,7 +48,7 @@ export function usePreviewMeta(id: string | null): PreviewMetaApi {
     // superseded.
     let cancelled = false;
     if (!id) { setState(EMPTY); return; }
-    setState({ tags: [], note: '', loading: true });
+    setState({ tags: [], note: '', loading: true, unreadable: null });
     // Fix: was `claude?.session?.getMeta?.(id).then(...)` — when `session`
     // (or `getMeta`) is absent, the optional chain short-circuits to
     // `undefined`, and `undefined.then` throws synchronously inside a
@@ -49,22 +60,28 @@ export function usePreviewMeta(id: string | null): PreviewMetaApi {
       try {
         const res: any = await (window as any).claude?.session?.getMeta?.(id);
         if (cancelled) return;
+        if (typeof res?.unreadable === 'string' && res.unreadable) {
+          setState({ tags: [], note: '', loading: false, unreadable: res.unreadable });
+          return;
+        }
         setState({
           tags: Array.isArray(res?.tags) ? res.tags : [],
           note: typeof res?.note === 'string' ? res.note : '',
           loading: false,
+          unreadable: null,
         });
-      } catch {
-        if (!cancelled) setState({ tags: [], note: '', loading: false });
+      } catch (e) {
+        if (!cancelled) setState({ tags: [], note: '', loading: false, unreadable: plainMessage(e) });
       }
     })();
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, attempt]);
 
   // Not memoized (recreated every render, like ResumeBrowser's toggleTag/
   // saveNote) so the closure always sees the latest `state` for rollback.
   const toggleTag = async (tagId: string, next: boolean) => {
-    if (!id) return;
+    // Never write against tags that could not be read — see `unreadable`.
+    if (!id || state.unreadable) return;
     const apply = (val: boolean) => setState((s) => ({
       ...s,
       tags: val ? [...new Set([...s.tags, tagId])] : s.tags.filter((t) => t !== tagId),
@@ -81,7 +98,8 @@ export function usePreviewMeta(id: string | null): PreviewMetaApi {
   };
 
   const saveNote = async (note: string) => {
-    if (!id) return;
+    // Never overwrite a note that could not be read — see `unreadable`.
+    if (!id || state.unreadable) return;
     const prevNote = state.note;
     setState((s) => ({ ...s, note }));
     try {
@@ -94,5 +112,5 @@ export function usePreviewMeta(id: string | null): PreviewMetaApi {
     }
   };
 
-  return { ...state, toggleTag, saveNote };
+  return { ...state, toggleTag, saveNote, reload: () => setAttempt((a) => a + 1) };
 }

@@ -126,6 +126,12 @@ export interface ToolServices {
      *  into the refusal copy so the number the model sees always matches the
      *  number that was checked, never a hardcoded constant that could read
      *  differently from what a local session's engine-measured cap allows. */
+    /** 2026-09-09: the on-demand replacement for the retired per-turn
+     *  `<specialists-status>` block (Destin: "better match what the others
+     *  do"). Codex and Hermes give the model a list tool and no per-turn
+     *  reminder; ours reads the delegation ledger AND the session's background
+     *  commands. null when this parent has nothing running or awaiting delivery. */
+    listStatus(parentId: string): string | null;
     reserve(parentId: string, opts: { writer: boolean }):
       { ok: true; token: SpecialistReservation }
       | { ok: false; reason: 'at-capacity'; max: number }
@@ -239,12 +245,9 @@ export interface ToolContext {
   sessionId: string;
   cwd: string;
   signal: AbortSignal;
-  /** Task 14 — this session's CURRENT model binding, needed as the `parent`
-   *  fallback for resolveDelegatedBinding (a tier that isn't set, or a bare
-   *  "run on this conversation's model" request, both resolve to this).
-   *  Optional so pre-existing test/one-off ToolContext constructions that
-   *  never touch model resolution keep compiling; the real driver
-   *  (harness-session.ts) always sets it from the session's own binding. */
+  /** This session's CURRENT model binding. It identifies which provider an
+   *  automatic tier should match and supplies the binding only for an explicit
+   *  `model: "parent"` request. The real driver always wires it. */
   binding?: ModelBinding;
   /** The Task-tool call's own toolCallId (Task 6/7), when the driver knows
    *  one — used as createChild's parentToolCallId so the host can later stamp
@@ -369,6 +372,14 @@ export interface NativeTool<A = any> {
    *  askUser() — guards/decide are skipped (asking permission to ask a question
    *  is absurd) and execute() never runs. */
   interactive?: boolean;
+  /** Set on tools whose OUTPUT is text from outside the user's machine (web
+   *  pages, search results, MCP servers). defineTool wraps a non-error result in
+   *  <untrusted-content source="…"> so the model can tell fetched text from the
+   *  harness's own notices; prompts/shared-doctrine.ts tells it what the tag
+   *  means. The value is the source label shown in the tag. WHY (2026-09-04):
+   *  WebFetch/WebSearch need no permission in any mode, so a page that says
+   *  "run this" reached the model with nothing marking it as data. */
+  untrusted?: string;
   /** How to widen THIS tool's output, in its own vocabulary — a static property,
    *  independent of whether the tool or the pipeline did the cutting.
    *

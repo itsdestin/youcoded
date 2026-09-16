@@ -4,6 +4,7 @@
 // and fitToContext dropped the entire prior conversation on any turn that
 // carried an image (#290 follow-up fix 1, 2026-08-11 spec).
 import type { ModelMessage } from 'ai';
+import { continuationEstimate } from './openai-continuation';
 
 export const APPROX_CHARS_PER_TOKEN = 4;
 
@@ -36,7 +37,11 @@ function charSize(value: unknown): number {
 }
 
 export function messageTokens(m: ModelMessage): number {
-  return Math.ceil(charSize((m as { content: unknown }).content) / APPROX_CHARS_PER_TOKEN);
+  // WHY: accepted Responses reasoning carries opaque ciphertext whose byte
+  // length has no token relationship. Its private per-step sizing tag is the
+  // authority; ordinary messages retain the established recursive estimator.
+  const continuation = continuationEstimate(m);
+  return continuation?.tokens ?? Math.ceil(charSize((m as { content: unknown }).content) / APPROX_CHARS_PER_TOKEN);
 }
 
 export function messagesTokens(messages: ModelMessage[]): number {

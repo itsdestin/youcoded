@@ -27,7 +27,7 @@
 // changes what you are measuring — see docs/engine-dependencies.md → Stage-two probes):
 //
 //   llama-server --host 127.0.0.1 --port 8199 --no-webui --jinja \
-//     --models-dir <cacheDir> --models-max 2 --sleep-idle-seconds 300 \
+//     --models-dir <cacheDir> --models-max 2 --sleep-idle-seconds 900 \
 //     -c <contextSize>
 //
 // Usage: node test-engine/probe-prefix-fanout.mjs <baseURL> <modelId> [N=4]

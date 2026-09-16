@@ -1,10 +1,14 @@
-import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useImperativeHandle, forwardRef, useContext } from 'react';
 import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
 import TerminalToolbar from './TerminalToolbar';
 import { Button } from './ui';
 import { AttachmentChip } from './AttachmentChip';
 import { AttachIcon, CompassIcon } from './Icons';
+import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
+import { StatusStrip } from './ui/StatusStrip';
+import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
+import { useVoiceInput } from '../hooks/useVoiceInput';
 import BrailleBurst from './BrailleBurst';
 import FlowingKeywordsText from './FlowingKeywords';
 import StopButton from './StopButton';
@@ -18,9 +22,20 @@ import { hasPendingInteraction } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
+import type { ClaudeAlias } from '../../shared/model-ids';
 import { useScrollFade } from '../hooks/useScrollFade';
-import { useStreamingGate } from '../hooks/useStreamingGate';
+import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
+
+// WHY: the composer auto-focus listener must leave controls and composite widgets
+// with their own keyboard behavior focused so they can handle Enter and arrows.
+const isInteractiveTarget = (el: Element | null | undefined): boolean => {
+  const target = el as HTMLElement | null;
+  if (!target) return false;
+  return !!target.closest(
+    'button, a[href], input, textarea, select, summary, [role="application"], [role="button"], [role="link"], [role="menu"], [role="menuitem"], [role="listbox"], [role="option"], [role="checkbox"], [role="radio"], [role="switch"], [role="tab"]',
+  );
+};
 
 export interface InputBarHandle {
   clear: () => void;
@@ -64,6 +79,9 @@ interface Props {
   getSessionState?: (sessionId: string) => import('../state/chat-types').SessionChatState | undefined;
   // Bare /model, /fast, /effort open the unified ModelPickerPopup
   onOpenModelPicker?: () => void;
+  // Typed `/model <alias>` — App.tsx runs the guarded PTY send + optimistic
+  // pill update. See slash-command-dispatcher.ts's DispatcherCallbacks doc.
+  onModelSwitchCommand?: (alias: ClaudeAlias) => 'sent' | 'blocked' | 'ineligible';
   /** Optional text to prefill when this session is first selected.
    *  Consumed exactly once per session ID via a consumed-set ref — safe to
    *  receive as a prop without triggering repeated fills on re-renders. */
@@ -95,21 +113,170 @@ function fileNameFromPath(p: string): string {
 
 // M1: copy for a refused/unknown native send ack, shown via onToast instead
 // of dispatching a phantom bubble. Each branch names the REAL cause reported
-// by the host (queue-full / not-live) rather than a guessed one — see
+// by the host (queue-full / not-live / starting) rather than a guessed one — see
 // docs/error-message-standards.md ("never guess an unverified cause").
+//
+// CORRECTED 2026-09-06. That claim used to be false for one branch. The host had
+// a single 'not-live' code for two opposite situations — a session that has ENDED
+// and one that has not STARTED yet — so a brand-new session on a local model told
+// Destin it was "no longer running" and to "start or resume it", while the engine
+// was quietly loading a 29 GB model that answered him a minute later. Neither half
+// was true and neither remedy existed. The host now separates them, and a message
+// typed during startup is HELD and delivered rather than refused at all, so this
+// branch is only reached when ten are already waiting.
 function sendFailureCopy(result: NativeSendResult | undefined): string {
   if (result?.status === 'failed' && result.reason === 'queue-full') {
     return 'Send queue is full (10 messages waiting). Wait for the current turn to finish.';
   }
+  if (result?.status === 'failed' && result.reason === 'starting') {
+    return 'Starting up — the model is still loading, and ten messages are already waiting.';
+  }
   if (result?.status === 'failed' && result.reason === 'not-live') {
     return 'This session is no longer running. Start or resume it to send messages.';
   }
-  return 'The message could not be sent — no response from the session host.';
+  // WHY two sentences where there was one (error inventory 2026-09-10, false message 5):
+  // this said "could not be sent — no response from the session host" for an ack that
+  // never came back too. Over remote access that is the 30-second timeout, and
+  // remote-shim.ts documents such a request as one that MAY have run — so the message
+  // could already be in the conversation while the restored draft invited a second send.
+  // No ack → say it could not be confirmed. A host that answered "failed" for a reason
+  // with no sentence of its own did refuse it — say only that, without guessing why.
+  if (!result) {
+    return "YouCoded couldn't confirm your message was sent — check the conversation before sending it again.";
+  }
+  return 'The message could not be sent.';
 }
 
-const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, initialInput, provider }, ref) {
+const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, provider }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  // Voice prompting (deck 2026-09-05). The draft stays the one source of truth:
+  // `text` holds what was typed plus the words the engine has SETTLED on;
+  // `voiceTail` is the engine's newest few words, still liable to change, drawn
+  // grey in the mirror layer and appended to the textarea value so both layers
+  // measure the same height (Q-2: "the newest few in grey until they settle").
+  // `voiceBaseRef` is the draft as it stood when the mic opened — every partial
+  // replaces everything after it, so a rewritten word never leaves a stale copy.
+  const [voiceTail, setVoiceTail] = useState('');
+  const voiceBaseRef = useRef('');
+  const textRef = useRef('');
+  const voice = useVoiceInput({
+    onPartial: (committed, tail) => {
+      setText(voiceBaseRef.current + committed);
+      setVoiceTail(tail ? (committed ? ' ' : '') + tail : '');
+    },
+    onFinal: (final) => {
+      setVoiceTail('');
+      // Q-4: the text waits in the box with the caret at the end — nothing is
+      // sent until the user presses Send.
+      const next = voiceBaseRef.current + final + (final ? ' ' : '');
+      setText(next);
+      requestAnimationFrame(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+      });
+    },
+  });
+  const startVoice = useCallback(() => {
+    // The textarea is the truth here, not React state: a keystroke from a
+    // fraction of a second ago may not have reached state yet. (There is no
+    // space to take back — a space bar held for the walkie-talkie never types
+    // one in the first place. See the gesture note below.)
+    const cur = inputRef.current?.value ?? textRef.current;
+    // Dictation continues the draft: a typed half-sentence keeps its place and
+    // the spoken words follow after one space.
+    voiceBaseRef.current = cur.trim() ? cur.replace(/\s*$/, ' ') : '';
+    setText(voiceBaseRef.current);
+    void voice.start();
+  }, [voice.start]); // eslint-disable-line react-hooks/exhaustive-deps -- reads the draft through the textarea on purpose
+  // Q-3 note (Destin): "press and hold the spacebar in a bare input box for
+  // walkie-talkie mode" — since widened to any box, with or without text.
+  //
+  // HOW THE GESTURE IS DECIDED, and why it is decided this way (Destin,
+  // 2026-09-05: "still seems like a bit of a gamble as to whether the spacebar
+  // does voice mode or just enters a bunch of spaces").
+  //
+  // The space bar goes down and NOTHING is typed. If it comes back up, or any
+  // other key goes down, before the hold matures, the space is typed then — one
+  // space, at the caret. If the hold matures, dictation starts and no space is
+  // typed at all.
+  //
+  // The rule that stops it feeling like a coin flip: nothing here may depend on
+  // the browser's `event.repeat` flag. The first attempt suppressed auto-repeat
+  // with `if (e.repeat)`, and Electron on Linux does not reliably set it — when
+  // it is missing every repeated space is typed, which is the run of spaces
+  // instead of the microphone. Whether a hold is open is OUR state
+  // (`spaceHoldTimer`), and every space arriving while it is open is swallowed
+  // whatever the event says about itself. At most one space can ever come out.
+  //
+  // Typing is unharmed: a normal space is released in about a tenth of a second,
+  // and the next key aborts the hold and puts the space in AHEAD of itself — so
+  // "hello world" typed at speed cannot come out "hellow orld", which is what a
+  // naive "insert it on key-up" would produce.
+  const SPACE_HOLD_MS = 350;
+  const spaceHoldTimer = useRef<number | null>(null);
+  const spaceHeld = useRef(false);
+  /** Type the space a pending hold swallowed, at the caret. */
+  const commitPendingSpace = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const at = el.selectionStart ?? el.value.length;
+    const to = el.selectionEnd ?? at;
+    // WHY: insert the space and place the caret before the browser inserts
+    // the next character; a deferred frame can overwrite newer input's caret.
+    el.setRangeText(' ', at, to, 'end');
+    setText(el.value);
+  }, []);
+  /** Call off the countdown; answers whether one was actually running. */
+  const cancelSpaceHold = useCallback(() => {
+    if (spaceHoldTimer.current === null) return false;
+    window.clearTimeout(spaceHoldTimer.current);
+    spaceHoldTimer.current = null;
+    return true;
+  }, []);
+  const voiceCanStart = voice.supported && voice.readiness?.state === 'ready' && voice.phase === 'idle';
+  // Round-2 alternatives for WHERE the listening feedback lives (see VoiceStyle).
+  const voiceStyle = useContext(VoiceStyleContext);
+  const voiceListening = voice.phase === 'listening';
+  // Read by the window-level key handler further down, which is installed once
+  // and must not be torn down and rebuilt every time the mic's phase changes.
+  const voiceListeningRef = useRef(false);
+  voiceListeningRef.current = voiceListening;
+  const voiceStopRef = useRef(voice.stop);
+  voiceStopRef.current = voice.stop;
+  // Read by `send`, which cannot depend on them without rebuilding on every
+  // partial — the same reason voiceListeningRef exists.
+  const voicePhaseRef = useRef(voice.phase);
+  voicePhaseRef.current = voice.phase;
+  const voiceCancelRef = useRef(voice.cancel);
+  voiceCancelRef.current = voice.cancel;
+
+  // Let go of the walkie-talkie, whatever the reason.
+  //
+  // WHY this is not simply "on key-up": the hold has TWO stages, and both can
+  // leak. For the first quarter second nothing is listening yet — only a timer
+  // is counting down — and if the user alt-tabs in that window the timer still
+  // fires, the microphone opens with the app in the background, and no key-up
+  // ever arrives to close it. After that quarter second the microphone IS open,
+  // and the same alt-tab would leave it open until the two-second silence stop
+  // drops whatever the room said into the message box. So losing the box (or
+  // the window, or the whole tab) cancels the countdown AND closes the mic.
+  const releaseSpaceHold = useCallback(() => {
+    if (spaceHoldTimer.current !== null) { window.clearTimeout(spaceHoldTimer.current); spaceHoldTimer.current = null; }
+    if (spaceHeld.current) { spaceHeld.current = false; void voice.stop(); }
+  }, [voice.stop]); // eslint-disable-line react-hooks/exhaustive-deps -- voice.stop is the only member read
+  useEffect(() => {
+    const onVisibility = () => { if (document.visibilityState === 'hidden') releaseSpaceHold(); };
+    window.addEventListener('blur', releaseSpaceHold);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('blur', releaseSpaceHold);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [releaseSpaceHold]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   // Drive the same fade-edge treatment on the textarea itself. The mask fades
   // wrapped text that sits above/below the 3-line max-height viewport.
@@ -133,6 +300,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // `attentionState === 'ok'`, which used to hide the button for the whole
   // stall countdown (see useStreamingGate.ts).
   const showStop = useStreamingGate(sessionId);
+  // WHY a second gate: `showStop` keeps the button reachable through stalls and
+  // permission asks; `stopLive` only animates it while the turn is really working
+  // (stop-button-alive questions deck Q-1/Q-2, 2026-09-10). Same cheap selector.
+  const stopLive = useTurnIsWorking(sessionId);
 
   // Per-session draft store — keeps input text and attachments separate
   // across sessions so switching away and back preserves your draft.
@@ -210,6 +381,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     },
   }));
 
+  // True when the user's last press was a finger or pen. Shared by the
+  // auto-focus handler below and the idle unfocus timer after it.
+  const lastPointerWasTouch = useRef(false);
+
   // Auto-focus input when user starts typing anywhere in the app.
   // When Enter is pressed while the textarea is blurred, we must also
   // preventDefault and send — otherwise the browser inserts a newline
@@ -221,7 +396,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // isTypingTarget: covers INPUT/TEXTAREA and the CodeMirror editor (a
       // contenteditable DIV) — without it, every printable key typed in the
       // code editor yanks focus into the composer mid-word (spec §12.6).
-      if (isTypingTarget(e.target as Element)) return;
+      // WHY: a focused prompt/menu control owns Enter and arrows. Taking focus
+      // here briefly moves it to the composer before that control can respond.
+      if (isTypingTarget(e.target as Element) || isInteractiveTarget(e.target as Element)) return;
       // Focus textarea for paste shortcuts so Ctrl+V lands in the input
       // even after the idle blur timer has unfocused it
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
@@ -230,9 +407,20 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key !== 'Backspace' && e.key !== 'Enter' && e.key.length !== 1) return;
+      // WHY: a key arriving while no text field has focus came from a physical
+      // keyboard — an on-screen keyboard only exists while a field is focused.
+      // So the user has switched to real keys: let the idle unfocus run again.
+      lastPointerWasTouch.current = false;
       inputRef.current?.focus();
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
+        // The second of the two keyboard sites that stop the mic instead of
+        // sending (the other is the textarea's own Enter branch). Enter with
+        // the mic open closes it and leaves the words in the box; a second
+        // Enter sends. The guard is deliberately NOT inside send(), which the
+        // Send button and the "Send anyway" retry also call — see the note at
+        // the textarea's Enter branch.
+        if (voiceListeningRef.current) { void voiceStopRef.current(); return; }
         sendRef.current();
       }
     };
@@ -254,15 +442,38 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // platform string: it's the actual question being asked, and it correctly
   // keeps idle-blur ON for a desktop browser connecting remotely (real
   // keyboard, shortcuts useful, no soft keyboard to dismiss).
+  //
+  // Fix (2026-09-10): the coarse-pointer check still misses a touchscreen
+  // laptop. "pointer" describes the PRIMARY pointer, which Chromium reports as
+  // "fine" whenever any touchpad or mouse-like device is attached — on the ROG
+  // Flow Z13 it stayed "fine" with the keyboard cover detached, most likely
+  // because a ydotool virtual mouse counts. It was also read once at mount, so docking or
+  // undocking never changed it. So the per-pause decision follows how the user
+  // last pointed: a finger or pen tap keeps focus (that is what raises the
+  // on-screen keyboard), a touchpad/mouse click or physical typing restores
+  // the unfocus (see lastPointerWasTouch in the auto-focus handler above).
   const idleBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const el = inputRef.current;
     const hasSoftKeyboard = isAndroid()
       || window.matchMedia?.('(pointer: coarse)')?.matches === true;
     if (!el || hasSoftKeyboard) return;
+    // Capture phase on window, so no component's stopPropagation can hide a tap.
+    const notePointer = (e: PointerEvent) => {
+      lastPointerWasTouch.current = e.pointerType === 'touch' || e.pointerType === 'pen';
+    };
+    window.addEventListener('pointerdown', notePointer, true);
     const resetTimer = () => {
       if (idleBlurTimer.current) clearTimeout(idleBlurTimer.current);
       idleBlurTimer.current = setTimeout(() => {
+        // Never blur out from under a space-hold dictation. The hold releases on
+        // blur, and this timer fires 750 ms after the last keydown — which is
+        // fine while a held key repeats faster than that, but the repeat delay is
+        // a system setting that can be longer, or switched off entirely. On such
+        // a machine a walkie-talkie dictation would have been cut off silently,
+        // three-quarters of a second in. Found reviewing T9, 2026-09-05.
+        if (spaceHeld.current || spaceHoldTimer.current !== null) return;
+        if (lastPointerWasTouch.current) return;
         if (document.activeElement === el) el.blur();
       }, 750);
     };
@@ -270,6 +481,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     el.addEventListener('input', resetTimer);
     el.addEventListener('paste', resetTimer);
     return () => {
+      window.removeEventListener('pointerdown', notePointer, true);
       el.removeEventListener('keydown', resetTimer);
       el.removeEventListener('input', resetTimer);
       el.removeEventListener('paste', resetTimer);
@@ -300,6 +512,18 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     };
     window.addEventListener('buddy:attach-file', listener);
     return () => window.removeEventListener('buddy:attach-file', listener);
+  }, [addFiles]);
+
+  useEffect(() => {
+    const listener = () => {
+      // WHY: the context menu identifies a composer-only image paste, while this
+      // component keeps ownership of both clipboard serialization and attachments.
+      void window.claude.dialog.saveClipboardImage().then((saved) => {
+        if (saved) addFiles([saved]);
+      });
+    };
+    window.addEventListener('youcoded:composer-paste-image', listener);
+    return () => window.removeEventListener('youcoded:composer-paste-image', listener);
   }, [addFiles]);
 
   // External "insert into composer" entry point — the chat right-click menu's
@@ -357,10 +581,18 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               sendRef.current(true);
             });
           } else {
-            onToast?.('Claude is waiting for your response — answer the prompt first.');
+            onToast?.('Your assistant is waiting for your response — answer the prompt first.');
           }
           return false;
         }
+      }
+
+      // Contract row R2: while the connection is down what you typed stays a draft and
+      // waits for you to press Send. It is NOT queued — queueing is what let a message the
+      // app had already reported as failed run minutes later, after a reconnect.
+      if (window.claude.session.canSend?.() === false) {
+        onToast?.('Not connected — your message is still here. Send it again when you reconnect.');
+        return false;
       }
 
       // Route slash commands through the central dispatcher BEFORE attachment
@@ -373,7 +605,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         files,
         dispatch,
         timeline: [], // Day 1: unused; will wire per-session timeline on Day 2 when commands need it
-        callbacks: { onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker },
+        callbacks: { onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker, onModelSwitchCommand },
         // Native /clear is durable-first — see deferUiEffectsToRuntime.
         deferUiEffectsToRuntime: provider === 'native',
       });
@@ -432,8 +664,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           // nothing and silently vanish the draft, so a rejection is routed
           // through the EXACT same failure branch as a failed/undefined ack
           // (same toast copy, same guarded draft restore) rather than treated
-          // as a distinct case — from the user's point of view a refused send
-          // and a lost send look identical: their message didn't go anywhere.
+          // as a distinct case. NOTE (error inventory 2026-09-10, false message 5):
+          // that a rejected send "didn't go anywhere" is NOT known — over remote
+          // access a rejection is the timeout and the send may still have run —
+          // so sendFailureCopy words an unanswered send as "couldn't confirm".
           let result: NativeSendResult | undefined;
           try {
             result = await sendChatMessage('native', sessionId, outgoing.ptyText, files.map((f) => f.path));
@@ -527,7 +761,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       }, submitStart);
       return true;
     },
-    [sessionId, disabled, dispatch, view, provider, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker],
+    [sessionId, disabled, dispatch, view, provider, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand],
   );
 
   // Auto-resize textarea to fit content, up to 3 lines then scroll
@@ -569,6 +803,16 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     // in the input bar so the user's text isn't lost. `force` is the "Send
     // anyway" override, which re-enters here past the gate (see sendMessage).
     if (!sendMessage(currentText, attachments, force)) return;
+    // The message has gone, so the dictation behind it goes too. Without this,
+    // sending mid-sentence sent the unsettled GREY words along with it AND left
+    // them in the box, and the next thing the engine said re-typed the whole
+    // utterance — so the user had to delete a copy of what they had just sent,
+    // with the microphone still open. `cancel` emits nothing (the event contract
+    // in voice-types.ts), so no late words can arrive after this either.
+    // Found reviewing T9, 2026-09-05.
+    setVoiceTail('');
+    voiceBaseRef.current = '';
+    if (voicePhaseRef.current !== 'idle') void voiceCancelRef.current();
     setText('');
     setAttachments([]);
     draftsRef.current.delete(sessionId); // Clear stored draft after sending
@@ -587,6 +831,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const val = inputRef.current?.value ?? text;
       // pty-worker auto-splits text+\r with a 600ms gap so Enter isn't
       // swallowed by Ink's paste buffer. No renderer-side setTimeout needed.
+      // A false return means the connection is down: keep the draft (R2).
+      if (window.claude.session.canSend?.() === false) {
+        onToast?.('Not connected — your message is still here. Send it again when you reconnect.');
+        return;
+      }
       window.claude.session.sendInput(sessionId, val + '\r');
       setText('');
       if (inputRef.current) {
@@ -651,9 +900,15 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     e.preventDefault();
   }, []);
 
+  textRef.current = text;
+
   return (
     <div
-      className="input-bar-container shrink-0"
+      // select-none: the composer's chrome (buttons, the placeholder/mirror
+      // layer, attachment chips) is not highlightable or copyable (Destin,
+      // 2026-09-10). The textarea itself stays selectable: globals.css
+      // re-enables text fields.
+      className="input-bar-container shrink-0 select-none"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
@@ -681,6 +936,20 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         </div>
       )}
 
+      {/* A model chosen at setup that is still downloading (first-run local
+          models, Q-4/Q-7): the same thin band, above the box. */}
+      {!minimal && <LocalModelDownloadStrip sessionId={sessionId} />}
+      {/* Feedback B: the app's thin status band, above the box, while listening. */}
+      {voiceListening && voiceStyle.feedback === 'strip' && (
+        <div className="px-2 sm:px-3 pb-1.5">
+          <StatusStrip
+            tone="ok"
+            action={<Button variant="secondary" size="sm" onClick={() => { void voice.stop(); }}>Stop</Button>}
+          >
+            <span className="inline-flex items-center gap-3">Listening <VoiceMeter level={voice.level} seconds={voice.seconds} /></span>
+          </StatusStrip>
+        </div>
+      )}
       <div className="px-2 sm:px-3 pb-1 sm:pb-1.5">
         <form onSubmit={handleSubmit} className="flex items-center gap-1.5 sm:gap-2 bg-inset rounded-xl px-2 sm:px-3 py-2">
           <BrailleBurst
@@ -702,6 +971,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             </BrailleBurst>
           )}
           <div className="relative flex-1">
+            {/* Feedback C: meter and clock in the empty line, gone once words arrive. */}
+            {voiceListening && voiceStyle.feedback === 'placeholder' && !text && !voiceTail && (
+              <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 flex items-center gap-2 text-sm text-fg-muted">
+                <span>Listening</span>
+                <VoiceMeter level={voice.level} seconds={voice.seconds} />
+              </div>
+            )}
             {/* Mirror layer: renders the same text behind the transparent
                 textarea, with keyword spans that animate via CSS. aria-hidden
                 because the textarea still owns the accessible value. */}
@@ -720,13 +996,14 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
                 className="input-bar-mirror-content text-sm text-fg leading-snug whitespace-pre-wrap break-words"
               >
                 <FlowingKeywordsText text={text} />
+                {voiceTail && <span className="text-fg-muted">{voiceTail}</span>}
                 {/* Zero-width char keeps a trailing newline visible in the mirror */}
                 {'\u200B'}
               </div>
             </div>
           <textarea
             ref={inputRef}
-            value={text}
+            value={text + voiceTail}
             rows={1}
             // Disable spellcheck — with transparent text + mirror overlay, the
             // red/blue squiggles render on top of the mirror and look like bugs.
@@ -740,6 +1017,18 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             }}
             onChange={(e) => {
               const val = e.target.value;
+              // Typing while the mic is open ends dictation, and EVERYTHING in the
+              // box stays — including the grey, still-being-reconsidered words.
+              //
+              // Fix (whole-branch review F4): this comment used to say the grey
+              // words were dropped, which is the opposite of what happens. The
+              // textarea's value is the solid text plus the grey tail, so a
+              // keystroke arrives as all of it plus the new character, and the
+              // line below promotes the lot to solid. That is the RIGHT behaviour
+              // — words the user watched appear must not vanish when they reach
+              // for the keyboard — but the comment claiming otherwise would have
+              // sent the next session "fixing" it in the wrong direction.
+              if (voice.phase !== 'idle') { void voice.cancel(); setVoiceTail(''); }
               setText(val);
               // Detect "/" typed as first character — open drawer in search mode
               if (val === '/' && text === '') {
@@ -754,10 +1043,57 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               }
             }}
             onKeyDown={(e) => {
+              // Hold Space anywhere in the box = walkie-talkie (see spaceHoldTimer).
+              if (e.key === ' ' && !minimal) {
+                // Already talking: the space bar belongs to the microphone.
+                if (spaceHeld.current) { e.preventDefault(); return; }
+                // A hold is already counting down, so this is the keyboard
+                // repeating itself — swallowed WITHOUT asking the event whether
+                // it is a repeat, which is the question that made this a gamble.
+                if (spaceHoldTimer.current !== null) { e.preventDefault(); return; }
+                if (voiceCanStart) {
+                  // Type nothing yet. Either the hold matures and this was never
+                  // meant to be a space, or it does not and the space goes in
+                  // below — in the right place, exactly once.
+                  e.preventDefault();
+                  spaceHoldTimer.current = window.setTimeout(() => {
+                    spaceHoldTimer.current = null;
+                    spaceHeld.current = true;
+                    startVoice();
+                  }, SPACE_HOLD_MS);
+                  return;
+                }
+              }
+              // Any other key while a hold is counting down means the user was
+              // typing, not reaching for the microphone. The swallowed space goes
+              // in BEFORE this key does.
+              if (spaceHoldTimer.current !== null && e.key !== ' ') {
+                cancelSpaceHold();
+                commitPendingSpace();
+              }
               // Enter sends, Shift+Enter inserts newline
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
+                // Enter while the mic is open STOPS it and sends nothing: the
+                // words wait in the box and a second Enter sends them, exactly
+                // as if they had been typed (deck V-6, contract R3).
+                //
+                // WHY the guard is here and in the window-level handler above,
+                // and NOT inside send(): the Send button submits the form
+                // through send(), and so does the "Send anyway" retry after a
+                // blocked send. A guard inside send() would silently turn both
+                // of those into a stop — a button that says Send and doesn't.
+                if (voiceListening) { void voice.stop(); return; }
                 if (minimal && sessionId) {
+                  // WHY ask canSend first (error inventory 2026-09-10, false message 6):
+                  // this branch sent and cleared unconditionally. Over remote access
+                  // session:input is refused while the connection is down, so the box
+                  // emptied as if the line had gone through and the words were lost.
+                  // Same check, same sentence as the composer's own send path.
+                  if (window.claude.session.canSend?.() === false) {
+                    onToast?.('Not connected — your message is still here. Send it again when you reconnect.');
+                    return;
+                  }
                   // Terminal mode: send text + Enter directly to PTY.
                   // pty-worker auto-splits text+\r with a 600ms gap so Ink
                   // sees Enter as a distinct keystroke after paste commits.
@@ -773,8 +1109,26 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
                 }
               }
             }}
+            onKeyUp={(e) => {
+              if (e.key !== ' ') return;
+              // Let go before the hold matured: that was a space, not a walkie-
+              // talkie. This is the only place a held space ever becomes text.
+              const wasPending = cancelSpaceHold();
+              releaseSpaceHold();
+              if (wasPending) commitPendingSpace();
+            }}
+            // The box losing focus mid-hold ends the hold too — see
+            // releaseSpaceHold. (The idle-unfocus timer below cannot trip this:
+            // a held key repeats, and every repeat resets that timer.)
+            onBlur={releaseSpaceHold}
             onPaste={handlePaste}
-            placeholder={disabled ? 'Waiting for approval...' : 'Message Claude...'}
+            // WHY unconditional (Destin, 2026-09-10): "replace any direct references to
+            // 'claude' with 'the assistant' … and make sure they work with native
+            // sessions". This was provider-conditional — "Message Claude…" on a PTY
+            // session, "your assistant" on a native one — which was right under the older
+            // policy and is superseded: the app is the product, and which model is behind
+            // it is a setting. Product names still stay (utils/assistant-name.ts).
+            placeholder={disabled ? 'Waiting for approval...' : voiceListening ? (voiceStyle.feedback === 'placeholder' ? '' : 'Listening…') : 'Message your assistant...'}
             disabled={disabled}
             // Text color is transparent so the mirror div behind it shows
             // through (with animated keyword spans). caret-color keeps the
@@ -807,7 +1161,34 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               stall warning and the red parked card, because those turns are
               still running and that is precisely when a user with no ESC key
               needs a way out. See useStreamingGate.ts. */}
-          <StopButton sessionId={sessionId} provider={provider} visible={showStop} />
+          {/* Voice prompting: the mic sits where the eye already goes to
+              send. Hidden entirely when the host has no speech engine
+              (remote browser, older builds) and in terminal view. */}
+          {/* WHY a group: Destin asked for the mic "a smidge closer to the stop button"
+              (live deck L-2, 2026-09-10). gap-1 inside the pair tightens only that
+              space; Send keeps the form's own gap. Rendered only when one of them shows,
+              because an empty flex child would still claim a gap in the row. */}
+          {((!minimal && voice.supported) || showStop) && (
+          <div className="flex items-center gap-1 shrink-0">
+          {!minimal && voice.supported && (
+            <VoiceButton
+              phase={voice.phase}
+              readiness={voice.readiness}
+              level={voice.level}
+              seconds={voice.seconds}
+              error={voice.error}
+              disabled={disabled}
+              onStart={startVoice}
+              onStop={() => { void voice.stop(); }}
+              onDownload={() => { void voice.download(); }}
+              onRecheck={() => { void voice.recheck(); }}
+              onClearError={voice.clearError}
+              onReady={() => onToast?.('Voice is ready — tap the mic to talk.')}
+            />
+          )}
+          <StopButton sessionId={sessionId} provider={provider} visible={showStop} live={stopLive} />
+          </div>
+          )}
           {/* The app's most-used control. Geometry is unchanged — 28x28 is exactly
               what size="icon" emits — and it keeps `bg-accent`, which matters:
               community packs style the send button through `.bg-accent` (Halftone's

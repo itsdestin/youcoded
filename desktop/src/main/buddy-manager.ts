@@ -18,6 +18,8 @@ export interface BuddyManager {
   chatWebContents(): WebContents | null;
   /** Per-frame drag path used ONLY by the three-window model; overlay no-ops. */
   moveMascot(targetX: number, targetY: number): void;
+  /** Cursor offset from the grab point, in the mascot window's own coordinates. */
+  moveMascotFromPointer(localDx: number, localDy: number): void;
   dragEnded(): void;
 }
 
