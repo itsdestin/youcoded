@@ -50,4 +50,15 @@ describe('SessionStrip layout effects', () => {
     const bare = effects.filter((e) => !e.hasDeps);
     expect(bare.map((e) => e.line), `dependency-less useLayoutEffect at lines ${bare.map((e) => e.line).join(', ')}`).toHaveLength(1);
   });
+
+  it('the two getComputedStyle reads are keyed on themeApplied, not on the theme itself', () => {
+    // WHY (review, 2026-09-16): keyed on `theme`, a layout effect runs in the
+    // same commit as the theme change — BEFORE the provider's passive effect
+    // has written the new theme to the DOM — and reads the OUTGOING theme.
+    // `themeApplied` is bumped one render after the DOM is current.
+    const src = readStripped(FILE);
+    expect(src).toMatch(/getComputedStyle\(nameEl\)\.font[\s\S]{0,200}\}, \[themeApplied, hasPills\]\);/);
+    expect(src).toMatch(/motionWindowMs\(pillBarRef\.current\)[\s\S]{0,120}\}, \[themeApplied\]\);/);
+    expect(src).not.toMatch(/\}, \[[^\]]*\b(themeSlug|theme|reducedEffects)\b[^\]]*\]\);/);
+  });
 });

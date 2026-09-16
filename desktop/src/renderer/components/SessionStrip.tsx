@@ -718,8 +718,10 @@ export default function SessionStrip({
   // phase is a forced style flush, and this effect ran once per render of the
   // strip — with the shell re-rendering per streamed word that was one forced
   // flush per word for the length of every reply. The font only changes with
-  // the theme, so the theme is the dependency.
-  const { theme: themeSlug, font: themeFont, reducedEffects } = useTheme();
+  // the theme, so the dependency is `themeApplied`: the provider bumps it one
+  // render AFTER it has written the theme to the DOM (its own WHY explains
+  // why keying on the theme itself would read the outgoing theme).
+  const { themeApplied } = useTheme();
   const hasPills = sessions.length > 0;
   const [font, setFont] = useState<string>(NAME_FONT);
   useLayoutEffect(() => {
@@ -727,7 +729,7 @@ export default function SessionStrip({
     if (!nameEl) return;
     const name = getComputedStyle(nameEl).font;
     setFont((prev) => (name && name !== prev ? name : prev));
-  }, [themeSlug, themeFont, hasPills]);
+  }, [themeApplied, hasPills]);
   const metrics = useMemo(() => {
     const out = new Map<string, PillMetrics>();
     const ctx = measureCanvasRef.current?.getContext('2d') ?? null;
@@ -1767,15 +1769,15 @@ export default function SessionStrip({
   // the stylesheet — see motionWindowMs. Also armed when a drag starts and
   // ends, so a label that opens or closes at pickup or drop is inside the
   // repack-churn kill-switch's exception.
-  // WHY theme-keyed deps (2026-09-16 A2): motionWindowMs is a getComputedStyle
+  // WHY themeApplied (2026-09-16 A2): motionWindowMs is a getComputedStyle
   // read — a forced style flush — and it ran after EVERY render. The reveal
   // duration lives in the stylesheet and changes only with the theme or with
-  // Reduced Effects, so those are the dependencies.
+  // Reduced Effects, both of which bump `themeApplied` once the DOM has them.
   const [windowMs, setWindowMs] = useState(EXPAND_WINDOW_FALLBACK_MS);
   useLayoutEffect(() => {
     const ms = motionWindowMs(pillBarRef.current);
     setWindowMs((prev) => (ms !== prev ? ms : prev));
-  }, [themeSlug, reducedEffects]);
+  }, [themeApplied]);
   const expandArmed = useOneShotWindow(`${activeSessionId}:${dragLeft !== null}`, windowMs);
 
   // Everything below reads the pack the drag was packed against (frozen at

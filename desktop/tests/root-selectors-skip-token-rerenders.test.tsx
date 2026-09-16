@@ -21,6 +21,7 @@ import type { ChatAction } from '../src/renderer/state/chat-types';
 import { useSessionTasks } from '../src/renderer/hooks/useSessionTasks';
 import { useTrustGateActive } from '../src/renderer/components/TrustGate';
 import ToolBody from '../src/renderer/components/tool-views/ToolBody';
+import { TRUST_PROMPT_TITLE } from '../src/renderer/parser/ink-select-parser';
 import type { ToolCallState } from '../src/shared/types';
 
 const SID = 's1';
@@ -75,6 +76,32 @@ describe('the app root and a streaming reply', () => {
     const before = renders;
     act(() => { store.dispatch({ type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SID } as ChatAction); });
     expect(renders - before).toBe(1);
+  });
+});
+
+// The trust-gate selector caches its timeline scan by the timeline array's
+// identity. Words stream (no flip, no rescan) → a trust prompt lands → the
+// gate flips on → the prompt is answered → it flips off. Pinned through the
+// real store so the cache is exercised across timeline changes.
+describe('the trust gate and a streaming reply', () => {
+  it('flips on when the prompt lands and off when it is answered, and ignores words in between', () => {
+    let store!: ChatStore;
+    let renders2 = 0;
+    let active = false;
+    function Gate() { renders2++; active = useTrustGateActive(SID); return null; }
+    function Grab() { store = useChatStore(); return null; }
+    render(<ChatProvider><Grab /><Gate /></ChatProvider>);
+    act(() => { store.dispatch({ type: 'SESSION_INIT', sessionId: SID }); store.dispatch(text(0)); });
+    const before = renders2;
+    act(() => { for (let i = 1; i <= 5; i++) store.dispatch(text(i)); });
+    expect(renders2 - before).toBe(0);
+    expect(active).toBe(false);
+    act(() => { store.dispatch({ type: 'SHOW_PROMPT', sessionId: SID, promptId: 'p1', title: TRUST_PROMPT_TITLE, buttons: [{ label: 'Yes', input: '1' }] } as ChatAction); });
+    expect(active).toBe(true);
+    act(() => { for (let i = 6; i <= 10; i++) store.dispatch(text(i)); });
+    expect(active).toBe(true);
+    act(() => { store.dispatch({ type: 'COMPLETE_PROMPT', sessionId: SID, promptId: 'p1', selection: 'Yes' } as ChatAction); });
+    expect(active).toBe(false);
   });
 });
 

@@ -163,6 +163,13 @@ function appendAbovePending(timeline: TimelineEntry[], entry: TimelineEntry): Ti
  * snapshots it with Array.from. Every caller sits on a path that commits the
  * new session object — a site that could still `return state` after calling
  * this would mark the uuid as applied without applying it, so keep it that way.
+ *
+ * One more consumer runs this reducer: SessionPreviewPane feeds it through
+ * React's useReducer, which may invoke a reducer twice for one action (a
+ * discarded render, StrictMode). That pane only dispatches SESSION_INIT and the
+ * HISTORY_PAGE_* actions, whose replay copies the set first — never route a
+ * live TRANSCRIPT_* action through a React reducer, or a double invocation
+ * would find its uuid already seen and drop the entry.
  */
 function markSeen(session: SessionChatState, uuid: string): Set<string> {
   const set = session.seenUuids ?? new Set<string>();

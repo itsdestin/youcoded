@@ -105,7 +105,20 @@ export function createChatStore(): ChatStore {
   const dispatchMany = (actions: readonly ChatAction[]) => {
     const prev = state;
     let next = prev;
-    for (const action of actions) next = chatReducer(next, action);
+    for (const action of actions) {
+      // WHY per-action try/catch (review, 2026-09-16): the per-action dispatch
+      // committed each action before the next ran, so a throwing action lost
+      // only itself and the rest of its frame. Applying the frame in one pass
+      // would lose the actions BEFORE the throw too — and, since the reducer's
+      // seen-uuid set is appended in place, their uuids would already count as
+      // applied, so a replay could not bring them back. Commit what succeeded.
+      try {
+        next = chatReducer(next, action);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[chat-store] action failed and was skipped', action.type, err);
+      }
+    }
     if (next === prev) return;
     state = next;
     notify(prev, next);
