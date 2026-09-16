@@ -328,9 +328,14 @@ export class PlanBudget {
             // may overshoot, and a running sibling still holds its own
             // allowance — without this it could keep sending (and overshoot
             // again) after the PLAN's limit is already gone. On capped routes
-            // spending can never pass the ceiling, so this is inert there.
-            if (plan.usedTokens >= plan.ceilingTokens
-              || (plan.ceilingUsd !== null && (plan.usedUsd ?? 0) >= plan.ceilingUsd - USD_EPSILON)) {
+            // spending can never pass the ceiling, so it is applied to soft
+            // routes only (round 4): on a capped plan, unresolved priced
+            // attempts charged to exactly the dollar limit must not block a
+            // free/local specialist that still holds tokens — Add budget on a
+            // local step could never clear that. Dollars use `>`, matching
+            // settle's re-check: reaching the limit exactly is not passing it.
+            if (!adapter.capsOutput && (plan.usedTokens >= plan.ceilingTokens
+              || (plan.ceilingUsd !== null && (plan.usedUsd ?? 0) > plan.ceilingUsd + USD_EPSILON))) {
               return { ok: false, kind: 'exhausted', detail: "The plan has used its whole budget." };
             }
             const left = allowanceLeft(attempt);

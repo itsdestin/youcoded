@@ -553,3 +553,25 @@ describe('soft plans stop at the PLAN limit, not just the attempt limit (round 3
     expect(await gate.reserve({ inputBoundTokens: 100 })).toMatchObject({ ok: false, kind: 'exhausted' });
   });
 });
+
+describe('the plan-wide stop is for soft routes only (round 4)', () => {
+  it('a capped plan whose dollars were charged to exactly the ceiling still lets a local specialist with tokens left send', async () => {
+    const m = manifest({ kind: 'priced', rates: REVIEWER_RATES }, { kind: 'local' });
+    await seed(record({ manifest: m, ceilingUsd: planCeilingUsd(DOC, m) }));
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's2' }]);
+    if (!r.ok) throw new Error(r.detail);
+    // Unresolved priced attempts were pessimistically charged to exactly the limit.
+    await journal.mutateFenced(REF, 'p1', fence, (p) => { p.usedUsd = p.ceilingUsd!; });
+    const gate = budget.requestGate(REF, 'p1', fence, 's2', r.attempts[0].attemptId, ADAPTER);
+    expect(await gate.reserve({ inputBoundTokens: 100 })).toEqual({ ok: true, maxOutputTokens: 1900 });
+  });
+
+  it('a soft plan exactly AT its dollar limit may still send (only passing it stops)', async () => {
+    await seed(record());
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);
+    if (!r.ok) throw new Error(r.detail);
+    await journal.mutateFenced(REF, 'p1', fence, (p) => { p.usedUsd = p.ceilingUsd!; });
+    const gate = budget.requestGate(REF, 'p1', fence, 's1', r.attempts[0].attemptId, SOFT);
+    expect(await gate.reserve({ inputBoundTokens: 100 })).toMatchObject({ ok: true });
+  });
+});
