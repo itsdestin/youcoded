@@ -177,4 +177,45 @@ describe('NativeHome', () => {
     expect(second).toBe(false);
     expect(fs.readFileSync(target, 'utf8')).toBe('the user edited this');
   });
+  // Specialists plans (Task 2): the plan journal must tell "absent" apart from
+  // "present but unreadable" — readJson collapses both to null. These strict
+  // helpers keep the lock/atomic-write story while exposing the raw bytes.
+  it('readRawBytes returns null only for a missing file and the exact bytes otherwise', () => {
+    expect(home.readRawBytes('plans/x.json')).toBeNull();
+    expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false);
+    const target = path.join(root, '.youcoded', 'plans', 'x.json');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const bytes = Buffer.from([0x7b, 0xff, 0x00, 0x7d]);
+    fs.writeFileSync(target, bytes);
+    expect(home.readRawBytes('plans/x.json')?.equals(bytes)).toBe(true);
+    fs.rmSync(target); fs.mkdirSync(target);
+    expect(() => home.readRawBytes('plans/x.json')).toThrow();
+  });
+
+  it('mutateText hands the raw text to the callback, writes its string, and a null return writes nothing', async () => {
+    const target = path.join(root, '.youcoded', 'raw.json');
+    await home.mutateText('raw.json', (cur) => { expect(cur).toBeNull(); return 'first'; });
+    expect(fs.readFileSync(target, 'utf8')).toBe('first');
+    await home.mutateText('raw.json', (cur) => { expect(cur).toBe('first'); return null; });
+    expect(fs.readFileSync(target, 'utf8')).toBe('first');
+    // A throwing callback aborts the write and releases the lock.
+    await expect(home.mutateText('raw.json', () => { throw new Error('refuse'); })).rejects.toThrow('refuse');
+    expect(fs.existsSync(target + '.lock')).toBe(false);
+    expect(fs.readFileSync(target, 'utf8')).toBe('first');
+  });
+
+  it('mutateJson still treats a corrupt file as absent (contract unchanged)', async () => {
+    const target = path.join(root, '.youcoded', 'c.json');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, '{nope');
+    await home.mutateJson('c.json', (cur) => ({ saw: cur }));
+    expect(home.readJson('c.json')).toEqual({ saw: null });
+  });
+
+  it('createFileExclusive writes bytes once and never replaces an existing file', async () => {
+    const bytes = Buffer.from([1, 2, 3]);
+    expect(await home.createFileExclusive('q/a.bin', bytes)).toBe(true);
+    expect(await home.createFileExclusive('q/a.bin', Buffer.from([9]))).toBe(false);
+    expect(fs.readFileSync(path.join(root, '.youcoded', 'q', 'a.bin')).equals(bytes)).toBe(true);
+  });
 });

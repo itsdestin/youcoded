@@ -86,14 +86,9 @@ export class NativeHome {
     mutate: (current: unknown | null) => unknown,
     opts?: { maxRetries?: number }
   ): Promise<void> {
-    const p = path.join(this.dir, rel);
-    // Clamp to ≥1: a 0/negative override would fall straight through the loop
-    // and throw "lock held" without ever probing the lock once.
-    const maxRetries = Math.max(1, opts?.maxRetries ?? LOCK_MAX_RETRIES);
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      // mutateFileUnderLock mkdirs the target's parent itself, so the directory
-      // is created lazily here on first WRITE — never on read.
-      const ok = await mutateFileUnderLock(p, (onDisk) => {
+    await this.mutateText(
+      rel,
+      (onDisk) => {
         let current: unknown | null = null;
         if (onDisk !== null) {
           try {
@@ -104,12 +99,79 @@ export class NativeHome {
           }
         }
         return JSON.stringify(mutate(current), null, 2);
-      });
+      },
+      opts
+    );
+  }
+
+  /**
+   * The raw-text form of mutateJson: same lock, same atomic write, same
+   * retry-then-THROW, but the callback sees the exact text on disk (null only
+   * when the file is absent) and returns the exact text to write, or null to
+   * write nothing. A throw inside the callback aborts with no write and the
+   * lock released.
+   *
+   * WHY (specialists plans, Task 2): mutateJson deliberately reads a corrupt
+   * file as "absent" so settings files self-heal. The plan journal must NOT
+   * do that — a damaged plan file may hold approved budgets and finished
+   * reports, so it has to be able to see the damage and refuse to write over
+   * it. mutateJson is now a thin wrapper over this, so both share one locking
+   * story and mutateJson's own contract is unchanged.
+   */
+  async mutateText(
+    rel: string,
+    mutate: (onDisk: string | null) => string | null,
+    opts?: { maxRetries?: number }
+  ): Promise<void> {
+    const p = path.join(this.dir, rel);
+    // Clamp to ≥1: a 0/negative override would fall straight through the loop
+    // and throw "lock held" without ever probing the lock once.
+    const maxRetries = Math.max(1, opts?.maxRetries ?? LOCK_MAX_RETRIES);
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // mutateFileUnderLock mkdirs the target's parent itself, so the directory
+      // is created lazily here on first WRITE — never on read.
+      const ok = await mutateFileUnderLock(p, mutate);
       if (ok) return;
     }
     throw new Error(
       `Could not update ${rel} — another YouCoded process is holding its lock. Try again in a moment.`
     );
+  }
+
+  /**
+   * Strict read: the exact bytes of a file relative to ~/.youcoded/, or null
+   * ONLY when it does not exist. Never parses, never creates a directory, and
+   * rethrows every other I/O error (same reason as readJson). WHY bytes, not
+   * text: a damaged plan journal is preserved byte-for-byte in a quarantine
+   * copy, and decoding invalid UTF-8 first would silently alter it.
+   */
+  readRawBytes(rel: string): Buffer | null {
+    try {
+      return fs.readFileSync(path.join(this.dir, rel));
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return null;
+      throw e;
+    }
+  }
+
+  /**
+   * Create `rel` with `bytes` only if nothing exists there yet. Returns true
+   * when it wrote, false when a file was already present (left untouched).
+   * WHY the exclusive 'wx' open rather than ensureTextFile's exists-check:
+   * two processes quarantining the same damaged journal at once must never
+   * truncate each other's copy, and 'wx' makes create-if-absent one atomic
+   * filesystem step.
+   */
+  async createFileExclusive(rel: string, bytes: Buffer): Promise<boolean> {
+    const p = path.join(this.dir, rel);
+    await fs.promises.mkdir(path.dirname(p), { recursive: true });
+    try {
+      await fs.promises.writeFile(p, bytes, { flag: 'wx' });
+      return true;
+    } catch (e: any) {
+      if (e?.code === 'EEXIST') return false;
+      throw e;
+    }
   }
 
   /** Absolute path of one session's JSONL. PUBLIC because the private
