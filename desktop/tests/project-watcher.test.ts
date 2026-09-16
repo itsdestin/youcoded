@@ -23,11 +23,14 @@ import {
   unwatchProject,
   dropSubscriber,
   noteOwnWrite,
+  watchDepthFor,
+  __ownWritesHeld,
   __resetProjectWatchersForTest,
   __setWatchGraceMsForTest,
   __watchersStartedForTest,
   type ExternalChangeEvent,
 } from '../src/main/artifacts/project-watcher';
+import { vi } from 'vitest';
 
 describe('isWatchIgnoredPath', () => {
   const root = '/proj';
@@ -240,4 +243,50 @@ describe('project watcher lifecycle', () => {
     expect(ids).toContain('mine/outside.ts');
     expect(ids).not.toContain('vendored/src/inside.ts');
   }, 20000);
+
+  // 2026-09-16 C8: an event names the windows subscribed to its root, so the
+  // sink sends it to those and not to every window in the app.
+  it('hands the sink the subscriber ids of the changed root only', async () => {
+    const delivered: number[][] = [];
+    initProjectWatchers((evt, subscriberIds) => { events.push(evt); delivered.push(subscriberIds); });
+    await watchProject(root, 7);
+    await watchProject(root, 9);
+    const other = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-watch-other-'));
+    try {
+      await watchProject(other, 11);
+      await fs.promises.writeFile(path.join(root, 'a.txt'), 'hello');
+      await settle();
+      expect(delivered.length).toBeGreaterThan(0);
+      for (const ids of delivered) expect([...ids].sort()).toEqual([7, 9]);
+    } finally {
+      await fs.promises.rm(other, { recursive: true, force: true });
+    }
+  }, 20000);
+});
+
+// 2026-09-16 C8: own-write markers under no watcher used to stay forever.
+describe('own-write markers expire', () => {
+  afterEach(() => { vi.useRealTimers(); __resetProjectWatchersForTest(); });
+
+  it('sweeps expired markers once the map grows past its threshold', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-16T12:00:00Z'));
+    for (let i = 0; i < 600; i++) noteOwnWrite(`/nowhere/watched/file-${i}.txt`);
+    expect(__ownWritesHeld()).toBe(600);
+    vi.setSystemTime(new Date('2026-09-16T12:00:10Z')); // well past OWN_WRITE_TTL_MS
+    noteOwnWrite('/nowhere/watched/one-more.txt');
+    expect(__ownWritesHeld()).toBe(1);
+  });
+});
+
+// 2026-09-16 C9: the seeded Home project is watched two levels deep, every
+// other root at the discovery depth.
+describe('watchDepthFor', () => {
+  it('is shallow for the home folder itself and full depth for a project inside it', () => {
+    const home = path.join(os.tmpdir(), 'ycd-home');
+    expect(watchDepthFor(home, home)).toBe(2);
+    expect(watchDepthFor(home + path.sep, home)).toBe(2);
+    expect(watchDepthFor(path.join(home, 'proj'), home)).toBe(6);
+    expect(watchDepthFor(path.join(os.tmpdir(), 'elsewhere'), home)).toBe(6);
+  });
 });

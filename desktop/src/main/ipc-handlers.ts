@@ -4899,10 +4899,15 @@ export function registerIpcHandlers(
   // Watchers live in main, refcounted per webContents (project-watcher.ts owns
   // the lifecycle). Events reuse the existing CHANGED broadcast contract with
   // by:'external' — the renderer filters on projectRoot exactly like user events.
-  initProjectWatchers((evt) => {
+  initProjectWatchers((evt, subscriberIds) => {
     // Created/deleted files must show up in the next file-list fetch.
     if (evt.kind !== 'edit') invalidateDiscoveryCache(evt.projectRoot);
-    webContents.getAllWebContents().forEach((wc) => wc.send(ARTIFACT_IPC.CHANGED, evt));
+    // Only the windows subscribed to this root (2026-09-16 C8) — every
+    // consumer of this event lives in a surface that called useProjectWatch
+    // (the drawer, its viewer and git footer, the Files tab). A phone's
+    // subscriber id is not a webContents id; fromId() answers undefined for it
+    // and the remote broadcast below carries the event there.
+    for (const id of subscriberIds) webContents.fromId(id)?.send(ARTIFACT_IPC.CHANGED, evt);
     // A phone subscribed over remote access (remote-server.ts watch-project)
     // is not a webContents; without this line the phone's file list never
     // updated while the assistant worked (contract row R12). Every consumer
