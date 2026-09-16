@@ -36,6 +36,10 @@ interface Props {
    *  the user can raise the exhausted window, side by side with switching
    *  providers. Shown only for a plan-limit error, like Switch Providers. */
   onUpgradePlan?: () => void;
+  /** Which runtime the session runs. Only 'native' changes anything: the
+   *  'stuck' line drops its "check Terminal view" pointer, because a native
+   *  session has no Terminal view. Anything else keeps the pointer. */
+  provider?: 'claude' | 'native';
 }
 
 // Provider-CONFIGURATION errors (missing API key, disabled provider, no endpoint)
@@ -63,6 +67,13 @@ const COPY: Record<Props['state'], string> = {
   'stalled': 'Provider may have stalled',
 };
 
+// WHY: a native session has no Terminal view to check, so the Claude Code
+// pointer above would send the user looking for something that isn't there.
+// No button is added: a native 'stuck' always moves on within ~15s — to the
+// red 'stalled' card (Retry/Stop), a silent auto-retry, or the 'error' card
+// (harness-session.ts armWatchdog). Destin chose copy-only, 2026-09-16.
+const NATIVE_STUCK_COPY = 'Still waiting on your assistant.';
+
 // Destructive states pick up the L3 destructive ring tokens so they read as
 // "something went wrong" rather than just a nudge. Other states reuse the
 // neutral bubble styling to stay consistent with ThinkingIndicator.
@@ -78,7 +89,7 @@ function elapsedLabel(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-export default function AttentionBanner({ state, anthropicRequestId, errorMessage, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan }: Props) {
+export default function AttentionBanner({ state, anthropicRequestId, errorMessage, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan, provider }: Props) {
   // Ticks once a second while parked. `stalledSince` IS serialized to the host
   // (chat-types.ts) so a reconnecting phone can still see the card — see that
   // field's own comment for why the elapsed number is only approximate there.
@@ -113,7 +124,9 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
     ? errorMessage
     : state === 'stalled' && stalledSince != null
       ? `${COPY.stalled} — no response for ${elapsedLabel(now - stalledSince)}`
-      : COPY[state];
+      : state === 'stuck' && provider === 'native'
+        ? NATIVE_STUCK_COPY
+        : COPY[state];
   // The 'error' banner's Try again button is UNCHANGED below (same element,
   // same classes) — Task 11 reserves it and nothing here may alter it.
   // Stalled gets its own Retry/Stop pair rather than reusing showRetry, so a
