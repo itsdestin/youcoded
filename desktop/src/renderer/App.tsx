@@ -1358,7 +1358,8 @@ function AppInner() {
     // The batcher lives in state/transcript-batch.ts (with its hidden-window
     // timer fallback) so the remote snapshot exporter and the chat:hydrate
     // handler can flush it on demand — see that module's WHY.
-    const transcriptBatcher = installTranscriptBatcher(dispatch);
+    // dispatchMany, not dispatch: the frame's actions notify subscribers once (A4).
+    const transcriptBatcher = installTranscriptBatcher(chatStore.dispatchMany);
     const batchTranscriptDispatch = (action: ChatAction) => transcriptBatcher.push(action);
 
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {

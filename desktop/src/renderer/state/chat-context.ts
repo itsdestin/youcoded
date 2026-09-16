@@ -54,22 +54,22 @@ export interface ChatStore {
   subscribeSession: (id: string, callback: () => void) => () => void;
   subscribeAll: (callback: () => void) => () => void;
   dispatch: Dispatch<ChatAction>;
+  /** Apply several actions in order and notify subscribers ONCE, for the
+   *  sessions the whole batch changed. See the WHY on the implementation. */
+  dispatchMany: (actions: readonly ChatAction[]) => void;
 }
 
-function createChatStore(): ChatStore {
+// Exported for tests that need a store without a React tree around it.
+export function createChatStore(): ChatStore {
   let state: ChatState = new Map();
   const sessionSubs = new Map<string, Set<() => void>>();
   const allSubs = new Set<() => void>();
 
-  const dispatch: Dispatch<ChatAction> = (action) => {
-    const prev = state;
-    const next = chatReducer(prev, action);
-    if (next === prev) return;
-    state = next;
-    // Notify only subscribers for sessions whose state reference changed.
-    // Added sessions count (new reference from undefined), removed sessions
-    // notify their subscribers too so they can read the EMPTY_SESSION_STATE
-    // fallback after deletion.
+  // Notify only subscribers for sessions whose state reference changed.
+  // Added sessions count (new reference from undefined), removed sessions
+  // notify their subscribers too so they can read the EMPTY_SESSION_STATE
+  // fallback after deletion.
+  const notify = (prev: ChatState, next: ChatState) => {
     for (const [id, session] of next) {
       if (prev.get(id) !== session) {
         const subs = sessionSubs.get(id);
@@ -83,6 +83,32 @@ function createChatStore(): ChatStore {
       }
     }
     for (const cb of allSubs) cb();
+  };
+
+  const dispatch: Dispatch<ChatAction> = (action) => {
+    const prev = state;
+    const next = chatReducer(prev, action);
+    if (next === prev) return;
+    state = next;
+    notify(prev, next);
+  };
+
+  // WHY (2026-09-16 smoothness sweep, A4): the transcript batcher already made
+  // ONE React render per animation frame, but it fed the store one action at a
+  // time, and every dispatch ran every subscriber — twelve app-wide
+  // subscribeAll readers (attention colours, usage totals, the submit-retry
+  // tracker that walks every session's timeline, …) plus the per-session
+  // ones. A frame carrying ten streamed words ran all of them ten times. The
+  // reducer still sees the actions one at a time, in order; only the
+  // notification waits for the end of the batch. No subscriber depends on an
+  // intermediate state — each re-reads the whole store when told.
+  const dispatchMany = (actions: readonly ChatAction[]) => {
+    const prev = state;
+    let next = prev;
+    for (const action of actions) next = chatReducer(next, action);
+    if (next === prev) return;
+    state = next;
+    notify(prev, next);
   };
 
   return {
@@ -107,6 +133,7 @@ function createChatStore(): ChatStore {
       return () => { allSubs.delete(cb); };
     },
     dispatch,
+    dispatchMany,
   };
 }
 

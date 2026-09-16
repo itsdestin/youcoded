@@ -163,10 +163,27 @@ export function useSubmitConfirmation(args: UseSubmitConfirmationArgs) {
   // Perf (tranche 1): store subscription instead of a [chatState] effect.
   // Tracking/cleanup semantics are unchanged — only the read path moved.
   useEffect(() => {
+    // WHY the timeline cache (2026-09-16 A4): this runs on every store
+    // notification and used to walk EVERY session's whole timeline each time —
+    // so a native session streaming at 60 words a second re-scanned the long
+    // Claude Code conversations in the other tabs 60 times a second, for a
+    // tracker that only changes when a pending bubble appears or clears. A
+    // pending flag change always produces a new timeline array (the reducer
+    // spreads), so an unchanged identity means nothing to (re)track: the
+    // session's already-tracked ids are carried into `seen` and the scan is
+    // skipped.
+    const lastTimeline = new Map<string, unknown>();
     const track = () => {
       const tracked = trackedRef.current;
       const seen = new Set<string>();
-      for (const [sessionId, session] of store.getState()) {
+      const state = store.getState();
+      for (const id of lastTimeline.keys()) if (!state.has(id)) lastTimeline.delete(id); // closed sessions
+      for (const [sessionId, session] of state) {
+        if (lastTimeline.get(sessionId) === session.timeline) {
+          for (const [id, info] of tracked) if (info.sessionId === sessionId) seen.add(id);
+          continue;
+        }
+        lastTimeline.set(sessionId, session.timeline);
         // Native sessions send in-process (native:send) — no lost-byte failure
         // mode, so never track their pending bubbles for the PTY `\r` retry.
         // Edge: during teardown the resolver may transiently return undefined
