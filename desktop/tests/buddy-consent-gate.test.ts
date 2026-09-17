@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
-import fs from 'node:fs';
 import path from 'node:path';
+import { readSource } from './helpers/guard-scope';
 
 /**
  * The buddy's consent gate lives in the MAIN process, not in the settings screen
@@ -194,8 +194,7 @@ describe('the cached status the drag path reads', () => {
 // The unit tests above prove the RULE. These prove main.ts actually applies it —
 // a correct gate nothing calls is the same bug with extra steps.
 describe('main.ts wires the gate to the window that gets created', () => {
-  // Normalised: a Windows checkout is CRLF; source-text assertions must not depend on it.
-  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.ts'), 'utf8').replace(/\r\n/g, '\n');
+  const main = readSource(path.join(__dirname, '..', 'src', 'main', 'main.ts'));
   const handler = main.slice(main.indexOf('IPC.BUDDY_SHOW'), main.indexOf('IPC.BUDDY_HIDE'));
 
   it('found the show handler (otherwise every assertion below is vacuous)', () => {
@@ -203,10 +202,7 @@ describe('main.ts wires the gate to the window that gets created', () => {
     expect(handler.length).toBeLessThan(1200);
   });
 
-  it('asks the gate, and re-reads the status rather than trusting launch', () => {
-    expect(handler).toContain('buddyShowRefusal(');
-    expect(handler).toContain('refreshBuddyHelperStatus()');
-  });
+  // Moved to ast-grep (Plan B, 2026-09-16): rule buddy-show-consults-refusal-gate.
 
   it('returns the refusal WITHOUT creating the buddy', () => {
     const refuse = handler.indexOf('return { ok: false');
