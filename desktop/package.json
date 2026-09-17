@@ -17,7 +17,7 @@
     "lint": "oxlint --type-aware",
     "postinstall": "node scripts/patch-node-pty.js && node scripts/patch-xterm-webgl-mipmap.js",
     "typecheck": "tsgo --noEmit -p tsconfig.json && tsgo --noEmit -p tsconfig.tests.json",
-    "lint:design": "oxlint -c .oxlintrc.design.json"
+    "lint:design": "oxlint -c .oxlintrc.design.json --max-warnings 542"
   },
   "keywords": [],
   "author": "itsdestin",
