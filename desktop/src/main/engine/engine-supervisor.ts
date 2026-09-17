@@ -59,8 +59,8 @@ export interface EngineSupervisorOpts {
   readyPollMs?: number;      // default 250
   idleMs?: number;           // default 25 min (spec §3.2); raised 10→25 min 2026-09-07
   idleCheckMs?: number;      // default 60s
-  modelPollMs?: number;      // /models state poll cadence when idle; default 1500
-  modelPollLoadingMs?: number; // faster cadence while a model is loading; default 400
+  modelPollMs?: number;      // /models state poll cadence when idle; default MODEL_POLL_IDLE_MS
+  modelPollLoadingMs?: number; // faster cadence while a model is loading; default MODEL_POLL_LOADING_MS
   /** Test seam: resolve the PID listening on `port` (Linux). Default: ss + /proc scan. */
   pidOnPort?: (port: number) => number | null;
   /** Test seam: resolve a PID's executable path (for the stale-engine reaper).
@@ -91,6 +91,14 @@ export const SLEEP_IDLE_SECONDS = 900;
 // stop retrying until the user acts (EngineCard's Restart button).
 const STRIKE_LIMIT = 3;
 const STRIKE_WINDOW_MS = 5 * 60_000;
+// GET /models cadence (startModelPoll). WHY 10 s idle (2026-09-16 audit W11): the
+// fast cadence exists for the load progress bar, and the poll already knows when
+// a load is in flight; idle it was 1.5 s for up to 25 min after the last message
+// with no window listening — 2,400 localhost requests an hour. Accepted cost: an
+// engine-side eviction (sleep, unload) shows within 10 s instead of 1.5 s. A
+// user-driven load or unload still emits at once through pollModelsNow().
+const MODEL_POLL_IDLE_MS = 10_000;
+const MODEL_POLL_LOADING_MS = 400;
 
 /** Resolve the PID of the process listening on a localhost port, cross-platform:
  *  Linux `ss` (+ /proc fallback), macOS `lsof`, Windows `netstat`. Returns null
@@ -1128,7 +1136,7 @@ export class EngineSupervisor extends EventEmitter {
     const schedule = () => {
       // Fast while a load is in flight (loadProgress tracks loading ids), else lazy.
       const loading = this.loadProgress.size > 0;
-      const delay = loading ? (this.opts.modelPollLoadingMs ?? 400) : (this.opts.modelPollMs ?? 1500);
+      const delay = loading ? (this.opts.modelPollLoadingMs ?? MODEL_POLL_LOADING_MS) : (this.opts.modelPollMs ?? MODEL_POLL_IDLE_MS);
       this.modelPollTimer = setTimeout(() => {
         void this.emitModelsIfChanged().finally(() => {
           if (this.state === 'running') schedule();
