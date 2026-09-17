@@ -42,7 +42,7 @@ import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-typ
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PAGE_KIT_CSS } from './page-kit';
-import { PAGE_DATA_SET_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
+import { PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
 
 
 interface PageHostProps {
@@ -124,7 +124,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
       const d = e.data as { type?: unknown; data?: unknown } | null;
-      if (!d || d.type !== PAGE_DATA_SET_MESSAGE) return;
+      if (!d) return;
+      // Esc inside the page = Esc on the view: leave, unless Settings or the
+      // library is open over it (their own Esc handling owns the key then).
+      if (d.type === PAGE_ESC_MESSAGE) { if (!settingsOpen && !state.pagesViewOpen) backToChat(); return; }
+      if (d.type !== PAGE_DATA_SET_MESSAGE) return;
       let size = 0;
       try { size = JSON.stringify(d.data ?? null).length; } catch { return; }
       if (size > MAX_PAGE_DATA_BYTES) return; // main refuses it too; no point posting
@@ -133,7 +137,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     };
     window.addEventListener('message', onMessage);
     return () => { window.removeEventListener('message', onMessage); if (timer !== null) { clearTimeout(timer); flush(); } };
-  }, [load.state, pageId]);
+  }, [load.state, pageId, settingsOpen, state.pagesViewOpen]);
 
   // Live theme: watch the host document and post the fresh tokens in.
   useEffect(() => {
@@ -156,10 +160,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   }
 
   return (
-    // z-[45]: above Project View (z-40) which it replaces, below the Settings
-    // drawer (z-50) so the gear in the band actually opens it, and below the
-    // library (z-[60]) that opens from Manage pages.
-    <div className="fixed inset-0 bg-panel z-[45] flex flex-col">
+    // z-40, the same layer as Project View (they replace each other, never
+    // coexist) and BELOW the Settings drawer's click-outside backdrop, so the
+    // gear opens the drawer and a click beside it closes it (found 2026-09-17:
+    // at z-45 the backdrop sat under the view and Settings could not be
+    // closed). The library (z-[60]) opens over this from Manage pages.
+    <div className="fixed inset-0 bg-panel z-40 flex flex-col">
       {/* The band: same height, drag region and window buttons as the app's
           header; three columns so the page's name is truly centred. No border
           underneath — the page pane's own edge is the divider (round 4). */}

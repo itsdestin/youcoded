@@ -29,6 +29,9 @@ export const PAGE_THEME_TOKENS: readonly string[] = [
 export const PAGE_THEME_MESSAGE = 'youcoded:theme';
 /** The message a page posts to the host to save its own data (design §5). */
 export const PAGE_DATA_SET_MESSAGE = 'youcoded:data:set';
+/** Posted when Esc is pressed inside the page: the frame has focus, so the
+ *  host's own Esc handling never sees the key (design review, item 7). */
+export const PAGE_ESC_MESSAGE = 'youcoded:esc';
 export const PAGE_THEME_STYLE_ID = 'youcoded-theme';
 
 /** Snapshot of the current theme as one `:root { … }` rule. Reads computed
@@ -59,7 +62,11 @@ function bootstrap(dataJson: string): string {
   var ID = ${JSON.stringify(PAGE_THEME_STYLE_ID)};
   var THEME = ${JSON.stringify(PAGE_THEME_MESSAGE)};
   var SET = ${JSON.stringify(PAGE_DATA_SET_MESSAGE)};
+  var ESC = ${JSON.stringify(PAGE_ESC_MESSAGE)};
   var subs = [];
+  window.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { try { parent.postMessage({ type: ESC }, '*'); } catch (err) {} }
+  });
   window.youcoded = {
     data: ${dataJson},
     save: function (data) { window.youcoded.data = data; try { parent.postMessage({ type: SET, data: data }, '*'); } catch (e) {} },
