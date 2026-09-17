@@ -28,6 +28,7 @@ import {
   __watchersStartedForTest,
   type ExternalChangeEvent,
 } from '../src/main/artifacts/project-watcher';
+import { readSource } from './helpers/guard-scope';
 
 describe('isWatchIgnoredPath', () => {
   const root = '/proj';
@@ -53,9 +54,10 @@ describe('isWatchIgnoredPath', () => {
     // the agreement textually: every entry there must be in WATCH_SKIP_DIRS and
     // vice versa. A mismatch means the watcher emits events for files the UI
     // never lists (or goes blind to listed ones).
-    const src = fs.readFileSync(
-      path.join(__dirname, '../src/main/artifacts/project-file-discovery.ts'), 'utf8'
-    );
+    // WHY still a text read (Plan B, 2026-09-16): equality of two sets in two files,
+    // one of them unexported, is a cross-file check no ast-grep rule can express.
+    // readSource normalises CRLF so a Windows checkout reads the same entries.
+    const src = readSource(path.join(__dirname, '../src/main/artifacts/project-file-discovery.ts'));
     const block = src.match(/const SKIP_DIRS = new Set\(\[([\s\S]*?)\]\)/);
     expect(block, 'SKIP_DIRS not found in project-file-discovery.ts').toBeTruthy();
     const discovered = [...block![1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
