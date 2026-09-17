@@ -2106,7 +2106,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     detectTailscale: async () => ({ installed: true, connected: true, ip: '100.92.14.3', hostname: 'destin-laptop', url: 'http://destin-laptop:7842' }),
     getClientCount: async () => remoteClients.length,
     getClientList: async () => remoteClients,
-    getStatus: async () => ({ state: 'listening', port: 7842 }),
+    getStatus: async () => ({ state: 'listening', port: 7842, clientCount: remoteClients.length }),
     onStatus: () => () => {},
     devices: {
       list: async () => remoteClients.map((c, i) => ({ id: c.id, name: i === 0 ? 'My phone' : 'My tablet', online: i === 0, createdAt: 0, lastSeenAt: 0 })),
@@ -2905,14 +2905,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   let buddyHelperInstalled = buddyHelperMode === 'installed' || buddyHelperMode === 'not-needed-installed';
   const buddyHelperSupported = buddyHelperNeeded && buddyHelperMode !== 'none';
   let buddyDismissed = false;
-  let buddyKeepAbove = true;
   const buddyStatusSubs = new Set<(s: unknown) => void>();
   const pushBuddyStatus = () => {
-    const snap = { dismissed: buddyDismissed, keepAbove: buddyKeepAbove };
+    const snap = { dismissed: buddyDismissed };
     buddyStatusSubs.forEach((cb) => cb(snap));
   };
   const buddy = {
-    getStatus: async () => ({ dismissed: buddyDismissed, keepAbove: buddyKeepAbove }),
+    getStatus: async () => ({ dismissed: buddyDismissed }),
     // Mirrors main's refusal (design §5): a desktop that NEEDS a helper and does
     // not have one says no rather than putting a buddy on screen that cannot be
     // dragged. The sentence is main's own (ipc-handlers.ts buddyShowRefusal), so
@@ -2930,9 +2929,6 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     hide: async () => {},
     dismiss: async () => { buddyDismissed = true; pushBuddyStatus(); },
-    // Mirrors the real one's contract exactly: resolves FALSE when KWin could
-    // not be reached, never throws. On the `none` desktop that is every call.
-    setKeepAbove: async (v: boolean) => { buddyKeepAbove = v; return buddyHelperSupported; },
     onStatusChanged: (cb: (s: unknown) => void) => {
       buddyStatusSubs.add(cb);
       return () => buddyStatusSubs.delete(cb);

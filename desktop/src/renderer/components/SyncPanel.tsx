@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow } from './ui';
+import { Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow, RowStatus } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
@@ -410,9 +410,22 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
   return (
     <>
       <SettingRow
-        icon={<div className={`w-2.5 h-2.5 rounded-full ${dotColor}`} />}
+        // WHY: the icon slot holds the same 16px outline icon as every other
+        // settings row (cloud + upload arrow); the status dot moved down next to
+        // the "Last synced\u2026" line it describes (Destin, 2026-09-16).
+        icon={
+          <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.24" />
+            <path d="M12 13v8" />
+            <path d="M8 17l4-4 4 4" />
+          </svg>
+        }
         title="Backup & Sync"
-        description={counts ? `${primaryLabel} \u00B7 ${counts}` : primaryLabel}
+        description={
+          <RowStatus dotClassName={dotColor}>
+            {counts ? `${primaryLabel} \u00B7 ${counts}` : primaryLabel}
+          </RowStatus>
+        }
         accessory={badge}
         onClick={() => setOpen(true)}
       />

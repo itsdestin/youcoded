@@ -82,10 +82,6 @@ import { registerArcadeHandlers } from './arcade-handlers';
 import { registerVoiceHandlers, shutdownVoiceHandlers } from './voice/voice-handlers';
 import { requestMergedChatSnapshot } from './chat-snapshot';
 import { BuddyWindowManager } from './buddy-window-manager';
-import { BuddyOverlayManager, OVERLAY_TITLE } from './buddy-overlay-manager';
-import { chooseBuddyStrategy } from './buddy-manager';
-import type { BuddyManager } from './buddy-manager';
-import { applyKwinKeepAbove } from './kwin-keep-above';
 import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 // The KDE script that lets the buddy move itself on a Wayland desktop, and
 // the lookup that asks KDE how much of the screen the taskbar has taken.
@@ -174,13 +170,16 @@ if (process.platform === 'win32') {
 
 let mainWindow: BrowserWindow | null = null;
 // Module-level ref so createAppWindow's 'closed' handler can reach the buddy
-// manager (defined later inside the ready-handler closure), whichever
-// implementation is active — BuddyWindowManager (three windows) today,
-// BuddyOverlayManager (one DOM overlay, Linux Wayland) from Task 3. Typed as
-// the BuddyManager interface so this call site never depends on which one it
-// is. Assigned once during setup; `createAppWindow` uses it to hide the
-// buddy when the last main window closes (spec §7.6).
-let buddyManagerRef: BuddyManager | null = null;
+// manager (defined later inside the ready-handler closure). Assigned once
+// during setup; `createAppWindow` uses it to hide the buddy when the last main
+// window closes (spec §7.6).
+//
+// WHY a concrete class, not an interface (2026-09-16): the `BuddyManager`
+// interface existed so a second, one-window "overlay" implementation could be
+// swapped in on Linux Wayland. That implementation was never reachable
+// (`chooseBuddyStrategy` returned `windows` on every path) and was deleted;
+// the three-window manager is the only one, on every platform.
+let buddyManagerRef: BuddyWindowManager | null = null;
 let cleanupIpcHandlers: (() => Promise<void>) | null = null;
 // Sign in with ChatGPT: module scope only so runShutdown can dispose it (stops
 // the usage poll, closes a lingering sign-in listener). Assigned in createWindow.
@@ -715,7 +714,7 @@ function wireDevLoadRecovery(win: BrowserWindow, devUrl: string): void {
   });
 }
 
-function createAppWindow(opts?: { x?: number; y?: number; width?: number; height?: number; maximize?: boolean; inactive?: boolean; buddy?: 'mascot' | 'chat' | 'bar' | 'overlay'; buddyTitle?: string }): BrowserWindow {
+function createAppWindow(opts?: { x?: number; y?: number; width?: number; height?: number; maximize?: boolean; inactive?: boolean; buddy?: 'mascot' | 'chat' | 'bar'; buddyTitle?: string }): BrowserWindow {
   const iconPath = path.join(__dirname, '../../assets/icon.png');
   const icon = nativeImage.createFromPath(iconPath);
   const isMac = process.platform === 'darwin';
@@ -840,8 +839,8 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   //
   // preventDefault BEFORE setTitle, always: register the block first and the
   // name we set can never be clobbered. Doing it the other way round is a real
-  // bug this repo has already shipped once — buddy-overlay-manager.ts:203-209,
-  // found live on 2026-07-23.
+  // bug this repo has already shipped once — in the since-deleted one-window
+  // buddy overlay, found live on 2026-07-23.
   if (opts?.buddy) {
     win.on('page-title-updated', (e) => e.preventDefault());
     win.setTitle(opts.buddyTitle ?? BUDDY_WINDOW_TITLE);
@@ -1293,9 +1292,9 @@ function registerDetachIpc() {
   // hydration, opening on the dragged session, re-sending open permission asks)
   // silently did nothing on EVERY tear-off into a fresh window.
   //
-  // Fix shape follows the one already used for the buddy overlay's boot
-  // geometry (see BUDDY_OVERLAY_READY): the renderer PULLS once mounted rather
-  // than being pushed at before it can listen. `readyWindows` is what makes the
+  // Fix shape: the renderer PULLS once mounted rather than being pushed at
+  // before it can listen (the same shape the since-deleted buddy overlay used
+  // for its boot geometry). `readyWindows` is what makes the
   // two paths exclusive — before a window has pulled, transfers queue; after,
   // they push as before — so a payload is delivered exactly once either way.
   ipcMain.handle(IPC.DETACH_CLAIM_PENDING, (evt) => pendingAcquire.claim(evt.sender.id));
@@ -1606,9 +1605,10 @@ if (!app.isPackaged && process.env.YOUCODED_DEVTOOLS_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.YOUCODED_DEVTOOLS_PORT);
 }
 
-// NOTE — do NOT add `--disable-features=EvictionThrottlesDraw` here for the
-// buddy overlay (2026-07-23 lesson, full matrix in
-// docs/active/investigations/2026-07-23-buddy-overlay-wayland-presentation.md):
+// NOTE — do NOT add `--disable-features=EvictionThrottlesDraw` here for a
+// transparent window (2026-07-23 lesson from the since-deleted buddy overlay,
+// full matrix in the workspace's
+// docs/archive/investigations/2026-07-23-buddy-overlay-wayland-presentation.md):
 // a delayed-content probe on the X11 backend froze without that switch and
 // was "fixed" by it — but the probe was silently running XWayland, and on
 // the app's REAL backend (native Wayland) the switch has the exact opposite
@@ -1950,11 +1950,9 @@ void app.whenReady().then(async () => {
   interface BuddyPositionsFile {
     mascot?: { x: number; y: number };
     dock?: 'left' | 'right' | 'top' | 'bottom';
-    // Linux Wayland overlay only (Task 3+): whether the overlay window
-    // should stay above fullscreen apps via Task 8's KWin script. Absent
-    // (undefined/falsy) is the correct default everywhere else — the
-    // three-window model never reads this field.
-    keepAbove?: boolean;
+    // A `keepAbove` key may still sit in files written before 2026-09-16 (the
+    // deleted overlay's KDE pin preference). It is carried through the
+    // parse/save round trip untouched and read by nothing.
   }
   function loadBuddyPositions(): BuddyPositionsFile {
     try { return JSON.parse(fs.readFileSync(BUDDY_POS_FILE, 'utf8')); } catch { return {}; }
@@ -2009,7 +2007,7 @@ void app.whenReady().then(async () => {
     // KDE screen each of Electron's displays is, so all three events re-ask.
     //
     // Debounced because KDE fires display-metrics-changed THREE TIMES within
-    // 200 ms of a window appearing (measured — buddy-overlay-manager.ts:110),
+    // 200 ms of a window appearing (measured 2026-07-23 on the buddy overlay),
     // so an undebounced handler would run the whole lookup three times over
     // every time the buddy is shown.
     //
@@ -2029,45 +2027,11 @@ void app.whenReady().then(async () => {
     screen.on('display-removed', reresolveWorkArea);
   }
 
-  // WHY branch here (not inside BuddyWindowManager/BuddyOverlayManager
-  // themselves): main.ts is the only place that knows both which strategy
-  // is active AND how to build a BrowserWindow (createAppWindow) — the two
-  // managers stay ignorant of each other. Windows/macOS/Linux-X11 get the
-  // EXACT SAME BuddyWindowManager construction as before this branch existed
-  // (same deps object, unchanged) — only Linux Wayland (or an explicit
-  // YOUCODED_BUDDY_STRATEGY override) takes the overlay path.
-  const buddyStrategy = chooseBuddyStrategy(process.platform, process.env);
-  const buddyManager: BuddyManager = buddyStrategy === 'overlay'
-    ? new BuddyOverlayManager({
-        createOverlayWindow: ({ width, height }) => createAppWindow({ width, height, buddy: 'overlay' }),
-        getPersisted: () => ({
-          mascot: buddyPositions.mascot ?? null,
-          dock: buddyPositions.dock ?? null,
-          keepAbove: !!buddyPositions.keepAbove,
-        }),
-        persist: (state) => {
-          buddyPositions.mascot = state.mascot;
-          if (state.dock) buddyPositions.dock = state.dock;
-          else delete buddyPositions.dock;
-          saveBuddyPositions(buddyPositions);
-        },
-        registry: windowRegistry,
-        mainWindow: () => mainWindow,
-        // Status pushes go to every window (main app Settings panels + buddy
-        // surfaces) so the "Hidden until restart" row state renders live.
-        onStatusChanged: (status) => {
-          for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send(IPC.BUDDY_STATUS_CHANGED, status);
-          }
-        },
-        // Task 8: real KWin "keep above" script runner. Fire-and-forget —
-        // BuddyOverlayDeps.applyKeepAbove is `void`, and the overlay's own
-        // construction/recreate path shouldn't block on a DBus round-trip;
-        // a slow or failed call just means the window briefly isn't pinned,
-        // not a functional break (applyKwinKeepAbove never throws).
-        applyKeepAbove: (_win) => { void applyKwinKeepAbove(OVERLAY_TITLE, true); },
-      })
-    : new BuddyWindowManager({
+  // The buddy is three windows (mascot, chat, bar) on every platform. A second
+  // one-window "overlay" strategy for Linux Wayland was built behind a chooser
+  // that returned this one on every path; it was deleted 2026-09-16, and this
+  // construction is byte-for-byte what the chooser's `windows` arm built.
+  const buddyManager = new BuddyWindowManager({
         // `title` is the caption that positions the window on native-Wayland
         // Linux; it is undefined on every other platform (see buddy-caption.ts).
         createBuddyWindow: (variant, { x, y, title }) => createAppWindow({ x, y, buddy: variant, buddyTitle: title }),
@@ -2178,65 +2142,12 @@ void app.whenReady().then(async () => {
   });
   // Drag release → edge-snap detection against the window's final bounds.
   ipcMain.on(IPC.BUDDY_DRAG_ENDED, () => buddyManager.dragEnded());
-  // Linux Wayland overlay only (Task 4). Both handlers verify the sender is
-  // the overlay's own webContents before acting — guarding on sender identity
-  // keeps a compromised main window from puppeting the overlay's input mode
-  // (set-interactive) or writing bogus positions (persist). No-op everywhere
-  // else: buddyManager is a BuddyWindowManager on Windows/macOS/Linux-X11,
-  // so the `instanceof` check alone already short-circuits these to nothing.
-  ipcMain.on(IPC.BUDDY_OVERLAY_SET_INTERACTIVE, (evt, { interactive }: { interactive: boolean }) => {
-    if (buddyManager instanceof BuddyOverlayManager && buddyManager.isBuddyWindow(BrowserWindow.fromWebContents(evt.sender)!)) {
-      buddyManager.setInteractive(interactive);
-    }
-  });
-  ipcMain.on(IPC.BUDDY_OVERLAY_PERSIST, (evt, state: { mascot: { x: number; y: number }; dock: 'left' | 'right' | 'top' | 'bottom' | null }) => {
-    if (buddyManager instanceof BuddyOverlayManager && buddyManager.isBuddyWindow(BrowserWindow.fromWebContents(evt.sender)!)) {
-      buddyManager.persistFromRenderer(state);
-    }
-  });
-  // Overlay renderer pulls its boot geometry once mounted (replaces the old
-  // did-finish-load push, which raced React's mount and got dropped — see
-  // BuddyOverlayManager.initPayloadForSender / BuddyApi.overlayReady WHYs).
-  // Sender guard lives inside initPayloadForSender; non-overlay senders and
-  // three-window platforms get null.
-  ipcMain.handle(IPC.BUDDY_OVERLAY_READY, (evt) =>
-    buddyManager instanceof BuddyOverlayManager ? buddyManager.initPayloadForSender(evt.sender) : null
-  );
-  // Task 8: Settings' KDE keep-above toggle. Persists to BUDDY_POS_FILE (so
-  // the next overlay show()/recreate reads it via getPersisted() and
-  // reapplies — KWin state doesn't survive window recreation) AND applies
-  // it live immediately against the overlay's current window, since a
-  // toggle flip mid-session doesn't otherwise trigger a recreate. Not
-  // gated on buddyManager's type: applyKwinKeepAbove filters by caption, and
-  // only the overlay window is ever titled OVERLAY_TITLE (buddy-overlay-
-  // manager.ts), so this is naturally a no-op on the three-window model.
-  //
-  // WHY persist the REQUEST, not the outcome: a failed apply here
-  // (GNOME/wlroots, or KWin just not answering DBus yet at login) doesn't
-  // mean the user's intent changed. Persisting `enabled && ok` instead
-  // would silently downgrade a real "yes, pin me" request to off and stop
-  // retrying on every future recreate — including a later session where
-  // KWin has since become available. Controller ruling (2026-07-22): the
-  // Settings toggle mirrors this exactly — it's a saved preference, not a
-  // live-state indicator, and always displays/persists the request in both
-  // directions (see SettingsPanel.tsx's toggleKeepAbove). The `ok` this
-  // handler returns is used there only to drive a transient, honest inline
-  // hint ("couldn't reach KWin right now") — never to flip the toggle
-  // itself back.
-  ipcMain.handle(IPC.BUDDY_OVERLAY_KEEP_ABOVE, async (_evt, enabled: boolean) => {
-    buddyPositions.keepAbove = enabled;
-    saveBuddyPositions(buddyPositions);
-    return applyKwinKeepAbove(OVERLAY_TITLE, enabled);
-  });
   ipcMain.handle(IPC.BUDDY_DISMISS, () => buddyManager.dismiss());
-  // keepAbove rides along on getStatus() (see BuddyApi.getStatus WHY comment
-  // in shared/types.ts) — merged in from the persisted positions file here
-  // rather than through buddyManager.getStatus(), since keepAbove isn't part
-  // of the BuddyManager interface (Windows/macOS/Linux-X11 never touch it).
-  ipcMain.handle(IPC.BUDDY_GET_STATUS, () => ({
-    ...buddyManager.getStatus(),
-    keepAbove: !!buddyPositions.keepAbove,
-  }));
+  // WHY no `keepAbove` on the status any more (2026-09-16): it rode along here
+  // for the deleted overlay's KDE "pin above" toggle, whose Settings row went
+  // 2026-09-04. Nothing in the renderer read the field; the three-window buddy
+  // is pinned by the KWin helper, not by a saved preference.
+  ipcMain.handle(IPC.BUDDY_GET_STATUS, () => buddyManager.getStatus());
   // Restore + focus the main window, then ask it to switch to the buddy's
   // viewed session so the user lands in the same conversation (spec §4.2).
   ipcMain.handle(IPC.BUDDY_OPEN_MAIN, () => {
@@ -2273,12 +2184,9 @@ void app.whenReady().then(async () => {
   // three black rectangles in the screenshot.
   ipcMain.handle(IPC.BUDDY_CAPTURE_DESKTOP, async (): Promise<string | null> => {
     const { desktopCapturer } = require('electron') as typeof import('electron');
-    // WHY: go through the BuddyManager interface instead of the three-window
-    // getters (getMascotWindow/getChatWindow/getBarWindow) so this handler
-    // works unchanged whichever strategy is active (three windows or the
-    // Linux Wayland overlay). captureWindows() already filters to alive,
-    // non-destroyed windows, mascot first when present — same set and same
-    // ordering the old three getters produced.
+    // captureWindows() filters to alive, non-destroyed windows, mascot first
+    // when present — the same set and ordering the older three getters
+    // (getMascotWindow/getChatWindow/getBarWindow) produced.
     const liveBuddyWindows = buddyManager.captureWindows();
     const mascotWin = liveBuddyWindows[0] ?? null;
     // Pick the display the mascot lives on — multi-monitor users expect
@@ -2288,15 +2196,6 @@ void app.whenReady().then(async () => {
     // display as fallback. Theoretical "mascot gone but chat/bar alive" state
     // would pick the surviving window's display instead — but hide() clears all
     // three windows together, so behavior is unchanged in practice.
-    // WHY getBounds() here is safe even for the overlay (coordinator review
-    // finding 4 — this branch otherwise never reads getBounds()/getPosition()
-    // on the overlay window, since Wayland echoes stale/construction values
-    // for it): the overlay is always constructed AT the primary display's
-    // bounds and never moved (buddy-overlay-manager.ts's createWindow), so
-    // the echoed construction bounds still resolve to the correct (primary)
-    // display via getDisplayMatching — there's no live-position read being
-    // relied on here, just a display lookup that happens to land right by
-    // construction.
     const targetDisplay = mascotWin
       ? screen.getDisplayMatching(mascotWin.getBounds())
       : screen.getPrimaryDisplay();

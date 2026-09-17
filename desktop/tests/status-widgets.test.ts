@@ -20,23 +20,36 @@ describe('widgetApplies', () => {
 });
 
 describe('widgetUnavailableReason', () => {
-  const native = { runtime: 'native' as const, hasPricedWork: true, anyUnpriced: false, runsLocally: false };
+  const native = { runtime: 'native' as const, hasPricedWork: true, anyUnpriced: false, runsLocally: false, chatgptWindows: false };
   // A native session on a model that costs nothing to run and has priced nothing.
-  const local = { runtime: 'native' as const, hasPricedWork: false, anyUnpriced: false, runsLocally: true };
+  const local = { runtime: 'native' as const, hasPricedWork: false, anyUnpriced: false, runsLocally: true, chatgptWindows: false };
   // A native session on a METERED model whose rate is not published. Nothing
   // could be priced, but the bar still draws a `Cost: not listed` chip for this
   // shape, so the menu row has to stay a switch the user can operate.
-  const unpriced = { runtime: 'native' as const, hasPricedWork: false, anyUnpriced: true, runsLocally: false };
+  const unpriced = { runtime: 'native' as const, hasPricedWork: false, anyUnpriced: true, runsLocally: false, chatgptWindows: false };
   // A session that has simply not run anything yet. No sentence about price is
   // true here, so no sentence may be shown.
-  const fresh = { runtime: 'native' as const, hasPricedWork: false, anyUnpriced: false, runsLocally: false };
+  const fresh = { runtime: 'native' as const, hasPricedWork: false, anyUnpriced: false, runsLocally: false, chatgptWindows: false };
   // The delegation shape spec §5 names: a free local parent whose specialist ran
   // on a metered model with no published rate.
-  const freeParentMeteredChild = { runtime: 'native' as const, hasPricedWork: false, anyUnpriced: true, runsLocally: true };
+  const freeParentMeteredChild = { runtime: 'native' as const, hasPricedWork: false, anyUnpriced: true, runsLocally: true, chatgptWindows: false };
+  // A native session signed in with ChatGPT: the runtime is still 'native' (it
+  // never spawns Claude Code), but it has its OWN rolling 5h/7d windows from the
+  // ChatGPT plan, fed into the bar as real numbers (StatusBar.tsx's `chatgptWindows`).
+  const chatgpt = { runtime: 'native' as const, hasPricedWork: true, anyUnpriced: false, runsLocally: false, chatgptWindows: true };
 
   it('explains the subscription chips', () => {
     expect(widgetUnavailableReason('usage-5h', native)).toBe('Claude Code sessions only');
     expect(widgetUnavailableReason('usage-7d', native)).toBe('Claude Code sessions only');
+  });
+
+  // The bug this covers: a ChatGPT-plan session's 5h/7d chips draw real numbers
+  // on the bar (StatusBar.tsx `show()` already special-cases `chatgptWindows`),
+  // but the Customize menu used to judge the row on `runtime` alone and called
+  // it "Claude Code sessions only" — false for the very session showing it.
+  it('leaves the subscription chips switchable for a ChatGPT-plan session', () => {
+    expect(widgetUnavailableReason('usage-5h', chatgpt)).toBeNull();
+    expect(widgetUnavailableReason('usage-7d', chatgpt)).toBeNull();
   });
 
   it('explains the unavailable chips without promising them later', () => {
@@ -73,7 +86,7 @@ describe('widgetUnavailableReason', () => {
 
   it('says nothing about cost when priced work exists — local or metered', () => {
     expect(widgetUnavailableReason('session-cost', native)).toBeNull();
-    expect(widgetUnavailableReason('session-cost', { runtime: 'native', hasPricedWork: true, anyUnpriced: false, runsLocally: true })).toBeNull();
+    expect(widgetUnavailableReason('session-cost', { runtime: 'native', hasPricedWork: true, anyUnpriced: false, runsLocally: true, chatgptWindows: false })).toBeNull();
   });
 
   it('never explains git-branch away — it is a missing feed, not a relevance rule', () => {
@@ -84,7 +97,7 @@ describe('widgetUnavailableReason', () => {
   });
 
   it('says nothing in a Claude Code session', () => {
-    const cc = { runtime: 'claude' as const, hasPricedWork: true, anyUnpriced: false, runsLocally: false };
+    const cc = { runtime: 'claude' as const, hasPricedWork: true, anyUnpriced: false, runsLocally: false, chatgptWindows: false };
     expect(widgetUnavailableReason('usage-5h', cc)).toBeNull();
     expect(widgetUnavailableReason('session-time', cc)).toBeNull();
   });
@@ -92,7 +105,7 @@ describe('widgetUnavailableReason', () => {
   it('says nothing about cost in a Claude Code session, whatever the totals say', () => {
     // The Claude Code runtime shows Claude Code's own figure and never consults
     // the native totals, so no pricing flag may reach the menu.
-    const ccLocal = { runtime: 'claude' as const, hasPricedWork: false, anyUnpriced: true, runsLocally: true };
+    const ccLocal = { runtime: 'claude' as const, hasPricedWork: false, anyUnpriced: true, runsLocally: true, chatgptWindows: false };
     expect(widgetUnavailableReason('session-cost', ccLocal)).toBeNull();
   });
 });

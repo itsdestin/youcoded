@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
 import type { ToolCallState } from '../../../shared/types';
+import { useSecondsTick } from '../../hooks/useSecondsTick';
 
 /** "Working in the background · 2m 14s" / "Finished in 4m · 5 steps" — the
- *  one line that answers "is it done?" without opening anything. Ticks once a
- *  second only while running. */
+ *  one line that answers "is it done?" without opening anything. Rides the
+ *  shared seconds clock only while running. */
 export function RunStatusLine({ run, report, elapsedUnknown = false }: {
   run: NonNullable<ToolCallState['specialistRun']>;
   report?: ToolCallState['specialistReport'];
@@ -14,12 +14,7 @@ export function RunStatusLine({ run, report, elapsedUnknown = false }: {
    *  rather than a fabricated one. */
   elapsedUnknown?: boolean;
 }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (run.status !== 'running' || elapsedUnknown) return;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, [run.status, elapsedUnknown]);
+  const now = useSecondsTick(run.status === 'running' && !elapsedUnknown);
   const end = run.endedAt ?? now;
   const elapsed = formatElapsed(Math.max(0, end - run.startedAt));
   const steps = run.steps !== undefined ? ` · ${run.steps} step${run.steps === 1 ? '' : 's'}` : '';

@@ -2822,17 +2822,6 @@ export function installShim(): void {
       onMascotState: () => () => { /* no-op unsubscribe */ },
       onChatState: () => () => { /* no-op unsubscribe */ },
       onFocusSession: () => () => { /* no-op unsubscribe */ },
-      // ── Linux Wayland overlay (Task 3+4) — same desktop-only contract:
-      // listeners return no-op unsubscribers, senders are no-ops (not
-      // throws) since overlaySetInteractive is a hover-hot path.
-      overlayReady: async () => null, // remote has no overlay window to init
-      onOverlayToggleChat: () => () => { /* no-op unsubscribe */ },
-      overlaySetInteractive: (_i: boolean) => { /* desktop-only */ },
-      overlayPersist: (_s: { mascot: { x: number; y: number }; dock: string | null }) => { /* desktop-only */ },
-      // Task 8 — KDE keep-above is Electron-only (KWin DBus scripting has
-      // no browser/Android equivalent); same desktop-only-throw contract as
-      // openMain/dismiss/getStatus above.
-      setKeepAbove: () => { throw new Error('Buddy is desktop-only in this version'); },
       // ── The Linux/KDE buddy helper (design §4) ──
       // Answered locally, not thrown and not sent over the wire. Two reasons.
       // First, the honest answer really is this one: a phone or a remote browser
@@ -2868,8 +2857,10 @@ export function installShim(): void {
     // (Task 7). Response shape is {text: string}; normalize to Promise<string>
     // with a '' fallback for safety.
     terminal: {
-      getScreenText: async (sessionId: string): Promise<string> => {
-        const response = await invoke('terminal:get-screen-text', { sessionId });
+      // tailRows rides along for parity with preload (audit W24); the Kotlin
+      // handler reads the visible screen and ignores it today.
+      getScreenText: async (sessionId: string, tailRows?: number): Promise<string> => {
+        const response = await invoke('terminal:get-screen-text', { sessionId, tailRows });
         return response?.text ?? '';
       },
     },

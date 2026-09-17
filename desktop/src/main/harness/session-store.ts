@@ -57,6 +57,27 @@ export interface PersistedEventReference {
   end: number;
 }
 
+/** map() with at most `limit` promises in flight; results in input order. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+/** Newest activity first — mtime moves on every append, which is exactly
+ *  "last active" for a single-writer JSONL file. Shared by list/listAsync. */
+function sortNewestFirst(rows: NativeSessionListEntry[]): NativeSessionListEntry[] {
+  rows.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return rows;
+}
+
 export class SessionStore {
   // One open (still-streaming) part per session, buffered until flushed by a
   // different partId, a non-delta event, or a turn boundary. The slug is
@@ -305,7 +326,16 @@ export class SessionStore {
    * must never produce duplicate reducer entries on replay.
    */
   readEvents(sessionId: string, cwd: string): TranscriptEvent[] {
-    const lines = this.home.readSessionLines(nativeStoreSlug(cwd), sessionId);
+    return this.eventsFromLines(this.home.readSessionLines(nativeStoreSlug(cwd), sessionId));
+  }
+
+  /** readEvents with the file read off the main thread (2026-09-16 C2); same dedup. */
+  async readEventsAsync(sessionId: string, cwd: string): Promise<TranscriptEvent[]> {
+    return this.eventsFromLines(await this.home.readSessionLinesAsync(nativeStoreSlug(cwd), sessionId));
+  }
+
+  /** Lines 2+ of a session file as typed events, deduped by uuid — see readEvents. */
+  private eventsFromLines(lines: unknown[]): TranscriptEvent[] {
     const seen = new Set<string>();
     const out: TranscriptEvent[] = [];
     for (const line of lines.slice(1)) {
@@ -345,38 +375,59 @@ export class SessionStore {
     const includeChildren = options?.includeChildren ?? false;
     const out: NativeSessionListEntry[] = [];
     for (const file of this.home.listSessionFiles()) {
-      const lines = this.home.readSessionHead(file.slug, file.sessionId);
-      const header = this.validateHeader(lines[0], file.sessionId);
-      if (!header) continue; // torn/foreign file — not a native session we can resume
-      // Specialists (spec 2026-08-11 §1): a specialist child is a normal
-      // session file, hidden from the default list unless asked for. Guard on
-      // BOTH fields — a future writer setting only one must not leak a child.
-      if (!includeChildren && (header.sessionKind === 'specialist' || header.parentSessionId)) continue;
-      // Title precedence (spec §2.6): explicit header title, else derive from
-      // the FIRST user-message event — native sessions have no CC auto-title
-      // hook, so the opening prompt is the best available label.
-      let title = header.title;
-      if (!title) {
-        for (const line of lines.slice(1)) {
-          const e = line as TranscriptEvent;
-          if (e && typeof e === 'object' && e.type === 'user-message' && e.data?.text != null) {
-            title = String(e.data.text).slice(0, DERIVED_TITLE_MAX);
-            break;
-          }
+      const entry = this.listEntry(file, this.home.readSessionHead(file.slug, file.sessionId), includeChildren);
+      if (entry) out.push(entry);
+    }
+    return sortNewestFirst(out);
+  }
+
+  /** list() with every read off the main thread (2026-09-16 C6) — the form
+   *  the Resume Browser and the remote list use. Same rows, same order. */
+  async listAsync(options?: { includeChildren?: boolean }): Promise<NativeSessionListEntry[]> {
+    const includeChildren = options?.includeChildren ?? false;
+    const files = await this.home.listSessionFilesAsync();
+    // WHY bounded (review, 2026-09-16): opening every session file at once could
+    // exhaust file descriptors on a long-used install, and an open failure
+    // reads back as "not a native session" — rows would vanish from Resume
+    // with no error. Sixteen at a time keeps the read parallel and safe.
+    const heads = await mapLimit(files, 16, (file) => this.home.readSessionHeadAsync(file.slug, file.sessionId));
+    const out: NativeSessionListEntry[] = [];
+    files.forEach((file, i) => {
+      const entry = this.listEntry(file, heads[i], includeChildren);
+      if (entry) out.push(entry);
+    });
+    return sortNewestFirst(out);
+  }
+
+  /** One Resume row from a session file's bounded head, or null when the file
+   *  is not a listable native session. Shared by list() and listAsync(). */
+  private listEntry(file: { slug: string; sessionId: string; mtimeMs: number; sizeBytes: number }, lines: unknown[], includeChildren: boolean): NativeSessionListEntry | null {
+    const header = this.validateHeader(lines[0], file.sessionId);
+    if (!header) return null; // torn/foreign file — not a native session we can resume
+    // Specialists (spec 2026-08-11 §1): a specialist child is a normal
+    // session file, hidden from the default list unless asked for. Guard on
+    // BOTH fields — a future writer setting only one must not leak a child.
+    if (!includeChildren && (header.sessionKind === 'specialist' || header.parentSessionId)) return null;
+    // Title precedence (spec §2.6): explicit header title, else derive from
+    // the FIRST user-message event — native sessions have no CC auto-title
+    // hook, so the opening prompt is the best available label.
+    let title = header.title;
+    if (!title) {
+      for (const line of lines.slice(1)) {
+        const e = line as TranscriptEvent;
+        if (e && typeof e === 'object' && e.type === 'user-message' && e.data?.text != null) {
+          title = String(e.data.text).slice(0, DERIVED_TITLE_MAX);
+          break;
         }
       }
-      out.push({
-        ...header,
-        ...(title !== undefined ? { title } : {}),
-        mtimeMs: file.mtimeMs,
-        sizeBytes: file.sizeBytes,
-        slug: file.slug,
-      });
     }
-    // Newest activity first — mtime moves on every append, which is exactly
-    // "last active" for a single-writer JSONL file.
-    out.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    return out;
+    return {
+      ...header,
+      ...(title !== undefined ? { title } : {}),
+      mtimeMs: file.mtimeMs,
+      sizeBytes: file.sizeBytes,
+      slug: file.slug,
+    };
   }
 
   /** A line only counts as a header if it's v1 AND names this exact session. */

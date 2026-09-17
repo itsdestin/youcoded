@@ -25,7 +25,7 @@ import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
-import { ChatProvider, useChatDispatch, useChatStore, useChatState } from './state/chat-context';
+import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
 import type { ChatAction } from './state/chat-types';
 import { installTranscriptBatcher, applyChatHydrate } from './state/transcript-batch';
 import {
@@ -119,7 +119,6 @@ import { ContextMenuHost } from './components/context-menu/ContextMenuHost';
 import { BuddyMascotApp } from './components/buddy/BuddyMascotApp';
 import { BuddyChatApp } from './components/buddy/BuddyChatApp';
 import { BuddyBarApp } from './components/buddy/BuddyBarApp';
-import { BuddyOverlayApp } from './components/buddy/BuddyOverlayApp';
 
 // ESC-passthrough: provider owns capture-phase ESC routing for overlays.
 // Mounted at app root so every overlay component is a descendant.
@@ -1358,7 +1357,8 @@ function AppInner() {
     // The batcher lives in state/transcript-batch.ts (with its hidden-window
     // timer fallback) so the remote snapshot exporter and the chat:hydrate
     // handler can flush it on demand — see that module's WHY.
-    const transcriptBatcher = installTranscriptBatcher(dispatch);
+    // dispatchMany, not dispatch: the frame's actions notify subscribers once (A4).
+    const transcriptBatcher = installTranscriptBatcher(chatStore.dispatchMany);
     const batchTranscriptDispatch = (action: ChatAction) => transcriptBatcher.push(action);
 
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
@@ -2385,17 +2385,17 @@ function AppInner() {
   // Check if remote setup banner is active (show badge on gear icon)
   // Badge shows whenever the blue "Set Up Remote Access" banner would be visible
   // in the settings panel — i.e., no remote clients are connected
+  // WHY no poll (audit W18): the count rides the remote status push now — one read seeds the badge, onStatus keeps it current; a remote browser or phone gets a no-op onStatus and keeps the seed, being a client itself.
   useEffect(() => {
     const claude = (window as any).claude;
     if (!claude?.remote) return;
-    const check = () => {
-      claude.remote.getClientCount().then((count: number) => {
-        setSettingsBadge(count === 0);
-      }).catch(() => {});
-    };
-    check();
-    const interval = setInterval(check, 10000);
-    return () => clearInterval(interval);
+    claude.remote.getClientCount().then((count: number) => {
+      setSettingsBadge(count === 0);
+    }).catch(() => {});
+    const off = claude.remote.onStatus?.((status: { clientCount?: number } | null) => {
+      if (typeof status?.clientCount === 'number') setSettingsBadge(status.clientCount === 0);
+    });
+    return () => { off?.(); };
   }, []);
 
   // Seed syncWarnings once at mount so a danger badge shows instantly at
@@ -3439,10 +3439,12 @@ function AppInner() {
     if (done !== null && Date.now() - done >= 24 * 60 * 60 * 1000) triggerTip('themes');
   }, [settingsOpen, tourOpen]);
 
-  // A tip waits while the assistant is answering (GuideTipHost). One session's
-  // state through the cached per-session selector, never the whole map.
-  const guideChatState = useChatState(sessionId ?? '');
-  const guideBusy = !!sessionId && !!guideChatState?.isThinking;
+  // A tip waits while the assistant is answering (GuideTipHost). One boolean
+  // through a cached selector — NOT useChatState: that subscribed this root
+  // component to the whole session, so every streamed word re-rendered the
+  // entire shell (2026-09-16 A1).
+  const guideThinking = useSessionIsThinking(sessionId ?? '');
+  const guideBusy = !!sessionId && guideThinking;
   const exitTour = useCallback(() => {
     markGuideDone();
     setTourOpen(false);
@@ -4660,17 +4662,10 @@ export default function App() {
   if (buddyMode === 'buddy-mascot') return <BuddyMascotApp />;
   if (buddyMode === 'buddy-chat') return <BuddyChatApp />;
   if (buddyMode === 'buddy-bar') return <BuddyBarApp />;
-  // The overlay strategy: the whole floater (mascot + chat + bar) mounted as DOM
-  // inside one screen-sized window instead of the three separate windows above.
-  //
-  // Correction 2026-09-04 (design §7): this comment used to say Linux Wayland
-  // takes this route. It does not, and has not — chooseBuddyStrategy
-  // (buddy-manager.ts) returns 'windows' on every path except an explicit
-  // YOUCODED_BUDDY_STRATEGY env override, so NO platform reaches
-  // ?mode=buddy-overlay on its own. The overlay code is dormant, kept behind that
-  // override; on Linux Wayland the buddy is three real windows moved by the KWin
-  // helper. Believing the old sentence sends a session to the wrong file.
-  if (buddyMode === 'buddy-overlay') return <BuddyOverlayApp />;
+  // There is no fourth buddy mode. A `buddy-overlay` mode (the whole floater as
+  // DOM inside one screen-sized window) existed until 2026-09-16 but no
+  // platform ever reached it; on Linux Wayland the buddy is these three real
+  // windows, moved by the KWin helper.
 
   // Main app wrapped in providers
   return (

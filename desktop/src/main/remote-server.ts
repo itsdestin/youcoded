@@ -155,6 +155,19 @@ const OLD_CLIENT_FALLBACK_MS = 5000;
 // that could not hear it, so the phone said "may be out of date". A page that will announce
 // readiness is waited on; this timer only covers one that breaks before it can.
 const READY_CLIENT_FALLBACK_MS = 30_000;
+
+/** Latest-wins buffer: `buffers` is sessionId → key → the newest event for
+ *  that key. One helper for both the specialist-run and shell-run catch-up
+ *  buffers (simplification audit M8) — a card shows one current status, not
+ *  a history, so the previous entry for the same key is overwritten. */
+function bufferLatest<E>(buffers: Map<string, Map<string, E>>, sessionId: string, key: string, event: E): void {
+  let byKey = buffers.get(sessionId);
+  if (!byKey) {
+    byKey = new Map();
+    buffers.set(sessionId, byKey);
+  }
+  byKey.set(key, event);
+}
 // Broadcasts queued for a client that is still restoring. Overflow drops the oldest and
 // marks that client's hydrate `degraded`, so the phone knows to offer Refresh.
 const RESTORE_QUEUE_MAX = 2000;
@@ -229,6 +242,7 @@ export interface RemoteStatus {
   state: 'listening' | 'stopped' | 'failed';
   reason?: string;
   port: number;
+  clientCount: number; // phones connected now — WHY here (audit W18): the gear badge polled it every 10 s per window; emitStatus() fires on every connect/disconnect instead
 }
 
 interface SessionNamingWiring {
@@ -511,9 +525,9 @@ export class RemoteServer {
    * caller outside tests.
    */
   getStatus(): RemoteStatus {
-    if (this.running) return { state: 'listening', port: this.config.port };
-    if (this.lastStartError) return { state: 'failed', reason: this.lastStartError, port: this.config.port };
-    return { state: 'stopped', port: this.config.port };
+    if (this.running) return { state: 'listening', port: this.config.port, clientCount: this.clients.size };
+    if (this.lastStartError) return { state: 'failed', reason: this.lastStartError, port: this.config.port, clientCount: this.clients.size };
+    return { state: 'stopped', port: this.config.port, clientCount: this.clients.size };
   }
 
   onStatusChange(listener: (status: RemoteStatus) => void): () => void {
@@ -700,7 +714,8 @@ export class RemoteServer {
         server.removeListener('error', onError);
         this.running = true;
         this.lastStartError = null;
-        this.startLiveness();
+        // The liveness ping is armed by addClient (first client) and disarmed on
+        // the last drop — see startLiveness (simplification audit W14).
         console.log(`[RemoteServer] Listening on port ${this.config.port}`);
         this.emitStatus();
         resolve();
@@ -762,10 +777,10 @@ export class RemoteServer {
   invalidateTokens(): void {
     this.devices.revokeAll();
     this.downloads.revokeAll();
-    for (const client of this.clients) {
+    for (const client of [...this.clients]) {
       client.ws.close(4001, 'Password changed');
+      this.removeClient(client); // also disarms the liveness ping on the last one
     }
-    this.clients.clear();
   }
 
   /** Number of currently connected remote clients. */
@@ -814,10 +829,18 @@ export class RemoteServer {
     for (const client of this.clients) {
       if (client.deviceId === deviceId) {
         client.ws.close(4003, 'Device unpaired');
-        this.clients.delete(client);
+        this.removeClient(client);
       }
     }
     return true;
+  }
+
+  /** Every path that forgets a client goes through here so the liveness ping
+   *  can stand down when the last one leaves (simplification audit W14). */
+  private removeClient(client: AuthenticatedClient): void {
+    if (!this.clients.delete(client)) return;
+    if (this.clients.size === 0 && this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    this.emitStatus(); // clientCount changed — see RemoteStatus.clientCount
   }
 
   // --- Event handlers for buffering ---
@@ -1047,20 +1070,13 @@ export class RemoteServer {
    *  Latest-per-child, not append-only — see specialistRunBuffers' own
    *  comment for why overwriting the previous entry is correct here. */
   bufferSpecialistRun(event: SpecialistsEvent): void {
-    let byChild = this.specialistRunBuffers.get(event.sessionId);
-    if (!byChild) {
-      byChild = new Map();
-      this.specialistRunBuffers.set(event.sessionId, byChild);
-    }
-    byChild.set(event.run.childId, event);
+    bufferLatest(this.specialistRunBuffers, event.sessionId, event.run.childId, event);
   }
 
   /** G-1: connect-time catch-up for a background command's card — latest per
    *  shell id, never an append-only log (same reasoning as bufferSpecialistRun). */
   bufferShellRun(event: ShellEvent): void {
-    let byShell = this.shellRunBuffers.get(event.sessionId);
-    if (!byShell) { byShell = new Map(); this.shellRunBuffers.set(event.sessionId, byShell); }
-    byShell.set(event.run.shellId, event);
+    bufferLatest(this.shellRunBuffers, event.sessionId, event.run.shellId, event);
   }
 
   private onSessionCreated = (info: any) => {
@@ -1347,7 +1363,11 @@ export class RemoteServer {
   }
 
   /** Close sockets that stopped answering. Without this a half-open connection is invisible
-   *  and the client waits the full 30s request timeout to learn anything is wrong. */
+   *  and the client waits the full 30s request timeout to learn anything is wrong.
+   *  WHY armed per client (simplification audit W14): this used to start with the
+   *  server and tick every 20 s with zero clients — 4,320 empty wakes a day on an
+   *  idle app. addClient arms it, removeClient disarms it on the last drop, the
+   *  same "nobody is listening" short-circuit broadcast() already has. */
   private startLiveness(): void {
     if (this.pingTimer) return;
     this.pingTimer = setInterval(() => {
@@ -1362,7 +1382,7 @@ export class RemoteServer {
           const socket = client.ws as WebSocket & { terminate?: () => void };
           if (typeof socket.terminate === 'function') socket.terminate();
           else socket.close(4008, 'No response');
-          this.clients.delete(client);
+          this.removeClient(client);
           continue;
         }
         client.missedPings = missed;
@@ -1379,6 +1399,7 @@ export class RemoteServer {
       phase: 'restoring', queue: [], queueDegraded: false, fallbackTimer: null,
     };
     this.clients.add(client);
+    this.startLiveness(); this.emitStatus(); // liveness is a no-op while already armed — see its WHY; the status carries the new clientCount
     this.logDevice(client, `connected (${opts.sendsReady ? 'page announces readiness' : 'older page'})`);
     // WHY a fallback and not an immediate replay (design §1): the restore used to start
     // the moment auth succeeded, before the page had mounted App, and guessed with a
@@ -1396,7 +1417,7 @@ export class RemoteServer {
 
     const drop = () => {
       if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
-      this.clients.delete(client);
+      this.removeClient(client);
     };
     ws.on('pong', () => { client.missedPings = 0; client.lastHeardAt = Date.now(); });
     ws.on('message', (raw) => { client.missedPings = 0; client.lastHeardAt = Date.now(); void this.handleMessage(client, raw as Buffer | string); });
@@ -1771,13 +1792,26 @@ export class RemoteServer {
         break;
       }
       case 'session:browse': {
-        const activeIds = new Set(this.sessionManager.listSessions().map(s => s.id));
+        // WHY resolve (simplification audit B1): listPastSessions compares the
+        // exclusion set against CLAUDE transcript ids, but a live session's
+        // desktop id is a separate UUID minted by SessionManager. The Electron
+        // path (ipc-handlers' SESSION_BROWSE) maps desktop → claude id through
+        // sessionIdMap first; this path passed raw desktop ids, so a session
+        // that was open on the desktop could still be listed as resumable on
+        // the phone. sessionMetaWiring.resolve IS that map (identity for
+        // native ids and for a CC session whose SessionStart hasn't arrived
+        // yet — a desktop UUID that no transcript id can match, so it is a
+        // harmless extra member). Iterating LIVE sessions keeps the Electron
+        // path's Bug-1 filter: a stale map entry for a closed session is never
+        // consulted. Undefined wiring (tests / not yet wired) = the old raw ids.
+        const resolve = this.sessionMetaWiring?.resolve ?? ((id: string) => id);
+        const activeIds = new Set(this.sessionManager.listSessions().map(s => resolve(s.id)));
         // Task 5: remote browse gains native rows for the first time, through
         // the SAME enrichment pass the Electron IPC path uses (see
         // ipc-handlers' SESSION_BROWSE) — previously this surface only ever
         // returned CC rows, so a remote web client's Resume Browser silently
         // never showed native sessions at all.
-        const sessions = await listPastSessions(activeIds, this.nativeRuntime?.nativeHost.list());
+        const sessions = await listPastSessions(activeIds, this.nativeRuntime ? await this.nativeRuntime.nativeHost.listAsync() : undefined);
         this.respond(client.ws, type, id, sessions);
         break;
       }
@@ -1858,7 +1892,7 @@ export class RemoteServer {
         break;
       }
       case 'native:sessions-list': {
-        this.respond(client.ws, type, id, this.nativeRuntime ? this.nativeRuntime.nativeHost.list() : []);
+        this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.nativeHost.listAsync() : []);
         break;
       }
       case 'native:kill-shell': {
@@ -2637,7 +2671,9 @@ export class RemoteServer {
 
         // Native sessions page over the merged event array; null means "not a
         // native id", so CC's transcript file is the source.
-        const nativePage = this.nativeRuntime?.nativeHost.getHistoryPage(pageSessionId, beforeOffset) ?? null;
+        // Async form (2026-09-16 C2 review): the desktop's page handler was
+        // converted; the phone's scroll-up read the whole transcript sync too.
+        const nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null;
         if (nativePage) {
           this.respond(client.ws, type, id, {
             events: nativePage.events,

@@ -112,7 +112,7 @@ describe('Read: PDF text layer (ledger G-6)', () => {
     // Since 2026-09-16 the registry holds a content fingerprint, not an mtime —
     // the same one a text Read of the same bytes would record.
     const { fingerprintFile } = await import('../src/main/harness/tools/file-fingerprint');
-    expect([...ctx.readRegistry.values()]).toContain(fingerprintFile(p));
+    expect([...ctx.readRegistry.values()]).toContain(await fingerprintFile(p)); // async since 2026-09-16 (C4)
   });
 
   it('honours a pages range and declares bounds for the pages after it', async () => {

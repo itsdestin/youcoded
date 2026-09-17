@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useSecondsTick } from '../hooks/useSecondsTick';
 
 // Spinner card shown during /compact (typed or triggered by resume-from-summary).
 // Claude Code's summarization takes 10-30s; before this card the user saw nothing
@@ -10,13 +10,10 @@ interface Props {
 
 export default function CompactingCard({ startedAt }: Props) {
   // Live elapsed counter — reassures the user that something is still happening.
-  const [elapsed, setElapsed] = useState(() => Math.floor((Date.now() - startedAt) / 1000));
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [startedAt]);
+  // The card exists only while compacting, so it rides the shared clock for its
+  // whole life; the number derives from startedAt, never from counted ticks.
+  const now = useSecondsTick(true);
+  const elapsed = Math.max(0, Math.floor((now - startedAt) / 1000));
 
   return (
     <div className="flex justify-start px-4 py-2">

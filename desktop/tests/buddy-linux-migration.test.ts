@@ -160,7 +160,7 @@ describe('R12 — the one-time Linux buddy hide', () => {
     // against the same profile's localStorage. Without the guard the migration
     // would fire up to three extra times per launch — including after the main
     // window had already let the user switch the buddy back on.
-    for (const mode of ['buddy-mascot', 'buddy-chat', 'buddy-bar', 'buddy-overlay']) {
+    for (const mode of ['buddy-mascot', 'buddy-chat', 'buddy-bar']) {
       const { runBuddyLinuxHideMigration } = await loadApp(`mode=${mode}`);
       localStorage.clear();
       installFakeClaude('linux');

@@ -3,6 +3,7 @@ import type { AttentionState } from '../state/chat-types';
 import BrailleSpinner from './BrailleSpinner';
 import { Button } from './ui';
 import { isChatGptLimitMessage } from '../../shared/chatgpt-types';
+import { useSecondsTick } from '../hooks/useSecondsTick';
 
 // Banner shown in place of ThinkingIndicator when the classifier (or a
 // process-exit event) concludes chat view is out of sync with what the user
@@ -90,15 +91,11 @@ function elapsedLabel(ms: number): string {
 }
 
 export default function AttentionBanner({ state, anthropicRequestId, errorMessage, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan, provider }: Props) {
-  // Ticks once a second while parked. `stalledSince` IS serialized to the host
-  // (chat-types.ts) so a reconnecting phone can still see the card — see that
-  // field's own comment for why the elapsed number is only approximate there.
-  const [now, setNow] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    if (state !== 'stalled' || stalledSince == null) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [state, stalledSince]);
+  // Rides the shared seconds clock while parked. `stalledSince` IS serialized
+  // to the host (chat-types.ts) so a reconnecting phone can still see the card
+  // — see that field's own comment for why the elapsed number is only
+  // approximate there.
+  const now = useSecondsTick(state === 'stalled' && stalledSince != null);
 
   const destructive = DESTRUCTIVE.includes(state);
   const bubbleBase = 'flex items-center gap-2 bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5';

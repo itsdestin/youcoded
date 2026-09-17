@@ -17,6 +17,7 @@ import { isPlaceholderModelId } from '../shared/model-ids';
 import { hasRealTitle } from '../shared/session-title';
 import { setPermissionOverrides, forgetSessionAttention } from './main';
 import { LocalSkillProvider } from './skill-provider';
+import { getJsonPath, setJsonPath } from './safe-json-path';
 import { CommandProvider } from './command-provider';
 import { IntegrationInstaller, listWithState } from './integration-installer';
 import { RemoteConfig, MIN_REMOTE_PASSWORD_LENGTH } from './remote-config';
@@ -90,7 +91,8 @@ import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
 // The KDE script that lets the buddy move itself on a Wayland desktop.
 import { helperStatus, installHelper, removeHelper, type HelperStatus } from './kwin-helper';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, type SyncWarning } from './sync-state';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, setSyncHealthGate, type SyncWarning } from './sync-state';
+import { startStatusPushGate } from './status-push-gate';
 // Cross-device sync spaces (spec 2026-07-03) — the folder-based sync engine.
 import {
   syncSpacesStatus, syncSpacesEnable, syncSpacesSyncNow, syncSpacesCreateProject, syncSpacesImportProject,
@@ -764,13 +766,16 @@ export function registerIpcHandlers(
   // for the given session. The actual read happens in the renderer (xterm
   // lives there), so main calls back via executeJavaScript. ~1s cadence
   // under the classifier; round-trip overhead is negligible.
-  ipcMain.handle('terminal:get-screen-text', async (event, sessionId: string) => {
+  ipcMain.handle('terminal:get-screen-text', async (event, sessionId: string, tailRows?: number) => {
     try {
-      // Tail read (120 buffer rows): the attention classifier keeps only the
-      // last 40 logical lines, so serializing the full 1000+-row scrollback
-      // every second was pure waste. 120 rows leaves ample wrap headroom.
+      // Tail read: serializing the full 1000+-row scrollback every second was
+      // pure waste. The caller says how many buffer rows it wants (the
+      // attention classifier asks for 40 — audit W24); a caller that omits it
+      // gets the 120-row tail this handler always used. Only a positive
+      // integer is honoured — anything else falls back to the default.
+      const rows = Number.isInteger(tailRows) && (tailRows as number) > 0 ? (tailRows as number) : 120;
       return await event.sender.executeJavaScript(
-        `window.__terminalRegistry?.getScreenText(${JSON.stringify(sessionId)}, 120) ?? ''`
+        `window.__terminalRegistry?.getScreenText(${JSON.stringify(sessionId)}, ${rows}) ?? ''`
       );
     } catch {
       return '';
@@ -1294,12 +1299,31 @@ export function registerIpcHandlers(
   // Field names follow Claude Code's own schema (e.g., 'editorMode', 'defaultMode').
   const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
 
+  // WHY a parse memo (simplification audit W10, 2026-09-16): the Preferences
+  // popup asks for six fields in one tick, and each ask re-read and re-parsed
+  // the same file. The parse is keyed on the file's (mtimeMs, size) so any
+  // writer — this handler, the remote-server twin, Claude Code itself — is
+  // seen on the next read without anyone having to tell us. The cached object
+  // is never handed out or mutated: readers walk it with getJsonPath, and the
+  // writer below re-reads the file rather than editing the memo in place.
+  let settingsMemo: { mtimeMs: number; size: number; parsed: unknown } | null = null;
+  const readClaudeSettings = (): unknown => {
+    const st = fs.statSync(claudeSettingsPath);
+    if (settingsMemo && settingsMemo.mtimeMs === st.mtimeMs && settingsMemo.size === st.size) {
+      return settingsMemo.parsed;
+    }
+    const parsed: unknown = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf-8'));
+    settingsMemo = { mtimeMs: st.mtimeMs, size: st.size, parsed };
+    return parsed;
+  };
+
   ipcMain.handle('settings:get', async (_event, field: string) => {
     try {
-      const raw = fs.readFileSync(claudeSettingsPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      // Dot-path support for nested fields like 'permissions.defaultMode'
-      return field.split('.').reduce((obj: any, k) => (obj == null ? undefined : obj[k]), parsed);
+      // getJsonPath: dot-path support for nested fields like
+      // 'permissions.defaultMode' — the same walker the remote-server twin uses
+      // (simplification audit D6), so a read of `__proto__` yields undefined
+      // here too instead of the prototype object.
+      return getJsonPath(readClaudeSettings(), field);
     } catch {
       return undefined;
     }
@@ -1307,25 +1331,20 @@ export function registerIpcHandlers(
 
   ipcMain.handle('settings:set', async (_event, field: string, value: unknown) => {
     try {
-      let existing: Record<string, any> = {};
+      let existing: Record<string, unknown> = {};
       try {
         existing = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf-8'));
       } catch {}
-      // Dot-path support — write nested fields without clobbering siblings
-      const keys = field.split('.');
-      let cursor = existing;
-      for (let i = 0; i < keys.length - 1; i++) {
-        const k = keys[i];
-        if (cursor[k] == null || typeof cursor[k] !== 'object') cursor[k] = {};
-        cursor = cursor[k];
-      }
-      if (value === null || value === undefined) {
-        delete cursor[keys[keys.length - 1]];
-      } else {
-        cursor[keys[keys.length - 1]] = value;
-      }
+      // WHY setJsonPath (simplification audit D6 / B3): the hand-rolled walk
+      // this replaces had no prototype-pollution guard and clobbered an array
+      // it walked through with `{}`; the shared helper refuses
+      // __proto__/constructor/prototype segments and walks INTO arrays, matching
+      // the remote-server handler for the same channel. `null`/`undefined`
+      // still deletes the leaf.
+      setJsonPath(existing, field, value);
       fs.mkdirSync(path.dirname(claudeSettingsPath), { recursive: true });
       fs.writeFileSync(claudeSettingsPath, JSON.stringify(existing, null, 2));
+      settingsMemo = null; // the (mtime, size) key would catch this too; be explicit
       return true;
     } catch {
       return false;
@@ -1786,7 +1805,7 @@ export function registerIpcHandlers(
     // WHY these are desktop IPC and have no remote equivalent: renaming and unpairing decide
     // who may reach this computer. The remote socket refuses them (HOST_ADMIN_REFUSAL).
     ipcMain.handle(IPC.REMOTE_STATUS, async () => {
-      return remoteServer?.getStatus() ?? { state: 'stopped', port: 0 };
+      return remoteServer?.getStatus() ?? { state: 'stopped', port: 0, clientCount: 0 };
     });
 
     // Remote access batch 2 (§6): Refresh belongs to a remote client's copy of the
@@ -1850,7 +1869,7 @@ export function registerIpcHandlers(
     // registry; passing it in (rather than session-browser.ts reading disk
     // itself) keeps NativeSessionHost the one source of truth for what native
     // sessions exist.
-    return listPastSessions(activeIds, nativeHost.list());
+    return listPastSessions(activeIds, await nativeHost.listAsync());
   });
 
   ipcMain.handle(IPC.SESSION_HISTORY, async (
@@ -2256,9 +2275,13 @@ export function registerIpcHandlers(
   const appearancePrefPath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
   const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
 
-  function readJsonFile(filePath: string): any {
+  // WHY async (2026-09-16 smoothness sweep, C5): these three readers feed the
+  // 10 s status push, which read 6 files plus 3 per open session synchronously
+  // on the main thread every tick (and again on every attention change) — a
+  // rhythmic micro-stutter that grew with the number of sessions opened.
+  async function readJsonFile(filePath: string): Promise<any> {
     try {
-      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      return JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
     } catch {
       return null;
     }
@@ -2270,18 +2293,18 @@ export function registerIpcHandlers(
   // Legacy .sync-warnings text file is no longer read; typed warnings come from .sync-warnings.json.
   const syncWarningsJsonPath = path.join(os.homedir(), '.claude', '.sync-warnings.json');
 
-  function readTextFile(filePath: string): string | null {
+  async function readTextFile(filePath: string): Promise<string | null> {
     try {
-      return fs.readFileSync(filePath, 'utf8').trim() || null;
+      return (await fs.promises.readFile(filePath, 'utf8')).trim() || null;
     } catch {
       return null;
     }
   }
 
-  /** Read typed sync warnings synchronously — returns [] if missing or unparseable. */
-  function readSyncWarningsSync(): SyncWarning[] {
+  /** Read typed sync warnings — returns [] if missing or unparseable. */
+  async function readSyncWarnings(): Promise<SyncWarning[]> {
     try {
-      const text = fs.readFileSync(syncWarningsJsonPath, 'utf8');
+      const text = await fs.promises.readFile(syncWarningsJsonPath, 'utf8');
       const parsed = JSON.parse(text);
       return Array.isArray(parsed) ? parsed : [];
     } catch {
@@ -2315,11 +2338,27 @@ export function registerIpcHandlers(
   // serves desktop AND remote. The old native:usage-report → status:data cache
   // was dead — nothing read it — and was removed in the whole-branch review.)
 
-  function buildStatusData() {
-    const usage = readJsonFile(usageCachePath);
-    const announcement = readJsonFile(announcementCachePath);
+  async function buildStatusData() {
+    const home = os.homedir();
+    // Every file read for one push is issued at once and awaited together;
+    // the per-session trio below likewise. Nothing here blocks the loop.
+    const [usage, announcement, syncWarnings, syncMarkerRaw, backupMeta, syncLockIsDir, perSession] = await Promise.all([
+      readJsonFile(usageCachePath),
+      readJsonFile(announcementCachePath),
+      readSyncWarnings(),
+      readTextFile(path.join(home, '.claude', 'toolkit-state', '.sync-marker')),
+      readJsonFile(path.join(home, '.claude', 'backup-meta.json')),
+      fs.promises.stat(path.join(home, '.claude', 'toolkit-state', '.sync-lock')).then((s) => s.isDirectory(), () => false),
+      Promise.all([...sessionIdMap].map(async ([desktopId, claudeId]) => {
+        const [context, branch, stats] = await Promise.all([
+          readTextFile(path.join(home, '.claude', `.context-${claudeId}`)),
+          readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
+          readJsonFile(path.join(home, '.claude', `.session-stats-${claudeId}.json`)),
+        ]);
+        return { desktopId, context, branch, stats };
+      })),
+    ]);
     const updateStatus = getUpdateStatus();
-    const syncWarnings = readSyncWarningsSync();
 
     // Sync state for live updates — SyncPanel also fetches via IPC,
     // but these fields let the compact section row update in real-time.
@@ -2328,12 +2367,9 @@ export function registerIpcHandlers(
     // Drive/iCloud-only installs. WHY: the marker is absent on GitHub-era
     // installs, so reading only it showed "last seen 22 hours ago" on a
     // machine that was (supposedly) syncing every 90 seconds (2026-07-30 spec §4).
-    const syncMarkerRaw = readTextFile(path.join(os.homedir(), '.claude', 'toolkit-state', '.sync-marker'));
     const lastSyncEpoch = deriveSelfLastSyncEpochSec(getSelfLastSyncEpochMs(), syncMarkerRaw);
     // Live spaces syncing OR the legacy lock dir (extra-backups pushes).
-    let syncInProgress = isSyncSpacesSyncing();
-    try { syncInProgress = syncInProgress || fs.statSync(path.join(os.homedir(), '.claude', 'toolkit-state', '.sync-lock')).isDirectory(); } catch {}
-    const backupMeta = readJsonFile(path.join(os.homedir(), '.claude', 'backup-meta.json'));
+    const syncInProgress = isSyncSpacesSyncing() || syncLockIsDir;
     // Per-device sync recency (machineId → epoch-ms), carried over the SyncHub.
     // Rides the live push so the "Your devices" rows update in real-time without
     // waiting for a full getSyncStatus() refetch. Forwarded verbatim to remote
@@ -2342,8 +2378,7 @@ export function registerIpcHandlers(
 
     // Read per-session context remaining % (written by statusline.sh)
     const contextMap: Record<string, number> = {};
-    for (const [desktopId, claudeId] of sessionIdMap) {
-      const raw = readTextFile(path.join(os.homedir(), '.claude', `.context-${claudeId}`));
+    for (const { desktopId, context: raw } of perSession) {
       if (raw != null) {
         const num = parseInt(raw, 10);
         if (!isNaN(num)) {
@@ -2357,8 +2392,7 @@ export function registerIpcHandlers(
 
     // Read per-session git branch (written by statusline.sh, same pattern as context %)
     const gitBranchMap: Record<string, string> = {};
-    for (const [desktopId, claudeId] of sessionIdMap) {
-      const raw = readTextFile(path.join(os.homedir(), '.claude', `.gitbranch-${claudeId}`));
+    for (const { desktopId, branch: raw } of perSession) {
       if (raw) {
         gitBranchMap[desktopId] = raw;
         lastGitBranchByDesktopId[desktopId] = raw;
@@ -2369,8 +2403,7 @@ export function registerIpcHandlers(
 
     // Read per-session stats (cost, tokens, code changes — written by statusline.sh)
     const sessionStatsMap: Record<string, any> = {};
-    for (const [desktopId, claudeId] of sessionIdMap) {
-      const stats = readJsonFile(path.join(os.homedir(), '.claude', `.session-stats-${claudeId}.json`));
+    for (const { desktopId, stats } of perSession) {
       if (stats) {
         sessionStatsMap[desktopId] = stats;
         lastSessionStatsByDesktopId[desktopId] = stats;
@@ -2401,13 +2434,25 @@ export function registerIpcHandlers(
     return { usage, announcement, updateStatus, syncWarnings, lastSyncEpoch, syncInProgress, lastSyncByDevice, backupMeta, contextMap, gitBranchMap, sessionStatsMap, attentionMap, chatgptUsage };
   }
 
-  // Push status data every 10s — store handle so it can be cleared on shutdown
-  const statusInterval = setInterval(() => {
-    const data = buildStatusData();
-    send(IPC.STATUS_DATA, data);
+  // Single-flight: an attention change that lands while the 10 s build is in
+  // progress joins it instead of racing a second build that could send an
+  // older payload after a newer one.
+  let statusBuildInFlight: ReturnType<typeof buildStatusData> | null = null;
+  function buildStatusDataShared(): ReturnType<typeof buildStatusData> {
+    if (!statusBuildInFlight) {
+      statusBuildInFlight = buildStatusData().finally(() => { statusBuildInFlight = null; });
+    }
+    return statusBuildInFlight;
+  }
+  // Push status data every 10 s while anyone can see it, deduplicated, pushed at
+  // once on the first look back — WHY and rules: status-push-gate.ts (audit W2).
+  const statusPush = startStatusPushGate({
+    build: buildStatusDataShared,
     // Feed full status data to remote server for browser clients (single polling source)
-    if (remoteServer) remoteServer.broadcastStatusData(data);
-  }, 10000);
+    deliver: (data) => { send(IPC.STATUS_DATA, data); if (remoteServer) remoteServer.broadcastStatusData(data); },
+    mainWindow, windowRegistry, remoteServer,
+  });
+  setSyncHealthGate(statusPush.hasAudience); // the sync health check asks the same question (audit W12)
 
   // Also push immediately on first hook event (session is active)
   let sentInitialStatus = false;
@@ -2415,9 +2460,7 @@ export function registerIpcHandlers(
     hookRelay.on('hook-event', () => {
       if (!sentInitialStatus) {
         sentInitialStatus = true;
-        const data = buildStatusData();
-        send(IPC.STATUS_DATA, data);
-        if (remoteServer) remoteServer.broadcastStatusData(data);
+        statusPush.push();
       }
     });
   }
@@ -2501,10 +2544,9 @@ export function registerIpcHandlers(
     if (!payload?.sessionId) return;
     lastAttentionBySession.set(payload.sessionId, payload.state);
     // Broadcast immediately so remote clients see the change without waiting
-    // for the 10s status:data timer. Payload rebuild is cheap.
+    // for the 10s status:data timer. The rebuild is async and shared (C5).
     if (remoteServer) {
-      const data = buildStatusData();
-      remoteServer.broadcastStatusData(data);
+      void buildStatusDataShared().then((data) => remoteServer?.broadcastStatusData(data));
     }
   });
 
@@ -3100,7 +3142,7 @@ export function registerIpcHandlers(
     // Native sessions page over the merged event array; getHistoryPage returns
     // null for non-native ids, so CC's watcher stays the source for claude
     // sessions — the same discrimination the replay handler uses.
-    const nativePage = nativeHost.getHistoryPage(sessionId, beforeCursor ? beforeCursor.offset : null);
+    const nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null);
     if (nativePage !== null) {
       return {
         events: nativePage.events,
@@ -3165,11 +3207,23 @@ export function registerIpcHandlers(
   // normal TRANSCRIPT_EVENT channel (uuid dedup handles overlap with live).
   // We send directly to the requesting window — NOT via sendForSession —
   // because ownership has already transferred to them by the time this fires.
-  ipcMain.on(IPC.TRANSCRIPT_REPLAY, (evt, { sessionId }: { sessionId: string }) => {
+  ipcMain.on(IPC.TRANSCRIPT_REPLAY, async (evt, { sessionId }: { sessionId: string }) => {
     // Native sessions replay from the SessionStore; getHistory returns null for
     // non-native ids so CC's watcher stays the source for claude sessions.
-    const nativeEvents = nativeHost.getHistory(sessionId);
-    const events = nativeEvents ?? transcriptWatcher.getHistory(sessionId);
+    // Async (2026-09-16 C2): the whole-history read is off the main thread; the
+    // sends below still go out in order, and the renderer's uuid dedup already
+    // covers a live event that lands between the read and the replay.
+    let events: TranscriptEvent[];
+    let nativeEvents: TranscriptEvent[] | null;
+    try {
+      nativeEvents = await nativeHost.getHistoryAsync(sessionId);
+      events = nativeEvents ?? transcriptWatcher.getHistory(sessionId);
+    } catch (err) {
+      log('WARN', 'IPC', 'transcript replay failed to read the history', { sessionId, error: String((err as any)?.message ?? err) });
+      return;
+    }
+    // The window may have closed during the read (a tear-off dismissed mid-replay).
+    if (evt.sender.isDestroyed()) return;
     for (const ev of events) {
       evt.sender.send(IPC.TRANSCRIPT_EVENT, ev);
     }
@@ -3247,7 +3301,9 @@ export function registerIpcHandlers(
   // page FIRST and then this, so the replay-complete marker cannot reap tool
   // cards before the page that creates them has been applied.
   ipcMain.handle(IPC.SESSION_REPLAY_LIVE_STATE, (evt, { sessionId }: { sessionId: string }) => {
-    sendLiveOnlyState(evt.sender, sessionId, nativeHost.getHistory(sessionId) !== null);
+    // isLive, not `getHistory(id) !== null` (2026-09-16 C2): that read the whole
+    // history, parent and every helper child, to compute this one boolean.
+    sendLiveOnlyState(evt.sender, sessionId, nativeHost.isLive(sessionId));
   });
 
   // --- Native runtime IPC (Phase 1 Plan A) ---
@@ -3341,7 +3397,7 @@ export function registerIpcHandlers(
   });
   ipcMain.handle(IPC.NATIVE_GET_STEP_GUARD, () => stepGuardSettings.read());
   ipcMain.handle(IPC.NATIVE_SET_STEP_GUARD, async (_e, value: number | null) => stepGuardSettings.update(value));
-  ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.list());
+  ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.listAsync());
   // G-1: the Bash card's Stop button, on every surface.
   ipcMain.handle(IPC.NATIVE_KILL_SHELL, (_e, { sessionId, shellId }: { sessionId: string; shellId: string }) => nativeHost.killShell(sessionId, shellId));
   // "What the assistant was given" — one file's text, read when the user opens
@@ -3654,9 +3710,12 @@ export function registerIpcHandlers(
     windowRegistry?.emit('changed');
   }
 
-  function readTopicFile(claudeSessionId: string): string | null {
+  // Async (2026-09-16 C5): the polling fallback below read this synchronously
+  // every 2 s for every session that fell into it — which was every session,
+  // because the topic file rarely exists when the session starts.
+  async function readTopicFile(claudeSessionId: string): Promise<string | null> {
     try {
-      const content = fs.readFileSync(path.join(topicDir, `topic-${claudeSessionId}`), 'utf8').trim();
+      const content = (await fs.promises.readFile(path.join(topicDir, `topic-${claudeSessionId}`), 'utf8')).trim();
       return content || null;
     } catch {
       return null;
@@ -3695,28 +3754,49 @@ export function registerIpcHandlers(
     pendingWatchers.add(desktopId);
 
     // Read initial value
-    const initial = readTopicFile(claudeId);
-    if (initial && initial !== 'New Session') {
-      // lastTopics is set only if the title was actually APPLIED. A topic
-      // refused because the user owns the name must stay un-recorded, or a
-      // later Use-automatic-name would find it "unchanged" and never repaint.
-      void applyTopic(desktopId, claudeId, initial);
-    }
+    void readTopicFile(claudeId).then((initial) => {
+      // Torn down (a /clear remap or exit) while the read was in flight: the
+      // topic belongs to a session id this desktop id no longer maps to.
+      if (!topicWatchers.has(desktopId)) return;
+      if (initial && initial !== 'New Session') {
+        // lastTopics is set only if the title was actually APPLIED. A topic
+        // refused because the user owns the name must stay un-recorded, or a
+        // later Use-automatic-name would find it "unchanged" and never repaint.
+        void applyTopic(desktopId, claudeId, initial);
+      }
+    });
 
+    attachTopicWatch(desktopId, claudeId);
+  }
+
+  /** Prefer fs.watch for efficiency; fall back to polling if watch fails
+   *  (e.g., on network filesystems or platforms with limited inotify), or when
+   *  the file does not exist yet — the poll upgrades back to a watch once it does. */
+  function attachTopicWatch(desktopId: string, claudeId: string) {
     const topicFilePath = path.join(topicDir, `topic-${claudeId}`);
-
-    // Prefer fs.watch for efficiency; fall back to polling if watch fails
-    // (e.g., on network filesystems or platforms with limited inotify)
     try {
-      const watcher = fs.watch(topicFilePath, { persistent: false }, () => {
-        const topic = readTopicFile(claudeId);
-        if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
-          void applyTopic(desktopId, claudeId, topic);
+      const watcher: fs.FSWatcher = fs.watch(topicFilePath, { persistent: false }, (eventType) => {
+        // WHY the rename branch (review, 2026-09-16): the hook's daily prune
+        // deletes topic files older than 30 days and recreates them on a new
+        // inode; Linux reports that as 'rename' and the old watch goes dead
+        // without an 'error'. Fall back to the poll, which re-attaches a watch
+        // the moment the file reads again.
+        if (eventType === 'rename') {
+          watcher.close();
+          if (topicWatchers.get(desktopId) === watcher) { topicWatchers.delete(desktopId); startPolling(desktopId, claudeId); }
+          return;
         }
+        void readTopicFile(claudeId).then((topic) => {
+          if (topicWatchers.get(desktopId) !== watcher) return; // torn down or replaced mid-read
+          if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
+            void applyTopic(desktopId, claudeId, topic);
+          }
+        });
       });
       watcher.on('error', () => {
         // File may not exist yet — fall back to polling
         watcher.close();
+        if (topicWatchers.get(desktopId) === watcher) topicWatchers.delete(desktopId);
         startPolling(desktopId, claudeId);
       });
       topicWatchers.set(desktopId, watcher);
@@ -3731,10 +3811,21 @@ export function registerIpcHandlers(
   function startPolling(desktopId: string, claudeId: string) {
     if (topicWatchers.has(desktopId)) return;
     const interval = setInterval(() => {
-      const topic = readTopicFile(claudeId);
-      if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
-        void applyTopic(desktopId, claudeId, topic);
-      }
+      void readTopicFile(claudeId).then((topic) => {
+        if (topicWatchers.get(desktopId) !== interval) return; // torn down or replaced mid-read
+        if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
+          void applyTopic(desktopId, claudeId, topic);
+        }
+        // WHY upgrade (2026-09-16 C5): the poll used to run for the session's
+        // whole life once it started, because nothing re-tried fs.watch after
+        // the file appeared. Once a read succeeds the file exists, so hand the
+        // session back to the watcher; if that attach fails it falls back here.
+        if (topic !== null && topicWatchers.get(desktopId) === interval) {
+          clearInterval(interval);
+          topicWatchers.delete(desktopId);
+          attachTopicWatch(desktopId, claudeId);
+        }
+      });
     }, 2000);
     topicWatchers.set(desktopId, interval);
   }
@@ -4846,10 +4937,23 @@ export function registerIpcHandlers(
   // Watchers live in main, refcounted per webContents (project-watcher.ts owns
   // the lifecycle). Events reuse the existing CHANGED broadcast contract with
   // by:'external' — the renderer filters on projectRoot exactly like user events.
-  initProjectWatchers((evt) => {
+  initProjectWatchers((evt, subscriberIds) => {
     // Created/deleted files must show up in the next file-list fetch.
     if (evt.kind !== 'edit') invalidateDiscoveryCache(evt.projectRoot);
-    webContents.getAllWebContents().forEach((wc) => wc.send(ARTIFACT_IPC.CHANGED, evt));
+    // Only the windows subscribed to this root (2026-09-16 C8) — every
+    // consumer of this event lives in a surface that called useProjectWatch
+    // (the drawer, its viewer and git footer, the Files tab). A phone's
+    // subscriber id is not a webContents id; fromId() answers undefined for it
+    // and the remote broadcast below carries the event there.
+    // (Guarded: test harnesses fake `webContents` with only getAllWebContents,
+    // and a throw here would also swallow the remote broadcast below.)
+    const byId = typeof webContents.fromId === 'function' ? webContents.fromId.bind(webContents) : () => undefined;
+    for (const id of subscriberIds) {
+      try {
+        const wc = byId(id);
+        if (wc && !wc.isDestroyed()) wc.send(ARTIFACT_IPC.CHANGED, evt);
+      } catch { /* a window closing mid-send must not cost the others their event */ }
+    }
     // A phone subscribed over remote access (remote-server.ts watch-project)
     // is not a webContents; without this line the phone's file list never
     // updated while the assistant worked (contract row R12). Every consumer
@@ -5156,7 +5260,7 @@ export function registerIpcHandlers(
   };
   const cleanup = function cleanup(): Promise<void> {
     stopThemeWatcher();
-    clearInterval(statusInterval);
+    statusPush.stop();
     transcriptWatcher.stopAll();
     // Flush + tear down every live native session on quit (best-effort, bounded
     // to one in-flight streaming part). Fire-and-forget with .catch — cleanup()

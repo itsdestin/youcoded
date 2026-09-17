@@ -8,7 +8,8 @@
 // walk-up-to-git-root that the assembled prompt needs, so this owns its own IO.
 import * as fs from 'fs';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
+import { promisify } from 'util';
 import type { PromptVariant } from './capability-profile';
 import { variantOverlay } from './prompts/variants';
 import { fitProjectInstructions } from './injection/injection-budget';
@@ -34,15 +35,46 @@ const DEFAULT_INSTRUCTION_BUDGET_TOKENS = 20_000;
 // presetName is LABEL-ONLY: it names the preset in the session-context panel and
 // never reaches the model, so passing it cannot change a single byte of the
 // assembled prompt. Optional so every existing caller assembles unchanged.
-export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string }
+// gitSnapshot: the <env> git line, computed AHEAD by the caller with
+// gitSnapshotAsync (2026-09-16 C3). When absent the sync shell-out below runs,
+// which only the evaluator and tests should reach — see the WHY on gitSnapshotAsync.
+export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string; gitSnapshot?: string }
+
+const GIT_TIMEOUT_MS = 3000;
+
+function gitLine(branch: string, dirty: string): string {
+  return `Git branch: ${branch}${dirty ? ` (${dirty.split('\n').length} uncommitted change(s))` : ' (clean)'}`;
+}
 
 function gitSnapshot(cwd: string): string {
   try {
     // stdio ignores stderr so a non-git cwd doesn't spam the main-process log
     // with `fatal: not a repository`; stdout is still captured, catch still fires.
-    const branch = execFileSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
-    const dirty = execFileSync('git', ['-C', cwd, 'status', '--porcelain'], { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
-    return `Git branch: ${branch}${dirty ? ` (${dirty.split('\n').length} uncommitted change(s))` : ' (clean)'}`;
+    const branch = execFileSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: GIT_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    const dirty = execFileSync('git', ['-C', cwd, 'status', '--porcelain'], { timeout: GIT_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    return gitLine(branch, dirty);
+  } catch { return 'Git: not a repository'; }
+}
+
+const execFileP = promisify(execFile);
+
+/**
+ * The same <env> git line as the sync form, byte for byte, with the two git
+ * commands run OFF the main thread.
+ *
+ * WHY (2026-09-16 smoothness sweep, C3): the sync form ran on every session
+ * create and resume — and, since specialists, on every helper the model spawns
+ * mid-turn — holding the whole main process for up to two 3 s timeouts on a
+ * big or dirty repo. The host now awaits this before assembling and passes the
+ * string in; the prompt stays byte-stable because the string is identical.
+ * Kept separate from findProjectInstructions' walk, which is a few stats.
+ */
+export async function gitSnapshotAsync(cwd: string): Promise<string> {
+  try {
+    const run = async (args: string[]) => (await execFileP('git', ['-C', cwd, ...args], { timeout: GIT_TIMEOUT_MS, windowsHide: true })).stdout.trim();
+    const branch = await run(['rev-parse', '--abbrev-ref', 'HEAD']);
+    const dirty = await run(['status', '--porcelain']);
+    return gitLine(branch, dirty);
   } catch { return 'Git: not a repository'; }
 }
 
@@ -135,7 +167,7 @@ export function assembleSystemPromptParts(i: PromptInputs): PromptPart[] {
         `Working directory: ${i.cwd}`,
         `Platform: ${process.platform} (${process.arch})`,
         `Date: ${new Date().toDateString()}`,
-        gitSnapshot(i.cwd),
+        i.gitSnapshot ?? gitSnapshot(i.cwd),
         `YouCoded version: ${i.appVersion}`,
         '</env>',
       ].join('\n'),

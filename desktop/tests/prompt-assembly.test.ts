@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions } from '../src/main/harness/prompt-assembly';
+import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions, gitSnapshotAsync } from '../src/main/harness/prompt-assembly';
+import { execFileSync } from 'child_process';
 import { CODER_DEFAULT_BODY } from '../src/main/harness/prompts/coder-default';
 
 // Each test gets a fresh tmp sandbox so filesystem walk-up state never leaks.
@@ -134,6 +135,43 @@ describe('assembleSystemPrompt — byte stability (KV-cache pin)', () => {
     const b = assembleSystemPrompt(inputs);
     expect(a).toBe(b);
     expect(a).toContain('Git: not a repository');
+  });
+});
+
+// 2026-09-16 smoothness sweep, C3: the host reads the git line ahead, off the
+// main thread, and passes it in. The assembled prompt must be byte-identical
+// either way, and the async reader must say exactly what the sync one says.
+describe('gitSnapshot — precomputed and async', () => {
+  it('a supplied gitSnapshot lands in <env> verbatim and the prompt equals the sync assembly', async () => {
+    const sync = assembleSystemPrompt({ presetBody: PRESET, cwd: dir, appVersion: '2.3.4' });
+    const pre = assembleSystemPrompt({ presetBody: PRESET, cwd: dir, appVersion: '2.3.4', gitSnapshot: await gitSnapshotAsync(dir) });
+    expect(pre).toBe(sync);
+    const custom = assembleSystemPrompt({ presetBody: PRESET, cwd: dir, appVersion: '2.3.4', gitSnapshot: 'Git branch: feature/x (2 uncommitted change(s))' });
+    expect(custom).toContain('\nGit branch: feature/x (2 uncommitted change(s))\n');
+    expect(custom).not.toContain('Git: not a repository');
+  });
+
+  it('answers the fixed line for a non-repository', async () => {
+    expect(await gitSnapshotAsync(dir)).toBe('Git: not a repository');
+  });
+
+  it('answers the same line as the sync reader for a real repository', async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-git-'));
+    try {
+      execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']);
+      fs.writeFileSync(path.join(repo, 'a.txt'), 'x');
+      // A repository with no commits has no HEAD, and both readers answer
+      // "not a repository" for it — so commit first, then leave one change.
+      execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'add', 'a.txt']);
+      execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'one']);
+      fs.writeFileSync(path.join(repo, 'b.txt'), 'y');
+      const line = await gitSnapshotAsync(repo);
+      expect(line).toBe('Git branch: main (1 uncommitted change(s))');
+      // The sync form is what the prompt falls back to; both must agree.
+      expect(assembleSystemPrompt({ presetBody: PRESET, cwd: repo, appVersion: '1' })).toContain(line);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 

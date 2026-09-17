@@ -321,6 +321,22 @@ describe('terminal:get-screen-text channel parity', () => {
     expect(src).toContain(`'${CHANNEL}'`);
   });
 
+  // Audit W24: the classifier asks for a 40-row tail through the second
+  // argument. A bridge that drops it silently reverts to the handler's default
+  // tail (desktop) or the whole screen (Android) with nothing failing.
+  // WHY readSourceFile (Plan B merge, 2026-09-17): master added these two parity
+  // cases with a raw readFileSync; this file routes every read through the
+  // CRLF-normalising reader so a Windows checkout matches the same regex.
+  it('preload.ts forwards the tailRows argument', () => {
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
+    expect(src).toMatch(/ipcRenderer\.invoke\('terminal:get-screen-text',\s*sessionId,\s*tailRows\)/);
+  });
+
+  it('remote-shim.ts forwards the tailRows argument', () => {
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
+    expect(src).toMatch(/invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
+  });
+
   it('terminal:get-screen-text is referenced in ipc-handlers.ts', () => {
     const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'));
     expect(src).toContain(`'${CHANNEL}'`);

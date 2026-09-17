@@ -6,11 +6,16 @@
   // them. Its errors name the color, size or component to use instead, which is
   // what lets an agent fix a violation in one pass.
   //
-  // REPORT-ONLY for now: the tree is not at zero on these rules, so they are
-  // warnings and the command exits 0. A rule becomes a gate (warn → error, and
-  // a CI step) only once its count is driven to zero — the same green-gate rule
-  // as .oxlintrc.json. `no-inline-styles` is omitted: ~1,050 of its hits are
-  // legitimate runtime values (positions, measured sizes).
+  // A RATCHET, not a zero gate (2026-09-16): the tree is not at zero on these
+  // rules, so they stay warnings — but `npm run lint:design` carries
+  // `--max-warnings <count measured that day>` (package.json), and CI and
+  // scripts/verify.sh both run it. Until then it ran nowhere and the count had
+  // drifted from 539 to 542 with no one told. A change that ADDS a warning
+  // fails; a cleanup that removes some should lower the number in the same
+  // commit. Never raise it. A rule becomes warn → error only once its own
+  // count is driven to zero — the same green-gate rule as .oxlintrc.json.
+  // `no-inline-styles` is omitted: ~1,050 of its hits are legitimate runtime
+  // values (positions, measured sizes).
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "jsPlugins": ["@shadcn/lint"],
   "categories": {

@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest';
  *     second after the buddy appears his coordinates would be overwritten with
  *     the word "YouCoded" — and he would sit there, unmovable, for the rest of
  *     the session. This repo has already shipped that exact bug once
- *     (buddy-overlay-manager.ts, found live on 2026-07-23).
+ *     (in the since-deleted one-window buddy overlay, found live on 2026-07-23).
  *
  *  2. BLOCKING THE PAGE'S TITLE *AFTER* SETTING OUR OWN. The order matters:
  *     register the block first and our name can never be clobbered; do it the

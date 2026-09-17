@@ -30,7 +30,7 @@ import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
 import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
-import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions } from './prompt-assembly';
+import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions, gitSnapshotAsync } from './prompt-assembly';
 import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
@@ -171,6 +171,23 @@ export function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
  * resuming) more than once can never accumulate duplicate entries — there is
  * nothing on disk for a second call to duplicate.
  */
+/** One page of an already-merged history: the last PAGE_TURNS user turns
+ *  before `beforeIndex` (null = the end). The cursor is an ARRAY INDEX. */
+function pageOf(all: TranscriptEvent[], beforeIndex: number | null): { events: TranscriptEvent[]; nextIndex: number | null; hasMore: boolean } {
+  const end = beforeIndex == null ? all.length : Math.min(beforeIndex, all.length);
+  if (end <= 0) return { events: [], nextIndex: null, hasMore: false };
+  let boundaries = 0;
+  let start = 0;
+  for (let i = end - 1; i >= 0; i--) {
+    if (all[i].type === 'user-message') {
+      boundaries++;
+      if (boundaries === PAGE_TURNS) { start = i; break; }
+    }
+  }
+  const hasMore = start > 0;
+  return { events: all.slice(start, end), nextIndex: hasMore ? start : null, hasMore };
+}
+
 export function mergeChildEvents(
   parentId: string,
   parentEvents: TranscriptEvent[],
@@ -919,14 +936,15 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
     const title = header.title ?? record.title;
 
+    const gitSnapshot = await gitSnapshotAsync(workDir);
     const session = this.buildSpecialistSession(
-      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent,
+      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
     );
     // Cold state rebuilt from the child's OWN transcript — seedHistory resets
     // readRegistry + todos too (the same reset-on-resume contract root
     // sessions get in resume() above); readImageFromDisk re-reads any
     // persisted attachment paths so images survive the resume.
-    this.seedResumedHistory(opts.childId, workDir, session);
+    await this.seedResumedHistory(opts.childId, workDir, session);
     this.bindReservation(opts.reservation, opts.childId);
     this.wireChildLive(parentId, opts.childId, workDir, session, binding, opts.parentToolCallId);
 
@@ -2554,7 +2572,7 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
+  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
@@ -2660,12 +2678,13 @@ export class NativeSessionHost extends EventEmitter {
           ? { models: { designated: this.delegatedModels, catalog: this.toolServices?.modelCatalog ?? (async () => null) } }
           : {}),
       },
-      // WHY assembleSystemPrompt is called synchronously here: it shells out to
-      // git twice (execFileSync, 3s timeout each → ~6s worst case). It runs ONCE
-      // per session create/resume — NEVER on the per-turn send() path — so the
-      // accepted sync cost sits off the hot loop. Threading an await through here
-      // would ripple through every construction site for no per-turn benefit
-      // (Task 11 review ruling — the sync cost is deliberate and bounded).
+      // The git line is PRECOMPUTED: `gitSnapshot` came from gitSnapshotAsync,
+      // awaited by the caller off the main thread (2026-09-16 C3). Until then
+      // assembleSystemPromptParts shelled out to git twice, synchronously (two
+      // 3 s timeouts, ~6 s worst case) — accepted as "once per session create
+      // or resume", but the specialist path spawns a helper mid-turn with the
+      // same call, so every helper froze the whole app for it. Passing the
+      // string keeps the prompt byte-stable and this function synchronous.
       // profile.promptVariant selects the capability-steering overlay (local-small only in v1).
       // hasTools mirrors buildAiTools()'s gate: a tool-less profile (supportsTools === false)
       // gets NO tools attached, so the prompt must also drop the tool-guidance line + overlay.
@@ -2682,7 +2701,7 @@ export class NativeSessionHost extends EventEmitter {
       // timeouts) and could land on a different date or branch than the prompt the
       // model actually got. presetName is label-only and reaches no model.
       ...(() => {
-        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name });
+        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name, gitSnapshot });
         return { promptParts, systemPrompt: promptParts.map((p) => p.text).join('\n\n') };
       })(),
     };
@@ -2949,9 +2968,13 @@ export class NativeSessionHost extends EventEmitter {
    * two resume paths used to do. Never throws: a signed-out ChatGPT makes
    * continuationIdentityFor throw, which is just another fallback.
    */
-  private seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): void {
+  private async seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): Promise<void> {
     const store = this.continuationStore();
-    const persisted = this.store.readEvents(sessionId, cwd);
+    // Off the main thread (2026-09-16 C2 review): this ran on every Resume
+    // click and read the whole transcript synchronously. (restore() below
+    // still reads it once more, synchronously, to verify the checkpoint's
+    // digest — filed as a follow-up in the plan.)
+    const persisted = await this.store.readEventsAsync(sessionId, cwd);
     if (store) {
       // WHY hydrate: `references` is in-memory, so every accepted uuid from a
       // previous process is unknown to this one. Without this the session's
@@ -3160,6 +3183,9 @@ export class NativeSessionHost extends EventEmitter {
     // this cwd. Awaited here so no session ever ships the model an empty
     // roster on its very first turn.
     await this.specialistCatalog.ensureFresh(opts.cwd);
+    // The <env> git line, read off the main thread before anything is built
+    // (2026-09-16 C3). Never throws (a non-repo answers a fixed string).
+    const gitSnapshot = await gitSnapshotAsync(opts.cwd);
     // Acquire this session's MCP servers (Task 6) BEFORE constructing the
     // session, so mcpServers is available for the very first buildAiTools().
     const mcpLease = await this.acquireMcp(opts.sessionId);
@@ -3177,7 +3203,7 @@ export class NativeSessionHost extends EventEmitter {
       session = new HarnessSession(
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile) },
+          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot) },
         this.modelFactory,
       );
     } catch (err) {
@@ -3255,12 +3281,13 @@ export class NativeSessionHost extends EventEmitter {
     takenNames.add(name);
 
     // Build the session BEFORE writing the header: everything inside
-    // buildSpecialistSession is fallible synchronous work (assembleSystemPrompt
-    // shells out to git, buildTriggerIndex walks the tree), and a throw after
-    // the header write would leave a session file on disk for a child that
-    // never existed.
+    // buildSpecialistSession is fallible synchronous work (buildTriggerIndex
+    // walks the tree), and a throw after the header write would leave a
+    // session file on disk for a child that never existed. The git line is
+    // awaited first, off the main thread (C3) — it never throws.
+    const gitSnapshot = await gitSnapshotAsync(workDir);
     const session = this.buildSpecialistSession(
-      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent,
+      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
     );
 
     // `title` was drawn earlier (before this session was built — see that
@@ -3309,6 +3336,8 @@ export class NativeSessionHost extends EventEmitter {
     // ring up real money through a metered specialist (spec §5).
     pricing: ModelPricing | null, free: boolean,
     parentToolCallId: string, preset: ResolvedPreset, parent: LiveEntry,
+    // The child's <env> git line, awaited by the caller off the main thread (C3).
+    gitSnapshot: string,
   ): HarnessSession {
     const allowed = new Set(specialist.allowedTools);
     return new HarnessSession(
@@ -3332,7 +3361,7 @@ export class NativeSessionHost extends EventEmitter {
         // parent's conversation crosses over — the brief in the first user turn
         // is the entire context the child gets.
         systemPrompt: assembleSystemPrompt({
-          presetBody: specialist.systemPrompt, cwd: workDir, appVersion: this.appVersion,
+          presetBody: specialist.systemPrompt, cwd: workDir, appVersion: this.appVersion, gitSnapshot,
           promptVariant: profile.promptVariant, hasTools: profile.supportsTools,
           instructionBudgetTokens: profile.injectionBudgetTokens,
           // audience 'parent': the shared doctrine's writing-for-the-user block is
@@ -3633,6 +3662,8 @@ export class NativeSessionHost extends EventEmitter {
     // structurally — this acquire() mints its own lease, and the outgoing
     // destroy() can only release the lease on the LiveEntry it captured. See
     // McpLease in mcp-manager.ts.
+    // The <env> git line, off the main thread, before the session is built (C3).
+    const gitSnapshot = await gitSnapshotAsync(cwd);
     const mcpLease = await this.acquireMcp(sessionId);
     const mcpServers = mcpLease?.servers;
     const harness = header.stepGuard === undefined
@@ -3651,7 +3682,7 @@ export class NativeSessionHost extends EventEmitter {
         // `binding` (not header.binding) — same override reason as above.
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(sessionId, cwd, preset, profile) },
+          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot) },
         this.modelFactory,
       );
       // Full history rebuild (spec §2.5): rebuildHistory reconstructs the assistant
@@ -3660,7 +3691,7 @@ export class NativeSessionHost extends EventEmitter {
       // already clears readRegistry + todos (the reset-on-resume ruling) — those
       // are runtime state, never persisted. readImageFromDisk re-reads any
       // persisted attachment paths so images survive resume (#290 follow-up fix 2).
-      this.seedResumedHistory(sessionId, cwd, session);
+      await this.seedResumedHistory(sessionId, cwd, session);
     } catch (err) {
       await mcpLease?.release();
       throw err;
@@ -4465,35 +4496,61 @@ export class NativeSessionHost extends EventEmitter {
   getHistoryPage(sessionId: string, beforeIndex: number | null): { events: TranscriptEvent[]; nextIndex: number | null; hasMore: boolean } | null {
     const all = this.getHistory(sessionId);
     if (all === null) return null;
-    const end = beforeIndex == null ? all.length : Math.min(beforeIndex, all.length);
-    if (end <= 0) return { events: [], nextIndex: null, hasMore: false };
-    let boundaries = 0;
-    let start = 0;
-    for (let i = end - 1; i >= 0; i--) {
-      if (all[i].type === 'user-message') {
-        boundaries++;
-        if (boundaries === PAGE_TURNS) { start = i; break; }
-      }
-    }
-    const hasMore = start > 0;
-    return { events: all.slice(start, end), nextIndex: hasMore ? start : null, hasMore };
+    return pageOf(all, beforeIndex);
+  }
+
+  /** getHistoryPage with the reads off the main thread — the IPC page handler's
+   *  form. WHY (2026-09-16 C2): every scroll-up page re-read the whole
+   *  transcript (parent and every helper child) synchronously, so scrolling
+   *  back through a long native chat stuttered progressively and froze every
+   *  other window for each page. Same window, same cursor meaning. */
+  async getHistoryPageAsync(sessionId: string, beforeIndex: number | null): Promise<{ events: TranscriptEvent[]; nextIndex: number | null; hasMore: boolean } | null> {
+    const all = await this.getHistoryAsync(sessionId);
+    if (all === null) return null;
+    return pageOf(all, beforeIndex);
+  }
+
+  /** Whether `sessionId` is a live native session — what a caller that only
+   *  needs a yes/no must use. WHY (2026-09-16 C2): tear-off and re-dock asked
+   *  `getHistory(id) !== null`, which read the whole history (parent AND every
+   *  child) to compute a boolean and threw it away. */
+  isLive(sessionId: string): boolean {
+    return this.live.has(sessionId);
   }
 
   getHistory(sessionId: string): TranscriptEvent[] | null {
+    const plan = this.historyPlan(sessionId);
+    if (!plan) return null;
+    const parentEvents = this.store.readEvents(sessionId, plan.cwd);
+    if (plan.records.length === 0) return parentEvents;
+    const children = plan.records.map((record) => ({ record, events: this.store.readEvents(record.childId, record.workDir) }));
+    return mergeChildEvents(sessionId, parentEvents, children);
+  }
+
+  /** getHistory with every file read off the main thread; identical result. */
+  async getHistoryAsync(sessionId: string): Promise<TranscriptEvent[] | null> {
+    const plan = this.historyPlan(sessionId);
+    if (!plan) return null;
+    const parentEvents = await this.store.readEventsAsync(sessionId, plan.cwd);
+    if (plan.records.length === 0) return parentEvents;
+    const children = await Promise.all(plan.records.map(async (record) => ({ record, events: await this.store.readEventsAsync(record.childId, record.workDir) })));
+    return mergeChildEvents(sessionId, parentEvents, children);
+  }
+
+  /** The one decision both getHistory forms share: which files make up this
+   *  session's history. null for a non-live id; an empty `records` when there
+   *  is no ledger or it could not be read (logged, replay degrades to the
+   *  parent's own events — a broken ledger read must never break replay). */
+  private historyPlan(sessionId: string): { cwd: string; records: DelegationRecord[] } | null {
     const entry = this.live.get(sessionId);
     if (!entry) return null;
-    const parentEvents = this.store.readEvents(sessionId, entry.cwd);
-    if (!this.ledger) return parentEvents;
-    let records: DelegationRecord[];
+    if (!this.ledger) return { cwd: entry.cwd, records: [] };
     try {
-      records = this.ledger.listFor(entry.cwd, sessionId);
+      return { cwd: entry.cwd, records: this.ledger.listFor(entry.cwd, sessionId) };
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'getHistory: failed to read the delegation ledger — replaying the parent\'s own events without card replay', { sessionId, error: String((err as any)?.message ?? err) });
-      return parentEvents;
+      return { cwd: entry.cwd, records: [] };
     }
-    if (records.length === 0) return parentEvents;
-    const children = records.map((record) => ({ record, events: this.store.readEvents(record.childId, record.workDir) }));
-    return mergeChildEvents(sessionId, parentEvents, children);
   }
 
   /** Task 9 (plan 1c) — every run record for `sessionId`'s (as PARENT) live
@@ -4549,6 +4606,11 @@ export class NativeSessionHost extends EventEmitter {
   /** Resume Browser rows — every persisted native session, tagged 'native'. */
   list(): (NativeSessionListEntry & { provider: 'native' })[] {
     return this.store.list().map((r) => ({ ...r, provider: 'native' as const }));
+  }
+
+  /** list() with the disk reads off the main thread (2026-09-16 C6). */
+  async listAsync(): Promise<(NativeSessionListEntry & { provider: 'native' })[]> {
+    return (await this.store.listAsync()).map((r) => ({ ...r, provider: 'native' as const }));
   }
 
   /** Cascade-cancel: interrupt then destroy every live specialist child of this

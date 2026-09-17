@@ -17,7 +17,7 @@ import { isNewerVersion } from '../shared/version-compare';
 import { MARKETPLACE_API_HOST } from '../renderer/state/marketplace-api-client';
 import type {
   SkillEntry, SkillDetailView, SkillFilters, ChipConfig,
-  MetadataOverride, SkillProvider,
+  MetadataOverride,
 } from '../shared/types';
 
 const CLAUDE_PLUGINS_ROOT = path.join(os.homedir(), '.claude', 'plugins');
@@ -98,7 +98,10 @@ const CATALOG_TTL = 60 * 60 * 1000;
 // `etag` is optional: only the catalog cache stores one, every other cache omits it.
 interface CacheMeta { fetchedAt: number; etag?: string; }
 
-export class LocalSkillProvider implements SkillProvider {
+// The class IS the type: ipc-handlers.ts and remote-server.ts take a
+// `LocalSkillProvider` directly (the one-implementation `SkillProvider`
+// interface was deleted — simplification audit M7).
+export class LocalSkillProvider {
   // Phase 3a: made public so ThemeMarketplaceProvider can share the same
   // youcoded-skills.json packages map and marketplace IPC can read it
   public configStore = new SkillConfigStore();

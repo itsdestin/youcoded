@@ -341,9 +341,17 @@ describe('SubagentWatcher timer lifecycle', () => {
     index.recordParentAgentToolUse('toolu_parent_done', 'Finished task', 'claude');
     appendLine(subagentsDir, 'done', toolUseLine('u-d1', 'toolu_D1', 'Read', { file_path: '/d' }));
 
-    watcher.start();
-    await vi.waitFor(() => expect(emitted.length).toBeGreaterThanOrEqual(1), { timeout: SETTLE_MS });
-    expect(watcher.hasActivePoll('done')).toBe(true);
+    // The stat poll beside a healthy watch is a Windows-only safety net (audit
+    // W8); the platform is stubbed so the poll exists for settle to stop.
+    const realPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      watcher.start();
+      await vi.waitFor(() => expect(emitted.length).toBeGreaterThanOrEqual(1), { timeout: SETTLE_MS });
+      expect(watcher.hasActivePoll('done')).toBe(true);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+    }
 
     await watcher.settleByParent('toolu_parent_done');
     expect(watcher.hasActivePoll('done')).toBe(false);
@@ -360,5 +368,94 @@ describe('SubagentWatcher timer lifecycle', () => {
   it('settleByParent for an unknown parent is a harmless no-op', async () => {
     watcher.start();
     await expect(watcher.settleByParent('toolu_never_seen')).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Timers are armed on demand (simplification audit W8). Every session used to
+// start two 5 s timers for helper files that usually never exist, and each
+// helper added a third beside its own watch, on every platform.
+// ---------------------------------------------------------------------------
+describe('SubagentWatcher arms timers only when there is something to poll', () => {
+  let tmpRoot: string;
+  let subagentsDir: string;
+  let index: SubagentIndex;
+  let emitted: TranscriptEvent[];
+  let watcher: SubagentWatcher;
+  const realPlatform = process.platform;
+  const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p, configurable: true });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'subagent-lazy-'));
+    subagentsDir = path.join(tmpRoot, 'subagents');
+    index = new SubagentIndex();
+    emitted = [];
+    watcher = new SubagentWatcher({ sessionId: 'sess-lazy', subagentsDir, index, emit: e => emitted.push(e) });
+  });
+
+  afterEach(() => {
+    watcher.stop();
+    setPlatform(realPlatform);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('a session that never runs a helper arms no timer at all (Linux, macOS)', () => {
+    setPlatform('linux');
+    watcher.start();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('on Windows the directory bootstrap poll runs from the start', () => {
+    setPlatform('win32');
+    watcher.start();
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('kickScan arms the bootstrap poll, and the watch takes over with no poll once the directory appears', async () => {
+    setPlatform('linux');
+    watcher.start();
+    watcher.kickScan(); // parent Agent tool_use seen, directory not created yet
+    expect(vi.getTimerCount()).toBe(1);
+
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    writeMeta(subagentsDir, 'k', 'Kicked task', 'claude');
+    index.recordParentAgentToolUse('toolu_parent_k', 'Kicked task', 'claude');
+    appendLine(subagentsDir, 'k', toolUseLine('u-k', 'toolu_K', 'Read', { file_path: '/k' }));
+    await vi.advanceTimersByTimeAsync(5000);
+    await vi.waitFor(() => expect(emitted.some(e => e.data.agentId === 'k')).toBe(true), { timeout: SETTLE_MS });
+    // Directory watched, file watched, helper bound: nothing left to poll.
+    expect(vi.getTimerCount()).toBe(0);
+    expect(watcher.hasActivePoll('k')).toBe(false);
+  });
+
+  it('the prune timer is armed by the first buffered event and stands down once the buffer empties', async () => {
+    setPlatform('linux');
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    writeMeta(subagentsDir, 'orphan', 'Early task', 'claude');
+    appendLine(subagentsDir, 'orphan', toolUseLine('u-o', 'toolu_O', 'Read', { file_path: '/o' }));
+    watcher.start(); // no parent recorded yet: the line is buffered
+    await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1), { timeout: SETTLE_MS });
+    expect(emitted).toEqual([]);
+
+    index.recordParentAgentToolUse('toolu_parent_o', 'Early task', 'claude');
+    watcher.flushPendingFor('orphan');
+    expect(emitted.some(e => e.data.agentId === 'orphan')).toBe(true);
+    await vi.advanceTimersByTimeAsync(5000); // the next prune tick finds nothing buffered
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('a directory whose fs.watch cannot be attached falls back to the polls', () => {
+    setPlatform('linux');
+    fs.mkdirSync(subagentsDir, { recursive: true });
+    writeMeta(subagentsDir, 'nw', 'No watch', 'claude');
+    index.recordParentAgentToolUse('toolu_parent_nw', 'No watch', 'claude');
+    appendLine(subagentsDir, 'nw', toolUseLine('u-nw', 'toolu_NW', 'Read', { file_path: '/nw' }));
+    vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('EMFILE'); });
+    watcher.start();
+    expect(vi.getTimerCount()).toBe(2); // directory poll + this helper's file poll
+    expect(watcher.hasActivePoll('nw')).toBe(true);
   });
 });

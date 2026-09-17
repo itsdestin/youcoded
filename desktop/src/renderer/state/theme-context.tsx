@@ -81,6 +81,9 @@ interface ThemeContextValue {
   font: string;
   reducedEffects: boolean;
   setReducedEffects: (v: boolean) => void;
+  /** Bumped one render after the theme (or Reduced Effects) has been written
+   *  to the DOM. Key on THIS to read the theme back out of the DOM. */
+  themeApplied: number;
   showTimestamps: boolean;
   setShowTimestamps: (v: boolean) => void;
   showTurnMetadata: boolean;
@@ -128,6 +131,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   cycleList: DEFAULT_CYCLE, setCycleList: () => {},
   font: DEFAULT_FONT_FAMILY,
   reducedEffects: false, setReducedEffects: () => {},
+  themeApplied: 0,
   showTimestamps: true, setShowTimestamps: () => {},
   showTurnMetadata: false, setShowTurnMetadata: () => {},
   showDeletedArtifacts: false, setShowDeletedArtifacts: () => {},
@@ -172,6 +176,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [cycleList, setCycleListState] = useState<string[]>(() => getStoredJSON(CYCLE_KEY, DEFAULT_CYCLE));
   const [font, setFontState] = useState(DEFAULT_FONT_FAMILY);
   const [reducedEffects, setReducedEffectsState] = useState(() => getStored(REDUCED_EFFECTS_KEY, '') === '1');
+  // See the interface: a counter for consumers that read the theme back out of the DOM.
+  const [themeApplied, setThemeApplied] = useState(0);
   const [showTimestamps, setShowTimestampsState] = useState(() => getStored(SHOW_TIMESTAMPS_KEY, '1') !== '0');
   // Task 5.1: opt-in per-turn metadata strip (model, tokens, cache hit %).
   // Defaults to false — advanced diagnostic signal, mirrors the "default hidden"
@@ -586,6 +592,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       applyThemeFont(undefined); // clears any previously injected Google Font link
       applyFont(DEFAULT_FONT_FAMILY);
     }
+    // WHY (2026-09-16 A2 review): a consumer that reads the theme back OUT of the
+    // DOM (getComputedStyle — the session strip's pill font and reveal window)
+    // cannot key on `theme`: its layout effect runs in the same commit, BEFORE
+    // this passive effect has written the theme, so it would read the outgoing
+    // theme. This counter moves one render after the DOM is current, so an
+    // effect keyed on it reads the theme that is actually applied.
+    setThemeApplied((n) => n + 1);
   }, [activeTheme, reducedEffects]);
 
   const setTheme = useCallback((slug: string) => {
@@ -683,7 +696,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(() => ({
     theme: activeSlug, setTheme, cycleTheme,
     cycleList, setCycleList, font,
-    reducedEffects, setReducedEffects,
+    reducedEffects, setReducedEffects, themeApplied,
     showTimestamps, setShowTimestamps,
     showTurnMetadata, setShowTurnMetadata,
     showDeletedArtifacts, setShowDeletedArtifacts,
@@ -693,7 +706,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     allThemes, activeTheme, bgStyle, patternStyle,
     setGlassOverride, reloadUserThemes,
   }), [activeSlug, setTheme, cycleTheme, cycleList, setCycleList, font,
-       reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps,
+       reducedEffects, setReducedEffects, themeApplied, showTimestamps, setShowTimestamps,
        showTurnMetadata, setShowTurnMetadata,
        showDeletedArtifacts, setShowDeletedArtifacts,
        contextDisplay, setContextDisplay,
