@@ -776,7 +776,7 @@ contextBridge.exposeInMainWorld('claude', {
   // Synchronous on purpose: the session strip has to choose a tear-off model in
   // the middle of a pointermove, where awaiting a round-trip would mean the
   // first drag after launch silently used the wrong one. Preload must not name
-  // a model itself — session-drag-model.test.ts pins that.
+  // a model itself — the ast-grep rule preload-no-drag-model-decision pins that.
   platformFacts: {
     platform: process.platform as string,
     // Wayland vs X11 decides whether window positions and the cursor's screen
