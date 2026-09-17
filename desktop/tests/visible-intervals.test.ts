@@ -23,7 +23,6 @@ const GATED = /document\.hidden|visibilityState|visibilitychange|useVisibleInter
 
 // Path relative to src/renderer → one-line reason it is allowed to tick unseen.
 const ALLOWLIST: Record<string, string> = {
-  'App.tsx': 'settings-badge poll every 10s — one cheap IPC read, no render unless the answer changes',
   'components/assistant-settings/AssistantSettings.tsx': 're-renders every 4s only while the Assistant dialog is open',
   'components/AttentionBanner.tsx': '1s elapsed counter, only while a stalled banner is on screen',
   'components/BrailleSpinner.tsx': 'shared 40ms spinner tick; runs only while a spinner is mounted (interval-driven by design, see animation-frame-budget.test.ts)',

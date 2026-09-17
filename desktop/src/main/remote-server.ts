@@ -242,6 +242,11 @@ export interface RemoteStatus {
   state: 'listening' | 'stopped' | 'failed';
   reason?: string;
   port: number;
+  /** Phones connected right now. WHY it rides the status push (2026-09-16 audit
+   *  W18): the gear badge asked `remote:get-client-count` every 10 s per window
+   *  for a number that changes a few times a session. With the count here, and
+   *  emitStatus() fired on every connect and disconnect, the renderer needs no poll. */
+  clientCount: number;
 }
 
 interface SessionNamingWiring {
@@ -524,9 +529,10 @@ export class RemoteServer {
    * caller outside tests.
    */
   getStatus(): RemoteStatus {
-    if (this.running) return { state: 'listening', port: this.config.port };
-    if (this.lastStartError) return { state: 'failed', reason: this.lastStartError, port: this.config.port };
-    return { state: 'stopped', port: this.config.port };
+    const clientCount = this.clients.size;
+    if (this.running) return { state: 'listening', port: this.config.port, clientCount };
+    if (this.lastStartError) return { state: 'failed', reason: this.lastStartError, port: this.config.port, clientCount };
+    return { state: 'stopped', port: this.config.port, clientCount };
   }
 
   onStatusChange(listener: (status: RemoteStatus) => void): () => void {
@@ -837,11 +843,12 @@ export class RemoteServer {
   /** Every path that forgets a client goes through here so the liveness ping
    *  can stand down when the last one leaves (simplification audit W14). */
   private removeClient(client: AuthenticatedClient): void {
-    this.clients.delete(client);
+    if (!this.clients.delete(client)) return;
     if (this.clients.size === 0 && this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
     }
+    this.emitStatus(); // clientCount changed — see RemoteStatus.clientCount
   }
 
   // --- Event handlers for buffering ---
@@ -1401,6 +1408,7 @@ export class RemoteServer {
     };
     this.clients.add(client);
     this.startLiveness(); // no-op while already armed — see its WHY
+    this.emitStatus(); // clientCount changed — see RemoteStatus.clientCount
     this.logDevice(client, `connected (${opts.sendsReady ? 'page announces readiness' : 'older page'})`);
     // WHY a fallback and not an immediate replay (design §1): the restore used to start
     // the moment auth succeeded, before the page had mounted App, and guessed with a
