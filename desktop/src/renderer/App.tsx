@@ -2751,7 +2751,7 @@ function AppInner() {
     setSessionId(info.id);
   }, [dispatch]);
 
-  const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string) => {
+  const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string, initialInput?: string) => {
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
     const m = sessionModel || realModelAlias(currentModel);
@@ -2777,6 +2777,7 @@ function AppInner() {
         skipPermissions: dangerous,
         binding,
         preset,
+        initialInput,
       }));
     } catch (err: any) {
       // Never a silent return to the empty screen — that is the "it just reset" Destin saw.
@@ -4432,8 +4433,16 @@ function AppInner() {
           creator skill that turns that conversation into a page is Phase 1's
           next task, not part of this shell. */}
       <PagesView
-        onMakePage={() => { dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false); }}
-        onEditPage={() => { dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false); }}
+        // Make a page: a conversation in the current folder with the creator
+        // skill pre-filled (not sent), so the person adds what the page should
+        // do and presses Enter. Edit: the same, naming the page; a project page
+        // opens in its project so the skill finds the folder.
+        onMakePage={() => { dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false, undefined, undefined, undefined, undefined, undefined, '/page-builder '); }}
+        onEditPage={(page) => {
+          dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' });
+          const cwd = page.home.kind === 'project' ? page.home.path : (currentSession?.cwd || sessionDefaults.projectFolder || '');
+          void createSession(cwd, false, undefined, undefined, undefined, undefined, undefined, `/page-builder edit "${page.name}" `);
+        }}
       />
       <PageHost />
     </div>

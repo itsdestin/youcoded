@@ -26,7 +26,7 @@ interface PagesViewProps {
   onMakePage: () => void;
   /** Opens the creator on an existing page. The ONLY place a page is edited
    *  from (round 5: "keep it only accessible in the manage pages view"). */
-  onEditPage: (pageId: string) => void;
+  onEditPage: (page: PageSummary) => void;
 }
 
 export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
@@ -89,14 +89,14 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
           {loaded && !failed && personal.length > 0 && (
             <Section label="Personal">
               {personal.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           )}
           {loaded && !failed && [...byProject.entries()].map(([name, list]) => (
             <Section key={name} label={name}>
               {list.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           ))}
