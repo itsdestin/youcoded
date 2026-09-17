@@ -654,7 +654,10 @@ export class PlanJournal {
     // Task 4: applied to each plan this pass interrupts, INSIDE the same write,
     // so an interrupted plan is never visible while it still holds budget
     // (the host passes PlanBudget.releaseOwnerlessHolds).
-    opts: { onInterrupt?: (plan: PlanRecord) => void } = {},
+    // Final review F2: `orphaned` answers, for a plan THIS process leases,
+    // why nothing is running it (its final write failed) — or undefined when
+    // a run is active. Such a plan is paused with that reason.
+    opts: { onInterrupt?: (plan: PlanRecord) => void; orphaned?: (planId: string) => string | undefined } = {},
   ): Promise<{ interrupted: string[]; recheckAt?: number }> {
     // WHY the read first: opening a conversation that never had a plan must
     // not create a plan directory (the lock step creates parents).
@@ -667,17 +670,30 @@ export class PlanJournal {
       const now = this.now();
       for (const plan of file.plans) {
         if (plan.status !== 'running') continue;
+        let orphanReason: string | undefined;
         if (plan.lease) {
           const owner = this.ownerState(plan.lease);
-          if (owner === 'self') continue;
-          if (owner === 'live') {
+          if (owner === 'self') {
+            orphanReason = opts.orphaned?.(plan.planId);
+            if (orphanReason === undefined) continue;
+          } else if (owner === 'live') {
             if (plan.lease.expiresAt > now) recheckAt = Math.min(recheckAt ?? Infinity, plan.lease.expiresAt);
             continue;
           }
         }
-        plan.status = 'interrupted';
         delete plan.lease;
+        // The step the card shows as stuck: the one that was running, else
+        // the first unfinished one.
+        const stuck = plan.steps.find((s) => s.status === 'running') ?? plan.steps.find((s) => s.status !== 'done') ?? plan.steps[0];
         for (const step of plan.steps) if (step.status === 'running') step.status = 'paused';
+        if (orphanReason !== undefined) {
+          // Not "the app closed" (it didn't): an unexpected-problem pause
+          // with the real reason, which offers Continue and Stop.
+          plan.status = 'paused';
+          plan.paused = { stepId: stuck?.id ?? '', reason: orphanReason, kind: 'unexpected-error' };
+        } else {
+          plan.status = 'interrupted';
+        }
         opts.onInterrupt?.(plan);
         interrupted.push(plan.planId);
       }

@@ -414,9 +414,9 @@ declare global {
         steer: (sessionId: string, childId: string, text: string) => Promise<{ ok: true } | { ok: false; error: string }>;
         interrupt: (sessionId: string, childId: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       };
-      // Specialists plans (Task 5a contract). The seven request channels are
-      // plans:approve / comment / add-budget / resume / stop / get-auto-approve /
-      // set-auto-approve (wired on every surface in Task 6; Android answers
+      // Specialists plans (Task 5a contract). The eight request channels are
+      // plans:approve / comment / add-budget / resume / stop / ask-assistant /
+      // get-auto-approve / set-auto-approve (wired on every surface; Android answers
       // `unsupported`). Every call answers with one of the
       // host's normalized forms — ok, a real failure, or `unsupported` (this
       // device can't run plans: the card disables its controls and never
@@ -427,7 +427,8 @@ declare global {
       plans?: {
         approve: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
         comment: (sessionId: string, planId: string, text: string) => Promise<import('../../shared/types').PlanActionResult>;
-        addBudget: (sessionId: string, planId: string, tokens: number) => Promise<import('../../shared/types').PlanActionResult>;
+        /** `requestId` (final review F1): one id per press; a repeat adds nothing. */
+        addBudget: (sessionId: string, planId: string, tokens: number, requestId?: string) => Promise<import('../../shared/types').PlanActionResult>;
         resume: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
         stop: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
         /** Task 11 (pause handoff §6): a paused card's "Ask the assistant". */

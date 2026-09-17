@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { loadRealPreload } from './helpers/real-preload';
 
 // ---------------------------------------------------------------------------
 // Specialists plans, Task 6 — the transport half of design §5.
 //
 //  1. Desktop IPC and the remote WebSocket call the SAME host methods and hand
-//     back the SAME normalized answer, for every one of the seven channels.
+//     back the SAME normalized answer, for every one of the eight channels.
 //  2. Local Electron hydration: session:replay-live-state (and the whole-
 //     transcript replay) pushes one plans:event per journal projection, BEFORE
 //     the replay-complete marker, and the invoke resolves only after that.
@@ -146,17 +147,32 @@ function buildDesktop() {
   return { host: hostRef.current, handler, listener, registry, remote, mainWindow };
 }
 
-/** What the preload sends for each channel — the same object payload the shim sends. */
-const REQUEST_PAYLOADS: Record<string, any> = {
-  'plans:approve': { sessionId: 's1', planId: 'p1' },
-  'plans:comment': { sessionId: 's1', planId: 'p1', text: 'use the other folder' },
-  'plans:add-budget': { sessionId: 's1', planId: 'p1', tokens: 1200 },
-  'plans:resume': { sessionId: 's1', planId: 'p1' },
-  'plans:stop': { sessionId: 's1', planId: 'p1' },
-  'plans:ask-assistant': { sessionId: 's1', planId: 'p1', question: 'why did it stop?' },
-  'plans:get-auto-approve': {},
-  'plans:set-auto-approve': { underTokens: 5000 },
+/** The renderer call behind each channel, made on the REAL preload object. */
+const RENDERER_CALLS: Record<string, (plans: any) => unknown> = {
+  'plans:approve': (p) => p.approve('s1', 'p1'),
+  'plans:comment': (p) => p.comment('s1', 'p1', 'use the other folder'),
+  'plans:add-budget': (p) => p.addBudget('s1', 'p1', 1200, 'press-1'),
+  'plans:resume': (p) => p.resume('s1', 'p1'),
+  'plans:stop': (p) => p.stop('s1', 'p1'),
+  'plans:ask-assistant': (p) => p.askAssistant('s1', 'p1', 'why did it stop?'),
+  'plans:get-auto-approve': (p) => p.getAutoApprove(),
+  'plans:set-auto-approve': (p) => p.setAutoApprove(5000),
 };
+
+/**
+ * Final review F29: what the preload ACTUALLY sends for each channel, read by
+ * calling the real preload method (tests/helpers/real-preload.ts), never a
+ * hand-written copy. The same payload goes to the desktop handler and the
+ * remote server below; remote-shim-plans.test.ts proves the shim sends it too.
+ */
+const REQUEST_PAYLOADS: Record<string, any> = Object.fromEntries(Object.entries(RENDERER_CALLS).map(([ch, call]) => {
+  const { claude, invokes } = loadRealPreload();
+  void call(claude.plans);
+  expect(invokes, `${ch}: the preload made ${invokes.length} calls`).toHaveLength(1);
+  expect(invokes[0][0], `${ch}: the preload used another channel`).toBe(ch);
+  expect(invokes[0], `${ch}: the preload sent more than one argument`).toHaveLength(2);
+  return [ch, invokes[0][1]];
+}));
 const HOST_METHOD: Record<string, string> = {
   'plans:approve': 'approvePlan',
   'plans:comment': 'commentOnPlan',
@@ -170,7 +186,7 @@ const HOST_METHOD: Record<string, string> = {
 const EXPECTED_ARGS: Record<string, unknown[]> = {
   'plans:approve': ['s1', 'p1'],
   'plans:comment': ['s1', 'p1', 'use the other folder'],
-  'plans:add-budget': ['s1', 'p1', 1200],
+  'plans:add-budget': ['s1', 'p1', 1200, 'press-1'],
   'plans:resume': ['s1', 'p1'],
   'plans:stop': ['s1', 'p1'],
   'plans:ask-assistant': ['s1', 'p1', 'why did it stop?'],

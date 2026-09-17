@@ -43,6 +43,9 @@ import { routePlanPause, type PlanPauseContext, type PlanRecoveryCause } from '.
 export const PLAN_HEARTBEAT_MS = 20_000;
 /** How long stopped specialists get to finish on their own before teardown. */
 export const PLAN_SETTLE_DEADLINE_MS = 10_000;
+/** Final review F2: a failed final write is tried again after these waits
+ *  (a held lock or a busy disk usually clears within a second). */
+export const PLAN_SETTLE_WRITE_RETRY_DELAYS_MS: readonly number[] = [250, 1_000];
 /** The hard product maximum of simultaneous specialists (global constraints). */
 export const PLAN_MAX_CONCURRENT_SPECIALISTS = 4;
 /** One dependency report handed to a verify/combine specialist, at most. */
@@ -179,6 +182,10 @@ export interface PlanRunner {
   reportOnlyInputBound?(ref: PlanRef, plan: PlanRecord, attemptId: string, message: string): Promise<number | undefined>;
   /** Review fix 2: the newest user message in a specialist's transcript. */
   latestUserText?(ref: PlanRef, childId: string): string | undefined;
+  /** Final review F2: a run ended but its final write never landed, so the
+   *  journal still says `running` under this process's lease. The host runs
+   *  recovery (with `PlanExecutor.orphanReason`) to show the real state. */
+  onOrphaned?(ref: PlanRef, planId: string): void;
 }
 
 /** The turn-complete stopReason a plan specialist ends with when its budget
@@ -242,6 +249,9 @@ export interface PlanExecutorDeps {
   settleDeadlineMs?: number;
   heartbeatMs?: number;
   timers?: PlanExecutorTimers;
+  /** Final review F2: the waits before each retry of a run's final write
+   *  (tests pass zeros). Its length is the number of retries. */
+  settleWriteRetryDelaysMs?: readonly number[];
   // Task 11 (pause handoff §6, review 4-11): no pause-time hook any more — a
   // pause is handed to the assistant only when the user asks (the host
   // bridge's askAssistant), never by the executor.
@@ -281,6 +291,8 @@ type HaltRequest =
   | {
     kind: 'pause'; why: PlanPauseKind; stepId: string; reason: string; attemptId?: string;
     minimumAddTokens?: number; ceilingShortfall?: true; tool?: string; repeat?: { rounds: number; until: string };
+    /** Final review F4: a report turn its allowance can't fund (Add budget funds it). */
+    reportOnlyOf?: string;
     /** Task 9a: the facts pause-routing.ts reads back from the saved pause. */
     launch?: 'refused' | 'drift'; retried?: true; toolEffect?: ToolEffect;
     /** Task 9a: this attempt's unknown outcome is shown by THIS pause, so the
@@ -355,6 +367,15 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** Why a finished report can't be used, or undefined when it can. Shared by
+ *  the commit and by a Continue that asks for the report again (F4), so the
+ *  specialist is told the same problem both times. */
+function invalidReportProblem(stepId: string, report: string, finalLeaf: boolean): string | undefined {
+  const decision = finalLeaf ? parseRepeatDecision(report) : undefined;
+  if (decision && !decision.ok) return `The check in step "${stepId}" didn't answer in the required form: ${decision.detail}.`;
+  return report.trim() ? undefined : `The specialist in step "${stepId}" finished without writing a report.`;
+}
+
 type RecoveryKey = { stepId: string; iteration: number; itemIndex: number };
 
 /** What one wave member carries between its launches. `recovered`: the
@@ -411,8 +432,13 @@ export class PlanExecutor implements PlanExecutorHooks {
    *  paused card is emitted, so the heartbeat stops and the run leaves `runs`
    *  BEFORE that write; `settled`/`stop` still find it here until it is done. */
   private readonly finishing = new Map<string, ActiveRun>();
+  /** Final review F2: runs whose final write never landed, with the real
+   *  reason — keyed like `runs`. Recovery reads it through orphanReason. */
+  private readonly orphans = new Map<string, string>();
+  private readonly settleWriteRetryDelaysMs: readonly number[];
 
   constructor(deps: PlanExecutorDeps) {
+    this.settleWriteRetryDelaysMs = deps.settleWriteRetryDelaysMs ?? PLAN_SETTLE_WRITE_RETRY_DELAYS_MS;
     this.journal = deps.journal;
     this.budget = deps.budget;
     this.runner = deps.runner;
@@ -431,6 +457,23 @@ export class PlanExecutor implements PlanExecutorHooks {
 
   private keyOf(ref: PlanRef, planId: string): string {
     return `${ref.sessionId}\u0000${planId}`;
+  }
+
+  /**
+   * Final review F2: why this process holds `planId`'s lease with nothing
+   * running it — its final write failed — or undefined (a run is active, or
+   * nothing went wrong). PlanJournal.recoverInterrupted asks this for every
+   * plan leased by this process.
+   */
+  orphanReason(ref: PlanRef, planId: string): string | undefined {
+    const key = this.keyOf(ref, planId);
+    if (this.runs.has(key) || this.finishing.has(key)) return undefined;
+    return this.orphans.get(key);
+  }
+
+  /** Recovery wrote the plan's real state: forget the orphan. */
+  clearOrphan(ref: PlanRef, planId: string): void {
+    this.orphans.delete(this.keyOf(ref, planId));
   }
 
   /** How many plans are advancing right now (tests + diagnostics). */
@@ -795,9 +838,23 @@ export class PlanExecutor implements PlanExecutorHooks {
     }
     const members: ReserveMember[] = items.map((itemIndex) => {
       const latest = latestAttempt(rec, itemIndex, iteration);
-      return latest && !isCommitted(latest)
-        ? { stepId: step.id, attemptId: latest.attemptId }
-        : { stepId: step.id, itemIndex, iteration };
+      if (latest && !isCommitted(latest)) return { stepId: step.id, attemptId: latest.attemptId };
+      // Final review F4: an item whose newest attempt failed its report (the
+      // only way an attempt is committed as `failed`) was paused for the
+      // person. Their Continue asks that SAME specialist for its report with
+      // tools off — never a fresh full run, which would repeat every command
+      // and edit the first run already made. A report-only turn that failed
+      // too is asked again with its own message, so a delivered message is
+      // answered with the short nudge (launchBrief).
+      if (latest && latest.terminal === 'failed' && latest.childId) {
+        return {
+          stepId: step.id, reportOnlyOf: latest.attemptId,
+          brief: latest.reportOnly && latest.brief !== undefined
+            ? latest.brief
+            : planReportOnlyBrief({ finalLeaf, problem: invalidReportProblem(step.id, latest.reportText ?? '', finalLeaf) ?? '' }),
+        };
+      }
+      return { stepId: step.id, itemIndex, iteration };
     });
     // One fenced write reserves the whole wave, or nothing (design §3).
     const reserved = await this.budget.reserveAttempts(run.ref, run.planId, run.fence, members, {
@@ -849,6 +906,7 @@ export class PlanExecutor implements PlanExecutorHooks {
         : 'plan-limit',
       ...(exhausted ? { attemptId: exhausted } : {}),
       ...(shortfall !== undefined ? { minimumAddTokens: shortfall, ceilingShortfall: true as const } : {}),
+      ...(reserved.reportOnlyOf !== undefined ? { reportOnlyOf: reserved.reportOnlyOf } : {}),
     };
   }
 
@@ -1193,11 +1251,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       plan = await this.load(run);
       attempt = this.findAttempt(plan, step.id, attemptId);
     }
-    const decision = finalLeaf ? parseRepeatDecision(report) : undefined;
-    const trimmed = report.trim();
-    const failure = decision && !decision.ok
-      ? `The check in step "${step.id}" didn't answer in the required form: ${decision.detail}.`
-      : trimmed ? undefined : `The specialist in step "${step.id}" finished without writing a report.`;
+    const failure = invalidReportProblem(step.id, report, finalLeaf);
     await this.journal.commitAttempt(run.ref, run.planId, run.fence, step.id, attemptId, {
       terminal: failure ? 'failed' : 'completed',
       reportText: report,
@@ -1365,7 +1419,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       if (final.kind === 'stop') {
         // Review item 8: PlanService's "stopped" edit rides in this same
         // write, so a crash can never leave a released-but-running plan.
-        await this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
+        await this.finalWrite(run, (p) => {
           delete p.lease;
           final.finalize?.(p);
         });
@@ -1376,7 +1430,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       // pause and marked as shown, so Continue picks them up instead of
       // pausing once more for each.
       const cutOffOthers = final.kind === 'pause' ? cutOff.filter((c) => c.attemptId !== final.attemptId) : [];
-      await this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
+      await this.finalWrite(run, (p) => {
         delete p.lease;
         for (const c of cutOffOthers) {
           const a = p.steps.find((x) => x.id === c.stepId)?.attempts.find((x) => x.attemptId === c.attemptId);
@@ -1407,6 +1461,7 @@ export class PlanExecutor implements PlanExecutorHooks {
             ...(final.attemptId ? { attemptId: final.attemptId } : {}),
             ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}),
             ...(final.ceilingShortfall ? { ceilingShortfall: true as const } : {}),
+            ...(final.reportOnlyOf !== undefined ? { reportOnlyOf: final.reportOnlyOf } : {}),
             ...(final.launch ? { launch: final.launch } : {}),
             ...(final.retried ? { retried: true as const } : {}),
             ...(final.toolEffect ? { toolEffect: final.toolEffect } : {}),
@@ -1418,7 +1473,34 @@ export class PlanExecutor implements PlanExecutorHooks {
         }
       });
     } catch (e) {
-      this.onJournalError(run, e);
+      if (!this.onJournalError(run, e)) {
+        // Final review F2: the run is over, but the journal still says
+        // "running" under this process's lease. Remember the real reason and
+        // ask the host to run recovery, which shows the plan paused with it
+        // and gives back whatever is still held, in its own write.
+        this.orphans.set(run.key, `The plan stopped because its progress couldn't be saved: ${errorText(e)}`);
+        try { this.runner.onOrphaned?.(run.ref, run.planId); } catch (err) {
+          console.error('[plan-executor] orphaned-plan listener threw', err);
+        }
+      }
+    }
+  }
+
+  /**
+   * Final review F2: the write that ends a run, tried again after a
+   * transient failure (a held lock, a busy disk). A fence or unreadable-file
+   * error is final at once — retrying can't fix either.
+   */
+  private async finalWrite(run: ActiveRun, fn: (plan: PlanRecord) => void): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.journal.mutateFenced(run.ref, run.planId, run.fence, fn);
+        return;
+      } catch (e) {
+        if (isJournalError(e) || attempt >= this.settleWriteRetryDelaysMs.length) throw e;
+        console.error('[plan-executor] the final plan write failed; trying again', e);
+        await new Promise((r) => setTimeout(r, this.settleWriteRetryDelaysMs[attempt]));
+      }
     }
   }
 }

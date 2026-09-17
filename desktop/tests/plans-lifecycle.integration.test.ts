@@ -269,6 +269,34 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     expect(childCalls).toHaveLength(3);
   });
 
+  // Final review F3: "Run small plans without asking" must not let one reply
+  // start plan after plan. Only the first under-limit proposal of a turn
+  // starts by itself; the rest wait for Approve. The next turn may start one.
+  it('F3: at most one plan auto-starts per assistant turn', async () => {
+    expect(await host.setPlanAutoApprove(1_000_000)).toEqual({ ok: true });
+    await host.create({ sessionId: SID, cwd: root, binding: parent });
+    parentSteps = [
+      // Different documents: identical calls would be caught as a loop instead.
+      stream(toolCallChunk('call-a', 'propose_plan', REVIEW_DOC), toolCallChunk('call-b', 'propose_plan', { ...REVIEW_DOC, goal: 'Second plan' }), finishChunk('tool-calls')),
+      proposeStep('call-c', { ...REVIEW_DOC, goal: 'Third plan' }),
+      textStep('Here are the plans.'),
+    ];
+    host.send(SID, 'Make plans');
+    await waitFor(() => fs.existsSync(journalPath()) && journal().plans.length === 3, 'three proposals');
+    await waitFor(() => host.isIdle(SID), 'the proposing turn to end');
+    const [a, b, c] = journal().plans.map((p: any) => p.planId as string);
+    const started = [a, b, c].filter((id) => plan(id).autoApproved === true);
+    expect(started).toHaveLength(1);
+    for (const id of [a, b, c].filter((x) => !started.includes(x))) expect(plan(id).status).toBe('proposed');
+    await waitForCard(started[0], 'completed');
+    expect(childCalls).toHaveLength(3);
+
+    // A new turn may auto-start one again.
+    const next = await propose(REVIEW_DOC, 'call-d');
+    await waitForCard(next, 'completed');
+    expect(plan(next).autoApproved).toBe(true);
+  });
+
   it('budget pause → Add budget of exactly the asked amount → Continue finishes the job without re-running the finished step', async () => {
     const doc = {
       goal: 'Two steps',

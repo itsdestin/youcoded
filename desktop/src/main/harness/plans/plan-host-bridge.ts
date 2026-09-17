@@ -116,6 +116,9 @@ export interface PlanHostPort {
   /** `historyNote`: shown to the model only, never in the chat (5b follow-up). */
   queueTurn(sessionId: string, text: string, turnId: string, historyNote?: string): void;
   currentTurnId(sessionId: string): string | undefined;
+  /** Final review F3: a key unique to the turn running right now (every turn
+   *  has one; see NativeSessionHost `currentTurnKey`). Optional for fakes. */
+  currentTurnKey?(sessionId: string): string | undefined;
   /** Task 11 (§6): why this conversation can't take a plan notice right now
    *  (not open here, or the user pressed Stop so deliveries are held), in the
    *  user's words; undefined when it can. */
@@ -153,7 +156,16 @@ export interface PlanHostBridgeOptions {
   now?: () => number;
   /** Task 9b: the "never stuck" backstop (tests only; 10 minutes otherwise). */
   handoffBackstopMs?: number;
+  /** Final review F2: when recovery runs after a run's final write failed
+   *  (tests only). One attempt per entry; a later one runs only if the plan
+   *  is still shown as running. */
+  orphanRecoveryDelaysMs?: readonly number[];
 }
+
+/** Final review F2: a failed final write is usually a moment's lock or disk
+ *  trouble; recovery is tried again a few times before waiting for the next
+ *  time the conversation opens. */
+const ORPHAN_RECOVERY_DELAYS_MS: readonly number[] = [2_000, 30_000, 5 * 60_000];
 
 /** Task 9b: one pause this process handed to the assistant. */
 interface LiveHandoff {
@@ -217,10 +229,13 @@ export class PlanHostBridge {
   private readonly handoffs = new Map<string, LiveHandoff>();
   private readonly noticeTurns = new Set<string>();
   private readonly handoffBackstopMs: number;
+  private readonly orphanRecoveryDelaysMs: readonly number[];
+  private readonly orphanTimers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(private readonly port: PlanHostPort, opts: PlanHostBridgeOptions = {}) {
     this.now = opts.now ?? Date.now;
     this.handoffBackstopMs = opts.handoffBackstopMs ?? PLAN_HANDOFF_BACKSTOP_MS;
+    this.orphanRecoveryDelaysMs = opts.orphanRecoveryDelaysMs ?? ORPHAN_RECOVERY_DELAYS_MS;
     this.journal = new PlanJournal({
       home: port.home,
       ...(opts.now ? { now: opts.now } : {}),
@@ -262,10 +277,14 @@ export class PlanHostBridge {
   // ---- ToolServices.plans ----
 
   /** propose_plan's callback, with the HOST's turn id (never model input). */
-  propose(sessionId: string, proposal: Omit<PlanProposal, 'turnId' | 'fromPlanNotice'>): Promise<PlanView> {
+  propose(sessionId: string, proposal: Omit<PlanProposal, 'turnId' | 'fromPlanNotice' | 'autoStartKey'>): Promise<PlanView> {
     const turnId = this.port.currentTurnId(sessionId);
+    // Final review F3: at most one auto-start per turn. A call with no known
+    // turn shares one key per conversation — the safe direction.
+    const autoStartKey = this.port.currentTurnKey?.(sessionId) ?? turnId ?? `conversation:${sessionId}`;
     return this.service.propose({
       ...proposal,
+      autoStartKey,
       ...(turnId !== undefined ? { turnId } : {}),
       // Task 9b: host-known, never model input.
       ...(turnId !== undefined && this.noticeTurns.has(turnId) ? { fromPlanNotice: true } : {}),
@@ -468,7 +487,7 @@ export class PlanHostBridge {
 
   async approve(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.approve(sessionId, planId)); }
   async comment(sessionId: string, planId: string, text: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.comment(sessionId, planId, text)); }
-  async addBudget(sessionId: string, planId: string, tokens: number): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.addBudget(sessionId, planId, tokens)); }
+  async addBudget(sessionId: string, planId: string, tokens: number, requestId?: unknown): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.addBudget(sessionId, planId, tokens, requestId)); }
   async resume(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.resume(sessionId, planId)); }
   async stop(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.stop(sessionId, planId)); }
   getAutoApprove(): Promise<PlanAutoApproveRead> { return this.service.getAutoApprove(); }
@@ -528,7 +547,13 @@ export class PlanHostBridge {
     this.cancelRecheck(sessionId);
     const ref: PlanRef = { cwd, sessionId };
     try {
-      const { recheckAt } = await this.journal.recoverInterrupted(ref, { onInterrupt: (plan) => this.budget.releaseOwnerlessHolds(plan) });
+      const { interrupted, recheckAt } = await this.journal.recoverInterrupted(ref, {
+        onInterrupt: (plan) => this.budget.releaseOwnerlessHolds(plan),
+        // Final review F2: this process's own plan whose run ended without
+        // its final write is shown paused with the real reason.
+        orphaned: (planId) => this.executor.orphanReason(ref, planId),
+      });
+      for (const planId of interrupted) this.executor.clearOrphan(ref, planId);
       // Task 9b: a pending handoff no one in this process is delivering (the
       // app restarted) is answered, so its card gets its buttons back.
       // Task 11 (review 4-4): asked live, inside the service's write, so a
@@ -573,9 +598,32 @@ export class PlanHostBridge {
     await this.clearSessionHandoffs(sessionId);
   }
 
+  /**
+   * Final review F2: a run's final write failed, so its card still says
+   * "running". Recovery is run after a short wait (the run has left the
+   * executor's books by then), and again later while the plan is still
+   * orphaned — a disk that stays broken is retried a bounded number of times.
+   */
+  private scheduleOrphanRecovery(ref: PlanRef, planId: string, attempt = 0): void {
+    const delay = this.orphanRecoveryDelaysMs[attempt];
+    if (delay === undefined) return;
+    const timer = setTimeout(() => {
+      this.orphanTimers.delete(timer);
+      if (this.executor.orphanReason(ref, planId) === undefined) return;
+      if (this.port.rootCwd(ref.sessionId) !== ref.cwd) return;
+      void this.recover(ref.sessionId, ref.cwd).then(() => {
+        if (this.executor.orphanReason(ref, planId) !== undefined) this.scheduleOrphanRecovery(ref, planId, attempt + 1);
+      });
+    }, delay);
+    (timer as { unref?: () => void }).unref?.();
+    this.orphanTimers.add(timer);
+  }
+
   /** App quit. */
   async interruptAll(): Promise<void> {
     for (const id of [...this.rechecks.keys()]) this.cancelRecheck(id);
+    for (const t of this.orphanTimers) clearTimeout(t);
+    this.orphanTimers.clear();
     await this.executor.interruptAll();
     await Promise.all([...new Set([...this.handoffs.values()].map((h) => h.ref.sessionId))].map((id) => this.clearSessionHandoffs(id)));
   }
@@ -649,6 +697,7 @@ export class PlanHostBridge {
       launch: (input) => this.launch(input),
       inspectTranscript: (ref, childId): TranscriptVerdict => classifyChildTranscript(this.port.readChildEvents(childId, ref.cwd), nativeToolEffect),
       onUnreadable: (ref, planId, detail) => this.onUnreadable(ref, planId, detail),
+      onOrphaned: (ref, planId) => this.scheduleOrphanRecovery(ref, planId),
       minimumAddTokens: (ref, plan, attemptId) => this.minimumAddTokens(ref, plan, attemptId),
       launchRefusal: (_ref, plan, specialist) => this.launchRefusal(plan, specialist),
       reportOnlyInputBound: (ref, plan, attemptId, message) => this.reportOnlyInputBound(ref, plan, attemptId, message),

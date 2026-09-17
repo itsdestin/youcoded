@@ -60,12 +60,13 @@ beforeEach(() => {
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
-async function propose(opts: { toolUseId?: string; turnId?: string; document?: PlanDocumentV1; ceilingTokens?: number; svc?: PlanService } = {}) {
+async function propose(opts: { toolUseId?: string; turnId?: string; autoStartKey?: string; document?: PlanDocumentV1; ceilingTokens?: number; svc?: PlanService } = {}) {
   const document = opts.document ?? doc();
   const ceiling = opts.ceilingTokens ?? document.steps.reduce((n, s) => n + s.budget_tokens * (s.items?.length ?? 1), 0);
   return (opts.svc ?? service).propose({
     sessionId: SID, toolUseId: opts.toolUseId ?? 'tool-1', document, maximumAttempts: 2, ceilingTokens: ceiling, maxFanOut: 2,
     signal: new AbortController().signal, commit: () => true, turnId: opts.turnId,
+    ...(opts.autoStartKey !== undefined ? { autoStartKey: opts.autoStartKey } : {}),
   });
 }
 
@@ -380,6 +381,17 @@ describe('auto-approve settings', () => {
     expect(await service.getAutoApprove()).toEqual({ ok: true, underTokens: 0 });
   });
 
+  // Final review F3: one reply can't start plan after plan without a click.
+  it('starts at most one plan per turn key (F3)', async () => {
+    await service.setAutoApprove(2500);
+    const first = await propose({ toolUseId: 'a', document: doc(500), autoStartKey: 'turn-1' });
+    const second = await propose({ toolUseId: 'b', document: doc(500), autoStartKey: 'turn-1' });
+    const nextTurn = await propose({ toolUseId: 'c', document: doc(500), autoStartKey: 'turn-2' });
+    expect([first.status, second.status, nextTurn.status]).toEqual(['running', 'proposed', 'running']);
+    expect(second.autoApproved).toBeUndefined();
+    expect(executor.start).toHaveBeenCalledTimes(2);
+  });
+
   it('a damaged settings file reads as off', async () => {
     fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
     fs.writeFileSync(settingsFile(), JSON.stringify({ v: 1, autoApprove: { underTokens: -4 } }));
@@ -434,6 +446,26 @@ describe('result discriminants', () => {
     expect(await svc.addBudget(SID, view.planId, 1000)).toMatchObject({ ok: true, plan: { planId: view.planId } });
     // Task 9b: `edit` answers a pending handoff in the same write.
     expect(addTokens).toHaveBeenCalledWith({ ref: REF, planId: view.planId, stepId: 's1', tokens: 1000, edit: expect.any(Function) });
+  });
+
+  // Final review F1: Retry after a lost reply (or a second press) sends the
+  // SAME request id; the service answers the plan as it stands and adds nothing.
+  it('a repeated Add budget press is answered without adding again, even below a now-lowered minimum (F1)', async () => {
+    const { PlanBudget } = await import('../src/main/harness/plans/plan-budget');
+    const budget = new PlanBudget({ journal, now: () => 7, newId: () => `t${++ids}` });
+    const addTokens = vi.fn((input: Parameters<typeof budget.addTokens>[0]) => budget.addTokens(input));
+    const svc = makeService({ budget: { addTokens } });
+    const view = await propose({ svc });
+    await journal.mutate(REF, (file) => {
+      file.plans[0].status = 'paused';
+      file.plans[0].paused = { stepId: 's1', reason: 'limit', minimumAddTokens: 2_500 };
+    });
+    const first = okPlan(await svc.addBudget(SID, view.planId, 3_000, 'press-1'));
+    const again = okPlan(await svc.addBudget(SID, view.planId, 3_000, 'press-1'));
+    expect(again.ceilingTokens).toBe(first.ceilingTokens);
+    expect((await journal.get(REF, view.planId))!.tranches).toHaveLength(1);
+    // A malformed id is refused before anything is read or written.
+    expect(await svc.addBudget(SID, view.planId, 3_000, 'x'.repeat(200))).toMatchObject({ ok: false });
   });
 
   it('refuses an Add budget smaller than the recorded minimum, naming that minimum (Task 4)', async () => {

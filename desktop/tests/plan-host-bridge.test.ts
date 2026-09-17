@@ -490,3 +490,33 @@ describe('Ask the assistant', () => {
     expect((await t.handoff())!.state).toBe('answered');
   });
 });
+
+// Final review F2: a run whose final write failed leaves a "running" card
+// under this process's lease. The bridge runs recovery itself, which shows the
+// plan paused with the real reason.
+describe('a plan whose final write failed', () => {
+  it('is recovered by the bridge as paused with the real reason', async () => {
+    const bridge = new PlanHostBridge(port(), { orphanRecoveryDelaysMs: [0] });
+    const REF = { cwd: '/proj', sessionId: SID };
+    await bridge.journal.mutate(REF, (file) => {
+      file.plans.push({
+        planId: 'p-o', toolUseId: 't', document: DOC, maximumAttempts: 1, maxFanOut: 1,
+        ceilingTokens: 1000, ceilingUsd: null, usedTokens: 0, status: 'proposed', seq: 1, createdAt: 1,
+        manifest: { modelLabel: 'm', specialists: { reviewer: { definitionFingerprint: 'd', binding: { providerId: 'p', modelId: 'm' }, pricing: null, setupTokens: 0 } }, permissionFingerprint: 'x' },
+        steps: [{ id: 's1', status: 'running', attempts: [] }], fenceEpoch: 0,
+      });
+    });
+    // This process leases it, and no run is behind it (the executor's answer).
+    expect((await bridge.journal.acquireLease(REF, 'p-o', { startFrom: ['proposed'] })).ok).toBe(true);
+    let orphan: string | undefined = "The plan stopped because its progress couldn't be saved: EIO";
+    vi.spyOn(bridge.executor, 'orphanReason').mockImplementation(() => orphan);
+    const cleared = vi.spyOn(bridge.executor, 'clearOrphan').mockImplementation(() => { orphan = undefined; });
+    // What the executor calls when its final write keeps failing.
+    (bridge.executor as unknown as { runner: { onOrphaned(ref: typeof REF, planId: string): void } }).runner.onOrphaned(REF, 'p-o');
+    await vi.waitFor(async () => expect((await bridge.journal.get(REF, 'p-o'))!.status).toBe('paused'));
+    const rec = (await bridge.journal.get(REF, 'p-o'))!;
+    expect(rec.lease).toBeUndefined();
+    expect(rec.paused).toMatchObject({ kind: 'unexpected-error', reason: expect.stringContaining('EIO') });
+    expect(cleared).toHaveBeenCalledWith(REF, 'p-o');
+  });
+});

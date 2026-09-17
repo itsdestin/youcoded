@@ -24,7 +24,7 @@ import {
   type PlanBudgetAdapter, type PlanChildRequestGate, type PlanRequestOutcome,
   type PlanRequestReservation, type PlanRequestSettlement,
 } from './budget-adapter';
-import type { ExecutionManifest, PlanAttemptRecord, PlanRecord, PlanRef } from './types';
+import { PLAN_BUDGET_REQUESTS_KEPT, type ExecutionManifest, type PlanAttemptRecord, type PlanRecord, type PlanRef } from './types';
 
 // ---- pricing snapshot (the meaning of ExecutionManifest…pricing) ----
 
@@ -187,7 +187,10 @@ export type ReserveResult =
   | { ok: true; attempts: Array<{ stepId: string; attemptId: string; reservedTokens: number }> }
   /** shortfallTokens (Task 4 review item 1): the smallest Add budget that
    *  would let this wave fit the plan limit, when it can be worked out. */
-  | { ok: false; reason: 'ceiling-tokens' | 'ceiling-usd' | 'local-pool' | 'invalid' | 'attempt-exhausted'; detail: string; shortfallTokens?: number };
+  | { ok: false; reason: 'ceiling-tokens' | 'ceiling-usd' | 'local-pool' | 'invalid' | 'attempt-exhausted'; detail: string; shortfallTokens?: number;
+    /** Final review F4: the report turn (for this failed attempt) that its
+     *  unspent allowance couldn't fund. */
+    reportOnlyOf?: string };
 
 export interface PlanBudgetDeps {
   journal: PlanJournal;
@@ -248,18 +251,27 @@ export class PlanBudget {
             return invalid(`Attempt ${member.reportOnlyOf} can't be asked for its report again.`);
           }
           const unspent = allowanceLeft(failed);
-          if (unspent < PLAN_REPORT_ONLY_REPLY_TOKENS) {
-            return { ok: false, reason: 'attempt-exhausted', detail: `The specialist in step "${member.stepId}" has too little of its budget left to send its report again.` };
+          // Final review F4: a Continue on a report turn that was too small
+          // to fund pauses for Add budget (`reportOnlyOf` below). The
+          // person's tranche for that pause names this failed attempt, and
+          // only this report turn claims it.
+          const tranches = (plan.tranches ?? []).filter((t) => t.reportOnlyOf === member.reportOnlyOf && !t.attemptId && !claimedTranches.has(t.trancheId));
+          tranches.forEach((t) => claimedTranches.add(t.trancheId));
+          const added = tranches.reduce((n, t) => n + t.tokens, 0);
+          if (unspent + added < PLAN_REPORT_ONLY_REPLY_TOKENS) {
+            return {
+              ok: false, reason: 'attempt-exhausted', reportOnlyOf: member.reportOnlyOf,
+              detail: `The specialist in step "${member.stepId}" has too little of its budget left to send its report again.`,
+            };
           }
-          // WHY no tranche claim and the whole unspent share: the retry must
-          // not take budget meant for another specialist, and its request
-          // re-sends the transcript, so it needs more than the reply alone.
+          // WHY the whole unspent share: the retry's request re-sends the
+          // transcript, so it needs more than the reply alone.
           const fresh: PlanAttemptRecord = {
             attemptId: this.newId(), itemIndex: failed.itemIndex, iteration: failed.iteration,
-            childId: failed.childId, baseTokens: unspent, addedTokens: 0, reservedTokens: 0, spentTokens: 0,
+            childId: failed.childId, baseTokens: unspent, addedTokens: added, reservedTokens: 0, spentTokens: 0,
             phase: 'prepared', reportOnly: true, ...(member.brief !== undefined ? { brief: member.brief } : {}),
           };
-          planned.push({ stepId: member.stepId, specialist: def.specialist, amount: unspent, fresh, trancheIds: [] });
+          planned.push({ stepId: member.stepId, specialist: def.specialist, amount: unspent + added, fresh, trancheIds: tranches.map((t) => t.trancheId) });
           continue;
         }
         // An Add budget made before this step had an attempt belongs to its
@@ -546,12 +558,17 @@ export class PlanBudget {
    * will send on Continue — and the card's token and dollar limits. Spent and
    * finished work are untouched.
    */
-  async addTokens(input: { ref: PlanRef; planId: string; stepId: string; tokens: number; edit?: (plan: PlanRecord) => void }): Promise<PlanView> {
-    const { ref, planId, stepId, tokens } = input;
+  async addTokens(input: { ref: PlanRef; planId: string; stepId: string; tokens: number; requestId?: string; edit?: (plan: PlanRecord) => void }): Promise<PlanView> {
+    const { ref, planId, stepId, tokens, requestId } = input;
     if (!(Number.isSafeInteger(tokens) && tokens > 0)) throw new Error('The added budget must be a whole number of tokens greater than 0.');
     await this.journal.mutate(ref, (file) => {
       const plan = file.plans.find((p) => p.planId === planId);
       if (!plan) throw new Error('This plan no longer exists.');
+      // Final review F1: this exact press was already applied to this pause
+      // (its reply was lost, or the button was pressed again) — answer the
+      // plan as it stands and change nothing, so nothing is added twice.
+      // Checked under the journal lock, so two copies racing add once.
+      if (requestId !== undefined && plan.status === 'paused' && plan.paused?.budgetRequests?.includes(requestId)) return;
       if (plan.status !== 'paused' || !plan.paused || plan.lease) throw new Error('Budget can only be added to a paused plan.');
       if (plan.paused.stepId !== stepId) throw new Error('Budget can only be added to the paused step.');
       const def = executableStep(plan.document, stepId);
@@ -559,7 +576,11 @@ export class PlanBudget {
       if (!def || !stepRec) throw new Error(`Step "${stepId}" can't run a specialist.`);
 
       let target: PlanAttemptRecord | undefined;
-      if (plan.paused.ceilingShortfall) {
+      // Final review F4: a report turn's pause — the tokens are for that turn.
+      const reportOnlyOf = plan.paused.reportOnlyOf;
+      if (reportOnlyOf !== undefined) {
+        target = undefined;
+      } else if (plan.paused.ceilingShortfall) {
         // Round 2: decided by the KIND of pause, not by whether the step
         // happens to have an unfinished specialist to attach the tranche to.
         target = undefined;
@@ -580,13 +601,16 @@ export class PlanBudget {
       }
       plan.tranches = [...(plan.tranches ?? []), {
         trancheId: this.newId(), stepId, tokens, at: this.now(),
-        ...(target ? { attemptId: target.attemptId } : { ceilingOnly: true as const }),
+        ...(target ? { attemptId: target.attemptId } : reportOnlyOf !== undefined ? { reportOnlyOf } : { ceilingOnly: true as const }),
       }];
       plan.ceilingTokens += tokens;
       if (plan.ceilingUsd !== null) {
         const snapshot = snapshotFor(plan.manifest, def.specialist);
         // A missing price can't be bounded; a free/local one adds nothing.
         plan.ceilingUsd = snapshot === null ? null : plan.ceilingUsd + (worstCaseUsd(snapshot, tokens) ?? 0);
+      }
+      if (requestId !== undefined) {
+        plan.paused.budgetRequests = [...(plan.paused.budgetRequests ?? []), requestId].slice(-PLAN_BUDGET_REQUESTS_KEPT);
       }
       // Task 9b: the caller's own change rides in this same write.
       input.edit?.(plan);

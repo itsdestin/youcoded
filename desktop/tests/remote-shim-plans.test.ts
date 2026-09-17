@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { REMOTE_UNSUPPORTED_EVENT } from '../src/renderer/remote-unsupported';
+import { loadRealPreload } from './helpers/real-preload';
 
 /**
  * Specialists plans, Task 6 — the plan bridge over the shared shim.
@@ -65,7 +66,7 @@ const last = (ws: FakeWebSocket) => JSON.parse(ws.sent[ws.sent.length - 1]);
 const CALLS: Array<[string, (p: any) => Promise<unknown>, string, unknown]> = [
   ['approve', (p) => p.approve('s1', 'p1'), 'plans:approve', { sessionId: 's1', planId: 'p1' }],
   ['comment', (p) => p.comment('s1', 'p1', 'hi'), 'plans:comment', { sessionId: 's1', planId: 'p1', text: 'hi' }],
-  ['addBudget', (p) => p.addBudget('s1', 'p1', 900), 'plans:add-budget', { sessionId: 's1', planId: 'p1', tokens: 900 }],
+  ['addBudget', (p) => p.addBudget('s1', 'p1', 900, 'press-9'), 'plans:add-budget', { sessionId: 's1', planId: 'p1', tokens: 900, requestId: 'press-9' }],
   ['resume', (p) => p.resume('s1', 'p1'), 'plans:resume', { sessionId: 's1', planId: 'p1' }],
   ['stop', (p) => p.stop('s1', 'p1'), 'plans:stop', { sessionId: 's1', planId: 'p1' }],
   ['askAssistant', (p) => p.askAssistant('s1', 'p1', 'why?'), 'plans:ask-assistant', { sessionId: 's1', planId: 'p1', question: 'why?' }],
@@ -87,6 +88,20 @@ describe('window.claude.plans over the shared shim', () => {
     Object.defineProperty(window, 'location', realLocation);
     delete (globalThis as any).WebSocket;
     delete (window as any).claude;
+  });
+
+  // Final review F29: the shim and the REAL preload send the same payload for
+  // every call, so the desktop and phone paths reach the handler identically.
+  it('sends exactly what the real preload sends, for all eight', async () => {
+    const { ws } = await connect('desktop');
+    const plans = (window as any).claude.plans;
+    for (const [name, call, type] of CALLS) {
+      const real = loadRealPreload();
+      void call(real.claude.plans);
+      void call(plans);
+      const msg = last(ws);
+      expect(real.invokes, name).toEqual([[type, msg.payload]]);
+    }
   });
 
   it('sends each of the eight with its object payload and resolves the host’s answer', async () => {

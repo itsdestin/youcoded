@@ -3057,7 +3057,8 @@ export function installShim(): void {
     plans: {
       approve: (sessionId: string, planId: string) => invoke('plans:approve', { sessionId, planId }),
       comment: (sessionId: string, planId: string, text: string) => invoke('plans:comment', { sessionId, planId, text }),
-      addBudget: (sessionId: string, planId: string, tokens: number) => invoke('plans:add-budget', { sessionId, planId, tokens }),
+      // Final review F1: `requestId` names one press, so a Retry adds nothing twice.
+      addBudget: (sessionId: string, planId: string, tokens: number, requestId?: string) => invoke('plans:add-budget', { sessionId, planId, tokens, requestId }),
       resume: (sessionId: string, planId: string) => invoke('plans:resume', { sessionId, planId }),
       stop: (sessionId: string, planId: string) => invoke('plans:stop', { sessionId, planId }),
       askAssistant: (sessionId: string, planId: string, question?: string) => invoke('plans:ask-assistant', { sessionId, planId, question }),

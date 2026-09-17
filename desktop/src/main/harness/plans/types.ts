@@ -21,6 +21,12 @@ const PLAN_PAUSE_ACTIONS = ['add_budget', 'continue', 'stop'] as const satisfies
 
 const nonNegativeInt = z.number().int().min(0);
 
+/** Final review F1: an Add budget request id is at most this long. */
+export const PLAN_BUDGET_REQUEST_ID_MAX_CHARS = 128;
+/** Final review F1: how many applied request ids one pause remembers (the
+ *  oldest is dropped first; a person never presses this many times). */
+export const PLAN_BUDGET_REQUESTS_KEPT = 16;
+
 /** A frozen model binding for one specialist, captured when the plan is proposed. */
 const FrozenBindingSchema = z.object({
   providerId: z.string().min(1),
@@ -143,6 +149,10 @@ const PlanTrancheSchema = z.object({
    *  limit shortfall). It raises the plan limit only and is never claimed by
    *  a new attempt — an allowance that grew with the limit could never fit. */
   ceilingOnly: z.literal(true).optional(),
+  /** Final review F4: added while the pause was a report turn that had too
+   *  little allowance. Claimed only by the report turn for that failed
+   *  attempt, never by any other specialist. */
+  reportOnlyOf: z.string().min(1).optional(),
 }).strict();
 export type PlanTranche = z.infer<typeof PlanTrancheSchema>;
 
@@ -194,6 +204,14 @@ const PlanRecordSchema = z.object({
     launch: z.enum(['refused', 'drift']).optional(),
     retried: z.literal(true).optional(),
     toolEffect: z.enum(TOOL_EFFECTS).optional(),
+    /** Final review F1: the request ids of the Add budget presses THIS pause
+     *  already applied. WHY on the pause: a lost reply followed by Retry (or a
+     *  second press of the same button) sends the same id again and must add
+     *  nothing; a new pause is a new object, so an old id never blocks it. */
+    /** Final review F4: the pause is a report turn (for this failed attempt)
+     *  that its unspent allowance can't fund — Add budget funds exactly it. */
+    reportOnlyOf: z.string().min(1).optional(),
+    budgetRequests: z.array(z.string().min(1).max(PLAN_BUDGET_REQUEST_ID_MAX_CHARS)).max(PLAN_BUDGET_REQUESTS_KEPT).optional(),
     /** Task 9b (pause handoff §2): this pause was handed to the assistant.
      *  `pending` = the card is greyed out while the assistant looks into it;
      *  `answered` = the card has its buttons again (with the assistant's

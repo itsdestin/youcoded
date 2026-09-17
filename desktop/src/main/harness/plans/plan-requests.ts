@@ -39,7 +39,7 @@ export const PLANS_EVENT_CHANNEL = 'plans:event';
 export interface PlanRequestHost {
   approvePlan(sessionId: string, planId: string): Promise<PlanActionResult>;
   commentOnPlan(sessionId: string, planId: string, text: string): Promise<PlanActionResult>;
-  addPlanBudget(sessionId: string, planId: string, tokens: number): Promise<PlanActionResult>;
+  addPlanBudget(sessionId: string, planId: string, tokens: number, requestId?: unknown): Promise<PlanActionResult>;
   resumePlan(sessionId: string, planId: string): Promise<PlanActionResult>;
   stopPlan(sessionId: string, planId: string): Promise<PlanActionResult>;
   askAssistantAboutPlan(sessionId: string, planId: string, question?: string): Promise<PlanActionResult>;
@@ -106,7 +106,8 @@ export async function handlePlanRequest(
         // would put a second, drifting copy of those rules in the transport.
         if (channel === 'plans:approve') answer = await host.approvePlan(sessionId, planId);
         else if (channel === 'plans:comment') answer = await host.commentOnPlan(sessionId, planId, p.text as string);
-        else if (channel === 'plans:add-budget') answer = await host.addPlanBudget(sessionId, planId, p.tokens as number);
+        // Final review F1: `requestId` is passed through; PlanService checks it.
+        else if (channel === 'plans:add-budget') answer = await host.addPlanBudget(sessionId, planId, p.tokens as number, p.requestId);
         else if (channel === 'plans:resume') answer = await host.resumePlan(sessionId, planId);
         // Decision 20: the typed question is passed through; the plan
         // service trims it and refuses one that is too long.

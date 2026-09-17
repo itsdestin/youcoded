@@ -435,6 +435,36 @@ describe('Add budget — an authorization tranche for the paused attempt', () =>
     await expect(budget.addTokens({ ref: REF, planId: 'p1', stepId: 's2', tokens: 5 })).rejects.toThrow(/paused step/);
   });
 
+  // Final review F1: a lost reply followed by Retry, or a second press of the
+  // same Add budget, must never add the tranche twice.
+  it('a repeated Add budget request id is a no-op that returns the current plan (F1)', async () => {
+    const id = await pausedAfterExhaustion();
+    const before = await plan();
+    const first = await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 500, requestId: 'press-1' });
+    const seqAfterFirst = (await plan()).seq;
+    const again = await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 500, requestId: 'press-1' });
+    const after = await plan();
+    expect(after.ceilingTokens).toBe(before.ceilingTokens + 500);
+    expect((await attempt('s1', id)).addedTokens).toBe(500);
+    expect(after.tranches).toHaveLength(1);
+    // Nothing was written the second time, and the answer is the plan as it stands.
+    expect(after.seq).toBe(seqAfterFirst);
+    expect(again).toEqual(first);
+    // A different press adds again.
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 200, requestId: 'press-2' });
+    expect((await plan()).ceilingTokens).toBe(before.ceilingTokens + 700);
+  });
+
+  it('a request id from an earlier pause does not block the next pause (F1)', async () => {
+    await pausedAfterExhaustion();
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 500, requestId: 'press-1' });
+    const ceiling = (await plan()).ceilingTokens;
+    // The executor writes a NEW pause object for the next pause.
+    await journal.mutate(REF, (file) => { file.plans[0].paused = { stepId: 's1', reason: 'Out of budget again' }; });
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 500, requestId: 'press-1' });
+    expect((await plan()).ceilingTokens).toBe(ceiling + 500);
+  });
+
   it('local plans gain tokens only — the dollar ceiling stays absent', async () => {
     await seed(record({ manifest: manifest({ kind: 'local' }, { kind: 'local' }), ceilingUsd: null }));
     await journal.mutateFenced(REF, 'p1', fence, (p) => {

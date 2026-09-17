@@ -1651,13 +1651,15 @@ contextBridge.exposeInMainWorld('claude', {
   plans: {
     approve: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_APPROVE, { sessionId, planId }),
     comment: (sessionId: string, planId: string, text: string) => ipcRenderer.invoke(IPC.PLANS_COMMENT, { sessionId, planId, text }),
-    addBudget: (sessionId: string, planId: string, tokens: number) => ipcRenderer.invoke(IPC.PLANS_ADD_BUDGET, { sessionId, planId, tokens }),
+    // Final review F1: `requestId` names one press, so a Retry adds nothing twice.
+    addBudget: (sessionId: string, planId: string, tokens: number, requestId?: string) => ipcRenderer.invoke(IPC.PLANS_ADD_BUDGET, { sessionId, planId, tokens, requestId }),
     resume: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_RESUME, { sessionId, planId }),
     stop: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_STOP, { sessionId, planId }),
     // Task 11 (pause handoff §6): a paused card's "Ask the assistant".
     // Decision 20: with the optional question typed in the Ask box.
     askAssistant: (sessionId: string, planId: string, question?: string) => ipcRenderer.invoke(IPC.PLANS_ASK_ASSISTANT, { sessionId, planId, question }),
-    getAutoApprove: () => ipcRenderer.invoke(IPC.PLANS_GET_AUTO_APPROVE),
+    // Final review F29: `{}`, exactly what the remote shim sends.
+    getAutoApprove: () => ipcRenderer.invoke(IPC.PLANS_GET_AUTO_APPROVE, {}),
     setAutoApprove: (underTokens: number) => ipcRenderer.invoke(IPC.PLANS_SET_AUTO_APPROVE, { underTokens }),
   },
   // Local llama.cpp engine (Plan B). Progress/status pushes return an

@@ -20,6 +20,7 @@ import type {
   ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanRecord, PlanRef,
   PlanSettingsWriteResult, PlanUnsupported,
 } from './types';
+import { PLAN_BUDGET_REQUEST_ID_MAX_CHARS } from './types';
 
 /** ~/.youcoded/plans.json — the auto-approve limit lives here (design §5). */
 const PLAN_SETTINGS_FILE = 'plans.json';
@@ -38,7 +39,7 @@ export interface PlanBudgetHooks {
   /** Task 3: record an authorization tranche for the paused step. Task 9b:
    *  `edit` is applied to the plan in that SAME write (the handoff it
    *  supersedes is answered by the write that adds the budget). */
-  addTokens(input: { ref: PlanRef; planId: string; stepId: string; tokens: number; edit?: (plan: PlanRecord) => void }): Promise<PlanView>;
+  addTokens(input: { ref: PlanRef; planId: string; stepId: string; tokens: number; requestId?: string; edit?: (plan: PlanRecord) => void }): Promise<PlanView>;
 }
 
 /** Task 9b: told when a user action superseded a pending handoff, so the
@@ -111,9 +112,20 @@ export interface PlanProposal {
    *  or not: the rule follows the turn, not the pending revision, so a user
    *  action that superseded the handoff mid-turn can't let one start. */
   fromPlanNotice?: boolean;
+  /** Final review F3: host-supplied key of the turn this call came from. At
+   *  most one proposal per key starts without a click; the rest wait for
+   *  Approve. Absent (unit tests) → no per-turn limit. */
+  autoStartKey?: string;
 }
 
+/** Final review F3: how many turn keys the service remembers (a turn is long
+ *  over well before this many newer turns have auto-started a plan). */
+const AUTO_START_KEYS_KEPT = 256;
+
 const unsupported = (error: string): PlanUnsupported => ({ ok: false, unsupported: true, error });
+/** A malformed request id comes from a broken caller, never from a person's
+ *  choice: the same general line the transport uses (no cause is invented). */
+const ACTION_REQUEST_UNREADABLE = "Couldn't update the plan. Please try again.";
 const failure = (error: string) => ({ ok: false as const, error });
 
 /** Thrown inside a journal mutation to abort it with a user-facing reason. */
@@ -204,6 +216,8 @@ export class PlanService {
   private readonly journal: PlanJournal;
   private readonly now: () => number;
   private readonly newId: () => string;
+  /** Final review F3: turn keys that already auto-started a plan (oldest first). */
+  private readonly autoStartedKeys = new Set<string>();
 
   constructor(private readonly deps: PlanServiceDeps) {
     this.journal = deps.journal;
@@ -364,7 +378,15 @@ export class PlanService {
     // Task 9b: never from a pause's notice turn (see PlanProposal.fromPlanNotice).
     if (this.deps.executor && !proposal.fromPlanNotice) {
       const settings = await this.getAutoApprove();
-      if (settings.ok && settings.underTokens > 0 && record.ceilingTokens < settings.underTokens) {
+      const key = proposal.autoStartKey;
+      // Final review F3: checked and claimed with no await in between, so two
+      // proposals from the same turn can't both see the key as free.
+      if (settings.ok && settings.underTokens > 0 && record.ceilingTokens < settings.underTokens
+        && (key === undefined || !this.autoStartedKeys.has(key))) {
+        if (key !== undefined) {
+          this.autoStartedKeys.add(key);
+          if (this.autoStartedKeys.size > AUTO_START_KEYS_KEPT) this.autoStartedKeys.delete(this.autoStartedKeys.values().next().value!);
+        }
         try {
           return await this.startRun(ref, planId, ['proposed'], (plan) => {
             plan.autoApproved = true;
@@ -511,13 +533,27 @@ export class PlanService {
     });
   }
 
-  addBudget(sessionId: string, planId: string, tokens: number): Promise<PlanActionResult> {
+  /**
+   * Final review F1: `requestId` names one press of Add budget. The card sends
+   * the same id again on Retry (a reply lost or timed out) and on a second
+   * press for the same pause; a pause that already applied it answers the plan
+   * as it stands, so the limit is never raised twice for one decision.
+   */
+  addBudget(sessionId: string, planId: string, tokens: number, requestId?: unknown): Promise<PlanActionResult> {
     return this.act('add budget to', async () => {
       if (!(typeof tokens === 'number' && Number.isSafeInteger(tokens) && tokens > 0)) {
         return failure('The added budget must be a whole number of tokens greater than 0.');
       }
+      if (requestId !== undefined && !(typeof requestId === 'string' && requestId.length > 0 && requestId.length <= PLAN_BUDGET_REQUEST_ID_MAX_CHARS)) {
+        return failure(ACTION_REQUEST_UNREADABLE);
+      }
       if (!this.deps.budget) return unsupported("Adding budget isn't available in this version of YouCoded.");
       const { ref, plan } = await this.loadPlan(sessionId, planId);
+      // The repeat is answered before the minimum check: the first press may
+      // already have lowered or cleared that minimum.
+      if (requestId !== undefined && plan.status === 'paused' && plan.paused?.budgetRequests?.includes(requestId)) {
+        return { ok: true, plan: projectPlan(plan) };
+      }
       if (plan.status !== 'paused' || !plan.paused) throw new PlanActionRefused('Budget can only be added to a paused plan.');
       // Task 4: a smaller amount would let Continue start and then pause again
       // at once (the resume prompt, or a soft overshoot, would not fit), so it
@@ -530,6 +566,7 @@ export class PlanService {
       let handoffId: string | undefined;
       const view = await this.deps.budget.addTokens({
         ref, planId, stepId: plan.paused.stepId, tokens,
+        ...(requestId !== undefined ? { requestId } : {}),
         edit: (p) => { handoffId = supersedeHandoff(p); },
       });
       this.notifySuperseded(ref, planId, handoffId);

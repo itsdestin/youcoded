@@ -343,6 +343,12 @@ interface LiveEntry {
   plan?: { planId: string; stepId: string; attemptId: string };
   // The host turn id of the turn running right now (SendUnit.turnId).
   currentTurnId?: string;
+  // Final review F3: a fresh key for EVERY pass of the turn drain (a user
+  // message, a queued turn, a delivery pass). Auto-approve starts at most one
+  // plan per key, so one reply can't start plan after plan without a click.
+  // Separate from currentTurnId, which only a host-queued turn carries and
+  // which links revisions — a key minted here must never match one.
+  currentTurnKey?: string;
   // Plans (Task 4 round 2): a stop that arrived before this specialist's
   // turn began. runTurns checks it at the moment the turn would start, so the
   // turn never sends — an interrupt then would have had nothing to stop.
@@ -3989,6 +3995,7 @@ export class NativeSessionHost extends EventEmitter {
         }
         // Plans (Task 4): the turn id propose_plan reads for this turn.
         entry.currentTurnId = typeof next === 'function' ? undefined : next.turnId;
+        entry.currentTurnKey = randomUUID();
         try {
           if (entry.cancelledBeforeSend) break;
           if (typeof next === 'function') await next();
@@ -4000,6 +4007,7 @@ export class NativeSessionHost extends EventEmitter {
           log('ERROR', 'NativeSessionHost', 'send failed', { sessionId, error: String(err) });
         } finally {
           entry.currentTurnId = undefined;
+          entry.currentTurnKey = undefined;
         }
         // Destroy() may have removed/replaced the entry mid-turn — stop draining then.
         if (this.live.get(sessionId) !== entry) return;
@@ -4792,8 +4800,9 @@ export class NativeSessionHost extends EventEmitter {
   commentOnPlan(sessionId: string, planId: string, text: string): Promise<PlanActionResult> {
     return this.plans?.comment(sessionId, planId, text) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
-  addPlanBudget(sessionId: string, planId: string, tokens: number): Promise<PlanActionResult> {
-    return this.plans?.addBudget(sessionId, planId, tokens) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  addPlanBudget(sessionId: string, planId: string, tokens: number, requestId?: unknown): Promise<PlanActionResult> {
+    // Final review F1: the press's request id makes a repeat a no-op.
+    return this.plans?.addBudget(sessionId, planId, tokens, requestId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
   resumePlan(sessionId: string, planId: string): Promise<PlanActionResult> {
     return this.plans?.resume(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
@@ -4847,6 +4856,7 @@ export class NativeSessionHost extends EventEmitter {
         }
       },
       currentTurnId: (sessionId) => this.live.get(sessionId)?.currentTurnId,
+      currentTurnKey: (sessionId) => this.live.get(sessionId)?.currentTurnKey,
       noticeRefusal: (sessionId) => this.planNoticeRefusal(sessionId),
       planToolsAvailable: (sessionId) => {
         const e = this.live.get(sessionId);
