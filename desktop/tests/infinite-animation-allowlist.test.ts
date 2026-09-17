@@ -20,6 +20,9 @@ import { RENDERER, readStripped, assertScopeIsPopulated, assertPatternMatches } 
 // for one pulsing dot. `steps(n)` presents n frames per cycle instead; the
 // investigation and the measurements are in animation-frame-budget.test.ts.
 //
+// Deliberately NOT swept: src/renderer/index.html, components/mascot/
+// default-mascot-paint.css, and the runtime theme CSS theme-engine.ts injects.
+//
 // SMOOTH_OK is a decision list, not an escape hatch. Every entry is an
 // animation that is gated some OTHER way (paused when hidden, bounded by a
 // load) and for which stepping is visibly worse. This guard changes no CSS;
@@ -37,6 +40,7 @@ const SMOOTH_OK: Record<string, string> = {
   'mascot-comp-float': 'theme companion float — visibility-gated with the scene',
   'buddy-breathe': 'buddy window is alwaysOnTop so visibilitychange never fires, and quantized breathing is visible; accepted cost of an opt-in feature',
   'model-load-sweep': 'bounded by the model load (two sites: .model-load-track::after, .model-load-finalize::after), and disabled by Reduced Effects + prefers-reduced-motion',
+  'boot-spin': 'bounded by the remote boot gate; ends when the app loads',
 };
 
 // Words that can appear in an `animation` shorthand and are NOT the name.
@@ -118,8 +122,12 @@ function sweepCss(sheet: string, css: string, out: Finding[]): void {
 }
 
 function sweepTsx(file: string, src: string, out: Finding[]): void {
-  // Inline style objects: `animation: 'name 2s ease infinite'` (either quote, or a template literal).
-  for (const m of src.matchAll(/animation:\s*(['"`])([^'"`]*)\1/g)) {
+  // ANY string literal (either quote, or a template literal) that says
+  // `infinite` — key-agnostic on purpose. The first cut required the quote to
+  // follow `animation:` directly and missed remote-gate.tsx's
+  // `animation: reduced ? 'none' : 'boot-spin 0.7s linear infinite'` (fresh-eyes
+  // review, 2026-09-16). A shorthand lives in the literal, not next to the key.
+  for (const m of src.matchAll(/(['"`])([^'"`\n]*\binfinite\b[^'"`\n]*)\1/g)) {
     for (const single of splitTopLevel(m[2])) {
       if (/\binfinite\b/.test(single) && !stepped(single, null)) {
         out.push({ where: file, name: nameOf(single), value: single });
@@ -181,6 +189,10 @@ describe('every infinite animation is stepped, or in SMOOTH_OK with a reason', (
     const e: Finding[] = [];
     sweepTsx('t.tsx', "style={{ animation: 'breathe 2s ease infinite' }} className=\"animate-[glow_2s_ease_infinite]\"", e);
     expect(e.map((f) => f.name)).toEqual(['breathe', 'glow']);
+    // The literal need not follow `animation:` — a ternary hides it behind another string.
+    const g: Finding[] = [];
+    sweepTsx('t.tsx', "animation: reduced ? 'none' : 'boot-spin 0.7s linear infinite',", g);
+    expect(g.map((f) => f.name)).toEqual(['boot-spin']);
     assertPatternMatches(/\binfinite\b/, 'rig-breathe 4s ease-in-out infinite', 'an infinite shorthand');
   });
 

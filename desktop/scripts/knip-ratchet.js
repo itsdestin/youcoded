@@ -69,7 +69,8 @@ for (const entry of report.issues ?? []) {
   for (const [category, items] of Object.entries(entry)) {
     if (!Array.isArray(items) || items.length === 0) continue;
     counts[category] = (counts[category] ?? 0) + items.length;
-    for (const item of items) {
+    // `duplicates` is an array of GROUPS (one export under several names); flatten so every name prints.
+    for (const item of items.flatMap((i) => (Array.isArray(i) ? i : [i]))) {
       // exports/types/enumMembers carry a line; dependency-style findings do not.
       const where = item.line ? `${entry.file}:${item.line}:${item.col}` : entry.file;
       lines.push(`${category.padEnd(12)} ${where}  ${item.name ?? ''}`.trimEnd());

@@ -4,7 +4,8 @@ import { describe, it, expect } from 'vitest';
 
 // Line-budget RATCHET for desktop/src (2026-09-16, simplification audit §7 G2).
 //
-// Nineteen source files were over 1,500 lines and nothing said so: docs and
+// Twenty source files were over 1,500 lines (18 budgeted below, two dev-only
+// workbench registries exempt) and nothing said so: docs and
 // rule files have word budgets (scripts/audit-anchors.mjs), source had none, so
 // App.tsx and ipc-handlers.ts grew by hundreds of lines a month with every
 // check green. This guard freezes each oversized file at the size it had the
