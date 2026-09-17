@@ -72,7 +72,8 @@ export function PageHost() {
   const { pages } = usePages();
   const summary = pages.find((p) => p.id === pageId) ?? null;
   const pinnedCount = pages.filter((p) => p.pinned).length;
-  const [railOpen, setRailOpen] = useState(true);
+  // Hidden by default, everywhere (Destin, 2026-09-17: "lets just always default to hidden").
+  const [railOpen, setRailOpen] = useState(false);
   const headerRef = useRef<HTMLDivElement>(null);
 
   const [load, setLoad] = useState<Load>({ state: 'loading' });
