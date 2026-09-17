@@ -2106,7 +2106,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     detectTailscale: async () => ({ installed: true, connected: true, ip: '100.92.14.3', hostname: 'destin-laptop', url: 'http://destin-laptop:7842' }),
     getClientCount: async () => remoteClients.length,
     getClientList: async () => remoteClients,
-    getStatus: async () => ({ state: 'listening', port: 7842 }),
+    getStatus: async () => ({ state: 'listening', port: 7842, clientCount: remoteClients.length }),
     onStatus: () => () => {},
     devices: {
       list: async () => remoteClients.map((c, i) => ({ id: c.id, name: i === 0 ? 'My phone' : 'My tablet', online: i === 0, createdAt: 0, lastSeenAt: 0 })),

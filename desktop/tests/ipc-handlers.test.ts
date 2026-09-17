@@ -502,6 +502,20 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
     expect(sends()).toBe(2); // a focus with no missed tick behind it pushes nothing
   });
 
+  it('remote:status over desktop IPC carries clientCount as a number, with or without a server', async () => {
+    const remoteConfig = { keepAwakeHours: 0, port: 9900, toSafeObject: () => ({}) };
+    const ipcMain = { handle: vi.fn(), on: vi.fn() };
+    registerIpcHandlers(
+      ipcMain as any,
+      { createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []), sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn() } as any,
+      { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
+      { configStore: { getPackages: vi.fn(() => ({})) }, getInstalled: vi.fn(() => []) } as any,
+      undefined as any, undefined, remoteConfig as any, undefined,
+    );
+    const handler = ipcMain.handle.mock.calls.find((c: any[]) => c[0] === 'remote:status')![1];
+    expect(await handler({})).toMatchObject({ state: 'stopped', port: 0, clientCount: 0 });
+  });
+
   it('a connected phone counts as an audience, and a phone connecting gets the missed push', async () => {
     let clients = 0;
     const { win, sends, tick, phoneConnects, remoteServer } = await boot({ clients: () => clients });

@@ -76,6 +76,11 @@ describe('remote access fake', () => {
     expect((await c.remote.getConfig()).clientCount).toBe(1);
     expect(await c.remote.getClientCount()).toBe(1);
   });
+  it('getStatus carries clientCount as a number, the shape the desktop answer and the socket give (audit W18)', async () => {
+    const c = await shim('?remote=connected');
+    const st = await c.remote.getStatus();
+    expect(st).toMatchObject({ state: expect.any(String), port: expect.any(Number), clientCount: 1 });
+  });
 });
 
 describe('takeover (lease) fake', () => {

@@ -1745,4 +1745,13 @@ describe('RemoteServer status carries the connected-client count', () => {
     b.emit('close', 1000, Buffer.alloc(0));
     expect(seen).toEqual([1, 2, 1, 0]);
   });
+
+  it('the remote:status answer over the socket carries clientCount as a number', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig) as any;
+    const sent: any[] = [];
+    const ws = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    await server.handleMessage({ ws }, JSON.stringify({ type: 'remote:status', id: 's', payload: {} }));
+    expect(sent.pop()?.payload).toMatchObject({ state: expect.any(String), port: expect.any(Number), clientCount: 0 });
+  });
 });
