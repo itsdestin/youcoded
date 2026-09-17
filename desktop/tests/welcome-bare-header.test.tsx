@@ -7,17 +7,14 @@
 // toggle, Session Files, Games, the ||| overflow menu) may appear there.
 //
 // The gear must be byte-identical to the session header's, so it lives in ONE
-// component in HeaderBar.tsx — the source assertion below fails if a second
-// gear is ever hand-copied.
+// component in HeaderBar.tsx. (Where App.tsx places this header, and the
+// "one gear" count, were source-text pins here; Plan B removed them on
+// 2026-09-16 — they asserted source layout, not behaviour.)
 import React from 'react';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { BareHeaderBar } from '../src/renderer/components/HeaderBar';
 import { ArtifactContext } from '../src/renderer/state/ArtifactContext';
-
-const RENDERER = join(__dirname, '..', 'src', 'renderer');
 
 // jsdom has no matchMedia; useNarrowViewport (via the header's children) reads
 // it. `matches` is the narrow/wide switch for the tests below.
@@ -134,32 +131,3 @@ describe('BareHeaderBar (welcome screen frame)', () => {
   });
 });
 
-describe('welcome screen wiring (source)', () => {
-  const app = readFileSync(join(RENDERER, 'App.tsx'), 'utf8');
-  const header = readFileSync(join(RENDERER, 'components', 'HeaderBar.tsx'), 'utf8');
-
-  it('App renders BareHeaderBar once, in the welcome branch (after the session HeaderBar, before "No Active Session")', () => {
-    expect(app.match(/<BareHeaderBar\b/g)?.length).toBe(1);
-    // `<HeaderBar` followed by any whitespace — NOT indexOf('<HeaderBar\n'), which
-    // found nothing on a Windows checkout (CRLF), failed this case on every CI run
-    // since P-6 shipped, and would have gone on reading as a real regression.
-    const session = app.search(/<HeaderBar[\s>]/);
-    const bare = app.indexOf('<BareHeaderBar');
-    const welcome = app.indexOf('No Active Session');
-    expect(session).toBeGreaterThan(-1);
-    expect(bare).toBeGreaterThan(session);
-    expect(welcome).toBeGreaterThan(bare);
-  });
-
-  it('the welcome branch paints the same chrome-glass + headerRef chrome-wrapper as a session', () => {
-    const bare = app.indexOf('<BareHeaderBar');
-    const before = app.slice(bare - 1500, bare);
-    expect(before).toContain('className="chrome-glass chrome-glass--bare"');
-    expect(before).toContain('<div ref={headerRef} className="chrome-wrapper bg-canvas">');
-  });
-
-  it('the Settings gear is defined exactly once in HeaderBar.tsx (shared by both headers)', () => {
-    expect(header.match(/<Tooltip text="Settings"/g)?.length).toBe(1);
-    expect(header.match(/<SettingsGearButton\b/g)?.length).toBe(2);
-  });
-});
