@@ -1089,6 +1089,10 @@ function handleMessage(data: string, generation: number): void {
       // payload is used — the event itself is the signal.
       dispatchEvent('system:back', payload);
       break;
+    case 'pages:changed':
+      // YouCoded Pages: the host's fresh page list after any change in a home.
+      dispatchEvent('pages:changed', payload);
+      break;
     case 'artifacts:changed':
       // Artifact viewer update event — dispatched when artifacts are added,
       // modified, or excluded. The payload contains change metadata.
@@ -2499,6 +2503,17 @@ export function installShim(): void {
         const handler: Callback = (evt: any) => cb(evt);
         addListener('artifacts:changed', handler);
         return () => removeListener('artifacts:changed', handler);
+      },
+    },
+    pages: {
+      list: () => invoke('pages:list'),
+      get: (id: string) => invoke('pages:get', { id }),
+      setPinned: (id: string, pinned: boolean) => invoke('pages:set-pinned', { id, pinned }),
+      setData: (id: string, data: unknown) => invoke('pages:set-data', { id, data }),
+      onChanged: (cb: (pages: any[]) => void) => {
+        const handler: Callback = (pages: any) => cb(pages);
+        addListener('pages:changed', handler);
+        return () => removeListener('pages:changed', handler);
       },
     },
     git: {

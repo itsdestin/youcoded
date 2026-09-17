@@ -51,7 +51,10 @@ const TIMER_HTML = `<!doctype html>
   </div>
 </div>
 <script>
-  var total = 25*60, left = total, running = false, tick = null, done = 0;
+  var saved = (window.youcoded && window.youcoded.data) || {};
+  var total = 25*60, left = total, running = false, tick = null, done = saved.done || 0;
+  document.getElementById('done').textContent = done;
+  function persist(){ if (window.youcoded) window.youcoded.save({ done: done }); }
   var clock = document.getElementById('clock'), ring = document.getElementById('ring'), go = document.getElementById('go'), st = document.getElementById('state');
   function fmt(s){ var m = Math.floor(s/60), r = s%60; return (m<10?'0':'')+m+':'+(r<10?'0':'')+r; }
   function paint(){ clock.textContent = fmt(left); ring.style.setProperty('--pct', (100*(1-left/total))+'%'); }
@@ -59,7 +62,7 @@ const TIMER_HTML = `<!doctype html>
   go.onclick = function(){
     if (running) return stop();
     running = true; go.textContent = 'Pause'; st.textContent = 'Running';
-    tick = setInterval(function(){ left--; if (left<=0){ left=0; paint(); stop(); done++; document.getElementById('done').textContent=done; st.textContent='Finished'; left=total; return; } paint(); }, 1000);
+    tick = setInterval(function(){ left--; if (left<=0){ left=0; paint(); stop(); done++; document.getElementById('done').textContent=done; persist(); st.textContent='Finished'; left=total; return; } paint(); }, 1000);
   };
   document.getElementById('reset').onclick = function(){ stop(); left = total; paint(); st.textContent='Ready'; };
   document.querySelectorAll('[data-min]').forEach(function(b){ b.onclick = function(){
@@ -131,7 +134,8 @@ const PLANNER_HTML = `<!doctype html>
   var base = new Date(2026, 8, 14); // Monday 14 Sep 2026
   var todayIdx = 2; // Wednesday
   var offset = 0;
-  var events = {
+  var saved = (window.youcoded && window.youcoded.data) || null;
+  var events = saved && saved.events ? saved.events : {
     0: [ { t:'09:30', n:'Team standup', k:'work' }, { t:'12:30', n:'Lunch with Sam', k:'social' }, { t:'18:00', n:'Gym', k:'health' } ],
     1: [ { t:'10:00', n:'Design review', k:'work' }, { t:'19:30', n:'Cook for the week', k:'home' } ],
     2: [ { t:'08:15', n:'Dentist', k:'health', done:true }, { t:'11:00', n:'Sprint planning', k:'work' }, { t:'15:00', n:'Call the landlord', k:'home' }, { t:'18:30', n:'Board games night', k:'social' } ],
@@ -140,6 +144,7 @@ const PLANNER_HTML = `<!doctype html>
     5: [ { t:'10:00', n:'Farmers market', k:'home' } ],
     6: [ { t:'11:00', n:'Brunch', k:'social' }, { t:'16:00', n:'Plan next week', k:'home' } ]
   };
+  function persist(){ if (window.youcoded) window.youcoded.save({ events: events }); }
   var week = document.getElementById('week'), form = document.getElementById('add');
   DAYS.forEach(function(d,i){ var o=document.createElement('option'); o.value=i; o.textContent=d; document.getElementById('f-day').appendChild(o); });
   function dayDate(i){ var d = new Date(base); d.setDate(base.getDate() + offset*7 + i); return d; }
@@ -158,7 +163,7 @@ const PLANNER_HTML = `<!doctype html>
         var el = document.createElement('div'); el.className = 'ev' + (e.done?' done':''); el.style.setProperty('--c', COLORS[e.k]);
         el.innerHTML = '<time>'+e.t+'</time>'+e.n.replace(/</g,'&lt;');
         el.title = e.done ? 'Mark as not done' : 'Mark as done';
-        el.onclick = function(){ e.done = !e.done; render(); };
+        el.onclick = function(){ e.done = !e.done; persist(); render(); };
         col.appendChild(el);
       });
       if (!list.length) { var em = document.createElement('div'); em.className='yc-caption'; em.textContent = 'Nothing planned'; col.appendChild(em); }
@@ -177,7 +182,7 @@ const PLANNER_HTML = `<!doctype html>
     ev.preventDefault();
     var i = +document.getElementById('f-day').value;
     (events[i] = events[i] || []).push({ t: document.getElementById('f-time').value || '09:00', n: document.getElementById('f-title').value.trim() || 'Untitled', k: document.getElementById('f-kind').value });
-    offset = 0; form.classList.remove('open'); form.reset(); render();
+    offset = 0; form.classList.remove('open'); form.reset(); persist(); render();
   };
   render();
 </script>
@@ -250,7 +255,9 @@ const PAINT_HTML = `<!doctype html>
   var paper = document.getElementById('paper'), c = document.getElementById('c'), p = document.getElementById('preview');
   var x = c.getContext('2d'), px = p.getContext('2d');
   var tool = 'brush', color = '#1d1d1d', size = 6, alpha = 1;
+  var savedPaint = (window.youcoded && window.youcoded.data) || null;
   var ops = [], redo = [], cur = null;
+  function persist(){ if (window.youcoded) window.youcoded.save({ ops: ops }); }
   var sw = document.getElementById('swatches');
   PALETTE.forEach(function(col, i){ var b = document.createElement('button'); b.className = 'yc-swatch' + (i===0?' yc-swatch--on':''); b.style.background = col; b.title = col; b.onclick = function(){ setColor(col, b); }; sw.appendChild(b); });
   function setColor(col, btn){ color = col; document.querySelectorAll('.yc-swatch').forEach(function(s){ s.classList.toggle('yc-swatch--on', s===btn); }); document.getElementById('custom').value = col; dot(); }
@@ -276,18 +283,18 @@ const PAINT_HTML = `<!doctype html>
   function redraw(){ x.clearRect(0,0,c.width,c.height); ops.forEach(function(o){ draw(x,o); }); document.getElementById('count').textContent = ops.length; document.getElementById('undo').disabled = !ops.length; document.getElementById('redo').disabled = !redo.length; }
   c.onpointerdown = function(e){ cur = { t: tool, c: color, w: size, a: alpha, p: [pt(e)] }; c.setPointerCapture(e.pointerId); };
   c.onpointermove = function(e){ if(!cur) return; cur.p.push(pt(e)); px.clearRect(0,0,p.width,p.height); draw(px, cur); };
-  c.onpointerup = c.onpointercancel = function(){ if(!cur) return; ops.push(cur); redo = []; cur = null; px.clearRect(0,0,p.width,p.height); redraw(); };
-  document.getElementById('undo').onclick = function(){ if (ops.length) { redo.push(ops.pop()); redraw(); } };
-  document.getElementById('redo').onclick = function(){ if (redo.length) { ops.push(redo.pop()); redraw(); } };
-  document.getElementById('clear').onclick = function(){ if (!ops.length) return; redo = ops.slice().reverse(); ops = []; redraw(); };
+  c.onpointerup = c.onpointercancel = function(){ if(!cur) return; ops.push(cur); redo = []; cur = null; px.clearRect(0,0,p.width,p.height); redraw(); persist(); };
+  document.getElementById('undo').onclick = function(){ if (ops.length) { redo.push(ops.pop()); redraw(); persist(); } };
+  document.getElementById('redo').onclick = function(){ if (redo.length) { ops.push(redo.pop()); redraw(); persist(); } };
+  document.getElementById('clear').onclick = function(){ if (!ops.length) return; redo = ops.slice().reverse(); ops = []; redraw(); persist(); };
   document.getElementById('save').onclick = function(){ var b = document.getElementById('save'); b.textContent = 'Saved'; setTimeout(function(){ b.textContent = 'Save as picture'; }, 1200); };
   window.addEventListener('keydown', function(e){
     if (e.target.tagName === 'INPUT') return;
     if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z') { e.preventDefault(); (e.shiftKey ? document.getElementById('redo') : document.getElementById('undo')).click(); return; }
     var k = { b:'brush', e:'eraser', l:'line', r:'rect', o:'ellipse' }[e.key.toLowerCase()]; if (k) setTool(k);
   });
-  // A little something on the paper so the studio does not open blank.
-  ops = [
+  // A little something on the paper the first time, so the studio does not open blank.
+  ops = (savedPaint && savedPaint.ops) ? savedPaint.ops : [
     { t:'brush', c:'#3070d6', w:10, a:1, p:[[180,420],[220,300],[300,240],[400,260],[470,340],[520,440]] },
     { t:'ellipse', c:'#e5a13a', w:8, a:1, p:[[560,140],[700,280]] },
     { t:'rect', c:'#2f9e5b', w:6, a:.8, p:[[760,380],[960,520]] },
@@ -295,7 +302,7 @@ const PAINT_HTML = `<!doctype html>
   ];
   // The seed was drawn for an 1100-wide paper; scale it to whatever width the
   // paper actually got (a narrower window, the rail open) so nothing is cut off.
-  (function(){ var k = paper.getBoundingClientRect().width / 1100; if (k > 0 && k !== 1) ops.forEach(function(o){ o.w = Math.max(2, o.w * k); o.p = o.p.map(function(q){ return [q[0]*k, q[1]*k]; }); }); })();
+  (function(){ if (savedPaint && savedPaint.ops) return; var k = paper.getBoundingClientRect().width / 1100; if (k > 0 && k !== 1) ops.forEach(function(o){ o.w = Math.max(2, o.w * k); o.p = o.p.map(function(q){ return [q[0]*k, q[1]*k]; }); }); })();
   window.onresize = fit; dot(); fit();
 </script>
 </body></html>`;
@@ -310,7 +317,9 @@ export function seedPages(): PageDocument[] {
       home: { kind: 'personal' },
       pinned: true,
       updatedAt: T,
+      htmlStamp: 1789450800000,
       html: TIMER_HTML,
+      data: null,
     },
     {
       id: 'page-week-planner',
@@ -320,7 +329,9 @@ export function seedPages(): PageDocument[] {
       home: { kind: 'personal' },
       pinned: false,
       updatedAt: '2026-09-12T09:05:00.000Z',
+      htmlStamp: 1789200300000,
       html: PLANNER_HTML,
+      data: null,
     },
     {
       id: 'page-paint',
@@ -330,7 +341,9 @@ export function seedPages(): PageDocument[] {
       home: { kind: 'project', path: '/home/destin/youcoded-dev/youcoded', name: 'youcoded' },
       pinned: true,
       updatedAt: '2026-09-10T21:40:00.000Z',
+      htmlStamp: 1789077600000,
       html: PAINT_HTML,
+      data: null,
     },
   ];
 }

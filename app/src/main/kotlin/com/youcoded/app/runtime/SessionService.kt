@@ -4198,6 +4198,14 @@ class SessionService : Service() {
             "search:set-key",
             "search:remove-key",
             "search:test",
+            // YouCoded Pages (Phase 1) live in the desktop's Personal sync space
+            // and project folders; the phone reaches them over remote access.
+            // Reply not-implemented so the shared React UI degrades instead of
+            // timing out (the library shows "Pages are not available in this window").
+            "pages:list",
+            "pages:get",
+            "pages:set-pinned",
+            "pages:set-data",
             // Remembered "Always allow" rules (M5 2a — permissions management UI).
             // These read/revoke the DESKTOP native harness's ~/.youcoded/permissions.json;
             // Android has no native harness to hold those grants until M8, which is

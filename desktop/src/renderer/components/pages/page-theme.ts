@@ -27,6 +27,8 @@ export const PAGE_THEME_TOKENS: readonly string[] = [
 
 /** The message the host posts into a page frame when the theme changes. */
 export const PAGE_THEME_MESSAGE = 'youcoded:theme';
+/** The message a page posts to the host to save its own data (design §5). */
+export const PAGE_DATA_SET_MESSAGE = 'youcoded:data:set';
 export const PAGE_THEME_STYLE_ID = 'youcoded-theme';
 
 /** Snapshot of the current theme as one `:root { … }` rule. Reads computed
@@ -47,28 +49,45 @@ export function readThemeCss(root: HTMLElement = document.documentElement): stri
   return `:root { ${lines.join(' ')} }`;
 }
 
-/** Runs INSIDE the page: applies theme updates the host posts. Kept tiny and
- *  dependency-free because it is stringified into the page document. */
-const BOOTSTRAP = `(function(){
+/** Runs INSIDE the page: applies theme updates the host posts, and gives the
+ *  page `window.youcoded` — its saved data (baked in by the host, so it is
+ *  there before the page's own scripts run; review F4), `save(data)` which
+ *  posts the data to the host, and `onData(cb)` for a later refresh. Kept
+ *  tiny and dependency-free because it is stringified into the page document. */
+function bootstrap(dataJson: string): string {
+  return `(function(){
   var ID = ${JSON.stringify(PAGE_THEME_STYLE_ID)};
-  var TYPE = ${JSON.stringify(PAGE_THEME_MESSAGE)};
+  var THEME = ${JSON.stringify(PAGE_THEME_MESSAGE)};
+  var SET = ${JSON.stringify(PAGE_DATA_SET_MESSAGE)};
+  var subs = [];
+  window.youcoded = {
+    data: ${dataJson},
+    save: function (data) { window.youcoded.data = data; try { parent.postMessage({ type: SET, data: data }, '*'); } catch (e) {} },
+    onData: function (cb) { subs.push(cb); }
+  };
   window.addEventListener('message', function (e) {
     var d = e && e.data;
-    if (!d || d.type !== TYPE || typeof d.css !== 'string') return;
-    var el = document.getElementById(ID);
-    if (!el) { el = document.createElement('style'); el.id = ID; document.head.appendChild(el); }
-    el.textContent = d.css;
+    if (!d) return;
+    if (d.type === THEME && typeof d.css === 'string') {
+      var el = document.getElementById(ID);
+      if (!el) { el = document.createElement('style'); el.id = ID; document.head.appendChild(el); }
+      el.textContent = d.css;
+    }
   });
 })();`;
+}
 
 /** Bakes the theme, the style kit and the bootstrap into a page document so
  *  the first paint is already in the live theme. Inserted at the top of
  *  <head> so the page's own styles still win on a tie. */
-export function prepareHostedDocument(html: string, themeCss: string, kitCss: string): string {
+export function prepareHostedDocument(html: string, themeCss: string, kitCss: string, data: unknown = null): string {
+  // `</script>` inside the data would end the script early; escape the one
+  // sequence that matters in a JSON literal placed in a script.
+  const dataJson = JSON.stringify(data ?? null).replace(/<\//g, '<\\/');
   const head =
     `<style id="${PAGE_THEME_STYLE_ID}">${themeCss}</style>` +
     `<style id="youcoded-kit">${kitCss}</style>` +
-    `<script>${BOOTSTRAP}</script>`;
+    `<script>${bootstrap(dataJson)}</script>`;
   const m = /<head[^>]*>/i.exec(html);
   if (m) return html.slice(0, m.index + m[0].length) + head + html.slice(m.index + m[0].length);
   const h = /<html[^>]*>/i.exec(html);

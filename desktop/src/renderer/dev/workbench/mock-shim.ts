@@ -201,7 +201,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // YouCoded Pages (Phase 1 shell) — designed ahead of the backend; mock-only.ts
   // carries the four rows. The fake keeps pin state for the tab's lifetime so the
   // header's pinned buttons follow the library's pin toggles.
-  'pages.list', 'pages.get', 'pages.setPinned', 'pages.onChanged',
+  'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -3041,7 +3041,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
 function createPagesMock(empty: boolean): PagesBridge {
   let pages: PageDocument[] = empty ? [] : seedPages();
   const subs = new Set<(p: PageSummary[]) => void>();
-  const summaries = () => pages.map(({ html: _html, ...rest }) => rest);
+  const summaries = () => pages.map(({ html: _html, data: _data, ...rest }) => rest);
   const publish = () => subs.forEach((cb) => cb(summaries()));
   return {
     list: async () => summaries(),
@@ -3055,6 +3055,13 @@ function createPagesMock(empty: boolean): PagesBridge {
       pages = pages.map((p) => (p.id === id ? { ...p, pinned } : p));
       publish();
       return summaries();
+    },
+    // Page data lives for the tab: reopen the page and it is still there, which
+    // is exactly what the real store gives across app restarts and devices.
+    setData: async (id, data) => {
+      if (!pages.some((p) => p.id === id)) return { ok: false, message: 'This page is no longer in your library.' };
+      pages = pages.map((p) => (p.id === id ? { ...p, data } : p));
+      return { ok: true };
     },
     onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
   };

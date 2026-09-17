@@ -414,6 +414,12 @@ const IPC = {
   CHATGPT_SIGN_IN: 'chatgpt:sign-in',
   CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
   CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
+  // YouCoded Pages (Phase 1) — mirrors shared/types.ts; pinned equal by ipc-channels.test.ts.
+  PAGES_LIST: 'pages:list',
+  PAGES_GET: 'pages:get',
+  PAGES_SET_PINNED: 'pages:set-pinned',
+  PAGES_SET_DATA: 'pages:set-data',
+  PAGES_CHANGED: 'pages:changed',
   // Claude Code's own sign-in, read live (2026-09-09) — mirrors shared/types.ts.
   CLAUDE_CODE_STATUS: 'claude-code:status',
   CLAUDE_CODE_INSTALL: 'claude-code:install',
@@ -1816,6 +1822,19 @@ contextBridge.exposeInMainWorld('claude', {
       const handler = (_e: any, payload: any) => cb(payload);
       ipcRenderer.on('artifacts:changed', handler);
       return () => ipcRenderer.removeListener('artifacts:changed', handler);
+    },
+  },
+  // YouCoded Pages (Phase 1): the library, pins, a page's document + data,
+  // and the change push. Shape: shared/pages-types.ts PagesBridge.
+  pages: {
+    list: () => ipcRenderer.invoke(IPC.PAGES_LIST),
+    get: (id: string) => ipcRenderer.invoke(IPC.PAGES_GET, id),
+    setPinned: (id: string, pinned: boolean) => ipcRenderer.invoke(IPC.PAGES_SET_PINNED, id, pinned),
+    setData: (id: string, data: unknown) => ipcRenderer.invoke(IPC.PAGES_SET_DATA, id, data),
+    onChanged: (cb: (pages: any[]) => void) => {
+      const handler = (_e: any, pages: any[]) => cb(pages);
+      ipcRenderer.on(IPC.PAGES_CHANGED, handler);
+      return () => ipcRenderer.removeListener(IPC.PAGES_CHANGED, handler);
     },
   },
   git: {

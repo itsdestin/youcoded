@@ -17,6 +17,7 @@ import { readFileHead } from './fs-read-head';
 // Games arcade scores — remote browsers share the desktop's operations and
 // its stale-board cache (main/arcade-handlers.ts).
 import { getArcadeOps } from './arcade-handlers';
+import { getPagesService } from './pages/pages-service';
 // Shared cap so a local folder's description (set via a remote browser client)
 // can't drift from the synced registry's limit — same constant project-registry.ts
 // and ipc-handlers.ts use.
@@ -1998,6 +1999,32 @@ export class RemoteServer {
       // search:test is never-throws — { ok, message } is the result.
       case 'search:list': {
         this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.searchKeyStore.list() : []);
+        break;
+      }
+      // YouCoded Pages (Phase 1). The service is the same one the desktop
+      // windows use; a phone over remote access sees the same library.
+      case 'pages:list': {
+        try { this.respond(client.ws, type, id, await getPagesService()?.store.list() ?? []); }
+        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
+        break;
+      }
+      case 'pages:get': {
+        try {
+          const svc = getPagesService();
+          this.respond(client.ws, type, id, svc ? await svc.store.get(String(payload?.id ?? '')) : { ok: false, failure: { kind: 'unreadable', message: 'Pages are not available on this host.' } });
+        } catch (err: any) { this.respond(client.ws, type, id, { ok: false, failure: { kind: 'unreadable', message: err?.message ?? String(err) } }); }
+        break;
+      }
+      case 'pages:set-pinned': {
+        try { this.respond(client.ws, type, id, await getPagesService()?.store.setPinned(String(payload?.id ?? ''), !!payload?.pinned) ?? []); }
+        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
+        break;
+      }
+      case 'pages:set-data': {
+        try {
+          const svc = getPagesService();
+          this.respond(client.ws, type, id, svc ? await svc.store.setData(String(payload?.id ?? ''), payload?.data) : { ok: false, message: 'Pages are not available on this host.' });
+        } catch (err: any) { this.respond(client.ws, type, id, { ok: false, message: err?.message ?? String(err) }); }
         break;
       }
       case 'search:set-key': {

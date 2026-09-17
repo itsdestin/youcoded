@@ -137,6 +137,8 @@ import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 // handlers, which mutate and write back, keep the private readSidecar.
 import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArtifact, removeArtifactRecord } from './artifacts/artifact-store';
 import { listProjects, removeProject } from './artifacts/central-index';
+import { initPagesService, getPagesService } from './pages/pages-service';
+import { getMachineIdentity } from './device-identity';
 // Shared with remote-server.ts — see that module's header for why these left
 // this file (they were closures, so the remote transport could not reach them).
 import { countArtifacts, listProjectsIndex } from './artifacts/projects-index';
@@ -4843,7 +4845,31 @@ export function registerIpcHandlers(
     // filters on its own projectRoot, so an unrelated root costs one dropped
     // message.
     remoteServer?.broadcast({ type: ARTIFACT_IPC.CHANGED, payload: evt });
+    // A change under a known project's Pages/ is a pages change too (F8).
+    getPagesService()?.onProjectChange(evt);
   });
+
+  // ── YouCoded Pages (Phase 1) ──
+  // One store over the Personal space's Pages/ and every known project's
+  // Pages/; one debounced push with the fresh list to every window and to
+  // remote clients. Design: youcoded-dev docs/active/specs/2026-09-17-youcoded-pages-phase1-technical-design.md
+  const pagesService = initPagesService({
+    personalRoot: () => getManagedRoots()?.personalRoot ?? null,
+    listProjects: async () => (await listProjects(CLAUDE_DIR)).map((p) => ({ name: path.basename(p.path), path: p.path })),
+    // The BUILT app's identity, like main.ts: a dev instance shares it and the
+    // live app's pins (PITFALLS → Shared state); null → local, unsynced pins.
+    deviceId: () => getMachineIdentity(app.getPath('userData'))?.id ?? null,
+    localFallbackDir: () => app.getPath('userData'),
+    noteOwnWrite,
+    broadcast: (pages) => {
+      webContents.getAllWebContents().forEach((wc) => wc.send(IPC.PAGES_CHANGED, pages));
+      remoteServer?.broadcast({ type: IPC.PAGES_CHANGED, payload: pages });
+    },
+  });
+  ipcMain.handle(IPC.PAGES_LIST, async () => { pagesService.ensureWatching(); return pagesService.store.list(); });
+  ipcMain.handle(IPC.PAGES_GET, async (_e, id: string) => pagesService.store.get(String(id ?? '')));
+  ipcMain.handle(IPC.PAGES_SET_PINNED, async (_e, id: string, pinned: boolean) => pagesService.store.setPinned(String(id ?? ''), !!pinned));
+  ipcMain.handle(IPC.PAGES_SET_DATA, async (_e, id: string, data: unknown) => pagesService.store.setData(String(id ?? ''), data));
   // A crashed/closed renderer never sends unwatch — drop its refs on destroy so
   // it cannot pin a watcher forever. One listener per webContents, attached on
   // its first subscribe.

@@ -20,6 +20,8 @@ export type PageIcon =
   | 'page' | 'timer' | 'notes' | 'paint' | 'chart' | 'calendar' | 'list' | 'game';
 
 export interface PageSummary {
+  /** `personal:<slug>` or `project:<project name>:<slug>` — the same on every
+   *  device, so a synced pin matches (design review F3). */
   id: string;
   name: string;
   /** One line, shown on the card under the name. */
@@ -28,15 +30,25 @@ export interface PageSummary {
   home: PageHome;
   /** Pinned pages get their own icon beside Projects. Per device. */
   pinned: boolean;
-  /** ISO timestamp of the last applied version. */
+  /** ISO timestamp of the last change to the page's manifest or document. */
   updatedAt: string;
+  /** Changes only when `page.html` is rewritten — never on a data save — so
+   *  the host reloads the frame on an edit and not on the page's own saving
+   *  (design review F7). Milliseconds. */
+  htmlStamp: number;
 }
 
 /** A page's working version, ready to show. `html` is a complete document;
- *  the host injects the theme and the style kit before it is framed. */
+ *  the host injects the theme, the style kit and `data` before it is framed. */
 export interface PageDocument extends PageSummary {
   html: string;
+  /** The page's own saved data, folded; null when it has never saved. */
+  data: unknown | null;
 }
+
+/** Largest `data.json` the host will write, checked in the renderer before
+ *  posting and in main before writing (design review F4). */
+export const MAX_PAGE_DATA_BYTES = 1_000_000;
 
 /** Why a page could not be shown. Specific and accurate when known
  *  (docs/error-message-standards.md); the host never invents a cause. */
@@ -48,8 +60,12 @@ export interface PagesBridge {
   list: () => Promise<PageSummary[]>;
   get: (id: string) => Promise<{ ok: true; page: PageDocument } | { ok: false; failure: PageLoadFailure }>;
   setPinned: (id: string, pinned: boolean) => Promise<PageSummary[]>;
-  /** Fires with the fresh list whenever a page is added, applied, renamed,
-   *  pinned or removed. Returns the unsubscribe. */
+  /** Writes the page's own data beside it (`data.json`, later save wins).
+   *  Refused over MAX_PAGE_DATA_BYTES or for an unknown page. */
+  setData: (id: string, data: unknown) => Promise<{ ok: true } | { ok: false; message: string }>;
+  /** Fires with the fresh list whenever a page is added, rewritten, renamed,
+   *  pinned or removed — on this device or arriving by sync. Returns the
+   *  unsubscribe. */
   onChanged: (cb: (pages: PageSummary[]) => void) => () => void;
 }
 

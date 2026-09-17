@@ -2089,6 +2089,12 @@ export const IPC = {
   SEARCH_SET_KEY: 'search:set-key',
   SEARCH_REMOVE_KEY: 'search:remove-key',
   SEARCH_TEST: 'search:test',
+  // ---- YouCoded Pages (Phase 1) — shared/pages-types.ts PagesBridge ----
+  PAGES_LIST: 'pages:list',
+  PAGES_GET: 'pages:get',
+  PAGES_SET_PINNED: 'pages:set-pinned',
+  PAGES_SET_DATA: 'pages:set-data',
+  PAGES_CHANGED: 'pages:changed',
   // ---- Remembered "Always allow" rules (M5 2a: permissions management UI) ----
   // list = every project's stored grants; remove/remove-project revoke them.
   // Keyed by PROJECT SLUG, not cwd — permissions.json never stored the cwd for

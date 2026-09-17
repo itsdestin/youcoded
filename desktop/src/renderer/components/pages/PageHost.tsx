@@ -44,11 +44,11 @@ import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { CaptionButtons, MacTrafficLights, showCaptionButtons } from '../HeaderBar';
 import type { PageDocument, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
-import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
+import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned } from './use-pages';
 import { PAGE_KIT_CSS } from './page-kit';
-import { PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
+import { PAGE_DATA_SET_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
 
 
 type Load =
@@ -72,6 +72,9 @@ export function PageHost() {
   const { pages } = usePages();
   const summary = pages.find((p) => p.id === pageId) ?? null;
   const pinnedCount = pages.filter((p) => p.pinned).length;
+  // The frame reloads when page.html was rewritten (the stamp moves) and not
+  // when the page saved its own data (it does not) — review F7.
+  const htmlStamp = summary?.htmlStamp ?? 0;
   // Hidden by default, everywhere (Destin, 2026-09-17: "lets just always default to hidden").
   const [railOpen, setRailOpen] = useState(false);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -79,10 +82,11 @@ export function PageHost() {
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const frameRef = useRef<HTMLIFrameElement>(null);
 
-  // Fetch the working version when the open page changes. The document is
-  // prepared ONCE here, with the theme of that moment; later theme changes go
-  // through postMessage below rather than a new srcDoc (which would reload
-  // the page and lose its state).
+  // Fetch the working version when the open page changes or its document was
+  // rewritten. The document is prepared ONCE here, with the theme and the
+  // saved data of that moment; later theme changes go through postMessage
+  // below rather than a new srcDoc (which would reload the page and lose its
+  // state).
   useEffect(() => {
     if (pageId === null) return;
     let cancelled = false;
@@ -94,13 +98,43 @@ export function PageHost() {
     }
     bridge.get(pageId).then((r) => {
       if (cancelled) return;
-      if (r.ok) setLoad({ state: 'ready', page: r.page, doc: prepareHostedDocument(r.page.html, readThemeCss(), PAGE_KIT_CSS) });
+      if (r.ok) setLoad({ state: 'ready', page: r.page, doc: prepareHostedDocument(r.page.html, readThemeCss(), PAGE_KIT_CSS, r.page.data) });
       else setLoad({ state: 'failed', failure: r.failure });
     }, () => {
       if (!cancelled) setLoad({ state: 'failed', failure: { kind: 'unreadable', message: 'The page could not be read.' } });
     });
     return () => { cancelled = true; };
-  }, [pageId]);
+  }, [pageId, htmlStamp]);
+
+  // Saves from the page. Only THIS frame may write this page's data: every
+  // sandboxed frame in the app has origin 'null' (HtmlView's artifact previews
+  // use the same sandbox), so a type-only filter would let a previewed file
+  // write page data — the check is e.source (review F4). Debounced so a page
+  // that saves on every keystroke writes once per pause; last write wins.
+  useEffect(() => {
+    if (load.state !== 'ready' || pageId === null) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let pending: unknown = undefined;
+    const flush = () => {
+      timer = null;
+      if (pending === undefined) return;
+      const data = pending; pending = undefined;
+      const bridge = (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
+      void bridge?.setData(pageId, data);
+    };
+    const onMessage = (e: MessageEvent) => {
+      if (e.source !== frameRef.current?.contentWindow) return;
+      const d = e.data as { type?: unknown; data?: unknown } | null;
+      if (!d || d.type !== PAGE_DATA_SET_MESSAGE) return;
+      let size = 0;
+      try { size = JSON.stringify(d.data ?? null).length; } catch { return; }
+      if (size > MAX_PAGE_DATA_BYTES) return; // main refuses it too; no point posting
+      pending = d.data ?? null;
+      if (timer === null) timer = setTimeout(flush, 500);
+    };
+    window.addEventListener('message', onMessage);
+    return () => { window.removeEventListener('message', onMessage); if (timer !== null) { clearTimeout(timer); flush(); } };
+  }, [load.state, pageId]);
 
   // Live theme: watch the host document and post the fresh tokens in.
   useEffect(() => {
