@@ -43,16 +43,16 @@ export default function InstallFavoriteCorner({
     // WHY <BrailleSpinner> (simplification audit W20): this used to carry its
     // own 80 ms timer and frame list — one timer per in-flight install — while
     // BrailleSpinner already drives every spinner off ONE shared tick. Same
-    // glyphs, same 80 ms cadence; colorCycle off gives the steady single
-    // colour every other non-cycling spinner uses (fg-dim) — the old copy was
-    // text-accent, the one visible nuance of this swap.
+    // glyphs, same 80 ms cadence, and className pins the same text-accent
+    // colour the old copy had (the spinner's default colours come from the
+    // theme cycle, which never lands on accent steadily).
     return (
       <span
         role="status"
         aria-label="Installing"
         className={`${place} p-1 rounded-md font-mono leading-none select-none`}
       >
-        <BrailleSpinner size="sm" colorCycle={false} />
+        <BrailleSpinner size="sm" colorCycle={false} className="text-accent" />
       </span>
     );
   }

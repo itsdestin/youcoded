@@ -73,6 +73,13 @@ interface Props {
   size?: 'xs' | 'sm' | 'base' | 'lg';
   /** Whether to cycle through colors (default true) */
   colorCycle?: boolean;
+  /** Extra classes on the glyph. WHY (audit W20): a caller that needs a colour
+   *  the theme cycle does not offer (the marketplace install corner is
+   *  text-accent) passes it here — and because the default colour is an INLINE
+   *  style, which would beat any class, giving a className also switches the
+   *  inline colour off so the class decides. Omitted = the look every other
+   *  caller has always had; colorCycle is ignored while a className is set. */
+  className?: string;
 }
 
 const sizeClass: Record<string, string> = {
@@ -82,14 +89,15 @@ const sizeClass: Record<string, string> = {
   lg: 'text-lg',
 };
 
-export default function BrailleSpinner({ size = 'sm', colorCycle = true }: Props) {
+export default function BrailleSpinner({ size = 'sm', colorCycle = true, className }: Props) {
   useSyncExternalStore(subscribe, getVersion);
 
   return (
     <span
-      className={`${sizeClass[size]} leading-none shrink-0 inline-block text-center`}
+      className={`${sizeClass[size]} leading-none shrink-0 inline-block text-center${className ? ` ${className}` : ''}`}
       style={{
-        color: colorCycle ? getThemeColors()[colorIndex] : getThemeColors()[0],
+        // See Props.className: a class-driven colour only works if this inline one steps aside.
+        ...(className ? {} : { color: colorCycle ? getThemeColors()[colorIndex] : getThemeColors()[0] }),
         width: '1em',  // Fixed width prevents layout reflow from variable-width braille glyphs
       }}
     >
