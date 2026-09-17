@@ -3,10 +3,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
 import { Dialog, DIALOG_WIDTHS, DIALOG_MAX_HEIGHTS } from '../src/renderer/components/ui/Dialog';
-import { inScopeFiles, RENDERER, assertScopeIsPopulated } from './helpers/guard-scope';
 
 // Guard for D1 — the one dialog shell.
 //
@@ -139,101 +136,9 @@ describe('Dialog shell', () => {
 
 // ── The adoption guard ──────────────────────────────────────────────────────
 //
-// Source-text, unlike the render assertions above: the failure mode is a future
-// session hand-rolling createPortal + Scrim + OverlayPanel in a NEW file, which
-// looks fine and only shows up as another bespoke width months later. 49 files
-// did exactly that against 7 using the old shell.
-//
-// SCOPE. The first version of this guard read only `components/*.tsx`, which
-// could not see App.tsx or ANY subdirectory -- so it could not enforce even the
-// scope the plan declared (which named `ui/` and `development/`). Two App-level
-// confirms and all three development popups were sitting outside it, unmigrated
-// and unflagged. Scope is now explicit and walked, not implied by a glob.
-//
-// IN: App.tsx, components/*.tsx, components/development, components/ui.
-// OUT (recorded residue, different surfaces with their own visual language):
-// marketplace, project-view, game, git, tags, context-menu, buddy.
-
-
-
-// Named, with the reason each is NOT a dialog. An exemption you cannot see is
-// how the inconsistency this test exists to stop got in.
-//
-// This list started with FOUR entries and two of them were wrong. SyncPanel and
-// QuickChips were both written off as "anchored popover positioned against its
-// trigger" on the strength of `className="fixed ..."` alone -- but their style
-// objects said `top: 50%, left: 50%, transform: translate(-50%, -50%)`. They
-// were centered modals with bespoke widths (520px, 420px) and, in SyncPanel's
-// case, exactly the fixed height the shell exists to ban.
-//
-// The lesson is not "check twice". It is that an exemption written with a
-// confident-sounding reason is MORE dangerous than a bare one: the reason is
-// what stops the next reader from re-deriving it. Anything added here needs
-// evidence from the element's computed position, not from a class string.
-const NOT_DIALOGS: Record<string, string> = {
-  'ResumeBrowser.tsx': 'L1 drawer — layer={1}, slides from the edge, never centered',
-  'ZoomOverlay.tsx': 'L4 system indicator pinned top-right (fixed top-16 right-4), no scrim',
-  // components/ui primitives that own an OverlayPanel for a NON-dialog surface.
-  'AnchorTip.tsx': 'tooltip anchored to its trigger via computed coordinates',
-  'Select.tsx': 'dropdown list anchored under its trigger',
-  'Toast.tsx': 'transient notification docked to a screen edge, no scrim',
-  // Evidence, not a class string: ZoomPill sets NO position of its own — it has
-  // no `fixed`/`absolute`, no top/left, and no transform anywhere in the file.
-  // Its one caller (ImageView) anchors it `absolute top-2 left-2` inside the
-  // viewer's own relative box. Corner-anchored, no scrim, never centered, never
-  // modal — the same shape as ZoomOverlay above, which it shares its look with.
-  'ZoomPill.tsx': 'in-pane zoom control anchored to a corner by its caller, no scrim',
-  // Evidence, not a class string: the wrapper's top/left come from
-  // getBoundingClientRect() of the [data-view-toggle] element, there is no
-  // translate(-50%, -50%) anywhere in the file, and it renders no <Scrim>. Same
-  // shape as AnchorTip above — a bubble pinned to a control it points at.
-  'ViewToggleHint.tsx': 'coach mark anchored to the chat/terminal toggle via computed coordinates',
-  // Evidence, not a class string: `pos` comes from getBoundingClientRect() of the
-  // mic button (its own triggerRef), the transform is translate(-100%, -100%) — up
-  // from the trigger's top edge, never -50%/-50% — and the file renders no <Scrim>.
-  // The same shape as AnchorTip and ViewToggleHint: a bubble pinned above the
-  // control it belongs to (the first-run download card, the download progress,
-  // the "no microphone" reason).
-  'VoiceButton.tsx': 'first-run / download / no-mic card anchored above the mic via computed coordinates',
-  // Evidence, not a class string: position comes from placeBubble() against the
-  // trigger's own getBoundingClientRect(), it is written as plain left/top with
-  // no translate anywhere in the file, and it renders no <Scrim> — it is
-  // `pointer-events-none`, so it cannot even be clicked. The same shape as
-  // AnchorTip, whose positioning it shares: a bubble pinned to the control it
-  // describes.
-  'Tooltip.tsx': 'hover hint anchored to its control via computed coordinates',
-};
-
-describe('dialog shell adoption', () => {
-  it('this guard can see what it claims to cover', () => {
-    // A source-text guard that matches nothing PASSES and reads as clean.
-    // Three of this workstream's worst misses were exactly that.
-    assertScopeIsPopulated(inScopeFiles());
-  });
-
-  it('nothing in scope hand-rolls the shell', () => {
-    const offenders = inScopeFiles()
-      .filter((p) => !(p.split(/[\\/]/).pop()! in NOT_DIALOGS))
-      .filter((p) => !p.endsWith(join('ui', 'Dialog.tsx')))
-      .filter((p) => readFileSync(p, 'utf8').includes('<OverlayPanel'))
-      .map((p) => p.replace(RENDERER, ''));
-    expect(
-      offenders,
-      'Centered modals go through <Dialog>. It owns scrim, centering, the width '
-        + 'ladder, the header and the scroll body — the last of which two of the old '
-        + "shell's seven callers got wrong, producing dialogs that clipped with no way to scroll.",
-    ).toEqual([]);
-  });
-
-  it('every exempted file still exists and still hand-rolls', () => {
-    // An exemption is a liability once it stops being true: if one of these is
-    // migrated or deleted, this list should shrink rather than quietly rot.
-    const byName = new Map(inScopeFiles().map((p) => [p.split(/[\\/]/).pop()!, p]));
-    for (const [file, why] of Object.entries(NOT_DIALOGS)) {
-      const abs = byName.get(file);
-      expect(abs, `${file} is exempted but no longer in scope — drop it`).toBeTruthy();
-      const src = readFileSync(abs!, 'utf8');
-      expect(src.includes('<OverlayPanel'), `${file} (${why}) no longer hand-rolls — drop it from NOT_DIALOGS`).toBe(true);
-    }
-  });
-});
+// WHY no source-text cases here any more (Plan B, 2026-09-16): "nothing in scope
+// hand-rolls the shell" and "every exempted file still exists and still
+// hand-rolls" are now the ast-grep rules no-hand-rolled-dialog-shell and
+// no-hand-rolled-dialog-shell-exemption-still-applies (youcoded-dev
+// scripts/ast-grep/rules/), which carry the scope and the NOT_DIALOGS
+// exemptions this file used to hold.
