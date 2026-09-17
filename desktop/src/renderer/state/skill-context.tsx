@@ -11,6 +11,11 @@ interface SkillState {
    *  `installed` is [] both when nothing is installed and when loading failed — this is
    *  the only way a screen can tell those apart. */
   loadError: string | null;
+  /** True until the first load (or a retry) has settled. WHY (2026-09-16 audit W17):
+   *  the marketplace used to fetch its own copy of `installed` and carried its own
+   *  loading flag; now that it reads this one, the Library's "loading your plugins"
+   *  state needs to know when THIS list is still on its way. */
+  loading: boolean;
 }
 
 interface SkillActions {
@@ -46,6 +51,7 @@ export function SkillProvider({ children }: { children: ReactNode }) {
   const [chips, setChipsState] = useState<ChipConfig[]>([]);
   const [drawerCommands, setDrawerCommands] = useState<CommandEntry[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   // Fetch slash commands separately from skills — the remote-shim exposes
   // window.claude.commands only when the server supports it, so guard the
@@ -98,9 +104,12 @@ export function SkillProvider({ children }: { children: ReactNode }) {
     }).catch((err) => {
       console.error('[SkillContext] Failed to load:', err);
       setLoadError(plainMessage(err));
-    });
+    }).finally(() => setLoading(false));
   }, []);
   useEffect(() => { load(); }, [load]);
+  // Only a Retry announces itself as loading again; the silent re-run after a
+  // remote reconnect keeps whatever is on screen.
+  const retryLoad = useCallback(() => { setLoading(true); load(); }, [load]);
   // Both again after a remote reconnect: a read lost during a drop left "No skills installed
   // yet" and a / menu with no commands until the page reloaded (2026-09-11 phone pass sweep).
   // Re-running the seeding is safe: it skips every id already recorded in SEEDED_KEY.
@@ -140,11 +149,11 @@ export function SkillProvider({ children }: { children: ReactNode }) {
   const publish = useCallback((id: string) => window.claude.skills.publish(id), []);
 
   const value = useMemo<SkillContextValue>(() => ({
-    installed, favorites, chips, loadError, drawerSkills, drawerCommands,
-    refreshInstalled, retryLoad: load, setFavorite: setFavoriteAction, setChips: setChipsAction,
+    installed, favorites, chips, loadError, loading, drawerSkills, drawerCommands,
+    refreshInstalled, retryLoad, setFavorite: setFavoriteAction, setChips: setChipsAction,
     setOverride: setOverrideAction, getShareLink, publish,
-  }), [installed, favorites, chips, loadError, drawerSkills, drawerCommands,
-       refreshInstalled, load, setFavoriteAction, setChipsAction, setOverrideAction,
+  }), [installed, favorites, chips, loadError, loading, drawerSkills, drawerCommands,
+       refreshInstalled, retryLoad, setFavoriteAction, setChipsAction, setOverrideAction,
        getShareLink, publish]);
 
   return <SkillContext.Provider value={value}>{children}</SkillContext.Provider>;

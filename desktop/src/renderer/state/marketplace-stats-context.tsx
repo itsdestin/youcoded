@@ -6,6 +6,11 @@
 // in a module-level ref for 5 minutes. A provider re-mount within that window
 // serves the cached value without a network round-trip. A full page reload clears
 // the cache (module is reloaded), which is an acceptable tradeoff for the TTL.
+//
+// WHY the fetch waits for a consumer (2026-09-16 audit W16): the provider sits
+// at the app root and used to request /stats on mount — one HTTP round-trip
+// at every launch for cards that live only in the marketplace screen. The
+// first useMarketplaceStats() caller starts it; the TTL cache is unchanged.
 
 import React, {
   createContext,
@@ -37,6 +42,8 @@ interface Ctx {
    *  the card you just voted on keeps its old percentage. The vote routes hand
    *  the fresh totals back with the response; this is where they land. */
   applyThumbs(pluginId: string, thumbsUp: number, thumbsDown: number): void;
+  /** Start the first fetch (or serve the cache) if no consumer has asked yet. */
+  ensureLoaded(): void;
 }
 
 const MarketplaceStatsContext = createContext<Ctx | null>(null);
@@ -124,8 +131,11 @@ export function MarketplaceStatsProvider({
     }
   }, [onNetworkResult]);
 
-  // Fetch on mount (or serve from cache if fresh)
-  useEffect(() => {
+  // Fetch (or serve from cache if fresh) on the first consumer, not on mount.
+  const demanded = useRef(false);
+  const ensureLoaded = useCallback(() => {
+    if (demanded.current) return;
+    demanded.current = true;
     void fetchStats(false);
   }, [fetchStats]);
 
@@ -150,8 +160,8 @@ export function MarketplaceStatsProvider({
   }, []);
 
   const value = useMemo<Ctx>(
-    () => ({ loading, plugins, themes, refresh, applyThumbs }),
-    [loading, plugins, themes, refresh, applyThumbs]
+    () => ({ loading, plugins, themes, refresh, applyThumbs, ensureLoaded }),
+    [loading, plugins, themes, refresh, applyThumbs, ensureLoaded]
   );
 
   return (
@@ -170,6 +180,9 @@ export function useMarketplaceStats(): Ctx {
       "useMarketplaceStats must be used inside <MarketplaceStatsProvider>"
     );
   }
+  // The consumer is the demand — see the header.
+  const { ensureLoaded } = ctx;
+  useEffect(() => { ensureLoaded(); }, [ensureLoaded]);
   return ctx;
 }
 
