@@ -4,7 +4,7 @@
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
-import TerminalView from './components/TerminalView';
+import { SessionTerminal } from './components/SessionTerminal';
 import ChatView from './components/ChatView';
 import HeaderBar, { BareHeaderBar } from './components/HeaderBar';
 import InputBar, { type InputBarHandle } from './components/InputBar';
@@ -3665,8 +3665,8 @@ function AppInner() {
                     />
                   </ErrorBoundary>
                   <ErrorBoundary name="Terminal">
-                    <TerminalView
-                      sessionId={s.id}
+                    {/* A native session's terminal mounts on its first switch to terminal view (audit W15). */}
+                    <SessionTerminal sessionId={s.id} provider={s.provider}
                       visible={s.id === sessionId && currentViewMode === 'terminal'}
                     />
                   </ErrorBoundary>
