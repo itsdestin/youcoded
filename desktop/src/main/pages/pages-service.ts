@@ -30,27 +30,54 @@ class PagesService {
   }
 
   /** Start (or re-point) the Personal watcher. Safe to call again: the
-   *  Personal root can appear after sync spaces turn on. */
+   *  Personal root can appear after sync spaces turn on. The watch is on the
+   *  Personal ROOT with everything but Pages/ ignored, because Pages/ itself
+   *  usually does not exist until the first page is made and a watch on a
+   *  missing folder never fires (found 2026-09-17). */
   ensureWatching(): void {
     const personal = this.deps.personalRoot();
-    const root = personal ? path.join(personal, PAGES_DIR) : null;
-    if (root === this.watchedRoot) return;
+    if (personal === this.watchedRoot) return;
     void this.watcher?.close().catch(() => {});
     this.watcher = null;
-    this.watchedRoot = root;
-    if (!root) return;
+    this.watchedRoot = personal;
+    if (!personal) return;
+    const pagesRoot = path.join(personal, PAGES_DIR);
     try {
       // Same shape as project-watcher.ts: wait for writes to settle so a page
-      // the skill is still writing is not listed half-done. depth 3 covers
-      // Pages/<slug>/<file> and the .pins folder. Watching a folder that does
-      // not exist yet is fine: chokidar picks it up when it appears.
-      this.watcher = chokidar.watch(root, {
-        ignoreInitial: true, followSymlinks: false, depth: 3,
+      // the skill is still writing is not listed half-done. depth 4 covers
+      // Personal/Pages/<slug>/<file> and the .pins folder.
+      this.watcher = chokidar.watch(personal, {
+        ignoreInitial: true, followSymlinks: false, depth: 4,
+        ignored: (p: string) => p !== personal && p !== pagesRoot && !p.startsWith(pagesRoot + path.sep),
         awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
       });
       this.watcher.on('all', () => this.schedule());
       this.watcher.on('error', () => { /* degrade to list()-on-demand, never throw */ });
     } catch { this.watcher = null; }
+  }
+
+  /** Watch a project's Pages/ directly once it exists. The project watcher
+   *  (review F8) only runs while a window has that project's files open, so a
+   *  page made in a folder nobody is browsing would never announce itself. One
+   *  small watcher per project that actually has pages (found 2026-09-17). */
+  private projectWatchers = new Map<string, FSWatcher>();
+  ensureProjectPagesWatched(projectPaths: string[]): void {
+    const wanted = new Set(projectPaths.map((p) => path.join(p, PAGES_DIR)));
+    for (const [root, w] of this.projectWatchers) {
+      if (!wanted.has(root)) { void w.close().catch(() => {}); this.projectWatchers.delete(root); }
+    }
+    for (const root of wanted) {
+      if (this.projectWatchers.has(root)) continue;
+      try {
+        const w = chokidar.watch(root, {
+          ignoreInitial: true, followSymlinks: false, depth: 2,
+          awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
+        });
+        w.on('all', () => this.schedule());
+        w.on('error', () => {});
+        this.projectWatchers.set(root, w);
+      } catch { /* degrade to list()-on-demand */ }
+    }
   }
 
   /** From the project watcher (ipc-handlers' existing sink): a change under a
@@ -64,8 +91,18 @@ class PagesService {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.store.list().then((pages) => this.deps.broadcast(pages)).catch(() => {});
+      void this.listAndWatch().then((pages) => this.deps.broadcast(pages)).catch(() => {});
     }, DEBOUNCE_MS);
+  }
+
+  /** list() plus keeping the per-project watchers in step with the projects
+   *  that have a Pages/ folder right now. */
+  async listAndWatch(): Promise<PageSummary[]> {
+    const pages = await this.store.list();
+    const roots = new Set<string>();
+    for (const p of pages) if (p.home.kind === 'project') roots.add(p.home.path);
+    this.ensureProjectPagesWatched([...roots]);
+    return pages;
   }
 
   stop(): void {
@@ -73,6 +110,8 @@ class PagesService {
     void this.watcher?.close().catch(() => {});
     this.watcher = null;
     this.watchedRoot = null;
+    for (const w of this.projectWatchers.values()) void w.close().catch(() => {});
+    this.projectWatchers.clear();
   }
 }
 

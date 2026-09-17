@@ -46,7 +46,7 @@ import { CaptionButtons, MacTrafficLights, showCaptionButtons } from '../HeaderB
 import type { PageDocument, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
-import { usePages, setPagePinned } from './use-pages';
+import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PAGE_KIT_CSS } from './page-kit';
 import { PAGE_DATA_SET_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
 
@@ -91,6 +91,7 @@ export function PageHost() {
     if (pageId === null) return;
     let cancelled = false;
     setLoad({ state: 'loading' });
+    void refreshPages();
     const bridge = (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
     if (!bridge) {
       setLoad({ state: 'failed', failure: { kind: 'unreadable', message: 'Pages are not available in this window.' } });

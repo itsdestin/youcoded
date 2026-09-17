@@ -11,14 +11,14 @@
 // Personal pages and project pages are grouped under eyebrows (G-7) rather
 // than filtered, so a person sees both at once and the project name on each
 // card says which folder owns it (scope §1: explicit source bindings).
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, CloseButton, LoadingState, ErrorState, Tooltip } from '../ui';
 import type { PageSummary } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
-import { usePages, setPagePinned } from './use-pages';
+import { usePages, setPagePinned, refreshPages } from './use-pages';
 
 interface PagesViewProps {
   /** Starts the creator: a new conversation that builds a page. Owned by
@@ -34,6 +34,8 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const open = state.pagesViewOpen;
   useEscClose(open, () => dispatch({ type: 'PAGES_VIEW_CLOSED' }));
   const { pages, loaded, failed } = usePages();
+  // Fresh list on every open (see refreshPages).
+  useEffect(() => { if (open) void refreshPages(); }, [open]);
   if (!open) return null;
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });
