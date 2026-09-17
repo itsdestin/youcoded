@@ -17,6 +17,7 @@ import { isPlaceholderModelId } from '../shared/model-ids';
 import { hasRealTitle } from '../shared/session-title';
 import { setPermissionOverrides, forgetSessionAttention } from './main';
 import { LocalSkillProvider } from './skill-provider';
+import { getJsonPath, setJsonPath } from './safe-json-path';
 import { CommandProvider } from './command-provider';
 import { IntegrationInstaller, listWithState } from './integration-installer';
 import { RemoteConfig, MIN_REMOTE_PASSWORD_LENGTH } from './remote-config';
@@ -1294,12 +1295,31 @@ export function registerIpcHandlers(
   // Field names follow Claude Code's own schema (e.g., 'editorMode', 'defaultMode').
   const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
 
+  // WHY a parse memo (simplification audit W10, 2026-09-16): the Preferences
+  // popup asks for six fields in one tick, and each ask re-read and re-parsed
+  // the same file. The parse is keyed on the file's (mtimeMs, size) so any
+  // writer — this handler, the remote-server twin, Claude Code itself — is
+  // seen on the next read without anyone having to tell us. The cached object
+  // is never handed out or mutated: readers walk it with getJsonPath, and the
+  // writer below re-reads the file rather than editing the memo in place.
+  let settingsMemo: { mtimeMs: number; size: number; parsed: unknown } | null = null;
+  const readClaudeSettings = (): unknown => {
+    const st = fs.statSync(claudeSettingsPath);
+    if (settingsMemo && settingsMemo.mtimeMs === st.mtimeMs && settingsMemo.size === st.size) {
+      return settingsMemo.parsed;
+    }
+    const parsed: unknown = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf-8'));
+    settingsMemo = { mtimeMs: st.mtimeMs, size: st.size, parsed };
+    return parsed;
+  };
+
   ipcMain.handle('settings:get', async (_event, field: string) => {
     try {
-      const raw = fs.readFileSync(claudeSettingsPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      // Dot-path support for nested fields like 'permissions.defaultMode'
-      return field.split('.').reduce((obj: any, k) => (obj == null ? undefined : obj[k]), parsed);
+      // getJsonPath: dot-path support for nested fields like
+      // 'permissions.defaultMode' — the same walker the remote-server twin uses
+      // (simplification audit D6), so a read of `__proto__` yields undefined
+      // here too instead of the prototype object.
+      return getJsonPath(readClaudeSettings(), field);
     } catch {
       return undefined;
     }
@@ -1307,25 +1327,20 @@ export function registerIpcHandlers(
 
   ipcMain.handle('settings:set', async (_event, field: string, value: unknown) => {
     try {
-      let existing: Record<string, any> = {};
+      let existing: Record<string, unknown> = {};
       try {
         existing = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf-8'));
       } catch {}
-      // Dot-path support — write nested fields without clobbering siblings
-      const keys = field.split('.');
-      let cursor = existing;
-      for (let i = 0; i < keys.length - 1; i++) {
-        const k = keys[i];
-        if (cursor[k] == null || typeof cursor[k] !== 'object') cursor[k] = {};
-        cursor = cursor[k];
-      }
-      if (value === null || value === undefined) {
-        delete cursor[keys[keys.length - 1]];
-      } else {
-        cursor[keys[keys.length - 1]] = value;
-      }
+      // WHY setJsonPath (simplification audit D6 / B3): the hand-rolled walk
+      // this replaces had no prototype-pollution guard and clobbered an array
+      // it walked through with `{}`; the shared helper refuses
+      // __proto__/constructor/prototype segments and walks INTO arrays, matching
+      // the remote-server handler for the same channel. `null`/`undefined`
+      // still deletes the leaf.
+      setJsonPath(existing, field, value);
       fs.mkdirSync(path.dirname(claudeSettingsPath), { recursive: true });
       fs.writeFileSync(claudeSettingsPath, JSON.stringify(existing, null, 2));
+      settingsMemo = null; // the (mtime, size) key would catch this too; be explicit
       return true;
     } catch {
       return false;
