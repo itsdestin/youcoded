@@ -22,6 +22,18 @@ export interface ArtifactState {
   drawerOpenBySession: Record<string, boolean>;
   drawerExpanded: boolean;                            // panel fills the content region
   projectViewOpen: boolean;
+  // YouCoded Pages (Phase 1 shell): the library screen, and which page (if
+  // any) is open on top of it. A pinned page opens with the library closed;
+  // a card opens it with the library still open underneath, so Back returns
+  // to where the person came from.
+  pagesViewOpen: boolean;
+  /** The page view itself: band, panel and frame. Open with openPageId null
+   *  shows "No page selected" in the frame. */
+  pageViewOpen: boolean;
+  openPageId: string | null;
+  /** The open page fills the view with the panel hidden — how a pinned button
+   *  opens a page (Destin, 2026-09-17). The Pages button brings the panel back. */
+  pageFocus: boolean;
   // Selected artifact is scoped per session (keyed by sessionId), so each
   // session's drawer remembers which file was open across session switches.
   // ProjectView uses the literal 'project-view' key for its own selection.
@@ -47,6 +59,10 @@ export const initialArtifactState: ArtifactState = {
   drawerOpenBySession: {},
   drawerExpanded: false,
   projectViewOpen: false,
+  pagesViewOpen: false,
+  pageViewOpen: false,
+  openPageId: null,
+  pageFocus: false,
   activeArtifactBySession: {},
   gitReviewBySession: {},
   activeSessionPreviewBySession: {},
@@ -123,10 +139,30 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
     // Back gesture in detail view: return to list without closing the drawer.
     case 'ACTIVE_ARTIFACT_CLEARED':
       return { ...s, activeArtifactBySession: { ...s.activeArtifactBySession, [a.sessionId]: null } };
+    // Projects and Pages replace each other in place (Destin, 2026-09-17:
+    // "toggle back and forth between projects/pages from the header").
     case 'PROJECT_VIEW_OPENED':
-      return { ...s, projectViewOpen: true };
+      return { ...s, projectViewOpen: true, pageViewOpen: false, pagesViewOpen: false, openPageId: null, pageFocus: false };
     case 'PROJECT_VIEW_CLOSED':
       return { ...s, projectViewOpen: false };
+    // From a focused (pinned) page, the Pages button brings the panel back
+    // with that page still open — focus off, openPageId kept.
+    case 'PAGE_VIEW_OPENED':
+      return { ...s, pageViewOpen: true, projectViewOpen: false, pageFocus: false };
+    // Leaving the page view leaves pages altogether: the library over it goes too.
+    case 'PAGE_VIEW_CLOSED':
+      return { ...s, pageViewOpen: false, pagesViewOpen: false, openPageId: null, pageFocus: false };
+    case 'PAGES_VIEW_OPENED':
+      return { ...s, pagesViewOpen: true };
+    // The library closes back onto the page view it was opened from.
+    case 'PAGES_VIEW_CLOSED':
+      return { ...s, pagesViewOpen: false };
+    // Opening a page (from a card, a pinned button or a panel row) opens the
+    // page view too, and puts the library away.
+    case 'PAGE_OPENED':
+      return { ...s, openPageId: a.pageId, pageViewOpen: true, pagesViewOpen: false, projectViewOpen: false, pageFocus: !!a.focus };
+    case 'PAGE_CLOSED':
+      return { ...s, openPageId: null };
     case 'GIT_REVIEW_OPENED':
       return { ...s, gitReviewBySession: { ...s.gitReviewBySession, [a.sessionId]: true } };
     case 'GIT_REVIEW_CLOSED':

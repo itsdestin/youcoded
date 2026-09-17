@@ -90,6 +90,10 @@ import ThemeShareSheet from './components/ThemeShareSheet';
 import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
 import { ProjectView } from './components/project-view/ProjectView';
+import { PagesView } from './components/pages/PagesView';
+import { PageHost } from './components/pages/PageHost';
+import { PageCreateDialog, type PageCreateRequest } from './components/pages/PageCreateDialog';
+import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
@@ -673,6 +677,9 @@ function AppInner() {
   const chatStore = useChatStore();
   // Artifact tracker — global reducer for session/project artifact state.
   const [artifactState, dispatchArtifact] = useReducer(artifactReducer, initialArtifactState);
+  // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
+  // and model (Destin, 2026-09-17). Null while closed.
+  const [pageCreate, setPageCreate] = useState<PageCreateRequest | null>(null);
   // Ref mirror of artifact state so the (once-registered) tool-use handler can
   // dedup Read-tracking against the session's already-known artifacts without
   // re-subscribing on every reducer tick.
@@ -2813,7 +2820,15 @@ function AppInner() {
     setSessionId(info.id);
   }, [dispatch]);
 
-  const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string) => {
+  // The page view blocks the chat's global shortcuts (Destin, 2026-09-17) —
+  // except while Settings, the library or the create dialog is over it, when
+  // those own the keyboard as they would over the chat. utils/shortcut-gate.ts.
+  useEffect(() => {
+    setGlobalShortcutsBlocked(artifactState.pageViewOpen && !settingsOpen && !artifactState.pagesViewOpen && pageCreate === null);
+    return () => setGlobalShortcutsBlocked(false);
+  }, [artifactState.pageViewOpen, artifactState.pagesViewOpen, settingsOpen, pageCreate]);
+
+  const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string, initialInput?: string) => {
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
     const m = sessionModel || realModelAlias(currentModel);
@@ -2839,6 +2854,7 @@ function AppInner() {
         skipPermissions: dangerous,
         binding,
         preset,
+        initialInput,
       }));
     } catch (err: any) {
       // Never a silent return to the empty screen — that is the "it just reset" Destin saw.
@@ -3398,6 +3414,7 @@ function AppInner() {
     const closeAll = () => {
       setSettingsOpen(false); setProvidersAutoOpen(false); setResumeRequested(false);
       dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+      dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
       setActiveView('chat');
       // The drawer's own dialogs (Assistant settings, Appearance, Help) keep
       // their open state across the drawer closing; tell them to close too.
@@ -3454,6 +3471,7 @@ function AppInner() {
     // a settings page the tour opened for its own reasons.
     setSettingsOpen(false); setProvidersAutoOpen(false);
     dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+    dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
     requestGuideReset();
   }, []);
 
@@ -3574,6 +3592,13 @@ function AppInner() {
       <div
         className="flex-1 flex flex-col overflow-hidden relative"
         hidden={activeView === 'marketplace' || activeView === 'library'}
+        // A screen (Project View, the page view) sits over this column at
+        // z-40. In floating chrome the screen's sheet is transparent so the
+        // wallpaper shows around its glass panes — and what is under a
+        // transparent sheet is THIS column, not the wallpaper. globals.css
+        // hides it (visibility, so layout, observers and the terminal keep
+        // their state) while a screen is open, in floating chrome only.
+        data-screen-open={artifactState.projectViewOpen || artifactState.pageViewOpen ? 'true' : undefined}
         // --right-pane-width drives BOTH the framed-shell drawer-pane width and
         // the chrome-glass cutout offset (both descend from here). BOTH right
         // panes are user-resizable and each remembers its OWN width — the games
@@ -4084,6 +4109,65 @@ function AppInner() {
         )}
       </div>
 
+      {/* THE SCREENS (Project View, the page view, the library) render BEFORE
+          SettingsPanel on purpose. They are z-40, the same number as the L1
+          scrim under the Settings drawer; with equal z-index the LATER element
+          paints on top, so mounted after Settings the page view sat over the
+          scrim and a click beside the drawer landed on the page instead of
+          closing it (Destin, 2026-09-17: "cant exit the settings panel
+          sometimes"). Earlier in the DOM, the scrim wins. */}
+      {/* ProjectView — full-screen artifact browser across all projects.
+          Renders null when projectViewOpen === false so no DOM overhead when closed.
+          z-40, the SCREEN layer: BELOW every L1–L4 overlay, so a dialog opened
+          from inside it (rename, a first-time warning) shows on top. This said
+          z-[8000] long after ProjectView.tsx moved it down (see its header). */}
+      <ProjectView
+        // Project view homes to the focused conversation's folder on every open.
+        activeSessionCwd={currentSession?.cwd}
+        onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
+        // Project View closes first, as it always has, so whatever the resume
+        // shows (the chat, a take-over prompt) is not under it.
+        onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}
+        defaultModel={sessionDefaults.model}
+        defaultSkipPermissions={sessionDefaults.skipPermissions}
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen((v) => !v)}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
+      />
+      {/* YouCoded Pages (Phase 1 shell): the library and, above it, an open
+          page. Both render null while closed, like ProjectView. "Make a page"
+          and "Edit in chat" start a conversation in the current folder — the
+          creator skill that turns that conversation into a page is Phase 1's
+          next task, not part of this shell. */}
+      <PagesView
+        // Make a page / Edit open the new-session dialog (folder, model, the
+        // rest) with the creator skill waiting in the composer — not sent, so
+        // the person adds what the page should do and presses Enter. Edit
+        // names the page; a project page starts in its project so the skill
+        // finds the folder. The dialog leaves pages once the session exists.
+        onMakePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
+        onEditPage={(page) => setPageCreate({
+          title: `Edit ${page.name}`,
+          initialInput: `/page-builder edit "${page.name}" `,
+          cwd: page.home.kind === 'project' ? page.home.path : undefined,
+        })}
+      />
+      <PageHost
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen(prev => !prev)}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
+        onCreatePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
+      />
+      <PageCreateDialog
+        request={pageCreate}
+        onCancel={() => setPageCreate(null)}
+        // The form created the session; adopt it the way createSession does
+        // (list entry, view mode, focus) and leave pages so the chat shows.
+        onCreated={(info) => { setPageCreate(null); adoptCreatedSession(info); dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); }}
+        onManageProjects={() => { setPageCreate(null); dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }); }}
+      />
       {/* The game panel now renders inside the active session's framed-shell
           right slot (passed as ChatView's gamePane prop above), so it shares the
           artifact drawer's framed chrome instead of being a separate slide-out. */}
@@ -4457,21 +4541,6 @@ function AppInner() {
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onZoomReset={handleZoomReset}
-      />
-      {/* ProjectView — full-screen artifact browser across all projects.
-          Renders null when projectViewOpen === false so no DOM overhead when closed.
-          z-40, the SCREEN layer: BELOW every L1–L4 overlay, so a dialog opened
-          from inside it (rename, a first-time warning) shows on top. This said
-          z-[8000] long after ProjectView.tsx moved it down (see its header). */}
-      <ProjectView
-        // Project view homes to the focused conversation's folder on every open.
-        activeSessionCwd={currentSession?.cwd}
-        onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
-        // Project View closes first, as it always has, so whatever the resume
-        // shows (the chat, a take-over prompt) is not under it.
-        onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}
-        defaultModel={sessionDefaults.model}
-        defaultSkipPermissions={sessionDefaults.skipPermissions}
       />
     </div>
     </ArtifactProvider>

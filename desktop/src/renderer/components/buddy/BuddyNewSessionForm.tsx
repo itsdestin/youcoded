@@ -10,10 +10,24 @@ import {
 import { buildSessionCreateArgs } from '../../../shared/session-create-args';
 
 interface Props {
-  /** Invoked with the new session id after session.create resolves. */
-  onCreated: (sessionId: string) => void;
+  /** Invoked with the new session id after session.create resolves. `info` is
+   *  the whole SessionInfo, for a host that adopts the session itself (the
+   *  main window's Pages dialog goes through App.adoptCreatedSession). */
+  onCreated: (sessionId: string, info: unknown) => void;
   /** User-initiated dismissal (Cancel button, Escape, click-away). */
   onCancel: () => void;
+  /** Text waiting in the composer when the conversation opens — not sent.
+   *  Pages' "Create a page" starts the page-builder this way. */
+  initialInput?: string;
+  /** Start on this folder instead of the saved default (editing a project
+   *  page starts in that project). */
+  initialCwd?: string;
+  /** Passed to FolderSwitcher when the host HAS a Project View to send people
+   *  to; the buddy window leaves it off (see the WHY at the render site). */
+  onManageProjects?: () => void;
+  /** Button size: the buddy window is 320px wide and uses `sm`; the main
+   *  window's dialogs stack full-width `md` actions. */
+  size?: 'sm' | 'md';
 }
 
 /**
@@ -40,7 +54,7 @@ interface Props {
  *
  * Pinned by tests/buddy-new-session-form.test.tsx.
  */
-export function BuddyNewSessionForm({ onCreated, onCancel }: Props) {
+export function BuddyNewSessionForm({ onCreated, onCancel, initialInput, initialCwd, onManageProjects, size = 'sm' }: Props) {
   const [cwd, setCwd] = useState('');
   const [dangerous, setDangerous] = useState(false);
   const [model, setModel] = useState<string>('sonnet');
@@ -83,7 +97,7 @@ export function BuddyNewSessionForm({ onCreated, onCancel }: Props) {
       try {
         const defaults = await window.claude.defaults?.get?.();
         if (cancelled) return;
-        setCwd(defaults?.projectFolder ?? '');
+        setCwd(initialCwd || (defaults?.projectFolder ?? ''));
         setDangerous(defaults?.skipPermissions ?? false);
         setModel(defaults?.model ?? 'sonnet');
         // WHY startModel and not just `model`: `defaults.model` only ever holds
@@ -122,8 +136,9 @@ export function BuddyNewSessionForm({ onCreated, onCancel }: Props) {
         skipPermissions: dangerous,
         binding: nb.effectiveBinding,
         preset,
+        initialInput,
       }));
-      if (info?.id) onCreated(info.id);
+      if (info?.id) onCreated(info.id, info);
       else {
         // The create never acked. Non-committal per docs/error-message-standards.md
         // — the cause isn't known on this side.
@@ -134,7 +149,7 @@ export function BuddyNewSessionForm({ onCreated, onCancel }: Props) {
       setError(e?.message ?? 'Could not start a session.');
       setCreating(false);
     }
-  }, [creating, cwd, dangerous, model, runtime, nb.effectiveBinding, preset, onCreated]);
+  }, [creating, cwd, dangerous, model, runtime, nb.effectiveBinding, preset, onCreated, initialInput]);
 
   // Skip Permissions is CLAUDE-CODE ONLY — it bypasses the CLI's permission
   // flow, and a native session has neither a PTY nor that flow. Same gate as
@@ -151,7 +166,7 @@ export function BuddyNewSessionForm({ onCreated, onCancel }: Props) {
             ArtifactProvider and so no Project View to send anyone to.
             FolderSwitcher renders its "Add a folder…" escape hatch instead
             precisely when this prop is absent (see the WHY there). */}
-        <FolderSwitcher value={cwd} onChange={setCwd} />
+        <FolderSwitcher value={cwd} onChange={setCwd} onManageProjects={onManageProjects} />
       </div>
       <div>
         <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">
@@ -187,14 +202,14 @@ export function BuddyNewSessionForm({ onCreated, onCancel }: Props) {
         </>
       )}
       <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-        <Button variant="secondary" size="sm" onClick={onCancel} disabled={creating}>
+        <Button variant="secondary" size={size} onClick={onCancel} disabled={creating}>
           Cancel
         </Button>
         <Button
           onClick={submit}
           disabled={creating || nb.nativeCreateBlocked}
           variant={dangerous && showSkipPermissions ? 'danger' : 'primary'}
-          size="sm"
+          size={size}
           className="flex-1"
         >
           {creating ? 'Creating…' : (dangerous && showSkipPermissions) ? 'Create (Dangerous)' : 'Create Session'}

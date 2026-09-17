@@ -17,6 +17,7 @@
 // overflow-hidden ancestors, so an in-tree absolute dropdown gets clipped.
 
 import { guardDirtyEditor } from './artifact-views/dirty-editor-guard';
+import { PagesIcon } from './pages/page-icons';
 import { createPortal } from 'react-dom';
 import { useArtifact } from '../state/ArtifactContext';
 import { GamepadIcon } from './Icons';
@@ -89,6 +90,17 @@ export default function OverflowMenu({
             d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
         </svg>
       ),
+    },
+    {
+      // Pages — the wide header's permanent button between Settings and
+      // Projects; narrow reaches it here (narrow-viewport rule: never hide a
+      // control without another entry point).
+      key: 'pages',
+      label: 'Pages',
+      onClick: choose(() => dispatch({ type: 'PAGE_VIEW_OPENED' })),
+      active: false,
+      dot: null,
+      icon: <PagesIcon />,
     },
     {
       key: 'artifacts',

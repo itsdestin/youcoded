@@ -2812,3 +2812,106 @@ html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
   }
   .stop-live::before { display: none; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Screens in floating chrome — the page view and Project View (2026-09-17)
+
+   A screen is a fixed sheet: a band (ScreenBand, the app's own .header-bar so
+   floating themes already turn it into their pill) over one or two panes. In
+   framed themes the sheet is --panel and the panes are --canvas cards, like
+   the chat pane and the drawer. In FLOATING chrome the chat shows the
+   wallpaper around detached glass pills, and a solid --panel sheet covered it
+   (Destin, 2026-09-17: "we need to make this work with floating themes like
+   halftone dimension"). Here the sheet goes transparent and the panes become
+   glass, on the same recipe the floating header pill uses: --panel at
+   --panels-opacity, a 1px --edge border, and the blur theme-engine injects
+   for .panel-glass.
+
+   data-screen-frame is the design round's variant switch (workbench-mode.ts →
+   workbenchScreenFrame); the app always renders `cards`.
+   ═══════════════════════════════════════════════════════════════════════════ */
+/* The body under the band: the panes sit in it with the frame edge as gutter
+   and gap, like the chat pane and the drawer in a chat session. Declared here
+   (not inline) so the floating rule below can change one side of it. */
+.screen-body {
+  gap: var(--frame-edge, 10px);
+  padding: 0 var(--frame-edge, 10px) var(--frame-edge, 10px);
+}
+[data-chrome-style='floating'] .screen-view {
+  background-color: transparent !important;
+}
+/* …which only works if the chat column under the sheet is not painted: the
+   wallpaper (#theme-bg, z-index -1) must be what the glass samples. visibility
+   rather than display so the column keeps its layout, its observers and the
+   terminal's size while the screen is up. Framed themes keep the column: the
+   sheet is opaque there and hiding would only cost a repaint on the way back. */
+[data-chrome-style='floating'] [data-screen-open='true'] {
+  visibility: hidden;
+}
+/* The band's pill has an 8px side margin; the panes take the same gutter so
+   their edges line up with the pill's, and the SAME 8px between the pill and
+   the panes — one number for every gap around a card (Destin, 2026-09-17: the
+   6px the chat's drawer pill uses read as cramped next to the 8px gutters). */
+[data-chrome-style='floating'] .screen-view .screen-body {
+  --frame-edge: 8px;
+  padding-top: var(--frame-edge);
+}
+[data-chrome-style='floating'] .screen-pane {
+  background-color: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-lg);
+}
+[data-wallpaper] [data-chrome-style='floating'] .screen-pane {
+  background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
+}
+/* A page's own document paints --canvas inside the frame, so the frame's
+   glass only shows around it while a page loads or none is picked. */
+
+/* sheet — one card, a divider down the middle instead of a gutter. */
+[data-chrome-style='floating'] .screen-view[data-screen-frame='sheet'] .screen-body {
+  gap: 0;
+}
+[data-chrome-style='floating'] .screen-view[data-screen-frame='sheet'] .screen-pane--panel {
+  border-right: none;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+[data-chrome-style='floating'] .screen-view[data-screen-frame='sheet'] .screen-pane--panel + .screen-pane--frame {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left: 1px solid var(--edge);
+}
+
+/* rail — the list sits straight on the wallpaper; only the page is a card. */
+[data-chrome-style='floating'] .screen-view[data-screen-frame='rail'] .screen-pane--panel {
+  background-color: transparent;
+  border-color: transparent;
+}
+
+/* bleed — the page runs edge to edge under the pill (no gutters, no corner)
+   and the panel floats inside it as a card. */
+[data-chrome-style='floating'] .screen-view[data-screen-frame='bleed'] .screen-body {
+  --frame-edge: 0px;
+  padding: 0;
+  gap: 0;
+  position: relative;
+}
+[data-chrome-style='floating'] .screen-view[data-screen-frame='bleed'] .screen-pane--frame {
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+}
+[data-chrome-style='floating'] .screen-view[data-screen-frame='bleed'] .screen-pane--panel {
+  position: absolute;
+  top: 14px;
+  left: 8px;
+  bottom: 8px;
+  z-index: 1;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, var(--shadow-strength, 0.15));
+}
+/* The page itself starts to the right of the floating panel (its width, 15rem,
+   plus the 8px gutter each side) so the panel never covers page content. */
+[data-chrome-style='floating'] .screen-view[data-screen-frame='bleed'] .screen-pane--panel ~ .screen-pane--frame > * {
+  left: calc(15rem + 16px);
+}

@@ -13,6 +13,7 @@ import WideViewToggle from './WideViewToggle';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { Tooltip } from './ui';
+import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac');
 
@@ -28,7 +29,7 @@ const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith(
 // connection authenticates, long after this module loaded, so a constant read
 // 'local' for ever and a phone browser got Minimize / Maximize / Close buttons
 // that squeezed the conversation name to one letter (tester U10, 2026-09-10).
-const showCaptionButtons = () => typeof navigator !== 'undefined'
+export const showCaptionButtons = () => typeof navigator !== 'undefined'
   && !isMac
   && !isAndroid()
   && !isRemoteMode();
@@ -43,7 +44,9 @@ const toggleOnLeft = typeof navigator !== 'undefined'
   && !navigator.platform.startsWith('Mac')
   && !isAndroid();
 
-function CaptionButtons() {
+/** Exported for the Pages view's own frame (PageHost.tsx), which keeps the
+ *  window buttons where the app's header keeps them. */
+export function CaptionButtons() {
   const claude = (window as any).claude;
   // Android has no OS window controls in-app. A RENDER-time check is needed on
   // top of the bridge check: the workbench declares `__PLATFORM__` only after the
@@ -88,7 +91,7 @@ function CaptionButtons() {
  *  light position in sync as the header height / window left-edge / chrome
  *  style changes. A MutationObserver on body's data-chrome-style / -header-style
  *  attrs covers the case where chrome radius changes without a size change. */
-function MacTrafficLights({ headerRef }: { headerRef: React.RefObject<HTMLDivElement | null> }) {
+export function MacTrafficLights({ headerRef }: { headerRef: React.RefObject<HTMLDivElement | null> }) {
   const pillRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
@@ -247,15 +250,18 @@ interface Props {
  *  App.tsx, does) — useArtifact() needs a provider ancestor regardless of which
  *  component calls it. Keeping this in its own small component is just code
  *  organization; SessionStrip now also calls useArtifact() at its top level. */
-function ProjectsButton() {
+/** `active` lights it inside Project View's own band (ScreenBand), where a
+ *  second press returns to chat — the same toggle the Pages button has. */
+export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
   const { dispatch } = useArtifact();
   return (
-    <Tooltip text="Projects" placement="bottom">
+    <Tooltip text={active ? 'Back to chat' : 'Projects'} placement="bottom">
     <button
       type="button"
-      className="relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg"
-      onClick={() => dispatch({ type: 'PROJECT_VIEW_OPENED' })}
+      className={`relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg ${active ? 'text-fg bg-inset' : ''}`}
+      onClick={() => dispatch({ type: active ? 'PROJECT_VIEW_CLOSED' : 'PROJECT_VIEW_OPENED' })}
       aria-label="Open Projects"
+      aria-pressed={active}
     >
       {/* Folder icon — matches the document icon style used by ArtifactDrawerButton */}
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -337,7 +343,7 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
  *  gear to be byte-identical to the session one, so the class string, badges
  *  and Android hit-size live here and nowhere else. Copying the JSX would let
  *  the two drift on the next tweak. */
-function SettingsGearButton({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge }: {
+export function SettingsGearButton({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge }: {
   settingsOpen: boolean;
   onToggleSettings: () => void;
   settingsBadge?: boolean;
@@ -544,8 +550,13 @@ export default React.memo(function HeaderBar({
             settingsDangerBadge={settingsDangerBadge}
           />
         )}
+        {/* Pages sits between Settings and Projects (scope §1, 2026-09-15) and
+            is permanent; pinned pages follow Projects as their own buttons.
+            Wide layouts only; narrow reaches Pages via ||| . */}
+        {!narrow && <PagesButton />}
         {/* Projects button — wide layouts only; narrow reaches it via ||| . */}
         {!narrow && <ProjectsButton />}
+        {!narrow && <PinnedPageButtons />}
         {isRemoteMode() && (
           <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-blue-400 border border-blue-500/25 shrink-0">
             REMOTE
@@ -680,7 +691,9 @@ export function BareHeaderBar({ settingsOpen, onToggleSettings, settingsBadge, s
           settingsBadge={settingsBadge}
           settingsDangerBadge={settingsDangerBadge}
         />
+        <PagesButton />
         <ProjectsButton />
+        <PinnedPageButtons />
       </div>
       {/* Empty middle — stays part of the drag region. */}
       <div className="flex-1 min-w-0" />
