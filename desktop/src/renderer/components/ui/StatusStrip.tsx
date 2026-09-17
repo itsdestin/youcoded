@@ -63,12 +63,21 @@ export type StatusStripProps = {
    * flat inset fill disappears. Opt-in, so `flat` callers cannot drift.
    */
   surface?: 'flat' | 'tinted';
+  /**
+   * Specialists plans, Task 11: let `action` wrap onto its own line when the
+   * strip is narrow (a 390 px phone). The words keep at least 10rem before the
+   * action moves below them; the caller's action should carry `ml-auto` so it
+   * stays on the right. Opt-in: every other strip keeps its one row. WHY: a
+   * paused plan card with three buttons crushed its reason into a one-letter
+   * column at 390 px, because the text was the only part allowed to shrink.
+   */
+  wrapAction?: boolean;
   className?: string;
 };
 
-export function StatusStrip({ tone = 'idle', children, detail, action, surface = 'flat', className = '' }: StatusStripProps) {
+export function StatusStrip({ tone = 'idle', children, detail, action, surface = 'flat', wrapAction = false, className = '' }: StatusStripProps) {
   return (
-    <div className={`px-3 py-2.5 rounded-lg ${surface === 'tinted' ? TINT[tone] : 'bg-inset'} flex items-center gap-3 ${className}`.trim()}>
+    <div className={`px-3 py-2.5 rounded-lg ${surface === 'tinted' ? TINT[tone] : 'bg-inset'} flex items-center gap-3 ${wrapAction ? 'flex-wrap gap-y-2' : ''} ${className}`.replace(/\s+/g, ' ').trim()}>
       <span className="shrink-0 flex items-center justify-center w-2">
         {tone === 'busy' ? (
           <BrailleSpinner size="xs" />
@@ -76,7 +85,7 @@ export function StatusStrip({ tone = 'idle', children, detail, action, surface =
           <span className={`w-2 h-2 rounded-full ${DOT[tone]}`} aria-hidden="true" />
         )}
       </span>
-      <span className="flex-1 min-w-0">
+      <span className={wrapAction ? 'flex-1 min-w-0 basis-40' : 'flex-1 min-w-0'}>
         <span className="block text-xs text-fg-2">{children}</span>
         {detail && <span className="block text-3xs text-fg-muted mt-0.5">{detail}</span>}
       </span>

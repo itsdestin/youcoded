@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, shouldRenderUserEntry } from '../state/chat-types';
+import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, userEntryRenderKind } from '../state/chat-types';
+import { PlanAskLine } from './plans/PlanAskLine';
 import UserMessage from './UserMessage';
 import SpecialistReportCard from './SpecialistReportCard';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
@@ -1137,16 +1138,18 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               let key: string;
               let content: React.ReactNode;
               switch (entry.kind) {
-                case 'user':
-                  // Task 10: a plan's pause notice runs but draws no row
-                  // (shared gate; MUST mirror BubbleFeed/PreviewTimeline).
-                  if (!shouldRenderUserEntry(entry)) return null;
+                case 'user': {
+                  // Task 10/11: a plan notice draws no row, or — when the user
+                  // asked it — one plain line (shared render kind; MUST mirror
+                  // BubbleFeed/PreviewTimeline).
+                  const renderKind = userEntryRenderKind(entry);
+                  if (renderKind === 'hide') return null;
                   key = entry.message.id;
                   // A host-injected user-role turn (a delivered specialist
                   // report) is an EVENT for the assistant, not anyone's words —
                   // a compact collapsed card, see SpecialistReportCard. MUST
                   // mirror BubbleFeed.tsx.
-                  content = entry.injected ? (
+                  content = renderKind === 'ask-line' ? <PlanAskLine /> : entry.injected ? (
                     <SpecialistReportCard
                       message={entry.message}
                       injected={entry.injected}
@@ -1162,6 +1165,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     />
                   );
                   break;
+                }
                 case 'assistant-turn': {
                   const turn = state.assistantTurns.get(entry.turnId);
                   // Shared gate (chat-types.ts): a segment-less turn renders

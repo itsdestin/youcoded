@@ -5,7 +5,8 @@ import { loadFirstPageThenReplay } from '../../state/first-page-load';
 import UserMessage from '../UserMessage';
 import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
-import { shouldRenderAssistantTurn, shouldRenderUserEntry } from '../../state/chat-types';
+import { shouldRenderAssistantTurn, userEntryRenderKind } from '../../state/chat-types';
+import { PlanAskLine } from '../plans/PlanAskLine';
 import { CompactToolStrip } from './CompactToolStrip';
 import { helperAsksOf } from '../../utils/specialist-cards';
 import PromptCard from '../PromptCard';
@@ -525,18 +526,22 @@ export function BubbleFeed({ sessionId }: Props) {
               let content: React.ReactNode;
 
               switch (entry.kind) {
-                case 'user':
-                  // Task 10: a plan's pause notice draws no row — shared gate,
-                  // MUST mirror ChatView.tsx.
-                  if (!shouldRenderUserEntry(entry)) return null;
+                case 'user': {
+                  // Task 10/11: a plan notice is hidden or drawn as the one-line
+                  // "You asked…" — shared render kind, MUST mirror ChatView.tsx.
+                  const renderKind = userEntryRenderKind(entry);
+                  if (renderKind === 'hide') return null;
                   key = entry.message.id;
                   // sessionId ?? '' — the buddy window has no ArtifactProvider, so
                   // FilepathToken pills render but their click is a documented no-op.
                   // Host-injected turn → compact report card, MUST mirror ChatView.tsx.
-                  content = entry.injected
-                    ? <SpecialistReportCard message={entry.message} injected={entry.injected} meta={entry.injectedMeta} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />
-                    : <UserMessage message={entry.message} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />;
+                  content = renderKind === 'ask-line'
+                    ? <PlanAskLine />
+                    : entry.injected
+                      ? <SpecialistReportCard message={entry.message} injected={entry.injected} meta={entry.injectedMeta} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />
+                      : <UserMessage message={entry.message} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />;
                   break;
+                }
                 case 'assistant-turn': {
                   const turn = state.assistantTurns.get(entry.turnId);
                   // Shared gate (chat-types.ts) — one function keeps this

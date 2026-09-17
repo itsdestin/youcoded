@@ -408,9 +408,10 @@ export function loadFixture(
         actions.push(action);
       } else if (parsed.type === 'host_notice' && typeof parsed.text === 'string') {
         // Task 9b: a host notice with no header (a plan pause handed to the
-        // assistant), added exactly as the real notice turn is. Since Task 10
-        // (review 7, Q7-2) the chat draws no row for a "[Plan paused]" notice
-        // (chat-types.ts shouldRenderUserEntry), so the gallery shows none.
+        // assistant), added exactly as the real notice turn is. Task 11: the
+        // chat draws an asked notice as the one line "You asked the assistant
+        // about this plan." and hides an older automatic one
+        // (chat-types.ts userEntryRenderKind).
         const action: ChatAction = {
           type: 'TRANSCRIPT_USER_MESSAGE', sessionId,
           uuid: `${name}-note-${actions.length}`, text: parsed.text,

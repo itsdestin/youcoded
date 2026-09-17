@@ -32,7 +32,10 @@ export function planStatusPhrase(plan: PlanView): string {
 
 function pausedDetail(plan: PlanView): string {
   // Task 9b: while the assistant has the pause, that is what the header says.
-  if (plan.paused?.handoff?.state === 'pending') return 'paused — the assistant is looking into this';
+  // Task 11 (§6): a question still waiting behind a reply says it is waiting.
+  if (plan.paused?.handoff?.state === 'pending') {
+    return plan.paused.handoff.waiting === 'reply' ? 'paused — waiting for the assistant' : 'paused — the assistant is looking into this';
+  }
   const kind = classifyPause(plan.paused).kind;
   return kind === 'unknown-outcome' ? 'paused — check before continuing'
     : kind === 'iteration-cap' ? 'paused — needs a revised plan'

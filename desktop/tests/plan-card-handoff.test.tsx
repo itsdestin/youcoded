@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 /**
  * Specialists plans, Task 9b — the plan card while a pause is handed to the
- * assistant (pause handoff design §2 steps 2, 7 and 8):
+ * assistant (pause handoff design §2 steps 2, 7 and 8; since Task 11 the
+ * handoff starts only from "Ask the assistant", which leads every paused
+ * card's buttons — plan-card-ask.test.tsx):
  *  - pending: greyed, no buttons, "The assistant is looking into this.";
  *  - recommended: the assistant's message, the recommended action as the
  *    filled RIGHT button (Add budget pre-filled), Stop as the light button on
@@ -91,7 +93,7 @@ describe('recommended: the assistant\'s button, filled and on the right', () => 
     render(<ChatProvider><Card initial={paused({ handoff: { state: 'answered', recommendation: { action: 'add_budget', addTokens: 3000, message } } })} /></ChatProvider>);
     expect(block()).not.toHaveClass('opacity-60');
     expect(screen.getByTestId('plan-recommendation')).toHaveTextContent(`The assistant suggests: ${message}`);
-    expect(buttons()).toEqual(['Stop', 'Add budget']);
+    expect(buttons()).toEqual(['Ask the assistant', 'Stop', 'Add budget']);
     const add = screen.getByRole('button', { name: 'Add budget' });
     expect(add.className).toContain('bg-accent');
     expect(screen.getByRole('button', { name: 'Stop' }).className).not.toContain('bg-destructive ');
@@ -111,14 +113,14 @@ describe('recommended: the assistant\'s button, filled and on the right', () => 
 
   it('continue: Stop (light) then Continue (filled)', () => {
     render(<ChatProvider><Card initial={paused({ kind: 'unexpected-error', minimumAddTokens: undefined, actions: ['continue', 'stop'], handoff: { state: 'answered', recommendation: { action: 'continue', message: 'The provider hiccuped; trying again should work.' } } })} /></ChatProvider>);
-    expect(buttons()).toEqual(['Stop', 'Continue']);
+    expect(buttons()).toEqual(['Ask the assistant', 'Stop', 'Continue']);
     expect(screen.getByRole('button', { name: 'Continue' }).className).toContain('bg-accent');
     expect(screen.getByTestId('plan-recommendation')).toHaveTextContent('The assistant suggests: The provider hiccuped; trying again should work.');
   });
 
-  it('stop: one filled Stop button, and nothing else', () => {
+  it('stop: one filled Stop button, and nothing else but Ask (Task 11)', () => {
     render(<ChatProvider><Card initial={paused({ handoff: { state: 'answered', recommendation: { action: 'stop', message: 'This cannot finish as planned.' } } })} /></ChatProvider>);
-    expect(buttons()).toEqual(['Stop']);
+    expect(buttons()).toEqual(['Ask the assistant', 'Stop']);
     // Whole class: the light variant only has `hover:bg-destructive/10`.
     expect(screen.getByRole('button', { name: 'Stop' }).className.split(/\s+/)).toContain('bg-destructive');
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
@@ -144,15 +146,16 @@ describe('answered with no recommendation: the default buttons (§2 step 7)', ()
     ['invalid-report', ['continue', 'stop'], ['Stop', 'Continue']],
   ] as const)('%s → %j', (kind, actions, shown) => {
     render(<ChatProvider><Card initial={paused({ kind, actions: [...actions], minimumAddTokens: undefined, handoff: { state: 'answered' } })} /></ChatProvider>);
-    expect(buttons()).toEqual(shown);
+    // Task 11 (decision 19): every paused card leads with Ask.
+    expect(buttons()).toEqual(['Ask the assistant', ...shown]);
     expect(screen.queryByTestId('plan-recommendation')).toBeNull();
     expect(screen.queryByTestId('plan-handoff-pending')).toBeNull();
     expect(block()).not.toHaveClass('opacity-60');
   });
 
-  it('a pause never handed over (Stop was pressed) uses the same defaults', () => {
+  it('a pause never asked about uses the same defaults', () => {
     render(<ChatProvider><Card initial={paused({ kind: 'specialist-error', actions: ['continue', 'stop'], minimumAddTokens: undefined })} /></ChatProvider>);
-    expect(buttons()).toEqual(['Stop', 'Continue']);
+    expect(buttons()).toEqual(['Ask the assistant', 'Stop', 'Continue']);
   });
 
   it('a Stop-only pause shows its Stop as the light button, as the iteration cap always did', () => {

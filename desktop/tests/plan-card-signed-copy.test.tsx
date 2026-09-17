@@ -17,6 +17,11 @@
  * deck 6 (R6-4) for Approve to be the rightmost button with Comment to its
  * left (and so Cancel · Send in the comment box). Those three states changed
  * button ORDER only — every word is as signed.
+ *
+ * Re-recorded once more, Task 11 (2026-09-17): decision 19 (the product owner,
+ * after review deck 7) puts "Ask the assistant" on every paused card as the
+ * light button on the far left. Only the plan-paused state changed, by that
+ * one button; every other word is as signed.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';

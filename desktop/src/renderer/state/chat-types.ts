@@ -1,4 +1,4 @@
-import { ChatMessage, PLAN_NOTICE_PREFIX, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
+import { ChatMessage, PLAN_ASK_NOTICE_LEAD, PLAN_NOTICE_PREFIX, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -108,18 +108,27 @@ export function shouldRenderAssistantTurn(turn: AssistantTurn | undefined): turn
   return turn.segments.length > 0 || abnormalStopReason(turn.stopReason);
 }
 
-/** Timeline render gate for a `user` entry, shared by ChatView, the buddy
+/** How a `user` timeline entry is drawn: as itself, not at all, or as the
+ *  one-line "You asked the assistant about this plan." */
+export type UserEntryRenderKind = 'show' | 'hide' | 'ask-line';
+
+/** Timeline render kind for a `user` entry, shared by ChatView, the buddy
  *  BubbleFeed and PreviewTimeline (which MUST mirror each other).
- *  Task 10 (review 7, R8-1 + Q7-2, "Hide it"): the notice a paused plan sends
- *  the assistant is not drawn. It still runs as a real turn and stays in the
- *  transcript and the model's history; only its collapsed "Note for the
- *  assistant" row is gone, because the greyed plan card already says the
- *  assistant is looking into it. Matched narrowly: a host-injected turn with
- *  no header whose text opens with the plan notice's prefix — so a user who
- *  types those words, and every other host note, still shows. */
-export function shouldRenderUserEntry(entry: { message: { content: string }; injected?: string; injectedMeta?: unknown }): boolean {
-  if (!entry.injected || entry.injectedMeta) return true;
-  return !entry.message.content.startsWith(PLAN_NOTICE_PREFIX);
+ *  Task 10 (review 7, R8-1 + Q7-2, "Hide it"): a plan notice never shows as a
+ *  collapsed "Note for the assistant" row. It still runs as a real turn and
+ *  stays in the transcript and the model's history.
+ *  Task 11 (pause handoff §6, review 4-6): the notice now exists only because
+ *  the user pressed "Ask the assistant", so it is drawn as one plain line on
+ *  the user's side ('ask-line'). It appears when the notice is delivered (the
+ *  transcript's own user-message), so a withdrawn notice draws nothing. An
+ *  older automatic notice (same prefix, other words) stays hidden — the user
+ *  never asked it. Matched narrowly: a host-injected turn with no header — so
+ *  a user who types those words, and every other host note, still shows. */
+export function userEntryRenderKind(entry: { message: { content: string }; injected?: string; injectedMeta?: unknown }): UserEntryRenderKind {
+  if (!entry.injected || entry.injectedMeta) return 'show';
+  const text = entry.message.content;
+  if (text.startsWith(PLAN_ASK_NOTICE_LEAD)) return 'ask-line';
+  return text.startsWith(PLAN_NOTICE_PREFIX) ? 'hide' : 'show';
 }
 
 // Snapshot of session stats + rate limits captured when /cost or /usage was typed.

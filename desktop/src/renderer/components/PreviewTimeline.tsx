@@ -19,7 +19,8 @@ import AssistantTurnBubble from './AssistantTurnBubble';
 import UsageCard from './UsageCard';
 import SystemMarker from './SystemMarker';
 import SkillInvocationCard from './SkillInvocationCard';
-import { shouldRenderAssistantTurn, shouldRenderUserEntry, type SessionChatState } from '../state/chat-types';
+import { shouldRenderAssistantTurn, userEntryRenderKind, type SessionChatState } from '../state/chat-types';
+import { PlanAskLine } from './plans/PlanAskLine';
 import { findArchiveBoundary } from '../state/archive-boundary';
 import { useTheme } from '../state/theme-context';
 import type { SessionProvider } from '../../shared/types';
@@ -39,17 +40,20 @@ export default function PreviewTimeline({ state, sessionId, provider }: {
         let key: string;
         let content: React.ReactNode;
         switch (entry.kind) {
-          case 'user':
-            // Task 10: a plan's pause notice draws no row — shared gate, as in ChatView.
-            if (!shouldRenderUserEntry(entry)) return null;
+          case 'user': {
+            // Task 10/11: a plan notice is hidden or drawn as the one-line
+            // "You asked…" — shared render kind, as in ChatView.
+            const renderKind = userEntryRenderKind(entry);
+            if (renderKind === 'hide') return null;
             key = entry.message.id;
-            content = entry.injected ? (
+            content = renderKind === 'ask-line' ? <PlanAskLine /> : entry.injected ? (
               <SpecialistReportCard message={entry.message} injected={entry.injected} meta={entry.injectedMeta}
                 sessionId={sessionId} showTimestamps={showTimestamps} />
             ) : (
               <UserMessage message={entry.message} sessionId={sessionId} showTimestamps={showTimestamps} />
             );
             break;
+          }
           case 'assistant-turn': {
             const turn = state.assistantTurns.get(entry.turnId);
             if (!shouldRenderAssistantTurn(turn)) return null;

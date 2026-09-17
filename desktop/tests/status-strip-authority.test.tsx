@@ -50,6 +50,18 @@ describe('StatusStrip', () => {
     expect(seen.size, 'each tone gets its own fill').toBe(3);
   });
 
+  it('wrapAction (Task 11) lets the action wrap under the words, and only when asked for', () => {
+    // A 390 px plan card crushed its reason into a one-letter column because
+    // only the words could shrink. Opt-in: every other strip keeps one row.
+    render(<StatusStrip action={<button>Go</button>}>message</StatusStrip>);
+    expect(strip().className.split(/\s+/)).not.toContain('flex-wrap');
+    expect(screen.getByText('message').parentElement!.className.split(/\s+/)).not.toContain('basis-40');
+    cleanup();
+    render(<StatusStrip wrapAction action={<button>Go</button>}>message</StatusStrip>);
+    expect(strip().className.split(/\s+/)).toContain('flex-wrap');
+    expect(screen.getByText('message').parentElement!.className.split(/\s+/)).toEqual(expect.arrayContaining(['flex-1', 'min-w-0', 'basis-40']));
+  });
+
   it('a state at rest gets a dot; a state in motion gets a spinner', () => {
     render(<StatusStrip tone="ok">message</StatusStrip>);
     expect(strip().querySelector('.rounded-full')).not.toBeNull();

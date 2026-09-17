@@ -20,6 +20,7 @@ import { hasNestedAsk } from '../../utils/specialist-cards';
 import type { SubagentSegment } from '../../../shared/types';
 import { PLAN_UNREADABLE, planAction, usePlanUnsupported } from './plan-bridge';
 import { planChildCard, planWithActivity } from './plan-activity';
+import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 
 /**
  * Specialists stage two — the PLAN CARD (designed 2026-09-05; since Task 5a
@@ -161,6 +162,14 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const handoff = plan.status === 'paused' ? plan.paused?.handoff : undefined;
   const handoffPending = handoff?.state === 'pending';
   const recommendation = handoff?.state === 'answered' ? handoff.recommendation : undefined;
+  // Task 11 (pause handoff §6): a question the assistant never answered —
+  // it had not started within 10 minutes, or its reply failed. The card says
+  // so with Retry (which asks again) instead of silently returning its buttons.
+  const askProblem = handoff?.state === 'answered' && !recommendation ? handoff.problem : undefined;
+  // Task 11: "Ask the assistant" on every paused card, except while a question
+  // is pending, when this conversation's model can't use tools, or while the
+  // error line's Retry already offers the same thing.
+  const canAsk = plan.status === 'paused' && !!plan.paused && !handoffPending && !plan.paused.askUnavailable && !askProblem;
   // The buttons this pause offers (main works them out from the same table
   // that limits the assistant's recommendation). A record from before that
   // field keeps the card's earlier rule.
@@ -228,6 +237,9 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   };
   const cont = () => { lastAction.current = cont; return act('continue', (b) => b.resume(id, plan.planId)); };
   const stop = () => { lastAction.current = stop; return act('stop', (b) => b.stop(id, plan.planId)); };
+  // Task 11 (§6): the host checks, records and queues; the card only lands the
+  // greyed record it answers. `act` ignores presses while one is in flight.
+  const askAssistant = () => { lastAction.current = askAssistant; return act('ask', (b) => b.askAssistant(id, plan.planId)); };
   const retry = () => { void lastAction.current?.(); };
   // Report bug / Diagnose open the app's ticket screen with the real text.
   const report = (errorText: string, diagnose: boolean) => setReportContext({ surface: 'a plan card', error: errorText, ...(diagnose ? { diagnose } : {}) });
@@ -314,8 +326,15 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               tone={handoffPending ? 'idle' : 'warn'}
               surface="tinted"
               className="!py-2"
+              // Task 11: at 390 px the buttons move under the reason instead
+              // of crushing it into a one-letter column.
+              wrapAction
               action={handoffPending ? undefined : !adding ? (
-                <div className="flex items-center justify-end gap-2 shrink-0">
+                <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-pause-actions">
+                  {/* Task 11 (§6, G-29): Ask is a light button, far left. */}
+                  {canAsk && (
+                    <Button size="sm" variant="secondary" onClick={askAssistant} disabled={blocked}>{busy === 'ask' ? 'Asking…' : 'Ask the assistant'}</Button>
+                  )}
                   {/* Task 9b (§2 step 7, design guide G-29): the filled button
                       is the rightmost; Stop is the light one on its left. A
                       recommended Stop is the card's one filled button. The
@@ -336,7 +355,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                   )}
                 </div>
               ) : (
-                <div className="flex items-center gap-2 shrink-0" data-testid="plan-add-budget">
+                <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-add-budget">
                   <span className="text-xs text-fg-dim">Allow</span>
                   <TextInput size="sm" inputMode="numeric" value={Number(extra) ? Number(extra).toLocaleString() : extra} onChange={(e) => setExtra(e.target.value.replace(/[^0-9]/g, ''))} className="w-20" aria-label="Tokens to allow" />
                   <span className="text-xs text-fg-dim">tokens{plan.ceilingUsd != null && plan.ceilingTokens > 0 ? ` (${usd((Number(extra) || 0) * (plan.ceilingUsd / plan.ceilingTokens))})` : ''}</span>
@@ -347,7 +366,11 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             >
               <PausedReason plan={plan} pause={pause} stepNumber={pausedIndex + 1} />
               {handoffPending && (
-                <span className="block mt-0.5 font-medium text-fg" data-testid="plan-handoff-pending">The assistant is looking into this.</span>
+                <span className="block mt-0.5 font-medium text-fg" data-testid="plan-handoff-pending">
+                  {/* Task 11 (§6, review 4-5): a question behind a reply in
+                      progress says it will wait, rather than look stuck. */}
+                  {handoff?.waiting === 'reply' ? 'The assistant will look at this after its current reply.' : 'The assistant is looking into this.'}
+                </span>
               )}
               {recommendation && (
                 <span className="block mt-0.5 text-fg" data-testid="plan-recommendation">
@@ -365,6 +388,31 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                 </span>
               )}
             </StatusStrip>
+          )}
+
+          {/* Task 11 (§6, error-message standards): a question cleared without
+              an answer. The real cause when main knows it; otherwise a
+              general line that names none, with Report bug and Diagnose.
+              Retry asks again. Hidden while the card's own error slot shows a
+              newer failure (that one has its own Retry). */}
+          {askProblem && !error && (
+            <div data-testid="plan-ask-error">
+              {askProblem.kind === 'no-start' ? (
+                // "10 minutes" is main's backstop (plan-handoff.ts
+                // PLAN_HANDOFF_BACKSTOP_MS; pinned by plan-card-ask.test.tsx).
+                <ErrorState variant="inline" message="The assistant didn't get to your question within 10 minutes." onRetry={askAssistant} />
+              ) : askProblem.detail ? (
+                <ErrorState variant="inline" message={`The assistant couldn't answer your question: ${askProblem.detail}`} onRetry={askAssistant} />
+              ) : (
+                <ErrorState
+                  variant="inline"
+                  message="The assistant couldn't answer your question."
+                  onReportBug={() => report("The assistant couldn't answer a question about a paused plan.", false)}
+                  onDiagnose={() => report("The assistant couldn't answer a question about a paused plan.", true)}
+                  onRetry={askAssistant}
+                />
+              )}
+            </div>
           )}
 
           {plan.status === 'interrupted' && (
@@ -511,6 +559,10 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
   useEffect(() => { if (step.status === 'running' || step.status === 'paused') setOpen(true); }, [step.status]);
   useEffect(() => { if (asking) setOpen(true); }, [asking]);
   const who = `${step.fanOut} ${step.specialist}${step.fanOut === 1 ? '' : 's'}`;
+  // Task 11: on a phone-width screen one line cut every title to "1." (the
+  // token figure and the specialist words took the room), so the details
+  // move to a second line there. Wide screens keep the signed one-line row.
+  const narrow = useNarrowViewport();
   const right =
     step.status === 'pending' || plan.status === 'proposed' ? `up to ${limitTokens(plan, step.budgetTokens * step.fanOut)}`
     : step.status === 'running' || step.status === 'paused' ? `${step.done ?? 0} of ${step.fanOut} ${step.specialist}s done · ${tokens(step.usedTokens ?? 0)}`
@@ -521,15 +573,32 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
     // below it, so the nesting reads plan → step → specialist by shape rather
     // than by indentation; the specialists sit on the container's own padding.
     <li className="border border-edge-dim rounded-md overflow-hidden bg-inset/25" data-testid={`plan-step-${step.id}`} data-step-status={step.status}>
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-        className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-inset/50 transition-colors">
-        <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
-        <span className="text-xs text-fg-muted tabular-nums shrink-0">{index + 1}.</span>
-        <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} truncate`}>{step.title}</span>
-        <span className="text-2xs text-fg-dim truncate">{who} · {KIND_WORD[step.kind]}</span>
-        <span className="ml-auto text-2xs text-fg-muted tabular-nums shrink-0">{right}</span>
-        <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
-      </button>
+      {narrow ? (
+        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
+          className="w-full flex flex-col gap-0.5 text-left px-2 py-1 hover:bg-inset/50 transition-colors">
+          <span className="flex items-center gap-2 min-w-0">
+            <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
+            <span className="text-xs text-fg-muted tabular-nums shrink-0">{index + 1}.</span>
+            <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} truncate flex-1 min-w-0`} data-testid="plan-step-title">{step.title}</span>
+            <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
+          </span>
+          {/* Lined up under the title (glyph 0.875rem + gap 0.5rem). */}
+          <span className="flex items-center gap-2 min-w-0 pl-5.5">
+            <span className="text-2xs text-fg-dim truncate min-w-0">{who} · {KIND_WORD[step.kind]}</span>
+            <span className="ml-auto text-2xs text-fg-muted tabular-nums shrink-0">{right}</span>
+          </span>
+        </button>
+      ) : (
+        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
+          className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-inset/50 transition-colors">
+          <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
+          <span className="text-xs text-fg-muted tabular-nums shrink-0">{index + 1}.</span>
+          <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} truncate`} data-testid="plan-step-title">{step.title}</span>
+          <span className="text-2xs text-fg-dim truncate">{who} · {KIND_WORD[step.kind]}</span>
+          <span className="ml-auto text-2xs text-fg-muted tabular-nums shrink-0">{right}</span>
+          <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
+        </button>
+      )}
       {open && (
         <div className="px-1.5 pb-1.5 pt-1 space-y-1 border-t border-edge-dim">
           {step.children && step.children.length > 0 ? (
