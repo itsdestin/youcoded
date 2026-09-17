@@ -1,6 +1,11 @@
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
-import { RENDERER, readSource, readStripped } from './helpers/guard-scope';
+import { RENDERER, readSource } from './helpers/guard-scope';
+
+// WHY this reader (t6a review fix, 2026-09-16): these pins were written against a
+// read that normalised line endings and DELETED block comments only (not
+// readStripped, which also blanks `//` — a URL in a stylesheet would shift).
+const readCss = (...p: string[]) => readSource(join(RENDERER, ...p)).replace(/\/\*[\s\S]*?\*\//g, '');
 
 // Guard for the 2026-07-30 idle-CPU investigation's actual conclusion.
 //
@@ -23,21 +28,19 @@ import { RENDERER, readSource, readStripped } from './helpers/guard-scope';
 //
 // Investigation: youcoded-dev/docs/archive/investigations/2026-07-30-idle-cpu-burn.md
 //
-// Plan B (2026-09-16): split out of tests/animation-frame-budget.test.ts, whose
-// two generic "walk every .tsx" sweeps ("bans NEW inline infinite animations…",
-// "bans Tailwind arbitrary-value infinite animations…") converted to the
-// ast-grep rule no-unstepped-infinite-animation. These 13 cases are per-file
-// pins — a specific CSS selector or a specific component's inline style — that
-// a generic ast-grep shape can't express without one rule per component; kept
-// as source-text reads here (readStripped/readSource per each case's original
-// helper, matching the original file's own mix). animation-frame-budget.test.ts
-// itself is unchanged apart from losing these 13 + the 2 converted cases: its
-// remaining "motion vocabulary" describe block is SessionStrip drag/hover
-// mechanics, unrelated to frame budgets, and is the named guard for
-// .claude/rules/session-strip-motion.md — do not move or rename it.
+// Plan B (2026-09-16): split out of tests/animation-frame-budget.test.ts. Every
+// component-side (.tsx) pin of this block is an ast-grep rule now
+// (scripts/ast-grep/rules/): no-unstepped-infinite-animation (inline and
+// Tailwind infinite animations, which also covers the SessionStrip breathing
+// dot and the HeaderBar challenge pulse), braille-spinner-interval-driven,
+// theme-effects-draws-from-interval, mascot-rig-raf-only-for-drag,
+// mascot-rig-pauses-when-hidden, setting-row-base-is-stepped-hover,
+// session-strip-menu-rows-stepped-hover and session-strip-no-transition-all.
+// What stays here reads STYLESHEETS only — CSS is not an ast-grep language in
+// this workspace's rule set.
 
 describe('perpetual animations are frame-budgeted', () => {
-  const globals = readStripped(join(RENDERER, 'styles', 'globals.css'));
+  const globals = readCss('styles', 'globals.css');
 
   it('quantizes .animate-pulse with steps() timing', () => {
     expect(globals).toMatch(/\.animate-pulse\s*\{[^}]*animation-timing-function:\s*steps\(/);
@@ -53,52 +56,6 @@ describe('perpetual animations are frame-budgeted', () => {
     // reintroduce a permanent ~44-66%-of-a-core cost per visible keyword.
     expect(globals).not.toMatch(/animation:\s*flowing-word-pan[^;]*infinite/);
     expect(globals).toMatch(/animation:\s*flowing-word-pan[^;]*\b\d+;/);
-  });
-
-  it('quantizes the SessionStrip breathing dot (inline animation)', () => {
-    // Inline TSX animations are invisible to a CSS-file sweep — this dot runs
-    // for every non-idle session in the always-visible header, making it the
-    // app's most persistent animation.
-    const src = readSource(join(RENDERER, 'components', 'SessionStrip.tsx'));
-    expect(src).toMatch(/animation:\s*'breathe[^']*steps\(/);
-    expect(src).not.toMatch(/animation:\s*'breathe[^']*ease/);
-  });
-
-  it('quantizes the HeaderBar challenge pulse (inline animation)', () => {
-    const src = readSource(join(RENDERER, 'components', 'HeaderBar.tsx'));
-    expect(src).toMatch(/animation:\s*'challenge-pulse[^']*steps\(/);
-    expect(src).not.toMatch(/animation:\s*'challenge-pulse[^']*ease/);
-  });
-
-  // ── JS animation drivers ──
-  // A requestAnimationFrame chain wakes at the display's refresh rate (180/sec
-  // on a 180Hz panel). These three drivers do slow work (12.5fps spinner, 30fps
-  // particles, ambient sway) and were each converted to interval-driven ticks —
-  // rAF remains legitimate ONLY for genuinely full-rate work (MascotRig's
-  // drag-trailing) and one-shot next-frame coalescing.
-
-  it('BrailleSpinner is interval-driven, not a rAF chain', () => {
-    const src = readStripped(join(RENDERER, 'components', 'BrailleSpinner.tsx'));
-    expect(src).toMatch(/setInterval\(tick/);
-    expect(src).not.toMatch(/requestAnimationFrame/);
-  });
-
-  it('ThemeEffects draws from an interval, not a rAF chain', () => {
-    const src = readStripped(join(RENDERER, 'components', 'ThemeEffects.tsx'));
-    expect(src).toMatch(/setInterval\(draw/);
-    // The one-shot resize coalescer may keep rAF; the draw loop may not.
-    expect(src).not.toMatch(/requestAnimationFrame\(draw/);
-  });
-
-  it('MascotRig runs rAF only for the drag chain, idle from an interval', () => {
-    const src = readStripped(join(RENDERER, 'components', 'mascot', 'MascotRig.tsx'));
-    expect(src).toMatch(/setInterval\(/);
-    // Every rAF request must belong to the drag-gated chain (rafTick) — an
-    // unconditional `requestAnimationFrame(tick)`-style self-chain regressing
-    // here would resume 180 presented frames/sec of ambient sway forever.
-    const rafCalls = [...src.matchAll(/requestAnimationFrame\(\s*(\w+)/g)].map((m) => m[1]);
-    expect(rafCalls.length).toBeGreaterThan(0);
-    expect(rafCalls.every((fn) => fn === 'rafTick')).toBe(true);
   });
 
   // ── Blind spots closed 2026-08-07 ──
@@ -134,7 +91,7 @@ describe('perpetual animations are frame-budgeted', () => {
     const sheets = ['globals.css', 'mascot.css', 'buddy.css'];
     const offenders: string[] = [];
     for (const sheet of sheets) {
-      const css = readStripped(join(RENDERER, 'styles', sheet));
+      const css = readCss('styles', sheet);
       for (const m of css.matchAll(/animation:\s*([\w-]+)([^;]*infinite[^;]*);/g)) {
         const [, name, rest] = m;
         if (!/steps\(/.test(rest) && !(name in ANIMATION_EXCEPTIONS)) {
@@ -150,33 +107,19 @@ describe('perpetual animations are frame-budgeted', () => {
     // to any surface where many hover targets are swept by one pointer motion.
     // These are the app's dense lists; a one-off button is deliberately NOT in
     // scope — it animates once, and a smooth fade there is free.
-    const globalsHere = readStripped(join(RENDERER, 'styles', 'globals.css'));
+    // The two component halves (SettingRow's base class, SessionStrip's menu
+    // rows) are the ast-grep rules named at the top of this file.
+    const globalsHere = readCss('styles', 'globals.css');
     expect(globalsHere).toMatch(/\.stepped-hover\s*\{[^}]*transition-timing-function:\s*steps\(/);
     expect(globalsHere).toMatch(/\.hover-lift\s*\{[^}]*steps\(/);
     expect(globalsHere).toMatch(/\.card-interactive\s*\{[^}]*steps\(/);
-
-    const settingRow = readSource(join(RENDERER, 'components', 'ui', 'SettingRow.tsx'));
-    expect(settingRow).toMatch(/ROW_BASE\s*=\s*'[^']*stepped-hover/);
-
-    const strip = readSource(join(RENDERER, 'components', 'SessionStrip.tsx'));
-    expect(strip).toMatch(/transition:\s*'opacity 150ms steps\(4\), background 150ms steps\(4\)'/);
-  });
-
-  it('transitions explicit properties on session pills, never `all`', () => {
-    // `transition: all` animates every animatable property that changes,
-    // layout properties included, and each one presents at the full refresh
-    // rate. Only transform/border-color/background-color change on these pills.
-    // Match the value, not `transition:` + value — the declaration is a
-    // multi-line ternary, so an adjacency regex passes vacuously.
-    const strip = readStripped(join(RENDERER, 'components', 'SessionStrip.tsx'));
-    expect(strip).not.toMatch(/'all \d+ms/);
   });
 
   it('sweeps the model-load bar with transform, not left', () => {
     // `left` is not compositable and forces a layout pass on every presented
     // frame — the most expensive per-frame shape in the app, running for the
     // whole duration of a local model load.
-    const globalsHere = readStripped(join(RENDERER, 'styles', 'globals.css'));
+    const globalsHere = readCss('styles', 'globals.css');
     const kf = globalsHere.match(/@keyframes model-load-sweep\s*\{[^}]*\}[^}]*\}/);
     expect(kf, '@keyframes model-load-sweep not found').toBeTruthy();
     expect(kf![0]).toMatch(/translateX\(/);
@@ -189,11 +132,9 @@ describe('perpetual animations are frame-budgeted', () => {
     // when nobody can see them. The interval must also reset its timestamp on
     // resume, or stepSpring integrates the entire hidden period as one dt and
     // the springs fling off-model on the first visible frame.
-    const rig = readStripped(join(RENDERER, 'components', 'mascot', 'MascotRig.tsx'));
-    expect(rig).toMatch(/visibilitychange/);
-    expect(rig).toMatch(/last\s*=\s*performance\.now\(\)/);
-
-    const mascotCss = readStripped(join(RENDERER, 'styles', 'mascot.css'));
+    // MascotRig's half (the visibilitychange listener and the clock reset) is
+    // the ast-grep rule mascot-rig-pauses-when-hidden.
+    const mascotCss = readCss('styles', 'mascot.css');
     expect(mascotCss).toMatch(/data-doc-hidden[^{]*\{[^}]*animation-play-state:\s*paused/);
   });
 });
