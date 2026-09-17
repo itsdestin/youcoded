@@ -1185,26 +1185,11 @@ export interface UserSkillConfig {
   packages?: Record<string, PackageInfo>;
 }
 
-export interface SkillProvider {
-  listMarketplace(filters?: SkillFilters): Promise<SkillEntry[]>;
-  getSkillDetail(id: string): Promise<SkillDetailView>;
-  search(query: string): Promise<SkillEntry[]>;
-  getInstalled(): Promise<SkillEntry[]>;
-  getFavorites(): Promise<string[]>;
-  getChips(): Promise<ChipConfig[]>;
-  getOverrides(): Promise<Record<string, MetadataOverride>>;
-  install(id: string): Promise<any>;
-  uninstall(id: string): Promise<void | { type: 'plugin' | 'prompt' }>;
-  setFavorite(id: string, favorited: boolean): Promise<void>;
-  setChips(chips: ChipConfig[]): Promise<void>;
-  setOverride(id: string, override: MetadataOverride): Promise<void>;
-  createPromptSkill(skill: Omit<SkillEntry, 'id'>): Promise<SkillEntry>;
-  deletePromptSkill(id: string): Promise<void>;
-  publish(id: string): Promise<{ prUrl: string }>;
-  generateShareLink(id: string): Promise<string>;
-  importFromLink(encoded: string): Promise<SkillEntry>;
-  getFeatured?(): Promise<FeaturedData>;
-}
+// The skill marketplace backend is typed as the class itself —
+// `LocalSkillProvider` in main/skill-provider.ts. The `SkillProvider` interface
+// that used to sit here had exactly one implementation, nothing was typed
+// against it polymorphically, and its name collided with the unrelated React
+// `<SkillProvider>` context component (simplification audit M7, 2026-09-16).
 
 // Marketplace redesign Phase 1 — discovery curation. Driven by featured.json
 // in the wecoded-marketplace repo; edited via /feature admin skill.
