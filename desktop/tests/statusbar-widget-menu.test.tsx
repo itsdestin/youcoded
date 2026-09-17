@@ -53,11 +53,24 @@ const statusData = {
   gitBranch: null, sessionStats: null, syncWarnings: [],
 } as any;
 
-async function openMenu(provider: 'claude' | 'native', nativeTotals?: any, sessionStats?: any) {
+async function openMenu(
+  provider: 'claude' | 'native',
+  nativeTotals?: any,
+  sessionStats?: any,
+  usagePlan?: 'claude' | 'chatgpt',
+) {
   // sessionStats is only needed by the bar/menu agreement table below, which
   // renders a Claude Code session that already has a cost figure.
   const data = sessionStats ? { ...statusData, sessionStats } : statusData;
-  render(<StatusBar statusData={data} provider={provider} sessionId="s1" nativeTotals={nativeTotals ?? null} />);
+  render(
+    <StatusBar
+      statusData={data}
+      provider={provider}
+      sessionId="s1"
+      nativeTotals={nativeTotals ?? null}
+      usagePlan={usagePlan}
+    />,
+  );
   fireEvent.click(screen.getByRole('button', { name: /status bar widgets|customize/i }));
 }
 
@@ -104,6 +117,19 @@ describe('Customize Status Bar menu', () => {
     await openMenu('native');
     const row = screen.getByText('Git Branch').closest('div')!;
     expect(row.textContent).not.toMatch(/only|not measured|no published/i);
+  });
+
+  // The reported bug: a ChatGPT-plan session's 5h/7d chips draw real numbers
+  // on the bar (they have their own rolling ChatGPT-plan windows), but the
+  // Customize menu judged the row on session runtime alone — which is
+  // 'native' for a ChatGPT session too — and called it "Claude Code sessions
+  // only" even though that exact chip was on screen with a real number.
+  it('leaves the subscription rows switchable for a ChatGPT-plan session', async () => {
+    window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['usage-5h', 'usage-7d']));
+    await openMenu('native', undefined, undefined, 'chatgpt');
+    expect(screen.queryByText('Claude Code sessions only')).toBeNull();
+    expect(screen.getByText('5h Usage').closest('button')).toBeTruthy();
+    expect(screen.getByText('7d Usage').closest('button')).toBeTruthy();
   });
 
   it('explains nothing in a Claude Code session', async () => {
