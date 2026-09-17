@@ -1267,6 +1267,28 @@ describe('TranscriptWatcher safety-net poll', () => {
     expect(watcher.isPolling()).toBe(true);
   });
 
+  it("re-watches the path on a 'rename' event, so a rename-replaced transcript keeps delivering", () => {
+    setPlatform('linux');
+    const fakes: Array<EventEmitter & { close: ReturnType<typeof vi.fn> }> = [];
+    const watch = vi.spyOn(fs, 'watch').mockImplementation(((_p: string, cb: (ev: string) => void) => {
+      const w = Object.assign(new EventEmitter(), { close: vi.fn() });
+      w.on('change', (ev: string) => cb(ev));
+      fakes.push(w);
+      return w as any;
+    }) as any);
+    watcher.startWatching('d-ren', 'ren', '/proj', existingTranscript('ren'));
+    expect(watch).toHaveBeenCalledTimes(1);
+
+    fakes[0].emit('change', 'rename'); // the inode under the watch was replaced
+    expect(fakes[0].close).toHaveBeenCalled();
+    expect(watch).toHaveBeenCalledTimes(2); // re-attached by path
+    expect(watcher.isPolling()).toBe(false); // healthy again, no poll needed
+
+    watch.mockImplementation(() => { throw new Error('ENOENT'); }); // renamed away, nothing to watch yet
+    fakes[1].emit('change', 'rename');
+    expect(watcher.isPolling()).toBe(true); // the poll covers the gap and re-attaches later
+  });
+
   it('polls only until the transcript file appears, then hands over to the watch', async () => {
     setPlatform('linux');
     const jsonlPath = path.join(tmpDir, 'later', 'later.jsonl');

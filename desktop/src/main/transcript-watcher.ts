@@ -666,7 +666,14 @@ export class TranscriptWatcher extends EventEmitter {
 
   private attachFsWatch(session: WatchedSession): void {
     try {
-      session.watcher = fs.watch(session.jsonlPath, () => {
+      session.watcher = fs.watch(session.jsonlPath, (eventType) => {
+        // WHY re-attach on 'rename' (review of audit W7): the watch is on the
+        // file's inode. A rename-replace of the JSONL (an atomic rewrite, or
+        // macOS FSEvents reporting one) leaves the watch on the OLD inode and
+        // silent forever — and the safety-net poll that used to recover it no
+        // longer runs off Windows. Re-watching by path picks up the new file,
+        // with a reconcile read; if it cannot be watched yet, the poll returns.
+        if (eventType === 'rename') { this.reattachFsWatch(session); return; }
         void this.readNewLines(session);
       });
       session.watcher.on('error', () => {
@@ -693,7 +700,17 @@ export class TranscriptWatcher extends EventEmitter {
     } catch {
       // fs.watch can throw on some platforms — global poll will cover it.
       session.needsPoll = true;
+      this.ensureGlobalPoll();
     }
+  }
+
+  private reattachFsWatch(session: WatchedSession): void {
+    if (session.watcher) {
+      session.watcher.close();
+      session.watcher = null;
+    }
+    if (!this.sessions.has(session.desktopSessionId)) return; // stopped meanwhile
+    this.attachFsWatch(session);
   }
 
   /**
