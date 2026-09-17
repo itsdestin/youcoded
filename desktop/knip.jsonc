@@ -77,13 +77,20 @@
 
   // Gate on the categories that are CLEAN today, so CI ratchets (nothing new
   // rots in) without demanding a big-bang cleanup first. The noisy-but-real
-  // categories report as warnings and are tracked in ROADMAP instead:
-  //   - types (172 under knip 6; 379 under knip 5): dominated by
-  //     components/ui/index.ts and src/shared/types.ts, deliberate shared type
-  //     surfaces consumed structurally. Erroring here would be wrong.
-  //   - exports (77): real findings, but deleting an export or re-pinning a
+  // categories stay "warn" here, but they are NOT unbounded: `npm run knip` is
+  // scripts/knip-ratchet.js, which fails when `exports` or `types` rises above
+  // the ceilings in knip-baseline.json (2026-09-16 — the exports count had
+  // grown 77 → 136 in six weeks with CI green the whole time).
+  //   - types (189 on 2026-09-16): dominated by components/ui/index.ts and
+  //     src/shared/types.ts, deliberate shared type surfaces consumed
+  //     structurally. Erroring here would be wrong.
+  //   - exports (136): real findings, but deleting an export or re-pinning a
   //     transitive dep is a reviewed change, not a lint autofix.
-  // Tighten these to "error" as each category is driven to zero.
+  //   - unlisted was promoted to "error" on 2026-09-16 once its four findings
+  //     (@ai-sdk/provider, acorn — both imported directly, listed nowhere) were
+  //     added to package.json. A package that works only because npm hoisted it
+  //     out of another package's tree breaks on the next lockfile churn.
+  // Tighten a "warn" to "error" once its ceiling reaches zero.
   // `classMembers` is not listed: knip 6 dropped that issue type (it relied on
   // a TypeScript API that goes away in TS 6), and an unknown key only warns.
   "rules": {
@@ -91,7 +98,7 @@
     "unresolved": "error",
     "duplicates": "error",
     "dependencies": "error",
-    "unlisted": "warn",
+    "unlisted": "error",
     "exports": "warn",
     "types": "warn",
     "enumMembers": "warn"

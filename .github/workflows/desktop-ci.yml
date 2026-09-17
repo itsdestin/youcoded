@@ -161,6 +161,16 @@ jobs:
       - name: Lint (oxlint)
         run: npm run lint
 
+      # Design-system lint as a RATCHET, not a gate at zero (2026-09-16). The
+      # script carries `--max-warnings <count measured that day>` (see
+      # desktop/package.json), so this fails only when a change ADDS a raw
+      # colour, an arbitrary value or a restyled components/ui primitive. Lower
+      # the number in package.json whenever a cleanup brings the count down;
+      # never raise it. Before this step the check had zero callers and the
+      # count grew unseen.
+      - name: Design lint (oxlint, ratchet)
+        run: npm run lint:design
+
       # Must run BEFORE the build — electron-builder's deb/rpm/pacman packagers
       # run inside `npm run build` (see desktop/electron-builder.yml linux.target).
       # PR #98 added rpm + pacman targets without updating CI, so every Desktop
