@@ -1,7 +1,8 @@
-// PagesView — the Pages library, a full screen in the same family as Projects
-// (design guide §4.4: one header, title left, back affordance right; content
-// on canvas). Opened by the Pages button (PAGES_VIEW_OPENED); renders nothing
-// while closed, like ProjectView.
+// PagesView — the Pages library ("Manage pages"), a full screen in the same
+// family as Projects (design guide §4.4: one header, title left, back
+// affordance right; content on canvas). Since 2026-09-17 it is reached only
+// from the page view's Manage pages button and sits OVER that view; Back
+// returns to it. Renders nothing while closed, like ProjectView.
 //
 // Cards, not rows: a page is a thing with a look of its own (guide §4.6 —
 // "cards are for things with a preview"). Phase 1 cards carry the glyph, name,
@@ -51,11 +52,12 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const pinnedCount = pages.filter((p) => p.pinned).length;
 
   return (
-    <div className="fixed inset-0 bg-canvas z-40 flex flex-col">
+    // z-[60]: above the page view (z-50) it opens from.
+    <div className="fixed inset-0 bg-canvas z-[60] flex flex-col">
       <header className="flex items-center gap-3 px-4 py-2.5 border-b border-edge shrink-0">
         <h2 className="text-base font-semibold text-fg shrink-0 flex items-center gap-2">
           <PagesIcon className="w-4 h-4 text-fg-muted" />
-          Pages
+          Manage pages
         </h2>
         <div className="flex-1" />
         {pages.length > 0 && (
@@ -69,7 +71,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
           className="hidden sm:inline-flex shrink-0 text-sm px-2.5 py-1"
           aria-label="Exit pages"
         >
-          Esc · Back to chat
+          Esc · Back
         </Button>
         <CloseButton
           onClick={close}

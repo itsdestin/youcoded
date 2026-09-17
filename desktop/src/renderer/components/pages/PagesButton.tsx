@@ -2,7 +2,10 @@
 //
 // PagesButton — the permanent destination between Settings and Projects
 // (scope §1: cannot be removed). Same 16px stroke-icon button as the Projects
-// folder beside it; dispatches PAGES_VIEW_OPENED.
+// folder beside it; opens the page VIEW (band + panel + frame), with
+// "No page selected" until one is picked (Destin, 2026-09-17). The library
+// is reached from that view's Manage pages. `active` marks it in the page
+// view's own band, where the same three icons live.
 //
 // PinnedPageButtons — one button per pinned page, after Projects, capped at
 // MAX_PINNED_PAGES; the rest stay in the library. A pinned page opens
@@ -21,15 +24,16 @@ import { usePages } from './use-pages';
 const HEADER_ICON_BUTTON =
   'relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg';
 
-export function PagesButton() {
+export function PagesButton({ active = false }: { active?: boolean } = {}) {
   const { dispatch } = useArtifact();
   return (
     <Tooltip text="Pages" placement="bottom">
       <button
         type="button"
-        className={HEADER_ICON_BUTTON}
-        onClick={() => dispatch({ type: 'PAGES_VIEW_OPENED' })}
+        className={`${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''}`}
+        onClick={() => dispatch({ type: 'PAGE_VIEW_OPENED' })}
         aria-label="Open Pages"
+        aria-pressed={active}
         data-guide-anchor="pages"
       >
         <PagesIcon />

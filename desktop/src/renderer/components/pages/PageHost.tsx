@@ -11,38 +11,32 @@
 // theme changes. The frame's srcDoc never changes after load, so a theme
 // switch keeps whatever the page was doing (scope §2).
 //
-// THE PAGE VIEW'S OWN FRAME (shell deck rounds 3–4, 2026-09-16/17). Destin
-// picked the side-panel layout and described the frame: "a similar style [to
-// the app frame], but a unique frame built for page view. keep
-// exit/maximize/minimize, but put the back to chat option where the
-// games/files panels would be, a page name where the session browser would
-// be, and the new side panel instead of the settings/project panel options."
-// The panel "should list all pages, with the pin icon next to them. a centered
-// manage pages button at the bottom of this panel will open the full page
-// management screen. esc/back to chat should still be its own option at the
-// top right. the rail should be collapsible with a button at the top left."
-// Round 4: no divider under the band and none above Manage pages — "the edge
-// of the frame itself should be the divider"; the page pane is inset from the
-// chrome by the frame edge on every side, like the chat pane. Round 5: the
-// panel sits in its own rounded container "kinda like games/files in framed
-// chat sessions"; Back to chat is styled like the window buttons (the same
-// inset pill, no outline); Edit is gone from the band — editing lives only in
-// the Manage pages screen.
+// THE PAGE VIEW (shell decks rounds 3–8, then Destin's redirection on
+// 2026-09-17): "when i click the pages icon, i want it to open straight into
+// the view with the left sidebar and the frame page window. the framed window
+// will just say No Page Selected until user picks a page. a new filled Create
+// a page button above manage pages with a plus sign. pin the drawer to the
+// open state and remove the panel/drawer icon from the top left. re-insert the
+// settings, project view, and pages icon at the top left (but NOT chat/terminal
+// toggle, file browser, or games panel). the old page icon page will now only
+// be accessible via manage pages."
 //
-//   ┌ [▣]                    ◷ Page name                    [Back to chat Esc] [– □ ×] ┐
+//   ┌ [⚙][▤][▢]              ◷ Page name                    [Back to chat Esc] [– □ ×] ┐
 //   │╭─────────────────────╮ ╭──────────────────────────────────────────────────╮│
-//   ││ every page, grouped, │ │  the page, in a rounded pane inset by the edge   ││
+//   ││ every page, grouped, │ │  the page — or "No page selected"                ││
 //   ││ pin beside each      │ │                                                  ││
+//   ││ [ + Create a page  ] │ │                                                  ││
 //   ││ [   Manage pages   ] │ ╰──────────────────────────────────────────────────╯│
 //
-// Opened by PAGE_OPENED (from a card, a pinned button, or a panel row); renders
-// nothing while no page is open. Sits above the library (z-50 over its z-40)
-// so Manage pages can open the library on top, and Back returns to chat.
+// Opened by PAGE_VIEW_OPENED (the Pages button) or PAGE_OPENED (a card, a
+// pinned button, a panel row). Renders nothing while closed. The library
+// (Manage pages) opens OVER it and closes back onto it.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
-import { CaptionButtons, MacTrafficLights, showCaptionButtons } from '../HeaderBar';
+import { CaptionButtons, MacTrafficLights, ProjectsButton, SettingsGearButton, showCaptionButtons } from '../HeaderBar';
+import { PagesButton } from './PagesButton';
 import type { PageDocument, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
@@ -51,32 +45,35 @@ import { PAGE_KIT_CSS } from './page-kit';
 import { PAGE_DATA_SET_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
 
 
+interface PageHostProps {
+  /** The same three icons the app's band shows, wired to the same places. */
+  settingsOpen: boolean;
+  onToggleSettings: () => void;
+  settingsBadge?: boolean;
+  settingsDangerBadge?: boolean;
+  /** Starts the creator in a new conversation. Owned by App. */
+  onCreatePage: () => void;
+}
+
 type Load =
+  | { state: 'idle' }
   | { state: 'loading' }
   | { state: 'ready'; page: PageDocument; doc: string }
   | { state: 'failed'; failure: PageLoadFailure };
 
-/** The band's icon buttons: the same 24px square the app's header uses for
- *  Settings, Pages and Projects, so the band reads as the same chrome. */
-const BAND_ICON_BUTTON =
-  'relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg';
-
-export function PageHost() {
+export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge, onCreatePage }: PageHostProps) {
   const { state, dispatch } = useArtifact();
+  const open = state.pageViewOpen;
   const pageId = state.openPageId;
-  // Back to chat closes the page AND the library beneath it: the panel's
-  // Manage pages opens the library over the page, but Esc/Back from the page
-  // itself means "I am done with pages".
-  const backToChat = () => { dispatch({ type: 'PAGE_CLOSED' }); dispatch({ type: 'PAGES_VIEW_CLOSED' }); };
-  useEscClose(pageId !== null && !state.pagesViewOpen, backToChat);
+  // Back to chat leaves pages altogether (the library over this view goes too).
+  const backToChat = () => dispatch({ type: 'PAGE_VIEW_CLOSED' });
+  useEscClose(open && !state.pagesViewOpen && !settingsOpen, backToChat);
   const { pages } = usePages();
   const summary = pages.find((p) => p.id === pageId) ?? null;
   const pinnedCount = pages.filter((p) => p.pinned).length;
   // The frame reloads when page.html was rewritten (the stamp moves) and not
   // when the page saved its own data (it does not) — review F7.
   const htmlStamp = summary?.htmlStamp ?? 0;
-  // Hidden by default, everywhere (Destin, 2026-09-17: "lets just always default to hidden").
-  const [railOpen, setRailOpen] = useState(false);
   const headerRef = useRef<HTMLDivElement>(null);
 
   const [load, setLoad] = useState<Load>({ state: 'loading' });
@@ -88,10 +85,11 @@ export function PageHost() {
   // below rather than a new srcDoc (which would reload the page and lose its
   // state).
   useEffect(() => {
-    if (pageId === null) return;
+    if (!open) return;
+    void refreshPages();
+    if (pageId === null) { setLoad({ state: 'idle' }); return; }
     let cancelled = false;
     setLoad({ state: 'loading' });
-    void refreshPages();
     const bridge = (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
     if (!bridge) {
       setLoad({ state: 'failed', failure: { kind: 'unreadable', message: 'Pages are not available in this window.' } });
@@ -105,7 +103,7 @@ export function PageHost() {
       if (!cancelled) setLoad({ state: 'failed', failure: { kind: 'unreadable', message: 'The page could not be read.' } });
     });
     return () => { cancelled = true; };
-  }, [pageId, htmlStamp]);
+  }, [open, pageId, htmlStamp]);
 
   // Saves from the page. Only THIS frame may write this page's data: every
   // sandboxed frame in the app has origin 'null' (HtmlView's artifact previews
@@ -145,8 +143,8 @@ export function PageHost() {
     });
   }, [load.state]);
 
-  const title = useMemo(() => summary?.name ?? (load.state === 'ready' ? load.page.name : 'Page'), [summary, load]);
-  if (pageId === null) return null;
+  const title = useMemo(() => summary?.name ?? (load.state === 'ready' ? load.page.name : ''), [summary, load]);
+  if (!open) return null;
 
   const personal = pages.filter((p) => p.home.kind === 'personal');
   const byProject = new Map<string, PageSummary[]>();
@@ -168,22 +166,17 @@ export function PageHost() {
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
         <MacTrafficLights headerRef={headerRef} />
+        {/* The app's own three destinations, in the app's order; Pages is lit
+            because this IS the pages view. No chat/terminal toggle, files or
+            games here (Destin, 2026-09-17). */}
         <div className="flex items-center gap-1 sm:gap-2">
-          <Tooltip text={railOpen ? 'Hide the pages panel' : 'Show the pages panel'} placement="bottom">
-            <button
-              type="button"
-              className={BAND_ICON_BUTTON}
-              onClick={() => setRailOpen((o) => !o)}
-              aria-label={railOpen ? 'Hide pages panel' : 'Show pages panel'}
-              aria-pressed={railOpen}
-            >
-              <RailToggleIcon open={railOpen} />
-            </button>
-          </Tooltip>
+          <SettingsGearButton settingsOpen={settingsOpen} onToggleSettings={onToggleSettings} settingsBadge={settingsBadge} settingsDangerBadge={settingsDangerBadge} />
+          <PagesButton active />
+          <ProjectsButton />
         </div>
         <div className="flex items-center justify-center gap-2 min-w-0 px-3">
           {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
-          <span className="text-sm font-medium text-fg truncate">{title}</span>
+          <span className="text-sm font-medium text-fg truncate">{title || 'Pages'}</span>
         </div>
         <div className="flex items-center justify-end gap-1 sm:gap-2">
           {/* Same inset pill and quiet text as the window buttons beside it
@@ -210,43 +203,49 @@ export function PageHost() {
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
       <div className="flex-1 min-h-0 flex" style={{ gap: 'var(--frame-edge, 10px)', padding: '0 var(--frame-edge, 10px) var(--frame-edge, 10px)' }}>
-        {railOpen && (
-          <aside className="w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
-            <div className="flex-1 overflow-y-auto p-2">
-              {personal.length > 0 && (
-                <RailGroup label="Personal">
-                  {personal.map((p) => (
-                    <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
-                      onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
-                  ))}
-                </RailGroup>
-              )}
-              {[...byProject.entries()].map(([name, list]) => (
-                <RailGroup key={name} label={name}>
-                  {list.map((p) => (
-                    <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
-                      onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
-                  ))}
-                </RailGroup>
-              ))}
-              {pages.length === 0 && <div className="px-3 py-3 text-xs text-fg-muted">No pages yet</div>}
-            </div>
-            <div className="p-3">
-              {/* The library sits BELOW the page view (z-40 under z-50), so opening
-                  it alone changed nothing on screen (found 2026-09-17). Manage
-                  pages leaves the page and shows the library; a card reopens one. */}
-              <Button variant="secondary" onClick={() => { dispatch({ type: 'PAGE_CLOSED' }); dispatch({ type: 'PAGES_VIEW_OPENED' }); }} className="w-full justify-center rounded-full">
-                <PagesIcon className="w-3.5 h-3.5" />
-                Manage pages
-              </Button>
-            </div>
-          </aside>
-        )}
+        <aside className="w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
+          <div className="flex-1 overflow-y-auto p-2">
+            {personal.length > 0 && (
+              <RailGroup label="Personal">
+                {personal.map((p) => (
+                  <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
+                    onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
+                ))}
+              </RailGroup>
+            )}
+            {[...byProject.entries()].map(([name, list]) => (
+              <RailGroup key={name} label={name}>
+                {list.map((p) => (
+                  <RailRow key={p.id} page={p} current={p.id === pageId} pinFull={pinnedCount >= MAX_PINNED_PAGES}
+                    onOpen={() => dispatch({ type: 'PAGE_OPENED', pageId: p.id })} />
+                ))}
+              </RailGroup>
+            ))}
+            {pages.length === 0 && <div className="px-2 py-3 text-xs text-fg-muted">No pages yet. Create one below.</div>}
+          </div>
+          <div className="p-3 flex flex-col gap-2">
+            {/* The ONE primary in this view (G-4). */}
+            <Button variant="primary" onClick={onCreatePage} className="w-full justify-center rounded-full">
+              <PlusGlyph />
+              Create a page
+            </Button>
+            <Button variant="secondary" onClick={() => dispatch({ type: 'PAGES_VIEW_OPENED' })} className="w-full justify-center rounded-full">
+              <PagesIcon className="w-3.5 h-3.5" />
+              Manage pages
+            </Button>
+          </div>
+        </aside>
         <div className="relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
+          {load.state === 'idle' && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 select-none">
+              <div className="text-sm font-medium text-fg-2">No page selected</div>
+              <div className="text-xs text-fg-muted">Pick one from the list, or create a page.</div>
+            </div>
+          )}
           {load.state === 'loading' && <LoadingState what={title} verb="Opening" />}
           {load.state === 'failed' && (
             <div className="p-6 max-w-[34rem] mx-auto">
-              <ErrorState message={load.failure.message} onRetry={() => dispatch({ type: 'PAGE_OPENED', pageId })} />
+              <ErrorState message={load.failure.message} onRetry={() => { if (pageId !== null) dispatch({ type: 'PAGE_OPENED', pageId }); }} />
             </div>
           )}
           {load.state === 'ready' && (
@@ -308,22 +307,20 @@ function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; curren
   );
 }
 
-/** A panel-with-left-sidebar glyph; the sidebar fills when the panel is open. */
-function RailToggleIcon({ open }: { open: boolean }) {
-  return (
-    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-      <rect x="3" y="5" width="18" height="14" rx="2" strokeWidth={2} />
-      <path d="M9 5v14" strokeWidth={2} />
-      {open && <rect x="3" y="5" width="6" height="14" rx="1" fill="currentColor" stroke="none" />}
-    </svg>
-  );
-}
 
 function EditIcon() {
   return (
     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
         d="M16.5 3.5a2.1 2.1 0 013 3L8 18l-4 1 1-4L16.5 3.5zM14 6l4 4" />
+    </svg>
+  );
+}
+
+function PlusGlyph() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <path strokeLinecap="round" strokeWidth={2.5} d="M12 5v14M5 12h14" />
     </svg>
   );
 }

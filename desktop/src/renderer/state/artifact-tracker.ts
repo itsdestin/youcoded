@@ -27,6 +27,9 @@ export interface ArtifactState {
   // a card opens it with the library still open underneath, so Back returns
   // to where the person came from.
   pagesViewOpen: boolean;
+  /** The page view itself: band, panel and frame. Open with openPageId null
+   *  shows "No page selected" in the frame. */
+  pageViewOpen: boolean;
   openPageId: string | null;
   // Selected artifact is scoped per session (keyed by sessionId), so each
   // session's drawer remembers which file was open across session switches.
@@ -54,6 +57,7 @@ export const initialArtifactState: ArtifactState = {
   drawerExpanded: false,
   projectViewOpen: false,
   pagesViewOpen: false,
+  pageViewOpen: false,
   openPageId: null,
   activeArtifactBySession: {},
   gitReviewBySession: {},
@@ -135,12 +139,20 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
       return { ...s, projectViewOpen: true };
     case 'PROJECT_VIEW_CLOSED':
       return { ...s, projectViewOpen: false };
+    case 'PAGE_VIEW_OPENED':
+      return { ...s, pageViewOpen: true };
+    // Leaving the page view leaves pages altogether: the library over it goes too.
+    case 'PAGE_VIEW_CLOSED':
+      return { ...s, pageViewOpen: false, pagesViewOpen: false, openPageId: null };
     case 'PAGES_VIEW_OPENED':
       return { ...s, pagesViewOpen: true };
+    // The library closes back onto the page view it was opened from.
     case 'PAGES_VIEW_CLOSED':
-      return { ...s, pagesViewOpen: false, openPageId: null };
+      return { ...s, pagesViewOpen: false };
+    // Opening a page (from a card, a pinned button or a panel row) opens the
+    // page view too, and puts the library away.
     case 'PAGE_OPENED':
-      return { ...s, openPageId: a.pageId };
+      return { ...s, openPageId: a.pageId, pageViewOpen: true, pagesViewOpen: false };
     case 'PAGE_CLOSED':
       return { ...s, openPageId: null };
     case 'GIT_REVIEW_OPENED':

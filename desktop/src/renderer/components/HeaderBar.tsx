@@ -250,7 +250,7 @@ interface Props {
  *  App.tsx, does) — useArtifact() needs a provider ancestor regardless of which
  *  component calls it. Keeping this in its own small component is just code
  *  organization; SessionStrip now also calls useArtifact() at its top level. */
-function ProjectsButton() {
+export function ProjectsButton() {
   const { dispatch } = useArtifact();
   return (
     <Tooltip text="Projects" placement="bottom">
@@ -340,7 +340,7 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
  *  gear to be byte-identical to the session one, so the class string, badges
  *  and Android hit-size live here and nowhere else. Copying the JSX would let
  *  the two drift on the next tweak. */
-function SettingsGearButton({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge }: {
+export function SettingsGearButton({ settingsOpen, onToggleSettings, settingsBadge, settingsDangerBadge }: {
   settingsOpen: boolean;
   onToggleSettings: () => void;
   settingsBadge?: boolean;

@@ -45,6 +45,11 @@ export type ArtifactAction =
   // ProjectView; an open page sits above it. Both live here rather than in a
   // store of their own because every entry point (HeaderBar, OverflowMenu,
   // the library's cards) already holds this dispatch.
+  // The page VIEW (band + panel + frame) is what the Pages button opens, with
+  // or without a page in the frame (Destin, 2026-09-17). The library
+  // (PAGES_VIEW_*) opens over it from Manage pages.
+  | { type: 'PAGE_VIEW_OPENED' }
+  | { type: 'PAGE_VIEW_CLOSED' }
   | { type: 'PAGES_VIEW_OPENED' }
   | { type: 'PAGES_VIEW_CLOSED' }
   | { type: 'PAGE_OPENED'; pageId: string }

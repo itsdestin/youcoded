@@ -3333,7 +3333,7 @@ function AppInner() {
     const closeAll = () => {
       setSettingsOpen(false); setProvidersAutoOpen(false); setResumeRequested(false);
       dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
-      dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' });
+      dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
       setActiveView('chat');
       // The drawer's own dialogs (Assistant settings, Appearance, Help) keep
       // their open state across the drawer closing; tell them to close too.
@@ -3388,7 +3388,7 @@ function AppInner() {
     // a settings page the tour opened for its own reasons.
     setSettingsOpen(false); setProvidersAutoOpen(false);
     dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
-    dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' });
+    dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
     requestGuideReset();
   }, []);
 
@@ -4436,15 +4436,21 @@ function AppInner() {
         // Make a page: a conversation in the current folder with the creator
         // skill pre-filled (not sent), so the person adds what the page should
         // do and presses Enter. Edit: the same, naming the page; a project page
-        // opens in its project so the skill finds the folder.
-        onMakePage={() => { dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false, undefined, undefined, undefined, undefined, undefined, '/page-builder '); }}
+        // opens in its project so the skill finds the folder. Both leave pages.
+        onMakePage={() => { dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false, undefined, undefined, undefined, undefined, undefined, '/page-builder '); }}
         onEditPage={(page) => {
-          dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' });
+          dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
           const cwd = page.home.kind === 'project' ? page.home.path : (currentSession?.cwd || sessionDefaults.projectFolder || '');
           void createSession(cwd, false, undefined, undefined, undefined, undefined, undefined, `/page-builder edit "${page.name}" `);
         }}
       />
-      <PageHost />
+      <PageHost
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen(prev => !prev)}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
+        onCreatePage={() => { dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false, undefined, undefined, undefined, undefined, undefined, '/page-builder '); }}
+      />
     </div>
     </ArtifactProvider>
   );

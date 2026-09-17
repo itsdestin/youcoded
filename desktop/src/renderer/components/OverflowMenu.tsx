@@ -97,7 +97,7 @@ export default function OverflowMenu({
       // control without another entry point).
       key: 'pages',
       label: 'Pages',
-      onClick: choose(() => dispatch({ type: 'PAGES_VIEW_OPENED' })),
+      onClick: choose(() => dispatch({ type: 'PAGE_VIEW_OPENED' })),
       active: false,
       dot: null,
       icon: <PagesIcon />,
