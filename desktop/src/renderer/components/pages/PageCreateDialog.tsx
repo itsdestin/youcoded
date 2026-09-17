@@ -31,7 +31,7 @@ export function PageCreateDialog({ request, onCreated, onCancel, onManageProject
   return (
     // Layer 3: the library (z-60, layer 2's band) may be under it — Make a
     // page lives there too — and a dialog must sit above what opened it.
-    <Dialog open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle="Pick where the conversation starts and which model builds it." className="p-4">
+    <Dialog open onClose={onCancel} layer={3} size="panel" title={request.title} subtitle="Pick where the conversation starts and which model builds it.">
       <BuddyNewSessionForm
         key={request.initialInput + (request.cwd ?? '')}
         initialInput={request.initialInput}

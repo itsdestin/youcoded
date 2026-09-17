@@ -52,8 +52,8 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const pinnedCount = pages.filter((p) => p.pinned).length;
 
   return (
-    // z-[60]: above the page view (z-50) it opens from.
-    <div className="fixed inset-0 bg-canvas z-[60] flex flex-col">
+    // z-50: above the page view (z-40) it opens from.
+    <div className="fixed inset-0 bg-canvas z-50 flex flex-col">
       <header className="flex items-center gap-3 px-4 py-2.5 border-b border-edge shrink-0">
         <h2 className="text-base font-semibold text-fg shrink-0 flex items-center gap-2">
           <PagesIcon className="w-4 h-4 text-fg-muted" />
@@ -68,7 +68,8 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
         <Button
           variant="ghost"
           onClick={close}
-          className="hidden sm:inline-flex shrink-0 text-sm px-2.5 py-1"
+          size="sm"
+          className="hidden sm:inline-flex shrink-0"
           aria-label="Exit pages"
         >
           Esc · Back
@@ -76,12 +77,12 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
         <CloseButton
           onClick={close}
           label="Exit pages"
-          className="sm:hidden shrink-0 panel-glass bg-inset rounded-md border border-edge-dim hover:border-edge"
+          className="sm:hidden shrink-0"
         />
       </header>
 
       <main className="flex-1 overflow-y-auto min-h-0">
-        <div className="w-full max-w-[1100px] mx-auto px-2 sm:px-4 py-4 flex flex-col gap-6">
+        <div className="w-full max-w-6xl mx-auto px-2 sm:px-4 py-4 flex flex-col gap-6">
           {!loaded && <LoadingState what="pages" />}
           {loaded && failed && (
             <ErrorState
@@ -146,9 +147,9 @@ function PageCard({ page, onOpen, onEdit, pinFull }: { page: PageSummary; onOpen
             variant="ghost"
             aria-label={`Edit ${page.name} in chat`}
             onClick={(e) => { e.stopPropagation(); onEdit(); }}
-            className="text-fg-muted"
           >
-            <EditGlyph />
+            {/* Colour on the glyph, not the Button: the primitive owns its own text colour. */}
+            <span className="text-fg-muted"><EditGlyph /></span>
           </Button>
         </Tooltip>
         <Tooltip text={cannotPin ? `Up to ${MAX_PINNED_PAGES} pinned pages` : page.pinned ? 'Unpin from the top bar' : 'Pin to the top bar'} placement="bottom">
@@ -159,9 +160,8 @@ function PageCard({ page, onOpen, onEdit, pinFull }: { page: PageSummary; onOpen
             aria-pressed={page.pinned}
             disabled={cannotPin}
             onClick={(e) => { e.stopPropagation(); void setPagePinned(page.id, !page.pinned); }}
-            className={page.pinned ? 'text-fg' : 'text-fg-muted'}
           >
-            <PinGlyph filled={page.pinned} />
+            <span className={page.pinned ? 'text-fg' : 'text-fg-muted'}><PinGlyph filled={page.pinned} /></span>
           </Button>
         </Tooltip>
       </div>
@@ -180,7 +180,7 @@ function PageCard({ page, onOpen, onEdit, pinFull }: { page: PageSummary; onOpen
 function PagesEmptyCard({ onMake }: { onMake: () => void }) {
   return (
     <div className="flex-1 flex items-center justify-center max-sm:items-start px-2 py-8 min-h-0">
-      <div className="w-full max-w-[34rem] bg-panel border border-edge rounded-lg p-5 sm:p-6 flex flex-col items-center text-center gap-4 sm:flex-row sm:items-start sm:text-left">
+      <div className="w-full max-w-xl bg-panel border border-edge rounded-lg p-5 sm:p-6 flex flex-col items-center text-center gap-4 sm:flex-row sm:items-start sm:text-left">
         <span aria-hidden="true" className="shrink-0 inline-flex w-16 h-16 rounded-lg bg-inset border border-edge-dim items-center justify-center text-fg-dim">
           <PagesIcon className="w-8 h-8" />
         </span>

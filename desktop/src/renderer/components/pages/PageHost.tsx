@@ -240,7 +240,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           )}
           {load.state === 'loading' && <LoadingState what={title} verb="Opening" />}
           {load.state === 'failed' && (
-            <div className="p-6 max-w-[34rem] mx-auto">
+            <div className="p-6 max-w-xl mx-auto">
               <ErrorState message={load.failure.message} onRetry={() => { if (pageId !== null) dispatch({ type: 'PAGE_OPENED', pageId }); }} />
             </div>
           )}
@@ -294,9 +294,11 @@ function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; curren
           aria-pressed={page.pinned}
           disabled={cannotPin}
           onClick={(e) => { e.stopPropagation(); void setPagePinned(page.id, !page.pinned); }}
-          className={`w-6 h-6 ${page.pinned ? 'text-fg' : 'text-fg-faint group-hover:text-fg-muted'}`}
+          className="w-6 h-6"
         >
-          <PinGlyph filled={page.pinned} />
+          {/* The colour rides on the glyph, not the Button (the primitive owns
+              its own text colour): quiet until the row is hovered, solid when pinned. */}
+          <span className={page.pinned ? 'text-fg' : 'text-fg-faint group-hover:text-fg-muted'}><PinGlyph filled={page.pinned} /></span>
         </Button>
       </Tooltip>
     </div>

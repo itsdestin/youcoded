@@ -6,7 +6,7 @@
 //   ┌ [⚙][▤][▢][pinned…]        ◷ Title            [Back to chat · Esc] [– □ ×] ┐
 //
 // Same height, drag region and window buttons as the app's header; three
-// columns so the title is truly centred. The left cluster is the app's own
+// equal columns so the title is truly centred (it truncates before the clusters do). The left cluster is the app's own
 // destinations — Settings, Pages, Projects and the pinned pages — wired to
 // the same places as in the chat header; `active` lights the one this screen
 // IS. No chat/terminal toggle, files or games here. No border underneath: the
@@ -34,7 +34,7 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
   return (
     <div
       ref={headerRef}
-      className="header-bar !relative grid grid-cols-[1fr_auto_1fr] items-center h-10 px-2 sm:px-3 shrink-0 select-none"
+      className="header-bar !relative grid grid-cols-3 items-center h-10 px-2 sm:px-3 shrink-0 select-none"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <MacTrafficLights headerRef={headerRef} />
@@ -55,7 +55,7 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
             type="button"
             onClick={onBack}
             aria-label={backLabel}
-            className="px-2 py-1 rounded-[var(--radius-toggle)] transition-colors text-fg-dim hover:text-fg-2 flex items-center gap-1.5 text-xs leading-none"
+            className="px-2 py-1 rounded-sm transition-colors text-fg-dim hover:text-fg-2 flex items-center gap-1.5 text-xs leading-none"
           >
             {/* One size and one baseline for all three parts (round 6), with a
                 dot between the words and the key. */}

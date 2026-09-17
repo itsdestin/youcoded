@@ -35,6 +35,7 @@ const ALLOWLIST: Record<string, string> = {
   'state/account-context.tsx': 'account refresh every 15 minutes — negligible',
   'dev/workbench/compare/registry.tsx': 'workbench-only, never in the shipped app',
   'dev/workbench/mock-shim.ts': 'workbench-only fake backend, never in the shipped app',
+  'dev/workbench/fixtures/pages.ts': 'workbench-only sample pages; the setInterval is page HTML inside a string, run by a sandboxed frame only while that page is open',
 };
 
 function walk(dir: string): string[] {

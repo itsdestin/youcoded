@@ -89,7 +89,10 @@ describe('ChatView pane layout containment', () => {
   it('keeps the ACTIVE session in layout', () => {
     const style = renderPane({ visible: true, sessionActive: true });
     expect(style.contentVisibility).toBe('visible');
-    expect(style.visibility).toBe('visible');
+    // Not 'visible': the active pane INHERITS visibility (no inline value), so
+    // an ancestor can hide the whole chat column under a floating-chrome
+    // screen (App's data-screen-open, 2026-09-17). Only 'hidden' is a bug here.
+    expect(style.visibility).not.toBe('hidden');
   });
 
   it('keeps the active session IN layout while its terminal tab is showing', () => {

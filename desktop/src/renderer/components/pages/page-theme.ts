@@ -14,7 +14,7 @@
 // host internals. The list below is the design guide's token vocabulary (§2)
 // plus the radius and font scale, i.e. what the style kit is written against.
 
-export const PAGE_THEME_TOKENS: readonly string[] = [
+const PAGE_THEME_TOKENS: readonly string[] = [
   'canvas', 'panel', 'inset', 'well',
   'accent', 'on-accent',
   'fg', 'fg-2', 'fg-dim', 'fg-muted', 'fg-faint',
@@ -32,7 +32,7 @@ export const PAGE_DATA_SET_MESSAGE = 'youcoded:data:set';
 /** Posted when Esc is pressed inside the page: the frame has focus, so the
  *  host's own Esc handling never sees the key (design review, item 7). */
 export const PAGE_ESC_MESSAGE = 'youcoded:esc';
-export const PAGE_THEME_STYLE_ID = 'youcoded-theme';
+const PAGE_THEME_STYLE_ID = 'youcoded-theme';
 
 /** Snapshot of the current theme as one `:root { … }` rule. Reads computed
  *  values, so it works whether a token came from a stylesheet or from the

@@ -62,10 +62,3 @@ export async function setPagePinned(id: string, pinned: boolean): Promise<void> 
   const pages = await b.setPinned(id, pinned);
   publish({ pages, loaded: true, failed: false });
 }
-
-/** Test seam: forget the bridge subscription so a second render tree starts clean. */
-export function resetPagesStoreForTests(): void {
-  started = false;
-  snapshot = { pages: [], loaded: false, failed: false };
-  listeners.clear();
-}

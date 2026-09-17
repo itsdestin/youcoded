@@ -31,10 +31,6 @@ export function setGlobalShortcutsBlocked(next: boolean): void {
   blocked = next;
 }
 
-export function globalShortcutsBlocked(): boolean {
-  return blocked;
-}
-
 const ZOOM_KEYS = new Set(['=', '+', '-', '_', '0']);
 
 /** Exported for the test; the module registers it itself. */
