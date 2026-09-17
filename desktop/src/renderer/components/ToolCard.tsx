@@ -301,6 +301,11 @@ export function friendlyToolDisplay(
     case 'propose_plan':
       return planDisplay(input, tool.plan);
 
+    // Task 9b: the assistant's answer to a paused plan — a plain verb, not
+    // the tool's code name. The suggestion itself is shown on the plan card.
+    case 'recommend_plan_action':
+      return { label: toolActionLabel('recommend_plan_action', active), detail: '' };
+
     case 'Task':
       return taskDisplay(input, {
         title: tool.specialistRun?.title,

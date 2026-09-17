@@ -119,7 +119,8 @@ describe('recommended: the assistant\'s button, filled and on the right', () => 
   it('stop: one filled Stop button, and nothing else', () => {
     render(<ChatProvider><Card initial={paused({ handoff: { state: 'answered', recommendation: { action: 'stop', message: 'This cannot finish as planned.' } } })} /></ChatProvider>);
     expect(buttons()).toEqual(['Stop']);
-    expect(screen.getByRole('button', { name: 'Stop' }).className).toContain('bg-destructive');
+    // Whole class: the light variant only has `hover:bg-destructive/10`.
+    expect(screen.getByRole('button', { name: 'Stop' }).className.split(/\s+/)).toContain('bg-destructive');
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
     expect(api.stop).toHaveBeenCalledWith(S, 'plan-1');
   });
@@ -169,6 +170,22 @@ describe('a plan the assistant revised', () => {
 });
 
 describe('the recommend_plan_action tool card', () => {
+  it('its own card header reads as a plain action, not the tool name', () => {
+    function RecCard() {
+      const dispatch = useChatDispatch();
+      useEffect(() => {
+        dispatch({ type: 'SESSION_INIT', sessionId: S });
+        dispatch({ type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'r', toolUseId: 'rec-1', toolName: 'recommend_plan_action', toolInput: { action: 'stop', message: 'm' } });
+        dispatch({ type: 'TRANSCRIPT_TOOL_RESULT', sessionId: S, uuid: 'r2', toolUseId: 'rec-1', result: 'Recommendation recorded.', isError: false });
+      }, [dispatch]);
+      const tool = useChatState(S).toolCalls.get('rec-1');
+      return tool ? <ToolCard tool={tool} sessionId={S} /> : null;
+    }
+    const { container } = render(<ChatProvider><RecCard /></ChatProvider>);
+    expect(container).toHaveTextContent('Suggested a next step for the plan');
+    expect(container).not.toHaveTextContent('recommend_plan_action');
+  });
+
   it('reads as a plain action, not "Used a tool"', () => {
     expect(toolActionLabel('recommend_plan_action', false)).toBe('Suggested a next step for the plan');
     expect(toolActionLabel('recommend_plan_action', true)).toBe('Suggesting a next step for the plan');
