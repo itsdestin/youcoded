@@ -26,6 +26,11 @@ import type { ChatAction, ChatState, SerializedChatState } from './chat-types';
 import { keptByHydrate } from './chat-reducer';
 
 type Dispatch = (action: ChatAction) => void;
+// The whole frame's actions in one call, in arrival order. WHY an array
+// (2026-09-16 A4): the store applies them one by one but notifies its
+// subscribers once for the batch — see ChatStore.dispatchMany. applyChatHydrate
+// below still takes the single-action Dispatch: a hydrate is one action.
+type DispatchBatch = (actions: ChatAction[]) => void;
 
 export interface TranscriptBatcher {
   /** Queue an action for the next frame (or the next 16 ms while hidden). */
@@ -41,7 +46,7 @@ export interface TranscriptBatcher {
 // so the module always points at the batcher whose dispatch is current.
 let active: TranscriptBatcher | null = null;
 
-export function installTranscriptBatcher(dispatch: Dispatch): TranscriptBatcher {
+export function installTranscriptBatcher(dispatch: DispatchBatch): TranscriptBatcher {
   const pending: ChatAction[] = [];
   let rafId: number | null = null;
   let timerId: ReturnType<typeof setTimeout> | null = null;
@@ -56,8 +61,9 @@ export function installTranscriptBatcher(dispatch: Dispatch): TranscriptBatcher 
     clearScheduled();
     if (disposed) return;
     const batch = pending.splice(0);
-    // React 18 batches all synchronous dispatches → single render for the whole batch
-    for (const action of batch) dispatch(action);
+    // One call for the frame: the store applies every action in order and
+    // notifies subscribers once (React already coalesced the render).
+    if (batch.length > 0) dispatch(batch);
   }
 
   function push(action: ChatAction) {
