@@ -310,7 +310,9 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   }),
   getFocusSessionId: () => windowRegistry.getFocusSessionId(),
   // A theme change made on a phone reaches every window here, the same message a peer
-  // window sends (tests/remote-appearance-relay.test.ts).
+  // window sends (tests/remote-appearance-relay.test.ts). This callback's presence is
+  // guarded by the ast-grep rule appearance-broadcast-relays-to-remote (workspace
+  // scripts/ast-grep/rules/).
   onAppearanceBroadcast: (prefs) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
