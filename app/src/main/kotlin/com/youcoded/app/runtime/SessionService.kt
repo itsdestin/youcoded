@@ -309,10 +309,14 @@ class SessionService : Service() {
         // Privacy analytics: fire install + daily-heartbeat ping to the marketplace
         // Worker. Fire-and-forget: no await, no logging. Respects opt-out internally
         // (AnalyticsService.runOnLaunch returns early if state.optIn is false).
-        // Runs on a raw thread so service startup is never blocked by network I/O.
-        // Mirror of desktop/src/main/main.ts's analytics wire-in.
-        Thread {
-            try {
+        // Runs on the IO dispatcher so service startup is never blocked by network I/O.
+        // Mirror of desktop/src/main/analytics-service.ts startDailyHeartbeat().
+        // WHY a loop: the heartbeat used to fire only when the service started, so
+        // an app left running for days was counted on its first day only. Each
+        // wake-up just looks at the clock; runOnLaunch sends at most once per UTC
+        // day. The loop lives on serviceScope, so onDestroy() cancels it.
+        serviceScope.launch {
+            val analytics = try {
                 AnalyticsService(
                     apiBase = ANALYTICS_API_BASE,
                     // $HOME is set by Bootstrap to the Termux home dir, but onCreate
@@ -326,11 +330,21 @@ class SessionService : Service() {
                     machineIdReader = {
                         Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: ""
                     },
-                ).runOnLaunch()
+                )
             } catch (_: Exception) {
                 // Swallow — analytics must never impact app startup.
+                return@launch
             }
-        }.start()
+            while (true) {
+                try {
+                    analytics.runOnLaunch()
+                } catch (_: Exception) {
+                    // Swallow — analytics must never impact the app.
+                }
+                // Outside the try: cancellation from onDestroy() must end the loop.
+                delay(AnalyticsService.msUntilNextCheck(System.currentTimeMillis()))
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

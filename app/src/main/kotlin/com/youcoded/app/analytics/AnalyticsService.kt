@@ -126,9 +126,23 @@ class AnalyticsService(
     }
 
     companion object {
+        // WHY a cap: a sleeping phone pauses the countdown, so one wait until
+        // midnight could run hours late. Each wake-up only looks at the clock;
+        // runOnLaunch() sends at most once per UTC day. Mirrors desktop's
+        // msUntilNextCheck in analytics-service.ts.
+        private const val MAX_WAIT_MS = 3L * 60 * 60 * 1000
+        private const val DAY_MS = 24L * 60 * 60 * 1000
+
         fun todayUtc(): String {
             val fmt = SimpleDateFormat("yyyy-MM-dd").apply { timeZone = TimeZone.getTimeZone("UTC") }
             return fmt.format(Date())
+        }
+
+        // Milliseconds until one second past the next UTC midnight, capped at 3 hours.
+        // Epoch milliseconds count UTC days exactly, so no calendar is needed.
+        fun msUntilNextCheck(nowMs: Long): Long {
+            val nextMidnight = (nowMs / DAY_MS + 1) * DAY_MS + 1000
+            return minOf(nextMidnight - nowMs, MAX_WAIT_MS)
         }
     }
 }

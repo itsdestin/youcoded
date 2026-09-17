@@ -141,6 +141,19 @@ class AnalyticsServiceTest {
         assertEquals(firstHash, secondHash)
     }
 
+    // Same fixtures as desktop's analytics-service.test.ts msUntilNextCheck cases.
+    @Test
+    fun `next check lands just after UTC midnight when under 3h away`() {
+        val now = java.time.Instant.parse("2026-09-16T23:00:00Z").toEpochMilli()
+        assertEquals(60L * 60 * 1000 + 1000, AnalyticsService.msUntilNextCheck(now))
+    }
+
+    @Test
+    fun `next check never waits longer than 3 hours`() {
+        val now = java.time.Instant.parse("2026-09-16T01:00:00Z").toEpochMilli()
+        assertEquals(3L * 60 * 60 * 1000, AnalyticsService.msUntilNextCheck(now))
+    }
+
     @Test
     fun `hash parity with desktop`() {
         // Fixture: hashing "parity-fixture-id|android" with ANALYTICS_SALT must

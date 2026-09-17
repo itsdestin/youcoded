@@ -89,7 +89,7 @@ import { syncHelperOnLaunch } from './kwin-helper';
 import { WorkAreaResolver } from './buddy-work-area';
 import { excludeFromCapture, nativeCaptureExclusionAvailable } from './window-exclude-capture';
 import { cleanupStaleDownloads } from './update-installer';
-import { runAnalyticsOnLaunch } from './analytics-service';
+import { startDailyHeartbeat } from './analytics-service';
 import { loadConfigSync, setAppliedAtLaunch, setCachedGpu } from './performance-config';
 import { perfMark } from './perf-marks';
 
@@ -1629,8 +1629,9 @@ void app.whenReady().then(async () => {
   reportPreviousCrashes();
 
   // Fire-and-forget: never await. Respects the opt-out in About → Privacy
-  // internally and fails silently on any network issue.
-  void runAnalyticsOnLaunch();
+  // internally and fails silently on any network issue. Keeps sending one per
+  // UTC day while the app stays open (see startDailyHeartbeat).
+  startDailyHeartbeat();
 
   // Cache the GPU device list once. Used by the Performance section in
   // SettingsPanel to decide whether to render (hidden on single-GPU systems)
@@ -1672,7 +1673,7 @@ void app.whenReady().then(async () => {
     isFirstRun = false;
   }
   // Perf lab: everything between rotate-log and here — kicking off
-  // runAnalyticsOnLaunch() (whose readState + deviceIdHash run synchronously on
+  // startDailyHeartbeat() (whose readState + deviceIdHash run synchronously on
   // this stack, before its first await), the app.getGPUInfo('complete') call, and
   // first-run detection's up-to-two readFileSync + JSON.parse — used to be billed
   // to the install-hooks chore, because the rig measures each chore as
