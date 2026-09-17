@@ -79,17 +79,17 @@ function setupFor(manifest: ExecutionManifest, specialist: string): number {
 }
 
 /**
- * What a reported request cost at its real rates. WHY the cache-write
- * subtraction: the AI SDK's `inputTokens` is the WHOLE prompt, cache writes
- * included (@ai-sdk/anthropic sums noCache + cacheRead + cacheWrite), while
- * costForUsage also bills `cacheCreationTokens` at the write rate — so the
- * written tokens would be billed twice. Plans subtract them first so each
- * token is priced once. Ordinary sessions still call costForUsage directly;
- * that shared double count is reported separately rather than changed here.
+ * What a reported request cost at its real rates. The AI SDK's `inputTokens`
+ * is the WHOLE prompt, cache writes included (@ai-sdk/anthropic sums noCache +
+ * cacheRead + cacheWrite). Plans used to subtract the written tokens here
+ * because costForUsage billed them twice; merge note (master, 2026-09-16):
+ * costForUsage now takes cache writes out of the prompt itself, so doing it
+ * here too would bill those tokens at NOTHING. Kept as the one named place a
+ * plan turns a report into dollars, so the plan and the conversation's Cost
+ * figure price a request identically.
  */
 function reportedUsd(usage: PricedUsage, rates: ModelPricing): number | null {
-  const written = rates.cacheWrite != null ? Math.min(usage.cacheCreationTokens, usage.inputTokens) : 0;
-  return costForUsage({ ...usage, inputTokens: usage.inputTokens - written }, rates);
+  return costForUsage(usage, rates);
 }
 
 /**
