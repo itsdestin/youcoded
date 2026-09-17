@@ -1812,7 +1812,7 @@ export class RemoteServer {
         // ipc-handlers' SESSION_BROWSE) — previously this surface only ever
         // returned CC rows, so a remote web client's Resume Browser silently
         // never showed native sessions at all.
-        const sessions = await listPastSessions(activeIds, this.nativeRuntime?.nativeHost.list());
+        const sessions = await listPastSessions(activeIds, this.nativeRuntime ? await this.nativeRuntime.nativeHost.listAsync() : undefined);
         this.respond(client.ws, type, id, sessions);
         break;
       }
@@ -1893,7 +1893,7 @@ export class RemoteServer {
         break;
       }
       case 'native:sessions-list': {
-        this.respond(client.ws, type, id, this.nativeRuntime ? this.nativeRuntime.nativeHost.list() : []);
+        this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.nativeHost.listAsync() : []);
         break;
       }
       case 'native:kill-shell': {
@@ -2672,7 +2672,9 @@ export class RemoteServer {
 
         // Native sessions page over the merged event array; null means "not a
         // native id", so CC's transcript file is the source.
-        const nativePage = this.nativeRuntime?.nativeHost.getHistoryPage(pageSessionId, beforeOffset) ?? null;
+        // Async form (2026-09-16 C2 review): the desktop's page handler was
+        // converted; the phone's scroll-up read the whole transcript sync too.
+        const nativePage = this.nativeRuntime ? await this.nativeRuntime.nativeHost.getHistoryPageAsync(pageSessionId, beforeOffset) : null;
         if (nativePage) {
           this.respond(client.ws, type, id, {
             events: nativePage.events,

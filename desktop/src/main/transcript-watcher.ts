@@ -691,7 +691,9 @@ export class TranscriptWatcher extends EventEmitter {
     this.globalPollTimer = setInterval(() => {
       for (const session of this.sessions.values()) {
         if (!session.needsPoll) continue;
-        if (!fs.existsSync(session.jsonlPath)) continue;
+        // No existsSync here (2026-09-16 C5): it was one synchronous stat per
+        // open session every 2 s, forever, and readNewLinesOnce already stats
+        // asynchronously and returns when the file is not there yet.
         void this.readNewLines(session);
         // If fs.watch isn't attached yet, upgrade from poll-only to watch+poll.
         if (!session.watcher) {

@@ -202,22 +202,123 @@ function createDigestCache(): (file: string) => string | null {
   };
 }
 
-function rawTranscript(file: string): { bytes: number; digest: string; events: Map<string, TranscriptEvent> } | null {
-  let data: Buffer;
-  try { data = fs.readFileSync(file); } catch { return null; }
-  const events = new Map<string, TranscriptEvent>();
-  for (const line of data.toString('utf8').split('\n')) {
+type RawTranscript = { bytes: number; digest: string; events: Map<string, TranscriptEvent> };
+
+/** Parse transcript lines into the uuid→event map. Returns false on a duplicate
+ *  uuid (WHY: duplicate UUIDs are ambiguous persistence anchors, never a basis
+ *  for faithful restore). An unparseable line is SKIPPED and parsing continues
+ *  — the raw digest still fences torn/junk lines; they are not referenceable.
+ *  (Review, 2026-09-16: an earlier draft stopped at the first junk line, which
+ *  a crash-sealed torn record would have made permanent for that session —
+ *  every later event invisible, every publish "unreferenced-history".) */
+function parseTranscriptLines(text: string, events: Map<string, TranscriptEvent>): boolean {
+  for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try {
       const value = JSON.parse(line) as TranscriptEvent;
       if (value && typeof value.type === 'string' && typeof value.uuid === 'string') {
-        // WHY: duplicate UUIDs are ambiguous persistence anchors, never a basis for faithful restore.
-        if (events.has(value.uuid)) return null;
+        if (events.has(value.uuid)) return false;
         events.set(value.uuid, value);
       }
-    } catch { /* Raw digest still fences torn/junk lines; they are not referenceable. */ }
+    } catch { /* junk line: skipped, never referenceable */ }
   }
+  return true;
+}
+
+/** Whole-file, synchronous read. Serves restore(), which runs once at resume. */
+function rawTranscriptSync(file: string): RawTranscript | null {
+  let data: Buffer;
+  try { data = fs.readFileSync(file); } catch { return null; }
+  const events = new Map<string, TranscriptEvent>();
+  if (!parseTranscriptLines(data.toString('utf8'), events)) return null;
   return { bytes: data.length, digest: digest(data), events };
+}
+
+// How many bytes just before the cached boundary are kept to prove the prefix
+// is still the prefix. A rewrite that changes an earlier line shifts every byte
+// after it, so the bytes at the boundary differ. (A same-length rewrite more
+// than this far before the boundary is undetectable by design — and no
+// production writer rewrites a session file; the store only appends.)
+const PREFIX_CHECK_BYTES = 4096;
+// How many transcripts' parsed prefixes the reader keeps. WHY a cap (review,
+// 2026-09-16): the cache lived for the app's life, one parsed event map per
+// native session ever published. remove() also forgets a session's entry.
+const MAX_CACHED_TRANSCRIPTS = 24;
+
+/**
+ * Reads a transcript for publish(), keeping the parsed prefix between calls.
+ *
+ * WHY (2026-09-16 smoothness sweep, C1): publish() runs at EVERY turn boundary
+ * of every native session and used to read and JSON-parse the whole transcript
+ * synchronously on the main thread — a hitch at the end of every reply that
+ * grew with the conversation, and every window frozen for it. Transcripts are
+ * append-only (the session store appends whole lines), so this keeps the
+ * events parsed so far, the hash state through the last newline it has seen,
+ * and the last few KB before that boundary; the next call reads only the bytes
+ * past it. The result is what the old whole-file reader returned: `bytes` is
+ * the file's size, `digest` hashes ALL its bytes (a torn tail included —
+ * restore() compares against the whole file), `events` holds every parsed line.
+ *
+ * Anything that breaks the append-only assumption drops the cache and re-reads
+ * in full: the file shrank, the bytes before the boundary no longer match (a
+ * header rewrite), a duplicate uuid, or an unparseable line. All I/O is
+ * fs.promises; the parse of the NEW bytes is the only main-thread work left.
+ */
+class IncrementalTranscriptReader {
+  private cache = new Map<string, { bytes: number; hash: ReturnType<typeof createHash>; events: Map<string, TranscriptEvent>; check: Buffer }>();
+  /** Test-only counters: how the reader answered. */
+  readonly stats = { full: 0, incremental: 0 };
+
+  forget(file: string): void { this.cache.delete(file); }
+
+  async read(file: string): Promise<RawTranscript | null> {
+    let handle: fs.promises.FileHandle;
+    try { handle = await fs.promises.open(file, 'r'); } catch { return null; }
+    try {
+      const size = (await handle.stat()).size;
+      const hit = this.cache.get(file);
+      let from = 0;
+      if (hit && size >= hit.bytes) {
+        const probe = Buffer.alloc(hit.check.length);
+        const { bytesRead } = await handle.read(probe, 0, probe.length, hit.bytes - probe.length);
+        if (bytesRead === probe.length && probe.equals(hit.check)) from = hit.bytes;
+      }
+      const data = Buffer.alloc(size - from);
+      if (data.length > 0) {
+        const { bytesRead } = await handle.read(data, 0, data.length, from);
+        if (bytesRead !== data.length) { this.cache.delete(file); return null; } // raced a truncate; next call re-reads
+      }
+      const base = from > 0 && hit
+        ? { hash: hit.hash, events: new Map(hit.events) }
+        : { hash: createHash('sha256'), events: new Map<string, TranscriptEvent>() };
+      if (from > 0) this.stats.incremental++; else this.stats.full++;
+
+      // Only whole lines are parsed and cached; a torn tail is hashed, never kept.
+      const lastNewline = data.lastIndexOf(0x0a);
+      const complete = lastNewline >= 0 ? data.subarray(0, lastNewline + 1) : data.subarray(0, 0);
+      if (!parseTranscriptLines(complete.toString('utf8'), base.events)) { this.cache.delete(file); return null; }
+
+      const prefixHash = base.hash.copy().update(complete);
+      const fullDigest = prefixHash.copy().update(data.subarray(complete.length)).digest('hex');
+      const cachedBytes = from + complete.length;
+      if (cachedBytes > 0) {
+        // The check window is the last PREFIX_CHECK_BYTES of the cached prefix,
+        // which may straddle the old boundary — take it from what we hold.
+        const tail = Buffer.concat([hit && from > 0 ? hit.check : Buffer.alloc(0), complete]);
+        this.cache.delete(file); // re-insert so Map order is least-recently-used first
+        this.cache.set(file, { bytes: cachedBytes, hash: prefixHash, events: base.events, check: tail.subarray(Math.max(0, tail.length - PREFIX_CHECK_BYTES)) });
+        while (this.cache.size > MAX_CACHED_TRANSCRIPTS) this.cache.delete(this.cache.keys().next().value!);
+      } else {
+        this.cache.delete(file);
+      }
+      return { bytes: size, digest: fullDigest, events: base.events };
+    } catch {
+      this.cache.delete(file);
+      return null;
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  }
 }
 
 /** The exact model-facing text an accepted event contributes for `field`, or null
@@ -361,6 +462,10 @@ export class AcceptedHistoryStore {
   private chains = new Map<string, Promise<unknown>>();
   private revisions = new Map<string, number>();
   private disabled = new Set<string>();
+  /** One reader per store: its cache is the parsed prefix of each session's transcript. */
+  readonly reader = new IncrementalTranscriptReader();
+  /** Which transcript each session last published from, so remove() can forget it. */
+  private transcriptBySession = new Map<string, string>();
 
   constructor(userDataRoot: string, private hooks: AcceptedHistoryStoreHooks = {}) {
     // WHY: continuation is profile-private Electron state, never the syncable NativeHome tree.
@@ -397,7 +502,8 @@ export class AcceptedHistoryStore {
       if (this.disabled.has(proposal.sessionId) || proposal.revision !== this.currentRevision(proposal.sessionId)) return { ok: false, reason: 'stale-generation' } as const;
       let json: string;
       try {
-        const raw = rawTranscript(proposal.transcriptPath);
+        this.transcriptBySession.set(proposal.sessionId, proposal.transcriptPath);
+        const raw = await this.reader.read(proposal.transcriptPath);
         if (!raw) return { ok: false, reason: 'unreferenced-history' } as const;
         const eventUuids = acceptedAnchors(proposal.references, raw.events);
         if (!eventUuids) return { ok: false, reason: 'unreferenced-history' } as const;
@@ -444,7 +550,7 @@ export class AcceptedHistoryStore {
     if (manifest.binding !== input.binding) return { ok: false, reason: 'binding-mismatch' };
     if (manifest.assemblyDigest !== input.assemblyDigest) return { ok: false, reason: 'assembly-mismatch' };
     if (path.resolve(manifest.transcriptPath) !== path.resolve(input.transcriptPath)) return { ok: false, reason: 'missing-transcript' };
-    const raw = rawTranscript(input.transcriptPath);
+    const raw = rawTranscriptSync(input.transcriptPath);
     if (!raw) { void this.remove(input.sessionId); return { ok: false, reason: 'missing-transcript' }; }
     if (raw.bytes !== manifest.transcript.bytes || raw.digest !== manifest.transcript.digest) return { ok: false, reason: 'transcript-advanced' };
     const accepted = new Set(manifest.eventUuids);
@@ -466,6 +572,8 @@ export class AcceptedHistoryStore {
   }
 
   async remove(sessionId: string): Promise<{ ok: true } | { ok: false; reason: 'unlink-failed' }> {
+    const transcript = this.transcriptBySession.get(sessionId);
+    if (transcript) { this.reader.forget(transcript); this.transcriptBySession.delete(sessionId); }
     await this.invalidate(sessionId, 'deleted');
     const unlink = this.hooks.unlink ?? ((file: string) => fs.promises.unlink(file));
     const drop = async (file: string): Promise<boolean> => {
@@ -529,8 +637,9 @@ export class AcceptedHistoryStore {
   }
 
   private async atomicWrite(file: string, text: string): Promise<void> {
-    fs.mkdirSync(this.dir, { recursive: true, mode: DIRECTORY_MODE });
-    fs.chmodSync(this.dir, DIRECTORY_MODE);
+    // fs.promises, not the Sync twins (2026-09-16 C1): this runs twice per turn boundary.
+    await fs.promises.mkdir(this.dir, { recursive: true, mode: DIRECTORY_MODE });
+    await fs.promises.chmod(this.dir, DIRECTORY_MODE);
     const temp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
     await fs.promises.writeFile(temp, text, { encoding: 'utf8', mode: FILE_MODE });
     await this.hooks.beforeRename?.();
