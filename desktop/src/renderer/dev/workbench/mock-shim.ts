@@ -2056,6 +2056,35 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
      'Added to your note for this conversation, so it shows under All Sessions.'],
   ];
 
+  // `&previewPlan=1` (round-11 review): a paused plan, same shape as the
+  // scenario fixtures' bubbles/tools plan-ask-budget.jsonl, so the preview
+  // shows a real pause with real buttons that PlanBlock's `readOnly` prop
+  // (previewSessionKey) must then hide.
+  const PREVIEW_PLAN: PlanView = {
+    planId: 'plan-preview-1',
+    toolUseId: 'toolu_preview_plan',
+    title: 'Review the auth module before the release',
+    status: 'paused',
+    steps: [
+      { id: 's1', kind: 'map', title: 'Review the six files that changed in the auth module', specialist: 'reviewer', fanOut: 3, budgetTokens: 9000, status: 'paused', done: 2, usedTokens: 27000 },
+      { id: 's2', kind: 'verify', title: 'Check each review against the file it describes', specialist: 'reviewer', fanOut: 1, budgetTokens: 9000, status: 'pending' },
+      { id: 's3', kind: 'combine', title: 'Combine the findings into one ranked list', specialist: 'worker', fanOut: 1, budgetTokens: 4000, status: 'pending' },
+    ],
+    ceilingTokens: 40000,
+    ceilingUsd: 0.12,
+    model: { label: 'Claude Sonnet 4.6' },
+    usedTokens: 27000,
+    usedUsd: 0.08,
+    startedAt: Date.now() - 20 * 60_000,
+    paused: {
+      stepId: 's1',
+      reason: 'step 1 hit its 27,000-token limit with 2 of 3 reviewers done.',
+      minimumAddTokens: 12500,
+      kind: 'budget',
+      actions: ['add_budget', 'stop'],
+    },
+  };
+
   const chatsearch = {
     resolve: async (shortIds: string[]) => ({ ok: true as const, results: shortIds.map(resolveFixture) }),
     read: async (req: { provider: string; id: string; before?: number }) => {
@@ -2080,7 +2109,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         const ev = (type: string, n: string, data: Record<string, unknown>) =>
           ({ type, sessionId, uuid: `${req.id}-${i}-${n}`, timestamp: t, data });
         const out = [ev('user-message', 'u', { text: ask })];
-        if (lead) {
+        // `&previewPlan=1`: the NEWEST turn (the one on screen without
+        // scrolling) is a paused plan instead of an ordinary tool turn — see
+        // PREVIEW_PLAN above.
+        if (previewPlanSwitch && i === TOTAL - 1) {
+          out.push(ev('assistant-text', 'l', { text: "I'll split this into steps for a few specialists." }));
+          out.push(ev('tool-use', 'plan', { toolUseId: PREVIEW_PLAN.toolUseId, toolName: 'propose_plan', toolInput: { goal: PREVIEW_PLAN.title }, plan: PREVIEW_PLAN }));
+          out.push(ev('tool-result', 'planr', { toolUseId: PREVIEW_PLAN.toolUseId, toolResult: 'Plan proposed; waiting for the user.', plan: PREVIEW_PLAN }));
+        } else if (lead) {
           out.push(ev('assistant-text', 'l', { text: lead }));
           const tools: [string, Record<string, unknown>, string][] = [
             ['Read', { file_path: '/home/destin/youcoded-dev/youcoded/desktop/src/renderer/components/ChatView.tsx' }, '1  import React from \'react\';'],
@@ -2131,6 +2167,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // arcade switch above documents). This composes with any scenario.
   const noProjectsSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('projects') === 'none';
+  // Round-11 review (specialists plans, F25 "previews are read-only"): the real
+  // chatsearch:read backend can return a `propose_plan` tool call same as any
+  // other, but this mock always fabricates CHAT_TURNS/STUDENT_TURNS, which
+  // never includes one — so a conversation preview could never be screenshotted
+  // with a plan card on it. `&previewPlan=1` makes the NEWEST turn of every
+  // previewed conversation a paused plan instead of an ordinary Q&A turn, so
+  // Projects → Conversations → any row shows it. Gated behind the switch so
+  // every other preview shot (contract tests, the promo/site clips) is unaffected.
+  const previewPlanSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('previewPlan') === '1';
 
   // Promo (model beat): the model picker shows ONLY favourites until you type
   // (components/model/ModelPicker.tsx), and it keeps them in localStorage under
