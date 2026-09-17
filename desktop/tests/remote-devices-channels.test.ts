@@ -10,8 +10,9 @@ const CHANNELS = ['remote:devices:list', 'remote:devices:rename', 'remote:device
 
 describe('the device list exists on every platform', () => {
   it('each channel is registered in preload, the desktop handlers and the shim', () => {
-    // WHY a parity test and not a type: shim-parity compares SHAPES, so a channel missing
-    // from one side of the bridge type-checks and then does nothing at runtime.
+    // WHY a parity test and not a type: a bridge type (SharedBridge in shared/types.ts)
+    // compares SHAPES, so a channel missing from one side of the bridge type-checks and
+    // then does nothing at runtime.
     for (const c of CHANNELS) {
       expect(preload).toContain(`'${c}'`);
       expect(shim).toContain(`'${c}'`);
@@ -22,7 +23,7 @@ describe('the device list exists on every platform', () => {
   });
 
   it('Android answers all three rather than falling through to unsupported', () => {
-    // shim-parity.test.ts cannot see Kotlin, so a missing case here is invisible until a
+    // The bridge types in shared/types.ts cannot see Kotlin, so a missing case here is invisible until a
     // phone hits it. Every channel must appear in the when-block.
     for (const c of CHANNELS) expect(kotlin).toContain(`"${c}"`);
   });

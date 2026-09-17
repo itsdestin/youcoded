@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame } from 'electron
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
-import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, SessionMetaResult } from '../shared/types';
+import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, SessionMetaResult, PreloadBridge } from '../shared/types';
 // Type-only (erased at build), so the sandboxed preload still resolves nothing at
 // runtime — same footing as the '../shared/types' line above.
 import type { FirstRunState } from '../shared/first-run-types';
@@ -1866,4 +1866,7 @@ contextBridge.exposeInMainWorld('claude', {
     read: (req: { provider: string; id: string; before?: number; projectSlug?: string }) =>
       ipcRenderer.invoke('chatsearch:read', req),
   },
-});
+  // WHY `satisfies`: a compile-time-only check (erased from the built preload, so
+  // the sandbox sees no import) that keeps `session`, `on` and the favorites pair
+  // in step with remote-shim.ts — see SharedBridge in shared/types.ts.
+} satisfies PreloadBridge);
