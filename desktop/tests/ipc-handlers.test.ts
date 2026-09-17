@@ -408,3 +408,113 @@ describe('dialog:open-file attachment picker filters', () => {
     expect(options.filters.at(-1)).toEqual({ name: 'All Files', extensions: ['*'] });
   });
 });
+
+// Simplification audit W2: the 10 s status push used to re-read every status
+// file and send the same payload to every window, minimised or not. These pin
+// the three changes: an unchanged payload is not re-sent, the tick does nothing
+// while no window is visible and no phone is connected, and the first look
+// afterwards (a focus, a phone connecting) gets a push at once.
+describe('status push: deduplicated, paused while nobody can see it, resumed on first look', () => {
+  // Every fs read the build makes resolves as a microtask, so one fake-timer
+  // advance settles a whole build — no real disk, no sleeps.
+  let usageJson: string | null;
+  let readFile: ReturnType<typeof vi.spyOn>;
+  let stat: ReturnType<typeof vi.spyOn>;
+  let httpsGet: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    usageJson = null;
+    readFile = vi.spyOn(fs.promises, 'readFile').mockImplementation(async (p: any) => {
+      if (String(p).endsWith('.usage-cache.json') && usageJson != null) return usageJson;
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+    stat = vi.spyOn(fs.promises, 'stat').mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    // The build kicks a release check; keep it off the network.
+    const https = await import('node:https');
+    httpsGet = vi.spyOn(https.default, 'get').mockImplementation((() => ({ on: () => ({ on: () => ({}) }) })) as any);
+  });
+  afterEach(() => {
+    readFile.mockRestore(); stat.mockRestore(); httpsGet.mockRestore();
+    vi.useRealTimers();
+  });
+
+  async function boot(opts: { clients?: () => number } = {}) {
+    const win = {
+      visible: true,
+      webContents: { send: vi.fn() },
+      isDestroyed: () => false,
+      isVisible() { return win.visible; },
+      isMinimized: () => false,
+      on: vi.fn(),
+    };
+    let statusListener: ((s: any) => void) | null = null;
+    const remoteServer = opts.clients ? {
+      getClientCount: opts.clients,
+      broadcastStatusData: vi.fn(),
+      onStatusChange: vi.fn((cb: (s: any) => void) => { statusListener = cb; return () => {}; }),
+      broadcast: vi.fn(),
+      // Wiring the handlers hand a real server at boot; inert here.
+      setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
+    } : undefined;
+    const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) }, getInstalled: vi.fn(() => []) };
+    registerIpcHandlers(
+      { handle: vi.fn(), on: vi.fn() } as any,
+      { createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []), sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn() } as any,
+      win as any,
+      mockSkillProvider as any,
+      undefined as any, undefined, undefined, remoteServer as any,
+    );
+    const { app } = await import('electron');
+    const focus = (app.on as any).mock.calls.filter((c: any[]) => c[0] === 'browser-window-focus').at(-1)[1] as () => void;
+    const sends = () => win.webContents.send.mock.calls.filter((c: any[]) => c[0] === 'status:data').length;
+    const tick = () => vi.advanceTimersByTimeAsync(10_000);
+    return { win, sends, tick, focus, phoneConnects: () => statusListener?.({ clientCount: 1 }), remoteServer };
+  }
+
+  it('sends a changed payload once and does not repeat an identical one', async () => {
+    const { sends, tick } = await boot();
+    await tick();
+    expect(sends()).toBe(1);
+    await tick();
+    await tick();
+    expect(sends()).toBe(1); // same files, same answer — nothing to tell the windows
+    usageJson = '{"five_hour":{"used":1}}';
+    await tick();
+    expect(sends()).toBe(2);
+  });
+
+  it('skips the tick while the window is hidden, then pushes the moment it is focused again', async () => {
+    const { win, sends, tick, focus } = await boot();
+    await tick();
+    expect(sends()).toBe(1);
+    win.visible = false;
+    usageJson = '{"five_hour":{"used":2}}';
+    await tick();
+    await tick();
+    expect(sends()).toBe(1); // changed on disk, but nobody can see a status bar
+    win.visible = true;
+    focus();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sends()).toBe(2); // right away, not after the next 10 s tick
+    focus();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sends()).toBe(2); // a focus with no missed tick behind it pushes nothing
+  });
+
+  it('a connected phone counts as an audience, and a phone connecting gets the missed push', async () => {
+    let clients = 0;
+    const { win, sends, tick, phoneConnects, remoteServer } = await boot({ clients: () => clients });
+    win.visible = false;
+    await tick();
+    expect(sends()).toBe(0);
+    clients = 1;
+    phoneConnects();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(sends()).toBe(1);
+    expect(remoteServer!.broadcastStatusData).toHaveBeenCalledTimes(1);
+    usageJson = '{"five_hour":{"used":3}}';
+    await tick(); // window still hidden — the phone keeps the tick alive
+    expect(sends()).toBe(2);
+  });
+});
