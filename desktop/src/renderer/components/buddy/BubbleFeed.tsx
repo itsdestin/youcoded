@@ -5,8 +5,7 @@ import { loadFirstPageThenReplay } from '../../state/first-page-load';
 import UserMessage from '../UserMessage';
 import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
-import { shouldRenderAssistantTurn, userEntryRenderKind, planAskQuestion } from '../../state/chat-types';
-import { PlanAskLine } from '../plans/PlanAskLine';
+import { shouldRenderAssistantTurn, userEntryRenderKind, planAskMessage } from '../../state/chat-types';
 import { CompactToolStrip } from './CompactToolStrip';
 import { helperAsksOf } from '../../utils/specialist-cards';
 import PromptCard from '../PromptCard';
@@ -527,16 +526,17 @@ export function BubbleFeed({ sessionId }: Props) {
 
               switch (entry.kind) {
                 case 'user': {
-                  // Task 10/11: a plan notice is hidden or drawn as the one-line
-                  // "You asked…" — shared render kind, MUST mirror ChatView.tsx.
+                  // Task 10/11: a plan notice is hidden, or (asked) drawn as the
+                  // user's own message (decision 21) — shared render kind, MUST
+                  // mirror ChatView.tsx.
                   const renderKind = userEntryRenderKind(entry);
                   if (renderKind === 'hide') return null;
                   key = entry.message.id;
                   // sessionId ?? '' — the buddy window has no ArtifactProvider, so
                   // FilepathToken pills render but their click is a documented no-op.
                   // Host-injected turn → compact report card, MUST mirror ChatView.tsx.
-                  content = renderKind === 'ask-line'
-                    ? <PlanAskLine question={planAskQuestion(entry.message.content)} />
+                  content = renderKind === 'ask-message'
+                    ? <UserMessage message={planAskMessage(entry.message)} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />
                     : entry.injected
                       ? <SpecialistReportCard message={entry.message} injected={entry.injected} meta={entry.injectedMeta} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />
                       : <UserMessage message={entry.message} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />;

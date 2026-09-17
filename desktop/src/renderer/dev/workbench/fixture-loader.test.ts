@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadFixture } from './fixture-loader';
+import { PLAN_ASK_BLANK_MESSAGE, planAskMessage, userEntryRenderKind } from '../../state/chat-types';
+import { chatReducer } from '../../state/chat-reducer';
 
 describe('loadFixture', () => {
   it('parses a Skill tool_use + tool_result pair into a single tool block', () => {
@@ -107,5 +111,25 @@ describe('loadFixture', () => {
       expect(result.blocks[1].tool.toolUseId).toBe('toolu_01G1');
       expect(result.blocks[3].tool.toolUseId).toBe('toolu_01G2');
     }
+  });
+});
+
+// Decision 21 (deck 9, D9-2): the "Ask the assistant" fixtures replay their
+// notice the way the real notice turn lands, and the chat draws it as the
+// user's own message — the typed question, or the default one when blank.
+describe('the Ask fixtures draw the question as the user\'s own message', () => {
+  const load = (file: string) => loadFixture(file, readFileSync(join(__dirname, 'fixtures', 'tools', `${file}.jsonl`), 'utf8'));
+  const askMessages = (file: string) => load(file).actions
+    .reduce((st, a) => chatReducer(st, a), chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: 'sandbox' }))
+    .get('sandbox')!.timeline
+    .filter((e) => e.kind === 'user' && userEntryRenderKind(e) === 'ask-message')
+    .map((e) => (e.kind === 'user' ? planAskMessage(e.message).content : ''));
+
+  it('plan-ask-line-text: the typed question', () => {
+    expect(askMessages('plan-ask-line-text')).toEqual(['Is adding 12,500 tokens enough to finish, or should I stop here?']);
+  });
+
+  it('plan-ask-pending: a blank box reads as the default question', () => {
+    expect(askMessages('plan-ask-pending')).toEqual([PLAN_ASK_BLANK_MESSAGE]);
   });
 });

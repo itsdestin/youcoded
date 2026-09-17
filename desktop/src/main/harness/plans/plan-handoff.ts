@@ -125,9 +125,9 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?
   const { actions } = pausedRouting(paused);
   const lines = [
     // Task 11 (§6): the user asked, and the notice says so first. The lead is
-    // shared with the renderer, which draws this notice as the one plain line
-    // "You asked the assistant about this plan." (the text itself is the
-    // transcript text, unchanged).
+    // shared with the renderer, which draws this notice as the user's own
+    // message (decision 21: the typed question, or "What should I do about
+    // this paused plan?"); the facts below reach the assistant only.
     PLAN_ASK_NOTICE_LEAD,
     '',
     `Plan: "${plan.document.goal}"`,

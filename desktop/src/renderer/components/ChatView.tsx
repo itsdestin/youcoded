@@ -1,7 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, userEntryRenderKind, planAskQuestion } from '../state/chat-types';
-import { PlanAskLine } from './plans/PlanAskLine';
+import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, userEntryRenderKind, planAskMessage } from '../state/chat-types';
 import UserMessage from './UserMessage';
 import SpecialistReportCard from './SpecialistReportCard';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
@@ -1140,8 +1139,8 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               switch (entry.kind) {
                 case 'user': {
                   // Task 10/11: a plan notice draws no row, or — when the user
-                  // asked it — one plain line (shared render kind; MUST mirror
-                  // BubbleFeed/PreviewTimeline).
+                  // asked it — the user's own message bubble (decision 21;
+                  // shared render kind; MUST mirror BubbleFeed/PreviewTimeline).
                   const renderKind = userEntryRenderKind(entry);
                   if (renderKind === 'hide') return null;
                   key = entry.message.id;
@@ -1149,7 +1148,9 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                   // report) is an EVENT for the assistant, not anyone's words —
                   // a compact collapsed card, see SpecialistReportCard. MUST
                   // mirror BubbleFeed.tsx.
-                  content = renderKind === 'ask-line' ? <PlanAskLine question={planAskQuestion(entry.message.content)} /> : entry.injected ? (
+                  content = renderKind === 'ask-message' ? (
+                    <UserMessage message={planAskMessage(entry.message)} sessionId={sessionId} showTimestamps={showTimestamps} />
+                  ) : entry.injected ? (
                     <SpecialistReportCard
                       message={entry.message}
                       injected={entry.injected}

@@ -122,9 +122,31 @@ export function planAskQuestion(noticeText: string): string | undefined {
   return question || undefined;
 }
 
-/** How a `user` timeline entry is drawn: as itself, not at all, or as the
- *  one-line "You asked the assistant about this plan." */
-export type UserEntryRenderKind = 'show' | 'hide' | 'ask-line';
+/** Decision 21 (deck 9, D9-2): what an Ask with a blank box reads as, in the
+ *  user's own bubble. */
+export const PLAN_ASK_BLANK_MESSAGE = 'What should I do about this paused plan?';
+
+const askMessages = new WeakMap<ChatMessage, ChatMessage>();
+
+/**
+ * Decision 21: the user message a delivered "Ask the assistant" notice is
+ * drawn as — the same entry (id, time) with the question the user typed, or
+ * PLAN_ASK_BLANK_MESSAGE. The plan facts in the notice are for the assistant
+ * only and are never drawn. Cached per message so the memoized bubble gets
+ * the same object on every render.
+ */
+export function planAskMessage(message: ChatMessage): ChatMessage {
+  let shown = askMessages.get(message);
+  if (!shown) {
+    shown = { ...message, content: planAskQuestion(message.content) ?? PLAN_ASK_BLANK_MESSAGE };
+    askMessages.set(message, shown);
+  }
+  return shown;
+}
+
+/** How a `user` timeline entry is drawn: as itself, not at all, or (an Ask
+ *  notice) as the user's own message — see planAskMessage. */
+export type UserEntryRenderKind = 'show' | 'hide' | 'ask-message';
 
 /** Timeline render kind for a `user` entry, shared by ChatView, the buddy
  *  BubbleFeed and PreviewTimeline (which MUST mirror each other).
@@ -132,8 +154,8 @@ export type UserEntryRenderKind = 'show' | 'hide' | 'ask-line';
  *  collapsed "Note for the assistant" row. It still runs as a real turn and
  *  stays in the transcript and the model's history.
  *  Task 11 (pause handoff §6, review 4-6): the notice now exists only because
- *  the user pressed "Ask the assistant", so it is drawn as one plain line on
- *  the user's side ('ask-line'). It appears when the notice is delivered (the
+ *  the user pressed "Ask the assistant". Decision 21: it is drawn as the user's
+ *  own message bubble ('ask-message', planAskMessage). It appears when the notice is delivered (the
  *  transcript's own user-message), so a withdrawn notice draws nothing. An
  *  older automatic notice (same prefix, other words) stays hidden — the user
  *  never asked it. Matched narrowly: a host-injected turn with no header — so
@@ -141,7 +163,7 @@ export type UserEntryRenderKind = 'show' | 'hide' | 'ask-line';
 export function userEntryRenderKind(entry: { message: { content: string }; injected?: string; injectedMeta?: unknown }): UserEntryRenderKind {
   if (!entry.injected || entry.injectedMeta) return 'show';
   const text = entry.message.content;
-  if (text.startsWith(PLAN_ASK_NOTICE_LEAD)) return 'ask-line';
+  if (text.startsWith(PLAN_ASK_NOTICE_LEAD)) return 'ask-message';
   return text.startsWith(PLAN_NOTICE_PREFIX) ? 'hide' : 'show';
 }
 

@@ -6209,7 +6209,7 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(handoff().recommendation).toBeUndefined();
       expect(handoff().problem).toBeUndefined();
       // The next user message does not carry the stale notice in either — and
-      // no "You asked" line was ever drawn for it (the notice never ran).
+      // no Ask message was ever drawn for it (the notice never ran).
       parentSteps.push(textStep('hi'));
       host.send(SID, 'hello again');
       await waitFor(() => host.isIdle(SID) && parentPrompts.some((p) => p.includes('hello again')), 'the next turn');
