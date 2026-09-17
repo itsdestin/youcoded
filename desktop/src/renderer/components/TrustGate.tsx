@@ -1,6 +1,6 @@
-import { useCallback } from 'react';
-import { useChatState, useChatDispatch } from '../state/chat-context';
-import { InteractivePrompt } from '../state/chat-types';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
+import { useChatState, useChatDispatch, useChatStore } from '../state/chat-context';
+import { InteractivePrompt, TimelineEntry } from '../state/chat-types';
 import { TRUST_PROMPT_TITLE } from '../parser/ink-select-parser';
 import { sendPromptInput } from '../state/prompt-input';
 import type { PromptCardButton } from './PromptCard';
@@ -108,7 +108,27 @@ export default function TrustGate({ sessionId }: Props) {
  * Hook for App.tsx to check if the trust gate is active for a session.
  */
 export function useTrustGateActive(sessionId: string | null): boolean {
-  const state = useChatState(sessionId || '');
-  if (!sessionId) return false;
-  return findTrustPrompt(state) !== null;
+  // WHY a cached selector (2026-09-16 A1): this ran in AppInner through a
+  // whole-state subscription, so every streamed word re-rendered the entire
+  // shell to re-scan the timeline for a prompt that is almost never there.
+  // The scan is keyed on the timeline array's identity: a prompt entry (or
+  // its completion) always produces a new array, a streamed word never does —
+  // text deltas update assistantTurns, not the timeline. getSnapshot therefore
+  // rescans only when an entry was added or replaced, and returns a boolean so
+  // useSyncExternalStore re-renders the host only when the answer flips.
+  const store = useChatStore();
+  const cache = useRef<{ timeline: TimelineEntry[] | null; active: boolean }>({ timeline: null, active: false });
+  const subscribe = useCallback(
+    (cb: () => void) => store.subscribeSession(sessionId ?? '', cb),
+    [store, sessionId],
+  );
+  const getSnapshot = useCallback((): boolean => {
+    if (!sessionId) return false;
+    const session = store.getSession(sessionId);
+    if (cache.current.timeline !== session.timeline) {
+      cache.current = { timeline: session.timeline, active: findTrustPrompt(session) !== null };
+    }
+    return cache.current.active;
+  }, [store, sessionId]);
+  return useSyncExternalStore(subscribe, getSnapshot);
 }

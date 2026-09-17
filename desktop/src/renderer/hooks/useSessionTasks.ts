@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useChatState } from '../state/chat-context';
+import { useSessionToolCalls } from '../state/chat-context';
 import { buildTasksById, TaskState } from '../state/task-state';
 
 export const INACTIVE_STORAGE_KEY = 'youcoded-tasks-inactive-v1';
@@ -42,7 +42,11 @@ function writeInactive(map: InactiveMap): void {
  * see this task". Once Claude closes it naturally, the concern is resolved.
  */
 export function useSessionTasks(sessionId: string) {
-  const session = useChatState(sessionId);
+  // WHY the selector and not useChatState (2026-09-16 A1): this hook's ONE
+  // instance lives in AppInner, so a whole-state subscription here re-rendered
+  // the entire shell on every streamed word. Only the toolCalls Map is read,
+  // and its identity survives text deltas.
+  const toolCalls = useSessionToolCalls(sessionId);
   const [inactiveMap, setInactiveMap] = useState<InactiveMap>(() => readInactive());
 
   const sessionInactive = useMemo(
@@ -51,7 +55,7 @@ export function useSessionTasks(sessionId: string) {
   );
 
   // Derive tasks from the session's toolCalls (memoized on the Map ref).
-  const derived = useMemo(() => buildTasksById(session.toolCalls), [session.toolCalls]);
+  const derived = useMemo(() => buildTasksById(toolCalls), [toolCalls]);
 
   // Overlay markedInactive and sort by orderIndex ascending.
   const tasks = useMemo<TaskState[]>(() => {

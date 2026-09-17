@@ -19,6 +19,7 @@
 // signal from the harness, which DOES know when it wrote.
 import chokidar, { FSWatcher } from 'chokidar';
 import fs, { Stats } from 'fs';
+import os from 'os';
 import path from 'path';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
 import { readSidecarShared } from './artifact-store';
@@ -46,6 +47,29 @@ export const WATCH_SKIP_DIRS = new Set([
 // Matches discovery MAX_DEPTH so a broad root (the seeded Home folder) cannot
 // point chokidar at an unbounded tree (plan ADDED 2026-07-22 — depth cap).
 const WATCH_DEPTH = 6;
+// The Home folder itself (the project a fresh install seeds when nothing is
+// saved) gets a much shallower watch. WHY (2026-09-16 smoothness sweep, C9):
+// six levels under $HOME — Documents, Downloads, Pictures, every non-repo code
+// tree — is the ~250,000 inotify watches docs/roadmap/files.md could not
+// attribute, plus a multi-hundred-millisecond main-process freeze each time
+// the watcher started. Two levels keeps live refresh for files sitting in Home
+// and one folder down; deeper files still LIST and OPEN (discovery has its
+// own caps), they just do not live-refresh while Home is the project — an
+// assistant edit to ~/A/B/C/file neither joins the list nor refreshes an open
+// preview until the tab is reopened (the harness's writes reach the UI only
+// through this watcher). The trade is recorded in docs/roadmap/files.md.
+const HOME_WATCH_DEPTH = 2;
+
+/** chokidar `depth` for a project root — see HOME_WATCH_DEPTH. Exported for tests. */
+export function watchDepthFor(projectRoot: string, home: string = os.homedir()): number {
+  return canonicalize(projectRoot, null) === canonicalize(home, null) ? HOME_WATCH_DEPTH : WATCH_DEPTH;
+}
+
+// noteOwnWrite's map only shed an entry when the watcher echoed that exact
+// path, so writes under no watcher (a root with no subscriber, an ignored or
+// nested-repo path, a file outside every watched root) stayed forever. Sweep
+// the expired ones once the map grows past this (2026-09-16 C8).
+const OWN_WRITES_SWEEP_AT = 512;
 
 // How long a path written by the app itself stays suppressed. Must exceed
 // chokidar awaitWriteFinish stabilityThreshold (500ms) with margin, or every
@@ -136,10 +160,16 @@ const ownWrites = new Map<string, number>();            // canonical abs path �
 const sidecarIdCache = new Map<string, { at: number; ids: Map<string, string> }>();
 const SIDECAR_CACHE_TTL_MS = 5000;
 
-let emit: ((evt: ExternalChangeEvent) => void) | null = null;
+// `subscriberIds` are the webContents ids currently subscribed to the event's
+// root. WHY (2026-09-16 C8): the sink used to send every changed file to EVERY
+// window — buddy floaters and the mascot window included — and a formatter or
+// checkout touching 500 files was 500 × windows structured clones. Only a
+// surface that called useProjectWatch can show a file from that root, so only
+// its window needs the message; the remote broadcast is the sink's own business.
+let emit: ((evt: ExternalChangeEvent, subscriberIds: number[]) => void) | null = null;
 
 /** Wire the broadcast sink once at startup (ipc-handlers owns webContents). */
-export function initProjectWatchers(onChange: (evt: ExternalChangeEvent) => void): void {
+export function initProjectWatchers(onChange: (evt: ExternalChangeEvent, subscriberIds: number[]) => void): void {
   emit = onChange;
 }
 
@@ -148,7 +178,16 @@ export function initProjectWatchers(onChange: (evt: ExternalChangeEvent) => void
  * write is not re-broadcast as an external change (spec §8.4).
  */
 export function noteOwnWrite(absPath: string): void {
+  if (ownWrites.size >= OWN_WRITES_SWEEP_AT) {
+    const now = Date.now();
+    for (const [p, expiry] of ownWrites) if (now >= expiry) ownWrites.delete(p);
+  }
   ownWrites.set(canonicalize(absPath, null), Date.now() + OWN_WRITE_TTL_MS);
+}
+
+/** Test-only: how many own-write markers are held. */
+export function __ownWritesHeld(): number {
+  return ownWrites.size;
 }
 
 /** Sidecar changed (appendVersion/rename/remove) — path→id map is stale. */
@@ -240,7 +279,7 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
       },
       ignoreInitial: true,
       followSymlinks: false,
-      depth: WATCH_DEPTH,
+      depth: watchDepthFor(projectRoot),
       awaitWriteFinish: { stabilityThreshold: 500, pollInterval: 100 },
     });
     watchersStarted++;
@@ -281,7 +320,8 @@ async function handleFsEvent(projectRoot: string, event: string, absPath: string
     ownWrites.delete(canon);
   }
   const artifactId = await resolveArtifactId(projectRoot, absPath);
-  emit?.({ projectRoot, artifactId, kind, by: 'external' });
+  const subscribers = entries.get(canonicalize(projectRoot, null))?.refs.keys() ?? [];
+  emit?.({ projectRoot, artifactId, kind, by: 'external' }, [...subscribers]);
 }
 
 /**
