@@ -77,7 +77,9 @@ interface Props {
    *  the theme cycle does not offer (the marketplace install corner is
    *  text-accent) passes it here — and because the default colour is an INLINE
    *  style, which would beat any class, giving a className also switches the
-   *  inline colour off so the class decides. Omitted = the look every other
+   *  inline colour off so the class decides. The fixed 1em width steps aside
+   *  too: that caller replaced an inline glyph at its natural width, and the
+   *  forced width made its badge ~5 px wider. Omitted = the look every other
    *  caller has always had; colorCycle is ignored while a className is set. */
   className?: string;
 }
@@ -95,10 +97,12 @@ export default function BrailleSpinner({ size = 'sm', colorCycle = true, classNa
   return (
     <span
       className={`${sizeClass[size]} leading-none shrink-0 inline-block text-center${className ? ` ${className}` : ''}`}
-      style={{
-        // See Props.className: a class-driven colour only works if this inline one steps aside.
-        ...(className ? {} : { color: colorCycle ? getThemeColors()[colorIndex] : getThemeColors()[0] }),
-        width: '1em',  // Fixed width prevents layout reflow from variable-width braille glyphs
+      // See Props.className: with a className the caller owns colour AND width;
+      // otherwise the fixed 1em width prevents layout reflow from
+      // variable-width braille glyphs.
+      style={className ? undefined : {
+        color: colorCycle ? getThemeColors()[colorIndex] : getThemeColors()[0],
+        width: '1em',
       }}
     >
       {FRAMES[frameIndex]}
