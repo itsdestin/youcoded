@@ -226,8 +226,8 @@ describe('accepted history privacy sentinels', () => {
     // Reader 6 (the bug-report / diagnostics attachment collector's structural
     // pin — "private-continuation named in exactly one module" and "dev-tools
     // never names userData") moved to ast-grep: rules
-    // private-continuation-dir-single-owner and its -devtools twin
-    // (scripts/ast-grep/rules/), Plan B 2026-09-16. Those run on every commit
+    // private-continuation-dir-single-owner and its -tsx, -present and
+    // -devtools companions (scripts/ast-grep/rules/), Plan B 2026-09-16. Those run on every commit
     // instead of only when this file happens to run, and don't false-fail on
     // whitespace or line-ending changes to dev-tools.ts.
   });
