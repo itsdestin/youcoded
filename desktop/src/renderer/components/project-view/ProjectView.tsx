@@ -20,6 +20,7 @@ import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
+import { workbenchScreenFrame } from '../../workbench-mode';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
 import type { PastSession } from '../../../shared/types';
@@ -725,7 +726,7 @@ export function ProjectView(props: ProjectViewProps) {
     // bg-panel behind a framed bg-canvas pane, under the same band the page
     // view has (Destin, 2026-09-17: "add the same styled frame/header in
     // projects view. we will unify these separate page/menu styles").
-    <div className="fixed inset-0 bg-panel z-40 flex flex-col">
+    <div className="screen-view fixed inset-0 bg-panel z-40 flex flex-col" data-screen-frame={workbenchScreenFrame()}>
       <ScreenBand
         settingsOpen={props.settingsOpen}
         onToggleSettings={props.onToggleSettings}
@@ -738,7 +739,7 @@ export function ProjectView(props: ProjectViewProps) {
 
       {/* The framed pane: rounded, canvas-coloured, inset by the frame edge
           like the page view's panel and frame. */}
-      <div className="flex-1 flex overflow-hidden" style={{ padding: '0 var(--frame-edge, 10px) var(--frame-edge, 10px)' }}>
+      <div className="screen-body flex-1 flex overflow-hidden" style={{ padding: '0 var(--frame-edge, 10px) var(--frame-edge, 10px)' }}>
         {/* Main column — hero + segmented control + active tab. There is no
             project rail anymore; switching projects goes through the palette
             (ProjectSwitcher) opened from the hero name, and project removal
@@ -748,7 +749,7 @@ export function ProjectView(props: ProjectViewProps) {
             ~200px slot under a hero that never moves. sm+ keeps the fixed-chrome
             layout (hero pinned, body scrolls independently) — there's vertical
             room for it there, and it's the design the view was built around. */}
-        <main className="flex-1 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden min-w-0 rounded-xl bg-canvas">
+        <main className="screen-pane screen-pane--frame flex-1 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden min-w-0 rounded-xl bg-canvas">
           {/* No projects at all (first-run guide, spec §1 item 5): the
               explainer card replaces BOTH the hero and the seg-row + tab body —
               three tabs with "0" badges over nothing is a dashboard for nothing.

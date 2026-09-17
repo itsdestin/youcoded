@@ -39,7 +39,8 @@
 // it back with the page still open.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
-import { useEscClose } from '../../hooks/use-esc-close';
+import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
+import { workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
@@ -73,6 +74,12 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // Back to chat leaves pages altogether (the library over this view goes too).
   const backToChat = () => dispatch({ type: 'PAGE_VIEW_CLOSED' });
   useEscClose(open && !state.pagesViewOpen && !settingsOpen, backToChat);
+  // Esc pressed INSIDE the page (the frame swallows the key) is forwarded by
+  // the page's bootstrap; it dismisses whatever is on top exactly as the key
+  // would — Settings or the library over the view, else the view itself.
+  // (Before: ignored while Settings was open, so Settings could not be
+  // closed by Esc with the page focused — Destin, 2026-09-17.)
+  const dismissTop = useDismissTop();
   const { pages } = usePages();
   const summary = pages.find((p) => p.id === pageId) ?? null;
   const pinnedCount = pages.filter((p) => p.pinned).length;
@@ -131,7 +138,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       if (!d) return;
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
-      if (d.type === PAGE_ESC_MESSAGE) { if (!settingsOpen && !state.pagesViewOpen) backToChat(); return; }
+      if (d.type === PAGE_ESC_MESSAGE) { dismissTop(); return; }
       if (d.type !== PAGE_DATA_SET_MESSAGE) return;
       let size = 0;
       try { size = JSON.stringify(d.data ?? null).length; } catch { return; }
@@ -141,7 +148,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     };
     window.addEventListener('message', onMessage);
     return () => { window.removeEventListener('message', onMessage); if (timer !== null) { clearTimeout(timer); flush(); } };
-  }, [load.state, pageId, settingsOpen, state.pagesViewOpen]);
+  }, [load.state, pageId, dismissTop]);
 
   // Live theme: watch the host document and post the fresh tokens in.
   useEffect(() => {
@@ -169,7 +176,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     // gear opens the drawer and a click beside it closes it (found 2026-09-17:
     // at z-45 the backdrop sat under the view and Settings could not be
     // closed). The library (z-[60]) opens over this from Manage pages.
-    <div className="fixed inset-0 bg-panel z-40 flex flex-col">
+    // .screen-view / .screen-pane: floating-chrome themes restyle them (see
+    // globals.css → "Screens in floating chrome"); data-screen-frame is the
+    // workbench's variant switch for that design round, 'cards' in the app.
+    <div className="screen-view fixed inset-0 bg-panel z-40 flex flex-col" data-screen-frame={workbenchScreenFrame()}>
       <ScreenBand
         settingsOpen={settingsOpen}
         onToggleSettings={onToggleSettings}
@@ -186,9 +196,9 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       {/* Below the band: the panel in its own rounded container and the page
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
-      <div className="flex-1 min-h-0 flex" style={{ gap: 'var(--frame-edge, 10px)', padding: '0 var(--frame-edge, 10px) var(--frame-edge, 10px)' }}>
+      <div className="screen-body flex-1 min-h-0 flex" style={{ gap: 'var(--frame-edge, 10px)', padding: '0 var(--frame-edge, 10px) var(--frame-edge, 10px)' }}>
         {!state.pageFocus && (
-        <aside className="w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
+        <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
           <div className="flex-1 overflow-y-auto p-2">
             {personal.length > 0 && (
               <RailGroup label="Personal">
@@ -221,7 +231,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           </div>
         </aside>
         )}
-        <div className="relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
+        <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
           {load.state === 'idle' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 select-none">
               <div className="text-sm font-medium text-fg-2">No page selected</div>

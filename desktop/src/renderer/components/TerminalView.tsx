@@ -603,7 +603,9 @@ export default function TerminalView({ sessionId, visible }: Props) {
         // tab is not active. display:none causes a 0x0 container, which
         // prevents xterm from initializing properly — the prompt detector
         // then reads an empty buffer and can't detect Ink select menus.
-        visibility: visible ? 'visible' : 'hidden',
+        // undefined rather than 'visible' so the active terminal inherits an
+        // ancestor's hidden state (see ChatView's root style block).
+        visibility: visible ? undefined : 'hidden',
         // Prevent the hidden terminal from capturing pointer events —
         // xterm.js registers mousedown/mousemove handlers that block
         // text selection in the ChatView sitting underneath.
