@@ -126,7 +126,7 @@ import type {
 // looks responsive. Long text truncates or wraps instead.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** The one canonical section-label spelling (section-label-authority). */
+/** The one canonical section-label spelling (ast-grep rule section-label-canonical-classes, youcoded-dev/scripts/ast-grep/rules/). */
 const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
 
 /**

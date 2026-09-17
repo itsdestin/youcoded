@@ -27,8 +27,11 @@ const FILES = walk(RENDERER).map((path) => ({ path, src: readStripped(path) }));
 
 describe('section label authority', () => {
   it('the canonical recipe is actually in use', () => {
-    // Sanity: if this reads zero the walk broke and the (now retired) class-set
-    // guard would have been vacuous.
+    // Adoption intent, not a self-test: the canonical recipe
+    // ("text-3xs font-medium text-fg-muted tracking-wider uppercase") is in
+    // use across more than 25 renderer files. If that ever drops, either the
+    // recipe stopped being the app's real section-label spelling, or this
+    // walk broke silently — either way it's worth a look.
     const users = FILES.filter(({ src }) => src.includes(CANONICAL));
     expect(users.length).toBeGreaterThan(25);
   });
