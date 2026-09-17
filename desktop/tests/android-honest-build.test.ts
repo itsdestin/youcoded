@@ -61,15 +61,20 @@ describe('Android builds tell the truth about themselves', () => {
       'plans:approve', 'plans:comment', 'plans:add-budget', 'plans:resume',
       'plans:stop', 'plans:ask-assistant', 'plans:get-auto-approve', 'plans:set-auto-approve',
     ];
-    const branch = service.match(/\n(\s*"plans:[a-z-]+",?\s*)+->\s*\{[\s\S]*?\n\s*\}\n/);
-    expect(branch, 'no single branch labelled with the plan channels').not.toBeNull();
-    const body = branch![0];
-    for (const l of labels) expect(body).toContain(`"${l}"`);
-    // Nothing but plan labels before the arrow.
-    const head = body.slice(0, body.indexOf('->'));
-    expect([...head.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort()).toEqual([...labels].sort());
-    expect(body).toContain('PlansBridge.unsupportedResponse()');
+    // Final review F30: the branch is routed by PlansBridge.CHANNELS itself —
+    // the set PlansBridgeTest.kt checks — and SessionService keeps no copy.
+    const branch = service.match(/\n\s*in PlansBridge\.CHANNELS\s*->\s*\{[\s\S]*?\n\s*\}\n/);
+    expect(branch, 'no branch routed by PlansBridge.CHANNELS').not.toBeNull();
+    expect(branch![0]).toContain('PlansBridge.unsupportedResponse()');
+    expect(service).not.toMatch(/"plans:[a-z-]+"/);
+    // It comes before the catch-all, which would otherwise answer first.
+    expect(service.indexOf('in PlansBridge.CHANNELS')).toBeLessThan(service.lastIndexOf('else -> {'));
     const helper = read('app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'PlansBridge.kt');
+    const set = helper.match(/val CHANNELS: Set<String> = setOf\(([\s\S]*?)\n\s*\)/);
+    expect(set, 'PlansBridge.CHANNELS not found').not.toBeNull();
+    // Comments inside the set are skipped (one quotes a button's words).
+    const code = set![1].split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+    expect([...code.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort()).toEqual([...labels].sort());
     expect(helper).toContain('MessageRouter.buildUnsupportedResponse(');
   });
 

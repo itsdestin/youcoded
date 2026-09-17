@@ -1648,10 +1648,6 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   let tiers = seedDelegatedModels();
   const specialistSubs = new Set<(e: any) => void>();
   const shellSubs = new Set<(e: any) => void>();   // G-1: background command run records
-  // Task 5a: plan card pushes (plans:event). The fake never pushes — every
-  // workbench transition is a button's own returned record — but the
-  // subscription must exist so App/BubbleFeed wire it as they do for real.
-  const planSubs = new Set<(e: any) => void>();
   // Specialists stage two — plans. The real channels exist (Task 6,
   // 2026-09-16; the backend is plans/plan-service.ts behind
   // NativeSessionHost), so these are no longer MOCK_ONLY: they are FIXTURE
@@ -2810,7 +2806,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // members above stay compiler-checked.
   (on as any).specialistEvent = (cb: (e: any) => void) => { specialistSubs.add(cb); return () => { specialistSubs.delete(cb); }; };
   (on as any).shellEvent = (cb: (e: any) => void) => { shellSubs.add(cb); return () => { shellSubs.delete(cb); }; };
-  (on as any).planEvent = (cb: (e: any) => void) => { planSubs.add(cb); return () => { planSubs.delete(cb); }; };
+  // Task 5a: plan card pushes (plans:event). The fake never pushes — every
+  // workbench transition is a button's own returned record — but the
+  // subscription must exist so App/BubbleFeed wire it as they do for real.
+  // Final review F32: nothing is kept, since nothing is ever sent.
+  (on as any).planEvent = (_cb: (e: any) => void) => () => {};
 
   // `theme` is absent from useIpc.ts entirely, so NONE of this is
   // compiler-checked — the contract test is the only guard. Typed as a plain

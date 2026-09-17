@@ -1511,11 +1511,17 @@ describe('plans:* channel parity (eight requests + plans:event)', () => {
     expect(src.match(/'plans:event'/g)).toHaveLength(1);
   });
 
-  it('SessionService.kt answers the eight, and never names the push', () => {
+  // Final review F30: SessionService routes `in PlansBridge.CHANNELS`, so the
+  // phone answers exactly the set PlansBridge.kt names (and PlansBridgeTest.kt checks).
+  it('SessionService.kt answers the eight (through PlansBridge.CHANNELS), and never names the push', () => {
     const kt = kotlin();
-    expect(plansStrings(kt)).toEqual(REQUESTS);
+    const bridgeKt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'PlansBridge.kt'), 'utf8');
+    expect(kt).toMatch(/\bin PlansBridge\.CHANNELS\s*->/);
+    expect(plansStrings(kt)).toEqual([]);
+    expect(plansStrings(bridgeKt)).toEqual(REQUESTS);
     // Push-only, like specialists:event: outbound, so no request label.
     expect(kt).not.toContain('"plans:event"');
+    expect(bridgeKt).not.toContain('"plans:event"');
   });
 });
 

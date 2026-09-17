@@ -323,7 +323,8 @@ export function projectPlan(plan: PlanRecord): PlanView {
     }
   }
   if (plan.revisedOnPause) view.revisedOnPause = true;
-  if (plan.revisionOf) view.revisionOf = plan.revisionOf;
+  // Final review F32: `revisionOf` stays in the journal (the service links
+  // revisions with it) but no card reads it, so it is not projected.
   if (plan.revisedBy) view.revisedBy = plan.revisedBy;
   if (plan.startedAt !== undefined) view.startedAt = plan.startedAt;
   if (plan.endedAt !== undefined) view.endedAt = plan.endedAt;

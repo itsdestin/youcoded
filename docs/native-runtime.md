@@ -1111,6 +1111,10 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
   any further request. One reply may overshoot. Such a plan carries `approximateLimit: true`.
   ChatGPT has no per-token price, so its plans have a token limit only.
 - **Add budget** needs a paused plan and never starts it; Continue does.
+  - **Each press carries a request id** (final review F1). The pause remembers the ids it
+    applied (`paused.budgetRequests`), so Retry after a lost reply, or a second press on the
+    same pause, answers the plan as it stands and adds nothing. A new pause is a new object,
+    so an old id never blocks it.
   - It raises the ceiling by exactly the amount. It also raises the paused specialist's
     allowance, unless the pause was a plan-limit shortfall (`ceilingShortfall`), in which case
     only the ceiling rises.
@@ -1118,6 +1122,9 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     the restart turn needs plus a 512-token margin, or the soft overshoot gap.
 - **Plan specialists don't spend the 30-per-conversation spawn budget** (decision 2). They
   still take a specialist slot (max 4) and the single-writer lock.
+- **At most one plan auto-starts per assistant turn** (final review F3). The host mints a
+  fresh `currentTurnKey` for every pass of the turn drain; `PlanService` starts one proposal
+  per key without a click, and the rest wait for Approve.
 
 ### Executor, settle, recovery
 - Steps run in waves up to the resolved cap (≤4); write-capable specialists serialize.
@@ -1133,6 +1140,11 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
 
   A paused, interrupted or stopped plan owns no specialist, slot, reservation, lease or timer.
   Stop is one fenced write (`finalize`).
+- **A final write that fails** (final review F2) is retried (`PLAN_SETTLE_WRITE_RETRY_DELAYS_MS`).
+  If it still fails, the executor records the real reason (`orphanReason`) and calls
+  `onOrphaned`; the bridge runs recovery (2 s, 30 s, 5 min), and `recoverInterrupted` turns a
+  plan this process leases with no run behind it into an `unexpected-error` pause with that
+  reason, releasing its holds in the same write.
 - **Quit, close and hand-off** (`destroyAll`, `destroy`, `quiesce`) leave plans `interrupted`.
   Reopening (`resume()`) interrupts stale running plans and releases ownerless holds in the same
   write. Nothing runs until Continue.
@@ -1166,6 +1178,11 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     write (`resetRecoveriesForContinue`): the next hiccup gets its one automatic retry again.
   - Starts that can never succeed (no approved settings, no usable budget route:
     `PlanLaunchRefusedError`) and drift (`PlanLaunchDriftError`) are never retried.
+  - **Continue on an invalid-report pause** (final review F4) never re-runs the task: the item's
+    newest attempt is committed `failed`, so the wave asks that same specialist for its report
+    with tools off (`reportOnlyOf`). A delivered report message gets the short nudge. When its
+    unspent share is too small, the pause records `reportOnlyOf`, and Add budget's tranche is
+    claimed only by that report turn.
   - An invalid report gets one **report-only turn**: a new attempt (`reportOnly`) on the same
     specialist session, one dedicated message, tools off (`toolChoice: 'none'`; a call made
     anyway never runs), reply capped at `PLAN_REPORT_ONLY_REPLY_TOKENS` (2,000). Its allowance
@@ -1202,10 +1219,11 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     `problem: {kind: 'reply-failed', detail}`; the backstop records `problem: {kind: 'no-start'}`.
     The card shows either as an error line whose Retry asks again. The user's own Stop leaves no
     problem.
-  - The chat, the buddy feed and previews draw a delivered notice as one plain line on the user's
-    side, "You asked the assistant about this plan." (`chat-types.ts` `userEntryRenderKind`:
-    `show` / `hide` / `ask-line`); an older automatic notice stays hidden. No new transcript
-    event and no history-only note.
+  - The chat, the buddy feed and previews draw a delivered notice as an ordinary user message
+    bubble (decision 21): the question the user typed, or "What should I do about this paused
+    plan?" when the box was blank (`chat-types.ts` `userEntryRenderKind`: `show` / `hide` /
+    `ask-message`, and `planAskMessage`). The plan facts in the notice reach the assistant only.
+    An older automatic notice stays hidden. No new transcript event and no history-only note.
   - `recommend_plan_action` (offered with `propose_plan`, never to specialists) records
     `handoff.recommendation` after `PlanService.recommend` validates it (§2 table, floor =
     `minimumAddTokens`, cap = 4 × limit, message ≤ 280). It only records: the model-facing
@@ -1234,8 +1252,21 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
   before the replay-complete marker. A remote first page (`transcript:page`) sends the records
   to the asking client only. `chat:hydrate` carries the rest; there is no plan buffer.
 - **Unsupported answers.** The phone answers all eight with typed `unsupported`
-  (`PlansBridge.kt`, in its own `when` branch). The shim resolves these as data
-  (`RESOLVE_UNSUPPORTED`), so the card disables its controls and shows no toast.
+  (`SessionService.kt` routes `in PlansBridge.CHANNELS`, so the set `PlansBridgeTest.kt`
+  checks is the set the phone answers). The shim resolves these as data
+  (`RESOLVE_UNSUPPORTED`), so the card disables its controls and shows no toast. The card's
+  cached answer is forgotten when the shim switches hosts (`REMOTE_HOST_CHANGED_EVENT`).
+  A refusal text naming a channel id is replaced by "Plans aren't available here."
+- **Offline presses** (final review F5). The seven action channels are `user-action` in
+  `MESSAGE_KIND`: while the phone is reconnecting they are refused at once
+  (`REMOTE_NOT_SENT`, shown with Retry) and never queued. Reading the setting is a `read`.
+- **What the card shows for a failure** (final review F6/F7/F11). A refusal worded for people
+  is shown as it is; any other error answers the general line, with its own text in
+  `detail` for the bug report only. A thrown transport error (a timeout) is general too. No
+  host yet: "The assistant isn't available right now." with Retry. A failed card shows
+  `failure.detail`, or "The plan couldn't be created." with Report bug and Diagnose
+  (`failure.report` carries the system text). `PlanProposalError` marks a refusal worded for
+  people.
 - **Plan specialists** never wire as conversations. Their display copies ride the plan card
   under the parent (`parentAgentToolUseId` = the propose_plan id). Their asks route to the
   parent's broker with `specialist.plan`. History replays their past activity (`getHistory`).
@@ -1264,9 +1295,11 @@ Whole lifecycles on the real host: `plans-lifecycle.integration`. It covers appr
 complete, auto-approve, pause → exact top-up → Continue, quit → reopen → Continue, the
 comment-trust rule, Stop during a four-specialist wave, the ChatGPT soft limit, and a routed ask.
 
-Transport: `plans-transport`, `ipc-channels`, `remote-shim-plans`, `PlansBridgeTest.kt`.
+Transport: `plans-transport` (drives the real preload object, `tests/helpers/real-preload.ts`),
+`ipc-channels`, `remote-shim-plans`, `PlansBridgeTest.kt`.
 
-Renderer: `plan-reducer`, `plan-card-actions`, `plan-card-signed-copy`, `plan-card-retried`, `first-page-live-replay`.
+Renderer: `plan-reducer`, `plan-card-actions`, `plan-card-signed-copy`, `plan-card-retried`,
+`plan-card-final-review`, `first-page-live-replay`.
 <!-- verify: {"test": "youcoded/desktop/tests/plans-lifecycle.integration.test.ts"} -->
 
 ### Known limits (2026-09-16)
@@ -1281,11 +1314,14 @@ Renderer: `plan-reducer`, `plan-card-actions`, `plan-card-signed-copy`, `plan-ca
   approve blocks approval (fails closed).
 - **Iteration cap.** At a repeat's iteration cap the plan pauses with no attempt: Add budget is
   refused, and only Stop or a revised plan helps.
-- **Not in the status-bar chip.** Plan specialists aren't listed there, and their asks aren't
-  counted in its "needs you".
 - **The phone can't run plans.** It sees the card and answers "unsupported".
 - **Workbench fakes are simpler than the backend.** In `mock-shim.ts`, Add budget resumes at
   once and Comment sets `revisedBy` straight away.
+- **Larger unreviewed local models are refused plans** (final review F28). Only reviewed
+  families are offered `propose_plan` locally (`REVIEWED_LOCAL_9B_PLUS`); a 29B, 122B or
+  Gemma 27B stays refused until model information says it is capable.
+- **A failed final write under a broken disk** is recovered at most three times per run;
+  after that the card stays "running" until the conversation reopens or Stop is pressed.
 
 Rule: `.claude/rules/native-specialists.md` → "Specialists plans (stage two)".
 

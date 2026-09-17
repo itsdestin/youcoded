@@ -14,6 +14,7 @@ import {
 import { PlanView, SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
+import { isPlanCard } from '../utils/specialist-cards';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -428,10 +429,6 @@ function endTurn(
   };
 }
 
-/** Task 5a: the propose_plan card — its specialists' rows are keyed by child. */
-function isPlanCard(tool: ToolCallState): boolean {
-  return tool.toolName === 'propose_plan';
-}
 
 /**
  * Task 5a: the plan record a card should keep when another arrives on a

@@ -139,7 +139,54 @@ describe('A. an approximate limit wears a tilde, and no extra sentence', () => {
 
 // ---------------------------------------------------------------------------
 
+/** Final review F27 (R22): a filled button is a solid fill (accent or
+ *  destructive); a light one is an outline or ghost. */
+const isFilled = (b: HTMLElement) => /(^|\s)bg-(accent|destructive)(\s|$)/.test(b.className);
+/** Every filled button in `row` comes after every light one, and the row sits
+ *  on the right. */
+function expectLightThenFilled(row: HTMLElement, label: string) {
+  const btns = within(row).queryAllByRole('button');
+  const kinds = btns.map((b) => (isFilled(b) ? 'filled' : 'light'));
+  expect(kinds.join(' '), `${label}: ${btns.map((b) => b.textContent).join(' | ')}`).toMatch(/^(light ?)*(filled ?)*$/);
+  expect(kinds, `${label} has no filled button`).toContain('filled');
+  expect(row, `${label} is not right-aligned`).toHaveClass('justify-end');
+}
+
 describe('B. filled buttons sit on the right, the light one to their left', () => {
+  // Final review F27 (R22, "wherever"): every row of the plan card where a
+  // filled and a light button sit together, checked by their real fill.
+  it('every button row on the card: light first, filled rightmost', () => {
+    const rowOf = (name: string) => screen.getByRole('button', { name }).parentElement!;
+    const { unmount: u1 } = render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
+    expect(isFilled(screen.getByRole('button', { name: 'Approve' }))).toBe(true);
+    expect(isFilled(screen.getByRole('button', { name: 'Comment' }))).toBe(false);
+    expectLightThenFilled(rowOf('Approve'), 'proposal');
+    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
+    expectLightThenFilled(rowOf('Send'), 'comment box');
+    u1();
+    const pausedPlan = plan({
+      status: 'paused', steps: [{ ...plan().steps[0], status: 'paused' }, plan().steps[1]],
+      paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget', actions: ['add_budget', 'stop'] },
+    });
+    const { unmount: u2 } = render(<ChatProvider><Card initial={pausedPlan} /></ChatProvider>);
+    expectLightThenFilled(screen.getByTestId('plan-pause-actions'), 'pause actions');
+    expect(isFilled(screen.getByRole('button', { name: 'Ask the assistant' }))).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
+    expectLightThenFilled(screen.getByTestId('plan-add-budget'), 'add budget');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ask the assistant' }));
+    expectLightThenFilled(rowOf('Send'), 'ask box');
+    u2();
+    const recommendedStop = plan({ ...pausedPlan, paused: { ...pausedPlan.paused!, handoff: { state: 'answered', recommendation: { action: 'stop', message: 'Stop here.' } } } });
+    const { unmount: u3 } = render(<ChatProvider><Card initial={recommendedStop} /></ChatProvider>);
+    expectLightThenFilled(screen.getByTestId('plan-pause-actions'), 'recommended stop');
+    u3();
+    render(<ChatProvider><Card initial={plan({ status: 'interrupted' })} /></ChatProvider>);
+    const interrupted = screen.getByRole('button', { name: 'Continue' }).parentElement!;
+    const kinds = within(interrupted).getAllByRole('button').map((b) => (isFilled(b) ? 'filled' : 'light'));
+    expect(kinds).toEqual(['light', 'filled']);
+  });
+
   it('a proposal reads Comment, then Approve, in a right-aligned row', () => {
     render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
     expect(buttons().slice(-2)).toEqual(['Comment', 'Approve']);

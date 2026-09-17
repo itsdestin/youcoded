@@ -56,8 +56,3 @@ export function planChildCard(child: PlanChildView): ToolCallState {
     subagentSegments: child.segments,
   };
 }
-
-/** Task 5b: a `propose_plan` card (the same test the reducer uses). */
-export function isPlanCard(tool: ToolCallState): boolean {
-  return tool.toolName === 'propose_plan';
-}

@@ -47,9 +47,12 @@ function Card({ initial }: { initial: PlanView }) {
     dispatch({ type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'u', toolUseId: CARD, toolName: 'propose_plan', toolInput: {} });
     dispatch({ type: 'PLAN_CHANGED', sessionId: S, plan: initial });
   }, [dispatch, initial]);
+  push = (p) => dispatch({ type: 'PLAN_CHANGED', sessionId: S, plan: p });
   const tool = useChatState(S).toolCalls.get(CARD);
   return tool ? <ToolCard tool={tool} sessionId={S} /> : null;
 }
+/** A later plans:event for the card on screen. */
+let push: (p: PlanView) => void = () => {};
 const show = (plan: PlanView) => render(<ChatProvider><Card initial={plan} /></ChatProvider>);
 
 const block = () => screen.getByTestId('plan-block');
@@ -88,6 +91,27 @@ describe('every paused card offers Ask, as the light button on the far left (§6
     // The reason is still there, at once.
     expect(screen.getByTestId('plan-paused-reason')).toBeInTheDocument();
     expect(block()).not.toHaveClass('opacity-60');
+  });
+
+  // Final review F27 (R37): "never hands itself to the assistant" — the card
+  // asks nothing when a pause arrives or changes; only the user's press does.
+  // (The host half — no notice is queued on a pause — is pinned in
+  // native-session-host.test.ts, "a pause is not handed over by itself".)
+  it('a pause arriving, or changing, never asks the assistant by itself', async () => {
+    show(paused());
+    await waitFor(() => expect(api.getAutoApprove).toHaveBeenCalled());
+    act(() => { push(paused({ reason: 'still out of room', minimumAddTokens: 9_000 }, { seq: 9 })); });
+    await waitFor(() => expect(screen.getByTestId('plan-paused-reason')).toHaveTextContent('still out of room'));
+    expect(api.askAssistant).not.toHaveBeenCalled();
+    expect(block()).not.toHaveAttribute('data-handoff');
+    expect(block()).not.toHaveClass('opacity-60');
+    expect(screen.queryByTestId('plan-handoff-pending')).toBeNull();
+    // The first button is Ask, and it is light.
+    const first = within(block()).queryAllByRole('button').filter((b) => !b.hasAttribute('aria-expanded'))[0];
+    expect(first).toHaveTextContent(ASK);
+    expect(first.className).not.toMatch(/(^|\s)bg-(accent|destructive)(\s|$)/);
+    fireEvent.click(first);
+    expect(api.askAssistant).not.toHaveBeenCalled();   // pressing opens the box; sending asks
   });
 
   it('a restart-interrupted card is unchanged: Stop · Continue, no Ask (review 4-1)', () => {
@@ -310,6 +334,10 @@ describe('narrow widths (390 px): the card wraps instead of crushing its text', 
     expect(row.className.split(/\s+/)).toContain('flex-col');
     const [first, second] = Array.from(row.children) as HTMLElement[];
     expect(within(first).getByTestId('plan-step-title')).toHaveTextContent('Combine');
+    // Final review F8 (R41): the title WRAPS on a narrow window — never cut off.
+    const title = within(first).getByTestId('plan-step-title').className.split(/\s+/);
+    expect(title).not.toContain('truncate');
+    expect(title).toEqual(expect.arrayContaining(['break-words', 'min-w-0', 'flex-1']));
     expect(first.textContent).not.toContain('worker');
     expect(second).toHaveTextContent('1 worker · combines the results');
     expect(second).toHaveTextContent('up to 4,000 tokens');

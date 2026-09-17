@@ -156,6 +156,8 @@ function shown(planId: string): PlanView | undefined {
 const waitForCard = (planId: string, status: PlanView['status']) =>
   waitFor(() => shown(planId)?.status === status, `the "${status}" card`);
 
+/** Runs the plan executor is advancing (a plan can only spend through one). */
+const activeRuns = (): number => (host as any).plans.executor.activeRuns();
 const liveChildren = () => [...(host as any).live.values()].filter((e: any) => e.parentSessionId === SID);
 const heldTokens = (rec: any) => rec.steps.reduce((n: number, s: any) => n + s.attempts.reduce((m: number, a: any) => m + a.reservedTokens, 0), 0);
 
@@ -210,8 +212,13 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
   it('propose → approve → the map wave runs in parallel, then combine → completed, and the plan owns nothing', async () => {
     const planId = await propose(REVIEW_DOC);
     expect(shown(planId)).toMatchObject({ status: 'proposed' });
-    await new Promise((r) => setTimeout(r, 30));
-    expect(childCalls).toHaveLength(0);   // nothing runs before the user approves
+    // Nothing runs before the user approves. Final review F34: checked from
+    // the state that would have to exist for anything to run (a run, a lease,
+    // an attempt), not by sleeping and hoping.
+    expect(childCalls).toHaveLength(0);
+    expect(activeRuns()).toBe(0);
+    expect(plan(planId).lease).toBeUndefined();
+    expect(plan(planId).steps.every((s: any) => s.attempts.length === 0)).toBe(true);
 
     // Both map specialists are held until both have sent: they share one wave.
     let open!: () => void;
@@ -220,8 +227,9 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     expect(await host.approvePlan(SID, planId)).toMatchObject({ ok: true, plan: { status: 'running' } });
     await waitFor(() => childCalls.length === 2, 'both map specialists to send together');
     expect(liveChildren()).toHaveLength(2);
-    // Combine waits for its inputs.
-    await new Promise((r) => setTimeout(r, 30));
+    // Combine waits for its inputs: while the map wave is held, the combine
+    // step has no attempt at all (F34: no sleep — nothing can send without one).
+    expect(plan(planId).steps[1].attempts).toHaveLength(0);
     expect(childCalls.some((c) => isCombine(c.prompt))).toBe(false);
     expect(shown(planId)!.steps.map((s) => s.status)).toEqual(['running', 'pending']);
     open();
@@ -263,7 +271,9 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     const ceiling = plan(auto).ceilingTokens;
     expect(await host.setPlanAutoApprove(ceiling)).toEqual({ ok: true });   // "under", so equal is not enough
     const manual = await propose(REVIEW_DOC, 'call-plan-2');
-    await new Promise((r) => setTimeout(r, 50));
+    // Auto-approve is decided inside the proposing call, which has returned.
+    expect(activeRuns()).toBe(0);
+    expect(plan(manual).lease).toBeUndefined();
     expect(plan(manual).status).toBe('proposed');
     expect(plan(manual).autoApproved).toBeUndefined();
     expect(childCalls).toHaveLength(3);
@@ -369,8 +379,10 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     expect(await host.resume(SID, root)).toBe(true);
     const views = await host.planViewsFor(SID);
     expect(views.find((v) => v.planId === planId)).toMatchObject({ status: 'interrupted' });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(childCalls).toHaveLength(callsAtQuit);   // nothing runs until Continue
+    // Nothing runs until Continue: no run, no lease (F34: state, not a sleep).
+    expect(activeRuns()).toBe(0);
+    expect(plan(planId).lease).toBeUndefined();
+    expect(childCalls).toHaveLength(callsAtQuit);
     expect(liveChildren()).toHaveLength(0);
 
     // Continue. The cut-off request's outcome is unknown, so it was charged in
@@ -477,8 +489,12 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     const eventsAtStop = planEvents.length;
 
     // Nothing keeps going: no new requests, no heartbeat writes, no newer card.
+    // F34: the executor holds no run (so no heartbeat timer and no specialist)
+    // once the plan has settled — waited for, then checked.
     const mtime = fs.statSync(journalPath()).mtimeMs;
-    await new Promise((r) => setTimeout(r, 150));
+    await (host as any).plans.executor.settled(planId);
+    expect(activeRuns()).toBe(0);
+    expect((host as any).plans.executor.finishing.size).toBe(0);
     expect(childCalls).toHaveLength(4);
     expect(planEvents).toHaveLength(eventsAtStop);
     expect(shown(planId)!.seq).toBe(stopSeq);

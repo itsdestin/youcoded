@@ -1,6 +1,7 @@
 import { useCallback, useRef, useEffect, useState, useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
-import { isPlanCard, planChildCard, planWithActivity } from '../components/plans/plan-activity';
+import { planChildCard, planWithActivity } from '../components/plans/plan-activity';
+import { isPlanCard } from '../utils/specialist-cards';
 import { planStatusPhrase } from '../components/plans/plan-status';
 import type { SpecialistRunView, ToolCallState, SpecialistDefinitionView, DelegatedModelsView, SubagentSegment, SpecialistsListResult } from '../../shared/types';
 

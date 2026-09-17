@@ -119,7 +119,7 @@ export function useSessionAttention(
       // approval" (via the attention report below). Its ask lives inside a
       // card, often one from a turn that already ended, hence the separate
       // check over every card (cached per toolCalls Map). Merge note: master added
-      // the same rule for hired specialists (hasHelperAsk); this check is its
+      // the same rule for hired specialists (hasOpenSpecialistAsk); this check is its
       // superset (hired + plan), so one call covers both.
       if (!hasAwaiting && hasOpenSpecialistAsk(chatState.toolCalls)) hasAwaiting = true;
       // Priority: red (permission prompt OR a state that needs a decision) →

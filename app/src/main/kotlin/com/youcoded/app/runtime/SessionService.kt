@@ -4100,14 +4100,10 @@ class SessionService : Service() {
             // `unsupported` refusal — see PlansBridge for why that shape. Its OWN
             // branch, for the reason the engine branch below spells out: a `-> {`
             // inside a comma list captures every label above it.
-            "plans:approve",
-            "plans:comment",
-            "plans:add-budget",
-            "plans:resume",
-            "plans:stop",
-            "plans:ask-assistant",
-            "plans:get-auto-approve",
-            "plans:set-auto-approve" -> {
+            // Final review F30: routed by PlansBridge.CHANNELS itself, so the list
+            // PlansBridgeTest checks IS the list the phone answers — no second copy
+            // here to drift.
+            in PlansBridge.CHANNELS -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, PlansBridge.unsupportedResponse()) }
             }
 

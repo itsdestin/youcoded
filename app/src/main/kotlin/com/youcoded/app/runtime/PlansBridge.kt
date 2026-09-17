@@ -20,6 +20,7 @@ import org.json.JSONObject
  * `plans:event` (the push) is outbound-only and needs no entry here.
  */
 object PlansBridge {
+    // Final review F30: SessionService routes exactly this set (`in CHANNELS ->`).
     val CHANNELS: Set<String> = setOf(
         "plans:approve",
         "plans:comment",

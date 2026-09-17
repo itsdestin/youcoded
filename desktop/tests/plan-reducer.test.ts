@@ -12,7 +12,7 @@ import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatState, ChatAction } from '../src/renderer/state/chat-types';
 import type { PlanView, PlanChildView, SubagentSegment } from '../src/shared/types';
 import { planWithActivity } from '../src/renderer/components/plans/plan-activity';
-import { hasNestedAsk, hasPlanChildAsk, helperAsksOf, hasHelperAsk } from '../src/renderer/utils/specialist-cards';
+import { hasNestedAsk, hasPlanChildAsk, helperAsksOf, hasOpenSpecialistAsk } from '../src/renderer/utils/specialist-cards';
 import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 
 const S = 'sess';
@@ -207,7 +207,7 @@ describe('plan specialists: a waiting ask joins the bottom-of-chat cards', () =>
       ask(A, 'req-9'),
     );
     const calls = s.get(S)!.toolCalls;
-    expect(hasHelperAsk(calls)).toBe(true);
+    expect(hasOpenSpecialistAsk(calls)).toBe(true);
     const asks = helperAsksOf(calls);
     expect(asks).toHaveLength(1);
     expect(asks[0]).toMatchObject({
@@ -217,7 +217,7 @@ describe('plan specialists: a waiting ask joins the bottom-of-chat cards', () =>
     });
     s = run(s, { type: 'PERMISSION_RESPONDED', sessionId: S, requestId: 'req-9' });
     expect(helperAsksOf(s.get(S)!.toolCalls)).toEqual([]);
-    expect(hasHelperAsk(s.get(S)!.toolCalls)).toBe(false);
+    expect(hasOpenSpecialistAsk(s.get(S)!.toolCalls)).toBe(false);
   });
 
   it('still names the ask when the plan record has not arrived yet', () => {

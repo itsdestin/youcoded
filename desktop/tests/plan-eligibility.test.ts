@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { isPlanEligible } from '../src/main/harness/plans/eligibility';
+import { HarnessSession } from '../src/main/harness/harness-session';
+import { BUILTIN_ROSTER } from '../src/main/harness/specialists/registry';
+import { CLOUD_DEFAULT, resolveProfile } from '../src/main/harness/capability-profile';
+import { HARNESS, EMPTY_SKILL_CATALOG, FAKE_SESSION_CWD } from './helpers/harness-fakes';
 
 const session = (overrides: Partial<Parameters<typeof isPlanEligible>[0]> = {}) => ({
   providerType: 'anthropic' as const,
@@ -56,5 +61,46 @@ describe('plan eligibility', () => {
     expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'unreviewed-70b' }))).toBe(false);
     expect(isPlanEligible(session({ supportsTools: false }))).toBe(false);
     expect(isPlanEligible(session({ isSpecialistChild: true }))).toBe(false);
+  });
+});
+
+// Final review F28 (R1): the rule above is what a real session applies. A
+// session the rule refuses is not given propose_plan (syncPlanTool), and one
+// it accepts is — so an ineligible model can never be offered a plan.
+describe('a real session applies it (syncPlanTool)', () => {
+  const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: [] }) }) });
+  const toolsOf = (over: Record<string, unknown>) => {
+    const s = new HarnessSession({
+      sessionId: 's-elig', cwd: FAKE_SESSION_CWD, harness: HARNESS,
+      binding: { providerId: 'openrouter', modelId: 'model' }, providerType: 'openrouter',
+      profile: CLOUD_DEFAULT, tools: [], skillCatalog: EMPTY_SKILL_CATALOG, mcpServers: [],
+      specialistRoster: BUILTIN_ROSTER, toolServices: { plans: { propose: async () => { throw new Error('unused'); } } },
+      decide: async () => ({ action: 'allow', denyListed: false }), retryDelays: [],
+      ...over,
+    } as any, async () => model as any);
+    return Object.keys((s as any).buildAiTools());
+  };
+  const local = (modelId: string) => ({
+    providerType: 'local-engine', binding: { providerId: 'local', modelId },
+    profile: resolveProfile({ providerType: 'local-engine', modelId, contextLength: 32_768 }),
+  });
+
+  it('a cloud session is offered propose_plan', () => {
+    expect(toolsOf({})).toContain('propose_plan');
+  });
+
+  it.each([
+    ['a small local model', local('Qwen3.5-2B-Q8_0')],
+    ['a specialist', { isSpecialistChild: true }],
+    ['a session with no provider provenance', { providerType: undefined }],
+    ['a local OpenAI-compatible endpoint', { providerType: 'openai-compatible', providerBaseUrl: 'http://127.0.0.1:1234/v1' }],
+  ])('%s is refused propose_plan', (_what, over) => {
+    const tools = toolsOf(over);
+    expect(tools).not.toContain('propose_plan');
+    expect(tools).not.toContain('recommend_plan_action');
+  });
+
+  it('a reviewed 9B local model is offered it', () => {
+    expect(toolsOf(local('Qwen3.5-9B-Q4_K_M'))).toContain('propose_plan');
   });
 });

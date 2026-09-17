@@ -4,7 +4,7 @@
 // request — often in a background hire's card several turns up — told the user
 // nothing (the "still pending on their screen" phantom approval).
 import { describe, it, expect } from 'vitest';
-import { helperAsksOf, hasHelperAsk } from '../src/renderer/utils/specialist-cards';
+import { helperAsksOf, hasOpenSpecialistAsk } from '../src/renderer/utils/specialist-cards';
 import type { ToolCallState } from '../src/shared/types';
 
 const task = (id: string, segs: ToolCallState['subagentSegments'], title = 'Wren the Whistling Worker'): ToolCallState => ({
@@ -30,7 +30,7 @@ describe('helperAsksOf', () => {
       toolUseId: 'c2', toolName: 'Bash', status: 'awaiting-approval', requestId: 'req-1', denyListed: true,
       specialist: { childId: 'child-t1', agentType: 'worker', title: 'Wren the Whistling Worker' },
     });
-    expect(hasHelperAsk(calls)).toBe(true);
+    expect(hasOpenSpecialistAsk(calls)).toBe(true);
   });
 
   it('ignores answered rows, rows with no request, and non-Task cards', () => {
@@ -40,7 +40,7 @@ describe('helperAsksOf', () => {
       ['b1', plain],
     ]);
     expect(helperAsksOf(calls)).toEqual([]);
-    expect(hasHelperAsk(calls)).toBe(false);
+    expect(hasOpenSpecialistAsk(calls)).toBe(false);
   });
 
   it('collects requests across several helpers', () => {

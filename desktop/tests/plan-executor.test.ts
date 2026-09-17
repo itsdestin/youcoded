@@ -158,6 +158,16 @@ async function seed(rec: PlanRecord): Promise<string> {
 }
 const plan = async (): Promise<PlanRecord> => (await journal.get(REF, 'p1'))!;
 const stepOf = async (id: string) => (await plan()).steps.find((s) => s.id === id)!;
+/** Final review F34: log 'settle-deadline' when the executor's settle
+ *  deadline timer (a setTimeout of exactly `ms`) fires. */
+function markDeadline(ms: number): { fired: () => boolean } {
+  const real = globalThis.setTimeout;
+  let fired = false;
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: (...a: unknown[]) => void, delay?: number, ...rest: unknown[]) => real(
+    delay === ms ? (...a: unknown[]) => { fired = true; log.push('settle-deadline'); fn(...a); } : fn, delay, ...rest,
+  )) as typeof setTimeout);
+  return { fired: () => fired };
+}
 const reservedTotal = (p: PlanRecord) => p.steps.flatMap((s) => s.attempts).reduce((n, a) => n + a.reservedTokens, 0);
 
 function executor(runner: PlanRunner, over: Partial<ConstructorParameters<typeof PlanExecutor>[0]> = {}): PlanExecutor {
@@ -174,7 +184,7 @@ beforeEach(() => {
   budget = new PlanBudget({ journal, newId: () => `att${++ids}` });
   resetDisabledAdaptersForTests();
 });
-afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }));
+afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); });
 
 const MAP6: PlanDocumentV1 = { goal: 'Six', steps: [
   { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a', 'b', 'c', 'd', 'e', 'f'] },
@@ -593,12 +603,14 @@ describe('pausing, stopping and interruption settle before anything is visible',
     // charged in full) but not what this test pins. The stuck two still wait
     // the whole deadline, so this is the test's cost.
     const exec = executor(runner, { settleDeadlineMs: 750 });
-    const t0 = Date.now();
+    const deadline = markDeadline(750);
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
-    const elapsed = Date.now() - t0;
-    // A lower bound only: the stragglers were held for the whole deadline.
-    expect(elapsed).toBeGreaterThanOrEqual(750);
+    // The stragglers were held for the whole deadline: they were disposed only
+    // after the settle deadline fired (final review F34: an ordering the log
+    // records, not a wall-clock lower bound).
+    expect(deadline.fired()).toBe(true);
+    for (const c of ['child-3', 'child-4']) expect(log.indexOf(`dispose:${c}`)).toBeGreaterThan(log.indexOf('settle-deadline'));
     // all three siblings were aborted; every child was disposed
     expect(runner.aborted.sort()).toEqual(expect.arrayContaining(['child-2', 'child-3', 'child-4']));
     // child-1 ran twice (the automatic retry continues the same session).
@@ -704,7 +716,7 @@ describe('pausing, stopping and interruption settle before anything is visible',
     while (runner.launches.length < 4 || reservedTotal(await plan()) === 0 || (await plan()).steps[0].attempts.filter((a) => a.phase === 'request-sent').length < 4) {
       await new Promise((r) => setTimeout(r, 5));
     }
-    const t0 = Date.now();
+    const deadline = markDeadline(80);
     const releases: unknown[] = [];
     const release = journal.releaseLease.bind(journal);
     journal.releaseLease = async (...a) => { releases.push(a); return release(...a); };
@@ -712,7 +724,9 @@ describe('pausing, stopping and interruption settle before anything is visible',
     expect(applied).toBe(true);
     expect(releases).toHaveLength(0); // the lease goes in the same write as "stopped"
     log.push('stop-returned');
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(80);
+    // F34: the stuck ones were torn down only once the deadline had passed.
+    expect(deadline.fired()).toBe(true);
+    expect(log.indexOf('settle-deadline')).toBeLessThan(log.indexOf('dispose:child-4'));
     expect(runner.aborted.sort()).toEqual(['child-1', 'child-2', 'child-3', 'child-4']);
     expect(runner.live).toBe(0);
     const p = await plan();

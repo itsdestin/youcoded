@@ -2,6 +2,13 @@ import type { SubagentSegment, ToolCallState } from '../../shared/types';
 
 type ToolSegment = Extract<SubagentSegment, { type: 'tool' }>;
 
+/** Specialists plans: a `propose_plan` card — its specialists' rows are keyed
+ *  by child. Final review F32: the ONE copy of this test (the reducer, the
+ *  plan card and the Specialists chip all read it). */
+export function isPlanCard(tool: ToolCallState): boolean {
+  return tool.toolName === 'propose_plan';
+}
+
 /**
  * Specialists 1c: does this Task card hold a helper's ask that is waiting on
  * the user? Where it is read (checked 2026-09-16, Task 5a review — the old
@@ -29,7 +36,7 @@ export function hasNestedAsk(tool: ToolCallState): boolean {
  * "waiting on you"; the plan card opens the asking row itself (PlanCard.tsx).
  */
 export function hasPlanChildAsk(tool: ToolCallState): boolean {
-  if (tool.toolName !== 'propose_plan' || !tool.subagentSegments) return false;
+  if (!isPlanCard(tool) || !tool.subagentSegments) return false;
   return tool.subagentSegments.some(s => s.type === 'tool' && s.status === 'awaiting-approval' && !!s.requestId);
 }
 
@@ -61,17 +68,6 @@ export function hasOpenSpecialistAsk(toolCalls: Map<string, ToolCallState>): boo
   }
   openAskCache.set(toolCalls, found);
   return found;
-}
-
-/**
- * True when any helper in the session is waiting on the user (see helperAsksOf).
- * Merge note (master + specialists plans): master scanned Task cards only; a
- * plan's specialist asks inside its plan card, so this now answers the same
- * question as hasOpenSpecialistAsk — the red dot, the bottom-of-chat cards and
- * this helper can never disagree about whether a specialist is waiting.
- */
-export function hasHelperAsk(toolCalls: Map<string, ToolCallState>): boolean {
-  return hasOpenSpecialistAsk(toolCalls);
 }
 
 /** One helper row as the ToolCallState shape the tool views and ToolCard read. */
