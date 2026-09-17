@@ -308,9 +308,14 @@ export function migrateConfigToV2(config: any): BackendInstance[] {
 
 /**
  * Regenerate legacy flat keys from the storage_backends array.
- * Called on every config write so bash hooks (sync.sh, session-start.sh)
- * that still read the flat keys continue to work. Uses the first instance
- * of each type for the flat key values.
+ * Called on every config write. The bash hooks that once read these keys
+ * (sync.sh, session-start.sh) no longer exist — sync-service.ts ported them to
+ * Node. The remaining consumer is the ANDROID app, which still reads the flat
+ * keys (PERSONAL_SYNC_BACKEND, DRIVE_ROOT, PERSONAL_SYNC_REPO, ICLOUD_PATH):
+ * app/src/main/kotlin/.../runtime/SessionService.kt (the sync:* handlers) and
+ * SyncService.kt. Retire the keys only after an Android release reads
+ * storage_backends directly (simplification audit M3). Uses the first
+ * instance of each type for the flat key values.
  */
 export function syncLegacyKeys(config: any): void {
   const backends: BackendInstance[] = config.storage_backends || [];

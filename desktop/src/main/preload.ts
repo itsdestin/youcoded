@@ -1412,8 +1412,10 @@ contextBridge.exposeInMainWorld('claude', {
   // up in bootstrap/terminal-bridge.ts. Round-trip cost is not perf-sensitive
   // at ~1s cadence.
   terminal: {
-    getScreenText: (sessionId: string): Promise<string> =>
-      ipcRenderer.invoke('terminal:get-screen-text', sessionId),
+    // tailRows: how many buffer rows to serialize (the classifier passes 40 —
+    // audit W24); omitted = the handler's own default.
+    getScreenText: (sessionId: string, tailRows?: number): Promise<string> =>
+      ipcRenderer.invoke('terminal:get-screen-text', sessionId, tailRows),
   },
   // GPU / performance preference — read and write the preferPowerSaving flag.
   // multiGpuDetected: false in the response means the UI section stays hidden.

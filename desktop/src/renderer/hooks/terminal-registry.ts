@@ -82,7 +82,7 @@ export function unregisterTerminal(sessionId: string) {
  *   serialized (walked back to the nearest logical-line start so a wrapped
  *   line is never cut). The hot callers only need the tail — the prompt
  *   detector reads once per buffer flush (up to ~60/s while Claude streams)
- *   and the attention classifier keeps just the last 40 lines — so
+ *   and the attention classifier asks for a 40-row tail once a second — so
  *   serializing the full scrollback (1000+ rows × translateToString) on
  *   every read was the single largest renderer CPU cost during streaming.
  *   Omit for the full buffer.

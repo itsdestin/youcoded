@@ -2856,8 +2856,10 @@ export function installShim(): void {
     // (Task 7). Response shape is {text: string}; normalize to Promise<string>
     // with a '' fallback for safety.
     terminal: {
-      getScreenText: async (sessionId: string): Promise<string> => {
-        const response = await invoke('terminal:get-screen-text', { sessionId });
+      // tailRows rides along for parity with preload (audit W24); the Kotlin
+      // handler reads the visible screen and ignores it today.
+      getScreenText: async (sessionId: string, tailRows?: number): Promise<string> => {
+        const response = await invoke('terminal:get-screen-text', { sessionId, tailRows });
         return response?.text ?? '';
       },
     },
