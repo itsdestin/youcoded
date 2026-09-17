@@ -134,7 +134,8 @@ const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider upperca
  *
  * Derived from SETTING_ROW_BASE by REPLACEMENT rather than by copying the
  * string, so there is still exactly one definition of settings-row geometry —
- * copying it is what setting-row-authority exists to stop. The only thing
+ * copying it is what the setting-row guards (the no-hand-rolled-setting-row
+ * ast-grep rules) exist to stop. The only thing
  * removed is the tile radius: this row is the card's top EDGE, and its own
  * 12px corners would leave a visible notch inside the card's border. The
  * `bg-inset/50` tint stays, and is load-bearing — it is what makes the header

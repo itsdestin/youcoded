@@ -45,10 +45,12 @@ function CompleteGlyph({ done, className = '' }: { done: boolean; className?: st
  *  than a card or a checkbox, because it is the shape Skip Permissions and Show
  *  Complete already use and the app should have one way of asking a yes/no.
  *
- *  Built on SettingRow, not hand-rolled. `setting-row-authority.test.tsx` says a
- *  label with a switch beside it IS a SettingRow — and this is exactly that, so
- *  it belongs in the primitive rather than in that test's exception list. The
- *  full suite caught the hand-rolled version; `verify.sh`'s related-tests pass
+ *  Built on SettingRow, not hand-rolled. The ast-grep rule
+ *  `no-hand-rolled-setting-row-toggle` says a label with a switch beside it IS a
+ *  SettingRow — and this is exactly that, so it belongs in the primitive rather
+ *  than in the exception list (TOGGLES_OUTSIDE_A_ROW in
+ *  `setting-row-authority.test.tsx`). The full suite caught the hand-rolled
+ *  version back when that guard was a test; `verify.sh`'s related-tests pass
  *  did not, because the authority test names no file this branch touched.
  *
  *  `className` restores the bordered-card treatment the workbench comparison
