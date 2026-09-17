@@ -765,13 +765,16 @@ export function registerIpcHandlers(
   // for the given session. The actual read happens in the renderer (xterm
   // lives there), so main calls back via executeJavaScript. ~1s cadence
   // under the classifier; round-trip overhead is negligible.
-  ipcMain.handle('terminal:get-screen-text', async (event, sessionId: string) => {
+  ipcMain.handle('terminal:get-screen-text', async (event, sessionId: string, tailRows?: number) => {
     try {
-      // Tail read (120 buffer rows): the attention classifier keeps only the
-      // last 40 logical lines, so serializing the full 1000+-row scrollback
-      // every second was pure waste. 120 rows leaves ample wrap headroom.
+      // Tail read: serializing the full 1000+-row scrollback every second was
+      // pure waste. The caller says how many buffer rows it wants (the
+      // attention classifier asks for 40 — audit W24); a caller that omits it
+      // gets the 120-row tail this handler always used. Only a positive
+      // integer is honoured — anything else falls back to the default.
+      const rows = Number.isInteger(tailRows) && (tailRows as number) > 0 ? (tailRows as number) : 120;
       return await event.sender.executeJavaScript(
-        `window.__terminalRegistry?.getScreenText(${JSON.stringify(sessionId)}, 120) ?? ''`
+        `window.__terminalRegistry?.getScreenText(${JSON.stringify(sessionId)}, ${rows}) ?? ''`
       );
     } catch {
       return '';

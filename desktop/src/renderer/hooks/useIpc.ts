@@ -94,7 +94,7 @@ declare global {
       // process (used by useAttentionClassifier and the Android terminal-data parity
       // refactor). Shape mirrors the handler in preload.ts (commit 0a7594a).
       terminal: {
-        getScreenText: (sessionId: string) => Promise<string>;
+        getScreenText: (sessionId: string, tailRows?: number) => Promise<string>;
       };
       // Mirrors ChangelogIpcResult in preload.ts (which mirrors ChangelogResult in
       // main/changelog-service.ts). When you edit one, edit all three — this copy
