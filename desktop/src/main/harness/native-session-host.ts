@@ -4084,7 +4084,10 @@ export class NativeSessionHost extends EventEmitter {
           // ends it with `user-interrupt` and is not a failure.
           let failed: string | undefined;
           const onTurnEvent = (event: TranscriptEvent) => {
-            if (event.type === 'session-error') failed = String(event.data?.text ?? '') || failed || 'The reply ended with an error.';
+            // Review fix 2: no text means no known cause — an empty `failed`
+            // leaves the card's general line (Report bug + Diagnose), never an
+            // invented reason.
+            if (event.type === 'session-error') failed = String(event.data?.text ?? '').trim() || failed || '';
           };
           entry.session.on('transcript-event', onTurnEvent);
           try {

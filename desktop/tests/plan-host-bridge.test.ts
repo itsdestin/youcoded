@@ -411,6 +411,54 @@ describe('Ask the assistant', () => {
     expect((await t.handoff())!.state).toBe('pending');
   });
 
+  it('a Stop that lands during the Ask write never leaves the card greyed (review of Task 11, finding 1)', async () => {
+    let bridge!: PlanHostBridge;
+    let fired = false;
+    const t = await setup({
+      // Called after the handoff is registered and before the service write:
+      // exactly the window where the clear finds nothing in the journal yet.
+      noticeWouldWait: () => { if (!fired) { fired = true; bridge.conversationStopped(SID); } return false; },
+      noticeRefusal: () => (fired ? 'You stopped this conversation. Send the assistant a message, then ask again.' : undefined),
+      queuePlanNotice: () => false,
+    });
+    bridge = t.bridge;
+    const res = await bridge.askAssistant(SID, 'p-h');
+    expect((res as any).plan?.paused?.handoff?.state).not.toBe('pending');
+    const h = (await t.handoff())!;
+    expect(h.state).toBe('answered');
+    expect(h.problem).toBeUndefined();
+    expect((bridge as any).handoffs.size).toBe(0);
+    expect((bridge as any).noticeTurns.size).toBe(0);
+  });
+
+  it('a Stop just before queueing, with the notice refused, leaves the card answered', async () => {
+    let bridge!: PlanHostBridge;
+    let calls = 0;
+    const t = await setup({
+      // The second call is inside queueAsk, after the write and its check.
+      noticeWouldWait: () => { if (++calls === 2) bridge.conversationStopped(SID); return false; },
+      queuePlanNotice: () => false,
+    });
+    bridge = t.bridge;
+    expect(await bridge.askAssistant(SID, 'p-h')).toMatchObject({ ok: false });
+    await vi.waitFor(async () => expect((await t.handoff())!.state).toBe('answered'));
+    expect((bridge as any).handoffs.size).toBe(0);
+  });
+
+  it('a Stop during the Ask write, with the notice still queued, is withdrawn and answered', async () => {
+    let bridge!: PlanHostBridge;
+    let fired = false;
+    const t = await setup({
+      noticeWouldWait: () => { if (!fired) { fired = true; bridge.conversationStopped(SID); } return false; },
+    });
+    bridge = t.bridge;
+    await bridge.askAssistant(SID, 'p-h');
+    await vi.waitFor(async () => expect((await t.handoff())!.state).toBe('answered'));
+    expect((bridge as any).handoffs.size).toBe(0);
+    expect((bridge as any).noticeTurns.size).toBe(0);
+    if (t.queued.length) expect(t.withdrawn).toContain(t.queued[0].handoffId);
+  });
+
   it('a clear that lands while the notice is being queued withdraws the notice just queued', async () => {
     const log: string[] = [];
     let bridge!: PlanHostBridge;

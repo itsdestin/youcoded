@@ -325,12 +325,28 @@ export class PlanHostBridge {
       if (this.handoffs.get(entry.handoffId) === entry) this.handoffs.delete(entry.handoffId);
       return res;
     }
+    // Review fix 1: a Stop or takeover that landed during the write cleared
+    // the entry before the journal had this handoff, so that clear answered
+    // nothing. Answer it here, or the card would stay greyed for good.
+    if (this.handoffs.get(entry.handoffId) !== entry) {
+      await this.answerOrphan(entry);
+      const now = await this.journal.get(ref, planId).then((p) => (p ? projectPlan(p) : res.plan), () => res.plan);
+      return { ok: true, plan: this.decorate(sessionId, now) };
+    }
     const queued = await this.queueAsk(entry, waiting);
     if (!queued) return { ok: false, error: QUEUE_FAILED };
     // The answer is the card as it stands after the queueing (a clear that
     // landed meanwhile already shows its buttons again).
     const view = await this.journal.get(ref, planId).then((p) => (p ? projectPlan(p) : res.plan), () => res.plan);
     return { ok: true, plan: this.decorate(sessionId, view) };
+  }
+
+  /** Review fix 1: answer a recorded handoff whose map entry a clear already
+   *  removed (that clear could not answer it). Never a problem: the user or a
+   *  takeover chose this. */
+  private async answerOrphan(entry: LiveHandoff): Promise<void> {
+    this.noticeTurns.delete(entry.turnId);
+    await this.service.answerHandoff(entry.ref, entry.planId, entry.handoffId);
   }
 
   /** Queue the notice for a handoff just recorded (cleared at once if that
@@ -378,7 +394,10 @@ export class PlanHostBridge {
     }
     if (!queued) {
       this.noticeTurns.delete(turnId);
-      await this.clearHandoff(handoffId, { force: true });
+      // Review fix 1: with no entry left, clearHandoff returns early, so the
+      // pending record is answered directly.
+      if (this.handoffs.get(handoffId) === entry) await this.clearHandoff(handoffId, { force: true });
+      else await this.answerOrphan(entry);
       return false;
     }
     // Task 9b follow-up: a clear (takeover, Stop) can land between the journal
@@ -392,6 +411,9 @@ export class PlanHostBridge {
         try { this.port.withdrawPlanNotice(ref.sessionId, handoffId); } catch (e) {
           log('WARN', 'PlanHostBridge', 'could not withdraw a plan pause notice', { error: String(e) });
         }
+        // Review fix 1: the clear may have run before the journal held this
+        // handoff; answering again is a no-op otherwise.
+        await this.answerOrphan(entry);
       }
       return true;
     }

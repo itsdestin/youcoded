@@ -166,10 +166,6 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // it had not started within 10 minutes, or its reply failed. The card says
   // so with Retry (which asks again) instead of silently returning its buttons.
   const askProblem = handoff?.state === 'answered' && !recommendation ? handoff.problem : undefined;
-  // Task 11: "Ask the assistant" on every paused card, except while a question
-  // is pending, when this conversation's model can't use tools, or while the
-  // error line's Retry already offers the same thing.
-  const canAsk = plan.status === 'paused' && !!plan.paused && !handoffPending && !plan.paused.askUnavailable && !askProblem;
   // The buttons this pause offers (main works them out from the same table
   // that limits the assistant's recommendation). A record from before that
   // field keeps the card's earlier rule.
@@ -177,6 +173,12 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     ?? (pause.kind === 'unknown-outcome' ? ['continue', 'stop'] : pause.kind === 'iteration-cap' ? ['stop'] : ['add_budget', 'stop']);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Task 11: "Ask the assistant" on every paused card, except while a question
+  // is pending, when this conversation's model can't use tools, or while the
+  // ask error line's Retry already offers the same thing — only while that
+  // line is actually showing (review fix 3: another action's error hides it,
+  // and that error's Retry does not ask).
+  const canAsk = plan.status === 'paused' && !!plan.paused && !handoffPending && !plan.paused.askUnavailable && !(askProblem && !error);
   // Task 5b: the card's error line offers Retry (error-message-standards:
   // every error has an action). Retry repeats the button that failed.
   const lastAction = useRef<(() => void) | null>(null);

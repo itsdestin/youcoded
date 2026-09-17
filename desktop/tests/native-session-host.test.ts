@@ -6265,6 +6265,17 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(handoff().problem).toEqual({ kind: 'reply-failed', detail: errorEvent.data.text });
     });
 
+    it('a failed notice turn with no error text leaves no invented cause (review of Task 11, finding 2)', async () => {
+      const planId = await pauseOnBudget();
+      const session = (host as any).live.get(SID).session;
+      vi.spyOn(session, 'runNotice').mockImplementationOnce(async () => {
+        session.emit('transcript-event', { type: 'session-error', sessionId: SID, uuid: 'e1', timestamp: 1, data: { text: '' } });
+      });
+      await ask(planId);
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the failed notice turn');
+      expect(handoff().problem).toEqual({ kind: 'reply-failed' });
+    });
+
     it('the user stopping the notice turn itself leaves no error (they chose it)', async () => {
       const planId = await pauseOnBudget();
       parentSteps.push({ gate: new Promise<void>(() => {}), chunks: textStep('never') });

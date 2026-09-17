@@ -198,6 +198,16 @@ describe('a question cleared without an answer shows an error line with Retry (Â
     expect(names[names.length - 1]).toBe('Retry');
   });
 
+  it('while another action\'s error shows, the ask error line hides and Ask comes back (review of Task 11, finding 3)', async () => {
+    api.stop.mockResolvedValueOnce({ ok: false, error: 'This plan is running in another YouCoded window. Stop it there.' });
+    show(paused({ handoff: { state: 'answered', problem: { kind: 'no-start' } } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+    await waitFor(() => expect(block()).toHaveTextContent('Stop it there.'));
+    expect(screen.queryByTestId('plan-ask-error')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: ASK }));
+    await waitFor(() => expect(api.askAssistant).toHaveBeenCalledWith(S, 'plan-1'));
+  });
+
   it('a recommendation that arrived first is kept, with no error line', () => {
     show(paused({ handoff: { state: 'answered', recommendation: { action: 'stop', message: 'stop it' } } }));
     expect(screen.queryByTestId('plan-ask-error')).toBeNull();
