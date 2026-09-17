@@ -10,7 +10,9 @@ import '@testing-library/jest-dom/vitest';
 import React, { useEffect } from 'react';
 import ToolCard from '../src/renderer/components/ToolCard';
 import { ChatProvider, useChatDispatch, useChatState } from '../src/renderer/state/chat-context';
-import type { PlanView } from '../src/shared/types';
+import { PLAN_PAUSE_KINDS, type PlanView } from '../src/shared/types';
+import { fallbackActions } from '../src/renderer/components/plans/PlanCard';
+import { pausedRouting } from '../src/main/harness/plans/pause-routing';
 import { planAction, resetPlanSupportForTests, PLAN_UNREADABLE } from '../src/renderer/components/plans/plan-bridge';
 import { planStatusPhrase } from '../src/renderer/components/plans/plan-status';
 import { PlansSettings } from '../src/renderer/components/SpecialistsSection';
@@ -189,13 +191,17 @@ describe('F10/F11: no channel ids or system text on the card', () => {
 });
 
 describe('F12/F13: Settings → Plans', () => {
-  it('a failed read offers Retry, which reads again and enables the switch', async () => {
-    const plans = bridge({ getAutoApprove: vi.fn().mockResolvedValueOnce({ ok: false, error: "Couldn't read the plan settings. Please try again." }).mockResolvedValue({ ok: true, underTokens: 0 }) });
+  // Decision 23 (deck 10, G-5): a setting that can't be read shows its
+  // default — off — and no error UI at all (this replaced F12's Retry row).
+  it('a failed read shows the default (off) and no error', async () => {
+    bridge({ getAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't read the plan settings. Please try again.", detail: 'EIO' }) });
     render(<PlansSettings />);
-    const alert = await screen.findByRole('alert');
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(screen.getByRole('switch', { name: 'Run small plans without asking' })).toBeEnabled());
-    expect(plans.getAutoApprove).toHaveBeenCalledTimes(2);
+    const toggle = await screen.findByRole('switch', { name: 'Run small plans without asking' });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/Couldn't read/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
   it('a click during a save is not lost or raced: one write at a time, the last choice wins', async () => {
@@ -390,18 +396,36 @@ describe('review fix 2: an unsaved-progress pause keeps the system text for the 
     paused: { stepId: 's1', reason: GENERAL, kind: 'unexpected-error', actions: ['continue', 'stop'], report: 'EIO: i/o error, write' },
   });
 
-  it('the card shows the general line, and Report bug hands over the system text', async () => {
+  // Decision 24 (deck 10, G-7): ONE row — the message on the left, and
+  // Report bug · Ask the assistant · Stop · Continue on the right, Continue
+  // filled and rightmost. No separate error block, and no Add budget: it is
+  // not a budget pause.
+  it('is one row: Report bug · Ask · Stop · Continue, and Report bug hands over the system text', async () => {
     bridge();
     render(<ChatProvider><Card initial={orphanPause()} /></ChatProvider>);
     const block = screen.getByTestId('plan-block');
     expect(within(block).getByTestId('plan-paused-reason')).toHaveTextContent(GENERAL);
     expect(block).not.toHaveTextContent('EIO');
-    const alert = within(block).getByTestId('plan-paused-report');
-    fireEvent.click(within(alert).getByRole('button', { name: 'Report bug' }));
+    expect(block).not.toHaveTextContent('Something went wrong');
+    expect(within(block).queryByTestId('plan-paused-report')).toBeNull();
+    expect(within(block).queryByRole('alert')).toBeNull();
+    const row = within(block).getByTestId('plan-pause-actions');
+    const btns = within(row).getAllByRole('button');
+    expect(btns.map((b) => b.textContent)).toEqual(['Report bug', 'Ask the assistant', 'Stop', 'Continue']);
+    expect(btns.map((b) => /(^|\s)bg-(accent|destructive)(\s|$)/.test(b.className))).toEqual([false, false, false, true]);
+    // The message and the buttons share the one strip.
+    expect(within(block).getByTestId('plan-paused-reason').closest('.bg-amber-500\\/10')).toContainElement(row);
+    fireEvent.click(within(row).getByRole('button', { name: 'Report bug' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toHaveTextContent(GENERAL);
     expect(dialog).toHaveTextContent('EIO: i/o error, write');
-    expect(within(alert).getByRole('button', { name: 'Diagnose with the assistant' })).toBeInTheDocument();
+  });
+
+  it('an unexpected-error pause never offers Add budget, even from a record without `actions`', () => {
+    bridge();
+    render(<ChatProvider><Card initial={paused({ paused: { stepId: 's1', reason: GENERAL, kind: 'unexpected-error', report: 'EIO' } })} /></ChatProvider>);
+    expect(screen.queryByRole('button', { name: 'Add budget' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument();
   });
 
   it('an ordinary pause shows no report actions', () => {
@@ -438,5 +462,14 @@ describe('follow-up: the minimum Add budget switches when the cache window close
     expect(screen.queryByTestId('plan-add-minimum')).toBeNull();
     act(() => { vi.advanceTimersByTime(1_001); });
     expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 1,700 tokens');
+  });
+});
+
+// Decision 24: the card's fallback for a record without `actions` is main's
+// own table, kind by kind (so no non-budget pause can show Add budget again).
+describe('the fallback buttons match main\'s pause routing', () => {
+  it.each(PLAN_PAUSE_KINDS.flatMap((kind) => [undefined, 'refused', 'drift'].map((launch) => [kind, launch] as const)))('%s (launch: %s)', (kind, launch) => {
+    const paused = { stepId: 's1', reason: 'x', kind, ...(launch ? { launch } : {}) } as NonNullable<PlanView['paused']>;
+    expect(fallbackActions(paused)).toEqual([...pausedRouting(paused as any).actions]);
   });
 });

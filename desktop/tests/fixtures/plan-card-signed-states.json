@@ -902,7 +902,8 @@
   "startedAt": 1753800005000,
   "paused": {
    "stepId": "s1",
-   "reason": "step 1 hit its 27,000-token limit with 2 of 3 reviewers done."
+   "reason": "step 1 hit its 27,000-token limit with 2 of 3 reviewers done.",
+   "kind": "budget"
   }
  },
  "plan-proposed-local": {

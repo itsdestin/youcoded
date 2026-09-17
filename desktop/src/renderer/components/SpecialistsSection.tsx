@@ -338,8 +338,9 @@ export default function SpecialistsSection({ cwd }: {
 export function PlansSettings() {
   const [under, setUnder] = useState<number | null>(null);
   const [draft, setDraft] = useState('20000');
-  // Final review F12: every error here offers Retry (and Report bug when the
-  // cause isn't known); `retry` repeats exactly what failed.
+  // Final review F12: a failed SAVE offers Retry (and Report bug when the
+  // cause isn't known); `retry` repeats exactly what failed. A failed read
+  // shows no error (decision 23).
   const [error, setError] = useState<{ text: string; detail?: string; retry: () => void } | null>(null);
   const [reporting, setReporting] = useState<string | null>(null);
   // Final review F13: which kind of write is out. One write at a time.
@@ -355,7 +356,10 @@ export function PlansSettings() {
         setUnder(r.underTokens);
         if (r.underTokens > 0) setDraft(String(r.underTokens));
       } else if (r.unsupported) setUnsupported(true);
-      else setError({ text: r.error, ...(r.detail ? { detail: r.detail } : {}), retry: load });
+      // Decision 23 (deck 10, G-5): a setting that can't be read shows its
+      // default — off — with no error row. (A save still reports its own
+      // failure, with Retry.)
+      else setUnder(0);
     });
   }, []);
   useEffect(() => { load(); }, [load]);

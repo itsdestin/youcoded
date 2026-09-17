@@ -160,6 +160,22 @@ function newRequestId(): string {
  *  chat's own cards, but nothing on them may act — the plan is not running here. */
 const PREVIEW_KEY_PREFIX = previewSessionKey('');
 
+/** Decision 24: the buttons for a pause whose record predates `actions`,
+ *  by kind — mirrors main's pause-routing.ts table (pinned against
+ *  pausedRouting by plan-card-final-review.test.tsx). */
+export function fallbackActions(paused: PlanView['paused']): Array<'add_budget' | 'continue' | 'stop'> {
+  switch (paused?.kind) {
+    case 'budget': case 'ceiling-shortfall':
+      return paused.launch === 'drift' ? ['stop'] : ['add_budget', 'stop'];
+    case 'plan-limit': case 'budget-refused': case 'iteration-cap': case 'local-pool':
+      return ['stop'];
+    case 'specialist-stopped':
+      return ['continue', 'stop'];
+    default:
+      return paused?.launch === 'drift' || (paused?.kind === 'launch-failed' && paused.launch === 'refused') ? ['stop'] : ['continue', 'stop'];
+  }
+}
+
 // ---- the block ---------------------------------------------------------------
 
 export function PlanBlock({ plan: record, segments, sessionId }: {
@@ -245,8 +261,10 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // The buttons this pause offers (main works them out from the same table
   // that limits the assistant's recommendation). A record from before that
   // field keeps the card's earlier rule.
-  const offered: ReadonlyArray<'add_budget' | 'continue' | 'stop'> = plan.paused?.actions
-    ?? (pause.kind === 'unknown-outcome' ? ['continue', 'stop'] : pause.kind === 'iteration-cap' ? ['stop'] : ['add_budget', 'stop']);
+  // Decision 24: a record without `actions` falls back by the pause's KIND,
+  // the same table main uses (pause-routing.ts) — only the budget kinds offer
+  // Add budget. The old fallback gave every unnamed kind Add budget.
+  const offered: ReadonlyArray<'add_budget' | 'continue' | 'stop'> = plan.paused?.actions ?? fallbackActions(plan.paused);
   const [busy, setBusy] = useState<string | null>(null);
   // Final review F15: an error belongs to the state it happened in; once a
   // push moves the card on, it (and its Retry) no longer applies.
@@ -450,6 +468,14 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               wrapAction
               action={handoffPending || asking || readOnly ? undefined : !adding ? (
                 <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-pause-actions">
+                  {/* Decision 24 (deck 10, G-7): a pause whose reason is a
+                      general line with the system's own text behind it
+                      (progress that couldn't be saved) offers Report bug in
+                      this same row, far left — no separate error block. The
+                      text goes only to the report screen. */}
+                  {plan.paused.report && (
+                    <Button size="sm" variant="secondary" onClick={() => report(reportText(plan.paused!.reason, plan.paused!.report), false)}>Report bug</Button>
+                  )}
                   {/* Task 11 (§6, G-29): Ask is a light button, far left. */}
                   {canAsk && (
                     <Button size="sm" variant="secondary" onClick={() => setAsking(true)} disabled={blocked}>Ask the assistant</Button>
@@ -509,25 +535,6 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               )}
             </StatusStrip>
           )}
-
-          {/* Task 12 review fix 2 (error-message standards): a pause whose
-              reason is a general line with the system's own text behind it
-              (progress that couldn't be saved). The card never shows that
-              text; Report bug and Diagnose hand it over. */}
-          {plan.status === 'paused' && plan.paused?.report && !handoffPending && !readOnly && (() => {
-            const toReport = reportText(plan.paused.reason, plan.paused.report);
-            return (
-              <div data-testid="plan-paused-report">
-                <ErrorState
-                  variant="inline"
-                  title="Something went wrong"
-                  explainer="Report it, or ask the assistant to diagnose what happened."
-                  onReportBug={() => report(toReport, false)}
-                  onDiagnose={() => report(toReport, true)}
-                />
-              </div>
-            );
-          })()}
 
           {/* Task 11 (§6, error-message standards): a question cleared without
               an answer. The real cause when main knows it; otherwise a

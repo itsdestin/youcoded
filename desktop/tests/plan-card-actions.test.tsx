@@ -90,7 +90,7 @@ describe('card actions land only what the host answered', () => {
   });
 
   it('Add budget sends the typed amount and keeps the control open if refused', async () => {
-    const paused = plan({ status: 'paused', steps: [{ ...plan().steps[0], status: 'paused' }], paused: { stepId: 's1', reason: 'step 1 hit its limit.' } });
+    const paused = plan({ status: 'paused', steps: [{ ...plan().steps[0], status: 'paused' }], paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget' } });
     const plans = bridge({
       addBudget: vi.fn()
         .mockResolvedValueOnce({ ok: false, error: 'Add at least 1,200 tokens so the specialist can continue.' })
@@ -248,11 +248,15 @@ describe('Settings → Plans reads and writes through the normalized forms', () 
     expect(toggle).toHaveAttribute('aria-checked', 'true');
   });
 
-  it('a failed read says so and keeps the switch disabled', async () => {
+  // Decision 23: a failed read shows the default (off) with no error row
+  // (plan-card-final-review.test.tsx pins it in full).
+  it('a failed read shows the default, off, and says nothing', async () => {
     bridge({ getAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't read the plan settings. Please try again.", detail: 'bad file' }) });
     render(<PlansSettings />);
-    await screen.findByText("Couldn't read the plan settings. Please try again.");
-    expect(screen.getByRole('switch', { name: 'Run small plans without asking' })).toBeDisabled();
+    const toggle = screen.getByRole('switch', { name: 'Run small plans without asking' });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByText(/Couldn't read/)).toBeNull();
   });
 
   it('a device that cannot run plans shows no Plans section at all', async () => {
