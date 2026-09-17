@@ -12,8 +12,9 @@ export type { Rect };
 // `qdbus`. Try the current name first, fall back to the legacy one. Lifted
 // verbatim out of the former kwin-keep-above.ts (deleted 2026-09-16 with the
 // buddy overlay it served) — the technical design (§7) says reuse this
-// discovery, do not re-implement it.
-export const QDBUS_CANDIDATES = ['qdbus6', 'qdbus'] as const;
+// discovery, do not re-implement it. WHY not exported: that deletion took the
+// last outside importer with it, and the knip ratchet forbids a dead export.
+const QDBUS_CANDIDATES = ['qdbus6', 'qdbus'] as const;
 
 // A DBus round trip to KWin or plasmashell is 2-10 ms when the service is
 // there (probe FINDINGS K4/K5). WHY a timeout at all: the work-area resolve is

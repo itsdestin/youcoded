@@ -32,7 +32,6 @@ const ALLOWLIST: Record<string, string> = {
   'components/guide/GuideTour.tsx': '300ms anchor-presence check while a first-run tour is running',
   'components/LocalModelDownloadStrip.tsx': '1s download-status poll while a model download is in flight',
   'components/LocalModelsSection.tsx': '2s settings re-read while a local-model dialog is open',
-  'components/marketplace/InstallFavoriteCorner.tsx': '80ms spinner only during an install',
   'components/ModelLoadingBar.tsx': '1s elapsed counter while a local model loads',
   'components/ModelProvidersPopup.tsx': '1s sign-in poll only while a browser sign-in is pending',
   'components/specialists/RunStatusLine.tsx': '1s elapsed counter while a specialist run is running',
