@@ -88,7 +88,7 @@ describe('DeliverablesCard', () => {
   });
 
   it('a failed tile with NO error text names the path and invents no cause', () => {
-    // The repo guard (status-strip-authority.test.tsx) scans for the SHAPE
+    // The repo guard (ast-grep rule no-hardcoded-error-fallback) bans the SHAPE
     // `someError || 'a guess'`. This pins the behaviour behind it: when the tool
     // gave us no reason, the tooltip must say nothing about WHY. The overlay
     // already tells the user it failed (docs/error-message-standards.md).

@@ -97,7 +97,7 @@ describe('SessionPreviewPane', () => {
 
   // Case (b): chatsearch:read answered { ok: false } with no `error`. The
   // honest answer is the general two-action card, never an invented cause
-  // (tests/status-strip-authority.test.tsx guards the same line).
+  // (the ast-grep rule no-hardcoded-error-fallback guards the same line).
   it('a failure with no error string shows the general card, not a fabricated cause', async () => {
     (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: false });
     render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
