@@ -144,14 +144,20 @@ export function registerSocialHandlers(
   // takes the socket DOWN when the user goes idle, so "stop on disconnect"
   // would have stopped the only thing able to notice them coming back.
   stopIdlePoller(); // hot-reload: never stack a second poller
+  const pollIdle = () => {
+    const localIdleMs = powerMonitor.getSystemIdleTime() * 1000;
+    const lastRemote = remoteServer?.getLastClientActivityMs() ?? 0;
+    const remoteIdleMs = lastRemote === 0 ? Number.POSITIVE_INFINITY : Date.now() - lastRemote;
+    presence.setIdle(localIdleMs >= IDLE_DISCONNECT_MS && remoteIdleMs >= IDLE_DISCONNECT_MS);
+  };
   const startIdlePoller = () => {
     stopIdlePoller();
-    idlePoller = setInterval(() => {
-      const localIdleMs = powerMonitor.getSystemIdleTime() * 1000;
-      const lastRemote = remoteServer?.getLastClientActivityMs() ?? 0;
-      const remoteIdleMs = lastRemote === 0 ? Number.POSITIVE_INFINITY : Date.now() - lastRemote;
-      presence.setIdle(localIdleMs >= IDLE_DISCONNECT_MS && remoteIdleMs >= IDLE_DISCONNECT_MS);
-    }, IDLE_POLL_MS);
+    // WHY one synchronous poll first: the socket keeps `idle` as state that ONLY
+    // this poller clears. After idle → intent off → intent on, setDesired(true)
+    // would otherwise stay masked by `!idle` until the first 15 s tick, and the
+    // user would sit on "Connecting…" for up to 15 s after asking for presence.
+    pollIdle();
+    idlePoller = setInterval(pollIdle, IDLE_POLL_MS);
   };
 
   // One client instance shared across all handlers. getToken() is read lazily
