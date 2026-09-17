@@ -5,7 +5,7 @@ import { loadFirstPageThenReplay } from '../../state/first-page-load';
 import UserMessage from '../UserMessage';
 import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
-import { shouldRenderAssistantTurn } from '../../state/chat-types';
+import { shouldRenderAssistantTurn, shouldRenderUserEntry } from '../../state/chat-types';
 import { CompactToolStrip } from './CompactToolStrip';
 import { helperAsksOf } from '../../utils/specialist-cards';
 import PromptCard from '../PromptCard';
@@ -526,6 +526,9 @@ export function BubbleFeed({ sessionId }: Props) {
 
               switch (entry.kind) {
                 case 'user':
+                  // Task 10: a plan's pause notice draws no row — shared gate,
+                  // MUST mirror ChatView.tsx.
+                  if (!shouldRenderUserEntry(entry)) return null;
                   key = entry.message.id;
                   // sessionId ?? '' — the buddy window has no ArtifactProvider, so
                   // FilepathToken pills render but their click is a documented no-op.

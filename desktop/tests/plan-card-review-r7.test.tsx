@@ -203,7 +203,10 @@ describe('D. the Specialists chip lists a plan\'s working specialists, grouped u
     expect(within(group).getByTestId('helper-card-kid-b')).toBeInTheDocument();
     expect(screen.queryByTestId('helper-card-kid-c')).toBeNull();
     // Plan specialists are not repeated in the ordinary sections.
-    expect(screen.queryByText('Working')).toBeNull();
+    // (Task 10, R7-5: the plan card itself now sits under "Working", so the
+    // check is that each specialist card appears once, inside the plan.)
+    expect(screen.getAllByTestId('helper-card-kid-a')).toHaveLength(1);
+    expect(screen.getAllByTestId(/^helper-card-/).every((c) => group.contains(c))).toBe(true);
   });
 
   it('a plan with an asking specialist starts open, says "1 needs you", and lists its working sibling too', () => {

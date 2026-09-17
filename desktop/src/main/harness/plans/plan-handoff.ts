@@ -12,7 +12,7 @@
 // a hostile web page or tool output must never read as the user's instruction.
 // Specialist report text is never included: it is model output about the
 // work, not a fact about the pause.
-import type { PlanPauseKind } from '../../../shared/types';
+import { PLAN_NOTICE_PREFIX, type PlanPauseKind } from '../../../shared/types';
 import { projectPlan } from './plan-journal';
 import { pausedRouting, type PlanPauseAction } from './pause-routing';
 import type { PlanRecord } from './types';
@@ -99,7 +99,9 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string): string {
   const approx = plan.approximateLimit || Object.values(plan.manifest.specialists).some((s) => s.approximateLimit);
   const { actions } = pausedRouting(paused);
   const lines = [
-    `[Plan paused] The plan "${plan.document.goal}" is paused and needs a decision from the user. You are asked to look into it first.`,
+    // Task 10: the prefix is shared with the renderer, which hides this
+    // notice's chat row by it (the text itself is unchanged).
+    `${PLAN_NOTICE_PREFIX} The plan "${plan.document.goal}" is paused and needs a decision from the user. You are asked to look into it first.`,
     '',
     `Plan id: ${plan.planId}`,
     `Handoff id: ${handoffId}`,

@@ -765,6 +765,14 @@ export type PlanPauseKind = (typeof PLAN_PAUSE_KINDS)[number];
 /** Task 9b: a button a paused plan card may offer, and what the assistant may
  *  recommend (pause handoff §2). The user always presses it. */
 export type PlanPauseAction = 'add_budget' | 'continue' | 'stop';
+/** Task 10 (review 7, Q7-2 "Hide it"): the first words of the notice a paused
+ *  plan sends the assistant (plan-handoff.ts). WHY shared: the renderer hides
+ *  that notice's chat row by this prefix (chat-types.ts shouldRenderUserEntry)
+ *  while the turn itself, the transcript and history keep it; one constant
+ *  keeps the template and the check from drifting apart. The notice carries no
+ *  header of its own, and older transcripts only have its text, so the text is
+ *  the one mark every saved copy shares. */
+export const PLAN_NOTICE_PREFIX = '[Plan paused]';
 
 /** Where one plan specialist's attempt stands (the journal's attempt phase):
  *  `prepared` means its first request was never sent. */

@@ -1,4 +1,4 @@
-import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
+import { ChatMessage, PLAN_NOTICE_PREFIX, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -106,6 +106,20 @@ export function abnormalStopReason(reason: string | null | undefined): boolean {
 export function shouldRenderAssistantTurn(turn: AssistantTurn | undefined): turn is AssistantTurn {
   if (!turn) return false;
   return turn.segments.length > 0 || abnormalStopReason(turn.stopReason);
+}
+
+/** Timeline render gate for a `user` entry, shared by ChatView, the buddy
+ *  BubbleFeed and PreviewTimeline (which MUST mirror each other).
+ *  Task 10 (review 7, R8-1 + Q7-2, "Hide it"): the notice a paused plan sends
+ *  the assistant is not drawn. It still runs as a real turn and stays in the
+ *  transcript and the model's history; only its collapsed "Note for the
+ *  assistant" row is gone, because the greyed plan card already says the
+ *  assistant is looking into it. Matched narrowly: a host-injected turn with
+ *  no header whose text opens with the plan notice's prefix — so a user who
+ *  types those words, and every other host note, still shows. */
+export function shouldRenderUserEntry(entry: { message: { content: string }; injected?: string; injectedMeta?: unknown }): boolean {
+  if (!entry.injected || entry.injectedMeta) return true;
+  return !entry.message.content.startsWith(PLAN_NOTICE_PREFIX);
 }
 
 // Snapshot of session stats + rate limits captured when /cost or /usage was typed.

@@ -251,9 +251,15 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               Task 5b: a failed card salvaged from a damaged file has no steps
               and a 0 limit — printing "of the 0 tokens limit" says nothing true,
               so that card shows only its reason. */}
+          {/* Task 10 (review 7, R7-2 note: "put the buttons in-line with the
+              text on the left. lots of empty space"): a proposal's Comment ·
+              Approve share this row too, like a running plan's Stop. The text
+              takes the free space (flex-1) but keeps a readable 16rem before
+              the buttons give way; below that the buttons wrap onto their own
+              line and stay on the right (ml-auto), Approve rightmost (G-29). */}
           {plan.steps.length > 0 && (
-          <div className="flex items-center justify-between gap-3 flex-wrap" data-testid="plan-ceiling">
-          <span className="text-xs text-fg-dim min-w-0">
+          <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap" data-testid="plan-ceiling">
+          <span className="text-xs text-fg-dim flex-1 min-w-0 basis-64">
             {plan.status === 'proposed' || revised
               // A revised plan never ran, so it keeps its proposal line rather
               // than a meaningless "Spent 0" (UX run 1 follow-up).
@@ -264,7 +270,18 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                 : <>Spent {spent(plan)} of {limit(plan)}</>}
           </span>
             {plan.status === 'running' && (
-              <Button size="sm" variant="danger-outline" className="shrink-0" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop the plan'}</Button>
+              <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
+                <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop the plan'}</Button>
+              </div>
+            )}
+            {/* Task 8 (review 6, R6-4; design guide G-29): Comment (light) on
+                the left, the filled Approve rightmost. Hidden while the comment
+                box is open — that box carries its own Cancel · Send. */}
+            {plan.status === 'proposed' && !commenting && (
+              <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
+                <Button size="sm" variant="secondary" onClick={() => setCommenting(true)} disabled={blocked}>Comment</Button>
+                <Button size="sm" variant="primary" onClick={approve} disabled={blocked}>{busy === 'approve' ? 'Approving…' : 'Approve'}</Button>
+              </div>
             )}
           </div>
           )}
@@ -377,17 +394,6 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             </div>
           )}
 
-      {/* The proposal keeps its buttons on their own row: it has two forward
-          actions and no status sentence to share a line with.
-          Task 8 (review 6, R6-4; design guide G-29): the row sits on the
-          RIGHT and the filled Approve is the rightmost button, with the light
-          Comment to its left — a filled button is never left-aligned. */}
-          {plan.status === 'proposed' && !commenting && (
-            <div className="flex items-center justify-end gap-2 flex-wrap">
-              <Button size="sm" variant="secondary" onClick={() => setCommenting(true)} disabled={blocked}>Comment</Button>
-              <Button size="sm" variant="primary" onClick={approve} disabled={blocked}>{busy === 'approve' ? 'Approving…' : 'Approve'}</Button>
-            </div>
-          )}
           {plan.status === 'proposed' && commenting && (
             <div className="space-y-1.5" data-testid="plan-comment">
               <Textarea

@@ -94,17 +94,26 @@ function SpecialistManager({ summary, sessionId, onJump }: { summary: Specialist
     { id: 'finished', label: 'Finished' },
   ];
   // Task 8 (review 6, Q6-2): a plan's specialists are listed under their
-  // plan, not in these sections — so each one is shown once, next to the job
-  // it belongs to. The Plans section sits right after "Needs you" (a plan
-  // with an asking specialist is sorted first and opens itself).
+  // plan, not on their own — so each one is shown once, next to the job it
+  // belongs to (a plan with an asking specialist is sorted first and opens
+  // itself).
+  // Task 10 (review 7, R7-5: "plan card should be same width as the
+  // independent specialists cards. remove the separate header"): no "Plans"
+  // section any more. Each plan is a card in the SAME list as the ordinary
+  // cards — under "Needs you" while one of its specialists asks, otherwise at
+  // the top of "Working" (a listed plan always has someone working or asking).
   const plans = [...summary.plans].sort((a, b) => (b.needsYou > 0 ? 1 : 0) - (a.needsYou > 0 ? 1 : 0));
+  const plansIn = (id: HelperView['group']) =>
+    id === 'needs-you' ? plans.filter(p => p.needsYou > 0) : id === 'working' ? plans.filter(p => p.needsYou === 0) : [];
   const section = (g: { id: HelperView['group']; label: string }) => {
     const items = summary.helpers.filter(h => h.group === g.id && !h.planId);
-    if (items.length === 0) return null;
+    const groupPlans = plansIn(g.id);
+    if (items.length === 0 && groupPlans.length === 0) return null;
     return (
       <section key={g.id}>
         <h3 className={SECTION_LABEL}>{g.label}</h3>
         <div className="space-y-2">
+          {groupPlans.map(p => <PlanGroup key={p.planId} group={p} sessionId={sessionId} onJump={onJump} />)}
           {items.map(h => <HelperCard key={h.run.childId} h={h} sessionId={sessionId} onJump={onJump} />)}
         </div>
       </section>
@@ -112,55 +121,46 @@ function SpecialistManager({ summary, sessionId, onJump }: { summary: Specialist
   };
   return (
     <div className="space-y-4">
-      {section(groups[0])}
-      {plans.length > 0 && (
-        <section key="plans">
-          <h3 className={SECTION_LABEL}>Plans</h3>
-          <div className="space-y-2">
-            {plans.map(p => <PlanGroup key={p.planId} group={p} sessionId={sessionId} onJump={onJump} />)}
-          </div>
-        </section>
-      )}
-      {section(groups[1])}
-      {section(groups[2])}
+      {groups.map(section)}
     </div>
   );
 }
 
 /**
- * Task 8 (review 6, Q6-2): one plan — a one-line foldable row (the app's
- * expand-in-place SettingRow, design guide G-22) with the plan's title, the
- * card header's own status phrase ("step 1 of 3"), and "N needs you" when a specialist asks. Opening it
- * shows the plan's working and asking specialists with the SAME card an
- * ordinary specialist gets. A plan with an asking specialist starts open, and
- * opens itself when an ask arrives, so the buttons are never behind a fold.
+ * One plan, as a card framed like an ordinary specialist's (Task 10, R7-5) and
+ * as wide, titled "Plan: <name>" with the card header's own status phrase
+ * ("step 1 of 3") and "N needs you" when a specialist asks. Its header is the
+ * app's expand-in-place row (SettingRow, design guide G-22); opening it shows
+ * the plan's working and asking specialists, inside the card, with the SAME
+ * card an ordinary specialist gets (Task 8, Q6-2). A plan with an asking
+ * specialist starts open, and opens itself when an ask arrives, so the buttons
+ * are never behind a fold.
  */
 function PlanGroup({ group, sessionId, onJump }: { group: PlanGroupView; sessionId?: string; onJump: () => void }) {
   const asking = group.needsYou > 0;
   const [open, setOpen] = useState(asking);
   useEffect(() => { if (asking) setOpen(true); }, [asking]);
   return (
-    <div className="space-y-2" data-testid={`plan-group-${group.planId}`}>
+    <div
+      // The HelperCard frame, amber while someone asks — the same cue.
+      className={`rounded-lg border ${asking ? 'border-amber-700/40' : 'border-edge'} bg-inset/50 overflow-hidden`}
+      data-testid={`plan-group-${group.planId}`}
+    >
       <div data-testid="plan-group-toggle">
         <SettingRow
-          variant="item"
-          title={group.title}
+          title={`Plan: ${group.title}`}
+          description={group.status}
           truncateTitle
           expanded={open}
           onClick={() => setOpen(v => !v)}
-          accessory={
-            <span className="shrink-0 flex items-center gap-2 text-2xs text-fg-muted tabular-nums">
-              <span>{group.status}</span>
-              {asking && (
-                // The same amber "waiting on you" words the chip uses.
-                <span className="inline-flex items-center gap-1 text-amber-500"><QuestionIcon className="w-3 h-3" />{group.needsYou} need{group.needsYou === 1 ? 's' : ''} you</span>
-              )}
-            </span>
-          }
+          accessory={asking ? (
+            // The same amber "waiting on you" words the chip uses.
+            <span className="shrink-0 inline-flex items-center gap-1 text-2xs text-amber-500 tabular-nums"><QuestionIcon className="w-3 h-3" />{group.needsYou} need{group.needsYou === 1 ? 's' : ''} you</span>
+          ) : undefined}
         />
       </div>
       {open && (
-        <div className="space-y-2 pl-3">
+        <div className="space-y-2 p-2 border-t border-edge-dim">
           {group.helpers.map(h => <HelperCard key={h.run.childId} h={h} sessionId={sessionId} onJump={onJump} />)}
         </div>
       )}

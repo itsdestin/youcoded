@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn } from '../state/chat-types';
+import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, shouldRenderUserEntry } from '../state/chat-types';
 import UserMessage from './UserMessage';
 import SpecialistReportCard from './SpecialistReportCard';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
@@ -1138,6 +1138,9 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               let content: React.ReactNode;
               switch (entry.kind) {
                 case 'user':
+                  // Task 10: a plan's pause notice runs but draws no row
+                  // (shared gate; MUST mirror BubbleFeed/PreviewTimeline).
+                  if (!shouldRenderUserEntry(entry)) return null;
                   key = entry.message.id;
                   // A host-injected user-role turn (a delivered specialist
                   // report) is an EVENT for the assistant, not anyone's words —

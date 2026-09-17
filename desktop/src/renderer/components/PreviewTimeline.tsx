@@ -19,7 +19,7 @@ import AssistantTurnBubble from './AssistantTurnBubble';
 import UsageCard from './UsageCard';
 import SystemMarker from './SystemMarker';
 import SkillInvocationCard from './SkillInvocationCard';
-import { shouldRenderAssistantTurn, type SessionChatState } from '../state/chat-types';
+import { shouldRenderAssistantTurn, shouldRenderUserEntry, type SessionChatState } from '../state/chat-types';
 import { findArchiveBoundary } from '../state/archive-boundary';
 import { useTheme } from '../state/theme-context';
 import type { SessionProvider } from '../../shared/types';
@@ -40,6 +40,8 @@ export default function PreviewTimeline({ state, sessionId, provider }: {
         let content: React.ReactNode;
         switch (entry.kind) {
           case 'user':
+            // Task 10: a plan's pause notice draws no row — shared gate, as in ChatView.
+            if (!shouldRenderUserEntry(entry)) return null;
             key = entry.message.id;
             content = entry.injected ? (
               <SpecialistReportCard message={entry.message} injected={entry.injected} meta={entry.injectedMeta}
