@@ -12,7 +12,6 @@ import {
   SerializedChatState,
 } from './chat-types';
 import { PlanView, SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
-import { markPlanReceived } from './plan-received';
 import { pageEventToAction } from './transcript-page-actions';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
 import { isPlanCard } from '../utils/specialist-cards';
@@ -2682,9 +2681,6 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'PLAN_CHANGED': {
-      // Task 12 follow-up 1: start the warm minimum's countdown from receipt
-      // (a side table, not state — see plan-received.ts).
-      markPlanReceived(action.plan);
       // Specialists stage two (design mockup, 2026-09-05): the plan record
       // lands on the `propose_plan` card that proposed it, keyed by toolUseId
       // — the same contract SHELL_RUN_CHANGED uses. A record for an unknown

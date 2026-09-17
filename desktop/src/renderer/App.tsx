@@ -1373,6 +1373,9 @@ function AppInner() {
     // button calls return.
     const planHandler = window.claude.on.planEvent?.((event) => {
       if (!event?.sessionId || !event.plan) return;
+      // Task 12 follow-up 1: the warm minimum's countdown starts when the view
+      // ARRIVES here, not when the batch is flushed (plan-received.ts).
+      markPlanReceived(event.plan);
       batchTranscriptDispatch({ type: 'PLAN_CHANGED', sessionId: event.sessionId, plan: event.plan });
     });
 
@@ -4531,6 +4534,7 @@ function AppInner() {
 // getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
 import type { UsageSnapshot } from './state/chat-types';
 import type { SessionChatState } from './state/chat-types';
+import { markPlanReceived } from './state/plan-received';
 const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; provider?: 'claude' | 'native' }>(
   function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, provider }, ref) {
     return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} provider={provider} />;

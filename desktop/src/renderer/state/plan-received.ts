@@ -12,14 +12,18 @@ type WarmMinimum = NonNullable<NonNullable<PlanView['paused']>['warmMinimum']>;
 
 const received = new WeakMap<WarmMinimum, number>();
 
-/** Called where a view enters chat state (PLAN_CHANGED). Idempotent. */
+/** Called by the listeners that receive a pushed or answered view (App.tsx,
+ *  BubbleFeed.tsx, PlanCard's action results). Idempotent: the first arrival
+ *  of a given view object wins. */
 export function markPlanReceived(plan: PlanView): void {
   const warm = plan.paused?.warmMinimum;
   if (warm && !received.has(warm)) received.set(warm, Date.now());
 }
 
-/** When `warm` expires on this device. A view that reached the card without
- *  passing the reducer is stamped the first time it is read. */
+/** When `warm` expires on this device. WHY a first-read fallback: a view can
+ *  also ride a transcript tool event (live or a history page) rather than a
+ *  plan push; such a view is stamped the first time the card reads it, which
+ *  is when it is first shown anyway. */
 export function warmMinimumExpiresAt(warm: WarmMinimum): number {
   let at = received.get(warm);
   if (at === undefined) {

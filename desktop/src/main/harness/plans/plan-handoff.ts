@@ -137,7 +137,12 @@ function topUpLine(paused: NonNullable<PlanRecord['paused']>, now: number): stri
   const cold = paused.minimumAddTokens;
   if (warm && now <= warm.until && cold !== undefined && warm.tokens < cold) {
     const minutes = Math.max(1, Math.floor((warm.until - now) / 60_000));
-    return [`Smallest top-up that lets it continue: ${fmt(warm.tokens)} tokens if it continues within the next ${minutes} minute${minutes === 1 ? '' : 's'}, ${fmt(cold)} tokens after that`];
+    const within = `within the next ${minutes} minute${minutes === 1 ? '' : 's'}`;
+    // Follow-up tidy-up: a warm minimum already met reads as "no top-up",
+    // never as "0 tokens".
+    return [warm.tokens > 0
+      ? `Smallest top-up that lets it continue: ${fmt(warm.tokens)} tokens if it continues ${within}, ${fmt(cold)} tokens after that`
+      : `Smallest top-up that lets it continue: no top-up is needed if it continues ${within}, ${fmt(cold)} tokens after that`];
   }
   const current = pausedMinimum(paused, now);
   return current !== undefined ? [`Smallest top-up that lets it continue: ${fmt(current)} tokens`] : [];

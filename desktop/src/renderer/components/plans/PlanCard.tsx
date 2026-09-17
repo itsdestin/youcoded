@@ -7,7 +7,7 @@ import { BugReportPopup } from '../development/BugReportPopup';
 import type { ReportContext } from '../development/ReportDesign';
 import { toolActionLabel } from '../../utils/tool-group-summary';
 import { classifyPause } from './plan-pause';
-import { warmMinimumExpiresAt } from '../../state/plan-received';
+import { markPlanReceived, warmMinimumExpiresAt } from '../../state/plan-received';
 import { planStatusPhrase } from './plan-status';
 import BrailleSpinner from '../BrailleSpinner';
 import { SpecialistActions } from '../specialists/SpecialistActions';
@@ -293,7 +293,12 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     setBusy(name); setFailed(null);
     try {
       const res = await planAction(fn);
-      if (res.ok) { dispatch({ type: 'PLAN_CHANGED', sessionId, plan: res.plan }); return res.plan; }
+      if (res.ok) {
+        // Task 12 follow-up 1: an action's answer is a view received now.
+        markPlanReceived(res.plan);
+        dispatch({ type: 'PLAN_CHANGED', sessionId, plan: res.plan });
+        return res.plan;
+      }
       if (res.unsupported) setAnsweredUnsupported(res.error);
       else setFailed({ text: res.error, ...(res.detail ? { detail: res.detail } : {}), status: at });
       return null;

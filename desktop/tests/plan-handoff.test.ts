@@ -749,4 +749,11 @@ describe('follow-up: the notice names the warm minimum only while it is valid', 
       .toContain('Smallest top-up that lets it continue: 800 tokens if it continues within the next 3 minutes, 2,500 tokens after that');
     expect(planHandoffNotice(rec, 'h-1', undefined, 10_001)).toContain('Smallest top-up that lets it continue: 2,500 tokens\n');
   });
+
+  it('a warm minimum already met says no top-up is needed, never "0 tokens"', () => {
+    const rec = pausedRecord({ minimumAddTokens: 1_700, extra: { warmMinimum: { tokens: 0, until: 10_000 } } });
+    const text = planHandoffNotice(rec, 'h-1', undefined, 10_000 - 2 * 60_000);
+    expect(text).toContain('Smallest top-up that lets it continue: no top-up is needed if it continues within the next 2 minutes, 1,700 tokens after that');
+    expect(text).not.toMatch(/\b0 tokens/);
+  });
 });
