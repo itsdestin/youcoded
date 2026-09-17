@@ -246,6 +246,21 @@ describe('narrow widths (390 px): the card wraps instead of crushing its text', 
     expect(second).toHaveTextContent('up to 4,000 tokens');
   });
 
+  it('narrow: the usage text on the second line wraps instead of being clipped (UX tester)', () => {
+    viewport(true);
+    show(paused());
+    const row = within(screen.getByTestId('plan-step-s1')).getAllByRole('button')[0];
+    const second = row.children[1] as HTMLElement;
+    expect(second.className.split(/\s+/)).toContain('flex-wrap');
+    const usage = within(second).getByText('2 of 2 reviewers done · 4,000 tokens'.replace('2 of 2', '1 of 2'));
+    const cls = usage.className.split(/\s+/);
+    // Never clipped: it may shrink and wrap, and is not held at its full width.
+    expect(cls).not.toContain('shrink-0');
+    expect(cls).not.toContain('truncate');
+    expect(cls).not.toContain('whitespace-nowrap');
+    expect(cls).toContain('min-w-0');
+  });
+
   it('wide: a step row stays one line, as signed', () => {
     viewport(false);
     show(paused());

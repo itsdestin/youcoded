@@ -91,6 +91,9 @@ function usd(n: number): string {
  *  found unnecessary. An exact limit reads exactly as signed. */
 function approx(plan: PlanView): string { return plan.approximateLimit ? '~' : ''; }
 function limitTokens(plan: PlanView, n: number): string { return `${approx(plan)}${tokens(n)}`; }
+/** UX tester (Task 11): before the word "limit" the number reads as an
+ *  adjective — "its 9,000-token limit", never "its 9,000 tokens limit". */
+function tokenLimit(plan: PlanView, n: number): string { return `${approx(plan)}${n.toLocaleString()}-token limit`; }
 
 /** The ceiling, priced when the model has a price. */
 function ceiling(plan: PlanView): string {
@@ -114,7 +117,7 @@ function spent(plan: PlanView): string {
  *  cap everywhere on the card (UX run 1, U8: budget/cap/ceiling were four words for one idea). */
 function limit(plan: PlanView): string {
   const t = limitTokens(plan, plan.ceilingTokens);
-  return plan.ceilingUsd == null ? `the ${t} limit` : `the ${approx(plan)}${usd(plan.ceilingUsd)} limit (${t})`;
+  return plan.ceilingUsd == null ? `the ${tokenLimit(plan, plan.ceilingTokens)}` : `the ${approx(plan)}${usd(plan.ceilingUsd)} limit (${t})`;
 }
 
 // ---- the block ---------------------------------------------------------------
@@ -585,9 +588,12 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
             <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
           </span>
           {/* Lined up under the title (glyph 0.875rem + gap 0.5rem). */}
-          <span className="flex items-center gap-2 min-w-0 pl-5.5">
+          {/* UX tester: the usage figure ("2 of 3 reviewers done · 27,000
+              tokens") was held at full width and clipped by the card edge.
+              It now wraps: first onto its own line, then within itself. */}
+          <span className="flex flex-wrap items-center gap-x-2 min-w-0 pl-5.5">
             <span className="text-2xs text-fg-dim truncate min-w-0">{who} · {KIND_WORD[step.kind]}</span>
-            <span className="ml-auto text-2xs text-fg-muted tabular-nums shrink-0">{right}</span>
+            <span className="ml-auto text-2xs text-fg-muted tabular-nums min-w-0 text-right">{right}</span>
           </span>
         </button>
       ) : (
@@ -607,7 +613,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
             step.children.map((c) => <PlanSpecialistCard key={c.childId} child={c} sessionId={sessionId} />)
           ) : (
             <div className="text-2xs text-fg-muted">
-              Each {step.specialist} stops at its {limitTokens(plan, step.budgetTokens)} limit.
+              Each {step.specialist} stops at its {tokenLimit(plan, step.budgetTokens)}.
             </div>
           )}
         </div>

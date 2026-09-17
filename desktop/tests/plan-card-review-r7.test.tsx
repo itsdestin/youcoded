@@ -114,12 +114,12 @@ describe('A. an approximate limit wears a tilde, and no extra sentence', () => {
     expect(screen.getByTestId('plan-step-s2')).toHaveTextContent('up to ~4,000 tokens');
     // A folded step with no specialists yet says each one's own limit.
     fireEvent.click(within(screen.getByTestId('plan-step-s1')).getAllByRole('button')[0]);
-    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('Each reviewer stops at its ~2,000 tokens limit.');
+    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('Each reviewer stops at its ~2,000-token limit.');
   });
 
   it('while spending: the limit wears it, the spent figure (a real count) does not', () => {
     const { unmount } = render(<ChatProvider><Card initial={running({ approximateLimit: true })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Spent 1,000 tokens of the ~42,000 tokens limit');
+    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Spent 1,000 tokens of the ~42,000-token limit');
     expect(screen.queryByTestId('plan-approximate-note')).toBeNull();
     unmount();
     render(<ChatProvider><Card initial={running({ approximateLimit: true, ceilingUsd: 0.12, usedUsd: 0.01 })} /></ChatProvider>);
@@ -132,7 +132,7 @@ describe('A. an approximate limit wears a tilde, and no extra sentence', () => {
     expect(block()).not.toHaveTextContent('~');
     unmount();
     render(<ChatProvider><Card initial={running()} /></ChatProvider>);
-    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Spent 1,000 tokens of the 42,000 tokens limit');
+    expect(screen.getByTestId('plan-ceiling')).toHaveTextContent('Spent 1,000 tokens of the 42,000-token limit');
     expect(block()).not.toHaveTextContent('~');
   });
 });
