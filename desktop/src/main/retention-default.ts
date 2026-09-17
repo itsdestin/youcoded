@@ -11,12 +11,15 @@ import { mutateSettings } from './claude-settings';
 // only writes when the key is missing: an explicit user value — even a
 // deliberately short one — is respected.
 //
-// This file's "never rewrite a settings.json that does not parse" convention
-// became the ONE rule for every writer in the 2026-09-16 simplification
-// (audit D5); it now lives in claude-settings.ts, which is the only module
-// that reads or writes the file. seedCleanupPeriodInto() edits a settings
-// object in place so the launch path can run it as one callback in a single
-// locked read/write alongside the other launch chores.
+// This file used to refuse to touch a settings.json that does not parse
+// ("replacing a corrupt file with just our key would wipe the hooks"). The
+// 2026-09-16 simplification (audit D5) moved every read and write into
+// claude-settings.ts, and on 2026-09-17 Destin decided its ONE rule: a corrupt
+// file is backed up beside itself and rewritten fresh, because silent hook
+// loss is worse than a lost custom key and the backup keeps the key
+// recoverable. seedCleanupPeriodInto() edits a settings object in place so the
+// launch path can run it as one callback in a single locked read/write
+// alongside the other launch chores.
 //
 // CC-coupled: `cleanupPeriodDays` is a Claude Code settings contract. See
 // youcoded/docs/cc-dependencies.md → "Transcript retention (cleanupPeriodDays)".

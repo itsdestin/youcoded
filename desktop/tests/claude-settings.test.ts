@@ -83,20 +83,34 @@ describe('mutateSettings', () => {
     expect(readSettings()).toEqual({ keep: true, added: 'yes' });
   });
 
-  it('refuses to write over a file that exists but does not parse, and says so', async () => {
+  // THE RULE (Destin, 2026-09-17): a corrupt file is moved aside, never lost,
+  // and a fresh one is written so the app keeps working.
+  it('backs up a file that does not parse beside itself and writes a fresh one', async () => {
     write('{ "hooks": { broken');
-    const mutate = vi.fn((s: Record<string, unknown>) => { s.x = 1; });
-    const r = await mutateSettings(mutate);
-    expect(r).toEqual({ written: false, refused: 'unparseable' });
-    expect(mutate).not.toHaveBeenCalled();
-    expect(fs.readFileSync(settingsPath(), 'utf8')).toBe('{ "hooks": { broken');
+    const r = await mutateSettings((s) => { s.x = 1; });
+    expect(r.written).toBe(true);
+    expect(r.repaired?.backupPath).toMatch(/settings\.json\.corrupt-\d{4}-\d{2}-\d{2}T[\d-]+Z$/);
+    expect(fs.readFileSync(r.repaired!.backupPath, 'utf8')).toBe('{ "hooks": { broken');
+    expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))).toEqual({ x: 1 });
   });
 
-  it('refuses a file whose JSON is not an object (an array is not a settings file)', async () => {
-    write('[]');
-    const r = await mutateSettings((s) => { s.x = 1; });
-    expect(r).toEqual({ written: false, refused: 'unparseable' });
-    expect(fs.readFileSync(settingsPath(), 'utf8')).toBe('[]');
+  it('a repaired file is written even when the mutator changes nothing, and is not backed up twice', async () => {
+    write('[]'); // valid JSON, not a settings object — corrupt for our purposes
+    const first = await mutateSettings(() => {});
+    expect(first).toMatchObject({ written: true, repaired: { backupPath: expect.any(String) } });
+    expect(fs.readFileSync(first.repaired!.backupPath, 'utf8')).toBe('[]');
+    expect(fs.readFileSync(settingsPath(), 'utf8')).toBe('{}');
+    const second = await mutateSettings((s) => { s.y = 2; });
+    expect(second).toEqual({ written: true });
+    const backups = fs.readdirSync(path.dirname(settingsPath())).filter((n) => n.includes('.corrupt-'));
+    expect(backups).toHaveLength(1);
+  });
+
+  it('a READ of a corrupt file answers {} and leaves the file in place — the next write repairs it', () => {
+    write('{ nope');
+    expect(readSettings()).toEqual({});
+    expect(fs.readFileSync(settingsPath(), 'utf8')).toBe('{ nope');
+    expect(fs.readdirSync(path.dirname(settingsPath())).filter((n) => n.includes('.corrupt-'))).toEqual([]);
   });
 
   it('serialises concurrent mutators under the lock so neither update is lost', async () => {
@@ -161,10 +175,13 @@ describe('getField / setField', () => {
     expect(() => getField('__proto__')).toThrow();
   });
 
-  it('reports false when the file exists but does not parse', async () => {
+  it('repairs a corrupt file on the way through, keeping the original beside it', async () => {
     write('{ nope');
-    expect(await setField('theme', 'dark')).toBe(false);
-    expect(fs.readFileSync(settingsPath(), 'utf8')).toBe('{ nope');
+    expect(await setField('theme', 'dark')).toBe(true);
+    expect(getField('theme')).toBe('dark');
+    const backups = fs.readdirSync(path.dirname(settingsPath())).filter((n) => n.includes('.corrupt-'));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(path.dirname(settingsPath()), backups[0]), 'utf8')).toBe('{ nope');
   });
 });
 

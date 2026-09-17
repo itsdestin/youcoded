@@ -16,13 +16,24 @@ import { log } from './logger';
 // every ~/.claude JSON write takes — and the dev instance and the built app
 // share this file. Everything now goes through here.
 //
-// THE PARSE-FAILURE RULE — refuse to write when the file exists but does not
-// parse. settings.json carries the user's hooks, enabledPlugins, permissions
-// and statusLine; a writer that "recovers" by replacing a corrupt file with
-// just its own key silently wipes all of that (retention-default.ts's
-// convention, kept because it is the only one that cannot destroy user
-// configuration). A refused write is logged at WARN so it is diagnosable; the
-// user (or Claude Code, which refuses to start on the same file) repairs it.
+// THE PARSE-FAILURE RULE (Destin, 2026-09-17) — the app SELF-HEALS. When the
+// file exists but does not parse as a JSON object, the first write renames it
+// to `settings.json.corrupt-<timestamp>` beside itself (never deletes it),
+// logs a WARN naming that backup, and proceeds as if the file were empty — so
+// the launch chores write a fresh file carrying the app's hooks and the app
+// works. Why not refuse: Claude Code itself starts anyway on a malformed file,
+// silently ignoring it (anthropics/claude-code #2835, #24823), so a refusal
+// meant a chat with no tool events and nothing on screen saying why. Silent
+// hook loss is worse than a lost custom key, and the backup keeps the key
+// recoverable. (Before this module, three writers each had a different rule.)
+//
+// Reads never repair: readSettings/getField answer `{}` for a corrupt file and
+// leave it in place, because a read must have no side effect (the Preferences
+// popup reads six fields in one tick, remote clients read too) and because the
+// launch chores always run a write cycle before any read, so a file corrupt at
+// launch is repaired before the first read. A file that goes corrupt mid-run
+// is repaired by the next write; backup names carry a millisecond timestamp,
+// so no later write can clobber an earlier backup.
 //
 // Reads are memoised on the file's (mtimeMs, size) — the memo phase 1a (W10)
 // added to the Preferences handler, moved here so every reader shares it.
@@ -75,38 +86,53 @@ export function readSettings(): Settings {
 }
 
 export interface MutateSettingsResult {
-  /** True iff the file was rewritten — the mutator changed something. */
+  /** True iff the file was rewritten — the mutator changed something, or the
+   *  file had to be repaired. */
   written: boolean;
   /** Why nothing was written, when it was not because nothing changed. */
-  refused?: 'unparseable' | 'locked';
+  refused?: 'locked';
+  /** The file did not parse: it was moved to `backupPath` and rewritten fresh. */
+  repaired?: { backupPath: string };
+}
+
+/** `settings.json.corrupt-2026-09-17T00-45-12-345Z`: the ISO timestamp with
+ *  `:` and `.` replaced, because `:` is not a legal file-name character on
+ *  Windows and the file must be recoverable on every platform. */
+function backupPathFor(p: string): string {
+  return `${p}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`;
 }
 
 /**
  * Read-mutate-write under the cross-process lock. `mutate` receives the
- * parsed object (fresh, `{}` when the file is absent) and edits it in place;
- * the file is rewritten only when the serialised result differs from what
- * was read, atomically (tmp + fsync + rename, via cas-write).
+ * parsed object (fresh, `{}` when the file is absent or was just backed up as
+ * corrupt) and edits it in place; the file is rewritten when the serialised
+ * result differs from what was read or when it was repaired, atomically
+ * (tmp + fsync + rename, via cas-write).
  */
 export async function mutateSettings(mutate: (settings: Settings) => void): Promise<MutateSettingsResult> {
   const p = settingsPath();
-  let refused: MutateSettingsResult['refused'];
+  let repaired: MutateSettingsResult['repaired'];
   let written = false;
   const locked = await mutateFileUnderLock(p, (onDisk) => {
     let settings: Settings = {};
     if (onDisk !== null) {
       const parsed = parseSettings(onDisk);
       if (parsed === null) {
-        refused = 'unparseable';
-        return null;
+        // Inside the lock, so no other writer can race the rename; the write
+        // below then lands on a path that no longer exists, as a creation.
+        const backupPath = backupPathFor(p);
+        fs.renameSync(p, backupPath);
+        repaired = { backupPath };
+      } else {
+        settings = parsed;
       }
-      settings = parsed;
     }
     // Compact serialisations compare CONTENT, so a file another writer
     // pretty-printed differently is not rewritten just to change whitespace.
     const before = JSON.stringify(settings);
     mutate(settings);
     const after = JSON.stringify(settings);
-    if (onDisk !== null && before === after) return null;
+    if (!repaired && onDisk !== null && before === after) return null;
     written = true;
     return JSON.stringify(settings, null, 2);
   });
@@ -114,11 +140,11 @@ export async function mutateSettings(mutate: (settings: Settings) => void): Prom
     log('WARN', 'ClaudeSettings', 'settings.json is locked by another process — write skipped', { path: p });
     return { written: false, refused: 'locked' };
   }
-  if (refused) {
-    log('WARN', 'ClaudeSettings', 'settings.json exists but does not parse — refusing to overwrite it', { path: p });
-    return { written: false, refused };
-  }
   if (written) memo = null;
+  if (repaired) {
+    log('WARN', 'ClaudeSettings', 'settings.json did not parse — backed it up and wrote a fresh file', { path: p, backupPath: repaired.backupPath });
+    return { written, repaired };
+  }
   return { written };
 }
 
@@ -129,7 +155,7 @@ export function getField(field: string): unknown {
 }
 
 /** Set (or, with null/undefined, delete) one dot-path field under the lock.
- *  Resolves false when the write was refused or the field is unsafe. */
+ *  Resolves false when the file was locked or the field is unsafe. */
 export async function setField(field: string, value: unknown): Promise<boolean> {
   try {
     const r = await mutateSettings((s) => { setJsonPath(s, field, value); });

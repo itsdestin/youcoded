@@ -272,10 +272,10 @@ function removeInstalledPlugin(id: string): void {
 // --- settings.json enabledPlugins ---
 //
 // WHY (2026-09-16 audit D5): settings.json is read and written ONLY by
-// claude-settings.ts — under the cross-process lock, atomically, and never
-// over a file that does not parse (this module used to treat an unparseable
-// file as empty and write a fresh one over it). The mutators below edit the
-// object they are handed; the module decides whether anything changed.
+// claude-settings.ts — under the cross-process lock, atomically, with a
+// corrupt file backed up beside itself before a fresh write (this module used
+// to overwrite one silently). The mutators below edit the object they are
+// handed; the module decides whether anything changed.
 
 async function enablePluginInSettings(id: string): Promise<void> {
   const key = pluginKey(id);

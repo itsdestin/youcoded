@@ -111,14 +111,21 @@ describe('install-hooks chore', () => {
     expect(s.statusLine.command).toBe('bash /home/me/custom-bar.sh');
   });
 
-  it('refuses to touch an unparseable settings.json (scripts are still staged)', async () => {
+  it('a corrupt settings.json is backed up with its original bytes and rewritten with the hooks; the next launch makes no second backup', async () => {
     fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
     fs.writeFileSync(settingsFile(), '{ "hooks": ');
     const r = await runInstallHooksChore(BUILD);
-    expect(r.refused).toBe('unparseable');
-    expect(r.written).toBe(false);
-    expect(fs.readFileSync(settingsFile(), 'utf8')).toBe('{ "hooks": ');
-    expect(fs.existsSync(path.join(stableDir(), 'relay.js'))).toBe(true);
+    expect(r.written).toBe(true);
+    expect(r.repairedFile?.backupPath).toContain('settings.json.corrupt-');
+    expect(fs.readFileSync(r.repairedFile!.backupPath, 'utf8')).toBe('{ "hooks": ');
+    const s = readSettings();
+    expect(s.hooks.Stop[0].hooks[0].command).toBe(`node ${JSON.stringify(path.join(stableDir(), 'relay.js'))}`);
+
+    const again = await runInstallHooksChore(BUILD);
+    expect(again.repairedFile).toBeUndefined();
+    expect(again.written).toBe(false);
+    const backups = fs.readdirSync(path.dirname(settingsFile())).filter((n) => n.includes('.corrupt-'));
+    expect(backups).toHaveLength(1);
   });
 
   it('recognises a dev worktree as a source it must not stage from', () => {
@@ -174,15 +181,18 @@ describe('the three settings chores after install-hooks', () => {
     expect(readSettings().hooks.SessionStart[0].hooks[0].command).toBe(`bash ${script}`);
   });
 
-  it('are all refused together on an unparseable file, and none claims to have changed anything', async () => {
+  it('repair a corrupt file together, in one write, keeping the original beside it', async () => {
     fs.mkdirSync(path.dirname(settingsFile()), { recursive: true });
     fs.writeFileSync(settingsFile(), 'not json');
+    const rename = vi.spyOn(fs.promises, 'rename');
 
     const r = await runSettingsChores();
 
-    expect(r.refused).toBe('unparseable');
-    expect(r.promptSuggestion.changed).toBe(false);
-    expect(r.retention.changed).toBe(false);
-    expect(fs.readFileSync(settingsFile(), 'utf8')).toBe('not json');
+    expect(r.repaired?.backupPath).toContain('settings.json.corrupt-');
+    expect(fs.readFileSync(r.repaired!.backupPath, 'utf8')).toBe('not json');
+    expect(r.promptSuggestion).toEqual({ changed: true, prior: undefined });
+    expect(r.retention).toEqual({ changed: true, effective: 365 });
+    expect(readSettings()).toEqual({ promptSuggestionEnabled: false, cleanupPeriodDays: 365, hooks: {} });
+    expect(rename).toHaveBeenCalledTimes(1); // the fresh write; the backup used renameSync
   });
 });

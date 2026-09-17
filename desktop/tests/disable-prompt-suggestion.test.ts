@@ -103,17 +103,20 @@ describe('enforcePromptSuggestionDisabled', () => {
     expect(after.promptSuggestionEnabled).toBe(false);
   });
 
-  // WHY this inverted (2026-09-16 audit D5): the old module treated an
-  // unparseable file as empty and wrote a fresh one over it — wiping the hooks
-  // and enabledPlugins a corrupt file still visibly carried. Every writer now
-  // refuses; see claude-settings.ts.
-  it('refuses to overwrite an unparseable settings.json', async () => {
+  // The old module overwrote an unparseable file with just its own key, losing
+  // whatever the user had put there. Every writer now goes through
+  // claude-settings.ts (Destin, 2026-09-17): the corrupt file is kept beside
+  // itself as a backup and a fresh one is written.
+  it('backs up an unparseable settings.json and writes a fresh well-formed file', async () => {
     fs.mkdirSync(path.join(tmpHome, '.claude'), { recursive: true });
     fs.writeFileSync(settingsFile(), '{not valid json');
 
     const result = await enforcePromptSuggestionDisabled();
 
-    expect(result.changed).toBe(false);
-    expect(fs.readFileSync(settingsFile(), 'utf8')).toBe('{not valid json');
+    expect(result.changed).toBe(true);
+    expect(readSettings()).toEqual({ promptSuggestionEnabled: false });
+    const backups = fs.readdirSync(path.join(tmpHome, '.claude')).filter((n) => n.includes('.corrupt-'));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(tmpHome, '.claude', backups[0]), 'utf8')).toBe('{not valid json');
   });
 });

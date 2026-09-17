@@ -36,11 +36,14 @@ function loadInstallHooks(): InstallHooksModule {
   return createRequire(__filename)(installHooksScript) as InstallHooksModule;
 }
 
-export interface InstallHooksChoreResult extends MutateSettingsResult {
+export interface InstallHooksChoreResult extends Omit<MutateSettingsResult, 'repaired'> {
   /** The hook scripts were copied into the stable dir (stamp mismatch or first launch). */
   copied: boolean;
   /** App-owned entries whose command pointed elsewhere and were repaired. */
   repaired: number;
+  /** settings.json did not parse and was backed up to `backupPath` before the
+   *  fresh write (claude-settings.ts's rule) — a different repair from the one above. */
+  repairedFile?: MutateSettingsResult['repaired'];
   /** Skipped entirely: the bundled scripts live inside a dev worktree. */
   skippedWorktree?: boolean;
 }
@@ -52,9 +55,9 @@ export async function runInstallHooksChore(build: { version: string; packaged: b
   if (ih.isWorktreeSource()) return { written: false, copied: false, repaired: 0, skippedWorktree: true };
   const { hookDir, copied } = ih.stageHookScripts({ stamp: `${build.version}|${build.packaged ? 'packaged' : 'dev'}` });
   let repaired = 0;
-  const r = await mutateSettings((settings) => { repaired = ih.applyAppHooks(settings, hookDir).repaired; });
+  const { repaired: repairedFile, ...r } = await mutateSettings((settings) => { repaired = ih.applyAppHooks(settings, hookDir).repaired; });
   ih.deployAutoTitleInstruction();
-  return { ...r, copied, repaired };
+  return { ...r, copied, repaired, ...(repairedFile ? { repairedFile } : {}) };
 }
 
 export interface SettingsChoresResult extends MutateSettingsResult {
@@ -75,7 +78,12 @@ export async function runSettingsChores(): Promise<SettingsChoresResult> {
     retention = seedCleanupPeriodInto(settings);
   });
   if (r.refused) {
-    // Nothing landed; report each chore as unchanged rather than as done.
+    // The lock could not be taken, so nothing landed; report each chore as
+    // unchanged rather than as done — including the reconciler's counts, or
+    // main.ts logs "reconciled {added:N}" for a write that never reached the
+    // file. (A repaired file is the opposite case: everything above DID land,
+    // in a fresh file — `r.repaired` names the backup.)
+    hooks = { added: 0, updatedPath: 0, updatedTimeout: 0, pruned: 0, manifestCount: hooks.manifestCount };
     promptSuggestion = { changed: false, prior: promptSuggestion.prior };
     retention = { changed: false, effective: undefined };
   }

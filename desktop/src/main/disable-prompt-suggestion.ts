@@ -14,8 +14,8 @@ import { mutateSettings } from './claude-settings';
 // edits a settings object in place so the launch path can run it as one
 // callback in a single locked read/write of settings.json; the file itself
 // is only ever read and written by claude-settings.ts. An unparseable
-// settings.json is no longer replaced with a fresh one — see that module's
-// header for the one rule every writer now follows.
+// settings.json is backed up beside itself before the fresh write — see that
+// module's header for the one rule every writer now follows.
 
 export interface EnforcePromptSuggestionResult {
   /** True iff the value didn't match and was set. */

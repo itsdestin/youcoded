@@ -1693,9 +1693,13 @@ void app.whenReady().then(async () => {
     try {
       const { runInstallHooksChore } = require('./launch-settings-chores');
       const r = await runInstallHooksChore({ version: app.getVersion(), packaged: app.isPackaged });
-      if (r.repaired > 0) log('WARN', 'Main', 'Stale hook commands repaired', { count: r.repaired });
-      if (r.refused) log('WARN', 'Main', 'Hook entries not written', { refused: r.refused });
-      log('INFO', 'Main', 'Hooks installed', { copied: r.copied, written: r.written });
+      if (r.skippedWorktree) log('WARN', 'Main', 'Hook scripts live inside a dev worktree — install-hooks skipped (set YOUCODED_PROFILE when running dev)');
+      else {
+        if (r.repaired > 0) log('WARN', 'Main', 'Stale hook commands repaired', { count: r.repaired });
+        if (r.repairedFile) log('WARN', 'Main', 'Claude settings file was unreadable — backed up and rewritten with the hooks', { backupPath: r.repairedFile.backupPath });
+        if (r.refused) log('WARN', 'Main', 'Hook entries not written', { refused: r.refused });
+        log('INFO', 'Main', 'Hooks installed', { copied: r.copied, written: r.written });
+      }
     } catch (e) {
       log('ERROR', 'Main', 'Failed to install hooks', { error: String(e) });
     }
@@ -1749,6 +1753,7 @@ void app.whenReady().then(async () => {
     log('INFO', 'Main', 'Plugin hooks reconciled', r.hooks);
     if (r.promptSuggestion.changed) log('INFO', 'Main', 'Prompt suggestion force-disabled', { prior: r.promptSuggestion.prior });
     if (r.retention.changed) log('INFO', 'Main', 'Seeded cleanupPeriodDays default', { effective: r.retention.effective });
+    if (r.repaired) log('WARN', 'Main', 'Claude settings file was unreadable — backed up and rewritten', { backupPath: r.repaired.backupPath });
     if (r.refused) log('WARN', 'Main', 'Settings chores not written', { refused: r.refused });
   } catch (e) {
     log('ERROR', 'Main', 'Failed to run settings chores', { error: String(e) });

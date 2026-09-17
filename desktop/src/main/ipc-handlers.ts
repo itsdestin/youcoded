@@ -1298,8 +1298,8 @@ export function registerIpcHandlers(
   // Field names follow Claude Code's own schema (e.g., 'editorMode', 'defaultMode').
   // WHY claude-settings (2026-09-16 audit D5): the (mtime, size) parse memo,
   // the dot-path walker with its prototype-pollution refusal, the atomic
-  // locked write and the "never overwrite a file that does not parse" rule
-  // all live in that one module now, shared with the remote-server twin.
+  // locked write and the "back up a corrupt file, then write fresh" rule all
+  // live in that one module now, shared with the remote-server twin.
   ipcMain.handle('settings:get', async (_event, field: string) => {
     try {
       return getField(field);
