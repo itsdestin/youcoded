@@ -744,6 +744,9 @@ export const PLAN_PAUSE_KINDS = [
   'specialist-error', 'specialist-stopped', 'unexpected-error',
 ] as const;
 export type PlanPauseKind = (typeof PLAN_PAUSE_KINDS)[number];
+/** Task 9b: a button a paused plan card may offer, and what the assistant may
+ *  recommend (pause handoff §2). The user always presses it. */
+export type PlanPauseAction = 'add_budget' | 'continue' | 'stop';
 
 /** Where one plan specialist's attempt stands (the journal's attempt phase):
  *  `prepared` means its first request was never sent. */
@@ -790,7 +793,25 @@ export interface PlanView {
     launch?: 'refused' | 'drift';
     retried?: boolean;
     toolEffect?: 'read' | 'local' | 'external';
+    /** Task 9b (pause handoff §2 step 7): the buttons this pause allows when
+     *  the assistant made no recommendation — Stop · Add budget for the budget
+     *  kinds, Stop alone where only a revised plan can help, Stop · Continue
+     *  otherwise. Worked out in main (pause-routing.ts) so the card and the
+     *  assistant's allowed recommendations can never disagree. Absent only on
+     *  a record from before this field; the card then keeps its older rule. */
+    actions?: PlanPauseAction[];
+    /** Task 9b: the pause was handed to the assistant first. `pending` → the
+     *  card is greyed with no buttons ("The assistant is looking into this.");
+     *  `answered` → buttons again, led by the assistant's recommendation when
+     *  it made one. The user still presses every button. */
+    handoff?: {
+      state: 'pending' | 'answered';
+      recommendation?: { action: PlanPauseAction; addTokens?: number; message: string };
+    };
   };
+  /** Task 9b: the assistant replaced this paused plan with a revised one (not
+   *  a Comment), so the greyed card must not say "after your comment". */
+  revisedOnPause?: boolean;
   /** The plan this one revises (after a Comment) — the old card greys out. */
   revisionOf?: string;
   /** Set on the OLD plan once a Comment produced a new one: the card greys out

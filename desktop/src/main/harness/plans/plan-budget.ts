@@ -546,7 +546,7 @@ export class PlanBudget {
    * will send on Continue — and the card's token and dollar limits. Spent and
    * finished work are untouched.
    */
-  async addTokens(input: { ref: PlanRef; planId: string; stepId: string; tokens: number }): Promise<PlanView> {
+  async addTokens(input: { ref: PlanRef; planId: string; stepId: string; tokens: number; edit?: (plan: PlanRecord) => void }): Promise<PlanView> {
     const { ref, planId, stepId, tokens } = input;
     if (!(Number.isSafeInteger(tokens) && tokens > 0)) throw new Error('The added budget must be a whole number of tokens greater than 0.');
     await this.journal.mutate(ref, (file) => {
@@ -588,6 +588,8 @@ export class PlanBudget {
         // A missing price can't be bounded; a free/local one adds nothing.
         plan.ceilingUsd = snapshot === null ? null : plan.ceilingUsd + (worstCaseUsd(snapshot, tokens) ?? 0);
       }
+      // Task 9b: the caller's own change rides in this same write.
+      input.edit?.(plan);
     });
     const plan = await this.journal.get(ref, planId);
     if (!plan) throw new Error('This plan no longer exists.');

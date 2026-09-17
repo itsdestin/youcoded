@@ -432,7 +432,8 @@ describe('result discriminants', () => {
     expect(await svc.addBudget(SID, view.planId, 1000)).toMatchObject({ ok: false, error: expect.stringMatching(/paused/) });
     await journal.mutate(REF, (file) => { file.plans[0].status = 'paused'; file.plans[0].paused = { stepId: 's1', reason: 'limit' }; });
     expect(await svc.addBudget(SID, view.planId, 1000)).toMatchObject({ ok: true, plan: { planId: view.planId } });
-    expect(addTokens).toHaveBeenCalledWith({ ref: REF, planId: view.planId, stepId: 's1', tokens: 1000 });
+    // Task 9b: `edit` answers a pending handoff in the same write.
+    expect(addTokens).toHaveBeenCalledWith({ ref: REF, planId: view.planId, stepId: 's1', tokens: 1000, edit: expect.any(Function) });
   });
 
   it('refuses an Add budget smaller than the recorded minimum, naming that minimum (Task 4)', async () => {

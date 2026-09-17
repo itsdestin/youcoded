@@ -41,6 +41,10 @@ function port(): PlanHostPort {
     readChildEvents: () => childEvents,
     queueTurn: () => {},
     currentTurnId: () => undefined,
+    // Task 9b: this file never hands a pause to the assistant.
+    canTakeNotice: () => false,
+    queuePlanNotice: () => false,
+    withdrawPlanNotice: () => false,
     startChild: async () => { throw new Error('not in this test'); },
     probeSession: () => ({
       session: {
@@ -229,5 +233,41 @@ describe('review fix 2: the report-only request is measured on the specialist\'s
     expect(runner.latestUserText({ cwd: '/proj', sessionId: SID }, 'kid')).toBe('REPORT NOW');
     childEvents = [];
     expect(runner.latestUserText({ cwd: '/proj', sessionId: SID }, 'kid')).toBeUndefined();
+  });
+});
+
+// Task 9b (pause handoff §2 steps 1 and 3) — the bridge's own decisions.
+describe('handing a pause to the assistant', () => {
+  const REF = { cwd: '/proj', sessionId: SID };
+  const pausedPlan = (): PlanRecord => ({
+    planId: 'p-h', toolUseId: 't', document: DOC, maximumAttempts: 1, maxFanOut: 1,
+    ceilingTokens: 1000, ceilingUsd: null, usedTokens: 1000, status: 'paused', seq: 1, createdAt: 1,
+    manifest: { modelLabel: 'm', specialists: { reviewer: { definitionFingerprint: 'd', binding: { providerId: 'p', modelId: 'm' }, pricing: null, setupTokens: 0 } }, permissionFingerprint: 'x' },
+    steps: [{ id: 's1', status: 'paused', attempts: [] }], fenceEpoch: 1,
+    paused: { stepId: 's1', reason: 'used it all', kind: 'budget', handoff: { id: 'h-q', state: 'pending', at: 1, revisionTurnId: 'turn-q' } },
+  });
+
+  it('a notice that cannot be queued (e.g. Stop pressed just after the check) clears the handoff at once', async () => {
+    const queued: string[] = [];
+    const bridge = new PlanHostBridge({ ...port(), queuePlanNotice: (_s, n) => { queued.push(n.handoffId); return false; } });
+    await bridge.journal.mutate(REF, (file) => { file.plans.push(pausedPlan()); });
+    await (bridge as any).handoffCreated(REF, 'p-h', { id: 'h-q', turnId: 'turn-q' });
+    expect(queued).toEqual(['h-q']);
+    expect((await bridge.journal.get(REF, 'p-h'))!.paused!.handoff).toEqual({ id: 'h-q', state: 'answered', at: 1 });
+    // A proposal from that never-delivered turn is not treated as a notice turn.
+    expect((bridge as any).noticeTurns.has('turn-q')).toBe(false);
+  });
+
+  it('hands over only an assistant-routed pause, and only when the conversation can take a notice', () => {
+    let can = true;
+    const bridge = new PlanHostBridge({ ...port(), canTakeNotice: () => can });
+    const prepare = (facts: object) => (bridge as any).prepareHandoff(REF, facts);
+    expect(prepare({ kind: 'budget' })).toEqual({ id: expect.any(String), turnId: expect.any(String) });
+    expect(prepare({ kind: 'specialist-stopped' })).toBeUndefined();
+    const a = prepare({ kind: 'iteration-cap' });
+    const b = prepare({ kind: 'iteration-cap' });
+    expect(a.id).not.toBe(b.id);   // unguessable, one per pause
+    can = false;
+    expect(prepare({ kind: 'budget' })).toBeUndefined();
   });
 });

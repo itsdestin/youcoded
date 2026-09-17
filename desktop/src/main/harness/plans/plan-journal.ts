@@ -27,6 +27,7 @@ import type { NativeHome } from '../../native-home';
 import { nativeStoreSlug } from '../../slug-encoding';
 import type { PlanChildView, PlanStepView, PlanView } from '../../../shared/types';
 import type { PlanStepV1 } from './schema';
+import { pausedRouting } from './pause-routing';
 import {
   PLAN_JOURNAL_VERSION, PlanJournalFileSchema,
   type JournalPlanStatus, type PlanAttemptRecord, type PlanEvent, type PlanJournalFile, type PlanLease,
@@ -306,7 +307,18 @@ export function projectPlan(plan: PlanRecord): PlanView {
     if (plan.paused.launch) view.paused.launch = plan.paused.launch;
     if (plan.paused.retried) view.paused.retried = true;
     if (plan.paused.toolEffect) view.paused.toolEffect = plan.paused.toolEffect;
+    // Task 9b (pause handoff §2 step 7): the default buttons, from the same
+    // table that decides what the assistant may recommend.
+    view.paused.actions = [...pausedRouting(plan.paused).actions];
+    const handoff = plan.paused.handoff;
+    if (handoff) {
+      // Only what the card shows: the id and the revision turn are the host's
+      // bookkeeping and never leave the main process.
+      view.paused.handoff = { state: handoff.state };
+      if (handoff.recommendation) view.paused.handoff.recommendation = { ...handoff.recommendation };
+    }
   }
+  if (plan.revisedOnPause) view.revisedOnPause = true;
   if (plan.revisionOf) view.revisionOf = plan.revisionOf;
   if (plan.revisedBy) view.revisedBy = plan.revisedBy;
   if (plan.startedAt !== undefined) view.startedAt = plan.startedAt;

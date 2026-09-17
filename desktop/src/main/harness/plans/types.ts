@@ -11,12 +11,13 @@ import { z } from 'zod';
 import { PlanDocumentSchema } from './schema';
 import { PLAN_PAUSE_KINDS, type PlanView } from '../../../shared/types';
 import type { ToolEffect } from '../tools/types';
-import type { PlanRecoveryCause } from './pause-routing';
+import type { PlanPauseAction, PlanRecoveryCause } from './pause-routing';
 
 export const PLAN_JOURNAL_VERSION = 1 as const;
 
 const TOOL_EFFECTS = ['read', 'local', 'external'] as const satisfies readonly ToolEffect[];
 const PLAN_RECOVERY_CAUSES = ['launch-failed', 'specialist-error', 'invalid-report', 'unknown-request', 'unknown-outcome'] as const satisfies readonly PlanRecoveryCause[];
+const PLAN_PAUSE_ACTIONS = ['add_budget', 'continue', 'stop'] as const satisfies readonly PlanPauseAction[];
 
 const nonNegativeInt = z.number().int().min(0);
 
@@ -193,6 +194,26 @@ const PlanRecordSchema = z.object({
     launch: z.enum(['refused', 'drift']).optional(),
     retried: z.literal(true).optional(),
     toolEffect: z.enum(TOOL_EFFECTS).optional(),
+    /** Task 9b (pause handoff §2): this pause was handed to the assistant.
+     *  `pending` = the card is greyed out while the assistant looks into it;
+     *  `answered` = the card has its buttons again (with the assistant's
+     *  recommendation when it made one). `id` is unguessable and tags the
+     *  notice, so a stale notice or recommendation can never land on a newer
+     *  pause. `revisionTurnId` is this pause's pending revision: the id of the
+     *  notice turn whose propose_plan may replace this plan. It lives HERE, on
+     *  the plan, so a Comment on another plan can't overwrite it; any user
+     *  action or the end of that turn deletes it. */
+    handoff: z.object({
+      id: z.string().min(1),
+      state: z.enum(['pending', 'answered']),
+      at: z.number(),
+      revisionTurnId: z.string().min(1).optional(),
+      recommendation: z.object({
+        action: z.enum(PLAN_PAUSE_ACTIONS),
+        addTokens: z.number().int().min(1).optional(),
+        message: z.string().min(1).max(280),
+      }).strict().optional(),
+    }).strict().optional(),
   }).strict().optional(),
   /** Task 9a (pause handoff §1): every automatic recovery, journalled with the
    *  fence BEFORE the relaunch. One per step, iteration, item and cause — so a
@@ -227,6 +248,9 @@ const PlanRecordSchema = z.object({
   failure: z.object({ detail: z.string().min(1) }).strict().optional(),
   /** Set when a Comment retired this proposal; the replacement may not exist yet. */
   revisedByComment: z.boolean().optional(),
+  /** Task 9b: the assistant replaced this paused plan with a revised one from
+   *  the pause's notice turn (the card must not say "after your comment"). */
+  revisedOnPause: z.literal(true).optional(),
   manifest: ExecutionManifestSchema,
   steps: z.array(PlanStepRecordSchema),
   /** Highest fencing epoch ever issued — survives lease release, so a later

@@ -64,7 +64,7 @@ import { nativeStoreSlug } from '../slug-encoding';
 import type { McpLease } from './mcp/mcp-manager';
 // Specialists plans (Task 4): the plan journal/budget/executor/service live
 // behind one bridge; this file only supplies the session mechanics.
-import { PlanHostBridge, type PlanChildStart, type PlanHostBridgeOptions, type PlanRoute } from './plans/plan-host-bridge';
+import { PlanHostBridge, type PlanChildStart, type PlanHostBridgeOptions, type PlanNoticeDelivery, type PlanRoute } from './plans/plan-host-bridge';
 import type { PlanChildHandle, PlanChildOutcome } from './plans/plan-executor';
 import type { PlanChildRequestGate } from './plans/budget-adapter';
 import type { PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult } from './plans/types';
@@ -496,7 +496,9 @@ export class NativeSessionHost extends EventEmitter {
   // this lane makes.
   // G-1: notices now carry the structured meta the renderer folds into a
   // card; shell notices ready in one drain are concatenated into ONE turn (D8).
-  private pendingHostNotices = new Map<string, Array<{ text: string; meta?: InjectedMeta }>>();
+  // Task 9b: `plan` marks a plan pause notice (tagged by its handoff id so it
+  // can be withdrawn; `delivering` once its turn has begun).
+  private pendingHostNotices = new Map<string, Array<{ text: string; meta?: InjectedMeta; plan?: PlanNoticeDelivery & { delivering?: boolean } }>>();
   /** G-1: one ShellRegistry per session id, HOST-owned. Why not on the
    *  HarnessSession: a remote takeover and the session-exit backstop destroy
    *  the session but must leave its commands running (D2) — those runs still
@@ -1603,6 +1605,35 @@ export class NativeSessionHost extends EventEmitter {
     this.kickIdleDeliveryPass(parentId);
   }
 
+  /** Task 9b (pause handoff §2): may this conversation take a plan notice now?
+   *  Open here, a root conversation, and its deliveries not held by Stop. */
+  private canTakePlanNotice(sessionId: string): boolean {
+    const entry = this.live.get(sessionId);
+    return !!entry && !entry.parentSessionId && !entry.holdDeliveries;
+  }
+
+  /** Task 9b: queue a plan pause notice. WHY never while held (review 2,
+   *  finding 1): a held notice would ride into the user's next message and
+   *  the card would stay greyed until then. */
+  private queuePlanNotice(sessionId: string, notice: PlanNoticeDelivery): boolean {
+    if (!this.canTakePlanNotice(sessionId)) return false;
+    const arr = this.pendingHostNotices.get(sessionId) ?? [];
+    arr.push({ text: notice.text, plan: notice });
+    this.pendingHostNotices.set(sessionId, arr);
+    this.kickIdleDeliveryPass(sessionId);
+    return true;
+  }
+
+  /** Task 9b: withdraw a plan notice that has not started to be delivered. */
+  private withdrawPlanNotice(sessionId: string, handoffId: string): boolean {
+    const arr = this.pendingHostNotices.get(sessionId);
+    const i = arr?.findIndex((n) => n.plan?.handoffId === handoffId && !n.plan.delivering) ?? -1;
+    if (!arr || i < 0) return false;
+    arr.splice(i, 1);
+    if (arr.length === 0) this.pendingHostNotices.delete(sessionId);
+    return true;
+  }
+
   /** G-1: the registry for a session id — created on first use, kept across
    *  destroy({keepShells}) so a taken-over conversation's runs stay owned. */
   private shellsFor(sessionId: string): ShellRegistry {
@@ -2693,8 +2724,14 @@ export class NativeSessionHost extends EventEmitter {
           : {}),
         // Specialists plans (Task 4): propose_plan journals through the plan
         // service, with THIS host's current turn id (never model input).
+        // Task 9b: recommend_plan_action records a suggestion for a pause this
+        // conversation was handed — always for THIS session, whatever the tool
+        // context says.
         ...(this.plans
-          ? { plans: { propose: (proposal) => this.plans!.propose(sessionId, proposal) } }
+          ? { plans: {
+            propose: (proposal) => this.plans!.propose(sessionId, proposal),
+            recommend: (input) => this.plans!.recommend({ ...input, sessionId }),
+          } }
           : {}),
       },
       // WHY assembleSystemPrompt is called synchronously here: it shells out to
@@ -3965,6 +4002,32 @@ export class NativeSessionHost extends EventEmitter {
         // builds finishing during one busy turn must not cost three turns.
         // Specialist follow-ups keep their one-per-turn shape.
         const head = notices[0];
+        // Task 9b: a plan pause notice is always its own turn, with its own
+        // turn id, and is never retried: whatever happens, the turn that
+        // delivered it ending is what answers its handoff (onEnd).
+        if (head.plan) {
+          const plan = head.plan;
+          notices.splice(0, 1);
+          if (mode === 'splice') {
+            // Never spliced silently: the handoff is cleared instead (Stop
+            // already clears these; this is the belt to that).
+            plan.onEnd();
+            continue;
+          }
+          plan.delivering = true;
+          entry.currentTurnId = plan.turnId;
+          try {
+            plan.onStart();
+            await this.deliverNotice(entry, 'turn', head.text);
+          } catch (err) {
+            log('WARN', 'NativeSessionHost', 'plan pause notice delivery failed — its handoff is cleared, not retried', { sessionId, error: String((err as any)?.message ?? err) });
+          } finally {
+            entry.currentTurnId = undefined;
+            plan.onEnd();
+          }
+          if (this.live.get(sessionId) !== entry) break;
+          continue;
+        }
         const headIsShell = head.meta?.kind === 'shell';
         const batch = headIsShell ? notices.filter((n) => n.meta?.kind === 'shell') : [head];
         const text = batch.map((n) => n.text).join('\n\n');
@@ -4399,7 +4462,12 @@ export class NativeSessionHost extends EventEmitter {
     entry?.session.interrupt();
     // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
     // Root sessions only: a child's own deliveries go to its parent, not to it.
-    if (entry && !entry.parentSessionId) entry.holdDeliveries = true;
+    if (entry && !entry.parentSessionId) {
+      entry.holdDeliveries = true;
+      // Task 9b (§2 "never stuck"): a plan pause waiting on the assistant gets
+      // its buttons back now, and its notice is withdrawn.
+      this.plans?.conversationStopped(sessionId);
+    }
     return !!entry;
   }
 
@@ -4683,6 +4751,9 @@ export class NativeSessionHost extends EventEmitter {
         }
       },
       currentTurnId: (sessionId) => this.live.get(sessionId)?.currentTurnId,
+      canTakeNotice: (sessionId) => this.canTakePlanNotice(sessionId),
+      queuePlanNotice: (sessionId, notice) => this.queuePlanNotice(sessionId, notice),
+      withdrawPlanNotice: (sessionId, handoffId) => this.withdrawPlanNotice(sessionId, handoffId),
       startChild: (input) => this.startPlanChild(input),
       probeSession: (input) => this.planProbeSession(input),
     }, this.planOptions);

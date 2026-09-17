@@ -1153,8 +1153,7 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     invalid report, a cut-off request, a cut-off `read` or `local` call (the restart turn tells
     the specialist to check a `local` one first).
   - **Assistant:** a cut-off `external` call (Bash included), a second failure, budget kinds,
-    local-pool, refusals, drift, iteration cap, unexpected errors. Until Task 9b these are
-    ordinary visible pauses.
+    local-pool, refusals, drift, iteration cap, unexpected errors (handed over — see below).
   - **User:** a specialist the user stopped; a plan interrupted by an app restart.
   - An automatic retry runs inside `runWave` (`runMember`): its siblings keep running. The
     recovery is journalled in `recoveries` (step, iteration, item, cause) with the fence
@@ -1178,6 +1177,31 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     specialist row shows "Retried after an error" (`PlanChildView.retried`) only for an error
     retry (start error, specialist error, invalid report) that really relaunched
     (`recoveries[].relaunched`, set in that launch's write); one row per session.
+- **Handing a pause to the assistant** (Task 9b; design §2; `plans/plan-handoff.ts`).
+  - Before the settle write, the executor asks the bridge (`PlanHandoffPort.prepare`): an
+    assistant-routed pause in a conversation that is open here and not held by Stop gets
+    `paused.handoff = {id, state: 'pending', at, revisionTurnId}` in that same write, so the
+    first paused card is already greyed ("The assistant is looking into this."). After the
+    write the bridge queues the pinned notice (`planHandoffNotice`) on the host's notice lane,
+    tagged by handoff id; a queueing failure answers the handoff at once. Plan notices are
+    never queued while deliveries are held.
+  - The notice turn is its own turn with `currentTurnId = revisionTurnId`. Its end (success,
+    error, Stop) answers the handoff with no recommendation (default buttons from
+    `pausedRouting` → `PlanView.paused.actions`) and drops the pending revision. It is never
+    retried and never spliced.
+  - `recommend_plan_action` (offered with `propose_plan`, never to specialists) records
+    `handoff.recommendation` after `PlanService.recommend` validates it (§2 table, floor =
+    `minimumAddTokens`, cap = 4 × limit, message ≤ 280). It only records: the model-facing
+    `ToolServices.plans` has no resume, stop or add-budget.
+  - A `propose_plan` from the notice turn links the replacement and stops the old plan
+    (`revisedOnPause`) in the same write, only while the old plan is still paused on that
+    handoff. Any proposal made during a plan notice turn never auto-approves
+    (`PlanProposal.fromPlanNotice`, from the bridge's set of notice turn ids).
+  - Cleared (answered, no recommendation, notice withdrawn) on: Stop on the conversation,
+    failed delivery, destroy/takeover (`interruptSession`), app restart (`recover` →
+    `clearStaleHandoffs`), and the 10-minute backstop, which only runs until delivery starts.
+    A user Continue/Add budget/Stop supersedes a pending handoff (`supersedeHandoff`, same
+    write) and withdraws its undelivered notice; an old-id recommendation is refused.
 - **Comment** stops the proposal and stores a `pendingRevision` token keyed by a host turn id,
   then queues the follow-up turn. Only a proposal made in THAT turn is linked as the revision;
   the model cannot claim one.

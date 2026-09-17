@@ -197,6 +197,9 @@ describe('5b follow-up: pause facts and attempt phase reach the card', () => {
     expect(projectPlan(rec).paused).toEqual({
       stepId: 's1', reason: 'r', kind: 'unknown-outcome', tool: 'Bash',
       repeat: { rounds: 3, until: 'tests pass' }, note: '1 other specialist was cut off.',
+      // Task 9b: the card's default buttons ride along (an unknown outcome
+      // with no known effect counts as external → Stop · Continue).
+      actions: ['continue', 'stop'],
     });
   });
 
@@ -210,7 +213,8 @@ describe('5b follow-up: pause facts and attempt phase reach the card', () => {
 
   it('a journal written before the kind existed still reads, with no kind on the card', async () => {
     await seed(record('p1', { status: 'paused', paused: { stepId: 's1', reason: 'r' } }));
-    expect(projectPlan((await journal.get(REF, 'p1'))!).paused).toEqual({ stepId: 's1', reason: 'r' });
+    // Task 9b: no kind reads as an unexpected problem → Stop · Continue.
+    expect(projectPlan((await journal.get(REF, 'p1'))!).paused).toEqual({ stepId: 's1', reason: 'r', actions: ['continue', 'stop'] });
   });
 
   it('each specialist row carries its attempt phase: prepared (never sent) vs request-sent', () => {

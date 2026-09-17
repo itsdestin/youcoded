@@ -5533,7 +5533,9 @@ describe('specialists plans in the native host (Task 4)', () => {
   // 5b follow-up: what the parent model was actually sent, per request.
   let parentPrompts: string[] = [];
   let childReply: (prompt: string, call: number) => Reply;
-  let childCalls: Array<{ prompt: string; maxOutputTokens: unknown; maxRetries?: unknown; toolChoice?: unknown }>;
+  let childCalls: Array<{ prompt: string; maxOutputTokens: unknown; maxRetries?: unknown; toolChoice?: unknown; tools?: string[] }>;
+  // Task 9b: the tool names each parent request offered.
+  let parentTools: string[][] = [];
   let events: any[];
   let planEvents: any[];
 
@@ -5545,7 +5547,7 @@ describe('specialists plans in the native host (Task 4)', () => {
       return new MockLanguageModelV4({
         doStream: async (options: any) => {
           const prompt = JSON.stringify(options.prompt);
-          childCalls.push({ prompt, maxOutputTokens: options.maxOutputTokens, toolChoice: options.toolChoice });
+          childCalls.push({ prompt, maxOutputTokens: options.maxOutputTokens, toolChoice: options.toolChoice, tools: (options.tools ?? []).map((t: any) => t.name) });
           const reply = childReply(prompt, childCalls.length);
           if (reply === 'hang') {
             return {
@@ -5563,20 +5565,39 @@ describe('specialists plans in the native host (Task 4)', () => {
     }
     return new MockLanguageModelV4({
       doStream: async (call: any) => {
-        parentPrompts.push(JSON.stringify(call.prompt));
-        return { stream: simulateReadableStream({ chunks: parentSteps.shift() ?? textStep('ok') }) };
+        const prompt = JSON.stringify(call.prompt);
+        parentPrompts.push(prompt);
+        parentTools.push((call.tools ?? []).map((t: any) => t.name));
+        // Task 9b: a step may be a function of the prompt (the notice carries
+        // ids the test can't know in advance), and may wait on a gate that an
+        // interrupt aborts — a parent that is busy when the pause happens.
+        let next: any = parentSteps.shift() ?? textStep('ok');
+        if (typeof next === 'function') next = await next(prompt);
+        if (next && !Array.isArray(next) && next.gate) {
+          await new Promise<void>((resolve, reject) => {
+            const onAbort = () => reject(new DOMException('aborted', 'AbortError'));
+            if (call.abortSignal?.aborted) { onAbort(); return; }
+            call.abortSignal?.addEventListener('abort', onAbort, { once: true });
+            next.gate.then(() => { call.abortSignal?.removeEventListener('abort', onAbort); resolve(); });
+          });
+          next = next.chunks;
+        }
+        return { stream: simulateReadableStream({ chunks: next }) };
       },
     }) as any;
   };
 
-  function makeHost(opts: { heartbeatMs?: number; now?: () => number } = {}): NativeSessionHost {
+  function makeHost(opts: { heartbeatMs?: number; now?: () => number; handoffBackstopMs?: number } = {}): NativeSessionHost {
     const home = new NativeHome(root);
     const h = new NativeSessionHost(
       new SessionStore(home), planFactory as any, NO_CONTEXT, async () => 'openrouter', async () => null,
       async () => ({ in: 1, out: 2 }), undefined, undefined,
       { modelCatalog: async () => CATALOG },
       undefined, undefined, home, undefined, undefined, undefined, {},
-      { settleDeadlineMs: 60, heartbeatMs: opts.heartbeatMs ?? 5_000, slotPollMs: 5, ...(opts.now ? { now: opts.now } : {}) },
+      {
+        settleDeadlineMs: 60, heartbeatMs: opts.heartbeatMs ?? 5_000, slotPollMs: 5, ...(opts.now ? { now: opts.now } : {}),
+        ...(opts.handoffBackstopMs !== undefined ? { handoffBackstopMs: opts.handoffBackstopMs } : {}),
+      },
     );
     h.on('transcript-event', (e) => events.push(e));
     h.on('plans-event', (e) => planEvents.push(e));
@@ -5605,7 +5626,7 @@ describe('specialists plans in the native host (Task 4)', () => {
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-plans-'));
-    events = []; planEvents = []; childCalls = []; parentSteps = []; parentPrompts = [];
+    events = []; planEvents = []; childCalls = []; parentSteps = []; parentPrompts = []; parentTools = [];
     childReply = (prompt) => ({ chunks: [...textChunks('r', prompt.includes('Combine') ? 'COMBINED' : `REPORT for ${prompt.includes('a.ts') ? 'a' : 'b'}`), finishChunk('stop', 10, 5)] });
     host = makeHost();
   });
@@ -6023,6 +6044,319 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(await host.setPlanAutoApprove(10)).toEqual({ ok: true });
     expect(await host.getPlanAutoApprove()).toEqual({ ok: true, underTokens: 10 });
     await bare.destroyAll();
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 9b — a pause that needs a decision goes to the assistant first
+  // (pause handoff design §2). Every "never stuck, never stale" rule has a
+  // test: each came from a bug a design review found.
+  // -------------------------------------------------------------------------
+  describe('Task 9b: handing a pause to the assistant', () => {
+    const SMALL = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, items: ['a.ts'] }] };
+    const handoff = () => journalFile().plans[0].paused?.handoff;
+    const notices = () => events.filter((e) => e.type === 'user-message' && String(e.data.text).startsWith('[Plan paused]'));
+    const idsIn = (prompt: string) => ({
+      planId: /Plan id: ([\w-]+)/.exec(prompt)![1],
+      handoffId: /Handoff id: ([\w-]+)/.exec(prompt)![1],
+    });
+    const gated = () => {
+      let open!: () => void;
+      const gate = new Promise<void>((r) => { open = r; });
+      return { step: { gate, chunks: textStep('busy reply') }, open };
+    };
+
+    /** Propose a one-specialist plan and run it into a budget pause (an
+     *  assistant-routed kind). `after` scripts the parent from the notice on. */
+    async function pauseOnBudget(after: any[] = [], opts: { beforeApprove?: () => void | Promise<void> } = {}) {
+      await host.create({ sessionId: SID, cwd: root, binding: PARENT });
+      parentSteps = [proposeStep('call-small', SMALL), textStep('Here is the plan.')];
+      host.send(SID, 'Plan it');
+      await waitFor(() => planStatus().includes('proposed'), 'the proposal');
+      await waitFor(() => host.isIdle(SID), 'the proposing turn to end');
+      const rec0 = journalFile().plans[0];
+      const allowance = 500 + rec0.manifest.specialists.reviewer.setupTokens;
+      childReply = (_prompt, call) => (call === 1
+        ? { chunks: [toolCallChunk('read-1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 1, allowance - 6)] }
+        : { chunks: [...textChunks('x', 'REPORT a'), finishChunk('stop', 1, 1)] });
+      await opts.beforeApprove?.();
+      parentSteps.push(...after);
+      await host.approvePlan(SID, rec0.planId);
+      // WHY the card event and not the file: a quick notice turn can move the
+      // plan on (revised, stopped) before a 10 ms poll ever sees "paused".
+      await waitFor(() => planEvents.some((e) => e.plan.planId === rec0.planId && e.plan.status === 'paused'), 'the budget pause');
+      return rec0.planId as string;
+    }
+
+    it('the card is greyed from its first paused state; the notice is delivered as its own turn; a recommendation reactivates it and changes nothing else', async () => {
+      const message = 'The reviewer ran out of room; adding the minimum lets it finish.';
+      let noticeTurnId: string | undefined;
+      let revisionTurnId: string | undefined;
+      const planId = await pauseOnBudget([
+        (prompt: string) => {
+          noticeTurnId = (host as any).live.get(SID).currentTurnId;
+          revisionTurnId = journalFile().plans[0].paused.handoff.revisionTurnId;
+          const ids = idsIn(prompt);
+          return stream(toolCallChunk('rec-1', 'recommend_plan_action', {
+            ...ids, action: 'add_budget', addTokens: journalFile().plans[0].paused.minimumAddTokens, message,
+          }), finishChunk('tool-calls'));
+        },
+        textStep('I recommend adding the minimum.'),
+      ]);
+      const firstPaused = planEvents.find((e) => e.plan.planId === planId && e.plan.status === 'paused');
+      expect(firstPaused.plan.paused.handoff).toEqual({ state: 'pending' });
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the recommendation');
+      // The notice: one injected turn, carrying this pause's ids, never shown as the user's words.
+      expect(notices()).toHaveLength(1);
+      expect(notices()[0].data.injected).toBe('specialist-report');
+      const rec = journalFile().plans[0];
+      expect(notices()[0].data.text).toContain(`Handoff id: ${rec.paused.handoff.id}`);
+      // The notice turn had its own turn id — the one its pending revision named.
+      expect(noticeTurnId).toMatch(/.+/);
+      expect(noticeTurnId).toBe(revisionTurnId);
+      expect(rec.paused.handoff.revisionTurnId).toBeUndefined();   // the turn ended
+      expect(rec.paused.handoff.recommendation).toEqual({ action: 'add_budget', addTokens: rec.paused.minimumAddTokens, message });
+      const result = events.find((e) => e.type === 'tool-result' && e.data.toolUseId === 'rec-1');
+      expect(result.data.isError).toBe(false);
+      // The assistant can never resume or add budget by itself.
+      expect(rec.status).toBe('paused');
+      expect(rec.tranches).toBeUndefined();
+      expect(childCalls).toHaveLength(1);
+      const view = (await host.planViewsFor(SID))[0];
+      expect(view.paused).toMatchObject({ actions: ['add_budget', 'stop'], handoff: { state: 'answered', recommendation: { action: 'add_budget', message } } });
+      // The user presses the button: the recommended minimum is always enough.
+      expect(await host.addPlanBudget(SID, planId, rec.paused.handoff.recommendation.addTokens)).toMatchObject({ ok: true });
+      expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true });
+      await waitFor(() => planStatus()[0] === 'completed', 'completion after the recommended top-up');
+      expect(childCalls).toHaveLength(2);
+      expect(notices()).toHaveLength(1);
+    });
+
+    it('recommend_plan_action is offered exactly where propose_plan is, and never to a specialist', async () => {
+      await pauseOnBudget([textStep('noted')]);
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the notice turn');
+      expect(parentTools.length).toBeGreaterThan(0);
+      for (const tools of parentTools) {
+        expect(tools).toContain('propose_plan');
+        expect(tools).toContain('recommend_plan_action');
+      }
+      for (const c of childCalls) {
+        expect(c.tools).not.toContain('recommend_plan_action');
+        expect(c.tools).not.toContain('propose_plan');
+      }
+    });
+
+    it('a refused recommendation tells the assistant why and to advise in chat; the handoff is answered with no recommendation when that turn ends', async () => {
+      await pauseOnBudget([
+        (prompt: string) => stream(toolCallChunk('rec-bad', 'recommend_plan_action', { ...idsIn(prompt), action: 'continue', message: 'try again' }), finishChunk('tool-calls')),
+        textStep('Continue would not help; you could add budget.'),
+      ]);
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
+      const result = events.find((e) => e.type === 'tool-result' && e.data.toolUseId === 'rec-bad');
+      expect(result.data.isError).toBe(true);
+      expect(result.data.toolResult).toContain('"continue" isn\'t allowed for this pause');
+      expect(result.data.toolResult).toContain('advice to the user in chat');
+      expect(handoff().recommendation).toBeUndefined();
+      expect(journalFile().plans[0].status).toBe('paused');
+      expect(childCalls).toHaveLength(1);
+    });
+
+    it('"just explain": the turn that delivered THIS notice ends, and the card gets its default buttons', async () => {
+      await pauseOnBudget([textStep('It ran out of budget; you can add more or stop.')]);
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
+      const view = (await host.planViewsFor(SID))[0];
+      expect(view.paused!.handoff).toEqual({ state: 'answered' });
+      expect(view.paused!.actions).toEqual(['add_budget', 'stop']);
+    });
+
+    it('another turn ending first does not answer the handoff; only the notice turn does', async () => {
+      const busy = gated();
+      let noticeGate!: () => void;
+      const noticeStep = { gate: new Promise<void>((r) => { noticeGate = r; }), chunks: textStep('explained') };
+      await pauseOnBudget([noticeStep], {
+        beforeApprove: async () => {
+          parentSteps.push(busy.step);
+          host.send(SID, 'keep busy');
+          await waitFor(() => !host.isIdle(SID), 'the busy turn');
+        },
+      });
+      // Reorder: the busy turn was queued first; it is still waiting.
+      expect(handoff()?.state).toBe('pending');
+      busy.open();
+      await waitFor(() => notices().length === 1, 'the notice turn to start');
+      // The user's own turn ended — the notice turn has not.
+      expect(handoff()?.state).toBe('pending');
+      noticeGate();
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
+    });
+
+    it('held deliveries (the user pressed Stop) skip the handoff: default buttons, no notice', async () => {
+      await pauseOnBudget([], { beforeApprove: () => { host.interrupt(SID); } });
+      await new Promise((r) => setTimeout(r, 50));
+      expect(handoff()).toBeUndefined();
+      expect(notices()).toHaveLength(0);
+      const view = (await host.planViewsFor(SID))[0];
+      expect(view.paused!.actions).toEqual(['add_budget', 'stop']);
+      expect(planEvents.filter((e) => e.plan.status === 'paused').every((e) => !e.plan.paused.handoff)).toBe(true);
+    });
+
+    it('Stop on the conversation while the notice waits clears the handoff and withdraws the notice', async () => {
+      const busy = gated();
+      await pauseOnBudget([], {
+        beforeApprove: async () => {
+          parentSteps.push(busy.step);
+          host.send(SID, 'keep busy');
+          await waitFor(() => !host.isIdle(SID), 'the busy turn');
+        },
+      });
+      expect(handoff()?.state).toBe('pending');
+      host.interrupt(SID);
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the cleared handoff');
+      expect(handoff().recommendation).toBeUndefined();
+      // The next user message does not carry the stale notice in either.
+      parentSteps.push(textStep('hi'));
+      host.send(SID, 'hello again');
+      await waitFor(() => host.isIdle(SID) && parentPrompts.some((p) => p.includes('hello again')), 'the next turn');
+      expect(notices()).toHaveLength(0);
+      expect(parentPrompts.some((p) => p.includes('[Plan paused]'))).toBe(false);
+    });
+
+    it('the 10-minute backstop clears a handoff whose notice never started, and withdraws it', async () => {
+      host = makeHost({ handoffBackstopMs: 40 });
+      const busy = gated();
+      await pauseOnBudget([], {
+        beforeApprove: async () => {
+          parentSteps.push(busy.step);
+          host.send(SID, 'keep busy');
+          await waitFor(() => !host.isIdle(SID), 'the busy turn');
+        },
+      });
+      await waitFor(() => handoff()?.state === 'answered', 'the backstop');
+      busy.open();
+      await waitFor(() => host.isIdle(SID), 'the busy turn to end');
+      await new Promise((r) => setTimeout(r, 30));
+      expect(notices()).toHaveLength(0);
+    });
+
+    it('the backstop stops once delivery has started: the notice turn decides', async () => {
+      host = makeHost({ handoffBackstopMs: 30 });
+      let noticeGate!: () => void;
+      await pauseOnBudget([{ gate: new Promise<void>((r) => { noticeGate = r; }), chunks: textStep('explained') }]);
+      await waitFor(() => notices().length === 1, 'the notice turn to start');
+      await new Promise((r) => setTimeout(r, 120));
+      expect(handoff()?.state).toBe('pending');
+      noticeGate();
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
+    });
+
+    it('a notice that fails to deliver clears the handoff and is never retried', async () => {
+      await pauseOnBudget([], {
+        beforeApprove: () => {
+          const session = (host as any).live.get(SID).session;
+          vi.spyOn(session, 'runNotice').mockRejectedValueOnce(new Error('the model route is gone'));
+        },
+      });
+      await waitFor(() => handoff()?.state === 'answered', 'the cleared handoff');
+      await waitFor(() => host.isIdle(SID), 'idle');
+      parentSteps.push(textStep('hi'));
+      host.send(SID, 'hello');
+      await waitFor(() => host.isIdle(SID) && parentPrompts.some((p) => p.includes('hello')), 'the next turn');
+      expect(parentPrompts.some((p) => p.includes('[Plan paused]'))).toBe(false);
+    });
+
+    it('closing the conversation clears a pending handoff and drops its notice', async () => {
+      const busy = gated();
+      await pauseOnBudget([], {
+        beforeApprove: async () => {
+          parentSteps.push(busy.step);
+          host.send(SID, 'keep busy');
+          await waitFor(() => !host.isIdle(SID), 'the busy turn');
+        },
+      });
+      expect(handoff()?.state).toBe('pending');
+      await host.destroy(SID);
+      expect(handoff()).toMatchObject({ state: 'answered' });
+      expect(handoff().revisionTurnId).toBeUndefined();
+      expect(notices()).toHaveLength(0);
+    });
+
+    it('an app restart clears a pending handoff left in the journal', async () => {
+      await pauseOnBudget([textStep('noted')]);
+      await waitFor(() => host.isIdle(SID) && handoff()?.state === 'answered', 'the notice turn');
+      await host.destroyAll();
+      const file = journalFile();
+      file.plans[0].paused.handoff = { id: 'left-over', state: 'pending', at: 1, revisionTurnId: 'old-turn' };
+      fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), JSON.stringify(file));
+      host = makeHost();
+      expect(await host.resume(SID, root)).toBe(true);
+      await waitFor(() => handoff()?.state === 'answered', 'the restart clear');
+      expect(handoff()).toEqual({ id: 'left-over', state: 'answered', at: 1 });
+      expect(parentPrompts.filter((p) => p.includes('left-over'))).toHaveLength(0);
+    });
+
+    it('a revised plan from the notice turn is linked, stops the old plan as revised, and never auto-approves', async () => {
+      // Auto-approve is turned on only inside the notice turn: the first
+      // proposal must wait for its own Approve.
+      const planId = await pauseOnBudget([
+        async () => {
+          await host.setPlanAutoApprove(10_000_000);
+          return proposeStep('call-revised', { ...SMALL, goal: 'Review a.ts with more room', steps: [{ ...SMALL.steps[0], budget_tokens: 3000 }] });
+        },
+        textStep('Here is a revised plan with more room.'),
+      ]);
+      await waitFor(() => journalFile().plans.length === 2 && host.isIdle(SID), 'the revised proposal');
+      const [oldPlan, newPlan] = journalFile().plans;
+      expect(oldPlan).toMatchObject({ planId, status: 'stopped', revisedBy: newPlan.planId, revisedOnPause: true });
+      expect(newPlan).toMatchObject({ status: 'proposed', revisionOf: planId });
+      expect(newPlan.autoApproved).toBeUndefined();
+      expect(childCalls).toHaveLength(1);
+      const oldView = (await host.planViewsFor(SID)).find((v) => v.planId === planId)!;
+      expect(oldView.revisedOnPause).toBe(true);
+    });
+
+    it('a handoff superseded mid-turn (the user stopped the plan), then a proposal: it stands alone and never auto-approves', async () => {
+      const planId = await pauseOnBudget([
+        async () => {
+          expect(await host.stopPlan(SID, journalFile().plans[0].planId)).toMatchObject({ ok: true });
+          await host.setPlanAutoApprove(10_000_000);
+          return proposeStep('call-after-stop', { ...SMALL, goal: 'A fresh plan' });
+        },
+        textStep('Proposed a fresh plan.'),
+      ]);
+      await waitFor(() => journalFile().plans.length === 2 && host.isIdle(SID), 'the new proposal');
+      const [oldPlan, newPlan] = journalFile().plans;
+      expect(oldPlan).toMatchObject({ planId, status: 'stopped' });
+      expect(oldPlan.revisedBy).toBeUndefined();
+      expect(oldPlan.revisedOnPause).toBeUndefined();
+      expect(newPlan.status).toBe('proposed');
+      expect(newPlan.revisionOf).toBeUndefined();
+      expect(childCalls).toHaveLength(1);
+    });
+
+    it('a user Add budget while the notice waits supersedes it: accepted, withdrawn, and an old-id recommendation is refused', async () => {
+      const busy = gated();
+      let ids: { planId: string; handoffId: string } | undefined;
+      const planId = await pauseOnBudget([], {
+        beforeApprove: async () => {
+          parentSteps.push(busy.step);
+          host.send(SID, 'keep busy');
+          await waitFor(() => !host.isIdle(SID), 'the busy turn');
+        },
+      });
+      const rec = journalFile().plans[0];
+      ids = { planId, handoffId: rec.paused.handoff.id };
+      expect(await host.addPlanBudget(SID, planId, rec.paused.minimumAddTokens)).toMatchObject({ ok: true });
+      expect(handoff()).toMatchObject({ state: 'answered' });
+      // The busy turn now calls the tool with the old id (as a stale notice would).
+      busy.step.chunks = stream(toolCallChunk('rec-old', 'recommend_plan_action', { ...ids, action: 'add_budget', addTokens: 5000, message: 'more' }), finishChunk('tool-calls'));
+      parentSteps.push(textStep('ok'));
+      busy.open();
+      await waitFor(() => host.isIdle(SID) && events.some((e) => e.type === 'tool-result' && e.data.toolUseId === 'rec-old'), 'the stale recommendation');
+      const result = events.find((e) => e.type === 'tool-result' && e.data.toolUseId === 'rec-old');
+      expect(result.data.isError).toBe(true);
+      expect(result.data.toolResult).toContain('no longer waiting');
+      expect(notices()).toHaveLength(0);
+      expect(handoff().recommendation).toBeUndefined();
+    });
   });
 
   it('Stop on a running plan settles its specialists before the card says stopped', async () => {

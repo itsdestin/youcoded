@@ -214,6 +214,18 @@ export interface ToolServices {
       signal: AbortSignal;
       commit(): boolean;
     }): Promise<PlanView>;
+    /** Task 9b (pause handoff §2 step 6): record the button the assistant
+     *  recommends for a paused plan it was handed. It only records — the user
+     *  presses every button, so there is deliberately no resume, stop or
+     *  add-budget callback on this seam. The host supplies the conversation. */
+    recommend?(input: {
+      sessionId: string;
+      planId: string;
+      handoffId: string;
+      action: string;
+      addTokens?: number;
+      message: string;
+    }): Promise<{ ok: true } | { ok: false; error: string }>;
   };
   modelCatalog?(): Promise<CatalogModel[] | null>;
   /** Task 14 — delegated model tiers + user-directed per-hire override.

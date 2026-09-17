@@ -11,13 +11,14 @@
 // This is one pure function so the executor (which decides at the moment a
 // specialist fails) and Task 9b (which decides from the saved pause) can never
 // disagree about a pause.
-import type { PlanPauseKind } from '../../../shared/types';
+import type { PlanPauseAction, PlanPauseKind } from '../../../shared/types';
 import type { ToolEffect } from '../tools/types';
 import type { PlanRecord } from './types';
 
 export type PlanPauseRoute = 'auto' | 'assistant' | 'user';
-/** What the card may offer / the assistant may recommend (§2 table). */
-export type PlanPauseAction = 'add_budget' | 'continue' | 'stop';
+/** What the card may offer / the assistant may recommend (§2 table). Task
+ *  9b: declared in shared/types.ts so the card reads the same names. */
+export type { PlanPauseAction };
 /** The pause kinds that can be recovered automatically; also the `cause` of
  *  a journalled recovery (one per step, iteration, item and cause). */
 export type PlanRecoveryCause = 'launch-failed' | 'specialist-error' | 'invalid-report' | 'unknown-request' | 'unknown-outcome';

@@ -39,12 +39,13 @@ const everyNativeTool = (): NativeTool[] => {
   return [...((session as any).toolByName as Map<string, NativeTool>).values()];
 };
 
-/** The design's table (§1), verbatim. Task and propose_plan are not in it;
- *  Task may start a specialist that runs commands (external), propose_plan
- *  only writes this conversation's plan file (local). */
+/** The design's table (§1), verbatim. Task, propose_plan and (Task 9b)
+ *  recommend_plan_action are not in it; Task may start a specialist that runs
+ *  commands (external), the two plan tools only write this conversation's plan
+ *  file (local). */
 const EXPECTED: Record<string, 'read' | 'local' | 'external'> = {
   Read: 'read', Glob: 'read', Grep: 'read', Skill: 'read', ModelSearch: 'read', BashOutput: 'read', WebSearch: 'read',
-  Write: 'local', Edit: 'local', TodoWrite: 'local', KillShell: 'local', propose_plan: 'local',
+  Write: 'local', Edit: 'local', TodoWrite: 'local', KillShell: 'local', propose_plan: 'local', recommend_plan_action: 'local',
   Bash: 'external', WebFetch: 'external', AskUserQuestion: 'external', SendUserFile: 'external', SendUserLink: 'external',
   Task: 'external',
   mcp__srv__search: 'external', mcp__srv__read_file: 'external',
@@ -53,7 +54,7 @@ const EXPECTED: Record<string, 'read' | 'local' | 'external'> = {
 describe('tool effects (pause handoff §1)', () => {
   it('the session really attached every conditional tool (so the checks below cover them)', () => {
     const names = everyNativeTool().map((t) => t.name);
-    for (const n of ['Skill', 'Task', 'ModelSearch', 'propose_plan', 'mcp__srv__search']) expect(names).toContain(n);
+    for (const n of ['Skill', 'Task', 'ModelSearch', 'propose_plan', 'recommend_plan_action', 'mcp__srv__search']) expect(names).toContain(n);
     for (const t of CORE_TOOLS) expect(names).toContain(t.name);
   });
 

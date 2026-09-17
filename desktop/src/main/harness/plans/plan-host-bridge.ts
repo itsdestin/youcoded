@@ -10,7 +10,7 @@
 // proves after a crash, how much Add budget is enough — live here, next to the
 // rest of the plan code, where they can be read and tested together.
 import { PLAN_COMMENT_TAG } from '../history-only';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { CatalogModel, ModelBinding } from '../../../shared/provider-types';
 import type { PlanView, TranscriptEvent } from '../../../shared/types';
 import type { NativeHome } from '../../native-home';
@@ -27,7 +27,9 @@ import { nativeToolEffect } from '../tools';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError } from './plan-journal';
 import { PlanBudget, pricingSnapshot } from './plan-budget';
-import { PlanService, type PlanProposal } from './plan-service';
+import { PlanService, type PlanProposal, type PlanRecommendation } from './plan-service';
+import { PLAN_HANDOFF_BACKSTOP_MS, planHandoffNotice } from './plan-handoff';
+import { pausedRouting, type RecordedPauseFacts } from './pause-routing';
 import {
   PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, classifyChildTranscript, planRestartBrief,
   type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type TranscriptVerdict,
@@ -74,6 +76,21 @@ export interface PlanChildStart {
   budgetStop(): PlanChildStop | undefined;
 }
 
+/** Task 9b: one plan pause notice the host delivers as its own model turn. */
+export interface PlanNoticeDelivery {
+  text: string;
+  /** The notice turn's id — what propose_plan reads as the current turn. */
+  turnId: string;
+  planId: string;
+  /** Tags the queued notice so a clear can withdraw it. */
+  handoffId: string;
+  /** Delivery started (the backstop no longer applies). */
+  onStart(): void;
+  /** The turn that delivered it ended — success, error or Stop — or it was
+   *  dropped without being delivered. Called exactly once. */
+  onEnd(): void;
+}
+
 export interface PlanHostPort {
   home: NativeHome;
   emit(event: PlanEvent): void;
@@ -92,6 +109,13 @@ export interface PlanHostPort {
   /** `historyNote`: shown to the model only, never in the chat (5b follow-up). */
   queueTurn(sessionId: string, text: string, turnId: string, historyNote?: string): void;
   currentTurnId(sessionId: string): string | undefined;
+  /** Task 9b (§2 step 1): the conversation is open here and its deliveries
+   *  are not held (the user has not pressed Stop). */
+  canTakeNotice(sessionId: string): boolean;
+  /** Task 9b: queue a plan notice; false when it can't be (never while held). */
+  queuePlanNotice(sessionId: string, notice: PlanNoticeDelivery): boolean;
+  /** Task 9b: drop a queued notice that has not started to be delivered. */
+  withdrawPlanNotice(sessionId: string, handoffId: string): boolean;
   /** Mint (or rebuild) a plan specialist, holding a specialist slot. */
   startChild(input: PlanChildStart): Promise<PlanChildHandle>;
   /** An unwired plan-child session, for measurement only. */
@@ -112,6 +136,18 @@ export interface PlanHostBridgeOptions {
    * finished reopening); an injected clock makes that decision deterministic.
    */
   now?: () => number;
+  /** Task 9b: the "never stuck" backstop (tests only; 10 minutes otherwise). */
+  handoffBackstopMs?: number;
+}
+
+/** Task 9b: one pause this process handed to the assistant. */
+interface LiveHandoff {
+  ref: PlanRef;
+  planId: string;
+  handoffId: string;
+  turnId: string;
+  started: boolean;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 function canonical(value: unknown): string {
@@ -158,9 +194,16 @@ export class PlanHostBridge {
   private readonly lastViews = new Map<string, PlanView>();
   private readonly rechecks = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly now: () => number;
+  /** Task 9b: pending handoffs by id, and the ids of plan notice turns (a
+   *  proposal made during one never auto-approves, whatever happened to the
+   *  handoff meanwhile — review 3, finding 1). */
+  private readonly handoffs = new Map<string, LiveHandoff>();
+  private readonly noticeTurns = new Set<string>();
+  private readonly handoffBackstopMs: number;
 
   constructor(private readonly port: PlanHostPort, opts: PlanHostBridgeOptions = {}) {
     this.now = opts.now ?? Date.now;
+    this.handoffBackstopMs = opts.handoffBackstopMs ?? PLAN_HANDOFF_BACKSTOP_MS;
     this.journal = new PlanJournal({
       home: port.home,
       ...(opts.now ? { now: opts.now } : {}),
@@ -176,6 +219,10 @@ export class PlanHostBridge {
       runner: this.runner(),
       settleDeadlineMs: opts.settleDeadlineMs,
       heartbeatMs: opts.heartbeatMs,
+      handoff: {
+        prepare: (ref, _planId, facts) => this.prepareHandoff(ref, facts),
+        created: (ref, planId, handoff) => this.handoffCreated(ref, planId, handoff),
+      },
     });
     this.service = new PlanService({
       journal: this.journal,
@@ -187,6 +234,10 @@ export class PlanHostBridge {
       },
       executor: this.executor,
       budget: { addTokens: (input) => this.budget.addTokens(input) },
+      // A user action (or a recommendation) answered it: an undelivered
+      // notice has nothing left to ask. A notice already being delivered
+      // stays until its turn ends.
+      handoffs: { superseded: (_ref, _planId, handoffId) => { void this.clearHandoff(handoffId, { force: false }); } },
     });
   }
 
@@ -197,9 +248,102 @@ export class PlanHostBridge {
   // ---- ToolServices.plans ----
 
   /** propose_plan's callback, with the HOST's turn id (never model input). */
-  propose(sessionId: string, proposal: Omit<PlanProposal, 'turnId'>): Promise<PlanView> {
+  propose(sessionId: string, proposal: Omit<PlanProposal, 'turnId' | 'fromPlanNotice'>): Promise<PlanView> {
     const turnId = this.port.currentTurnId(sessionId);
-    return this.service.propose({ ...proposal, ...(turnId !== undefined ? { turnId } : {}) });
+    return this.service.propose({
+      ...proposal,
+      ...(turnId !== undefined ? { turnId } : {}),
+      // Task 9b: host-known, never model input.
+      ...(turnId !== undefined && this.noticeTurns.has(turnId) ? { fromPlanNotice: true } : {}),
+    });
+  }
+
+  /** recommend_plan_action's callback (Task 9b). */
+  async recommend(input: PlanRecommendation): Promise<{ ok: true } | { ok: false; error: string }> {
+    const res = await this.service.recommend(input);
+    return res.ok ? { ok: true } : { ok: false, error: res.error };
+  }
+
+  // ---- Task 9b: pause handoffs (design §2) ----
+
+  /** Before the settle write: hand this pause over? Only an assistant-routed
+   *  pause, only in a conversation that can take a notice right now. */
+  private prepareHandoff(ref: PlanRef, facts: RecordedPauseFacts): { id: string; turnId: string } | undefined {
+    if (pausedRouting(facts).route !== 'assistant') return undefined;
+    if (!this.port.canTakeNotice(ref.sessionId)) return undefined;
+    return { id: randomUUID(), turnId: randomUUID() };
+  }
+
+  /** After the settle write: queue the notice (cleared at once if that fails)
+   *  and arm the backstop. */
+  private async handoffCreated(ref: PlanRef, planId: string, h: { id: string; turnId: string }): Promise<void> {
+    const entry: LiveHandoff = { ref, planId, handoffId: h.id, turnId: h.turnId, started: false };
+    this.handoffs.set(h.id, entry);
+    let queued = false;
+    try {
+      const plan = await this.journal.get(ref, planId);
+      if (plan?.paused?.handoff?.id === h.id && plan.paused.handoff.state === 'pending') {
+        this.noticeTurns.add(h.turnId);
+        queued = this.port.queuePlanNotice(ref.sessionId, {
+          text: planHandoffNotice(plan, h.id),
+          turnId: h.turnId,
+          planId,
+          handoffId: h.id,
+          onStart: () => {
+            entry.started = true;
+            if (entry.timer) clearTimeout(entry.timer);
+          },
+          onEnd: () => {
+            this.noticeTurns.delete(h.turnId);
+            void this.clearHandoff(h.id, { force: true });
+          },
+        });
+      }
+    } catch (e) {
+      log('WARN', 'PlanHostBridge', 'could not queue a plan pause notice', { planId, error: String(e) });
+    }
+    if (!queued) {
+      await this.clearHandoff(h.id, { force: true });
+      return;
+    }
+    // The host starts delivery on a later tick, so the backstop is armed
+    // before any delivery can begin; it only ever clears a notice not started.
+    if (!entry.started && this.handoffs.has(h.id)) {
+      entry.timer = setTimeout(() => {
+        if (!entry.started) void this.clearHandoff(h.id, { force: false });
+      }, this.handoffBackstopMs);
+      (entry.timer as { unref?: () => void }).unref?.();
+    }
+  }
+
+  /**
+   * Clear one handoff this process holds. A notice not yet being delivered is
+   * withdrawn and the handoff answered now. One being delivered is left to its
+   * turn's end unless `force` (Stop, closing, the end of that turn itself).
+   */
+  private async clearHandoff(handoffId: string, opts: { force: boolean }): Promise<void> {
+    const entry = this.handoffs.get(handoffId);
+    if (!entry) return;
+    if (entry.started && !opts.force) return;
+    this.handoffs.delete(handoffId);
+    if (entry.timer) clearTimeout(entry.timer);
+    if (!entry.started) {
+      this.noticeTurns.delete(entry.turnId);
+      try { this.port.withdrawPlanNotice(entry.ref.sessionId, handoffId); } catch (e) {
+        log('WARN', 'PlanHostBridge', 'could not withdraw a plan pause notice', { error: String(e) });
+      }
+    }
+    await this.service.answerHandoff(entry.ref, entry.planId, handoffId);
+  }
+
+  private async clearSessionHandoffs(sessionId: string): Promise<void> {
+    const mine = [...this.handoffs.values()].filter((h) => h.ref.sessionId === sessionId);
+    await Promise.all(mine.map((h) => this.clearHandoff(h.handoffId, { force: true })));
+  }
+
+  /** The user pressed Stop on the conversation (§2 "never stuck"). */
+  conversationStopped(sessionId: string): void {
+    void this.clearSessionHandoffs(sessionId);
   }
 
   // ---- the seven actions + hydration ----
@@ -267,6 +411,10 @@ export class PlanHostBridge {
     const ref: PlanRef = { cwd, sessionId };
     try {
       const { recheckAt } = await this.journal.recoverInterrupted(ref, { onInterrupt: (plan) => this.budget.releaseOwnerlessHolds(plan) });
+      // Task 9b: a pending handoff no one in this process is delivering (the
+      // app restarted) is answered, so its card gets its buttons back.
+      const keep = new Set([...this.handoffs.values()].filter((h) => h.ref.sessionId === sessionId).map((h) => h.handoffId));
+      await this.service.clearStaleHandoffs(ref, keep);
       // Plans left paused/interrupted/stopped with holds by an older crash.
       const read = await this.journal.read(ref);
       if (read.kind === 'valid') {
@@ -302,12 +450,15 @@ export class PlanHostBridge {
   async interruptSession(sessionId: string): Promise<void> {
     this.cancelRecheck(sessionId);
     await this.executor.interruptSession(sessionId);
+    // Task 9b: closed or taken over — nothing here will deliver its notices.
+    await this.clearSessionHandoffs(sessionId);
   }
 
   /** App quit. */
   async interruptAll(): Promise<void> {
     for (const id of [...this.rechecks.keys()]) this.cancelRecheck(id);
     await this.executor.interruptAll();
+    await Promise.all([...new Set([...this.handoffs.values()].map((h) => h.ref.sessionId))].map((id) => this.clearSessionHandoffs(id)));
   }
 
   // ---- manifest (frozen at proposal) ----

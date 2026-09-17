@@ -17,6 +17,7 @@ import { ModelSearchTool } from './model-search';
 import { SKILL_TOOL_EFFECT } from './skill';
 import { TASK_TOOL_EFFECT } from './task';
 import { PROPOSE_PLAN_TOOL_EFFECT } from './propose-plan';
+import { RECOMMEND_PLAN_ACTION_TOOL_EFFECT } from './recommend-plan-action';
 
 /** Plan A core set + Plan B tools + SendUserFile (2026-08-25). WebFetch/WebSearch
  *  are the web pair (free in every preset/mode — see permission-types.rulesForMode);
@@ -38,6 +39,7 @@ const NATIVE_TOOL_EFFECTS: ReadonlyMap<string, ToolEffect> = new Map<string, Too
   ['Skill', SKILL_TOOL_EFFECT],
   ['Task', TASK_TOOL_EFFECT],
   ['propose_plan', PROPOSE_PLAN_TOOL_EFFECT],
+  ['recommend_plan_action', RECOMMEND_PLAN_ACTION_TOOL_EFFECT],
 ]);
 
 export function nativeToolEffect(name: string): ToolEffect {

@@ -176,6 +176,7 @@ import { messageTokens, messagesTokens, APPROX_CHARS_PER_TOKEN } from './message
 import { createSkillTool } from './tools/skill';
 import { createTaskTool } from './tools/task';
 import { createProposePlanTool, failedPlanProjection, stoppedPlanProjection, writingPlanProjection } from './tools/propose-plan';
+import { createRecommendPlanActionTool } from './tools/recommend-plan-action';
 import { isPlanEligible } from './plans/eligibility';
 import {
   authoritativeTokens,
@@ -1364,8 +1365,12 @@ export class HarnessSession extends EventEmitter {
       supportsTools: this.profile.supportsTools,
       isSpecialistChild: this.opts.isSpecialistChild ?? false,
     });
-    if (!wanted) { this.toolByName.delete('propose_plan'); return; }
+    // Task 9b (pause handoff §2): recommend_plan_action answers a plan's pause
+    // notice, so it rides exactly the same gate as propose_plan — never a
+    // specialist, never a model that can't propose plans.
+    if (!wanted) { this.toolByName.delete('propose_plan'); this.toolByName.delete('recommend_plan_action'); return; }
     this.toolByName.set('propose_plan', createProposePlanTool(this.opts.specialistRoster ?? BUILTIN_ROSTER));
+    this.toolByName.set('recommend_plan_action', createRecommendPlanActionTool());
   }
 
   /** Add or remove MCP server tools to match the CURRENT profile's budget
@@ -3989,10 +3994,12 @@ export class HarnessSession extends EventEmitter {
 
     // 4. Configured decision. An external-directory path forces 'ask' regardless
     //    of rules; otherwise consult decide() (default: ask — never silent-allow).
-    const decision: PermissionDecision = call.toolName === 'propose_plan'
+    const decision: PermissionDecision = call.toolName === 'propose_plan' || call.toolName === 'recommend_plan_action'
       // Proposing is not execution consent: it only creates the card whose
       // Approve action authorizes specialists. WHY skip an approval ask here:
       // asking before the proposal exists would duplicate and invert that flow.
+      // Task 9b: a recommendation only changes the card's suggested button;
+      // the user's own press is the consent.
       ? { action: 'allow', denyListed: false }
       : externalAsk
         ? { action: 'ask', denyListed: false }

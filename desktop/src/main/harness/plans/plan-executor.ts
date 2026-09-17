@@ -37,7 +37,7 @@ import type { PlanExecutorHooks } from './plan-service';
 import type { PlanAttemptRecord, PlanRecord, PlanRef, PlanStepRecord } from './types';
 import type { TranscriptEvent } from '../../../shared/types';
 import type { ToolEffect } from '../tools/types';
-import { routePlanPause, type PlanPauseContext, type PlanRecoveryCause } from './pause-routing';
+import { routePlanPause, type PlanPauseContext, type PlanRecoveryCause, type RecordedPauseFacts } from './pause-routing';
 
 /** Well inside the journal's 60 s lease, so a slow disk never lets it lapse. */
 export const PLAN_HEARTBEAT_MS = 20_000;
@@ -235,6 +235,23 @@ export interface PlanExecutorTimers {
   clearInterval(handle: unknown): void;
 }
 
+/**
+ * Task 9b (pause handoff §2 steps 1–3): who may take a pause off the user's
+ * hands first. The host bridge implements it.
+ *  - `prepare` runs BEFORE the settle write, with the facts the routing reads:
+ *    it answers a new handoff (an unguessable id and the notice turn's id)
+ *    only for an assistant-routed pause in a conversation that can take a
+ *    notice right now (open, and Stop not pressed). Synchronous, so nothing
+ *    can happen between the check and the write that would need a lock.
+ *  - `created` runs AFTER that write landed (the card already shows it as
+ *    handed over) and queues the notice; it clears the handoff itself when
+ *    queueing fails.
+ */
+export interface PlanHandoffPort {
+  prepare(ref: PlanRef, planId: string, facts: RecordedPauseFacts): { id: string; turnId: string } | undefined;
+  created(ref: PlanRef, planId: string, handoff: { id: string; turnId: string }): void | Promise<void>;
+}
+
 export interface PlanExecutorDeps {
   journal: PlanJournal;
   budget: PlanBudget;
@@ -242,6 +259,7 @@ export interface PlanExecutorDeps {
   settleDeadlineMs?: number;
   heartbeatMs?: number;
   timers?: PlanExecutorTimers;
+  handoff?: PlanHandoffPort;
 }
 
 // ---- repeat decisions ----
@@ -402,6 +420,7 @@ export class PlanExecutor implements PlanExecutorHooks {
   private readonly settleDeadlineMs: number;
   private readonly heartbeatMs: number;
   private readonly timers: PlanExecutorTimers;
+  private readonly handoff?: PlanHandoffPort;
   private readonly runs = new Map<string, ActiveRun>();
   /** Runs whose visible end is being written. WHY separate (review fix 7
    *  follow-up): "a paused plan owns no timer" must already hold when the
@@ -415,6 +434,7 @@ export class PlanExecutor implements PlanExecutorHooks {
     this.runner = deps.runner;
     this.settleDeadlineMs = deps.settleDeadlineMs ?? PLAN_SETTLE_DEADLINE_MS;
     this.heartbeatMs = deps.heartbeatMs ?? PLAN_HEARTBEAT_MS;
+    this.handoff = deps.handoff;
     this.timers = deps.timers ?? {
       setInterval: (fn, ms) => {
         const h = setInterval(fn, ms);
@@ -1373,6 +1393,24 @@ export class PlanExecutor implements PlanExecutorHooks {
       // pause and marked as shown, so Continue picks them up instead of
       // pausing once more for each.
       const cutOffOthers = final.kind === 'pause' ? cutOff.filter((c) => c.attemptId !== final.attemptId) : [];
+      // Task 9b (§2 step 1): whether this pause is handed to the assistant is
+      // decided BEFORE the write, so the first paused card the user sees is
+      // already the right one (greyed, or with its buttons).
+      let handoff: { id: string; turnId: string } | undefined;
+      if (final.kind === 'pause' && this.handoff) {
+        try {
+          handoff = this.handoff.prepare(run.ref, run.planId, {
+            kind: final.why,
+            ...(final.tool ? { tool: final.tool } : {}),
+            ...(final.toolEffect ? { toolEffect: final.toolEffect } : {}),
+            ...(final.launch ? { launch: final.launch } : {}),
+            ...(final.retried ? { retried: true as const } : {}),
+          });
+        } catch (e) {
+          // No handoff is the safe direction: the card shows its own buttons.
+          console.error('[plan-executor] could not check whether the assistant can take this pause', e);
+        }
+      }
       await this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
         delete p.lease;
         for (const c of cutOffOthers) {
@@ -1407,6 +1445,7 @@ export class PlanExecutor implements PlanExecutorHooks {
             ...(final.launch ? { launch: final.launch } : {}),
             ...(final.retried ? { retried: true as const } : {}),
             ...(final.toolEffect ? { toolEffect: final.toolEffect } : {}),
+            ...(handoff ? { handoff: { id: handoff.id, state: 'pending' as const, at: Date.now(), revisionTurnId: handoff.turnId } } : {}),
           };
           const s = p.steps.find((x) => x.id === final.stepId);
           if (s && s.status !== 'done') s.status = 'paused';
@@ -1414,6 +1453,14 @@ export class PlanExecutor implements PlanExecutorHooks {
           p.status = 'interrupted';
         }
       });
+      // Task 9b (§2 step 3): queued only after the handed-over card is durable.
+      if (handoff) {
+        try {
+          await this.handoff!.created(run.ref, run.planId, handoff);
+        } catch (e) {
+          console.error('[plan-executor] could not hand this pause to the assistant', e);
+        }
+      }
     } catch (e) {
       this.onJournalError(run, e);
     }
