@@ -4,8 +4,6 @@
 // yet", "Sign in" for a signed-in user, no default project). Each now asks again after a remote
 // reconnect, and a failure is no longer remembered as the answer.
 import React from 'react';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { REMOTE_RECONNECTED_EVENT } from '../src/renderer/remote-events';
@@ -138,11 +136,5 @@ describe('screens that load once ask again after a reconnect', () => {
     await flush();
     expect(providers.list).toHaveBeenCalledTimes(2);
     expect(h.result.current).toBe('chatgpt');
-  });
-
-  it("App's session defaults (App cannot be rendered in a unit test; its wiring is pinned here)", () => {
-    const app = readFileSync(resolve(__dirname, '../src/renderer/App.tsx'), 'utf8');
-    expect(app).toContain('useOnRemoteReconnect(loadSessionDefaults);');
-    expect(app).toMatch(/useEffect\(\(\) => \{ loadSessionDefaults\(\); \}, \[settingsOpen, loadSessionDefaults\]\);/);
   });
 });

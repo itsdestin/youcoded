@@ -4,8 +4,6 @@
 // exists, so none of the day's phone-side fixes reached the phone. In development the phone now gets
 // live code unless a fresh copy was asked for (run-dev.sh --phone-build), and the log says which.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { choosePhonePageSource } from '../src/main/remote-server';
 
 describe('which copy of the app a phone is served', () => {
@@ -19,10 +17,5 @@ describe('which copy of the app a phone is served', () => {
 
   it('asked for a built copy that does not exist, it serves live code rather than nothing', () => {
     expect(choosePhonePageSource({ serveBuiltPage: true, hasBuild: false })).toBe('dev-server');
-  });
-
-  it('main.ts serves the built copy only when packaged or when run-dev.sh built one', () => {
-    const main = readFileSync(resolve(__dirname, '../src/main/main.ts'), 'utf8');
-    expect(main).toContain("serveBuiltPage: app.isPackaged || process.env.YOUCODED_REMOTE_BUILT === '1'");
   });
 });

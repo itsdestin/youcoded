@@ -15,9 +15,10 @@
 // to clamp the pane, did the same thing.
 //
 // This is the root-cause half of the fix. The other half — that stopping play
-// is its own effect, keyed on the open game alone — is a source-text guard in
-// arcade-authority.test.ts, because it is a fact about how the effect is
-// WRITTEN and no amount of rendering can pin it.
+// is its own effect, keyed on the open game alone — is the ast-grep rule
+// arcade-stop-play-keyed-on-open-game (plus a count in arcade-authority.test.ts),
+// because it is a fact about how the effect is WRITTEN and no amount of
+// rendering can pin it.
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup, act } from '@testing-library/react';
 import { ThemeProvider, useTheme } from '../src/renderer/state/theme-context';

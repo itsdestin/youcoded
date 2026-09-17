@@ -11,8 +11,8 @@
 // buddy deliberately (or not yet) does not. Shrinking it is good; growing it
 // requires a WHY here.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readSource } from './helpers/guard-scope';
 
 const RENDERER = join(__dirname, '..', 'src', 'renderer');
 
@@ -28,7 +28,7 @@ const TRANSCRIPT_TYPES = [
  *  TRANSCRIPT_TYPES scopes this to transcript switches and ignores the
  *  timeline-render switch ('user', 'assistant-turn', 'prompt', ...). */
 function handledTypes(file: string): Set<string> {
-  const text = readFileSync(join(RENDERER, file), 'utf8');
+  const text = readSource(join(RENDERER, file));
   const found = new Set<string>();
   for (const t of TRANSCRIPT_TYPES) {
     if (text.includes(`case '${t}':`)) found.add(t);
@@ -74,8 +74,8 @@ describe('transcript event surface parity: App.tsx vs BubbleFeed.tsx', () => {
     // Case-label parity (the test above) cannot see this: both files already
     // handle 'assistant-thinking', so a toolPreparing branch missing from one
     // of them is invisible to a label comparison.
-    const app = readFileSync(join(RENDERER, 'App.tsx'), 'utf8');
-    const buddy = readFileSync(join(RENDERER, 'components', 'buddy', 'BubbleFeed.tsx'), 'utf8');
+    const app = readSource(join(RENDERER, 'App.tsx'));
+    const buddy = readSource(join(RENDERER, 'components', 'buddy', 'BubbleFeed.tsx'));
     expect(app).toContain('toolPreparing');
     expect(buddy).toContain('toolPreparing');
     expect(app).toContain('NATIVE_TOOL_PREPARING');
@@ -102,7 +102,7 @@ const TOOL_USE_DISPATCHERS = [
 /** Every `{ ... type: 'TRANSCRIPT_TOOL_USE' ... }` object literal in a file,
  *  found by walking back to the opening brace and forward to its match. */
 function toolUseDispatchLiterals(file: string): string[] {
-  const text = readFileSync(join(RENDERER, file), 'utf8');
+  const text = readSource(join(RENDERER, file));
   const needle = "type: 'TRANSCRIPT_TOOL_USE'";
   const out: string[] = [];
   let from = 0;

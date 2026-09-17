@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import fs from 'fs';
 import path from 'path';
+import { readSource } from './helpers/guard-scope';
 
 // Pins the write-guard PreToolUse BLOCKING contract discovered via issue #86:
 // Claude Code only denies a tool call when a PreToolUse hook exits with code 2
@@ -16,11 +16,13 @@ const androidCopy = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'a
 
 describe('bundled write-guard.sh blocking contract', () => {
   it('desktop and Android copies are byte-identical (bundled-hook parity)', () => {
-    expect(fs.readFileSync(desktopCopy, 'utf8')).toBe(fs.readFileSync(androidCopy, 'utf8'));
+    // WHY: both sides go through readSource, so the comparison stays valid —
+    // normalising just one side would compare stripped bytes against raw ones.
+    expect(readSource(desktopCopy)).toBe(readSource(androidCopy));
   });
 
   it('the block path exits 2 with the message on stderr (CC PreToolUse deny contract)', () => {
-    const script = fs.readFileSync(desktopCopy, 'utf8');
+    const script = readSource(desktopCopy);
     // The user-facing WRITE BLOCKED line must go to stderr…
     expect(script).toMatch(/echo "WRITE BLOCKED: .*retry your edit\." >&2/);
     // …followed by exit 2 (the ONLY exit code CC treats as a block).

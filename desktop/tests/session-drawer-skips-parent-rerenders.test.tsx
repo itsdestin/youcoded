@@ -12,9 +12,10 @@
 //   2. App hands ArtifactContext a MEMOIZED value — an inline object literal is a
 //      new identity every render, which redraws every consumer of that context
 //      regardless of what memo does about props
+// This file pins half 1. WHY half 2 is not here (Plan B, 2026-09-16): it is one
+// prop at one call site in App.tsx, pinned by the ast-grep rule
+// artifact-provider-value-memoized in the workspace's scripts/ast-grep/rules/.
 import React, { useState } from 'react';
-import fs from 'fs';
-import path from 'path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act, cleanup, waitFor } from '@testing-library/react';
 
@@ -81,28 +82,5 @@ describe('the file pane and a streaming reply', () => {
     for (let i = 0; i < 40; i++) await act(async () => { bump(); });
 
     expect(mocks.bodyRuns).toBe(0);
-  });
-
-  it('App gives ArtifactContext a memoized value, not a fresh object per render', () => {
-    // A rendering test for App would need the entire shell stood up; the
-    // invariant is one prop at one call site, so read it. Without this, memo
-    // above still passes while every context consumer redraws per token.
-    const src = fs.readFileSync(path.join(__dirname, '../src/renderer/App.tsx'), 'utf8');
-    const call = src.match(/<ArtifactProvider[^>]*>/);
-    expect(call, '<ArtifactProvider> not found in App.tsx').toBeTruthy();
-    expect(call![0]).not.toMatch(/value=\{\{/);          // the inline-literal form
-    expect(call![0]).toContain('value={artifactContextValue}');
-    expect(src).toMatch(/const artifactContextValue = useMemo\(/);
-
-    // The DEPENDENCIES are the load-bearing half, and the failure they prevent
-    // is far worse than the one above. `useMemo(() => ({...}), [])` satisfies
-    // every assertion so far and ships a FROZEN context: opening a file,
-    // closing the drawer and switching the active file would all stop updating
-    // anywhere in the app, because no consumer would ever see a new value.
-    // Whatever the body closes over must appear in the deps.
-    const memo = src.slice(src.indexOf('const artifactContextValue = useMemo('));
-    const deps = memo.match(/\}\),\s*\[([^\]]*)\]/);
-    expect(deps, 'could not read the useMemo dependency array').toBeTruthy();
-    expect(deps![1]).toContain('artifactState');
   });
 });

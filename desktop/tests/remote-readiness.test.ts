@@ -4,8 +4,6 @@
 // timer (contract R6), and nothing is shown twice (R5).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { join } from 'node:path';
-import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 
 vi.mock('ws', async () => {
   const { EventEmitter: EE } = await import('events');
@@ -269,19 +267,5 @@ describe('the cut line', () => {
     snap.resolve(snapshotOf(['s1']));
     await restoring;
     expect(ws.ofType('hook:event').map((f) => f.payload.type)).toEqual(['PermissionResolved']);
-  });
-});
-
-describe('the host has no fixed wait', () => {
-  it('replays with no 500 ms timer — the only timers on the restore path are the two fallbacks', () => {
-    const src = readStripped(join(__dirname, '..', 'src', 'main', 'remote-server.ts'));
-    const halfSecondTimer = /\},\s*500\s*\)/g;                      // a callback closed and timed at 500
-    assertPatternMatches(halfSecondTimer, '}, 500);', 'a setTimeout callback ending in `}, 500)`');
-    expect(src.match(halfSecondTimer)).toBeNull();
-    expect(src).toMatch(/OLD_CLIENT_FALLBACK_MS\s*=\s*5000/);
-    // A page that announces client:ready at sign-in is waited on longer (2026-09-11 phone pass;
-    // behaviour pinned in remote-host-reliability.test.ts).
-    expect(src).toMatch(/READY_CLIENT_FALLBACK_MS\s*=\s*30_000/);
-    expect(src).toMatch(/setTimeout\([\s\S]*?\}, opts\.sendsReady \? READY_CLIENT_FALLBACK_MS : OLD_CLIENT_FALLBACK_MS\);/);
   });
 });

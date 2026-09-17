@@ -257,21 +257,6 @@ describe('assembleSystemPrompt — shared doctrine (2026-09-04)', () => {
 describe('assembleSystemPromptParts — the pieces ARE the prompt', () => {
   const base = { presetBody: PRESET, cwd: '/tmp', appVersion: '1.0.0' };
 
-  // The join test below is TAUTOLOGICAL while assembleSystemPrompt is literally
-  // defined as that join — it proves nothing today and would only go red if
-  // someone later gave the prompt its own assembly. That day is exactly the
-  // failure worth catching, so this reads the source and refuses the split
-  // outright, rather than trusting a test that certifies its own definition.
-  it('the prompt is assembled FROM the parts, never beside them', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'harness', 'prompt-assembly.ts'), 'utf8');
-    const body = src.slice(src.indexOf('export function assembleSystemPrompt(i: PromptInputs): string {'));
-    expect(
-      body.slice(0, body.indexOf('\n}')),
-      'assembleSystemPrompt must return assembleSystemPromptParts joined — the System tab shows what it returns, '
-        + 'so a second assembly would drift from the prompt invisibly',
-    ).toContain('assembleSystemPromptParts(i)');
-  });
-
   it('joining the parts reproduces the prompt exactly, in every shape', () => {
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Rules\nPROJECT_INSTR_MARKER');
     const shapes = [

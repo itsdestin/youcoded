@@ -8,6 +8,7 @@ import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, Sess
 import type { FirstRunState } from '../shared/first-run-types';
 import type { ChatGptAccountStatus } from '../shared/chatgpt-types';
 import type { ClaudeAccountStatus } from '../shared/claude-account-types';
+import type { PreloadBridge } from '../shared/bridge-types';
 
 // WHY: buddy geometry and pointer offsets are native DIPs, so its CSS pixels
 // must stay at 100% even when a same-origin main window is zoomed. In Electron
@@ -767,7 +768,7 @@ contextBridge.exposeInMainWorld('claude', {
   // Synchronous on purpose: the session strip has to choose a tear-off model in
   // the middle of a pointermove, where awaiting a round-trip would mean the
   // first drag after launch silently used the wrong one. Preload must not name
-  // a model itself — session-drag-model.test.ts pins that.
+  // a model itself — the ast-grep rule preload-no-drag-model-decision pins that.
   platformFacts: {
     platform: process.platform as string,
     // Wayland vs X11 decides whether window positions and the cursor's screen
@@ -1828,4 +1829,6 @@ contextBridge.exposeInMainWorld('claude', {
     read: (req: { provider: string; id: string; before?: number; projectSlug?: string }) =>
       ipcRenderer.invoke('chatsearch:read', req),
   },
-});
+  // WHY `satisfies`: compile-time only (erased from the built preload, so the sandbox sees no
+  // import); keeps `session`, `on` and favorites in step with remote-shim.ts (shared/bridge-types.ts).
+} satisfies PreloadBridge);

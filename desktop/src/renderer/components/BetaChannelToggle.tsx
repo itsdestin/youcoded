@@ -69,7 +69,8 @@ const DESCRIPTION_SHORT = 'Offers pre-release versions as updates';
  *
  * It stays a <SettingRow variant="item"> in both places rather than a compact
  * hand-rolled variant: a label with a switch beside it IS a SettingRow, and
- * `setting-row-authority.test.tsx` is the guard that keeps it that way.
+ * the ast-grep rule `no-hand-rolled-setting-row-toggle` (youcoded-dev
+ * scripts/ast-grep/rules/) is the guard that keeps it that way.
  */
 export function BetaChannelRow(
   { separated, icon, variant = 'item' }:

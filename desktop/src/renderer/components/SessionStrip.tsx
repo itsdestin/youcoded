@@ -2242,7 +2242,9 @@ export default function SessionStrip({
               // reorder system above (session-strip-motion.md) — deliberately not
               // touching that fragile, heavily-reviewed code path. Background stays
               // inline (not a class) so this div's className keeps matching the
-              // literal string menu-row-reachability.test.ts pins.
+              // literal string
+              // scripts/ast-grep/rules/shortcuts-dialog-keeps-scroll-body-session-menu-height.yml
+              // pins (retired tests/menu-row-reachability.test.ts, Plan B 2026-09-16).
               style={{
                 maxHeight: 'min(432px, 55vh)',
                 background: peerDropActive ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : undefined,

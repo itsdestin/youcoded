@@ -2,8 +2,9 @@
 // every surface. Preload declares them (desktop never shows the strip), desktop
 // IPC answers not-remote, the shim implements them, the host handles
 // remote:rehydrate (remote-channel-parity.test.ts checks the host case), and
-// Android relies on its catch-all. App's own use is pinned in
-// remote-place-app-wiring.test.ts.
+// Android relies on its catch-all. App's own use was pinned in
+// remote-place-app-wiring.test.ts, deleted 2026-09-16 (Plan B Task 4, no replacement —
+// see state/remote-place.ts).
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
 import { readStripped, assertPatternMatches } from './helpers/guard-scope';

@@ -3,10 +3,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
 import { StatusStrip } from '../src/renderer/components/ui/StatusStrip';
-import { inScopeFiles, stripComments, RENDERER, assertScopeIsPopulated } from './helpers/guard-scope';
+import { inScopeFiles, readStripped } from './helpers/guard-scope';
 
 // Guard for K5 (status strip) and K9 (danger zone).
 //
@@ -16,6 +14,13 @@ import { inScopeFiles, stripComments, RENDERER, assertScopeIsPopulated } from '.
 // block cannot quietly grow a button and become a second status strip. These
 // assertions pin the other half: a status strip HAS the slot, and the branches
 // that used to be eleven hand-rolled shapes go through it.
+//
+// Plan B (2026-09-16) moved the source-text halves to workspace ast-grep rules
+// (scripts/ast-grep/rules/): no-centred-status-paragraph and
+// no-hardcoded-error-fallback hold every unlisted file at zero, and
+// danger-zone-has-danger-callout / danger-zone-no-fixed-status-red pin K9's
+// three danger zones. What stays here as text is only the exact per-file
+// counts of the two debt lists below.
 
 afterEach(cleanup);
 
@@ -66,6 +71,11 @@ describe('StatusStrip', () => {
  * All three lists below are real findings, and none of them is K5's or K9's job.
  * Writing them as COUNTS rather than skipping the check turns each backlog into
  * a live number: the guard fails the moment someone adds one more.
+ *
+ * Every file NOT listed is held at zero by the matching ast-grep rule, which
+ * names these same files under its `ignores:`. Adding or removing an entry here
+ * means editing that rule's list too — youcoded-dev's check.sh fails if the two
+ * lists differ.
  */
 
 // Centred, colour-carrying status paragraphs on surfaces outside the settings
@@ -110,16 +120,28 @@ describe('status adoption', () => {
     // a column of left-aligned rows, and it has nowhere to put the action that
     // resolves the state — which is why two branches ended up with a
     // full-width button stacked underneath instead.
+    //
+    // WHY still a source read, and only for the listed files: every other file is
+    // held at zero by the ast-grep rule no-centred-status-paragraph; an exact
+    // per-file count ("ShareSheet has 2") is not something a rule can express.
     const drift: string[] = [];
+    const seen = new Set<string>();
     for (const file of inScopeFiles()) {
       const name = file.split(/[\\/]/).pop()!;
-      const src = stripComments(readFileSync(file, 'utf8'));
+      const allowed = CENTRED_STATUS_ELSEWHERE[name]?.count;
+      if (allowed === undefined) continue;
+      seen.add(name);
+      const src = readStripped(file);
       let n = 0;
       for (const m of src.matchAll(/className="[^"]*text-center[^"]*"/g)) {
         if (/text-(green|amber|red)-\d{3}|text-destructive-fg/.test(m[0])) n++;
       }
-      const allowed = CENTRED_STATUS_ELSEWHERE[name]?.count ?? 0;
       if (n !== allowed) drift.push(`${name}: ${n} centred status lines, expected ${allowed}`);
+    }
+    // WHY (review of u9): a listed file that was moved or deleted used to be skipped
+    // silently, leaving a stale exemption that pre-approves whatever later takes its name.
+    for (const name of Object.keys(CENTRED_STATUS_ELSEWHERE)) {
+      if (!seen.has(name)) drift.push(`${name} is exempted but no longer in scope — drop it`);
     }
     expect(drift, 'A subsystem status line is a <StatusStrip>.').toEqual([]);
   });
@@ -132,13 +154,24 @@ describe('status adoption', () => {
     // Matches the SHAPE — a `||` fallback to a quoted string on a variable whose
     // name ends in Error — rather than that one string, because the next one
     // will be spelled differently.
+    //
+    // WHY still a source read, and only for the listed files: every other file is
+    // held at zero by the ast-grep rule no-hardcoded-error-fallback; an exact
+    // per-file count ("SyncSetupWizard has 6") is not something a rule can express.
     const drift: string[] = [];
+    const seen = new Set<string>();
     for (const file of inScopeFiles()) {
       const name = file.split(/[\\/]/).pop()!;
-      const src = stripComments(readFileSync(file, 'utf8'));
+      const allowed = HARDCODED_ERROR_FALLBACK[name]?.count;
+      if (allowed === undefined) continue;
+      seen.add(name);
+      const src = readStripped(file);
       const n = [...src.matchAll(/\b\w*[eE]rror\s*\|\|\s*['"][^'"]+['"]/g)].length;
-      const allowed = HARDCODED_ERROR_FALLBACK[name]?.count ?? 0;
       if (n !== allowed) drift.push(`${name}: ${n} hardcoded error fallbacks, expected ${allowed}`);
+    }
+    // WHY (review of u9): same as above — a listed file no longer in scope is a stale exemption.
+    for (const name of Object.keys(HARDCODED_ERROR_FALLBACK)) {
+      if (!seen.has(name)) drift.push(`${name} is exempted but no longer in scope — drop it`);
     }
     expect(
       drift,
@@ -146,49 +179,5 @@ describe('status adoption', () => {
         + '(<ErrorState mode="general">). A hardcoded fallback asserts a cause nobody verified. '
         + 'The counts above are the v1.3.1 audit backlog — they may shrink, never grow.',
     ).toEqual([]);
-  });
-});
-
-describe('danger zones', () => {
-  it('this guard can see what it claims to cover', () => {
-    // A source-text guard that matches nothing PASSES and reads as clean.
-    // Three of this workstream's worst misses were exactly that.
-    assertScopeIsPopulated(inScopeFiles());
-  });
-
-  const COMPONENTS = join(RENDERER, 'components');
-
-  it('every danger zone states its consequence in a danger callout', () => {
-    // K9's shape. The three zones already had good consequence sentences — that
-    // is why the copy pass turned out to be structural — but they lived in
-    // three different containers: a raw text-[#DD4444] span inside a row
-    // description, a bare <p>, and a bordered bg-inset box.
-    for (const file of ['SettingsPanel.tsx', 'AccountSection.tsx', 'LocalModelsSection.tsx']) {
-      const src = stripComments(readFileSync(join(COMPONENTS, file), 'utf8'));
-      expect(src, `${file} should state its consequence in a danger Callout`).toMatch(
-        /<Callout[^>]*tone="danger"/,
-      );
-    }
-  });
-
-  it('no danger-zone consequence rides the fixed status red', () => {
-    // `text-[#DD4444]` is the hardcoded status red. Change 17 moved the app's
-    // destructive surfaces onto the `destructive` token so theme packs can
-    // restyle them; the Skip Permissions consequence line was still on the raw
-    // hex, so a pack could restyle the toggle beside it and not the sentence
-    // explaining what it does.
-    //
-    // SCOPED TO THE THREE DANGER ZONES, deliberately. #DD4444 survives in ~20
-    // places app-wide (StatusBar, SessionStrip, FolderSwitcher, TagPicker and
-    // more) and converting all of them is change 17's unfinished business, not
-    // K9's. A guard that failed on all twenty would have been switched off.
-    const DANGER_ZONES = ['SettingsPanel.tsx', 'AccountSection.tsx', 'LocalModelsSection.tsx'];
-    const offenders: string[] = [];
-    for (const file of DANGER_ZONES) {
-      const src = stripComments(readFileSync(join(COMPONENTS, file), 'utf8'));
-      // Only the class form — a bare mention in prose is not a style.
-      if (/\[#DD4444\]/.test(src)) offenders.push(file);
-    }
-    expect(offenders, 'Use the destructive token, not the fixed status red.').toEqual([]);
   });
 });

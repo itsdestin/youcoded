@@ -6,8 +6,6 @@
 // announces on a microtask — and the card is already answered when the resolution
 // lands, so the reducer ignores it.) Every other device still gets it.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { join } from 'node:path';
-import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -68,17 +66,5 @@ describe('a permission answered from this phone', () => {
     await expect(answer).resolves.toBe(true);
     ws.receive(resolved('mine'));      // a later copy (a replay) is no longer ours to hide
     expect(seen).toEqual(['PermissionResolved:theirs', 'PermissionResolved:mine']);
-  });
-});
-
-describe('a desktop window clears resolutions quietly', () => {
-  it('App marks a resolution silent outside remote mode — cleared, never "Answered on the computer"', () => {
-    // Ignoring the resolution on the desktop left a card with live buttons whenever a
-    // phone's answer broadcast was lost (T2 re-review, 4); showing the note there would
-    // name the wrong device. The desktop clears the card and says nothing.
-    const app = readStripped(join(__dirname, '..', 'src', 'renderer', 'App.tsx'));
-    const gate = /action\?\.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode\(\)\) action\.silent = true;/;
-    assertPatternMatches(gate, "if (action?.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) action.silent = true;", 'the desktop marker');
-    expect(app).toMatch(gate);
   });
 });

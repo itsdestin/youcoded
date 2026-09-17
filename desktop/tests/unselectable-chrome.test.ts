@@ -7,8 +7,14 @@ import { RENDERER, readStripped, assertPatternMatches } from './helpers/guard-sc
 //
 // What Ctrl+A paints is decided by CSS and class names, which no DOM test sees:
 // jsdom applies neither the stylesheet nor Tailwind. So this pins the SOURCE of
-// both halves. The right-click half is pinned behaviourally in
+// the stylesheet half. The right-click half is pinned behaviourally in
 // components/context-menu/build-menu.test.tsx.
+//
+// WHY only globals.css here (Plan B, 2026-09-16): the class-name half — every
+// chrome root carries select-none, and both file-name buttons opt back in with
+// select-text — is the ast-grep rules chrome-root-select-none-* and
+// file-name-button-select-text. The stylesheet stays a text read: CSS is not an
+// ast-grep language in this rule set.
 
 const read = (...parts: string[]) => readStripped(join(RENDERER, ...parts));
 
@@ -51,38 +57,5 @@ describe('globals.css: chrome is unselectable, text fields are not', () => {
   it('focused text fields re-enable selection, inside @layer base', () => {
     assertPatternMatches(FIELDS_TEXT, 'input:focus,\n textarea:focus,\n [contenteditable]:focus {\n user-select: text;\n }', 'FIELDS_TEXT');
     expect(base, 'text-field rule missing from @layer base').toMatch(FIELDS_TEXT);
-  });
-});
-
-describe('chrome areas carry select-none on their own root', () => {
-  const cases: Array<[label: string, file: string[], pattern: RegExp, positive: string]> = [
-    ['status bar', ['components', 'StatusBar.tsx'], /className="status-bar\b[^"]*\bselect-none\b/, 'className="status-bar flex select-none"'],
-    ['header bar', ['components', 'HeaderBar.tsx'], /className="header-bar\b[^"]*\bselect-none\b/, 'className="header-bar flex select-none"'],
-    ['composer', ['components', 'InputBar.tsx'], /className="input-bar-container\b[^"]*\bselect-none\b/, 'className="input-bar-container shrink-0 select-none"'],
-    ['quick chips', ['components', 'QuickChips.tsx'], /<div className="[^"]*\bselect-none\b[^"]*">\s*<div className="flex gap-1 px-3 py-1 overflow-x-auto/, '<div className="relative select-none">\n <div className="flex gap-1 px-3 py-1 overflow-x-auto'],
-    ['thinking line', ['components', 'ThinkingIndicator.tsx'], /data-testid="thinking-indicator" className="[^"]*\bselect-none\b/, 'data-testid="thinking-indicator" className="flex select-none"'],
-    ['empty-chat hint', ['components', 'ChatView.tsx'], /className="[^"]*\bselect-none\b[^"]*"[^>]*>\s*Start a conversation with/, 'className="absolute select-none"\n style={{ top: 1 }}\n >\n Start a conversation with'],
-    ['no-session title', ['App.tsx'], /className="[^"]*\bselect-none\b[^"]*">No Active Session</, '<p className="text-xl select-none">No Active Session<'],
-    ['initializing line', ['App.tsx'], /className="[^"]*\bselect-none\b[^"]*">Initializing session\.\.\.</, '<p className="text-sm select-none">Initializing session...<'],
-    ['tool card title (both header variants)', ['components', 'ToolCard.tsx'], /const headerClass = isCompactSkill\s*\?\s*'[^']*\bselect-none\b[^']*'\s*:\s*'[^']*\bselect-none\b[^']*'/, "const headerClass = isCompactSkill\n ? 'w-full select-none'\n : 'w-full select-none';"],
-  ];
-
-  for (const [label, file, pattern, positive] of cases) {
-    it(label, () => {
-      assertPatternMatches(pattern, positive, label);
-      expect(read(...file), `${label}: select-none missing`).toMatch(pattern);
-    });
-  }
-});
-
-describe('a button whose label is message content opts back in', () => {
-  it('both clickable file-name variants carry select-text', () => {
-    const src = read('components', 'FilepathToken.tsx');
-    // Each <button …>…</button> element that carries the right-click path marker.
-    const fileButtons = src.split('<button').slice(1)
-      .map((chunk) => chunk.slice(0, chunk.indexOf('</button>')))
-      .filter((el) => el.includes('data-file-path='));
-    expect(fileButtons.length, 'expected the inline and pill variants').toBe(2);
-    for (const el of fileButtons) expect(el).toMatch(/className="[^"]*\bselect-text\b/);
   });
 });

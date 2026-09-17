@@ -71,5 +71,5 @@ export const ALWAYS_ASKS: readonly string[] = [
   "Anything needing your computer's administrator password",
 ];
 
-/** The one canonical section-label spelling (section-label-authority). */
+/** The one canonical section-label spelling (ast-grep rule section-label-canonical-classes-ts). */
 export const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';

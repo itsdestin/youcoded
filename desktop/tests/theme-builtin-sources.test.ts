@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { readSource } from './helpers/guard-scope';
 
 /**
  * Built-in theme colors exist in two places and MUST agree:
@@ -21,9 +22,8 @@ import { join, resolve } from 'node:path';
  */
 
 const builtinDir = resolve(__dirname, '..', 'src', 'renderer', 'themes', 'builtin');
-const globalsCss = readFileSync(
+const globalsCss = readSource(
   resolve(__dirname, '..', 'src', 'renderer', 'styles', 'globals.css'),
-  'utf-8',
 );
 
 /** Pulls the CSS custom properties out of the `[data-theme="<slug>"]` block. */
@@ -43,7 +43,7 @@ function parseThemeBlock(slug: string): Record<string, string> {
 function loadBuiltins() {
   return readdirSync(builtinDir)
     .filter((f) => f.endsWith('.json'))
-    .map((f) => JSON.parse(readFileSync(join(builtinDir, f), 'utf-8')));
+    .map((f) => JSON.parse(readSource(join(builtinDir, f))));
 }
 
 describe('built-in theme sources agree', () => {

@@ -1343,9 +1343,9 @@ function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAc
  *
  * Only codes we actually recognise are translated, and the original is kept after the
  * explanation. Anything unrecognised is passed through untouched rather than described
- * with a guess.
+ * with a guess. File-local on purpose: an unused export fails knip's ratchet.
  */
-export function plainReason(reason: string): string {
+function plainReason(reason: string): string {
   if (/EADDRINUSE/.test(reason)) {
     return `Another program on this computer is already using that address, so remote access could not start. Close it and try again. (${reason})`;
   }

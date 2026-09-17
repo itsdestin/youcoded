@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { readStripped, assertPatternMatches } from './helpers/guard-scope';
+import { readSource, readStripped, assertPatternMatches } from './helpers/guard-scope';
 
-const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+// WHY: readSource already normalises \r\n/\r — the old inline .replace() here is redundant now.
+const read = (rel: string) => readSource(fileURLToPath(new URL(rel, import.meta.url)));
 const shim = read('../src/renderer/remote-shim.ts');
 const server = read('../src/main/remote-server.ts');
 // Comment-blanked copies for the guards below: the WHY comments beside a case
 // quote channel names, and a guard reading raw text would count the explanation
 // of a missing case as the case.
-const shimCode = readStripped(fileURLToPath(new URL('../src/renderer/remote-shim.ts', import.meta.url))).replace(/\r\n/g, '\n');
-const serverCode = readStripped(fileURLToPath(new URL('../src/main/remote-server.ts', import.meta.url))).replace(/\r\n/g, '\n');
+const shimCode = readStripped(fileURLToPath(new URL('../src/renderer/remote-shim.ts', import.meta.url)));
+const serverCode = readStripped(fileURLToPath(new URL('../src/main/remote-server.ts', import.meta.url)));
 
 /** Every `remote:*` channel the shim asks the host for an answer on. */
 function invokedRemoteChannels(): string[] {

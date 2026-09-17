@@ -390,27 +390,13 @@ describe('the install runs no other program', () => {
   // to enter terminal commands or download things externally. Should be
   // seamless." This is that promise, as something a machine checks.
   //
-  // WHY it is a source scan and not a behaviour test: the failure it guards
-  // against is a future edit reaching for `tar` or `bzip2` again because that is
-  // the obvious way to unpack something. Nothing would break HERE — it would
-  // break on a stranger's computer that does not have the program, which is
-  // exactly the class of bug no test on this machine can see.
-  const source = fs.readFileSync(
-    path.join(__dirname, '..', 'src', 'main', 'voice', 'voice-assets.ts'), 'utf8',
-  );
-
-  it('never reaches for child_process', () => {
-    expect(source).not.toMatch(/from 'child_process'/);
-    expect(source).not.toMatch(/\b(execFile|execFileSync|spawn|spawnSync|exec)\s*\(/);
-  });
-
-  it('names no external unpacking program', () => {
-    // In code, that is. The comments explain at length why these are gone.
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-    for (const program of ['bzip2', 'lbzip2', 'pbzip2', 'tar.exe', 'System32']) {
-      expect(code, `${program} is named in voice-assets.ts`).not.toContain(program);
-    }
-  });
+  // WHY the "no other program" half is not a case here: the failure it guards
+  // against is a future edit reaching for `tar` or `bzip2` again, which breaks
+  // only on a stranger's computer that lacks the program — no test on this
+  // machine can see it. It is held by oxlint `no-restricted-imports` (scoped to
+  // voice-assets.ts in .oxlintrc.json) and the workspace ast-grep rule
+  // voice-assets-runs-no-other-program (Plan B, 2026-09-16). This case is the
+  // behaviour half: the unpacking really happens in process.
 
   it('unpacks the npm tarball itself, correctly', async () => {
     // The real proof that dropping `tar` did not drop the unpacking: install

@@ -2,7 +2,10 @@
 //
 // What this file defends, in plain words:
 //   1. THE GREY TEXT RULE HAS ONE IMPLEMENTATION. The worker imports it from the
-//      shared file; it does not keep a second copy that could drift.
+//      shared file; it does not keep a second copy that could drift. (WHY not a
+//      case here: that is a fact about the worker's source, held by the
+//      workspace ast-grep rule voice-worker-uses-shared-sentence-split — Plan B,
+//      2026-09-16. The cases below exercise the shared helper's behaviour.)
 //   2. A stretch of speech is only closed off after a real pause, and only once
 //      it is long enough to be worth closing.
 //   3. When somebody talks on and on without pausing, the worker breaks the
@@ -123,21 +126,6 @@ async function ready(h: ReturnType<typeof makeHarness>) {
 }
 
 // ---------------------------------------------------------------------------
-
-describe('the grey/solid rule has exactly one implementation', () => {
-  it('the worker imports the shared helper and keeps no copy of the rule', () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, '..', 'src', 'main', 'voice', 'voice-worker.ts'),
-      'utf8',
-    );
-    expect(source).toContain("import { splitAtLastSentenceEnd } from '../../shared/voice-types'");
-    // A second implementation would have to look for sentence marks itself. If
-    // this ever fails, the fix is to delete the copy, not to loosen the check:
-    // two implementations of one promise is how the composer and the phone came
-    // to disagree about what is grey.
-    expect(source).not.toMatch(/===\s*'[.?!]'/);
-  });
-});
 
 describe('when a stretch of speech is closed off', () => {
   it('is never closed before five seconds, however long the pause', () => {

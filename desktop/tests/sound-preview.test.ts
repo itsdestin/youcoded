@@ -1,5 +1,3 @@
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { describe, it, expect } from 'vitest';
 import { STOCK_PRESETS } from '../src/renderer/utils/sounds';
 
@@ -16,19 +14,11 @@ import { STOCK_PRESETS } from '../src/renderer/utils/sounds';
 // "these must be separate"; it is "selecting must make a sound." A future
 // session that drops playPreview from the select path would silently restore a
 // picker you cannot hear, which is the same bug wearing different clothes.
-
-const PANEL = join(__dirname, '..', 'src', 'renderer', 'components', 'SettingsPanel.tsx');
+// WHY that check is not here (Plan B, 2026-09-16): it read SettingsPanel.tsx as
+// text; it is now the ast-grep rule select-preset-calls-playpreview in
+// youcoded-dev's scripts/ast-grep/rules/.
 
 describe('sound presets', () => {
-  it('selecting a preset auditions it', () => {
-    const src = readFileSync(PANEL, 'utf8');
-    // The select handler persists the choice and then plays it.
-    expect(
-      src,
-      'Selecting a sound must play it -- otherwise the list cannot be auditioned at all.',
-    ).toMatch(/setSelectedPresetId\([^)]*\);\s*playPreview\(/);
-  });
-
   it('every stock preset carries a description', () => {
     expect(STOCK_PRESETS.length).toBeGreaterThan(10);
     for (const preset of STOCK_PRESETS) {

@@ -1,10 +1,9 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { readSource } from './helpers/guard-scope';
 
-const css = readFileSync(
+const css = readSource(
   join(__dirname, '..', 'src', 'renderer', 'styles', 'globals.css'),
-  'utf8',
 );
 
 function ruleBody(selector: string): string {

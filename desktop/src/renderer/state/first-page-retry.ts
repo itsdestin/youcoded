@@ -4,9 +4,11 @@ import type { TranscriptPageResult } from '../../shared/types';
  * What to do with the answer to a FIRST-page request (App.loadFirstPage).
  *
  * Extracted from App.tsx so it can be tested: App.tsx cannot be mounted in a
- * test (see tests/app-resume-session-listener.test.ts for the established
- * reasoning), and this is the decision that determines whether a conversation
- * comes up with its history or comes up blank.
+ * test (see the youcoded-dev workspace repo's
+ * scripts/ast-grep/rules/resume-listener-guards-detail-before-call.yml's
+ * note for the established reasoning, carried over from the retired
+ * tests/app-resume-session-listener.test.ts), and this is the decision that
+ * determines whether a conversation comes up with its history or comes up blank.
  */
 export type FirstPageDecision =
   /** Record it: this is the real state of the conversation's history. */

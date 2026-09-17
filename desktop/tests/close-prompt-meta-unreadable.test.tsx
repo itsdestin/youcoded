@@ -18,9 +18,7 @@ import React from 'react';
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
-import { join } from 'node:path';
 import CloseSessionPrompt from '../src/renderer/components/CloseSessionPrompt';
-import { readStripped } from './helpers/guard-scope';
 
 function mockWindowClaude(getMeta: ReturnType<typeof vi.fn>) {
   (window as any).claude = {
@@ -73,24 +71,7 @@ describe('CloseSessionPrompt — an unreadable note is not "No note"', () => {
   });
 });
 
-describe('both hosts report a failed read instead of answering blanks', () => {
-  const MAIN = join(__dirname, '..', 'src', 'main');
-
-  it("main's session:get-meta marks a thrown read or a missing store as unreadable", () => {
-    const src = readStripped(join(MAIN, 'ipc-handlers.ts'));
-    const start = src.indexOf('ipcMain.handle(IPC.SESSION_GET_META');
-    expect(start).toBeGreaterThanOrEqual(0);
-    const body = src.slice(start, src.indexOf('ipcMain.handle(', start + 10));
-    expect(body).toMatch(/if \(!store\) return \{[^}]*unreadable:/);
-    expect(body).toMatch(/catch \(\w+\) \{[^}]*unreadable:/);
-  });
-
-  it("remote-server's session:get-meta does the same", () => {
-    const src = readStripped(join(MAIN, 'remote-server.ts'));
-    const start = src.indexOf("case 'session:get-meta':");
-    expect(start).toBeGreaterThanOrEqual(0);
-    const body = src.slice(start, src.indexOf("case '", start + 10));
-    expect(body).toMatch(/unreadable:/);
-    expect(body).not.toMatch(/fall through to empty/);
-  });
-});
+// WHY no host source reads here any more (Plan B, 2026-09-16): "both hosts report a
+// failed read instead of answering blanks" is the workspace ast-grep rules
+// get-meta-marks-failed-read-unreadable (ipc-handlers.ts) and its -remote twin
+// (remote-server.ts).

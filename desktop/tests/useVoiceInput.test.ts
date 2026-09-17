@@ -13,10 +13,15 @@
 //  - The give-up clock is restarted by the host's "still working" pings, so a
 //    long sentence is never cut off — and if the words turn up after we gave up,
 //    they still land in the box.
+//
+// WHY the workbench gate's PREDICATE is not tested here: under vitest
+// `import.meta.env.DEV` is always true, so the dev-only `isWorkbenchMode()` acts
+// exactly like the safe one and no runtime case can tell them apart. The
+// production-build half is held by the workspace ast-grep rules
+// voice-mic-gate-uses-workbench-document and
+// workbench-document-checks-vite-workbench (Plan B, 2026-09-16).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MIC_REFUSED_SENTENCE } from '../src/shared/voice-types';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { renderHook, act } from '@testing-library/react';
 import type { VoiceEvent, VoiceReadiness } from '../src/shared/voice-types';
 
@@ -433,14 +438,6 @@ describe('useVoiceInput — events while the mic is closed', () => {
   });
 });
 
-// A SOURCE guard, because no runtime test in this suite can see the bug it stops.
-// Under vitest `import.meta.env.DEV` is always true, so `isWorkbenchMode()` behaves
-// exactly like the safe predicate here and every runtime assertion passes either
-// way. The bug only exists in the built landing-page bundle, where Vite folds the
-// dev-only predicate to `false` and the microphone gate disappears — the marketing
-// page would have asked visitors for their microphone. Found by reading that
-// bundle, 2026-09-05. This is the cheapest thing that fails if someone swaps the
-// predicate back.
 // WHY both cases: the flow the contract row describes is first tap → the system's
 // own prompt → decline, and that landed on the "voice stopped" card whose only
 // button is OK, so the Check again button appeared only on some later look. And
@@ -472,17 +469,3 @@ describe('a refusal from the operating system', () => {
   });
 });
 
-describe('the microphone gate uses the predicate that survives a production build', () => {
-  it('useVoiceInput gates on isWorkbenchDocument, never isWorkbenchMode', () => {
-    const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'hooks', 'useVoiceInput.ts'), 'utf8');
-    expect(src).toContain('isWorkbenchDocument');
-    // `isWorkbenchMode` is dev-only by design and is compiled out of the site build.
-    expect(src.replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, '')).not.toContain('isWorkbenchMode');
-  });
-
-  it('isWorkbenchDocument checks VITE_WORKBENCH, which is what the site build sets', () => {
-    const src = readFileSync(join(__dirname, '..', 'src', 'renderer', 'workbench-mode.ts'), 'utf8');
-    const fn = src.slice(src.indexOf('export function isWorkbenchDocument'));
-    expect(fn.slice(0, fn.indexOf('}'))).toContain('VITE_WORKBENCH');
-  });
-});

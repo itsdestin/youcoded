@@ -309,7 +309,9 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   }),
   getFocusSessionId: () => windowRegistry.getFocusSessionId(),
   // A theme change made on a phone reaches every window here, the same message a peer
-  // window sends (tests/remote-appearance-relay.test.ts).
+  // window sends (tests/remote-appearance-relay.test.ts). This callback's presence is
+  // guarded by the ast-grep rule appearance-broadcast-relays-to-remote (workspace
+  // scripts/ast-grep/rules/).
   onAppearanceBroadcast: (prefs) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
@@ -660,7 +662,8 @@ export function forgetSessionAttention(sessionId: string): void {
  * read `#root.childElementCount`, and index.html began painting the boot
  * skeleton inside `#root`, so every stranded window reported "mounted". The
  * probe now lives in ./dev-mount-probe.ts, pinned against the real index.html by
- * tests/dev-load-recovery.test.tsx — do not inline a new one here. Neither
+ * tests/dev-load-recovery.test.tsx — do not inline a new one here (the
+ * workspace ast-grep rule main-uses-shared-mount-probe refuses it). Neither
  * sibling path can substitute: did-fail-load never fires (index.html itself
  * loads 200) and render-process-gone never fires (the renderer stays alive).
  * Prod loads local files and is deliberately untouched (callers gate on

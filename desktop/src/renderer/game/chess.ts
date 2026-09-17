@@ -3,8 +3,9 @@
 // WHY THIS FILE EXISTS AT ALL, rather than a `ChessPlay` field on the shared
 // game state: the shell must never learn what a board is. `GameState.play` is
 // `unknown` on purpose, and each game narrows it inside its OWN module. Connect
-// 4 does the same in `connect-four.ts`; `arcade-authority.test.ts` fails the
-// build if a shell file starts reading into it.
+// 4 does the same in `connect-four.ts`; the ast-grep rule
+// arcade-state-play-only-in-own-board fails the build if a shell file starts
+// reading into it.
 //
 // WHY chess.js AND NOT HAND-WRITTEN RULES (spec §5.3): castling, en passant,
 // promotion, check, stalemate, threefold repetition and the fifty-move rule are
