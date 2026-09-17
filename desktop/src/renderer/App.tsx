@@ -2385,10 +2385,7 @@ function AppInner() {
   // Check if remote setup banner is active (show badge on gear icon)
   // Badge shows whenever the blue "Set Up Remote Access" banner would be visible
   // in the settings panel — i.e., no remote clients are connected
-  // WHY no poll (audit W18): this asked getClientCount() every 10 s per window. The count
-  // rides the remote status push now (RemoteStatus.clientCount, emitted on every connect and
-  // disconnect): one read seeds the badge, the subscription keeps it current. A remote browser
-  // and the phone get a no-op onStatus and keep the seeded answer — they ARE a client.
+  // WHY no poll (audit W18): the count rides the remote status push now — one read seeds the badge, onStatus keeps it current; a remote browser or phone gets a no-op onStatus and keeps the seed, being a client itself.
   useEffect(() => {
     const claude = (window as any).claude;
     if (!claude?.remote) return;

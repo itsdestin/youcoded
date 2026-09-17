@@ -91,7 +91,8 @@ import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
 // The KDE script that lets the buddy move itself on a Wayland desktop.
 import { helperStatus, installHelper, removeHelper, type HelperStatus } from './kwin-helper';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, type SyncWarning } from './sync-state';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, setSyncHealthGate, type SyncWarning } from './sync-state';
+import { startStatusPushGate } from './status-push-gate';
 // Cross-device sync spaces (spec 2026-07-03) — the folder-based sync engine.
 import {
   syncSpacesStatus, syncSpacesEnable, syncSpacesSyncNow, syncSpacesCreateProject, syncSpacesImportProject,
@@ -2443,50 +2444,15 @@ export function registerIpcHandlers(
     }
     return statusBuildInFlight;
   }
-  // WHY (2026-09-16 audit W2): this re-read every status file and sent the same
-  // payload to every window and phone every 10 s, minimised or not. Now (a) a
-  // payload equal to the last one sent is dropped unless the window set changed
-  // (there is no status:get — a new window's only source is this push); (b) the
-  // tick is skipped while no main window is visible and no phone is connected
-  // (buddy windows stay Electron-shown while CSS-hidden, so only main windows
-  // count); (c) the first look afterwards — show, restore, focus, a phone
-  // connecting — gets a push at once. A window double without the visibility
-  // methods (tests) reads as visible, the pre-W2 behaviour.
-  let lastStatusSent = '', lastStatusWindows = '', statusTickSkipped = false, statusPushStopped = false;
-  function pushStatusData(): void {
-    void buildStatusDataShared().then((data) => {
-      const serialized = JSON.stringify(data);
-      const windows = windowRegistry ? windowRegistry.getWindowIds().join(',') : '';
-      if (serialized === lastStatusSent && windows === lastStatusWindows) return;
-      lastStatusSent = serialized; lastStatusWindows = windows;
-      send(IPC.STATUS_DATA, data);
-      // Feed full status data to remote server for browser clients (single polling source)
-      if (remoteServer) remoteServer.broadcastStatusData(data);
-    });
-  }
-  const windowIsVisible = (win: BrowserWindow | null): boolean =>
-    !!win && !win.isDestroyed() && (typeof win.isVisible !== 'function' || (win.isVisible() && !win.isMinimized()));
-  const statusHasAudience = (): boolean =>
-    (remoteServer?.getClientCount() ?? 0) > 0 || (!windowRegistry
-      ? windowIsVisible(mainWindow)
-      : windowRegistry.getMainWindowIds().some((wid) => {
-        const wc = webContents.fromId(wid);
-        return !!wc && !wc.isDestroyed() && windowIsVisible(BrowserWindow.fromWebContents(wc));
-      }));
-  // Push status data every 10s — store handle so it can be cleared on shutdown
-  const statusInterval = setInterval(() => {
-    if (statusHasAudience()) pushStatusData(); else statusTickSkipped = true;
-  }, 10000);
-  const pushStatusIfMissed = () => {
-    if (statusPushStopped || !statusTickSkipped) return;
-    statusTickSkipped = false;
-    pushStatusData();
-  };
-  const watchWindowForStatus = (win: BrowserWindow) => { win.on('show', pushStatusIfMissed); win.on('restore', pushStatusIfMissed); };
-  if (typeof mainWindow.on === 'function') watchWindowForStatus(mainWindow);
-  app.on('browser-window-created', (_e, win) => watchWindowForStatus(win));
-  app.on('browser-window-focus', pushStatusIfMissed);
-  remoteServer?.onStatusChange((status) => { if (status.clientCount > 0) pushStatusIfMissed(); });
+  // Push status data every 10 s while anyone can see it, deduplicated, pushed at
+  // once on the first look back — WHY and rules: status-push-gate.ts (audit W2).
+  const statusPush = startStatusPushGate({
+    build: buildStatusDataShared,
+    // Feed full status data to remote server for browser clients (single polling source)
+    deliver: (data) => { send(IPC.STATUS_DATA, data); if (remoteServer) remoteServer.broadcastStatusData(data); },
+    mainWindow, windowRegistry, remoteServer,
+  });
+  setSyncHealthGate(statusPush.hasAudience); // the sync health check asks the same question (audit W12)
 
   // Also push immediately on first hook event (session is active)
   let sentInitialStatus = false;
@@ -2494,7 +2460,7 @@ export function registerIpcHandlers(
     hookRelay.on('hook-event', () => {
       if (!sentInitialStatus) {
         sentInitialStatus = true;
-        pushStatusData();
+        statusPush.push();
       }
     });
   }
@@ -5294,8 +5260,7 @@ export function registerIpcHandlers(
   };
   const cleanup = function cleanup(): Promise<void> {
     stopThemeWatcher();
-    clearInterval(statusInterval);
-    statusPushStopped = true; // the window/focus listeners above outlive this; they must not push after quit
+    statusPush.stop();
     transcriptWatcher.stopAll();
     // Flush + tear down every live native session on quit (best-effort, bounded
     // to one in-flight streaming part). Fire-and-forget with .catch — cleanup()
