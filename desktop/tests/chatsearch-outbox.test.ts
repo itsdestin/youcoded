@@ -44,7 +44,7 @@ vi.mock('../src/main/logger', () => ({ log: (...args: any[]) => { logCalls.push(
 
 import { parseOutboxRequest, appendNoteText, hasDatedLine } from '../src/main/chatsearch-index/outbox-format';
 import {
-  applyOutboxRequest, drainOutboxOnce, outboxDir, liveOpts, drainSerialized,
+  applyOutboxRequest, drainOutboxOnce, outboxDir, liveOpts, drainSerialized, sweepOutbox, startOutboxDrain, stopOutboxDrain,
 } from '../src/main/chatsearch-index/outbox-drain';
 
 let home: string;
@@ -243,6 +243,7 @@ describe('drainOutboxOnce', () => {
     const p = path.join(proc, '55555555-2222-3333-4444-555555555555.json');
     fs.writeFileSync(p, JSON.stringify(req([{ op: 'flag', targets: T, flag: 'complete', value: true }])));
     const old = new Date(Date.now() - 11 * 60_000); fs.utimesSync(p, old, old);
+    sweepOutbox(home); // the hourly housekeeping pass (audit W9), not the drain itself
     expect(await drainOutboxOnce(opts())).toBe(1);
   });
   // Finding 2: rename() preserves mtime, so a request the CLI wrote 20 minutes
@@ -261,7 +262,8 @@ describe('drainOutboxOnce', () => {
     const src = path.join(outboxDir(home), '77777777-2222-3333-4444-555555555555.json');
     const old = new Date(Date.now() - 20 * 60_000); fs.utimesSync(src, old, old); // CLI wrote it 20 min ago
     const p1 = drainOutboxOnce(opts()); // claims synchronously, then suspends inside applyOutboxRequest
-    const p2 = drainOutboxOnce(opts()); // starts before p1 resolves — must see the fresh claim stamp
+    sweepOutbox(home);                   // a housekeeping pass lands mid-apply — must see the fresh claim stamp
+    const p2 = drainOutboxOnce(opts());
     const [h1, h2] = await Promise.all([p1, p2]);
     expect(h1 + h2).toBe(1); // applied exactly once, not twice
     expect(flagCalls).toEqual([['c1', 'complete', true]]);
@@ -270,7 +272,7 @@ describe('drainOutboxOnce', () => {
     const done = path.join(outboxDir(home), 'done'); fs.mkdirSync(done, { recursive: true });
     const p = path.join(done, 'old.ack.json'); fs.writeFileSync(p, '{}');
     const old = new Date(Date.now() - 25 * 3600_000); fs.utimesSync(p, old, old);
-    await drainOutboxOnce(opts());
+    sweepOutbox(home);
     expect(fs.existsSync(p)).toBe(false);
   });
   // F1: a request for another store is left alone while it's still plausibly
@@ -308,7 +310,7 @@ describe('drainOutboxOnce', () => {
     const tmp = path.join(dir, 'bb222222-2222-3333-4444-555555555555.json.tmp-12345');
     fs.writeFileSync(tmp, '{"v":1');
     const old = new Date(Date.now() - 4 * 24 * 3600_000); fs.utimesSync(tmp, old, old);
-    await drainOutboxOnce(opts());
+    sweepOutbox(home);
     expect(fs.existsSync(tmp)).toBe(false);
     expect(fs.existsSync(path.join(dir, 'done', 'bb222222-2222-3333-4444-555555555555.ack.json'))).toBe(false);
   });
@@ -316,6 +318,7 @@ describe('drainOutboxOnce', () => {
     const dir = outboxDir(home); fs.mkdirSync(dir, { recursive: true });
     const tmp = path.join(dir, 'cc333333-2222-3333-4444-555555555555.json.tmp-12345');
     fs.writeFileSync(tmp, '{"v":1');
+    sweepOutbox(home);
     await drainOutboxOnce(opts());
     expect(fs.existsSync(tmp)).toBe(true);
   });
@@ -402,5 +405,89 @@ describe('liveOpts / drainSerialized (dev-instance gate, as actually wired)', ()
     expect(flagCalls).toEqual([['c1', 'complete', true], ['c2', 'priority', true]]);
     expect(fs.existsSync(path.join(sandboxOutbox, 'done', 'aaaaaaaa-2222-3333-4444-555555555555.ack.json'))).toBe(true);
     expect(fs.existsSync(path.join(sandboxOutbox, 'done', 'bbbbbbbb-2222-3333-4444-555555555555.ack.json'))).toBe(true);
+  });
+});
+
+// Simplification audit W9: the outbox used to do four directory listings every
+// 5 s beside a watcher on the same directory, three of them housekeeping. The
+// sweeps now run once at start and hourly; the 5 s poll exists only where the
+// watch cannot be trusted (Windows) or could not be attached.
+describe('startOutboxDrain timers', () => {
+  const sandboxOutbox = outboxDir(os.homedir());
+  const realPlatform = process.platform;
+  const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p, configurable: true });
+  const origProfile = process.env.YOUCODED_PROFILE;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    delete process.env.YOUCODED_PROFILE; // not a dev instance — requests must actually drain
+    fs.rmSync(sandboxOutbox, { recursive: true, force: true });
+  });
+  afterEach(() => {
+    stopOutboxDrain();
+    setPlatform(realPlatform);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    if (origProfile === undefined) delete process.env.YOUCODED_PROFILE; else process.env.YOUCODED_PROFILE = origProfile;
+    fs.rmSync(sandboxOutbox, { recursive: true, force: true });
+  });
+
+  const intervals = () => vi.getTimerCount();
+
+  it('off Windows a healthy watch means no 5 s poll: the only interval is the hourly sweep', () => {
+    setPlatform('linux');
+    startOutboxDrain();
+    // fake setTimeout too, so the count is exact: 1 hourly sweep interval, and no
+    // store-wait timer because the (mocked) store is already up.
+    expect(intervals()).toBe(1);
+    stopOutboxDrain();
+    expect(intervals()).toBe(0);
+  });
+
+  it('on Windows the 5 s poll runs beside the watch', () => {
+    setPlatform('win32');
+    startOutboxDrain();
+    expect(intervals()).toBe(2);
+  });
+
+  it('a watch that cannot be attached falls back to the 5 s poll everywhere', () => {
+    setPlatform('linux');
+    vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('EMFILE'); });
+    startOutboxDrain();
+    expect(intervals()).toBe(2);
+  });
+
+  it('sweeps at start and hourly, never on an ordinary drain', async () => {
+    setPlatform('linux');
+    const done = path.join(sandboxOutbox, 'done'); fs.mkdirSync(done, { recursive: true });
+    const stale = (name: string) => {
+      const p = path.join(done, name); fs.writeFileSync(p, '{}');
+      const old = new Date(Date.now() - 25 * 3600_000); fs.utimesSync(p, old, old);
+      return p;
+    };
+    const first = stale('first.ack.json');
+    startOutboxDrain();
+    expect(fs.existsSync(first)).toBe(false); // swept at start
+    const second = stale('second.ack.json');
+    await drainSerialized();
+    expect(fs.existsSync(second)).toBe(true);  // a drain no longer sweeps
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(fs.existsSync(second)).toBe(false); // the hourly pass did
+  });
+
+  it('a request queued while the app was closed is applied once the store comes up, without a poll', async () => {
+    setPlatform('linux');
+    fs.mkdirSync(sandboxOutbox, { recursive: true });
+    fs.writeFileSync(
+      path.join(sandboxOutbox, 'dddddddd-2222-3333-4444-555555555555.json'),
+      JSON.stringify(req([{ op: 'flag', targets: T, flag: 'complete', value: true }])),
+    );
+    storeAvailable = false; // main.ts starts the drain before the store has finished starting
+    startOutboxDrain();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(flagCalls).toEqual([]);
+    storeAvailable = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.waitFor(() => expect(flagCalls).toEqual([['c1', 'complete', true]]));
   });
 });
