@@ -98,11 +98,15 @@ const SNAPSHOT_POLL_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 // WHY 5 minutes, gated (2026-09-16 audit W12): at one minute it was a DNS lookup
 // of github.com plus a config re-read 1,440 times a day, with the window hidden
 // and with sync switched off, and its only reader is the status push. The tick
-// now runs only while a window is visible or a phone is connected (main.ts
-// hands in the gate) and only when some sync is configured. Accepted cost: the
-// "No internet" banner clears within 5 min instead of 1, and — with the
-// two-strike rule kept — appears up to 10 min after the network goes away.
+// now runs only while a window is visible or a phone is connected (the status
+// push gate, handed in through sync-state) and only when some sync is
+// configured. Accepted cost: "No internet" clears within 5 min instead of 1.
+// WHY the 60 s retry: the OFFLINE warning needs two failed probes, and at a flat
+// 5 min the banner would APPEAR up to 10 min after the network went away
+// (before W12: ~2). After a failed probe the next check comes in 60 s, so the
+// second strike lands within about a minute; a good probe returns to 5 min.
 const HEALTH_POLL_INTERVAL_MS = 5 * 60 * 1000;
+const HEALTH_RETRY_INTERVAL_MS = 60 * 1000;
 
 /**
  * Do two warning lists say the same thing? Used to skip the write when a
@@ -142,8 +146,10 @@ export class SyncService extends EventEmitter {
   private pushing = false;
   // Hourly daily-snapshot poll (see SNAPSHOT_POLL_INTERVAL_MS). Cleared in stop().
   private snapshotTimer: NodeJS.Timeout | null = null;
-  // Per-minute health re-check (see HEALTH_POLL_INTERVAL_MS). Cleared in stop().
+  // Periodic health re-check (see HEALTH_POLL_INTERVAL_MS) — a self-rescheduling
+  // timeout, since the delay depends on the last probe. Cleared in stop().
   private healthTimer: NodeJS.Timeout | null = null;
+  private healthChecksActive = false;
   // Consecutive failed reachability probes — the OFFLINE warning needs two.
   // See the comment at its use site in runHealthCheck.
   private failedInternetProbes = 0;
@@ -156,6 +162,24 @@ export class SyncService extends EventEmitter {
    *  is unaffected. */
   setHealthCheckGate(gate: () => boolean): void {
     this.healthCheckGate = gate;
+  }
+
+  /** 60 s while the last probe failed (see HEALTH_RETRY_INTERVAL_MS), else 5 min. */
+  private nextHealthDelay(): number {
+    return this.failedInternetProbes > 0 ? HEALTH_RETRY_INTERVAL_MS : HEALTH_POLL_INTERVAL_MS;
+  }
+
+  private scheduleHealthCheck(delayMs: number): void {
+    this.healthTimer = setTimeout(async () => {
+      this.healthTimer = null;
+      let delay = HEALTH_POLL_INTERVAL_MS; // a skipped tick (nobody looking, nothing configured) is not a strike
+      if (this.healthCheckGate() && this.isSyncConfigured()) {
+        try { await this.runHealthCheck({ probeBackends: false }); }
+        catch (e) { this.logBackup('ERROR', `Periodic health check failed: ${e}`, 'sync.health'); }
+        delay = this.nextHealthDelay();
+      }
+      if (this.healthChecksActive) this.scheduleHealthCheck(delay);
+    }, delayMs);
   }
 
   /** No sync of any kind configured — the periodic check then has nothing to
@@ -240,13 +264,8 @@ export class SyncService extends EventEmitter {
     // itself. Cheap by construction: no backend probe, no write unless the
     // warning set changed — and skipped entirely while nobody can see the
     // result or nothing is configured (HEALTH_POLL_INTERVAL_MS).
-    this.healthTimer = setInterval(() => {
-      if (!this.healthCheckGate()) return;
-      if (!this.isSyncConfigured()) return;
-      this.runHealthCheck({ probeBackends: false }).catch(e => {
-        this.logBackup('ERROR', `Periodic health check failed: ${e}`, 'sync.health');
-      });
-    }, HEALTH_POLL_INTERVAL_MS);
+    this.healthChecksActive = true;
+    this.scheduleHealthCheck(this.nextHealthDelay());
 
     // Daily-snapshot poll. Non-force push() on launch (in case today's snapshot
     // isn't done yet) plus an hourly tick. NON-force so the 15-min debounce +
@@ -270,8 +289,9 @@ export class SyncService extends EventEmitter {
       clearInterval(this.snapshotTimer);
       this.snapshotTimer = null;
     }
+    this.healthChecksActive = false; // an in-flight check must not reschedule
     if (this.healthTimer) {
-      clearInterval(this.healthTimer);
+      clearTimeout(this.healthTimer);
       this.healthTimer = null;
     }
 

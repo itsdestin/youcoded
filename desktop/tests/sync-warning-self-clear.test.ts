@@ -178,7 +178,10 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
     vi.useFakeTimers();
     try {
       setPrimarySync(true);
-      const { svc } = makeService(false);
+      // Online: a failed launch probe would put the re-check on the 60 s retry
+      // cadence (audit W12, pinned in tests/sync-service.test.ts) — this test
+      // pins only that a re-check happens at all, and that stop() ends it.
+      const { svc } = makeService(true);
       // Not under test here and it shells out to rclone/git.
       vi.spyOn(svc as any, 'push').mockResolvedValue({ success: true, errors: 0, backends: [] });
       const health = vi.spyOn(svc, 'runHealthCheck');
@@ -186,8 +189,7 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
       await svc.start();
       expect(health).toHaveBeenCalledTimes(1);
 
-      // Five minutes, not one, since audit W12 (tests/sync-service.test.ts pins
-      // the cadence and its gates; this test pins that a re-check happens at all).
+      // Five minutes, not one, since audit W12.
       await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
       expect(health).toHaveBeenCalledTimes(2);
       // The re-check must not re-run the rclone backend probe.
