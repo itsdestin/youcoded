@@ -91,7 +91,8 @@ import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
 // The KDE script that lets the buddy move itself on a Wayland desktop.
 import { helperStatus, installHelper, removeHelper, type HelperStatus } from './kwin-helper';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, type SyncWarning } from './sync-state';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, setSyncHealthGate, type SyncWarning } from './sync-state';
+import { startStatusPushGate } from './status-push-gate';
 // Cross-device sync spaces (spec 2026-07-03) — the folder-based sync engine.
 import {
   syncSpacesStatus, syncSpacesEnable, syncSpacesSyncNow, syncSpacesCreateProject, syncSpacesImportProject,
@@ -1804,7 +1805,7 @@ export function registerIpcHandlers(
     // WHY these are desktop IPC and have no remote equivalent: renaming and unpairing decide
     // who may reach this computer. The remote socket refuses them (HOST_ADMIN_REFUSAL).
     ipcMain.handle(IPC.REMOTE_STATUS, async () => {
-      return remoteServer?.getStatus() ?? { state: 'stopped', port: 0 };
+      return remoteServer?.getStatus() ?? { state: 'stopped', port: 0, clientCount: 0 };
     });
 
     // Remote access batch 2 (§6): Refresh belongs to a remote client's copy of the
@@ -2443,16 +2444,15 @@ export function registerIpcHandlers(
     }
     return statusBuildInFlight;
   }
-  function pushStatusData(): void {
-    void buildStatusDataShared().then((data) => {
-      send(IPC.STATUS_DATA, data);
-      // Feed full status data to remote server for browser clients (single polling source)
-      if (remoteServer) remoteServer.broadcastStatusData(data);
-    });
-  }
-
-  // Push status data every 10s — store handle so it can be cleared on shutdown
-  const statusInterval = setInterval(pushStatusData, 10000);
+  // Push status data every 10 s while anyone can see it, deduplicated, pushed at
+  // once on the first look back — WHY and rules: status-push-gate.ts (audit W2).
+  const statusPush = startStatusPushGate({
+    build: buildStatusDataShared,
+    // Feed full status data to remote server for browser clients (single polling source)
+    deliver: (data) => { send(IPC.STATUS_DATA, data); if (remoteServer) remoteServer.broadcastStatusData(data); },
+    mainWindow, windowRegistry, remoteServer,
+  });
+  setSyncHealthGate(statusPush.hasAudience); // the sync health check asks the same question (audit W12)
 
   // Also push immediately on first hook event (session is active)
   let sentInitialStatus = false;
@@ -2460,7 +2460,7 @@ export function registerIpcHandlers(
     hookRelay.on('hook-event', () => {
       if (!sentInitialStatus) {
         sentInitialStatus = true;
-        pushStatusData();
+        statusPush.push();
       }
     });
   }
@@ -5260,7 +5260,7 @@ export function registerIpcHandlers(
   };
   const cleanup = function cleanup(): Promise<void> {
     stopThemeWatcher();
-    clearInterval(statusInterval);
+    statusPush.stop();
     transcriptWatcher.stopAll();
     // Flush + tear down every live native session on quit (best-effort, bounded
     // to one in-flight streaming part). Fire-and-forget with .catch — cleanup()

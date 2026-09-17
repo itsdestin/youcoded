@@ -1701,3 +1701,57 @@ describe('RemoteServer replay buffers stay bounded and replay the same tail', ()
     expect(buf[buf.length - 1].payload.n).toBe(HOOK_CAP + 499); // newest kept
   });
 });
+
+// The gear badge used to poll remote:get-client-count every 10 s per window
+// (simplification audit W18). The count now rides the status push, so the
+// server must announce every arrival and departure through onStatusChange.
+describe('RemoteServer status carries the connected-client count', () => {
+  let mockSessionManager: any;
+  let mockHookRelay: any;
+  let mockConfig: any;
+
+  beforeEach(() => {
+    mockSessionManager = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []) });
+    mockHookRelay = new EventEmitter();
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+  });
+
+  function fakeSocket() {
+    return Object.assign(new EventEmitter(), {
+      readyState: 1, send: vi.fn(), ping: vi.fn(), close: vi.fn(), terminate: vi.fn(),
+    });
+  }
+
+  it('emits the status with clientCount on every connect and disconnect', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig) as any;
+    const seen: number[] = [];
+    server.onStatusChange((st: any) => seen.push(st.clientCount));
+    expect(server.getStatus().clientCount).toBe(0);
+
+    const a = fakeSocket();
+    const b = fakeSocket();
+    server.addClient(a, 'dev-a', '100.64.0.2', { sendsReady: true });
+    server.addClient(b, 'dev-b', '100.64.0.3', { sendsReady: true });
+    expect(seen).toEqual([1, 2]);
+    expect(server.getStatus().clientCount).toBe(2);
+
+    a.emit('close', 1000, Buffer.alloc(0));
+    expect(seen).toEqual([1, 2, 1]);
+    b.emit('close', 1000, Buffer.alloc(0));
+    expect(seen).toEqual([1, 2, 1, 0]);
+    expect(server.getStatus().clientCount).toBe(0);
+    // A second close for the same socket is not a departure — nothing new is announced.
+    b.emit('close', 1000, Buffer.alloc(0));
+    expect(seen).toEqual([1, 2, 1, 0]);
+  });
+
+  it('the remote:status answer over the socket carries clientCount as a number', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig) as any;
+    const sent: any[] = [];
+    const ws = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    await server.handleMessage({ ws }, JSON.stringify({ type: 'remote:status', id: 's', payload: {} }));
+    expect(sent.pop()?.payload).toMatchObject({ state: expect.any(String), port: expect.any(Number), clientCount: 0 });
+  });
+});

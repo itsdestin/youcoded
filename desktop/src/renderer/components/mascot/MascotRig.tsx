@@ -249,13 +249,18 @@ export function MascotRig({
   }, [reducedEffects, motionRef]);
 
   // ── Pupil targets (curious face follows the cursor) ──
+  // WHY the face check is an effect dependency, not a line in the callback
+  // (2026-09-16 audit W23): every mascot registered a window-wide pointermove
+  // listener for life and bailed inside it, so two handlers ran on every mouse
+  // move only to return. Now the listener exists only while the pose's face is
+  // curious — the only face that follows the cursor.
+  const curiousFace = POSES[pose]?.face === 'curious';
   useEffect(() => {
-    if (reducedEffects) return;
+    if (reducedEffects || !curiousFace) return;
     const onMove = (e: PointerEvent) => {
       const host = hostRef.current;
       const parts = partsRef.current;
       if (!host || !parts || !parts.pupils.length) return;
-      if (POSES[poseRef.current].face !== 'curious') return;
       const r = host.getBoundingClientRect();
       if (!r.width) return;
       const nx = Math.max(-1, Math.min(1, (e.clientX - (r.left + r.width / 2)) / r.width));
@@ -264,7 +269,7 @@ export function MascotRig({
     };
     window.addEventListener('pointermove', onMove);
     return () => window.removeEventListener('pointermove', onMove);
-  }, [reducedEffects]);
+  }, [reducedEffects, curiousFace]);
 
   // ── Unified spring loop: pose base + drag trail + idle sway per part ──
   //

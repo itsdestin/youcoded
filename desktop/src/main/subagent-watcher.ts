@@ -39,10 +39,18 @@ export interface SubagentWatcherOptions {
  * through parseTranscriptLine with parentAgentToolUseId + agentId stamped
  * on each emitted event.
  *
- * Windows fs.watch on a directory is flaky — we combine fs.watch with a
- * 1s poll that lists the directory and picks up new .jsonl files. On each
- * JSONL we combine fs.watch-on-file with a 2s poll for the same reason,
- * matching the strategy in TranscriptWatcher.
+ * Windows fs.watch on a directory is flaky — there we combine fs.watch with a
+ * slow poll that lists the directory and picks up new .jsonl files, and each
+ * JSONL's fs.watch with a slow stat poll, matching TranscriptWatcher. Off
+ * Windows the watches deliver on their own, so no poll runs beside a healthy
+ * watch; a poll appears only when a watch fails (simplification audit W8).
+ *
+ * Timers are armed on demand, never at start: most sessions never run a helper,
+ * so a session begins with NO timer. The bootstrap poll that waits for the
+ * subagents directory to appear is armed by kickScan() (a parent Agent tool_use
+ * was just seen — the directory is about to exist) and retired once it does;
+ * the prune timer is armed by the first buffered event and stands down once the
+ * buffer empties.
  */
 export class SubagentWatcher {
   private readonly sessionId: string;
@@ -67,9 +75,7 @@ export class SubagentWatcher {
     this.started = true;
     this.scanDirectory(); // synchronous replay of any existing files
     this.attachDirWatcher();
-    // Age out pending buffered events every 5s so a lingering unbound
-    // subagent doesn't leak memory.
-    this.pruneTimer = setInterval(() => this.index.pruneExpired(), 5000);
+    // The prune timer is armed lazily by deliver() on the first buffered event.
   }
 
   stop(): void {
@@ -160,10 +166,16 @@ export class SubagentWatcher {
    */
   kickScan(): void {
     if (!this.started) return;
-    if (!fs.existsSync(this.subagentsDir)) return;
+    if (!fs.existsSync(this.subagentsDir)) {
+      // A helper was just started but Claude Code has not created the
+      // directory yet — poll for it to appear (retired once it does). This is
+      // the only way the bootstrap poll is armed off Windows.
+      this.startBootstrapPoll();
+      return;
+    }
     if (!this.dirWatcher) {
       // Dir just appeared — retire the bootstrap poll and upgrade to
-      // fs.watch + safety-net (attachDirWatcher re-arms the poll).
+      // fs.watch (+ the safety-net poll on Windows; attachDirWatcher decides).
       if (this.dirPollTimer) { clearInterval(this.dirPollTimer); this.dirPollTimer = null; }
       this.scanDirectory();
       this.attachDirWatcher();
@@ -218,18 +230,10 @@ export class SubagentWatcher {
   private attachDirWatcher(): void {
     if (!fs.existsSync(this.subagentsDir)) {
       // The directory is created by Claude Code only once a subagent runs.
-      // Poll the parent until it exists; upgrade to fs.watch once it does.
-      // 5s is deliberately slow — most sessions never run a subagent, and
-      // kickScan() (fired on the parent Agent tool_use) covers the fast path.
-      this.dirPollTimer = setInterval(() => {
-        // Fix 2: stop() was called after setInterval was scheduled — bail.
-        if (!this.started) return;
-        if (fs.existsSync(this.subagentsDir)) {
-          if (this.dirPollTimer) { clearInterval(this.dirPollTimer); this.dirPollTimer = null; }
-          this.scanDirectory();
-          this.attachDirWatcher();
-        }
-      }, 5000);
+      // Off Windows nothing is armed here: kickScan() starts the bootstrap
+      // poll when a helper actually starts. Windows keeps the poll from the
+      // start, as before, since its directory watch is the flaky one.
+      if (process.platform === 'win32') this.startBootstrapPoll();
       return;
     }
     try {
@@ -238,21 +242,55 @@ export class SubagentWatcher {
         if (this.dirWatcher) { this.dirWatcher.close(); this.dirWatcher = null; }
         this.startDirPoll();
       });
-      this.startDirPoll(); // slow safety-net poll alongside watch
+      // WHY Windows only (audit W8): the safety-net poll exists for dropped
+      // directory notifications, which only Windows produces once a watch is
+      // armed; elsewhere it was a readdir every 5 s for the session's life.
+      if (process.platform === 'win32') this.startDirPoll();
     } catch {
       this.startDirPoll();
     }
+  }
+
+  /** Poll for the subagents directory to appear; upgrade to fs.watch once it
+   *  does. 5 s is deliberately slow — kickScan() (fired on the parent Agent
+   *  tool_use) covers the fast path, and is what arms this off Windows. */
+  private startBootstrapPoll(): void {
+    if (this.dirPollTimer) return;
+    this.dirPollTimer = setInterval(() => {
+      // Fix 2: stop() was called after setInterval was scheduled — bail.
+      if (!this.started) return;
+      if (fs.existsSync(this.subagentsDir)) {
+        if (this.dirPollTimer) { clearInterval(this.dirPollTimer); this.dirPollTimer = null; }
+        this.scanDirectory();
+        this.attachDirWatcher();
+      }
+    }, 5000);
   }
 
   private startDirPoll(): void {
     if (this.dirPollTimer) return;
     // Fix 2 (defensive): guard against one-more-firing after stop().
     // 5s: fs.watch + kickScan() are the fast paths; this only catches the
-    // rare Windows fs.watch dropped notification, so it can afford to be slow
-    // (it readdirs the whole subagents dir on every tick, forever).
+    // rare Windows fs.watch dropped notification (or stands in for a watch
+    // that failed), so it can afford to be slow.
     this.dirPollTimer = setInterval(() => {
       if (!this.started) return;
       this.scanDirectory();
+    }, 5000);
+  }
+
+  /** Age out pending buffered events every 5 s so a lingering unbound helper
+   *  doesn't leak memory. Armed by the first buffered event; stands down as
+   *  soon as the buffer is empty again (audit W8: it used to run for every
+   *  session's life over a structure that is empty almost always). */
+  private armPruneTimer(): void {
+    if (this.pruneTimer) return;
+    this.pruneTimer = setInterval(() => {
+      this.index.pruneExpired();
+      if (!this.index.hasPending() && this.pruneTimer) {
+        clearInterval(this.pruneTimer);
+        this.pruneTimer = null;
+      }
     }, 5000);
   }
 
@@ -297,7 +335,9 @@ export class SubagentWatcher {
         if (state.watcher) { state.watcher.close(); state.watcher = null; }
         this.startFilePoll(state);
       });
-      this.startFilePoll(state); // 2s safety-net poll alongside watch
+      // Same platform rule as the directory poll (audit W8): a safety-net stat
+      // poll beside a healthy file watch only on Windows.
+      if (process.platform === 'win32') this.startFilePoll(state);
     } catch {
       this.startFilePoll(state);
     }
@@ -401,6 +441,7 @@ export class SubagentWatcher {
     }
     // Not bound yet — buffer for eventual flush using cached meta.
     this.index.bufferPendingEvent(state.agentId, state.meta, ev);
+    this.armPruneTimer();
   }
 
   private stamp(ev: TranscriptEvent, parentAgentToolUseId: string, agentId: string): TranscriptEvent {

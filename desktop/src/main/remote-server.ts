@@ -242,6 +242,7 @@ export interface RemoteStatus {
   state: 'listening' | 'stopped' | 'failed';
   reason?: string;
   port: number;
+  clientCount: number; // phones connected now — WHY here (audit W18): the gear badge polled it every 10 s per window; emitStatus() fires on every connect/disconnect instead
 }
 
 interface SessionNamingWiring {
@@ -524,9 +525,9 @@ export class RemoteServer {
    * caller outside tests.
    */
   getStatus(): RemoteStatus {
-    if (this.running) return { state: 'listening', port: this.config.port };
-    if (this.lastStartError) return { state: 'failed', reason: this.lastStartError, port: this.config.port };
-    return { state: 'stopped', port: this.config.port };
+    if (this.running) return { state: 'listening', port: this.config.port, clientCount: this.clients.size };
+    if (this.lastStartError) return { state: 'failed', reason: this.lastStartError, port: this.config.port, clientCount: this.clients.size };
+    return { state: 'stopped', port: this.config.port, clientCount: this.clients.size };
   }
 
   onStatusChange(listener: (status: RemoteStatus) => void): () => void {
@@ -837,11 +838,9 @@ export class RemoteServer {
   /** Every path that forgets a client goes through here so the liveness ping
    *  can stand down when the last one leaves (simplification audit W14). */
   private removeClient(client: AuthenticatedClient): void {
-    this.clients.delete(client);
-    if (this.clients.size === 0 && this.pingTimer) {
-      clearInterval(this.pingTimer);
-      this.pingTimer = null;
-    }
+    if (!this.clients.delete(client)) return;
+    if (this.clients.size === 0 && this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+    this.emitStatus(); // clientCount changed — see RemoteStatus.clientCount
   }
 
   // --- Event handlers for buffering ---
@@ -1400,7 +1399,7 @@ export class RemoteServer {
       phase: 'restoring', queue: [], queueDegraded: false, fallbackTimer: null,
     };
     this.clients.add(client);
-    this.startLiveness(); // no-op while already armed — see its WHY
+    this.startLiveness(); this.emitStatus(); // liveness is a no-op while already armed — see its WHY; the status carries the new clientCount
     this.logDevice(client, `connected (${opts.sendsReady ? 'page announces readiness' : 'older page'})`);
     // WHY a fallback and not an immediate replay (design §1): the restore used to start
     // the moment auth succeeded, before the page had mounted App, and guessed with a

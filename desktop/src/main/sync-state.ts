@@ -36,6 +36,10 @@ import { deriveSelfLastSyncEpochSec } from './sync-spaces/self-sync-status';
 // When the SyncService is running, forceSync() delegates to it instead
 // of shelling out to sync.sh. This is set by main.ts on startup.
 let syncServiceInstance: SyncService | null = null;
+// "Is anyone looking?" for the service's periodic health check (audit W12). The
+// IPC handlers own that answer (status-push-gate.ts) and register before the
+// service exists, so it is kept here and applied to whichever service is set.
+let syncHealthGate: (() => boolean) | null = null;
 
 export function setSyncService(service: SyncService | null): void {
   // Stop the old service if replacing
@@ -43,6 +47,12 @@ export function setSyncService(service: SyncService | null): void {
     syncServiceInstance.stop();
   }
   syncServiceInstance = service;
+  if (service && syncHealthGate) service.setHealthCheckGate(syncHealthGate);
+}
+
+export function setSyncHealthGate(gate: () => boolean): void {
+  syncHealthGate = gate;
+  syncServiceInstance?.setHealthCheckGate(gate);
 }
 
 // --- V2 Types: Multi-instance backend model ---

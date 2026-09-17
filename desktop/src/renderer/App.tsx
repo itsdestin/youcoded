@@ -2385,17 +2385,17 @@ function AppInner() {
   // Check if remote setup banner is active (show badge on gear icon)
   // Badge shows whenever the blue "Set Up Remote Access" banner would be visible
   // in the settings panel — i.e., no remote clients are connected
+  // WHY no poll (audit W18): the count rides the remote status push now — one read seeds the badge, onStatus keeps it current; a remote browser or phone gets a no-op onStatus and keeps the seed, being a client itself.
   useEffect(() => {
     const claude = (window as any).claude;
     if (!claude?.remote) return;
-    const check = () => {
-      claude.remote.getClientCount().then((count: number) => {
-        setSettingsBadge(count === 0);
-      }).catch(() => {});
-    };
-    check();
-    const interval = setInterval(check, 10000);
-    return () => clearInterval(interval);
+    claude.remote.getClientCount().then((count: number) => {
+      setSettingsBadge(count === 0);
+    }).catch(() => {});
+    const off = claude.remote.onStatus?.((status: { clientCount?: number } | null) => {
+      if (typeof status?.clientCount === 'number') setSettingsBadge(status.clientCount === 0);
+    });
+    return () => { off?.(); };
   }, []);
 
   // Seed syncWarnings once at mount so a danger badge shows instantly at
