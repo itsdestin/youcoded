@@ -82,8 +82,12 @@ function existsSomewhereReal(path: string): boolean {
 }
 
 describe('workbench mock contract', () => {
-  // Sanity: if the scan itself breaks (preload reformatted, object moved), every
-  // other assertion in this file silently passes. Pin known-real channels.
+  // What this protects: the namespace scoping every parity case below relies on.
+  // It pins product facts about preload.ts — session.list, the top-level
+  // getPlatform and theme.readFile are exposed; memoryCheck lives under
+  // `models`, not `session` — and that a channel in the wrong namespace does not
+  // resolve. If preload is reformatted so the scan finds nothing, the parity
+  // cases would pass vacuously; this fails instead.
   it('the preload scan actually resolves known channels', () => {
     expect(existsInPreload('session.list')).toBe(true);
     expect(existsInPreload('getPlatform')).toBe(true);
@@ -95,8 +99,12 @@ describe('workbench mock contract', () => {
     expect(existsInPreload('models.memoryCheck')).toBe(true);
   });
 
-  // Same sanity guard for the shim scan: if it silently resolved nothing, the
-  // MOCK_ONLY staleness check below would pass vacuously.
+  // What this protects: remote-shim's namespace scoping, which the fallback and
+  // MOCK_ONLY staleness cases below rely on. It pins product facts about
+  // remote-shim.ts — on.chatHydrate (remote-only), providers.list and
+  // permissions.list are exposed; there is no notifications namespace — so a
+  // scan that resolved nothing, or matched a leaf in the wrong namespace, fails
+  // here instead of letting those cases pass vacuously.
   it('the remote-shim scan actually resolves known channels', () => {
     expect(existsInRemoteShim('on.chatHydrate')).toBe(true);
     expect(existsInRemoteShim('providers.list')).toBe(true);
