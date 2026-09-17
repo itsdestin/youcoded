@@ -134,13 +134,25 @@ export function registerSocialHandlers(
   // which fails SAFE to "active", i.e. current behavior), and remote-access
   // clients (their input never touches local idle time — without this, a user
   // driving the app from their phone would wrongly read as away).
-  if (idlePoller) clearInterval(idlePoller);
-  idlePoller = setInterval(() => {
-    const localIdleMs = powerMonitor.getSystemIdleTime() * 1000;
-    const lastRemote = remoteServer?.getLastClientActivityMs() ?? 0;
-    const remoteIdleMs = lastRemote === 0 ? Number.POSITIVE_INFINITY : Date.now() - lastRemote;
-    presence.setIdle(localIdleMs >= IDLE_DISCONNECT_MS && remoteIdleMs >= IDLE_DISCONNECT_MS);
-  }, IDLE_POLL_MS);
+  //
+  // WHY it runs only while the renderer WANTS presence (simplification audit
+  // W13): it used to tick every 15 s from boot, signed in or not, and signed
+  // out setIdle is a no-op. It is keyed to the renderer's presence-connect /
+  // presence-disconnect intent (plus sign-out and teardown) — the same
+  // desired-state axis the suspend/resume listeners feed — and deliberately
+  // NOT to the socket's own connected/disconnected events: the poller is what
+  // takes the socket DOWN when the user goes idle, so "stop on disconnect"
+  // would have stopped the only thing able to notice them coming back.
+  stopIdlePoller(); // hot-reload: never stack a second poller
+  const startIdlePoller = () => {
+    stopIdlePoller();
+    idlePoller = setInterval(() => {
+      const localIdleMs = powerMonitor.getSystemIdleTime() * 1000;
+      const lastRemote = remoteServer?.getLastClientActivityMs() ?? 0;
+      const remoteIdleMs = lastRemote === 0 ? Number.POSITIVE_INFINITY : Date.now() - lastRemote;
+      presence.setIdle(localIdleMs >= IDLE_DISCONNECT_MS && remoteIdleMs >= IDLE_DISCONNECT_MS);
+    }, IDLE_POLL_MS);
+  };
 
   // One client instance shared across all handlers. getToken() is read lazily
   // per-request so sign-out takes effect immediately.
@@ -210,11 +222,13 @@ export function registerSocialHandlers(
 
   ipcMain.handle("social:presence-connect", (): { ok: true } => {
     presence.setDesired(true);
+    startIdlePoller(); // see the poller's WHY: it lives with the renderer's intent
     return { ok: true };
   });
 
   ipcMain.handle("social:presence-disconnect", (): { ok: true } => {
     presence.setDesired(false);
+    stopIdlePoller();
     return { ok: true };
   });
 
@@ -236,6 +250,7 @@ export function registerSocialHandlers(
 // interaction. No-op when presence was never registered.
 export function notifySignedOut(): void {
   presenceSocket?.setDesired(false);
+  stopIdlePoller();
 }
 
 // App-quit teardown hook. Electron process death kills the socket anyway, but
@@ -243,4 +258,12 @@ export function notifySignedOut(): void {
 export function destroySocialHandlers(): void {
   presenceSocket?.destroy();
   presenceSocket = null;
+  stopIdlePoller();
+}
+
+// Module-level so sign-out and teardown (above) can stop it without a handle
+// to the registration closure that started it.
+function stopIdlePoller(): void {
+  if (idlePoller) clearInterval(idlePoller);
+  idlePoller = null;
 }
