@@ -575,8 +575,9 @@ function FolderCard({
         // screen was already out of date, so say that rather than report a
         // success that did not happen. It no longer names a Refresh button —
         // that button is gone, and copy pointing at a control that does not
-        // exist is exactly the drift item-list-authority pins. Closing and
-        // reopening this screen remounts it and re-reads the list.
+        // exist is exactly the drift scripts/ast-grep/rules/no-bare-glyph-item-action-stale-copy.yml
+        // pins (retired tests/item-list-authority.test.ts, Plan B 2026-09-16).
+        // Closing and reopening this screen remounts it and re-reads the list.
         setNote("These couldn't be found — they may already be gone. Reopen this screen for the current list.");
       }
     } catch {
