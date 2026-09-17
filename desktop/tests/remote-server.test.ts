@@ -1056,6 +1056,27 @@ describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
       expect(sent[0].payload).toEqual(pastRows); // round-tripped through JSON via ws.send — deep, not reference, equality
     });
 
+    // Audit B1: the exclusion set must hold CLAUDE transcript ids, which is what
+    // listPastSessions compares against — the desktop id a live session is
+    // known by is a different UUID. Same mapping the Electron path applies.
+    it('resolves live desktop ids to claude ids through sessionMetaWiring before excluding them', async () => {
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+      mockSessionManager.listSessions = vi.fn(() => [{ id: 'desktop-1' }, { id: 'desktop-unmapped' }]);
+      const map = new Map([['desktop-1', 'claude-1']]);
+      server.setSessionMetaWiring({
+        resolve: (id: string) => map.get(id) || id, // ipc-handlers' exact resolver shape
+        canWrite: () => true,
+      });
+
+      await sendAndCollect(server, { type: 'session:browse', id: 'b3', payload: {} });
+
+      const [activeIdsArg] = mockSessionBrowser.listPastSessions.mock.calls[0];
+      expect(activeIdsArg.has('claude-1')).toBe(true); // the mapped id is what hides the open session
+      expect(activeIdsArg.has('desktop-1')).toBe(false); // the raw desktop id matches no transcript
+      expect(activeIdsArg.has('desktop-unmapped')).toBe(true); // no mapping yet → identity, as on desktop
+    });
+
     it('passes undefined native entries when no native runtime is wired (pre-M2 / not-yet-wired parity)', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);

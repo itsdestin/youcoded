@@ -1793,7 +1793,20 @@ export class RemoteServer {
         break;
       }
       case 'session:browse': {
-        const activeIds = new Set(this.sessionManager.listSessions().map(s => s.id));
+        // WHY resolve (simplification audit B1): listPastSessions compares the
+        // exclusion set against CLAUDE transcript ids, but a live session's
+        // desktop id is a separate UUID minted by SessionManager. The Electron
+        // path (ipc-handlers' SESSION_BROWSE) maps desktop → claude id through
+        // sessionIdMap first; this path passed raw desktop ids, so a session
+        // that was open on the desktop could still be listed as resumable on
+        // the phone. sessionMetaWiring.resolve IS that map (identity for
+        // native ids and for a CC session whose SessionStart hasn't arrived
+        // yet — a desktop UUID that no transcript id can match, so it is a
+        // harmless extra member). Iterating LIVE sessions keeps the Electron
+        // path's Bug-1 filter: a stale map entry for a closed session is never
+        // consulted. Undefined wiring (tests / not yet wired) = the old raw ids.
+        const resolve = this.sessionMetaWiring?.resolve ?? ((id: string) => id);
+        const activeIds = new Set(this.sessionManager.listSessions().map(s => resolve(s.id)));
         // Task 5: remote browse gains native rows for the first time, through
         // the SAME enrichment pass the Electron IPC path uses (see
         // ipc-handlers' SESSION_BROWSE) — previously this surface only ever
