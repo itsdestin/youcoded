@@ -298,6 +298,8 @@ export function projectPlan(plan: PlanRecord): PlanView {
   if (plan.paused) {
     view.paused = { stepId: plan.paused.stepId, reason: plan.paused.reason };
     if (plan.paused.minimumAddTokens !== undefined) view.paused.minimumAddTokens = plan.paused.minimumAddTokens;
+    // Review fix 2: the system text for the bug report (the card never draws it).
+    if (plan.paused.report) view.paused.report = plan.paused.report;
     // 5b follow-up: why it paused, so the card never reads `reason` for it.
     if (plan.paused.kind) view.paused.kind = plan.paused.kind;
     if (plan.paused.tool) view.paused.tool = plan.paused.tool;
@@ -658,7 +660,9 @@ export class PlanJournal {
     // Final review F2: `orphaned` answers, for a plan THIS process leases,
     // why nothing is running it (its final write failed) — or undefined when
     // a run is active. Such a plan is paused with that reason.
-    opts: { onInterrupt?: (plan: PlanRecord) => void; orphaned?: (planId: string) => string | undefined } = {},
+    // Review fix 2: `reason` is the card's general line; `report` the
+    // system's own text, kept for the bug report only.
+    opts: { onInterrupt?: (plan: PlanRecord) => void; orphaned?: (planId: string) => { reason: string; report?: string } | undefined } = {},
   ): Promise<{ interrupted: string[]; recheckAt?: number }> {
     // WHY the read first: opening a conversation that never had a plan must
     // not create a plan directory (the lock step creates parents).
@@ -671,7 +675,7 @@ export class PlanJournal {
       const now = this.now();
       for (const plan of file.plans) {
         if (plan.status !== 'running') continue;
-        let orphanReason: string | undefined;
+        let orphanReason: { reason: string; report?: string } | undefined;
         if (plan.lease) {
           const owner = this.ownerState(plan.lease);
           if (owner === 'self') {
@@ -691,7 +695,10 @@ export class PlanJournal {
           // Not "the app closed" (it didn't): an unexpected-problem pause
           // with the real reason, which offers Continue and Stop.
           plan.status = 'paused';
-          plan.paused = { stepId: stuck?.id ?? '', reason: orphanReason, kind: 'unexpected-error' };
+          plan.paused = {
+            stepId: stuck?.id ?? '', reason: orphanReason.reason, kind: 'unexpected-error',
+            ...(orphanReason.report ? { report: orphanReason.report } : {}),
+          };
         } else {
           plan.status = 'interrupted';
         }

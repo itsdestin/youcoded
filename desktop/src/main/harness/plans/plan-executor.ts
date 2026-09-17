@@ -192,6 +192,12 @@ export interface PlanRunner {
  *  runs out (harness-session.ts) — not a finished report. */
 const PLAN_BUDGET_EXHAUSTED_STOP_REASON = 'plan_budget_exhausted';
 
+/** Final review F2 + Task 12 review fix 2: why a run's final write never
+ *  landed. `reason` is the card's general line; `report` is the system's own
+ *  text, for Report bug / Diagnose only. */
+export interface PlanOrphan { reason: string; report?: string }
+export const PLAN_PROGRESS_NOT_SAVED = "The plan stopped because its progress couldn't be saved.";
+
 /**
  * Read a plan specialist's own transcript (design §3 resume): what does it
  * PROVE about an attempt whose journal phase never reached committed?
@@ -434,7 +440,7 @@ export class PlanExecutor implements PlanExecutorHooks {
   private readonly finishing = new Map<string, ActiveRun>();
   /** Final review F2: runs whose final write never landed, with the real
    *  reason — keyed like `runs`. Recovery reads it through orphanReason. */
-  private readonly orphans = new Map<string, string>();
+  private readonly orphans = new Map<string, PlanOrphan>();
   private readonly settleWriteRetryDelaysMs: readonly number[];
 
   constructor(deps: PlanExecutorDeps) {
@@ -465,7 +471,7 @@ export class PlanExecutor implements PlanExecutorHooks {
    * nothing went wrong). PlanJournal.recoverInterrupted asks this for every
    * plan leased by this process.
    */
-  orphanReason(ref: PlanRef, planId: string): string | undefined {
+  orphanReason(ref: PlanRef, planId: string): PlanOrphan | undefined {
     const key = this.keyOf(ref, planId);
     if (this.runs.has(key) || this.finishing.has(key)) return undefined;
     return this.orphans.get(key);
@@ -1478,7 +1484,10 @@ export class PlanExecutor implements PlanExecutorHooks {
         // "running" under this process's lease. Remember the real reason and
         // ask the host to run recovery, which shows the plan paused with it
         // and gives back whatever is still held, in its own write.
-        this.orphans.set(run.key, `The plan stopped because its progress couldn't be saved: ${errorText(e)}`);
+        // Review fix 2 (Task 12): the card gets the general line — the raw
+        // system text ("EIO: …") names nothing a person can act on — and the
+        // system text rides along for Report bug / Diagnose only.
+        this.orphans.set(run.key, { reason: PLAN_PROGRESS_NOT_SAVED, report: errorText(e) });
         try { this.runner.onOrphaned?.(run.ref, run.planId); } catch (err) {
           console.error('[plan-executor] orphaned-plan listener threw', err);
         }

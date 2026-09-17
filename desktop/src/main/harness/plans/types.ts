@@ -9,7 +9,7 @@
 // both the TypeScript type and that check, so the two can never drift.
 import { z } from 'zod';
 import { PlanDocumentSchema } from './schema';
-import { PLAN_PAUSE_KINDS, type PlanView } from '../../../shared/types';
+import { PLAN_PAUSE_KINDS, PLAN_QUESTION_MAX_CHARS, type PlanView } from '../../../shared/types';
 import type { ToolEffect } from '../tools/types';
 import type { PlanPauseAction, PlanRecoveryCause } from './pause-routing';
 
@@ -205,6 +205,9 @@ const PlanRecordSchema = z.object({
    *  when the pause happened before that step had an attempt. */
   paused: z.object({
     stepId: z.string(), reason: z.string(), attemptId: z.string().optional(),
+    /** Task 12 review fix 2: the system's own text behind a general `reason`,
+     *  for Report bug / Diagnose only — never drawn on the card. */
+    report: z.string().min(1).optional(),
     /** Task 4: the smallest Add budget that lets the paused specialist send
      *  its next request (its fresh resume prompt plus any soft overshoot).
      *  Add budget lowers it by what was added; the service refuses less. */
@@ -260,8 +263,9 @@ const PlanRecordSchema = z.object({
       revisionTurnId: z.string().min(1).optional(),
       waiting: z.literal('reply').optional(),
       /** Decision 20: what the user typed in the Ask box (trimmed, at most
-       *  1,000 characters). Absent when they left it blank. */
-      question: z.string().min(1).max(1000).optional(),
+       *  PLAN_QUESTION_MAX_CHARS). Absent when they left it blank. Review
+       *  fix 3: the same constant the Ask box checks, so they can't drift. */
+      question: z.string().min(1).max(PLAN_QUESTION_MAX_CHARS).optional(),
       recommendation: z.object({
         action: z.enum(PLAN_PAUSE_ACTIONS),
         addTokens: z.number().int().min(1).optional(),

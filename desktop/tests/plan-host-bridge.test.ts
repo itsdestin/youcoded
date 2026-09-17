@@ -508,7 +508,7 @@ describe('a plan whose final write failed', () => {
     });
     // This process leases it, and no run is behind it (the executor's answer).
     expect((await bridge.journal.acquireLease(REF, 'p-o', { startFrom: ['proposed'] })).ok).toBe(true);
-    let orphan: string | undefined = "The plan stopped because its progress couldn't be saved: EIO";
+    let orphan: { reason: string; report?: string } | undefined = { reason: "The plan stopped because its progress couldn't be saved.", report: 'EIO: i/o error' };
     vi.spyOn(bridge.executor, 'orphanReason').mockImplementation(() => orphan);
     const cleared = vi.spyOn(bridge.executor, 'clearOrphan').mockImplementation(() => { orphan = undefined; });
     // What the executor calls when its final write keeps failing.
@@ -516,7 +516,7 @@ describe('a plan whose final write failed', () => {
     await vi.waitFor(async () => expect((await bridge.journal.get(REF, 'p-o'))!.status).toBe('paused'));
     const rec = (await bridge.journal.get(REF, 'p-o'))!;
     expect(rec.lease).toBeUndefined();
-    expect(rec.paused).toMatchObject({ kind: 'unexpected-error', reason: expect.stringContaining('EIO') });
+    expect(rec.paused).toMatchObject({ kind: 'unexpected-error', reason: "The plan stopped because its progress couldn't be saved.", report: 'EIO: i/o error' });
     expect(cleared).toHaveBeenCalledWith(REF, 'p-o');
   });
 });

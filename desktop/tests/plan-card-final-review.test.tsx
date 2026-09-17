@@ -380,3 +380,33 @@ describe('F25: plan cards in a conversation preview are read-only', () => {
     expect(plans.getAutoApprove).not.toHaveBeenCalled();
   });
 });
+
+// Task 12 review fix 2: a plan whose progress couldn't be saved pauses with a
+// general line on the card; the system's own text (an EIO, say) goes only to
+// the report screen (docs/error-message-standards.md).
+describe('review fix 2: an unsaved-progress pause keeps the system text for the report', () => {
+  const GENERAL = "The plan stopped because its progress couldn't be saved.";
+  const orphanPause = () => paused({
+    paused: { stepId: 's1', reason: GENERAL, kind: 'unexpected-error', actions: ['continue', 'stop'], report: 'EIO: i/o error, write' },
+  });
+
+  it('the card shows the general line, and Report bug hands over the system text', async () => {
+    bridge();
+    render(<ChatProvider><Card initial={orphanPause()} /></ChatProvider>);
+    const block = screen.getByTestId('plan-block');
+    expect(within(block).getByTestId('plan-paused-reason')).toHaveTextContent(GENERAL);
+    expect(block).not.toHaveTextContent('EIO');
+    const alert = within(block).getByTestId('plan-paused-report');
+    fireEvent.click(within(alert).getByRole('button', { name: 'Report bug' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent(GENERAL);
+    expect(dialog).toHaveTextContent('EIO: i/o error, write');
+    expect(within(alert).getByRole('button', { name: 'Diagnose with the assistant' })).toBeInTheDocument();
+  });
+
+  it('an ordinary pause shows no report actions', () => {
+    bridge();
+    render(<ChatProvider><Card initial={paused()} /></ChatProvider>);
+    expect(screen.queryByTestId('plan-paused-report')).toBeNull();
+  });
+});

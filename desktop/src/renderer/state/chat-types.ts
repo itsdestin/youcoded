@@ -1,4 +1,4 @@
-import { ChatMessage, PLAN_ASK_NOTICE_LEAD, PLAN_ASK_QUESTION_CLOSE, PLAN_ASK_QUESTION_OPEN, PLAN_NOTICE_PREFIX, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
+import { ChatMessage, PLAN_ASK_DETAIL_HEADER, PLAN_ASK_NOTICE_LEAD, PLAN_ASK_QUESTION_CLOSE, PLAN_ASK_QUESTION_LABEL, PLAN_ASK_QUESTION_OPEN, PLAN_NOTICE_PREFIX, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -110,14 +110,24 @@ export function shouldRenderAssistantTurn(turn: AssistantTurn | undefined): turn
 
 /** Decision 20: the question the user typed, read back from the delivered
  *  notice's own block — so a replayed, remote or buddy chat shows the same
- *  words the live one does. undefined when the notice carries none. */
+ *  words the live one does. undefined when the notice carries none.
+ *  Task 12 review fix 1: ONLY the block directly under the question's label
+ *  line, closed before the provider-detail section, counts. Main keeps block
+ *  tags and line breaks out of every other text it puts in the notice (the
+ *  goal, step titles, tool names, the provider detail), so nothing a model or
+ *  a tool wrote can pose as the user's words here. */
 export function planAskQuestion(noticeText: string): string | undefined {
-  const open = `\n${PLAN_ASK_QUESTION_OPEN}\n`;
+  const open = `\n${PLAN_ASK_QUESTION_LABEL}\n${PLAN_ASK_QUESTION_OPEN}\n`;
   const start = noticeText.indexOf(open);
   if (start < 0) return undefined;
   const from = start + open.length;
-  const end = noticeText.indexOf(`\n${PLAN_ASK_QUESTION_CLOSE}`, from);
+  const close = `\n${PLAN_ASK_QUESTION_CLOSE}\n`;
+  const end = noticeText.indexOf(close, from);
   if (end < 0) return undefined;
+  // The detail section must follow the block (its header may also appear
+  // inside the detail itself, so the LAST one is always after it).
+  const detail = noticeText.lastIndexOf(`\n${PLAN_ASK_DETAIL_HEADER}\n`);
+  if (detail < end + close.length - 1) return undefined;
   const question = noticeText.slice(from, end).trim();
   return question || undefined;
 }

@@ -925,7 +925,12 @@ describe('a final write that fails', () => {
     let p = await plan();
     expect(p.status).toBe('running');
     expect(journal.leaseOwner(p)).toBe('self');
-    expect(exec.orphanReason(REF, 'p1')).toMatch(/couldn't be saved.*EIO/);
+    // Review fix 2 (Task 12): the card gets the general line; the system's
+    // own text is kept for the bug report only.
+    expect(exec.orphanReason(REF, 'p1')).toEqual({
+      reason: "The plan stopped because its progress couldn't be saved.",
+      report: expect.stringMatching(/EIO/),
+    });
     vi.restoreAllMocks();
     // Recovery without the executor's answer still leaves this process's plan alone.
     expect((await journal.recoverInterrupted(REF)).interrupted).toEqual([]);
@@ -938,7 +943,10 @@ describe('a final write that fails', () => {
     expect(p.status).toBe('paused');
     expect(p.lease).toBeUndefined();
     expect(p.paused).toMatchObject({ kind: 'unexpected-error', stepId: 's1' });
-    expect(p.paused!.reason).toMatch(/couldn't be saved.*EIO/);
+    expect(p.paused!.reason).toBe("The plan stopped because its progress couldn't be saved.");
+    expect(p.paused!.report).toMatch(/EIO/);
+    expect(projectPlan(p).paused).toMatchObject({ reason: "The plan stopped because its progress couldn't be saved.", report: expect.stringMatching(/EIO/) });
+    expect(projectPlan(p).paused!.reason).not.toMatch(/EIO/);
     expect(reservedTotal(p)).toBe(0);
     exec.clearOrphan(REF, 'p1');
     expect(exec.orphanReason(REF, 'p1')).toBeUndefined();

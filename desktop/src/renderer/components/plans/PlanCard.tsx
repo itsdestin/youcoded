@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { PlanView, PlanStepView, PlanChildView, ToolCallState } from '../../../shared/types';
+import { PLAN_QUESTION_MAX_CHARS, type PlanView, type PlanStepView, type PlanChildView, type ToolCallState } from '../../../shared/types';
 import { useChatDispatch } from '../../state/chat-context';
 import { Button, ErrorState, FieldError, StatusStrip, Textarea, TextInput } from '../ui';
 import { CheckIcon, FailIcon, StoppedIcon, ChevronIcon } from '../Icons';
@@ -79,10 +79,9 @@ export function planIcon(plan: PlanView): 'spinner' | 'check' | 'fail' | 'stoppe
 
 function tokens(n: number): string { return `${n.toLocaleString()} tokens`; }
 
-/** Decision 20: the longest Ask question main accepts (plan-handoff.ts
- *  PLAN_QUESTION_MAX_CHARS, which the renderer can't import; pinned equal by
- *  plan-card-ask.test.tsx). */
-const PLAN_QUESTION_LIMIT = 1_000;
+/** Decision 20: the longest Ask question main accepts. Review fix 3: now the
+ *  shared constant itself (shared/types.ts), so the two can't drift. */
+const PLAN_QUESTION_LIMIT = PLAN_QUESTION_MAX_CHARS;
 
 /** Final review F6: a failed plan whose cause isn't known — general, and
  *  names no cause (docs/error-message-standards.md), with Report bug and
@@ -497,6 +496,25 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               )}
             </StatusStrip>
           )}
+
+          {/* Task 12 review fix 2 (error-message standards): a pause whose
+              reason is a general line with the system's own text behind it
+              (progress that couldn't be saved). The card never shows that
+              text; Report bug and Diagnose hand it over. */}
+          {plan.status === 'paused' && plan.paused?.report && !handoffPending && !readOnly && (() => {
+            const toReport = reportText(plan.paused.reason, plan.paused.report);
+            return (
+              <div data-testid="plan-paused-report">
+                <ErrorState
+                  variant="inline"
+                  title="Something went wrong"
+                  explainer="Report it, or ask the assistant to diagnose what happened."
+                  onReportBug={() => report(toReport, false)}
+                  onDiagnose={() => report(toReport, true)}
+                />
+              </div>
+            );
+          })()}
 
           {/* Task 11 (§6, error-message standards): a question cleared without
               an answer. The real cause when main knows it; otherwise a
