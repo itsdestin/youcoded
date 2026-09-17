@@ -1,10 +1,10 @@
-import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BuddyWindowManager, type BuddyWindowManagerDeps, type BuddyWorkAreaSource } from '../src/main/buddy-window-manager';
 import { buildCaption, parseCaption, type BuddyRole } from '../src/shared/buddy-caption';
 import { MASCOT_SIZE, CHAT_SIZE, BAR_SIZE } from '../src/main/buddy-bar-geometry';
 import { WorkAreaResolver } from '../src/main/buddy-work-area';
+import { readSource } from './helpers/guard-scope';
 
 /**
  * The caption channel — how the buddy moves on native-Wayland Linux.
@@ -172,33 +172,15 @@ describe('the caption channel', () => {
     // thought to drive; this covers the file. If a future change adds a tenth
     // way to move the buddy and calls setPosition directly, the Wayland buddy
     // silently stops moving on that path — and this fails instead.
-    // Normalised: a Windows checkout is CRLF, and the line split below would keep
-    // a trailing '\r' on every line.
-    const SRC = readFileSync(join(__dirname, '../src/main/buddy-window-manager.ts'), 'utf8').replace(/\r\n/g, '\n');
+    //
+    // Plan B (2026-09-16): the two "no window-moving API is called outside
+    // place()" / "setTitle is called in exactly one place" cases moved to
+    // ast-grep rule buddy-window-move-only-in-place. The two below stay as
+    // text reads — an ast-grep rule reports violations, not a required COUNT
+    // of legitimate calls, so "a write path silently deleted" (their failure
+    // mode) isn't expressible that way.
+    const SRC = readSource(join(__dirname, '../src/main/buddy-window-manager.ts'));
     const lines = SRC.split('\n');
-
-    it('no window-moving API is called outside place()', () => {
-      // setBounds and setContentBounds are the OTHER standard Electron ways to
-      // move a window — natural to reach for when you also want to resize, or
-      // when copying a pattern from elsewhere in the repo. Scanning only for
-      // setPosition would let either of them bypass the caption channel
-      // entirely, and on Wayland there is no readback (design §3), so nothing
-      // in the app could ever notice the move silently failed.
-      const hits = lines
-        .map((l, i) => ({ l, i }))
-        .filter(({ l }) => /\.(setPosition|setBounds|setContentBounds)\(/.test(l) && !l.trimStart().startsWith('//'));
-      expect(hits.map((h) => h.l.trim())).toEqual(['else win.setPosition(x, y);']);
-      // ...and that one line sits inside place(), not somewhere that merely
-      // looks like it.
-      const placeStart = lines.findIndex((l) => l.includes('private place(role: BuddyRole'));
-      expect(placeStart).toBeGreaterThan(-1);
-      expect(hits[0].i).toBeGreaterThan(placeStart);
-    });
-
-    it('setTitle is called in exactly one place, inside place()', () => {
-      const hits = lines.filter((l) => /\.setTitle\(/.test(l) && !l.trimStart().startsWith('//'));
-      expect(hits.map((l) => l.trim())).toEqual(['if (this.captionLive()) win.setTitle(buildCaption(role, x, y));']);
-    });
 
     it('every one of the nine write sites and three creation sites is still there', () => {
       // The scans above prove nothing moves the buddy EXCEPT through place().
