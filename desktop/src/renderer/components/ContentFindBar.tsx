@@ -81,6 +81,11 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   const [count, setCount] = useState(0);
   const [current, setCurrent] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  // The ranges of the last walk, and a counter that bumps each time they are
+  // rebuilt so the current-match effect below reruns for a NEW set of ranges
+  // even when the count and the current index happen to be unchanged.
+  const rangesRef = useRef<Range[]>([]);
+  const [rangesVersion, setRangesVersion] = useState(0);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
   // New artifact → clear the search.
@@ -88,30 +93,44 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   // New query → jump back to the first match.
   useEffect(() => { setCurrent(0); }, [query]);
 
-  // Recompute + paint highlights whenever the query, current match, or artifact
-  // changes. Scrolls the current match into view if it's off-screen.
+  // WHY two effects (2026-09-16 audit W22): one effect used to walk every text
+  // node in the container on every keystroke AND on every next/previous match,
+  // so moving the highlight by one rebuilt every range — on a fully read
+  // conversation that is ~1.4M DOM nodes per Enter. The walk now happens only
+  // when the query or the artifact changes; moving the current match reuses
+  // the ranges from the ref.
   useEffect(() => {
     const root = containerRef.current;
-    if (!root || !highlightsSupported()) { setCount(0); return; }
+    if (!root || !highlightsSupported()) { rangesRef.current = []; setCount(0); return; }
     const ranges = computeRanges(root, query);
+    rangesRef.current = ranges;
     setCount(ranges.length);
+    setRangesVersion((v) => v + 1);
     if (ranges.length === 0) { clearHighlights(HL, HL_CURRENT); return; }
-    const cur = ((current % ranges.length) + ranges.length) % ranges.length;
     const HighlightCtor = (window as any).Highlight;
     (CSS as any).highlights.set(HL, new HighlightCtor(...ranges));
+  }, [query, resetKey, containerRef, HL, HL_CURRENT]);
+
+  // Paint the current match and scroll it into view if it's off-screen.
+  useEffect(() => {
+    const ranges = rangesRef.current;
+    if (ranges.length === 0 || !highlightsSupported()) return;
+    const cur = ((current % ranges.length) + ranges.length) % ranges.length;
+    const HighlightCtor = (window as any).Highlight;
     (CSS as any).highlights.set(HL_CURRENT, new HighlightCtor(ranges[cur]));
     try {
       // Measure "off-screen" against the actual scrolling viewport, not the
       // searched container (they differ for the chat timeline). Falls back to
       // the container when no scrollRef is given (artifact viewer).
-      const viewport = scrollRef?.current ?? root;
+      const viewport = scrollRef?.current ?? containerRef.current ?? null;
+      if (!viewport) return;
       const rect = ranges[cur].getBoundingClientRect();
       const vpRect = viewport.getBoundingClientRect();
       if (rect.top < vpRect.top || rect.bottom > vpRect.bottom) {
         (ranges[cur].startContainer.parentElement as HTMLElement | null)?.scrollIntoView({ block: 'center' });
       }
     } catch { /* range geometry can throw on detached nodes — ignore */ }
-  }, [query, current, resetKey, containerRef, scrollRef, HL, HL_CURRENT]);
+  }, [current, rangesVersion, containerRef, scrollRef, HL_CURRENT]);
 
   // Always clear highlights when the bar unmounts (closed).
   useEffect(() => () => clearHighlights(HL, HL_CURRENT), [HL, HL_CURRENT]);
