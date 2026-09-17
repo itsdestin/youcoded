@@ -15,6 +15,15 @@ import type { PlanPauseAction, PlanRecoveryCause } from './pause-routing';
 
 export const PLAN_JOURNAL_VERSION = 1 as const;
 
+/**
+ * Final review F6: a proposal refused for a reason written for people (the
+ * plan names a specialist this project doesn't have, no safe model could be
+ * confirmed, …). The failed card shows its message as the reason. Any other
+ * error is unexpected: the card says so generally and keeps the text for the
+ * bug report, because a system message is not a reason a person can act on.
+ */
+export class PlanProposalError extends Error {}
+
 const TOOL_EFFECTS = ['read', 'local', 'external'] as const satisfies readonly ToolEffect[];
 const PLAN_RECOVERY_CAUSES = ['launch-failed', 'specialist-error', 'invalid-report', 'unknown-request', 'unknown-outcome'] as const satisfies readonly PlanRecoveryCause[];
 const PLAN_PAUSE_ACTIONS = ['add_budget', 'continue', 'stop'] as const satisfies readonly PlanPauseAction[];

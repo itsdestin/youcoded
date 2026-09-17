@@ -775,9 +775,10 @@ export type PlanPauseAction = 'add_budget' | 'continue' | 'stop';
 export const PLAN_NOTICE_PREFIX = '[Plan paused]';
 /** Task 11 (pause handoff §6, revision 4): the first line of the notice the
  *  user's "Ask the assistant" sends. The chat, the buddy feed and previews draw
- *  a notice that starts with it as one plain line on the user's side ("You
- *  asked the assistant about this plan."), while an older automatic notice
- *  (same prefix, different words) stays hidden — the user never asked that. */
+ *  a notice that starts with it as the user's own message bubble (decision 21:
+ *  the typed question, or "What should I do about this paused plan?"), while an
+ *  older automatic notice (same prefix, different words) stays hidden — the
+ *  user never asked that. */
 export const PLAN_ASK_NOTICE_LEAD = `${PLAN_NOTICE_PREFIX} The user asked you about this paused plan.`;
 /** Decision 20: the tags that wrap the question the user typed in the Ask box
  *  inside that notice. The chat line reads the question back from between
@@ -802,7 +803,9 @@ export interface PlanView {
   /** Priced per model; null when the model has no published price — the card
    *  then shows the ceiling in tokens only (never a false $0.00). */
   ceilingUsd: number | null;
-  model: { label: string };
+  /** `local` (final review F19): the plan is written by a model on this
+   *  computer, which can take minutes — only then does the writing card say so. */
+  model: { label: string; local?: boolean };
   usedTokens?: number;
   usedUsd?: number | null;
   /** Set when the plan ran without asking because it fell under the user's limit. */
@@ -864,8 +867,6 @@ export interface PlanView {
   /** Task 9b: the assistant replaced this paused plan with a revised one (not
    *  a Comment), so the greyed card must not say "after your comment". */
   revisedOnPause?: boolean;
-  /** The plan this one revises (after a Comment) — the old card greys out. */
-  revisionOf?: string;
   /** Set on the OLD plan once a Comment produced a new one: the card greys out
    *  and points below. */
   revisedBy?: string;
@@ -877,8 +878,11 @@ export interface PlanView {
    *  be capped (ChatGPT), so the limit is approximate — one reply may go past
    *  it before the plan pauses. Wording belongs to the card (Task 5). */
   approximateLimit?: boolean;
-  /** Decision 6: why a failed plan failed — the real reason, never a guess. */
-  failure?: { detail: string };
+  /** Decision 6: why a failed plan failed — the real reason, never a guess.
+   *  Final review F6: `detail` is absent when the cause isn't known (the card
+   *  then shows a general line); `report` is the system's own text, for the
+   *  bug report only. */
+  failure?: { detail?: string; report?: string };
 }
 
 /**
@@ -891,7 +895,9 @@ export interface PlanView {
  * Nothing here ever implies success before the host said so.
  */
 export type PlanUnsupported = { ok: false; unsupported: true; error: string };
-export type PlanFailure = { ok: false; unsupported?: undefined; error: string };
+/** `detail` (final review F11): the system's own text behind a general
+ *  `error`, for the bug report only — never shown on the card. */
+export type PlanFailure = { ok: false; unsupported?: undefined; error: string; detail?: string };
 export type PlanActionResult = { ok: true; plan: PlanView } | PlanFailure | PlanUnsupported;
 export type PlanAutoApproveRead = { ok: true; underTokens: number } | PlanFailure | PlanUnsupported;
 export type PlanSettingsWriteResult = { ok: true } | PlanFailure | PlanUnsupported;

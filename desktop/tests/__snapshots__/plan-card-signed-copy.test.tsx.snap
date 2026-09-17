@@ -32,8 +32,8 @@ exports[`the signed plan card reads exactly as approved > plan-failed 1`] = `
 step plan-step-s1: pending
 step plan-step-s2: pending
 step plan-step-s3: pending
-buttons: Plan: Review the auth module before the releasefailed | 1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens | 2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens | 3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens
-text: Plan: Review the auth module before the releasefailed1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokensSpent 0 tokens of the $0.12 limit (40,000 tokens)"
+buttons: Plan: Review the auth module before the releasefailed | 1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens | 2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens | 3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokens | Report bug | Diagnose with the assistant
+text: Plan: Review the auth module before the releasefailed1.Review the six files that changed in the auth module3 reviewers · at the same timeup to 27,000 tokens2.Check each review against the file it describes3 reviewers · checks each resultup to 9,000 tokens3.Combine the findings into one ranked list1 worker · combines the resultsup to 4,000 tokensSpent 0 tokens of the $0.12 limit (40,000 tokens)The plan couldn't be created.Report bugDiagnose with the assistant"
 `;
 
 exports[`the signed plan card reads exactly as approved > plan-interrupted 1`] = `

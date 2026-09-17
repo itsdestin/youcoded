@@ -21,6 +21,7 @@ import type { SubagentSegment } from '../../../shared/types';
 import { PLAN_UNREADABLE, planAction, usePlanUnsupported } from './plan-bridge';
 import { planChildCard, planWithActivity } from './plan-activity';
 import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
+import { previewSessionKey } from '../../../shared/chatsearch-refs';
 
 /**
  * Specialists stage two — the PLAN CARD (designed 2026-09-05; since Task 5a
@@ -50,7 +51,9 @@ import { useNarrowViewport } from '../../hooks/use-narrow-viewport';
 
 /** "Plan: <goal>" plus the one status phrase the header can carry. */
 export function planDisplay(input: Record<string, unknown>, plan?: PlanView): { label: string; detail: string } {
-  const title = plan?.title || asString(input.title) || 'a plan';
+  // Final review F20: the tool's field is `goal`. A writing/failed/stopped
+  // shell carries no title of its own, so the input names the plan.
+  const title = plan?.title || asString(input.goal) || asString(input.title) || 'a plan';
   const label = `Plan: ${title}`;
   if (!plan) return { label, detail: '' };
   // Task 8 review: shared with the Specialists chip's plan row (plan-status.ts).
@@ -81,11 +84,23 @@ function tokens(n: number): string { return `${n.toLocaleString()} tokens`; }
  *  plan-card-ask.test.tsx). */
 const PLAN_QUESTION_LIMIT = 1_000;
 
+/** Final review F6: a failed plan whose cause isn't known — general, and
+ *  names no cause (docs/error-message-standards.md), with Report bug and
+ *  Diagnose beside it. */
+const PLAN_FAILED_GENERAL = "The plan couldn't be created.";
+
 /** "$0.12"; "less than a cent" rather than a false "$0.00" (error-message
  *  standard: never print a zero that is not one). */
 function usd(n: number): string {
-  if (n > 0 && n < 0.005) return 'less than a cent';
+  if (isUnderACent(n)) return 'less than a cent';
   return `$${n.toFixed(2)}`;
+}
+const isUnderACent = (n: number) => n > 0 && n < 0.005;
+/** Final review F22: an estimate with its marker — "about $0.12" / "~$0.12" —
+ *  but never "about less than a cent" or "~less than a cent" (the words
+ *  already say it is small). */
+function estimateUsd(n: number, marker: string): string {
+  return isUnderACent(n) ? usd(n) : `${marker}${usd(n)}`;
 }
 
 /** Task 8 (review 6, R6-1): a limit one reply can overshoot (ChatGPT sends
@@ -109,7 +124,7 @@ function ceiling(plan: PlanView): string {
   if (plan.ceilingUsd == null) return `Up to ${t} · specialists run on ${plan.model.label}, which has no published price`;
   // A priced ceiling was always "about $X" (a price is an estimate); an
   // approximate one says it with the tilde instead, like its token figure.
-  const dollars = plan.approximateLimit ? `~${usd(plan.ceilingUsd)}` : `about ${usd(plan.ceilingUsd)}`;
+  const dollars = estimateUsd(plan.ceilingUsd, plan.approximateLimit ? '~' : 'about ');
   return `Up to ${dollars} (${t}) · specialists run on ${plan.model.label}`;
 }
 
@@ -122,8 +137,28 @@ function spent(plan: PlanView): string {
  *  cap everywhere on the card (UX run 1, U8: budget/cap/ceiling were four words for one idea). */
 function limit(plan: PlanView): string {
   const t = limitTokens(plan, plan.ceilingTokens);
-  return plan.ceilingUsd == null ? `the ${tokenLimit(plan, plan.ceilingTokens)}` : `the ${approx(plan)}${usd(plan.ceilingUsd)} limit (${t})`;
+  if (plan.ceilingUsd == null) return `the ${tokenLimit(plan, plan.ceilingTokens)}`;
+  // Final review F22: "the less than a cent limit" doesn't read; say it plainly.
+  if (isUnderACent(plan.ceilingUsd)) return `a limit under one cent (${t})`;
+  return `the ${approx(plan)}${usd(plan.ceilingUsd)} limit (${t})`;
 }
+
+/** Final review F24: what one specialist of `step` may use in all — its work
+ *  budget plus its fixed setup cost — so the rows add up to the plan limit. */
+function perSpecialist(step: PlanStepView): number {
+  return step.budgetTokens + (step.setupTokens ?? 0);
+}
+
+/** Final review F1: one id per Add budget press. `crypto.randomUUID` is only
+ *  there in a secure context (a phone browser over plain http has none). */
+function newRequestId(): string {
+  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  return c?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** Final review F25: a conversation preview (previewSessionKey) draws the
+ *  chat's own cards, but nothing on them may act — the plan is not running here. */
+const PREVIEW_KEY_PREFIX = previewSessionKey('');
 
 // ---- the block ---------------------------------------------------------------
 
@@ -136,6 +171,8 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
 }) {
   const plan = useMemo(() => planWithActivity(record, segments), [record, segments]);
   const dispatch = useChatDispatch();
+  // Final review F25: a conversation preview is read-only.
+  const readOnly = sessionId?.startsWith(PREVIEW_KEY_PREFIX) === true;
   // Destin, round 2 (R-1): while the plan is being written the card must be
   // exactly a header row — not a header plus an empty padded body, which read
   // as thicker than every other collapsed tool card.
@@ -155,7 +192,26 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const pausedIndex = plan.steps.findIndex((st) => st.id === plan.paused?.stepId);
   const pausedStep = pausedIndex >= 0 ? plan.steps[pausedIndex] : undefined;
   const minimum = plan.paused?.minimumAddTokens;
-  const [extra, setExtra] = useState(String(minimum ?? pausedStep?.budgetTokens ?? 10000));
+  const defaultExtra = String(minimum ?? pausedStep?.budgetTokens ?? 10000);
+  const [extra, setExtra] = useState(defaultExtra);
+  // Final review F1: the id of this pause's Add budget press. Kept for Retry
+  // and for a second press on the same pause (the host adds nothing twice);
+  // forgotten when the plan leaves the pause, so the next pause gets a new one.
+  const budgetRequest = useRef<string | null>(null);
+  const isPaused = plan.status === 'paused';
+  // Final review F16: a box left open (or a value left typed) belongs to the
+  // pause it was opened on. When the plan leaves that pause — resumed from
+  // another window, say — the boxes close and the next pause starts fresh.
+  const defaultExtraRef = useRef(defaultExtra);
+  defaultExtraRef.current = defaultExtra;
+  useEffect(() => {
+    if (isPaused) { setExtra(defaultExtraRef.current); return; }
+    budgetRequest.current = null;
+    setAdding(false);
+    setAsking(false);
+    setQuestion('');
+  }, [isPaused]);
+  useEffect(() => { if (plan.status !== 'proposed') setCommenting(false); }, [plan.status]);
   // Task 9b: "Add budget pre-filled" — the assistant's amount, never below
   // the host's minimum (the host would refuse less).
   const recommendedTokens = plan.paused?.handoff?.recommendation?.action === 'add_budget' ? plan.paused.handoff.recommendation.addTokens : undefined;
@@ -185,28 +241,33 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const offered: ReadonlyArray<'add_budget' | 'continue' | 'stop'> = plan.paused?.actions
     ?? (pause.kind === 'unknown-outcome' ? ['continue', 'stop'] : pause.kind === 'iteration-cap' ? ['stop'] : ['add_budget', 'stop']);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Final review F15: an error belongs to the state it happened in; once a
+  // push moves the card on, it (and its Retry) no longer applies.
+  const [failed, setFailed] = useState<{ text: string; detail?: string; status: PlanView['status'] } | null>(null);
+  const error = failed && failed.status === plan.status ? failed.text : null;
   // Task 11: "Ask the assistant" on every paused card, except while a question
   // is pending, when this conversation's model can't use tools, or while the
   // ask error line's Retry already offers the same thing — only while that
   // line is actually showing (review fix 3: another action's error hides it,
   // and that error's Retry does not ask).
-  const canAsk = plan.status === 'paused' && !!plan.paused && !handoffPending && !plan.paused.askUnavailable && !(askProblem && !error);
+  const canAsk = !readOnly && plan.status === 'paused' && !!plan.paused && !handoffPending && !plan.paused.askUnavailable && !(askProblem && !error);
   // Task 5b: the card's error line offers Retry (error-message-standards:
   // every error has an action). Retry repeats the button that failed.
-  const lastAction = useRef<(() => void) | null>(null);
+  // Final review F14: it names the action, and Retry runs that action as it
+  // is NOW — with the note, question or amount on the card at that moment.
+  const lastAction = useRef<string | null>(null);
   const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   // Task 5a: a device or host that can't run plans (asked once per window, or
   // learned from a button's answer) keeps every control disabled and says why
   // in the card's own error line. Nothing is retried or shown in advance.
-  const probedUnsupported = usePlanUnsupported();
+  const probedUnsupported = usePlanUnsupported(!readOnly);
   const [answeredUnsupported, setAnsweredUnsupported] = useState<string | null>(null);
   const unsupported = answeredUnsupported ?? probedUnsupported?.error ?? null;
   const blocked = busy !== null || unsupported !== null;
   const revised = plan.status === 'stopped' && !!plan.revisedBy;
   // Only a card that offers buttons explains why they are disabled; a
   // finished, failed or revised card has nothing to refuse (Task 5a review).
-  const hasControls = !revised && (plan.status === 'proposed' || plan.status === 'running' || plan.status === 'paused' || plan.status === 'interrupted');
+  const hasControls = !readOnly && !revised && (plan.status === 'proposed' || plan.status === 'running' || plan.status === 'paused' || plan.status === 'interrupted');
   // Task 5a review: `busy` is React state and does not update between two
   // presses in the same tick (double Enter in the comment box sent the note
   // twice). A ref closes that gap: one call at a time per card.
@@ -218,27 +279,30 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // Task 5b: answers the landed record (or null) so Add budget can decide
   // whether the plan still needs a Continue.
   const act = async (name: string, fn: Parameters<typeof planAction>[0]): Promise<PlanView | null> => {
-    if (!sessionId || unsupported !== null || inFlight.current) return null;
+    if (!sessionId || readOnly || unsupported !== null || inFlight.current) return null;
     inFlight.current = true;
-    setBusy(name); setError(null);
+    // The status the press was made in: the error it may leave belongs there.
+    const at = plan.status;
+    setBusy(name); setFailed(null);
     try {
       const res = await planAction(fn);
       if (res.ok) { dispatch({ type: 'PLAN_CHANGED', sessionId, plan: res.plan }); return res.plan; }
       if (res.unsupported) setAnsweredUnsupported(res.error);
-      else setError(res.error);
+      else setFailed({ text: res.error, ...(res.detail ? { detail: res.detail } : {}), status: at });
       return null;
     } finally { inFlight.current = false; setBusy(null); }
   };
   const id = sessionId ?? '';
-  const approve = () => { lastAction.current = approve; return act('approve', (b) => b.approve(id, plan.planId)); };
+  const approve = () => { lastAction.current = 'approve'; return act('approve', (b) => b.approve(id, plan.planId)); };
   // A refused note or amount stays where it was typed, so it can be sent again.
-  const sendComment = () => { lastAction.current = sendComment; return act('comment', (b) => b.comment(id, plan.planId, comment.trim())).then((ok) => { if (ok) { setComment(''); setCommenting(false); } }); };
+  const sendComment = () => { lastAction.current = 'comment'; return act('comment', (b) => b.comment(id, plan.planId, comment.trim())).then((ok) => { if (ok) { setComment(''); setCommenting(false); } }); };
   const addBudget = async () => {
     // Task 5b: an amount under the host's minimum is refused here, before
     // anything is sent — the host would refuse it anyway.
     if (belowMinimum) return;
-    lastAction.current = addBudget;
-    const landed = await act('budget', (b) => b.addBudget(id, plan.planId, Number(extra) || 0));
+    lastAction.current = 'budget';
+    budgetRequest.current ??= newRequestId();
+    const landed = await act('budget', (b) => b.addBudget(id, plan.planId, Number(extra) || 0, budgetRequest.current!));
     if (!landed) return;
     setAdding(false);
     // Task 5b: the real host only raises the limit and leaves the plan
@@ -246,33 +310,44 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     // the plan stopped"), so the card presses Continue for the user. An
     // answer that already runs the plan (the workbench fake) is not resumed
     // a second time.
-    // Retry after THIS step must only continue — repeating addBudget would
-    // add the tokens twice.
-    if (landed.status === 'paused') { lastAction.current = cont; await act('continue', (b) => b.resume(id, plan.planId)); }
+    // Retry after THIS step only continues (a repeated Add budget would add
+    // nothing anyway: same request id, final review F1).
+    if (landed.status === 'paused') { lastAction.current = 'continue'; await act('continue', (b) => b.resume(id, plan.planId)); }
   };
-  const cont = () => { lastAction.current = cont; return act('continue', (b) => b.resume(id, plan.planId)); };
-  const stop = () => { lastAction.current = stop; return act('stop', (b) => b.stop(id, plan.planId)); };
+  const cont = () => { lastAction.current = 'continue'; return act('continue', (b) => b.resume(id, plan.planId)); };
+  const stop = () => { lastAction.current = 'stop'; return act('stop', (b) => b.stop(id, plan.planId)); };
   // Task 11 (§6): the host checks, records and queues; the card only lands the
   // greyed record it answers. `act` ignores presses while one is in flight.
-  // Decision 20: the question travels with the request; Retry (the card's
-  // error slot or the ask error line) asks again with the same words.
+  // Decision 20: the question travels with the request.
   const sendAsk = (text: string): Promise<void> => {
-    const again = () => sendAsk(text);
-    lastAction.current = again;
     return act('ask', (b) => b.askAssistant(id, plan.planId, text)).then((landed) => {
       // A refused question stays where it was typed, so it can be sent again.
       if (landed) { setAsking(false); setQuestion(''); }
     });
   };
-  const submitAsk = () => { if (!questionTooLong) void sendAsk(question.trim()); };
-  const askAgain = () => sendAsk(handoff?.question ?? '');
-  const retry = () => { void lastAction.current?.(); };
-  // Report bug / Diagnose open the app's ticket screen with the real text.
+  const submitAsk = () => { lastAction.current = 'ask'; if (!questionTooLong) void sendAsk(question.trim()); };
+  // The ask error line's Retry asks again with the words that were asked.
+  const askAgain = () => { lastAction.current = 'ask-again'; return sendAsk(handoff?.question ?? ''); };
+  // Final review F14: the latest version of each action, read at Retry time.
+  const actions = useRef<Record<string, () => unknown>>({});
+  actions.current = {
+    approve, comment: sendComment, budget: addBudget, continue: cont, stop,
+    // The Ask box is still open after a refused question: send what it holds now.
+    ask: () => (asking ? submitAsk() : askAgain()),
+    'ask-again': askAgain,
+  };
+  const retry = () => { const name = lastAction.current; if (name) void actions.current[name]?.(); };
+  // Report bug / Diagnose open the app's ticket screen with the real text
+  // (final review F11: the system's own detail when there is one).
   const report = (errorText: string, diagnose: boolean) => setReportContext({ surface: 'a plan card', error: errorText, ...(diagnose ? { diagnose } : {}) });
+  const reportText = (text: string, detail?: string) => (detail ? `${text}\n\n${detail}` : text);
 
   const specialists = plan.steps.reduce((n, s) => n + s.fanOut, 0);
   const done = plan.steps.filter((s) => s.status === 'done').length;
   if (writing) return null;
+  // Final review F21: a proposal stopped before it was written has nothing to
+  // show under its header ("Plan: … · stopped").
+  if (plan.status === 'stopped' && plan.steps.length === 0 && !plan.revisedBy) return null;
 
   return (
     // Task 9b: a pause handed to the assistant greys the card like a revised
@@ -302,12 +377,11 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               // A revised plan never ran, so it keeps its proposal line rather
               // than a meaningless "Spent 0" (UX run 1 follow-up).
               ? <>{specialists} specialist{specialists === 1 ? '' : 's'} · {ceiling(plan)}</>
-              // UX run 1, U16: the header already says how long it took.
-              : plan.status === 'completed'
-                ? <>Spent {spent(plan)} of {limit(plan)}</>
-                : <>Spent {spent(plan)} of {limit(plan)}</>}
+              // UX run 1, U16: the header already says how long it took, so a
+              // finished plan reads like any other: what it spent of its limit.
+              : <>Spent {spent(plan)} of {limit(plan)}</>}
           </span>
-            {plan.status === 'running' && (
+            {plan.status === 'running' && !readOnly && (
               <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
                 <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop the plan'}</Button>
               </div>
@@ -315,7 +389,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             {/* Task 8 (review 6, R6-4; design guide G-29): Comment (light) on
                 the left, the filled Approve rightmost. Hidden while the comment
                 box is open — that box carries its own Cancel · Send. */}
-            {plan.status === 'proposed' && !commenting && (
+            {plan.status === 'proposed' && !commenting && !readOnly && (
               <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
                 <Button size="sm" variant="secondary" onClick={() => setCommenting(true)} disabled={blocked}>Comment</Button>
                 <Button size="sm" variant="primary" onClick={approve} disabled={blocked}>{busy === 'approve' ? 'Approving…' : 'Approve'}</Button>
@@ -328,14 +402,21 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               words, with the two actions for a failure the user cannot fix
               from here (error-message-standards §2). No reason → no block:
               nothing is invented. */}
-          {plan.status === 'failed' && plan.failure?.detail && (
-            <ErrorState
-              variant="inline"
-              message={plan.failure.detail}
-              onReportBug={() => report(plan.failure!.detail, false)}
-              onDiagnose={() => report(plan.failure!.detail, true)}
-            />
-          )}
+          {/* Final review F6: a failed card ALWAYS says something. With no
+              known reason it says so generally (the system's own text, when
+              there is some, goes only to the report). */}
+          {plan.status === 'failed' && (() => {
+            const shown = plan.failure?.detail ?? PLAN_FAILED_GENERAL;
+            const toReport = reportText(shown, plan.failure?.report);
+            return (
+              <ErrorState
+                variant="inline"
+                message={shown}
+                onReportBug={() => report(toReport, false)}
+                onDiagnose={() => report(toReport, true)}
+              />
+            );
+          })()}
 
           {plan.autoApproved && (
             <div className="text-2xs text-fg-muted">Ran without asking — under the limit you set in Settings.</div>
@@ -355,7 +436,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               // Task 11: at 390 px the buttons move under the reason instead
               // of crushing it into a one-letter column.
               wrapAction
-              action={handoffPending || asking ? undefined : !adding ? (
+              action={handoffPending || asking || readOnly ? undefined : !adding ? (
                 <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-pause-actions">
                   {/* Task 11 (§6, G-29): Ask is a light button, far left. */}
                   {canAsk && (
@@ -384,7 +465,8 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                 <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-add-budget">
                   <span className="text-xs text-fg-dim">Allow</span>
                   <TextInput size="sm" inputMode="numeric" value={Number(extra) ? Number(extra).toLocaleString() : extra} onChange={(e) => setExtra(e.target.value.replace(/[^0-9]/g, ''))} className="w-20" aria-label="Tokens to allow" />
-                  <span className="text-xs text-fg-dim">tokens{plan.ceilingUsd != null && plan.ceilingTokens > 0 ? ` (${usd((Number(extra) || 0) * (plan.ceilingUsd / plan.ceilingTokens))})` : ''}</span>
+                  {/* Final review F23: an approximate plan's dollar figure wears the tilde too (R26). */}
+                  <span className="text-xs text-fg-dim">tokens{plan.ceilingUsd != null && plan.ceilingTokens > 0 ? ` (${estimateUsd((Number(extra) || 0) * (plan.ceilingUsd / plan.ceilingTokens), approx(plan))})` : ''}</span>
                   <Button size="sm" variant="ghost" onClick={() => setAdding(false)} disabled={blocked}>Cancel</Button>
                   <Button size="sm" variant="primary" onClick={addBudget} disabled={blocked || !(Number(extra) > 0) || belowMinimum}>{busy === 'budget' || busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
                 </div>
@@ -421,7 +503,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               general line that names none, with Report bug and Diagnose.
               Retry asks again. Hidden while the card's own error slot shows a
               newer failure (that one has its own Retry). */}
-          {askProblem && !error && (
+          {askProblem && !error && !readOnly && (
             <div data-testid="plan-ask-error">
               {askProblem.kind === 'no-start' ? (
                 // "10 minutes" is main's backstop (plan-handoff.ts
@@ -443,7 +525,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
 
           {/* Decision 20: the Ask box — the Comment box's shape (G-29:
               Cancel light on the left, Send filled on the right). */}
-          {plan.status === 'paused' && asking && !handoffPending && (
+          {plan.status === 'paused' && asking && !handoffPending && !readOnly && (
             <div className="space-y-1.5" data-testid="plan-ask-box">
               <Textarea
                 size="sm"
@@ -470,7 +552,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               tone="idle"
               surface="tinted"
               className="!py-2"
-              action={(
+              action={readOnly ? undefined : (
                 <div className="flex items-center gap-2 shrink-0">
                   <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
                   <Button size="sm" variant="primary" onClick={cont} disabled={blocked}>{busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
@@ -490,7 +572,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             </div>
           )}
 
-          {plan.status === 'proposed' && commenting && (
+          {plan.status === 'proposed' && commenting && !readOnly && (
             <div className="space-y-1.5" data-testid="plan-comment">
               <Textarea
                 size="sm"
@@ -517,7 +599,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
           (5b review). Never a bare red
           sentence (design guide §4.7). */}
       {error && (error === PLAN_UNREADABLE
-        ? <ErrorState variant="inline" message={error} onReportBug={() => report(error, false)} onDiagnose={() => report(error, true)} onRetry={retry} />
+        ? <ErrorState variant="inline" message={error} onReportBug={() => report(reportText(error, failed?.detail), false)} onDiagnose={() => report(reportText(error, failed?.detail), true)} onRetry={retry} />
         : <ErrorState variant="inline" message={error} onRetry={retry} />)}
       {/* "Plans aren't available here" is why the buttons are disabled, not a
           failure: a quiet note beside them (design guide §4.7 "Disabled"). */}
@@ -575,7 +657,8 @@ export function PlanWritingDetail({ plan }: { plan: PlanView }) {
   const elapsed = formatElapsed(Math.max(0, now - (plan.startedAt ?? now)));
   return (
     <span className="text-xs text-fg-muted truncate flex-1 min-w-0" data-testid="plan-writing">
-      writing the plan · {elapsed}{plan.ceilingUsd == null ? ' · can take a few minutes on your computer' : ''}
+      {/* Final review F19: only a model on this computer is that slow. */}
+      writing the plan · {elapsed}{plan.model.local ? ' · can take a few minutes on your computer' : ''}
     </span>
   );
 }
@@ -612,8 +695,9 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
   // move to a second line there. Wide screens keep the signed one-line row.
   const narrow = useNarrowViewport();
   const right =
-    step.status === 'pending' || plan.status === 'proposed' ? `up to ${limitTokens(plan, step.budgetTokens * step.fanOut)}`
-    : step.status === 'running' || step.status === 'paused' ? `${step.done ?? 0} of ${step.fanOut} ${step.specialist}s done · ${tokens(step.usedTokens ?? 0)}`
+    step.status === 'pending' || plan.status === 'proposed' ? `up to ${limitTokens(plan, perSpecialist(step) * step.fanOut)}`
+    // Final review F26: "0 of 1 reviewer done", not "reviewers".
+    : step.status === 'running' || step.status === 'paused' ? `${step.done ?? 0} of ${step.fanOut} ${step.specialist}${step.fanOut === 1 ? '' : 's'} done · ${tokens(step.usedTokens ?? 0)}`
     : step.status === 'done' ? tokens(step.usedTokens ?? 0)
     : '';
   return (
@@ -627,7 +711,8 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
           <span className="flex items-center gap-2 min-w-0">
             <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
             <span className="text-xs text-fg-muted tabular-nums shrink-0">{index + 1}.</span>
-            <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} truncate flex-1 min-w-0`} data-testid="plan-step-title">{step.title}</span>
+            {/* Final review F8 (R41): on a narrow window the title wraps. */}
+            <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} break-words flex-1 min-w-0`} data-testid="plan-step-title">{step.title}</span>
             <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
           </span>
           {/* Lined up under the title (glyph 0.875rem + gap 0.5rem). */}
@@ -656,7 +741,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
             step.children.map((c) => <PlanSpecialistCard key={c.childId} child={c} sessionId={sessionId} />)
           ) : (
             <div className="text-2xs text-fg-muted">
-              Each {step.specialist} stops at its {tokenLimit(plan, step.budgetTokens)}.
+              Each {step.specialist} stops at its {tokenLimit(plan, perSpecialist(step))}.
             </div>
           )}
         </div>
@@ -677,6 +762,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
  * per specialist, so there is no tool card to hang them on.
  */
 function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessionId?: string }) {
+  const readOnly = sessionId?.startsWith(PREVIEW_KEY_PREFIX) === true;
   const tool = useMemo<ToolCallState>(() => planChildCard(child), [child]);
   // Task 5a: this specialist's ask is answered inside its Activity, so the row
   // opens when one arrives (Activity itself opens for it — AgentSections).
@@ -720,7 +806,7 @@ function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessio
       {open && (
         <div className="px-2 py-1.5 border-t border-edge-dim space-y-1">
           <AgentSections tool={tool} sessionId={sessionId}>
-            {child.status === 'running' && sessionId && <SpecialistActions sessionId={sessionId} run={child} />}
+            {child.status === 'running' && sessionId && !readOnly && <SpecialistActions sessionId={sessionId} run={child} />}
           </AgentSections>
         </div>
       )}

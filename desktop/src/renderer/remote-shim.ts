@@ -8,7 +8,7 @@ import type { VoiceReadiness } from '../shared/voice-types';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
-import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
+import { REMOTE_HOST_CHANGED_EVENT, REMOTE_NOT_SENT, REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT } from './remote-events';
 import type { FirstRunState } from '../shared/first-run-types';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
@@ -453,6 +453,19 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   // already saved (appearance:set); a copy queued while offline could replay an old theme over
   // a newer one chosen on the computer meanwhile, so it is never queued.
   'appearance:broadcast': 'user-action',
+  // Final review F5: a plan button is a person's decision (Approve, Add budget,
+  // Stop …). Queued while reconnecting, it could run after its own 30 s timer
+  // had already told the card it failed — so it is refused on the spot
+  // instead (invoke rejects with REMOTE_NOT_SENT). Reading the setting is safe
+  // to send again.
+  'plans:approve': 'user-action',
+  'plans:comment': 'user-action',
+  'plans:add-budget': 'user-action',
+  'plans:resume': 'user-action',
+  'plans:stop': 'user-action',
+  'plans:ask-assistant': 'user-action',
+  'plans:set-auto-approve': 'user-action',
+  'plans:get-auto-approve': 'read',
 };
 
 /**
@@ -634,7 +647,14 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
     }, timeoutMs);
     pending.set(id, { resolve, reject, timeout, type });
     if (REHYDRATE_ON_RECONNECT.includes(type)) lastReadPayload.set(type, payload);
-    send({ type, id, payload });
+    if (!send({ type, id, payload })) {
+      // Final review F5: a person's action refused while the connection is
+      // down (send() never queues those). It was not sent, so it is certain
+      // it did not run: say so now rather than after the 30 s timeout.
+      clearTimeout(timeout);
+      pending.delete(id);
+      reject(new Error(REMOTE_NOT_SENT));
+    }
   });
 }
 
@@ -1753,6 +1773,7 @@ export async function connectToHost(host: string, port: number, password: string
     localStorage.setItem('youcoded-remote-target', targetUrl);
     preservePlatform = false;
     setConnectionMode('remote');
+    announceHostChanged();
   } catch (err) {
     console.error('[remote-shim] connectToHost failed:', (err as Error)?.message);
     // Same leak class as scheduleReconnect's MAX_RECONNECT branch:
@@ -1771,8 +1792,16 @@ export async function connectToHost(host: string, port: number, password: string
     targetUrl = null;
     preservePlatform = false;
     localStorage.removeItem('youcoded-remote-target');
-    connect('android-local', false).catch(() => {});
+    connect('android-local', false).then(announceHostChanged, () => {});
     throw err;
+  }
+}
+
+/** Final review F9: the page now talks to a different host. Anything cached
+ *  about the old one (can it run plans?) is asked again. */
+function announceHostChanged(): void {
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent(REMOTE_HOST_CHANGED_EVENT));
   }
 }
 
@@ -1800,6 +1829,7 @@ export async function disconnectFromHost(): Promise<void> {
   await connect('android-local', false);
 
   setConnectionMode('local');
+  announceHostChanged();
 }
 
 /**

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type {
   PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult, PlanUnsupported, PlanView,
 } from '../../../shared/types';
+import { REMOTE_HOST_CHANGED_EVENT, REMOTE_NOT_SENT } from '../../remote-unsupported';
 
 /**
  * Specialists plans, Task 5a — the ONE place the renderer talks to
@@ -29,16 +30,30 @@ const UNREADABLE = "Couldn't update the plan. Please try again.";
  *  own reason, because only the general one also offers Report bug. */
 export const PLAN_UNREADABLE = UNREADABLE;
 const UNREADABLE_SETTINGS = "Couldn't read the plan settings. Please try again.";
+const UNSAVED_SETTINGS = "Couldn't save the plan settings. Please try again.";
+/** Final review F11: the general settings lines, so Settings can offer
+ *  Report bug beside Retry for them (no known cause). */
+export const PLAN_SETTINGS_GENERAL: ReadonlySet<string> = new Set([UNREADABLE_SETTINGS, UNSAVED_SETTINGS]);
+
+/** Final review F10: a refusal that names an internal channel id (an older
+ *  desktop's "isn't available over remote access yet (plans:…)") means
+ *  nothing to a person; the plain line says the same thing. */
+const CHANNEL_ID = /\b[a-z][a-z-]*:[a-z][a-z-]*\b/;
 
 function bridge(): PlansBridge | undefined {
   return (window as { claude?: { plans?: PlansBridge } }).claude?.plans;
 }
 
 function refusal(raw: unknown, fallback: string): PlanActionResult & { ok: false } | null {
-  const r = raw as { ok?: unknown; unsupported?: unknown; error?: unknown } | null | undefined;
+  const r = raw as { ok?: unknown; unsupported?: unknown; error?: unknown; detail?: unknown } | null | undefined;
   if (!r || typeof r !== 'object' || r.ok !== false) return null;
   const error = typeof r.error === 'string' && r.error.trim() ? r.error : fallback;
-  return r.unsupported === true ? { ok: false, unsupported: true, error } : { ok: false, error };
+  if (r.unsupported === true) {
+    return { ok: false, unsupported: true, error: CHANNEL_ID.test(error) ? NO_BRIDGE.error : error };
+  }
+  // Final review F11: the host's own detail (a system error) rides along for
+  // the bug report only; the card shows `error`.
+  return typeof r.detail === 'string' && r.detail.trim() ? { ok: false, error, detail: r.detail } : { ok: false, error };
 }
 
 function isPlanView(v: unknown): v is PlanView {
@@ -66,22 +81,29 @@ function normalizePlanRead(raw: unknown): PlanAutoApproveRead {
 }
 
 function normalizePlanWrite(raw: unknown): PlanSettingsWriteResult {
-  const refused = refusal(raw, "Couldn't save the plan settings. Please try again.");
+  const refused = refusal(raw, UNSAVED_SETTINGS);
   if (refused) return refused;
   const r = raw as { ok?: unknown } | null | undefined;
-  return r && r.ok === true ? { ok: true } : { ok: false, error: "Couldn't save the plan settings. Please try again." };
+  return r && r.ok === true ? { ok: true } : { ok: false, error: UNSAVED_SETTINGS };
 }
 
-/** Run one call; a missing bridge is `unsupported`, a thrown call is a failure
- *  carrying the transport's own message (the shims word theirs for people). */
+/**
+ * Run one call; a missing bridge is `unsupported`.
+ * Final review F1/F10/F11: a THROWN call has no known cause for the person —
+ * a timeout ("Request plans:add-budget timed out") may even have succeeded —
+ * so it answers the general line (which offers Report bug and Retry) and keeps
+ * the transport's text for the bug report. The one thrown error with a known
+ * cause is the shim's "nothing was sent" (F5), shown as it is.
+ */
 async function call<T>(fn: (b: PlansBridge) => Promise<unknown>, normalize: (raw: unknown) => T, fallback: string): Promise<T | PlanActionResult> {
   const b = bridge();
   if (!b) return NO_BRIDGE;
   try {
     return normalize(await fn(b));
   } catch (e) {
-    const message = e instanceof Error && e.message.trim() ? e.message : fallback;
-    return { ok: false, error: message };
+    const message = e instanceof Error ? e.message.trim() : '';
+    if (message === REMOTE_NOT_SENT) return { ok: false, error: REMOTE_NOT_SENT };
+    return message ? { ok: false, error: fallback, detail: message } : { ok: false, error: fallback };
   }
 }
 
@@ -94,7 +116,7 @@ export function readPlanAutoApprove(): Promise<PlanAutoApproveRead> {
 }
 
 export function writePlanAutoApprove(underTokens: number): Promise<PlanSettingsWriteResult> {
-  return call((b) => b.setAutoApprove(underTokens), normalizePlanWrite, "Couldn't save the plan settings. Please try again.") as Promise<PlanSettingsWriteResult>;
+  return call((b) => b.setAutoApprove(underTokens), normalizePlanWrite, UNSAVED_SETTINGS) as Promise<PlanSettingsWriteResult>;
 }
 
 // ---- can this device run plans? --------------------------------------------
@@ -117,13 +139,30 @@ export function resetPlanSupportForTests(): void {
   support = null;
 }
 
-/** null while unknown or supported; the host's refusal when plans can't run here. */
-export function usePlanUnsupported(): PlanUnsupported | null {
+// Final review F9: the cached answer belongs to the host that gave it. When
+// the remote shim switches hosts without a reload (a phone that first answered
+// "unsupported" for itself, then connected to a computer that can run plans),
+// the answer is forgotten and every card on screen asks again.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener(REMOTE_HOST_CHANGED_EVENT, () => { support = null; });
+}
+
+/** null while unknown or supported; the host's refusal when plans can't run here.
+ *  `enabled: false` (a read-only preview) never asks. */
+export function usePlanUnsupported(enabled = true): PlanUnsupported | null {
   const [state, setState] = useState<PlanUnsupported | null>(null);
+  const [hostEpoch, setHostEpoch] = useState(0);
   useEffect(() => {
+    if (!enabled) return;
+    const onHostChanged = () => { support = null; setHostEpoch((n) => n + 1); };
+    window.addEventListener(REMOTE_HOST_CHANGED_EVENT, onHostChanged);
+    return () => window.removeEventListener(REMOTE_HOST_CHANGED_EVENT, onHostChanged);
+  }, [enabled]);
+  useEffect(() => {
+    if (!enabled) return;
     let alive = true;
     void probe().then((r) => { if (alive) setState(r); });
     return () => { alive = false; };
-  }, []);
+  }, [enabled, hostEpoch]);
   return state;
 }

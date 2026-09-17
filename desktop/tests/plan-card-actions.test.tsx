@@ -101,13 +101,14 @@ describe('card actions land only what the host answered', () => {
     fireEvent.change(screen.getByLabelText('Tokens to allow'), { target: { value: '1,000' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByText('Add at least 1,200 tokens so the specialist can continue.');
-    expect(plans.addBudget).toHaveBeenLastCalledWith(S, 'plan-1', 1000);
+    // Final review F1: the press's request id rides along (the same one for this pause).
+    expect(plans.addBudget).toHaveBeenLastCalledWith(S, 'plan-1', 1000, expect.any(String));
     expect(screen.getByTestId('plan-add-budget')).toBeInTheDocument();
     expect(status()).toBe('paused');
     fireEvent.change(screen.getByLabelText('Tokens to allow'), { target: { value: '1200' } });
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(status()).toBe('running'));
-    expect(plans.addBudget).toHaveBeenLastCalledWith(S, 'plan-1', 1200);
+    expect(plans.addBudget).toHaveBeenLastCalledWith(S, 'plan-1', 1200, plans.addBudget.mock.calls[0][3]);
   });
 
   it('Continue (interrupted) and Stop go to resume and stop', async () => {
@@ -196,11 +197,16 @@ describe('card actions land only what the host answered', () => {
     expect(status()).toBe('proposed');
   });
 
-  it('a thrown call shows its message and changes nothing', async () => {
+  // Final review F10/F11: a thrown call's cause isn't known to the person (a
+  // timeout may even have succeeded), so the card shows the general line with
+  // Report bug and Retry; the transport's own text goes only to the report.
+  it('a thrown call shows the general line and changes nothing', async () => {
     bridge({ stop: vi.fn().mockRejectedValue(new Error('The desktop stopped answering.')) });
     render(<ChatProvider><Card initial={plan({ status: 'running' })} /></ChatProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Stop the plan' }));
-    await screen.findByText('The desktop stopped answering.');
+    await screen.findByText("Couldn't update the plan. Please try again.");
+    expect(screen.queryByText('The desktop stopped answering.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
     expect(status()).toBe('running');
   });
 });
@@ -227,21 +233,25 @@ describe('Settings → Plans reads and writes through the normalized forms', () 
   it('a refused write shows the reason and leaves the setting as it was', async () => {
     bridge({
       getAutoApprove: vi.fn().mockResolvedValue({ ok: true, underTokens: 5000 }),
-      setAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't save the plan settings: disk full" }),
+      // What the host answers now (final review F11): the general line, the
+      // system's text only in `detail`.
+      setAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't save the plan settings. Please try again.", detail: 'ENOSPC: disk full' }),
     });
     render(<PlansSettings />);
     const toggle = await screen.findByRole('switch', { name: 'Run small plans without asking' });
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
     expect(screen.getByLabelText('Token limit for plans that run without asking')).toHaveValue('5000');
     fireEvent.click(toggle);
-    await screen.findByText("Couldn't save the plan settings: disk full");
+    await screen.findByText("Couldn't save the plan settings. Please try again.");
+    expect(screen.queryByText(/ENOSPC/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
     expect(toggle).toHaveAttribute('aria-checked', 'true');
   });
 
   it('a failed read says so and keeps the switch disabled', async () => {
-    bridge({ getAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't read the plan settings: bad file" }) });
+    bridge({ getAutoApprove: vi.fn().mockResolvedValue({ ok: false, error: "Couldn't read the plan settings. Please try again.", detail: 'bad file' }) });
     render(<PlansSettings />);
-    await screen.findByText("Couldn't read the plan settings: bad file");
+    await screen.findByText("Couldn't read the plan settings. Please try again.");
     expect(screen.getByRole('switch', { name: 'Run small plans without asking' })).toBeDisabled();
   });
 

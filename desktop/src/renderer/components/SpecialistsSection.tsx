@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SpecialistDefinitionView, DelegatedModelsView, SpecialistsListResult } from '../../shared/types';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 import { Button, EmptyState, ErrorState, FieldError, LoadingState, SettingRow, TextInput, Toggle } from './ui';
 import type { ExplainerSection } from './SettingsExplainer';
 import { refreshSpecialistRoster, useSpecialistRoster, provenanceWithinGroup, NOT_IMPLEMENTED_ON_MOBILE } from '../hooks/useSpecialists';
 import { AUTOMATIC_SPECIALIST_MODEL_COPY, SPECIALIST_DEFAULTS_CHANGED_EVENT } from './SpecialistModelUnavailable';
-import { readPlanAutoApprove, writePlanAutoApprove } from './plans/plan-bridge';
+import { PLAN_SETTINGS_GENERAL, readPlanAutoApprove, writePlanAutoApprove } from './plans/plan-bridge';
+import { BugReportPopup } from './development/BugReportPopup';
 
 // Specialists 1c — Settings → Specialists. Two things, in the order a person
 // needs them: (1) the two model tiers the assistant can hire onto (Destin's
@@ -337,35 +338,65 @@ export default function SpecialistsSection({ cwd }: {
 export function PlansSettings() {
   const [under, setUnder] = useState<number | null>(null);
   const [draft, setDraft] = useState('20000');
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  // Final review F12: every error here offers Retry (and Report bug when the
+  // cause isn't known); `retry` repeats exactly what failed.
+  const [error, setError] = useState<{ text: string; detail?: string; retry: () => void } | null>(null);
+  const [reporting, setReporting] = useState<string | null>(null);
+  // Final review F13: which kind of write is out. One write at a time.
+  const [saving, setSaving] = useState<'toggle' | 'amount' | null>(null);
   const [unsupported, setUnsupported] = useState(false);
-  useEffect(() => {
-    let alive = true;
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const load = useCallback(() => {
+    setError(null);
     void readPlanAutoApprove().then((r) => {
-      if (!alive) return;
+      if (!alive.current) return;
       if (r.ok) {
         setUnder(r.underTokens);
         if (r.underTokens > 0) setDraft(String(r.underTokens));
       } else if (r.unsupported) setUnsupported(true);
-      else setError(r.error);
+      else setError({ text: r.error, ...(r.detail ? { detail: r.detail } : {}), retry: load });
     });
-    return () => { alive = false; };
   }, []);
-  const save = async (n: number) => {
-    setSaving(true); setError(null);
+  useEffect(() => { load(); }, [load]);
+  // Final review F13: editing the amount and then clicking the switch starts
+  // the amount's save first. The click is not lost and does not race it: a
+  // choice made while a write is out waits, and the LATEST one is written
+  // when that write lands (the switch still moves only on what was saved).
+  const inFlight = useRef(false);
+  const queued = useRef<number | null>(null);
+  const save = async (n: number, source: 'toggle' | 'amount') => {
+    if (inFlight.current) { queued.current = n; return; }
+    inFlight.current = true;
+    setSaving(source); setError(null);
+    let next: number | null = n;
     try {
-      const res = await writePlanAutoApprove(n);
-      if (res.ok) setUnder(n);
-      else if (res.unsupported) setUnsupported(true);
-      else setError(res.error);
-    } finally { setSaving(false); }
+      while (next !== null) {
+        const value: number = next;
+        queued.current = null;
+        const res = await writePlanAutoApprove(value);
+        if (!alive.current) return;
+        if (res.ok) setUnder(value);
+        else if (res.unsupported) { setUnsupported(true); return; }
+        else {
+          // A later choice is dropped with the failure: Retry repeats this one.
+          setError({ text: res.error, ...(res.detail ? { detail: res.detail } : {}), retry: () => void save(value, source) });
+          return;
+        }
+        next = queued.current;
+      }
+    } finally {
+      inFlight.current = false;
+      queued.current = null;
+      if (alive.current) setSaving(null);
+    }
   };
   if (unsupported) return null;
   const on = (under ?? 0) > 0;
+  const general = error !== null && PLAN_SETTINGS_GENERAL.has(error.text);
   // Q-4 on the questions deck: OFF until the user turns it on — every plan
   // asks until they decide they trust the card. The amount is the one number
-  // a plan card prints (its ceiling), so the row speaks in the same unit the
+  // a plan card prints (its limit), so the row speaks in the same unit the
   // card does. SettingRow variant="item" + Toggle: the one shape every boolean
   // setting takes (design guide §4.6; setting-row-authority guards it).
   return (
@@ -375,8 +406,9 @@ export function PlansSettings() {
         <SettingRow
           variant="item"
           title="Run small plans without asking"
-          description="A plan under the limit starts on its own; its card still shows the ceiling. Bigger plans always ask."
-          control={<Toggle checked={on} onChange={(next) => void save(next ? (Number(draft) || 20000) : 0)} disabled={under === null || saving} aria-label="Run small plans without asking" />}
+          // Final review F33: "limit", the card's one word for it.
+          description="A plan under the limit starts on its own; its card still shows the limit. Bigger plans always ask."
+          control={<Toggle checked={on} onChange={(next) => void save(next ? (Number(draft) || 20000) : 0, 'toggle')} disabled={under === null || saving === 'toggle'} aria-label="Run small plans without asking" />}
         />
         {/* UX run 1, U3: the limit is visible even while the switch is off, so
             "small" always has a number next to it; the field just cannot be
@@ -387,15 +419,29 @@ export function PlansSettings() {
               size="sm"
               inputMode="numeric"
               className="w-24"
-              disabled={!on || saving}
+              disabled={!on || saving !== null}
               value={draft}
               aria-label="Token limit for plans that run without asking"
               onChange={(e) => setDraft(e.target.value.replace(/[^0-9]/g, ''))}
-              onBlur={() => { const n = Number(draft); if (n > 0 && n !== under) void save(n); }}
+              onBlur={() => { const n = Number(draft); if (n > 0 && n !== under) void save(n, 'amount'); }}
             />
             <span className="text-2xs text-fg-dim">tokens</span>
         </div>
-        {error && <div className="px-3"><FieldError>{error}</FieldError></div>}
+        {error && (
+          <div className="px-3">
+            {general ? (
+              <ErrorState
+                variant="inline"
+                message={error.text}
+                onReportBug={() => setReporting(error.detail ? `${error.text}\n\n${error.detail}` : error.text)}
+                onRetry={error.retry}
+              />
+            ) : (
+              <ErrorState variant="inline" message={error.text} onRetry={error.retry} />
+            )}
+          </div>
+        )}
+        <BugReportPopup open={reporting !== null} onClose={() => setReporting(null)} context={reporting !== null ? { surface: 'Settings → Plans', error: reporting } : undefined} />
       </div>
     </div>
   );

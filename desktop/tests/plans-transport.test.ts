@@ -228,7 +228,8 @@ describe('the shared plan request handler', () => {
       const r: any = await handlePlanRequest(null, ch, REQUEST_PAYLOADS[ch]);
       expect(r.ok).toBe(false);
       expect(r.unsupported).toBeUndefined();
-      expect(typeof r.error).toBe('string');
+      // Final review F7 (contract R44): the signed words, exactly.
+      expect(r.error).toBe("The assistant isn't available right now.");
     }
   });
 

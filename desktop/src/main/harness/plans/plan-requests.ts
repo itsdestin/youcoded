@@ -57,8 +57,10 @@ const READ_FAILED = "Couldn't read the plan settings. Please try again.";
 const WRITE_FAILED = "Couldn't save the plan settings. Please try again.";
 /** The runtime isn't wired yet (a remote client that connected during startup).
  *  A plain failure, NOT `unsupported`: the card caches unsupported for the life
- *  of the window and disables itself, and this is only momentary. */
-const NOT_CONNECTED = 'The assistant runtime isn’t connected.';
+ *  of the window and disables itself, and this is only momentary.
+ *  Final review F7: the signed copy (contract R44), shown with Retry. */
+const PLAN_HOST_NOT_READY = "The assistant isn't available right now.";
+const NOT_CONNECTED = PLAN_HOST_NOT_READY;
 
 const fail = (error: string): PlanFailure => ({ ok: false, error });
 

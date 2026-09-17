@@ -112,10 +112,25 @@ describe('2. a failed card explains itself', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
-  it('a failed card with no reason shows no error block (nothing is invented)', () => {
+  // Final review F6 (R27): every failed card says what went wrong in one line.
+  // With no known reason that line is general and names no cause; it still
+  // offers Report bug and Diagnose. Nothing is invented.
+  it('a failed card with no known reason shows the general line with Report bug and Diagnose', () => {
     bridge();
     render(<ChatProvider><Card initial={plan({ status: 'failed' })} /></ChatProvider>);
-    expect(within(block()).queryByRole('alert')).toBeNull();
+    const alert = within(block()).getByRole('alert');
+    expect(alert).toHaveTextContent("The plan couldn't be created.");
+    expect(alert.textContent).not.toMatch(/because|probably|may have/i);
+    expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Diagnose with the assistant' })).toBeInTheDocument();
+  });
+
+  it('a failed card with a reason shows that reason, not the general line', () => {
+    bridge();
+    render(<ChatProvider><Card initial={plan({ status: 'failed', failure: { detail: "Plans aren't available in this conversation." } })} /></ChatProvider>);
+    const alert = within(block()).getByRole('alert');
+    expect(alert).toHaveTextContent("Plans aren't available in this conversation.");
+    expect(alert).not.toHaveTextContent("couldn't be created");
   });
 
   it('a salvaged card with no steps does not print a meaningless 0-token limit', () => {
@@ -213,7 +228,7 @@ describe('6. a minimum top-up', () => {
     fireEvent.click(within(block()).getByRole('button', { name: 'Add budget' }));
     fireEvent.click(within(screen.getByTestId('plan-add-budget')).getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(status()).toBe('running'));
-    expect(plans.addBudget).toHaveBeenCalledWith(S, 'plan-1', 12500);
+    expect(plans.addBudget).toHaveBeenCalledWith(S, 'plan-1', 12500, expect.any(String));
     expect(plans.resume).toHaveBeenCalledWith(S, 'plan-1');
   });
 
@@ -289,6 +304,14 @@ describe('9. a specialist stopped before it started', () => {
     const rows = screen.getAllByTestId('plan-child');
     expect(rows[2]).toHaveTextContent('Mara the ReviewerNot started');
     expect(rows[2]).not.toHaveTextContent('pick this back up');
+    // Final review F27 (R28): muted, with an EMPTY circle (an outline, no fill,
+    // no check or stop mark) — the same glyph a step that hasn't started wears.
+    expect(within(rows[2]).getByText('Not started')).toHaveClass('text-fg-muted');
+    const circle = within(rows[2]).getByLabelText('not started');
+    expect(circle).toHaveClass('rounded-full', 'border');
+    expect(circle.className).not.toMatch(/\bbg-/);
+    expect(circle.childElementCount).toBe(0);
+    expect(within(rows[1]).queryByLabelText('not started')).toBeNull();
     // A specialist that did work keeps its ordinary stopped line.
     expect(rows[1]).toHaveTextContent('Stopped after');
     expect(rows[3]).not.toHaveTextContent('Not started');
@@ -313,6 +336,12 @@ describe('10. a plan specialist waiting on the user lights the specialists chip'
     fireEvent.click(chip);
     const card = screen.getByTestId('helper-card-kid-a');
     expect(within(card).getByTestId('helper-card-ask')).toHaveTextContent('Wren wants to:');
+    // Final review F27 (R30): the whole row — its question, Yes and No, and
+    // the specialist's own Note and Stop.
+    expect(within(card).getByTestId('helper-card-ask')).toHaveTextContent('npm test');
+    for (const name of ['Yes', 'No', 'Note', 'Stop']) {
+      expect(within(card).getByRole('button', { name }), name).toBeEnabled();
+    }
     // Task 8 (review 6, Q6-2): the working sibling is now listed too, under
     // the same plan (tests/plan-card-review-r7.test.tsx pins the grouping).
     expect(screen.getByTestId('helper-card-kid-b')).toBeInTheDocument();

@@ -22,6 +22,13 @@
  * after review deck 7) puts "Ask the assistant" on every paused card as the
  * light button on the far left. Only the plan-paused state changed, by that
  * one button; every other word is as signed.
+ *
+ * Re-recorded once more, final code review (2026-09-17, F6, a controller
+ * decision under decision 6 / R27): a failed card with no known reason now
+ * says "The plan couldn't be created." with Report bug and Diagnose — only
+ * the plan-failed state changed. The plan-writing input now carries
+ * `model.local` (F19: the "on your computer" hint follows that flag instead of
+ * a missing price); its words are unchanged.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';
@@ -93,6 +100,14 @@ describe('the signed plan card reads exactly as approved', () => {
     const { container } = render(<ChatProvider><ToolCard tool={toolFor(all['plan-paused'])} sessionId="s1" /></ChatProvider>);
     fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
     expect(describeCard(container)).toMatchSnapshot();
+    // Final review F27 (R17): the field is INSIDE the amber pill, and the
+    // pause's reason is still readable beside it in that same pill.
+    const pill = screen.getByTestId('plan-paused-reason').closest('.bg-amber-500\\/10');
+    expect(pill, 'the reason is not in an amber pill').not.toBeNull();
+    expect(pill).toContainElement(screen.getByLabelText('Tokens to allow'));
+    expect(pill).toContainElement(screen.getByTestId('plan-add-budget'));
+    expect(screen.getByTestId('plan-paused-reason')).toBeVisible();
+    expect(screen.getByTestId('plan-paused-reason').textContent!.length).toBeGreaterThan(10);
   });
 
   it('the proposed card opens its comment box', () => {

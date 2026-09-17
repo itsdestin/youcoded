@@ -7,6 +7,16 @@
 
 export const REMOTE_UNSUPPORTED_EVENT = 'youcoded:remote-unsupported';
 
+/** Final review F9: the shim switched to another host (connectToHost /
+ *  disconnectFromHost) without reloading the page. Anything cached about "the
+ *  host" — whether it can run plans, say — must be asked again. */
+export const REMOTE_HOST_CHANGED_EVENT = 'youcoded:remote-host-changed';
+
+/** Final review F5: a person's action pressed while the connection is down is
+ *  refused on the spot (never queued to run later). The known cause, in the
+ *  composer's words. */
+export const REMOTE_NOT_SENT = 'Not connected — nothing was sent. Try again when you reconnect.';
+
 export interface RemoteUnsupportedDetail {
   channel: string;
   feature: string;

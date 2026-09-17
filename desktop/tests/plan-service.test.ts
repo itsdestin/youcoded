@@ -7,6 +7,7 @@ import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path'
 import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
 import { PlanService, type PlanExecutorHooks, type PlanServiceDeps } from '../src/main/harness/plans/plan-service';
+import { PlanProposalError } from '../src/main/harness/plans/types';
 import type {
   ExecutionManifest, PlanActionResult, PlanAutoApproveRead, PlanEvent, PlanRef, PlanSettingsWriteResult,
 } from '../src/main/harness/plans/types';
@@ -70,6 +71,9 @@ async function propose(opts: { toolUseId?: string; turnId?: string; autoStartKey
   });
 }
 
+/** The journal's link from a plan to the one it revises (final review F32:
+ *  the card itself no longer carries it). */
+const revisionOf = async (view: { planId: string }) => (await journal.get(REF, view.planId))!.revisionOf;
 const okPlan = (r: PlanActionResult) => { if (!r.ok) throw new Error(`expected ok, got ${r.error}`); return r.plan; };
 
 describe('propose', () => {
@@ -185,10 +189,22 @@ describe('manifest drift', () => {
     expect(executor.start).toHaveBeenCalledTimes(1); // only the original approve
   });
 
-  it('a resolver failure is reported with its real message, never as success', async () => {
+  it('a resolver refusal worded for people is reported with its real message, never as success', async () => {
     const view = await propose();
-    const svc = makeService({ resolveManifest: async () => { throw new Error('No safe budget model is available for this provider.'); } });
-    expect(await svc.approve(SID, view.planId)).toEqual({ ok: false, error: expect.stringContaining('No safe budget model') });
+    const svc = makeService({ resolveManifest: async () => { throw new PlanProposalError('No safe budget model is available for this provider.'); } });
+    expect(await svc.approve(SID, view.planId)).toEqual({ ok: false, error: 'No safe budget model is available for this provider.' });
+  });
+
+  // Final review F11: a system error never reaches the card or Settings as
+  // text; the general line carries it in `detail` for the bug report only.
+  it('an unexpected error answers the general line and keeps its text for the report', async () => {
+    const view = await propose();
+    const svc = makeService({ resolveManifest: async () => { throw new Error('EACCES: permission denied'); } });
+    expect(await svc.approve(SID, view.planId)).toEqual({ ok: false, error: "Couldn't update the plan. Please try again.", detail: 'EACCES: permission denied' });
+    vi.spyOn(home, 'readJson').mockImplementation(() => { throw new Error('EIO: read'); });
+    expect(await svc.getAutoApprove()).toEqual({ ok: false, error: "Couldn't read the plan settings. Please try again.", detail: 'EIO: read' });
+    vi.spyOn(home, 'mutateJson').mockRejectedValue(new Error('ENOSPC: disk full'));
+    expect(await svc.setAutoApprove(10)).toEqual({ ok: false, error: "Couldn't save the plan settings. Please try again.", detail: 'ENOSPC: disk full' });
   });
 });
 
@@ -297,7 +313,7 @@ describe('comment and the trusted revision token', () => {
 
     events = [];
     const next = await propose({ toolUseId: 'tool-new', turnId: queued[0].turnId });
-    expect(next.revisionOf).toBe(old.planId);
+    expect(await revisionOf(next)).toBe(old.planId);
     expect((await journal.get(REF, old.planId))!.revisedBy).toBe(next.planId);
     expect(await journal.pendingRevision(REF)).toBeUndefined();
     // One write: both cards update together.
@@ -305,7 +321,7 @@ describe('comment and the trusted revision token', () => {
 
     // The same turn proposing again cannot re-link.
     const again = await propose({ toolUseId: 'tool-again', turnId: queued[0].turnId });
-    expect(again.revisionOf).toBeUndefined();
+    expect(await revisionOf(again)).toBeUndefined();
     expect((await journal.get(REF, old.planId))!.revisedBy).toBe(next.planId);
   });
 
@@ -314,8 +330,8 @@ describe('comment and the trusted revision token', () => {
     okPlan(await service.comment(SID, old.planId, 'change it'));
     const unrelated = await propose({ toolUseId: 'tool-x', turnId: 'some-other-turn' });
     const untagged = await propose({ toolUseId: 'tool-y' });
-    expect(unrelated.revisionOf).toBeUndefined();
-    expect(untagged.revisionOf).toBeUndefined();
+    expect(await revisionOf(unrelated)).toBeUndefined();
+    expect(await revisionOf(untagged)).toBeUndefined();
     expect((await journal.get(REF, old.planId))!.revisedBy).toBeUndefined();
     expect(await journal.pendingRevision(REF)).toMatchObject({ oldPlanId: old.planId });
   });
@@ -328,9 +344,9 @@ describe('comment and the trusted revision token', () => {
     expect(await service.comment(SID, a.planId, 'again')).toMatchObject({ ok: false });
     const [turnA, turnB] = queued.map((q) => q.turnId);
     const fromA = await propose({ toolUseId: 'tool-a2', turnId: turnA });
-    expect(fromA.revisionOf).toBeUndefined();
+    expect(await revisionOf(fromA)).toBeUndefined();
     const fromB = await propose({ toolUseId: 'tool-b2', turnId: turnB });
-    expect(fromB.revisionOf).toBe(b.planId);
+    expect(await revisionOf(fromB)).toBe(b.planId);
     expect((await journal.get(REF, a.planId))!.revisedBy).toBeUndefined();
   });
 

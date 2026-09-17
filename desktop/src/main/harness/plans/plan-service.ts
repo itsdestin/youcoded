@@ -20,7 +20,7 @@ import type {
   ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanRecord, PlanRef,
   PlanSettingsWriteResult, PlanUnsupported,
 } from './types';
-import { PLAN_BUDGET_REQUEST_ID_MAX_CHARS } from './types';
+import { PLAN_BUDGET_REQUEST_ID_MAX_CHARS, PlanProposalError } from './types';
 
 /** ~/.youcoded/plans.json — the auto-approve limit lives here (design §5). */
 const PLAN_SETTINGS_FILE = 'plans.json';
@@ -126,6 +126,15 @@ const unsupported = (error: string): PlanUnsupported => ({ ok: false, unsupporte
 /** A malformed request id comes from a broken caller, never from a person's
  *  choice: the same general line the transport uses (no cause is invented). */
 const ACTION_REQUEST_UNREADABLE = "Couldn't update the plan. Please try again.";
+/** Final review F11: the general settings lines (the same words the card's
+ *  bridge uses when it can't read an answer). */
+const SETTINGS_READ_FAILED = "Couldn't read the plan settings. Please try again.";
+const SETTINGS_WRITE_FAILED = "Couldn't save the plan settings. Please try again.";
+/** A general failure that keeps the system's own text for the bug report. */
+function generalFailure(error: string, cause: unknown): { ok: false; error: string; detail?: string } {
+  const detail = String((cause as { message?: unknown } | null)?.message ?? cause ?? '').trim();
+  return detail ? { ok: false, error, detail } : { ok: false, error };
+}
 const failure = (error: string) => ({ ok: false as const, error });
 
 /** Thrown inside a journal mutation to abort it with a user-facing reason. */
@@ -230,13 +239,17 @@ export class PlanService {
     return cwd === undefined ? undefined : { cwd, sessionId };
   }
 
-  /** Shared wrapper: every action returns a result, never throws. */
+  /** Shared wrapper: every action returns a result, never throws.
+   *  Final review F11: a refusal worded for people is shown as it is; any
+   *  other error (a disk or lock failure) answers the general line, and its
+   *  own text travels in `detail` for the bug report only. */
   private async act(verb: string, fn: () => Promise<PlanActionResult>): Promise<PlanActionResult> {
     try {
       return await fn();
     } catch (e: any) {
-      if (e instanceof PlanActionRefused || e instanceof PlanJournalUnreadableError) return failure(e.message);
-      return failure(`Couldn't ${verb} the plan: ${e?.message ?? String(e)}`);
+      if (e instanceof PlanActionRefused || e instanceof PlanJournalUnreadableError || e instanceof PlanProposalError) return failure(e.message);
+      console.error(`[plan-service] could not ${verb} a plan`, e);
+      return generalFailure(ACTION_REQUEST_UNREADABLE, e);
     }
   }
 
@@ -297,7 +310,7 @@ export class PlanService {
    */
   async propose(proposal: PlanProposal): Promise<PlanView> {
     const ref = this.refFor(proposal.sessionId);
-    if (!ref) throw new Error("Plans aren't available for this conversation.");
+    if (!ref) throw new PlanProposalError("Plans aren't available for this conversation.");
     const manifest = await this.deps.resolveManifest({ sessionId: ref.sessionId, cwd: ref.cwd, document: proposal.document });
     if (proposal.signal.aborted) throw new Error('The plan proposal was interrupted.');
 
@@ -761,7 +774,8 @@ export class PlanService {
     try {
       return { ok: true, underTokens: readUnderTokens(this.deps.home.readJson(PLAN_SETTINGS_FILE)) };
     } catch (e: any) {
-      return failure(`Couldn't read the plan settings: ${e?.message ?? String(e)}`);
+      console.error('[plan-service] could not read the plan settings', e);
+      return generalFailure(SETTINGS_READ_FAILED, e);
     }
   }
 
@@ -776,7 +790,8 @@ export class PlanService {
       });
       return { ok: true };
     } catch (e: any) {
-      return failure(`Couldn't save the plan settings: ${e?.message ?? String(e)}`);
+      console.error('[plan-service] could not save the plan settings', e);
+      return generalFailure(SETTINGS_WRITE_FAILED, e);
     }
   }
 }

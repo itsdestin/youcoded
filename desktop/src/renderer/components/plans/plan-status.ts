@@ -26,7 +26,8 @@ export function planStatusPhrase(plan: PlanView): string {
     : plan.status === 'paused' ? pausedDetail(plan)
     : plan.status === 'interrupted' ? `interrupted — ${done} of ${total} steps done`
     : plan.status === 'completed' ? `finished in ${formatElapsed((plan.endedAt ?? 0) - (plan.startedAt ?? 0))}`
-    : plan.status === 'stopped' ? (plan.revisedBy ? 'revised — see the new plan below' : `stopped — ${done} of ${total} steps done`)
+    // Final review F21: a proposal stopped before it had steps has no count to give.
+    : plan.status === 'stopped' ? (plan.revisedBy ? 'revised — see the new plan below' : total === 0 ? 'stopped' : `stopped — ${done} of ${total} steps done`)
     : 'failed';
 }
 

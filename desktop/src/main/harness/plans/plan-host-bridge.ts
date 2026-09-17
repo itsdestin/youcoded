@@ -39,6 +39,8 @@ import {
 import type {
   ExecutionManifest, PlanActionResult, PlanAutoApproveRead, PlanEvent, PlanRecord, PlanRef, PlanSettingsWriteResult,
 } from './types';
+// Final review F6: refusals worded for people (the failed card shows them).
+import { PlanProposalError } from './types';
 
 /** Task 11 (§6): the "Ask the assistant" refusals main words itself. */
 const NOT_HERE = "This conversation isn't running here right now, so the assistant can't be asked.";
@@ -635,7 +637,7 @@ export class PlanHostBridge {
     // model: a provider-matched safe default, never the parent by accident.
     const requested = resolveRequestedModel(undefined, def.modelPreference);
     if (requested === 'parent') return parent;
-    if (!this.port.designated) throw new Error("Specialist models aren't available in this session, so the plan wasn't created.");
+    if (!this.port.designated) throw new PlanProposalError("Specialist models aren't available in this session, so the plan wasn't created.");
     const needsCatalog = typeof requested === 'object' || !this.port.designated.get(requested);
     try {
       const { binding } = resolveDelegatedBinding({
@@ -644,33 +646,33 @@ export class PlanHostBridge {
       return { providerId: binding.providerId, modelId: binding.modelId };
     } catch (e) {
       if (e instanceof DelegatedModelUnavailable) {
-        throw new Error(`YouCoded couldn't confirm a ${e.tier} model for the "${def.id}" specialist, so the plan wasn't created.`);
+        throw new PlanProposalError(`YouCoded couldn't confirm a ${e.tier} model for the "${def.id}" specialist, so the plan wasn't created.`);
       }
-      if (e instanceof DelegatedModelRefused) throw new Error(e.message);
+      if (e instanceof DelegatedModelRefused) throw new PlanProposalError(e.message);
       throw e;
     }
   }
 
   async resolveManifest(input: { sessionId: string; cwd: string; document: PlanDocumentV1 }): Promise<ExecutionManifest> {
     const parent = this.port.parentBinding(input.sessionId);
-    if (!parent) throw new Error("This conversation isn't open, so the plan can't be prepared.");
+    if (!parent) throw new PlanProposalError("This conversation isn't open, so the plan can't be prepared.");
     const roster = this.port.roster(input.cwd);
     let catalog: Promise<CatalogModel[] | null> | undefined;
     const specialists: ExecutionManifest['specialists'] = {};
     for (const id of [...new Set(leafSteps(input.document.steps).map((s) => s.specialist))]) {
       const def = roster.resolve(id);
-      if (!def) throw new Error(`The plan names a specialist ("${id}") that isn't available in this project.`);
+      if (!def) throw new PlanProposalError(`The plan names a specialist ("${id}") that isn't available in this project.`);
       const binding = await this.bindingFor(def, parent, () => (catalog ??= this.port.catalog()));
       const route = await this.port.resolveRoute(binding);
       const lookup = budgetAdapterFor(route.providerType);
-      if (!lookup.ok) throw new Error(lookup.reason);
+      if (!lookup.ok) throw new PlanProposalError(lookup.reason);
       // Decision 4: the exact child system prompt and tool schemas, measured
       // by the same adapter its request gate will use.
       const probe = this.port.probeSession({ parentId: input.sessionId, specialist: def, binding, route, gate: measurementGate(lookup.adapter) });
       let setup: Awaited<ReturnType<HarnessSession['planSetupRequest']>>;
       try { setup = await probe.session.planSetupRequest(); } finally { probe.dispose(); }
       const bound = setupBound(lookup.adapter, setup);
-      if (!bound.ok) throw new Error(bound.reason);
+      if (!bound.ok) throw new PlanProposalError(bound.reason);
       specialists[id] = {
         definitionFingerprint: definitionFingerprint(def),
         binding,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { REMOTE_UNSUPPORTED_EVENT } from '../src/renderer/remote-unsupported';
+import { REMOTE_HOST_CHANGED_EVENT, REMOTE_NOT_SENT, REMOTE_UNSUPPORTED_EVENT } from '../src/renderer/remote-unsupported';
 import { loadRealPreload } from './helpers/real-preload';
 
 /**
@@ -145,6 +145,46 @@ describe('window.claude.plans over the shared shim', () => {
     }
     // Every other channel keeps today's rule.
     expect(shim.responseOutcome('models:settings', { ok: false, unsupported: true })).toBe('unsupported');
+  });
+
+  // Final review F5: a plan button pressed while the connection is down is
+  // refused at once and never sent later.
+  it('a plan action while disconnected is refused at once and never flushed after reconnecting', async () => {
+    const { ws, shim } = await connect('desktop');
+    const plans = (window as any).claude.plans;
+    ws.readyState = 3;
+    ws.onclose?.({ code: 1006, reason: 'network' });
+    const sentBefore = ws.sent.length;
+    for (const [name, call, type] of CALLS) {
+      if (type === 'plans:get-auto-approve') continue;
+      await expect(call(plans), name).rejects.toThrow(REMOTE_NOT_SENT);
+      expect(shim.MESSAGE_KIND[type], name).toBe('user-action');
+    }
+    // Reading the setting is safe to send again, so it waits for the connection.
+    expect(shim.MESSAGE_KIND['plans:get-auto-approve']).toBe('read');
+    expect(ws.sent.length).toBe(sentBefore);
+    // Whatever socket comes next never receives the refused presses.
+    const next = FakeWebSocket.instances.slice(1);
+    for (const w of next) expect(w.sent.map((m) => JSON.parse(m).type).filter((t: string) => t.startsWith('plans:') && t !== 'plans:get-auto-approve')).toEqual([]);
+  });
+
+  // Final review F9: switching hosts without a reload tells the page.
+  it('disconnecting from a remote host announces the host change', async () => {
+    const { shim } = await connect('phone');
+    const seen: Event[] = [];
+    const onChanged = (e: Event) => seen.push(e);
+    window.addEventListener(REMOTE_HOST_CHANGED_EVENT, onChanged);
+    try {
+      const switching = shim.disconnectFromHost();
+      await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+      const local = FakeWebSocket.instances[1];
+      local.open();
+      local.receive({ type: 'auth:ok', token: 'tok', platform: 'android' });
+      await switching;
+      expect(seen).toHaveLength(1);
+    } finally {
+      window.removeEventListener(REMOTE_HOST_CHANGED_EVENT, onChanged);
+    }
   });
 
   it('on.planEvent delivers plans:event pushes and unsubscribes', async () => {

@@ -4,6 +4,7 @@ import { PLAN_DOCUMENT_JSON_SCHEMA, PlanDocumentSchema, type PlanDocumentV1 } fr
 import { validatePlanDocument } from '../plans/validator';
 import type { SpecialistRoster } from '../specialists/registry';
 import type { PlanView } from '../../../shared/types';
+import { PlanProposalError } from '../plans/types';
 
 /** Pause handoff §1: exported so tools/index.ts can name this factory-built
  *  tool's effect without building one (nativeToolEffect). */
@@ -14,27 +15,49 @@ export const PROPOSE_PLAN_TOOL_EFFECT: ToolEffect = 'local';
  * PlanView rather than another event: tool-use/tool-result already own transcript
  * pairing, while the plan field is the renderer's established card projection seam.
  */
-export function writingPlanProjection(toolUseId: string, modelLabel: string): PlanView {
+/** Final review F18/F19: when the plan began being written (the header's
+ *  clock), and whether a model on this computer is writing it (only then does
+ *  the card say it can take minutes). */
+export interface PlanShellFacts { startedAt?: number; local?: boolean }
+
+export function writingPlanProjection(toolUseId: string, modelLabel: string, facts: PlanShellFacts = {}): PlanView {
   return {
     planId: `writing:${toolUseId}`,
     toolUseId,
-    title: 'a plan',
+    // Final review F20: a shell has no title of its own — the card names the
+    // plan from the tool call's `goal`, and says "a plan" only without one.
+    title: '',
     status: 'writing',
     steps: [],
     ceilingTokens: 0,
     ceilingUsd: null,
-    model: { label: modelLabel },
+    model: { label: modelLabel, ...(facts.local ? { local: true } : {}) },
+    ...(facts.startedAt !== undefined ? { startedAt: facts.startedAt } : {}),
     seq: 0,
   };
 }
 
-export function failedPlanProjection(toolUseId: string, modelLabel: string): PlanView {
-  return { ...writingPlanProjection(toolUseId, modelLabel), status: 'failed', seq: 1 };
+/** Final review F6: `failure.detail` is a reason written for people (shown on
+ *  the card); `failure.report` is an unexpected error's own text (for the bug
+ *  report only). Neither → the card's general line. */
+export function failedPlanProjection(toolUseId: string, modelLabel: string, failure?: PlanView['failure'], facts: PlanShellFacts = {}): PlanView {
+  return {
+    ...writingPlanProjection(toolUseId, modelLabel, facts), status: 'failed', seq: 1,
+    ...(failure && (failure.detail || failure.report) ? { failure } : {}),
+  };
 }
 
-export function stoppedPlanProjection(toolUseId: string, modelLabel: string): PlanView {
-  return { ...writingPlanProjection(toolUseId, modelLabel), status: 'stopped', seq: 1 };
+export function stoppedPlanProjection(toolUseId: string, modelLabel: string, facts: PlanShellFacts = {}): PlanView {
+  return { ...writingPlanProjection(toolUseId, modelLabel, facts), status: 'stopped', seq: 1 };
 }
+
+/** Final review F6: the card's reason for a plan that failed validation. */
+export const PLAN_INVALID_DETAIL = "The assistant's plan wasn't in a form the app can use.";
+/** …for a propose_plan call the assistant never finished writing. */
+export const PLAN_UNFINISHED_DETAIL = 'The assistant stopped before it finished writing the plan.';
+/** …for a second plan sent in the same reply as an invalid one. */
+export const PLAN_SIBLING_DETAIL = 'The assistant sent more than one plan at once, so this one wasn\'t used.';
+const PLAN_NO_SERVICE_DETAIL = "Plans aren't available in this conversation.";
 
 export function createProposePlanTool(roster: SpecialistRoster): NativeTool<PlanDocumentV1> {
   return defineTool<PlanDocumentV1>({
@@ -57,6 +80,7 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
           text: `Plan validation failed:\n${validated.issues.map((issue) => `- ${issue}`).join('\n')}`,
           isError: true,
           planArgsInvalid: true,
+          plan: failedPlanProjection(ctx.toolCallId ?? '', ctx.binding?.modelId ?? 'Unknown model', { detail: PLAN_INVALID_DETAIL }),
         };
       }
       const toolUseId = ctx.toolCallId ?? '';
@@ -66,7 +90,7 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
         return {
           text: 'propose_plan failed: no plan proposal service is wired for this session (configuration error).',
           isError: true,
-          plan: failedPlanProjection(toolUseId, modelLabel),
+          plan: failedPlanProjection(toolUseId, modelLabel, { detail: PLAN_NO_SERVICE_DETAIL }),
         };
       }
       if (ctx.signal.aborted) {
@@ -107,7 +131,11 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
           isError: true,
           plan: ctx.signal.aborted
             ? stoppedPlanProjection(toolUseId, modelLabel)
-            : failedPlanProjection(toolUseId, modelLabel),
+            // Final review F6: a refusal worded for people is the card's
+            // reason; anything else is general, its text kept for the report.
+            : failedPlanProjection(toolUseId, modelLabel, err instanceof PlanProposalError
+              ? { detail: err.message }
+              : { report: String(err?.message ?? err) }),
         };
       }
       // WHY `committed` alone decides (Task 4, from the Task 2 review): once the
@@ -122,7 +150,7 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
           isError: true,
           plan: ctx.signal.aborted
             ? stoppedPlanProjection(toolUseId, modelLabel)
-            : failedPlanProjection(toolUseId, modelLabel),
+            : failedPlanProjection(toolUseId, modelLabel, { report: 'propose_plan: the proposal service did not commit the plan.' }),
         };
       }
       return {

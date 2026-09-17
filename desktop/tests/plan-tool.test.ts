@@ -355,3 +355,73 @@ describe('HarnessSession plan integration', () => {
     expect(events.find((event) => event.type === 'tool-result' && event.data.toolUseId === 'cut-plan')?.data.plan.status).toBe('failed');
   });
 });
+
+// Final review F6/F18/F19/F20: what the tool's own shells tell the card.
+describe('propose_plan card shells (final review)', () => {
+  const ctx = (services: any, signal = new AbortController().signal) => ({
+    sessionId: 's-1', cwd: FAKE_SESSION_CWD, signal, toolCallId: 'call-9', readRegistry: new Map(), todos: [], services,
+    binding: { providerId: 'openrouter', modelId: 'model' },
+  }) as any;
+
+  it('F6: no proposal service → a failed card with that reason', async () => {
+    const r = await createProposePlanTool(BUILTIN_ROSTER).execute(VALID, ctx({}));
+    expect(r.plan).toMatchObject({ status: 'failed', failure: { detail: "Plans aren't available in this conversation." } });
+  });
+
+  it('F6: a refusal the service words for people is the card\'s reason', async () => {
+    const { PlanProposalError } = await import('../src/main/harness/plans/types');
+    const propose = vi.fn(async () => { throw new PlanProposalError('The plan names a specialist ("x") that isn\'t available in this project.'); });
+    const r = await createProposePlanTool(BUILTIN_ROSTER).execute(VALID, ctx({ plans: { propose } }));
+    expect(r.plan?.failure).toEqual({ detail: 'The plan names a specialist ("x") that isn\'t available in this project.' });
+  });
+
+  it('F6: an unexpected error is general on the card; its text is kept for the report', async () => {
+    const propose = vi.fn(async () => { throw new Error('EACCES: permission denied, open plans.json'); });
+    const r = await createProposePlanTool(BUILTIN_ROSTER).execute(VALID, ctx({ plans: { propose } }));
+    expect(r.plan?.status).toBe('failed');
+    expect(r.plan?.failure).toEqual({ report: 'EACCES: permission denied, open plans.json' });
+  });
+
+  it('F6: an invalid plan is a failed card that says the plan wasn\'t usable', async () => {
+    const { session, events } = scriptedSession([
+      stream(toolCallChunk('bad-1', 'propose_plan', { goal: 'x', steps: [] }), finishChunk('tool-calls')),
+      stream(toolCallChunk('bad-2', 'propose_plan', { goal: 'x', steps: [] }), finishChunk('tool-calls')),
+      stream(...textChunks('t', 'done'), finishChunk('stop')),
+    ]);
+    await session.send('plan');
+    const failed = events.filter((e) => e.type === 'tool-result' && e.data.plan?.status === 'failed');
+    expect(failed.length).toBeGreaterThan(0);
+    for (const e of failed) expect(e.data.plan.failure).toEqual({ detail: "The assistant's plan wasn't in a form the app can use." });
+  });
+
+  it('F19: a writing shell from a model on this computer says so', async () => {
+    const profile = resolveProfile({ providerType: 'local-engine', modelId: 'Qwen3.5-9B-Q4_K_M', contextLength: 32_768 });
+    const { session, events } = scriptedSession([
+      stream(...toolInputChunks('w-1', 'propose_plan', JSON.stringify(VALID)), finishChunk('tool-calls')),
+      stream(...textChunks('t', 'done'), finishChunk('stop')),
+    ], { providerType: 'local-engine', binding: { providerId: 'local', modelId: 'Qwen3.5-9B-Q4_K_M' }, profile });
+    expect(Object.keys((session as any).buildAiTools())).toContain('propose_plan');
+    await session.send('plan');
+    const writing = events.filter((e) => e.data?.plan?.status === 'writing');
+    expect(writing.length).toBeGreaterThan(0);
+    for (const e of writing) expect(e.data.plan.model).toMatchObject({ local: true });
+  });
+
+  it('F18/F20: a cloud writing shell has a start time and is not marked local', async () => {
+    const { session, events } = scriptedSession([
+      stream(...toolInputChunks('w-2', 'propose_plan', JSON.stringify(VALID)), finishChunk('tool-calls')),
+      stream(...textChunks('t', 'done'), finishChunk('stop')),
+    ]);
+    const before = Date.now();
+    await session.send('plan');
+    const writing = events.filter((e) => e.data?.plan?.status === 'writing');
+    expect(writing.length).toBeGreaterThan(0);
+    const starts = new Set(writing.map((e) => e.data.plan.startedAt));
+    expect(starts.size).toBe(1);
+    expect([...starts][0]).toBeGreaterThanOrEqual(before);
+    for (const e of writing) {
+      expect(e.data.plan.title).toBe('');
+      expect(e.data.plan.model.local).toBeUndefined();
+    }
+  });
+});

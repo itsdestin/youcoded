@@ -174,7 +174,10 @@ import { toReport, type PrefillProgress } from '../providers/prefill-progress';
 import { messageTokens, messagesTokens, APPROX_CHARS_PER_TOKEN } from './message-size';
 import { createSkillTool } from './tools/skill';
 import { createTaskTool } from './tools/task';
-import { createProposePlanTool, failedPlanProjection, stoppedPlanProjection, writingPlanProjection } from './tools/propose-plan';
+import {
+  createProposePlanTool, failedPlanProjection, stoppedPlanProjection, writingPlanProjection,
+  PLAN_INVALID_DETAIL, PLAN_SIBLING_DETAIL, PLAN_UNFINISHED_DETAIL, type PlanShellFacts,
+} from './tools/propose-plan';
 import { createRecommendPlanActionTool } from './tools/recommend-plan-action';
 import { isPlanEligible } from './plans/eligibility';
 import {
@@ -808,6 +811,9 @@ export class HarnessSession extends EventEmitter {
    * Kept across consumeStep's throw boundary so provider rejection can still
    * pair every visible writing shell exactly once. */
   private activeWritingPlanIds = new Set<string>();
+  /** Final review F18: when each propose_plan call's card began "writing the
+   *  plan" — every shell of that call carries the same start. */
+  private planWritingStarts = new Map<string, number>();
   private readRegistry = new Map<string, string>();  // canonical path → content fingerprint at last Read (tools/file-fingerprint.ts)
   /** G-11 (2026-08-26 tools investigation) — what Read has already served this
    *  session (`path|offset|limit` → mtime + which call). Read answers a repeat
@@ -990,6 +996,7 @@ export class HarnessSession extends EventEmitter {
     // WHY: a writing plan belongs to the history being replaced — pairing it
     // later would push a call the new history never contained.
     this.activeWritingPlanIds.clear();
+    this.planWritingStarts.clear();
     // WHY both: the restored ciphertext was accepted under THIS identity, so the
     // first dispatch must compare against it and strip on a mismatch — and the
     // published checkpoint must keep naming it until a live factory replaces it.
@@ -1603,7 +1610,9 @@ export class HarnessSession extends EventEmitter {
       toolCallId, toolName: 'propose_plan', input: {},
     }));
     for (const call of calls) {
+      const facts = this.planShellFacts(call.toolCallId);
       this.activeWritingPlanIds.delete(call.toolCallId);
+      this.planWritingStarts.delete(call.toolCallId);
       // WHY record: every caller pushes the matching history pair, so this
       // result is accepted provenance exactly like an ordinary tool result.
       this.capture.recordEvent(this.emitEvent('tool-result', {
@@ -1612,8 +1621,9 @@ export class HarnessSession extends EventEmitter {
         toolResult: text,
         isError: true,
         plan: stopped
-          ? stoppedPlanProjection(call.toolCallId, this.binding.modelId)
-          : failedPlanProjection(call.toolCallId, this.binding.modelId),
+          ? stoppedPlanProjection(call.toolCallId, this.binding.modelId, facts)
+          // Final review F6: the writing was abandoned before it finished.
+          : failedPlanProjection(call.toolCallId, this.binding.modelId, { detail: PLAN_UNFINISHED_DETAIL }, facts),
       }));
     }
     return calls;
@@ -1641,12 +1651,34 @@ export class HarnessSession extends EventEmitter {
    *  whose payload carries no plan (interrupt, dismissal, skipped siblings). */
   private planResultFields(call: ToolCall, stopped: boolean, plan?: PlanView): { plan?: PlanView } {
     if (call.toolName !== 'propose_plan') return plan ? { plan } : {};
+    const facts = this.planShellFacts(call.toolCallId);
     this.activeWritingPlanIds.delete(call.toolCallId);
+    this.planWritingStarts.delete(call.toolCallId);
+    // Final review F18/F19: a terminal shell keeps the writing card's clock
+    // and locality; a real record (proposed/running) is passed as it is.
+    const shell = plan && plan.planId.startsWith('writing:') ? { ...plan, model: { ...plan.model, ...(facts.local ? { local: true } : {}) }, ...(facts.startedAt !== undefined ? { startedAt: facts.startedAt } : {}) } : plan;
     return {
-      plan: plan ?? (stopped
-        ? stoppedPlanProjection(call.toolCallId, this.binding.modelId)
-        : failedPlanProjection(call.toolCallId, this.binding.modelId)),
+      // No known cause here (a refused permission, a dismissal, a skipped
+      // sibling …): the card's general line (final review F6).
+      plan: shell ?? (stopped
+        ? stoppedPlanProjection(call.toolCallId, this.binding.modelId, facts)
+        : failedPlanProjection(call.toolCallId, this.binding.modelId, undefined, facts)),
     };
+  }
+
+  /**
+   * Final review F18/F19: the facts every card shell of one propose_plan call
+   * shares — when its writing began (the first shell stamps it, so the
+   * header's clock never restarts) and whether a model on this computer is
+   * writing it.
+   */
+  private planShellFacts(toolCallId: string): PlanShellFacts {
+    let startedAt = this.planWritingStarts.get(toolCallId);
+    if (startedAt === undefined) {
+      startedAt = Date.now();
+      this.planWritingStarts.set(toolCallId, startedAt);
+    }
+    return { startedAt, ...(this.opts.providerType === 'local-engine' ? { local: true } : {}) };
   }
 
   /** Assistant history message: text part (if any) + one tool-call part per call.
@@ -2180,7 +2212,8 @@ export class HarnessSession extends EventEmitter {
     // /clear is exactly when a user looks at the chip to confirm it worked.
     const contextUsedAfter = this.reprojectContextUsed(estimateBefore);
     this.prefixMoved = true;   // the next request shares nothing with the last one — a known full miss
-    this.activeWritingPlanIds.clear();   // same reason as seedHistory: nothing left to pair against
+    this.activeWritingPlanIds.clear();
+    this.planWritingStarts.clear();   // same reason as seedHistory: nothing left to pair against
     // No seed: the accepted list empties AND takes the next revision, so a
     // checkpoint published before the clear can never be restored over it.
     this.capture.reset();
@@ -3036,7 +3069,7 @@ export class HarnessSession extends EventEmitter {
             // Providers that omit tool-input-start still get the same stable
             // writing projection at the completed-call seam.
             ...(call.toolName === 'propose_plan'
-              ? { plan: writingPlanProjection(call.toolCallId, this.binding.modelId) }
+              ? { plan: writingPlanProjection(call.toolCallId, this.binding.modelId, this.planShellFacts(call.toolCallId)) }
               : {}),
           }));
         }
@@ -3063,7 +3096,7 @@ export class HarnessSession extends EventEmitter {
               ? {
                   text: 'Not run: another invalid propose_plan sibling already scheduled the one repair turn.',
                   isError: true,
-                  plan: failedPlanProjection(call.toolCallId, this.binding.modelId),
+                  plan: failedPlanProjection(call.toolCallId, this.binding.modelId, { detail: PLAN_SIBLING_DETAIL }, this.planShellFacts(call.toolCallId)),
                 }
               : await this.runOneTool(call, recentCalls, planRepairUsed);   // NEVER throws
           if (payload !== 'interrupted' && !('kind' in payload) && payload.planArgsInvalid) {
@@ -3928,7 +3961,7 @@ export class HarnessSession extends EventEmitter {
                 toolUseId: prepId,
                 toolName: prepName,
                 toolInput: {},
-                plan: writingPlanProjection(prepId, this.binding.modelId),
+                plan: writingPlanProjection(prepId, this.binding.modelId, this.planShellFacts(prepId)),
               }));
             } else {
               this.emitEvent('assistant-thinking', {
@@ -4129,7 +4162,7 @@ export class HarnessSession extends EventEmitter {
       // the strict schemas below make that the common case for CC-trained models.
       const detail = formatArgErrors(call.toolName, parsed.error, tool.inputSchema);
       if (call.toolName === 'propose_plan') {
-        const terminal = failedPlanProjection(call.toolCallId, this.binding.modelId);
+        const terminal = failedPlanProjection(call.toolCallId, this.binding.modelId, { detail: PLAN_INVALID_DETAIL }, this.planShellFacts(call.toolCallId));
         return planRepairUsed
           ? { text: `${detail}\nPlan repair exhausted; stop and wait for the user's next message.`, isError: true, plan: terminal, planArgsInvalid: true, planRepairExhausted: true }
           : { text: `${detail}\nYou have exactly one plan-specific repair opportunity. Call propose_plan once more with corrected arguments.`, isError: true, plan: terminal, planArgsInvalid: true };
@@ -4325,7 +4358,7 @@ export class HarnessSession extends EventEmitter {
     });
     if (call.toolName !== 'propose_plan' || !payload.planArgsInvalid) return payload;
 
-    const terminal = payload.plan ?? failedPlanProjection(call.toolCallId, this.binding.modelId);
+    const terminal = payload.plan ?? failedPlanProjection(call.toolCallId, this.binding.modelId, { detail: PLAN_INVALID_DETAIL }, this.planShellFacts(call.toolCallId));
     return planRepairUsed
       ? {
           ...payload,

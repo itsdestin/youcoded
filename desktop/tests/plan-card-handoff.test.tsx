@@ -102,7 +102,7 @@ describe('recommended: the assistant\'s button, filled and on the right', () => 
     // Nothing is sent until the user presses Continue.
     expect(api.addBudget).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect(api.addBudget).toHaveBeenCalledWith(S, 'plan-1', 3000));
+    await waitFor(() => expect(api.addBudget).toHaveBeenCalledWith(S, 'plan-1', 3000, expect.any(String)));
   });
 
   it('add_budget below the host\'s minimum starts at the minimum instead', () => {

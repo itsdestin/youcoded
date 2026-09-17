@@ -1255,7 +1255,8 @@
   "ceilingTokens": 40000,
   "ceilingUsd": null,
   "model": {
-   "label": "Qwen3.5-9B (your computer)"
+   "label": "Qwen3.5-9B (your computer)",
+   "local": true
   },
   "elapsedMs": 72000
  }
