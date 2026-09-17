@@ -1531,6 +1531,32 @@ describe('EngineSupervisor model poll cadence', () => {
     expect(models()).toBe(base + 1);
   });
 
+  it('a load started mid-idle-wait brings the pending 10 s poll forward to 400 ms', async () => {
+    const calls: string[] = [];
+    let state: 'loaded' | 'loading' = 'loaded';
+    const fetchImpl = vi.fn(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as any;
+      if (u.includes('/models')) {
+        calls.push(u);
+        return { ok: true, status: 200, json: async () => ({ data: [{ id: 'm-Q4_K_M', size: 1_000, status: { value: state } }] }) } as any;
+      }
+      return { ok: true, status: 200, text: async () => '' } as any; // the warm-up completion
+    });
+    await bootUnderFakeTimers(fetchImpl);
+    const models = () => calls.length;
+    await vi.advanceTimersByTimeAsync(5_000); // half-way through an idle wait
+    const base = models();
+    state = 'loading';
+    await sup.loadModel('m-Q4_K_M'); // the nudge sees 'loading'
+    await vi.advanceTimersByTimeAsync(0);
+    const afterNudge = models();
+    expect(afterNudge).toBe(base + 1);
+    await vi.advanceTimersByTimeAsync(500);
+    // The idle timer had ~5 s left; the loading cadence must have taken over.
+    expect(models()).toBeGreaterThanOrEqual(afterNudge + 1);
+  });
+
   it('keeps the 400 ms cadence while a model is loading', async () => {
     const { fetchImpl, models } = pollingFetch('loading');
     await bootUnderFakeTimers(fetchImpl);
