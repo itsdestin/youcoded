@@ -133,7 +133,6 @@ export type TranscriptEventType =
   | 'assistant-text'
   | 'tool-use'
   | 'tool-result'
-  | 'thinking'
   // Extended-thinking models emit `thinking` blocks between tool calls that
   // carry no chat text — the watcher surfaces them as heartbeats so the
   // attention classifier doesn't misread the silence as 'stuck'.
@@ -1186,26 +1185,11 @@ export interface UserSkillConfig {
   packages?: Record<string, PackageInfo>;
 }
 
-export interface SkillProvider {
-  listMarketplace(filters?: SkillFilters): Promise<SkillEntry[]>;
-  getSkillDetail(id: string): Promise<SkillDetailView>;
-  search(query: string): Promise<SkillEntry[]>;
-  getInstalled(): Promise<SkillEntry[]>;
-  getFavorites(): Promise<string[]>;
-  getChips(): Promise<ChipConfig[]>;
-  getOverrides(): Promise<Record<string, MetadataOverride>>;
-  install(id: string): Promise<any>;
-  uninstall(id: string): Promise<void | { type: 'plugin' | 'prompt' }>;
-  setFavorite(id: string, favorited: boolean): Promise<void>;
-  setChips(chips: ChipConfig[]): Promise<void>;
-  setOverride(id: string, override: MetadataOverride): Promise<void>;
-  createPromptSkill(skill: Omit<SkillEntry, 'id'>): Promise<SkillEntry>;
-  deletePromptSkill(id: string): Promise<void>;
-  publish(id: string): Promise<{ prUrl: string }>;
-  generateShareLink(id: string): Promise<string>;
-  importFromLink(encoded: string): Promise<SkillEntry>;
-  getFeatured?(): Promise<FeaturedData>;
-}
+// The skill marketplace backend is typed as the class itself —
+// `LocalSkillProvider` in main/skill-provider.ts. The `SkillProvider` interface
+// that used to sit here had exactly one implementation, nothing was typed
+// against it polymorphically, and its name collided with the unrelated React
+// `<SkillProvider>` context component (simplification audit M7, 2026-09-16).
 
 // Marketplace redesign Phase 1 — discovery curation. Driven by featured.json
 // in the wecoded-marketplace repo; edited via /feature admin skill.
@@ -1453,55 +1437,12 @@ export interface BuddyApi {
   openMain(): Promise<void>;
   /** Hide the buddy for this app run only (preference stays enabled). */
   dismiss(): Promise<void>;
-  // WHY keepAbove rides on getStatus() rather than a dedicated getter: Task
-  // 8 only adds one new channel (setKeepAbove, for the write); reusing the
-  // existing getStatus() round-trip for the read keeps that true instead of
-  // growing a second buddy:* channel just to answer "what's it set to now".
-  // Optional (not just boolean) because the remote-shim stub throws before
-  // ever constructing a payload, so no caller can assume the field exists.
-  getStatus(): Promise<{ dismissed: boolean; visible: boolean; keepAbove?: boolean }>;
+  getStatus(): Promise<{ dismissed: boolean; visible: boolean }>;
   onStatusChanged(cb: (s: { dismissed: boolean; visible: boolean }) => void): () => void;
   onBarState(cb: (s: { visible: boolean }) => void): () => void;
   onMascotState(cb: (s: { mode: 'free' | 'docked' | 'peeking'; edge: string | null }) => void): () => void;
   onChatState(cb: (s: { visible: boolean }) => void): () => void;
   onFocusSession(cb: (sessionId: string) => void): () => void;
-  // ── Linux Wayland overlay (Task 3+4) — only the overlay renderer calls
-  // these; other buddy surfaces (three-window model) never mount them.
-  /** Renderer → main pull, called once on overlay mount: returns the
-   *  window-local workArea/mascot/dock the overlay's DOM mascot needs, or
-   *  null when the caller isn't the live overlay window. WHY pull, not a
-   *  main→renderer push (2026-07-23 dead-floater lesson): a push sent at
-   *  did-finish-load races React's mount — in dev, Vite loads the module
-   *  graph AFTER did-finish-load, so the one-shot push was gone before the
-   *  subscription existed and the overlay rendered nothing forever. A pull
-   *  cannot lose that race by construction. */
-  overlayReady(): Promise<{
-    workArea: { x: number; y: number; width: number; height: number };
-    mascot: { x: number; y: number } | null;
-    dock: string | null;
-  } | null>;
-  /** Main → overlay push: external (tray/menu) chat toggle request. */
-  onOverlayToggleChat(cb: () => void): () => void;
-  /** Fire-and-forget, hover-hot path: overlay renderer reports whether the
-   *  pointer is over an interactive element (mascot/bar/chat) so main can
-   *  flip the click-through window between ignore/accept mouse events. */
-  overlaySetInteractive(interactive: boolean): void;
-  /** Fire-and-forget: overlay renderer's own drag/dock logic (DOM-side)
-   *  reports the final mascot position + dock edge to persist. */
-  overlayPersist(state: { mascot: { x: number; y: number }; dock: string | null }): void;
-  // ── Task 8: opt-in KDE keep-above (Settings toggle, Linux only) ──
-  /** Persists `enabled` to the buddy positions file and applies it live via
-   *  a KWin scripting DBus call (see kwin-keep-above.ts). The toggle itself
-   *  is a saved PREFERENCE, not a live-state indicator — it displays and
-   *  persists the user's request in both directions regardless of this
-   *  result (controller ruling 2026-07-22: a symmetric OR asymmetric
-   *  reconcile against this boolean both produced contradictions — see
-   *  SettingsPanel.tsx's toggleKeepAbove WHY comment). The resolved boolean
-   *  reports only whether the KWin apply actually ran just now — true on
-   *  KDE Plasma where the script ran, false everywhere else (GNOME/wlroots/
-   *  no qdbus, or a transient DBus failure) — and is used solely to drive
-   *  Settings' inline "couldn't reach KWin" hint. Never rejects. */
-  setKeepAbove(enabled: boolean): Promise<boolean>;
 }
 
 // Marketplace redesign Phase 1 — per-entry component inventory for the
@@ -1974,27 +1915,6 @@ export const IPC = {
   BUDDY_MASCOT_STATE: 'buddy:mascot-state',
   // Main → chat renderer: entrance/exit animation cue around show/hide.
   BUDDY_CHAT_STATE: 'buddy:chat-state',
-  // Linux Wayland overlay (Task 3+): main → overlay renderer, sent once on
-  // did-finish-load with window-local workArea/mascot/dock (BuddyOverlayManager's
-  // overlayInitPayload). External toggle-chat push for the same overlay
-  // window. The rest of the overlay IPC surface (renderer→main channels,
-  // BuddyApi, preload wiring) lands in the next commit (Task 4) — these two
-  // are added now only so this commit's manager code type-checks.
-  BUDDY_OVERLAY_READY: 'buddy:overlay-ready',
-  BUDDY_OVERLAY_TOGGLE_CHAT: 'buddy:overlay-toggle-chat',
-  // Task 4: renderer → main, fire-and-forget. Hover-hot path (mousemove over
-  // the mascot/bar/chat toggles hit-testing many times/sec) so this is `send`,
-  // not `invoke` — same reasoning as BUDDY_MOVE_MASCOT above.
-  BUDDY_OVERLAY_SET_INTERACTIVE: 'buddy:overlay-set-interactive',
-  // Task 4: renderer → main, fire-and-forget. Renderer owns drag/dock state
-  // (DOM-side for the overlay model) and pushes the final position here to
-  // persist — main never computes it, just writes it to BUDDY_POS_FILE.
-  BUDDY_OVERLAY_PERSIST: 'buddy:overlay-persist',
-  // Task 8: renderer → main, invoke/handle (unlike the fire-and-forget
-  // overlay channels above — this one returns a result, and toggling is
-  // rare/user-driven, not a hover-hot path). Settings' keep-above toggle:
-  // persists to BUDDY_POS_FILE and runs the KWin script live.
-  BUDDY_OVERLAY_KEEP_ABOVE: 'buddy:overlay-keep-above',
   // ── The Linux/KDE buddy helper (docs/active/design/2026-09-04-linux-buddy-helper/) ──
   // On a native-Wayland desktop an app is not allowed to move its own windows,
   // so the buddy appears but cannot be dragged. A small script that runs inside

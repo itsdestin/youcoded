@@ -15,7 +15,7 @@ import type { ClaudeAccountStatus } from '../shared/claude-account-types';
 // Reapply on every preload/reload, without splitting theme protocol or storage
 // into another session, or resetting the main window's chosen zoom.
 const buddyMode = new URLSearchParams(location.search).get('mode');
-if (['buddy-mascot', 'buddy-chat', 'buddy-bar', 'buddy-overlay'].includes(buddyMode ?? '')) {
+if (['buddy-mascot', 'buddy-chat', 'buddy-bar'].includes(buddyMode ?? '')) {
   webFrame.setZoomFactor(1);
 }
 
@@ -332,15 +332,6 @@ const IPC = {
   BUDDY_BAR_STATE: 'buddy:bar-state',
   BUDDY_MASCOT_STATE: 'buddy:mascot-state',
   BUDDY_CHAT_STATE: 'buddy:chat-state',
-  // Linux Wayland overlay (Task 3+4). Inlined here like every other buddy
-  // channel above — preload cannot import shared/types.ts.
-  BUDDY_OVERLAY_READY: 'buddy:overlay-ready',
-  BUDDY_OVERLAY_TOGGLE_CHAT: 'buddy:overlay-toggle-chat',
-  BUDDY_OVERLAY_SET_INTERACTIVE: 'buddy:overlay-set-interactive',
-  BUDDY_OVERLAY_PERSIST: 'buddy:overlay-persist',
-  // Task 8: Settings' KDE keep-above toggle — invoke/handle, not fire-and-
-  // forget, since it returns whether the KWin script actually ran.
-  BUDDY_OVERLAY_KEEP_ABOVE: 'buddy:overlay-keep-above',
   // The Linux/KDE buddy helper. Kept byte-identical to shared/types.ts's copy —
   // preload cannot import that file (Electron sandbox), so the two maps are
   // duplicated on purpose and ipc-channels.test.ts is what stops them drifting.
@@ -1347,10 +1338,7 @@ contextBridge.exposeInMainWorld('claude', {
     dragEnded: () => ipcRenderer.send(IPC.BUDDY_DRAG_ENDED),
     openMain: (): Promise<void> => ipcRenderer.invoke(IPC.BUDDY_OPEN_MAIN),
     dismiss: (): Promise<void> => ipcRenderer.invoke(IPC.BUDDY_DISMISS),
-    // Fix: keepAbove rides along on getStatus() (Task 8) rather than a new
-    // getter channel — main's BUDDY_GET_STATUS handler merges it in from
-    // the persisted positions file, so this type just widens to match.
-    getStatus: (): Promise<{ dismissed: boolean; visible: boolean; keepAbove?: boolean }> =>
+    getStatus: (): Promise<{ dismissed: boolean; visible: boolean }> =>
       ipcRenderer.invoke(IPC.BUDDY_GET_STATUS),
     onStatusChanged: (cb: (s: { dismissed: boolean; visible: boolean }) => void) => {
       const listener = (_: unknown, s: { dismissed: boolean; visible: boolean }) => cb(s);
@@ -1377,34 +1365,6 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.SESSION_FOCUS_REQUEST, listener);
       return () => ipcRenderer.removeListener(IPC.SESSION_FOCUS_REQUEST, listener);
     },
-    // ── Linux Wayland overlay (Task 3+4) ──
-    // WHY invoke (pull), not an on() push: a did-finish-load push raced
-    // React's mount and got dropped — see BuddyApi.overlayReady's WHY in
-    // shared/types.ts. One-shot boot fetch, not a hot path.
-    overlayReady: (): Promise<{
-      workArea: { x: number; y: number; width: number; height: number };
-      mascot: { x: number; y: number } | null;
-      dock: string | null;
-    } | null> => ipcRenderer.invoke(IPC.BUDDY_OVERLAY_READY),
-    onOverlayToggleChat: (cb: () => void) => {
-      const listener = () => cb();
-      ipcRenderer.on(IPC.BUDDY_OVERLAY_TOGGLE_CHAT, listener);
-      return () => ipcRenderer.removeListener(IPC.BUDDY_OVERLAY_TOGGLE_CHAT, listener);
-    },
-    // Fire-and-forget, hover-hot path (mousemove-driven hit testing) — same
-    // reasoning as moveMascot above: an invoke() round-trip would starve it.
-    overlaySetInteractive: (interactive: boolean) =>
-      ipcRenderer.send(IPC.BUDDY_OVERLAY_SET_INTERACTIVE, { interactive }),
-    overlayPersist: (state: { mascot: { x: number; y: number }; dock: string | null }) =>
-      ipcRenderer.send(IPC.BUDDY_OVERLAY_PERSIST, state),
-    // Task 8: Settings' KDE keep-above toggle. invoke/handle (not send) —
-    // this is a rare, user-driven click, not a hover-hot path. The toggle
-    // itself is a saved preference (see BuddyApi.setKeepAbove's WHY comment
-    // in shared/types.ts) — the resolved boolean here reports only whether
-    // the KWin apply actually ran just now, used by Settings for an inline
-    // "couldn't reach KWin" hint, not to render the toggle's own state.
-    setKeepAbove: (enabled: boolean): Promise<boolean> =>
-      ipcRenderer.invoke(IPC.BUDDY_OVERLAY_KEEP_ABOVE, enabled),
     // ── The Linux/KDE buddy helper (design §4) ──
     //
     // `needed` is the fact that decides whether ANY of this UI appears: it is
@@ -1452,8 +1412,10 @@ contextBridge.exposeInMainWorld('claude', {
   // up in bootstrap/terminal-bridge.ts. Round-trip cost is not perf-sensitive
   // at ~1s cadence.
   terminal: {
-    getScreenText: (sessionId: string): Promise<string> =>
-      ipcRenderer.invoke('terminal:get-screen-text', sessionId),
+    // tailRows: how many buffer rows to serialize (the classifier passes 40 —
+    // audit W24); omitted = the handler's own default.
+    getScreenText: (sessionId: string, tailRows?: number): Promise<string> =>
+      ipcRenderer.invoke('terminal:get-screen-text', sessionId, tailRows),
   },
   // GPU / performance preference — read and write the preferPowerSaving flag.
   // multiGpuDetected: false in the response means the UI section stays hidden.

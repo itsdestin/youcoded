@@ -11,6 +11,14 @@ import { isRemoteMode } from '../platform';
 // How often the classifier re-reads the buffer while active.
 const TICK_MS = 1000;
 
+// How many terminal rows the classifier asks for per tick. The registry
+// (terminal-registry.getScreenText) tails the buffer by this many rows —
+// walking back to a logical line start so the first line is never a wrapped
+// fragment — so the answer is at most this many logical lines. WHY (audit
+// W24): the hook used to fetch a 120-row tail over IPC every second and keep
+// its last 40 lines itself; asking for 40 rows moves the cut to the source.
+const TAIL_ROWS = 40;
+
 // A non-ok classification must hold for this many consecutive ticks before we
 // dispatch. Suppresses transient false positives during spinner-render gaps.
 const STABILITY_TICKS = 5;
@@ -158,15 +166,15 @@ export function useAttentionClassifier(sessionId: string, args: HookArgs): void 
     const tick = async () => {
       let raw: string;
       try {
-        raw = await window.claude.terminal.getScreenText(sessionId);
+        raw = await window.claude.terminal.getScreenText(sessionId, TAIL_ROWS);
       } catch {
         // Network/IPC failure (Android WebSocket disconnect, etc.) — treat as
         // empty buffer rather than crashing the tick. Mirrors the desktop IPC
         // handler's try/catch defaulting to ''.
         raw = '';
       }
-      const lines = raw.split('\n');
-      const tail = lines.slice(-40);
+      // Already a TAIL_ROWS tail (see the constant): no slice needed here.
+      const tail = raw.split('\n');
 
       const ctx: ClassifierContext = {
         bufferTail: tail,

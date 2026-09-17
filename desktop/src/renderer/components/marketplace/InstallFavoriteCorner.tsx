@@ -1,7 +1,5 @@
-import { useEffect, useState } from 'react';
 import FavoriteStar from './FavoriteStar';
-
-const BRAILLE_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+import BrailleSpinner from '../BrailleSpinner';
 
 interface Props {
   installed: boolean;
@@ -27,12 +25,6 @@ export default function InstallFavoriteCorner({
   installed, installing, favorited, onInstall, onToggleFavorite, inline = false,
 }: Props) {
   const place = inline ? '' : 'absolute top-1.5 right-1.5 bg-panel/90';
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    if (!installing) return;
-    const id = setInterval(() => setFrame(f => (f + 1) % BRAILLE_FRAMES.length), 80);
-    return () => clearInterval(id);
-  }, [installing]);
 
   if (installed) {
     return (
@@ -48,13 +40,19 @@ export default function InstallFavoriteCorner({
   if (installing) {
     // Perf: no backdrop-blur — same compositing-cost removal FavoriteStar
     // documented; bg-panel/90 keeps the corner legible over card art.
+    // WHY <BrailleSpinner> (simplification audit W20): this used to carry its
+    // own 80 ms timer and frame list — one timer per in-flight install — while
+    // BrailleSpinner already drives every spinner off ONE shared tick. Same
+    // glyphs, same 80 ms cadence, and className pins the same text-accent
+    // colour the old copy had (the spinner's default colours come from the
+    // theme cycle, which never lands on accent steadily).
     return (
       <span
         role="status"
         aria-label="Installing"
-        className={`${place} p-1 rounded-md text-accent font-mono text-sm leading-none select-none`}
+        className={`${place} p-1 rounded-md font-mono leading-none select-none`}
       >
-        {BRAILLE_FRAMES[frame]}
+        <BrailleSpinner size="sm" colorCycle={false} className="text-accent" />
       </span>
     );
   }

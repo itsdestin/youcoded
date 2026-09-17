@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render } from '@testing-library/react';
 
 // Pins how a docked buddy treats "something needs attention". Attention (the
 // notification pose) and the dock (pushed separately by main) are two inputs,
@@ -34,24 +34,43 @@ vi.mock('../src/renderer/components/mascot/MascotRig', async (importActual) => {
     },
   };
 });
-import { BuddyMascot } from '../src/renderer/components/buddy/BuddyMascot';
+import { BuddyMascot, type MascotDockState } from '../src/renderer/components/buddy/BuddyMascot';
 
 // jsdom has no layout, so getBBox is missing and PeekHands would never draw its
 // mittens — which would make "no mittens" pass for the wrong reason. A fake box
 // lets the grip render exactly as it does in the app.
 const realGetBBox = (SVGElement.prototype as unknown as { getBBox?: unknown }).getBBox;
+// The mascot learns its dock state the way it does in the app: main pushes
+// buddy:mascot-state and the component subscribes through window.claude.buddy.
+// This fake keeps the subscription so a test can play main's part (until
+// 2026-09-16 tests fed the dock through a prop that only a deleted one-window
+// host ever used; this is the path the real buddy takes).
+const bridge: { push: ((s: MascotDockState) => void) | null } = { push: null };
+const win = window as unknown as { claude?: unknown };
+const realClaude = win.claude;
 beforeAll(() => {
   (SVGElement.prototype as unknown as { getBBox: () => DOMRect }).getBBox =
     () => ({ x: 0, y: 0, width: 4, height: 4 }) as DOMRect;
+  win.claude = {
+    buddy: {
+      onMascotState: (cb: (s: MascotDockState) => void) => {
+        bridge.push = cb;
+        return () => { if (bridge.push === cb) bridge.push = null; };
+      },
+    },
+  };
 });
 afterAll(() => {
   (SVGElement.prototype as unknown as { getBBox?: unknown }).getBBox = realGetBBox;
+  win.claude = realClaude;
 });
 afterEach(() => { cleanup(); state.attention = false; state.poses = []; });
 
-const drive = (mode: 'peeking' | 'docked' | 'free', edge: string | null) => ({
-  dock: { mode, edge }, onDragMove: vi.fn(), onDragEnd: vi.fn(), onTap: vi.fn(),
-});
+/** Main pushes a dock state to the mounted mascot. */
+const dock = (mode: MascotDockState['mode'], edge: string | null) => {
+  expect(bridge.push, 'the mascot did not subscribe to buddy:mascot-state').not.toBeNull();
+  act(() => { bridge.push!({ mode, edge }); });
+};
 const sink = (c: HTMLElement) => c.querySelector<HTMLElement>('.mascot-sink')!;
 const lastPose = () => state.poses[state.poses.length - 1];
 const bouncing = (c: HTMLElement) => c.querySelector('.mascot-bounce') !== null;
@@ -61,7 +80,8 @@ const mittens = (c: HTMLElement) => c.querySelectorAll('.mascot-wrap > [aria-hid
 describe('a docked buddy that needs attention', () => {
   it('stays tucked into a side edge and drops the notification pose', async () => {
     state.attention = true;
-    const view = render(<BuddyMascot overlayDrive={drive('peeking', 'right')} />);
+    const view = render(<BuddyMascot />);
+    dock('peeking', 'right');
     expect(sink(view.container).dataset.dockMode).toBe('peeking');
     expect(lastPose()).toBe('peek-right');
     expect(bouncing(view.container)).toBe(false);
@@ -70,7 +90,8 @@ describe('a docked buddy that needs attention', () => {
 
   it('stays tucked into a top or bottom edge too', () => {
     state.attention = true;
-    const view = render(<BuddyMascot overlayDrive={drive('peeking', 'bottom')} />);
+    const view = render(<BuddyMascot />);
+    dock('peeking', 'bottom');
     expect(sink(view.container).dataset.dockMode).toBe('peeking');
     expect(lastPose()).toBe('peek');
     expect(bouncing(view.container)).toBe(false);
@@ -78,9 +99,10 @@ describe('a docked buddy that needs attention', () => {
 
   it('shows the notification pose once main pops him out of the edge', () => {
     state.attention = true;
-    const view = render(<BuddyMascot overlayDrive={drive('peeking', 'left')} />);
+    const view = render(<BuddyMascot />);
+    dock('peeking', 'left');
     expect(lastPose()).toBe('peek-left');
-    view.rerender(<BuddyMascot overlayDrive={drive('docked', 'left')} />);
+    dock('docked', 'left');
     expect(lastPose()).toBe('shocked');
     expect(bouncing(view.container)).toBe(true);
     expect(mittens(view.container)).toHaveLength(0);
@@ -88,7 +110,8 @@ describe('a docked buddy that needs attention', () => {
 
   it('shows the notification pose while hovered out, and drops it on tucking back', () => {
     state.attention = true;
-    const view = render(<BuddyMascot overlayDrive={drive('peeking', 'left')} />);
+    const view = render(<BuddyMascot />);
+    dock('peeking', 'left');
     const wrap = view.container.querySelector('.mascot-wrap')!;
     fireEvent.pointerEnter(wrap);
     expect(sink(view.container).dataset.dockMode).toBe('free');
@@ -100,7 +123,8 @@ describe('a docked buddy that needs attention', () => {
 
   it('shows the notification pose when free', () => {
     state.attention = true;
-    const view = render(<BuddyMascot overlayDrive={drive('free', null)} />);
+    const view = render(<BuddyMascot />);
+    dock('free', null);
     expect(lastPose()).toBe('shocked');
     expect(bouncing(view.container)).toBe(true);
   });

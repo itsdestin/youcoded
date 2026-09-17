@@ -318,6 +318,19 @@ describe('terminal:get-screen-text channel parity', () => {
     expect(src).toContain(`'${CHANNEL}'`);
   });
 
+  // Audit W24: the classifier asks for a 40-row tail through the second
+  // argument. A bridge that drops it silently reverts to the handler's default
+  // tail (desktop) or the whole screen (Android) with nothing failing.
+  it('preload.ts forwards the tailRows argument', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    expect(src).toMatch(/ipcRenderer\.invoke\('terminal:get-screen-text',\s*sessionId,\s*tailRows\)/);
+  });
+
+  it('remote-shim.ts forwards the tailRows argument', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    expect(src).toMatch(/invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
+  });
+
   it('terminal:get-screen-text is referenced in ipc-handlers.ts', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'), 'utf8');
     expect(src).toContain(`'${CHANNEL}'`);
