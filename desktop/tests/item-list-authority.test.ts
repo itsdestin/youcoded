@@ -1,6 +1,6 @@
 // desktop/tests/item-list-authority.test.ts
 import { describe, it, expect } from 'vitest';
-import { inScopeFiles, readSource } from './helpers/guard-scope';
+import { inScopeFiles, readStripped } from './helpers/guard-scope';
 
 // "No bare glyph survives..." and "no in-menu copy tells the user to press a
 // control that was removed" converted to ast-grep rules —
@@ -23,18 +23,21 @@ const GLYPH_EXEMPT: Record<string, { count: number; why: string }> = {
   },
 };
 
+// FIX (review of batch B, 2026-09-16): restored to readStripped (comment-
+// stripped), as the original did — a bare readSource would trip on a WHY
+// comment quoting this exact glyph pattern.
 function bareGlyphs(src: string): number {
   return [...src.matchAll(/>\s*✕\s*</g)].length;
 }
 
-describe('item list actions exemptions', () => {
-  it('an exemption covers exactly the occurrences it was granted for', () => {
+describe('item list actions', () => {
+  it('every exemption still exists and still applies', () => {
     const byName = new Map(inScopeFiles().map((p) => [p.split(/[\\/]/).pop()!, p]));
     for (const [file, { count, why }] of Object.entries(GLYPH_EXEMPT)) {
       const abs = byName.get(file);
       expect(abs, `${file} is exempted but no longer in scope — drop it`).toBeTruthy();
       expect(
-        bareGlyphs(readSource(abs!)),
+        bareGlyphs(readStripped(abs!)),
         `${file} (${why}) no longer has ${count} — update or drop the exemption`,
       ).toBe(count);
     }
