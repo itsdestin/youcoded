@@ -250,15 +250,18 @@ interface Props {
  *  App.tsx, does) — useArtifact() needs a provider ancestor regardless of which
  *  component calls it. Keeping this in its own small component is just code
  *  organization; SessionStrip now also calls useArtifact() at its top level. */
-export function ProjectsButton() {
+/** `active` lights it inside Project View's own band (ScreenBand), where a
+ *  second press returns to chat — the same toggle the Pages button has. */
+export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
   const { dispatch } = useArtifact();
   return (
-    <Tooltip text="Projects" placement="bottom">
+    <Tooltip text={active ? 'Back to chat' : 'Projects'} placement="bottom">
     <button
       type="button"
-      className="relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg"
-      onClick={() => dispatch({ type: 'PROJECT_VIEW_OPENED' })}
+      className={`relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg ${active ? 'text-fg bg-inset' : ''}`}
+      onClick={() => dispatch({ type: active ? 'PROJECT_VIEW_CLOSED' : 'PROJECT_VIEW_OPENED' })}
       aria-label="Open Projects"
+      aria-pressed={active}
     >
       {/* Folder icon — matches the document icon style used by ArtifactDrawerButton */}
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

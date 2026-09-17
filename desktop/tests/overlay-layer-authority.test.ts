@@ -47,7 +47,9 @@ describe('overlay layer authority', () => {
     // Change 26: Marketplace, Library and ProjectView are ONE layer. At the old
     // z-[8000] a Toast/ContextMenu/AnchorTip fired while Projects was open
     // painted underneath it and was silently swallowed.
-    expect(src).toContain('fixed inset-0 bg-canvas z-40');
+    // bg-panel since 2026-09-17: the view frames a bg-canvas pane under the
+    // shared ScreenBand, like the page view. The layer is what this pins.
+    expect(src).toContain('fixed inset-0 bg-panel z-40');
     expect(appliedZIndexes(src)).not.toContain('z-[8000]');
   });
 

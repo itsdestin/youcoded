@@ -31,12 +31,17 @@
 // Opened by PAGE_VIEW_OPENED (the Pages button) or PAGE_OPENED (a card, a
 // pinned button, a panel row). Renders nothing while closed. The library
 // (Manage pages) opens OVER it and closes back onto it.
+//
+// FOCUS (Destin, 2026-09-17): a pinned button opens its page "full screen
+// framed with no side bar" — PAGE_OPENED with focus. The band is the same
+// (ScreenBand, shared with Project View), the pinned button lights instead of
+// the Pages icon, and the panel is simply not rendered; the Pages icon brings
+// it back with the page still open.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
-import { CaptionButtons, MacTrafficLights, ProjectsButton, SettingsGearButton, showCaptionButtons } from '../HeaderBar';
-import { PagesButton } from './PagesButton';
+import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
@@ -74,7 +79,6 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // The frame reloads when page.html was rewritten (the stamp moves) and not
   // when the page saved its own data (it does not) — review F7.
   const htmlStamp = summary?.htmlStamp ?? 0;
-  const headerRef = useRef<HTMLDivElement>(null);
 
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -166,52 +170,24 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     // at z-45 the backdrop sat under the view and Settings could not be
     // closed). The library (z-[60]) opens over this from Manage pages.
     <div className="fixed inset-0 bg-panel z-40 flex flex-col">
-      {/* The band: same height, drag region and window buttons as the app's
-          header; three columns so the page's name is truly centred. No border
-          underneath — the page pane's own edge is the divider (round 4). */}
-      <div
-        ref={headerRef}
-        className="header-bar !relative grid grid-cols-[1fr_auto_1fr] items-center h-10 px-2 sm:px-3 shrink-0 select-none"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-      >
-        <MacTrafficLights headerRef={headerRef} />
-        {/* The app's own three destinations, in the app's order; Pages is lit
-            because this IS the pages view. No chat/terminal toggle, files or
-            games here (Destin, 2026-09-17). */}
-        <div className="flex items-center gap-1 sm:gap-2">
-          <SettingsGearButton settingsOpen={settingsOpen} onToggleSettings={onToggleSettings} settingsBadge={settingsBadge} settingsDangerBadge={settingsDangerBadge} />
-          <PagesButton active />
-          <ProjectsButton />
-        </div>
-        <div className="flex items-center justify-center gap-2 min-w-0 px-3">
+      <ScreenBand
+        settingsOpen={settingsOpen}
+        onToggleSettings={onToggleSettings}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
+        active={state.pageFocus ? null : 'pages'}
+        onBack={backToChat}
+        title={<>
           {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
-          <span className="text-sm font-medium text-fg truncate">{title || 'Pages'}</span>
-        </div>
-        <div className="flex items-center justify-end gap-1 sm:gap-2">
-          {/* Same inset pill and quiet text as the window buttons beside it
-              (round 5: "should match styling of max/min/exit"). */}
-          <div className="flex bg-inset rounded-md p-0.5">
-            <button
-              type="button"
-              onClick={backToChat}
-              aria-label="Back to chat"
-              className="px-2 py-1 rounded-[var(--radius-toggle)] transition-colors text-fg-dim hover:text-fg-2 flex items-center gap-1.5 text-xs leading-none"
-            >
-              {/* One size and one baseline for all three parts (round 6: the
-                  key cap sat a hair low), with a dot between the words and the key. */}
-              <span>Back to chat</span>
-              <span aria-hidden="true" className="hidden sm:inline text-fg-faint">·</span>
-              <span className="hidden sm:inline text-fg-muted">Esc</span>
-            </button>
-          </div>
-          {showCaptionButtons() && <CaptionButtons />}
-        </div>
-      </div>
+          <span className="truncate">{title || 'Pages'}</span>
+        </>}
+      />
 
       {/* Below the band: the panel in its own rounded container and the page
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
       <div className="flex-1 min-h-0 flex" style={{ gap: 'var(--frame-edge, 10px)', padding: '0 var(--frame-edge, 10px) var(--frame-edge, 10px)' }}>
+        {!state.pageFocus && (
         <aside className="w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
           <div className="flex-1 overflow-y-auto p-2">
             {personal.length > 0 && (
@@ -244,6 +220,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
             </Button>
           </div>
         </aside>
+        )}
         <div className="relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
           {load.state === 'idle' && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 select-none">
@@ -316,15 +293,6 @@ function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; curren
   );
 }
 
-
-function EditIcon() {
-  return (
-    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-        d="M16.5 3.5a2.1 2.1 0 013 3L8 18l-4 1 1-4L16.5 3.5zM14 6l4 4" />
-    </svg>
-  );
-}
 
 function PlusGlyph() {
   return (

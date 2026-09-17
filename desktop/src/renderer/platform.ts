@@ -1,6 +1,10 @@
 export type Platform = 'electron' | 'android' | 'browser'
 
 export function getPlatform(): Platform {
+  // WHY the guard: HeaderBar reads this at module load (toggleOnLeft), and a
+  // node-environment test that imports a screen which imports the band
+  // (ProjectView → ScreenBand → HeaderBar) has no window at all.
+  if (typeof window === 'undefined') return 'electron'
   return (window as any).__PLATFORM__ || 'electron'
 }
 

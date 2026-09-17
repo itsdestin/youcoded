@@ -90,6 +90,8 @@ import ShareSheet from './components/ShareSheet';
 import { ProjectView } from './components/project-view/ProjectView';
 import { PagesView } from './components/pages/PagesView';
 import { PageHost } from './components/pages/PageHost';
+import { PageCreateDialog, type PageCreateRequest } from './components/pages/PageCreateDialog';
+import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
@@ -674,6 +676,9 @@ function AppInner() {
   const chatStore = useChatStore();
   // Artifact tracker — global reducer for session/project artifact state.
   const [artifactState, dispatchArtifact] = useReducer(artifactReducer, initialArtifactState);
+  // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
+  // and model (Destin, 2026-09-17). Null while closed.
+  const [pageCreate, setPageCreate] = useState<PageCreateRequest | null>(null);
   // Ref mirror of artifact state so the (once-registered) tool-use handler can
   // dedup Read-tracking against the session's already-known artifacts without
   // re-subscribing on every reducer tick.
@@ -2751,6 +2756,14 @@ function AppInner() {
     setSessionId(info.id);
   }, [dispatch]);
 
+  // The page view blocks the chat's global shortcuts (Destin, 2026-09-17) —
+  // except while Settings, the library or the create dialog is over it, when
+  // those own the keyboard as they would over the chat. utils/shortcut-gate.ts.
+  useEffect(() => {
+    setGlobalShortcutsBlocked(artifactState.pageViewOpen && !settingsOpen && !artifactState.pagesViewOpen && pageCreate === null);
+    return () => setGlobalShortcutsBlocked(false);
+  }, [artifactState.pageViewOpen, artifactState.pagesViewOpen, settingsOpen, pageCreate]);
+
   const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string, initialInput?: string) => {
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
@@ -4426,6 +4439,10 @@ function AppInner() {
         onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}
         defaultModel={sessionDefaults.model}
         defaultSkipPermissions={sessionDefaults.skipPermissions}
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen((v) => !v)}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
       />
       {/* YouCoded Pages (Phase 1 shell): the library and, above it, an open
           page. Both render null while closed, like ProjectView. "Make a page"
@@ -4433,23 +4450,32 @@ function AppInner() {
           creator skill that turns that conversation into a page is Phase 1's
           next task, not part of this shell. */}
       <PagesView
-        // Make a page: a conversation in the current folder with the creator
-        // skill pre-filled (not sent), so the person adds what the page should
-        // do and presses Enter. Edit: the same, naming the page; a project page
-        // opens in its project so the skill finds the folder. Both leave pages.
-        onMakePage={() => { dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false, undefined, undefined, undefined, undefined, undefined, '/page-builder '); }}
-        onEditPage={(page) => {
-          dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
-          const cwd = page.home.kind === 'project' ? page.home.path : (currentSession?.cwd || sessionDefaults.projectFolder || '');
-          void createSession(cwd, false, undefined, undefined, undefined, undefined, undefined, `/page-builder edit "${page.name}" `);
-        }}
+        // Make a page / Edit open the new-session dialog (folder, model, the
+        // rest) with the creator skill waiting in the composer — not sent, so
+        // the person adds what the page should do and presses Enter. Edit
+        // names the page; a project page starts in its project so the skill
+        // finds the folder. The dialog leaves pages once the session exists.
+        onMakePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
+        onEditPage={(page) => setPageCreate({
+          title: `Edit ${page.name}`,
+          initialInput: `/page-builder edit "${page.name}" `,
+          cwd: page.home.kind === 'project' ? page.home.path : undefined,
+        })}
       />
       <PageHost
         settingsOpen={settingsOpen}
         onToggleSettings={() => setSettingsOpen(prev => !prev)}
         settingsBadge={settingsBadge}
         settingsDangerBadge={settingsDangerBadge}
-        onCreatePage={() => { dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false, undefined, undefined, undefined, undefined, undefined, '/page-builder '); }}
+        onCreatePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
+      />
+      <PageCreateDialog
+        request={pageCreate}
+        onCancel={() => setPageCreate(null)}
+        // The form created the session; adopt it the way createSession does
+        // (list entry, view mode, focus) and leave pages so the chat shows.
+        onCreated={(info) => { setPageCreate(null); adoptCreatedSession(info); dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); }}
+        onManageProjects={() => { setPageCreate(null); dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }); }}
       />
     </div>
     </ArtifactProvider>
