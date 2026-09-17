@@ -4,18 +4,23 @@
 // RUNS the workbench's voice fake, which schedules its scripted words with
 // `window.setTimeout`. Every other test here is a static scan and does not care.
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { HAND_WRITTEN, createVoiceMock } from '../src/renderer/dev/workbench/mock-shim';
 import { MOCK_ONLY } from '../src/renderer/dev/workbench/mock-only';
 import type { VoiceEvent } from '../src/shared/voice-types';
+import { readSource } from './helpers/guard-scope';
 
-const preload = readFileSync(join(__dirname, '../src/main/preload.ts'), 'utf8');
+// WHY the channel checks below still read preload.ts and remote-shim.ts as text
+// (Plan B source-grep sweep, 2026-09-16, row "channel parity stays"): they compare
+// the mock's RUN-TIME lists (HAND_WRITTEN, MOCK_ONLY) with what the two real
+// bridges declare — a cross-file check against values built at run time, which no
+// ast-grep rule or type can express. readSource strips Windows line endings first.
+const preload = readSource(join(__dirname, '../src/main/preload.ts'));
 // remote-shim is the OTHER real implementation of window.claude — a handful of
 // channels (on.chatHydrate) exist only there, because Electron clients get the
 // same data from the transcript watcher. "Mirrors something real" has to mean
 // either file, or the mock would be forced to declare a real channel MOCK_ONLY.
-const remoteShim = readFileSync(join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8');
+const remoteShim = readSource(join(__dirname, '../src/renderer/remote-shim.ts'));
 const mockOnly = new Set(MOCK_ONLY.map((m) => m.channel));
 
 // WHY namespace-scoped and not a bare `\blist\s*:` over the whole file: `list:`
