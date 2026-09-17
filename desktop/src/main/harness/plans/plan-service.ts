@@ -15,7 +15,7 @@ import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
 import { planCeilingTokens, planCeilingUsd } from './plan-budget';
 import { pausedRouting, resetRecoveriesForContinue, type PlanPauseAction } from './pause-routing';
-import { PLAN_NOTICE_DETAIL_MAX_CHARS, PLAN_RECOMMENDATION_MAX_CHARS, addBudgetCap, addBudgetFloor } from './plan-handoff';
+import { PLAN_NOTICE_DETAIL_MAX_CHARS, PLAN_RECOMMENDATION_MAX_CHARS, addBudgetCap, addBudgetFloor, normalizePlanQuestion } from './plan-handoff';
 import type {
   ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanRecord, PlanRef,
   PlanSettingsWriteResult, PlanUnsupported,
@@ -557,8 +557,12 @@ export class PlanService {
    * write. Asking again after an answer replaces the old recommendation,
    * error and revision link. The host queues the notice afterwards.
    */
-  askAssistant(sessionId: string, planId: string, handoff: PlanAskHandoff): Promise<PlanActionResult> {
+  askAssistant(sessionId: string, planId: string, handoff: PlanAskHandoff, question?: unknown): Promise<PlanActionResult> {
     return this.act('ask the assistant about', async () => {
+      // Decision 20: the optional typed question is checked here, like a
+      // Comment's text, before anything is read or written.
+      const q = normalizePlanQuestion(question);
+      if (!q.ok) return failure(q.error);
       const { ref } = await this.loadPlan(sessionId, planId);
       await this.journal.mutate(ref, (file) => {
         const p = file.plans.find((x) => x.planId === planId);
@@ -571,6 +575,7 @@ export class PlanService {
         p.paused.handoff = {
           id: handoff.id, state: 'pending', at: this.now(), revisionTurnId: handoff.turnId,
           ...(handoff.waiting ? { waiting: 'reply' as const } : {}),
+          ...(q.question ? { question: q.question } : {}),
         };
       });
       return { ok: true, plan: await this.view(ref, planId) };

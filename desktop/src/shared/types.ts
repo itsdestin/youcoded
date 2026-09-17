@@ -779,6 +779,11 @@ export const PLAN_NOTICE_PREFIX = '[Plan paused]';
  *  asked the assistant about this plan."), while an older automatic notice
  *  (same prefix, different words) stays hidden — the user never asked that. */
 export const PLAN_ASK_NOTICE_LEAD = `${PLAN_NOTICE_PREFIX} The user asked you about this paused plan.`;
+/** Decision 20: the tags that wrap the question the user typed in the Ask box
+ *  inside that notice. The chat line reads the question back from between
+ *  them, so replay, remote and the buddy all show the same words. */
+export const PLAN_ASK_QUESTION_OPEN = '<user-question>';
+export const PLAN_ASK_QUESTION_CLOSE = '</user-question>';
 
 /** Where one plan specialist's attempt stands (the journal's attempt phase):
  *  `prepared` means its first request was never sent. */
@@ -842,6 +847,9 @@ export interface PlanView {
       /** Task 11 (§6): pending, but queued behind a reply already in
        *  progress — "The assistant will look at this after its current reply." */
       waiting?: 'reply';
+      /** Decision 20: the question the user typed when asking (absent when
+       *  blank) — Retry after a failure asks again with the same words. */
+      question?: string;
       /** Task 11 (§6): the question was cleared without an answer. `no-start`
        *  = it had not started after 10 minutes; `reply-failed` = its turn
        *  failed, `detail` being the real error. The card shows an error line

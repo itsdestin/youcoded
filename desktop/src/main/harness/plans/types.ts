@@ -217,6 +217,9 @@ const PlanRecordSchema = z.object({
       at: z.number(),
       revisionTurnId: z.string().min(1).optional(),
       waiting: z.literal('reply').optional(),
+      /** Decision 20: what the user typed in the Ask box (trimmed, at most
+       *  1,000 characters). Absent when they left it blank. */
+      question: z.string().min(1).max(1000).optional(),
       recommendation: z.object({
         action: z.enum(PLAN_PAUSE_ACTIONS),
         addTokens: z.number().int().min(1).optional(),

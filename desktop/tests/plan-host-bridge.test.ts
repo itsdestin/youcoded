@@ -298,6 +298,15 @@ describe('Ask the assistant', () => {
     expect(t.queued[0].text.startsWith('[Plan paused] The user asked you about this paused plan.')).toBe(true);
   });
 
+  it('Decision 20: the typed question rides in the notice; an over-long one is refused before anything is held', async () => {
+    const t = await setup();
+    expect(await t.bridge.askAssistant(SID, 'p-h', 'x'.repeat(1001))).toEqual({ ok: false, error: 'Questions are limited to 1,000 characters.' });
+    expect((t.bridge as any).handoffs.size).toBe(0);
+    expect(t.queued).toHaveLength(0);
+    expect(await t.bridge.askAssistant(SID, 'p-h', ' Can it finish with 5,000 more? ')).toMatchObject({ ok: true });
+    expect(t.queued[0].text).toContain("The user's question (their own words):\n<user-question>\nCan it finish with 5,000 more?\n</user-question>");
+  });
+
   it('a conversation that cannot take a notice refuses with the real reason, before any write (§6)', async () => {
     const t = await setup({ noticeRefusal: () => 'You stopped this conversation. Send the assistant a message, then ask again.' });
     const seq = (await t.bridge.journal.get(REF, 'p-h'))!.seq;

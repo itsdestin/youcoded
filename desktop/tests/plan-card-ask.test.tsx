@@ -21,7 +21,7 @@ import type { PlanView } from '../src/shared/types';
 import { resetPlanSupportForTests } from '../src/renderer/components/plans/plan-bridge';
 import { planDisplay } from '../src/renderer/components/plans/PlanCard';
 import { NARROW_VIEWPORT_QUERY } from '../src/renderer/hooks/use-narrow-viewport';
-import { PLAN_HANDOFF_BACKSTOP_MS } from '../src/main/harness/plans/plan-handoff';
+import { PLAN_HANDOFF_BACKSTOP_MS, PLAN_QUESTION_MAX_CHARS } from '../src/main/harness/plans/plan-handoff';
 
 const S = 's1';
 const CARD = 'call-plan';
@@ -114,38 +114,106 @@ describe('every paused card offers Ask, as the light button on the far left (§6
   });
 });
 
-describe('pressing Ask', () => {
-  it('sends one request for this plan and lands the greyed card the host returned', async () => {
+describe('pressing Ask opens an optional question box (decision 20)', () => {
+  const PLACEHOLDER = 'What would you like to ask? (optional)';
+  const open = () => fireEvent.click(screen.getByRole('button', { name: ASK }));
+  const box = () => screen.getByTestId('plan-ask-box');
+  const send = () => fireEvent.click(within(box()).getByRole('button', { name: 'Send' }));
+
+  it('opens a text box with Cancel (light, left) and Send (filled, right); nothing is sent yet', () => {
     show(paused());
-    fireEvent.click(screen.getByRole('button', { name: ASK }));
+    open();
+    expect(within(box()).getByPlaceholderText(PLACEHOLDER)).toBeInTheDocument();
+    const names = within(box()).getAllByRole('button').map((b) => (b.textContent ?? '').trim());
+    expect(names).toEqual(['Cancel', 'Send']);
+    expect(within(box()).getByRole('button', { name: 'Send' }).className.split(/\s+/)).toContain('bg-accent');
+    expect(within(box()).getByRole('button', { name: 'Cancel' }).className.split(/\s+/)).not.toContain('bg-accent');
+    // Blank is allowed: Send is enabled with nothing typed.
+    expect(within(box()).getByRole('button', { name: 'Send' })).not.toBeDisabled();
+    // The strip's own buttons step aside while the box is open (like Comment).
+    expect(screen.queryByTestId('plan-pause-actions')).toBeNull();
+    expect(api.askAssistant).not.toHaveBeenCalled();
+  });
+
+  it('Cancel closes it and sends nothing', () => {
+    show(paused());
+    open();
+    fireEvent.change(within(box()).getByPlaceholderText(PLACEHOLDER), { target: { value: 'draft' } });
+    fireEvent.click(within(box()).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('plan-ask-box')).toBeNull();
+    expect(buttons()).toEqual([ASK, 'Stop', 'Add budget']);
+    expect(api.askAssistant).not.toHaveBeenCalled();
+  });
+
+  it('Send with the box blank asks with no question and lands the greyed card', async () => {
+    show(paused());
+    open();
+    send();
     await waitFor(() => expect(screen.getByTestId('plan-handoff-pending')).toHaveTextContent('The assistant is looking into this.'));
     expect(api.askAssistant).toHaveBeenCalledTimes(1);
-    expect(api.askAssistant).toHaveBeenCalledWith(S, 'plan-1');
+    expect(api.askAssistant).toHaveBeenCalledWith(S, 'plan-1', '');
+    expect(screen.queryByTestId('plan-ask-box')).toBeNull();
     expect(block()).toHaveClass('opacity-60');
     expect(buttons()).toEqual([]);
   });
 
-  it('ignores more clicks while its request is in flight (review 4-3)', async () => {
+  it('after a successful Send the box stays closed when the answer comes back', async () => {
+    const { rerender } = show(paused());
+    open();
+    fireEvent.change(within(box()).getByPlaceholderText(PLACEHOLDER), { target: { value: 'Why?' } });
+    send();
+    await waitFor(() => expect(screen.getByTestId('plan-handoff-pending')).toBeInTheDocument());
+    rerender(<ChatProvider><Card initial={paused({ handoff: { state: 'answered', question: 'Why?' } }, { seq: 9 })} /></ChatProvider>);
+    await waitFor(() => expect(screen.queryByTestId('plan-handoff-pending')).toBeNull());
+    expect(screen.queryByTestId('plan-ask-box')).toBeNull();
+    expect(buttons()).toEqual([ASK, 'Stop', 'Add budget']);
+  });
+
+  it('Send with a question sends it trimmed; Enter sends too, Shift+Enter does not', async () => {
+    show(paused());
+    open();
+    const input = within(box()).getByPlaceholderText(PLACEHOLDER);
+    fireEvent.change(input, { target: { value: '  Is 5,000 more enough?  ' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(api.askAssistant).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(api.askAssistant).toHaveBeenCalledWith(S, 'plan-1', 'Is 5,000 more enough?'));
+  });
+
+  it('ignores more presses while its request is in flight (review 4-3)', async () => {
     let finish!: (v: unknown) => void;
     api.askAssistant.mockImplementation(() => new Promise((r) => { finish = r; }));
     show(paused());
-    const ask = screen.getByRole('button', { name: ASK });
-    fireEvent.click(ask);
-    fireEvent.click(ask);
-    fireEvent.click(ask);
+    open();
+    const sendButton = within(box()).getByRole('button', { name: 'Send' });
+    fireEvent.click(sendButton);
+    fireEvent.click(sendButton);
+    fireEvent.keyDown(within(box()).getByPlaceholderText(PLACEHOLDER), { key: 'Enter' });
     expect(api.askAssistant).toHaveBeenCalledTimes(1);
-    expect(ask).toHaveTextContent('Asking…');
+    expect(sendButton).toHaveTextContent('Sending…');
     await act(async () => { finish({ ok: true, plan: paused({ handoff: { state: 'pending' } }, { seq: 5 }) }); });
     expect(api.askAssistant).toHaveBeenCalledTimes(1);
   });
 
-  it('a refusal shows the host\'s reason with Retry, and Retry asks again', async () => {
+  it('a refusal keeps the typed question, shows the reason with Retry, and Retry asks again with the same words', async () => {
     api.askAssistant.mockResolvedValueOnce({ ok: false, error: 'You stopped this conversation. Send the assistant a message, then ask again.' });
     show(paused());
-    fireEvent.click(screen.getByRole('button', { name: ASK }));
+    open();
+    fireEvent.change(within(box()).getByPlaceholderText(PLACEHOLDER), { target: { value: 'Why?' } });
+    send();
     await waitFor(() => expect(block()).toHaveTextContent('You stopped this conversation. Send the assistant a message, then ask again.'));
+    expect(within(box()).getByPlaceholderText(PLACEHOLDER)).toHaveValue('Why?');
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(api.askAssistant).toHaveBeenCalledTimes(2));
+    expect(api.askAssistant).toHaveBeenLastCalledWith(S, 'plan-1', 'Why?');
+  });
+
+  it('over 1,000 characters: Send is disabled and the box says why', () => {
+    show(paused());
+    open();
+    fireEvent.change(within(box()).getByPlaceholderText(PLACEHOLDER), { target: { value: 'x'.repeat(1001) } });
+    expect(within(box()).getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(box()).toHaveTextContent('Questions are limited to 1,000 characters.');
   });
 });
 
@@ -167,14 +235,14 @@ describe('while the assistant has the question (§6)', () => {
 });
 
 describe('a question cleared without an answer shows an error line with Retry (§6, review 4-5/4-10)', () => {
-  it('not started within 10 minutes', async () => {
-    show(paused({ handoff: { state: 'answered', problem: { kind: 'no-start' } } }));
+  it('not started within 10 minutes; Retry asks again with the same question (decision 20)', async () => {
+    show(paused({ handoff: { state: 'answered', question: 'Why did it stop?', problem: { kind: 'no-start' } } }));
     const line = screen.getByTestId('plan-ask-error');
     expect(line).toHaveTextContent("The assistant didn't get to your question within 10 minutes.");
     // Retry is the ask; the default buttons stay, Ask itself does not repeat.
     expect(buttons()).toEqual(['Stop', 'Add budget', 'Retry']);
     fireEvent.click(within(line).getByRole('button', { name: 'Retry' }));
-    await waitFor(() => expect(api.askAssistant).toHaveBeenCalledWith(S, 'plan-1'));
+    await waitFor(() => expect(api.askAssistant).toHaveBeenCalledWith(S, 'plan-1', 'Why did it stop?'));
     await waitFor(() => expect(screen.queryByTestId('plan-ask-error')).toBeNull());
   });
 
@@ -205,7 +273,8 @@ describe('a question cleared without an answer shows an error line with Retry (�
     await waitFor(() => expect(block()).toHaveTextContent('Stop it there.'));
     expect(screen.queryByTestId('plan-ask-error')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: ASK }));
-    await waitFor(() => expect(api.askAssistant).toHaveBeenCalledWith(S, 'plan-1'));
+    fireEvent.click(within(screen.getByTestId('plan-ask-box')).getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(api.askAssistant).toHaveBeenCalledWith(S, 'plan-1', ''));
   });
 
   it('a recommendation that arrived first is kept, with no error line', () => {
@@ -274,5 +343,8 @@ describe('narrow widths (390 px): the card wraps instead of crushing its text', 
 describe('the "10 minutes" in the card\'s copy', () => {
   it('matches the backstop main uses', () => {
     expect(PLAN_HANDOFF_BACKSTOP_MS).toBe(10 * 60_000);
+  });
+  it('the Ask box\'s 1,000 matches the limit main enforces (decision 20)', () => {
+    expect(PLAN_QUESTION_MAX_CHARS).toBe(1_000);
   });
 });

@@ -3060,7 +3060,7 @@ export function installShim(): void {
       addBudget: (sessionId: string, planId: string, tokens: number) => invoke('plans:add-budget', { sessionId, planId, tokens }),
       resume: (sessionId: string, planId: string) => invoke('plans:resume', { sessionId, planId }),
       stop: (sessionId: string, planId: string) => invoke('plans:stop', { sessionId, planId }),
-      askAssistant: (sessionId: string, planId: string) => invoke('plans:ask-assistant', { sessionId, planId }),
+      askAssistant: (sessionId: string, planId: string, question?: string) => invoke('plans:ask-assistant', { sessionId, planId, question }),
       getAutoApprove: () => invoke('plans:get-auto-approve', {}),
       setAutoApprove: (underTokens: number) => invoke('plans:set-auto-approve', { underTokens }),
     },

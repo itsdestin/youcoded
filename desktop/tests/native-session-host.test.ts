@@ -6102,6 +6102,15 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(notices()).toHaveLength(1);
     });
 
+    it('Decision 20: the user\'s typed question reaches the assistant inside the notice', async () => {
+      const planId = await pauseOnBudget();
+      parentSteps.push(textStep('Adding 5,000 would be enough.'));
+      expect(await host.askAssistantAboutPlan(SID, planId, 'Would 5,000 more be enough?')).toMatchObject({ ok: true, plan: { paused: { handoff: { question: 'Would 5,000 more be enough?' } } } });
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the notice turn');
+      expect(String(notices()[0].data.text)).toContain('<user-question>\nWould 5,000 more be enough?\n</user-question>');
+      expect(parentPrompts.some((p) => p.includes('Would 5,000 more be enough?'))).toBe(true);
+    });
+
     it('recommend_plan_action is offered exactly where propose_plan is, and never to a specialist', async () => {
       const planId = await pauseOnBudget();
       parentSteps.push(textStep('noted'));

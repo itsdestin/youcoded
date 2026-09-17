@@ -76,6 +76,11 @@ export function planIcon(plan: PlanView): 'spinner' | 'check' | 'fail' | 'stoppe
 
 function tokens(n: number): string { return `${n.toLocaleString()} tokens`; }
 
+/** Decision 20: the longest Ask question main accepts (plan-handoff.ts
+ *  PLAN_QUESTION_MAX_CHARS, which the renderer can't import; pinned equal by
+ *  plan-card-ask.test.tsx). */
+const PLAN_QUESTION_LIMIT = 1_000;
+
 /** "$0.12"; "less than a cent" rather than a false "$0.00" (error-message
  *  standard: never print a zero that is not one). */
 function usd(n: number): string {
@@ -138,6 +143,11 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const [commenting, setCommenting] = useState(false);
   const [comment, setComment] = useState('');
   const [adding, setAdding] = useState(false);
+  // Decision 20: "Ask the assistant" opens a small optional question box,
+  // like Comment's. Blank is fine; Send asks either way.
+  const [asking, setAsking] = useState(false);
+  const [question, setQuestion] = useState('');
+  const questionTooLong = question.trim().length > PLAN_QUESTION_LIMIT;
   // UX run 1, U18: default to the paused step's own per-specialist cap (a
   // sensible size for one more pass), shown with a thousands comma.
   // Task 5b: when the host says a smaller amount would only pause again
@@ -244,7 +254,18 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const stop = () => { lastAction.current = stop; return act('stop', (b) => b.stop(id, plan.planId)); };
   // Task 11 (§6): the host checks, records and queues; the card only lands the
   // greyed record it answers. `act` ignores presses while one is in flight.
-  const askAssistant = () => { lastAction.current = askAssistant; return act('ask', (b) => b.askAssistant(id, plan.planId)); };
+  // Decision 20: the question travels with the request; Retry (the card's
+  // error slot or the ask error line) asks again with the same words.
+  const sendAsk = (text: string): Promise<void> => {
+    const again = () => sendAsk(text);
+    lastAction.current = again;
+    return act('ask', (b) => b.askAssistant(id, plan.planId, text)).then((landed) => {
+      // A refused question stays where it was typed, so it can be sent again.
+      if (landed) { setAsking(false); setQuestion(''); }
+    });
+  };
+  const submitAsk = () => { if (!questionTooLong) void sendAsk(question.trim()); };
+  const askAgain = () => sendAsk(handoff?.question ?? '');
   const retry = () => { void lastAction.current?.(); };
   // Report bug / Diagnose open the app's ticket screen with the real text.
   const report = (errorText: string, diagnose: boolean) => setReportContext({ surface: 'a plan card', error: errorText, ...(diagnose ? { diagnose } : {}) });
@@ -334,11 +355,11 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               // Task 11: at 390 px the buttons move under the reason instead
               // of crushing it into a one-letter column.
               wrapAction
-              action={handoffPending ? undefined : !adding ? (
+              action={handoffPending || asking ? undefined : !adding ? (
                 <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-pause-actions">
                   {/* Task 11 (§6, G-29): Ask is a light button, far left. */}
                   {canAsk && (
-                    <Button size="sm" variant="secondary" onClick={askAssistant} disabled={blocked}>{busy === 'ask' ? 'Asking…' : 'Ask the assistant'}</Button>
+                    <Button size="sm" variant="secondary" onClick={() => setAsking(true)} disabled={blocked}>Ask the assistant</Button>
                   )}
                   {/* Task 9b (§2 step 7, design guide G-29): the filled button
                       is the rightmost; Stop is the light one on its left. A
@@ -405,18 +426,40 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               {askProblem.kind === 'no-start' ? (
                 // "10 minutes" is main's backstop (plan-handoff.ts
                 // PLAN_HANDOFF_BACKSTOP_MS; pinned by plan-card-ask.test.tsx).
-                <ErrorState variant="inline" message="The assistant didn't get to your question within 10 minutes." onRetry={askAssistant} />
+                <ErrorState variant="inline" message="The assistant didn't get to your question within 10 minutes." onRetry={askAgain} />
               ) : askProblem.detail ? (
-                <ErrorState variant="inline" message={`The assistant couldn't answer your question: ${askProblem.detail}`} onRetry={askAssistant} />
+                <ErrorState variant="inline" message={`The assistant couldn't answer your question: ${askProblem.detail}`} onRetry={askAgain} />
               ) : (
                 <ErrorState
                   variant="inline"
                   message="The assistant couldn't answer your question."
                   onReportBug={() => report("The assistant couldn't answer a question about a paused plan.", false)}
                   onDiagnose={() => report("The assistant couldn't answer a question about a paused plan.", true)}
-                  onRetry={askAssistant}
+                  onRetry={askAgain}
                 />
               )}
+            </div>
+          )}
+
+          {/* Decision 20: the Ask box — the Comment box's shape (G-29:
+              Cancel light on the left, Send filled on the right). */}
+          {plan.status === 'paused' && asking && !handoffPending && (
+            <div className="space-y-1.5" data-testid="plan-ask-box">
+              <Textarea
+                size="sm"
+                rows={2}
+                className="w-full"
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitAsk(); } }}
+                placeholder="What would you like to ask? (optional)"
+                autoFocus
+              />
+              {questionTooLong && <FieldError size="2xs">Questions are limited to {PLAN_QUESTION_LIMIT.toLocaleString()} characters.</FieldError>}
+              <div className="flex items-center justify-end gap-2">
+                <Button size="sm" variant="ghost" onClick={() => { setAsking(false); setQuestion(''); }} disabled={blocked}>Cancel</Button>
+                <Button size="sm" variant="primary" onClick={submitAsk} disabled={blocked || questionTooLong} title="The assistant looks into this pause and replies in the chat">{busy === 'ask' ? 'Sending…' : 'Send'}</Button>
+              </div>
             </div>
           )}
 

@@ -42,7 +42,7 @@ export interface PlanRequestHost {
   addPlanBudget(sessionId: string, planId: string, tokens: number): Promise<PlanActionResult>;
   resumePlan(sessionId: string, planId: string): Promise<PlanActionResult>;
   stopPlan(sessionId: string, planId: string): Promise<PlanActionResult>;
-  askAssistantAboutPlan(sessionId: string, planId: string): Promise<PlanActionResult>;
+  askAssistantAboutPlan(sessionId: string, planId: string, question?: string): Promise<PlanActionResult>;
   getPlanAutoApprove(): Promise<PlanAutoApproveRead>;
   setPlanAutoApprove(underTokens: unknown): Promise<PlanSettingsWriteResult>;
 }
@@ -108,7 +108,9 @@ export async function handlePlanRequest(
         else if (channel === 'plans:comment') answer = await host.commentOnPlan(sessionId, planId, p.text as string);
         else if (channel === 'plans:add-budget') answer = await host.addPlanBudget(sessionId, planId, p.tokens as number);
         else if (channel === 'plans:resume') answer = await host.resumePlan(sessionId, planId);
-        else if (channel === 'plans:ask-assistant') answer = await host.askAssistantAboutPlan(sessionId, planId);
+        // Decision 20: the typed question is passed through; the plan
+        // service trims it and refuses one that is too long.
+        else if (channel === 'plans:ask-assistant') answer = await host.askAssistantAboutPlan(sessionId, planId, p.question as string);
         else answer = await host.stopPlan(sessionId, planId);
       }
     }

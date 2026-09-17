@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, userEntryRenderKind } from '../state/chat-types';
+import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, userEntryRenderKind, planAskQuestion } from '../state/chat-types';
 import { PlanAskLine } from './plans/PlanAskLine';
 import UserMessage from './UserMessage';
 import SpecialistReportCard from './SpecialistReportCard';
@@ -1149,7 +1149,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                   // report) is an EVENT for the assistant, not anyone's words —
                   // a compact collapsed card, see SpecialistReportCard. MUST
                   // mirror BubbleFeed.tsx.
-                  content = renderKind === 'ask-line' ? <PlanAskLine /> : entry.injected ? (
+                  content = renderKind === 'ask-line' ? <PlanAskLine question={planAskQuestion(entry.message.content)} /> : entry.injected ? (
                     <SpecialistReportCard
                       message={entry.message}
                       injected={entry.injected}

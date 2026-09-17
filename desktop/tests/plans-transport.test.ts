@@ -153,7 +153,7 @@ const REQUEST_PAYLOADS: Record<string, any> = {
   'plans:add-budget': { sessionId: 's1', planId: 'p1', tokens: 1200 },
   'plans:resume': { sessionId: 's1', planId: 'p1' },
   'plans:stop': { sessionId: 's1', planId: 'p1' },
-  'plans:ask-assistant': { sessionId: 's1', planId: 'p1' },
+  'plans:ask-assistant': { sessionId: 's1', planId: 'p1', question: 'why did it stop?' },
   'plans:get-auto-approve': {},
   'plans:set-auto-approve': { underTokens: 5000 },
 };
@@ -173,7 +173,7 @@ const EXPECTED_ARGS: Record<string, unknown[]> = {
   'plans:add-budget': ['s1', 'p1', 1200],
   'plans:resume': ['s1', 'p1'],
   'plans:stop': ['s1', 'p1'],
-  'plans:ask-assistant': ['s1', 'p1'],
+  'plans:ask-assistant': ['s1', 'p1', 'why did it stop?'],
   'plans:get-auto-approve': [],
   'plans:set-auto-approve': [5000],
 };

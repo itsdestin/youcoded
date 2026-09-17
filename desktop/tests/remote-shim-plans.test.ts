@@ -68,7 +68,7 @@ const CALLS: Array<[string, (p: any) => Promise<unknown>, string, unknown]> = [
   ['addBudget', (p) => p.addBudget('s1', 'p1', 900), 'plans:add-budget', { sessionId: 's1', planId: 'p1', tokens: 900 }],
   ['resume', (p) => p.resume('s1', 'p1'), 'plans:resume', { sessionId: 's1', planId: 'p1' }],
   ['stop', (p) => p.stop('s1', 'p1'), 'plans:stop', { sessionId: 's1', planId: 'p1' }],
-  ['askAssistant', (p) => p.askAssistant('s1', 'p1'), 'plans:ask-assistant', { sessionId: 's1', planId: 'p1' }],
+  ['askAssistant', (p) => p.askAssistant('s1', 'p1', 'why?'), 'plans:ask-assistant', { sessionId: 's1', planId: 'p1', question: 'why?' }],
   ['getAutoApprove', (p) => p.getAutoApprove(), 'plans:get-auto-approve', {}],
   ['setAutoApprove', (p) => p.setAutoApprove(3000), 'plans:set-auto-approve', { underTokens: 3000 }],
 ];

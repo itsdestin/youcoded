@@ -318,6 +318,7 @@ export function projectPlan(plan: PlanRecord): PlanView {
       if (handoff.recommendation) view.paused.handoff.recommendation = { ...handoff.recommendation };
       // Task 11 (§6): what the greyed card and its error line say.
       if (handoff.waiting) view.paused.handoff.waiting = handoff.waiting;
+      if (handoff.question) view.paused.handoff.question = handoff.question;
       if (handoff.problem) view.paused.handoff.problem = { ...handoff.problem };
     }
   }

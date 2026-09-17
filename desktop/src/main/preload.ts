@@ -1655,7 +1655,8 @@ contextBridge.exposeInMainWorld('claude', {
     resume: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_RESUME, { sessionId, planId }),
     stop: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_STOP, { sessionId, planId }),
     // Task 11 (pause handoff §6): a paused card's "Ask the assistant".
-    askAssistant: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_ASK_ASSISTANT, { sessionId, planId }),
+    // Decision 20: with the optional question typed in the Ask box.
+    askAssistant: (sessionId: string, planId: string, question?: string) => ipcRenderer.invoke(IPC.PLANS_ASK_ASSISTANT, { sessionId, planId, question }),
     getAutoApprove: () => ipcRenderer.invoke(IPC.PLANS_GET_AUTO_APPROVE),
     setAutoApprove: (underTokens: number) => ipcRenderer.invoke(IPC.PLANS_SET_AUTO_APPROVE, { underTokens }),
   },

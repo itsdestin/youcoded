@@ -1722,8 +1722,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // and queues the notice; the fake only greys the card, so the review deck
     // can show the state right after the press. It never answers — that is
     // the assistant's turn.
-    askAssistant: async (_sessionId: string, planId: string) => nextPlan(planId, (p) => (p.status === 'paused' && p.paused
-      ? { ...p, paused: { ...p.paused, handoff: { state: 'pending' } } }
+    askAssistant: async (_sessionId: string, planId: string, question?: string) => nextPlan(planId, (p) => (p.status === 'paused' && p.paused
+      ? { ...p, paused: { ...p.paused, handoff: { state: 'pending', ...(question?.trim() ? { question: question.trim() } : {}) } } }
       : p)),
     // Task 5a: the real forms (plan-service.ts) — the settings row reads `ok`.
     // A refused write answers `{ ok: false }` via `write`, which the bridge

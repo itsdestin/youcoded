@@ -5,7 +5,7 @@ import { loadFirstPageThenReplay } from '../../state/first-page-load';
 import UserMessage from '../UserMessage';
 import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
-import { shouldRenderAssistantTurn, userEntryRenderKind } from '../../state/chat-types';
+import { shouldRenderAssistantTurn, userEntryRenderKind, planAskQuestion } from '../../state/chat-types';
 import { PlanAskLine } from '../plans/PlanAskLine';
 import { CompactToolStrip } from './CompactToolStrip';
 import { helperAsksOf } from '../../utils/specialist-cards';
@@ -536,7 +536,7 @@ export function BubbleFeed({ sessionId }: Props) {
                   // FilepathToken pills render but their click is a documented no-op.
                   // Host-injected turn → compact report card, MUST mirror ChatView.tsx.
                   content = renderKind === 'ask-line'
-                    ? <PlanAskLine />
+                    ? <PlanAskLine question={planAskQuestion(entry.message.content)} />
                     : entry.injected
                       ? <SpecialistReportCard message={entry.message} injected={entry.injected} meta={entry.injectedMeta} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />
                       : <UserMessage message={entry.message} sessionId={sessionId ?? ''} showTimestamps={showTimestamps} />;

@@ -4802,8 +4802,8 @@ export class NativeSessionHost extends EventEmitter {
     return this.plans?.stop(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
   /** Task 11 (pause handoff §6): the paused card's "Ask the assistant". */
-  askAssistantAboutPlan(sessionId: string, planId: string): Promise<PlanActionResult> {
-    return this.plans?.askAssistant(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  askAssistantAboutPlan(sessionId: string, planId: string, question?: string): Promise<PlanActionResult> {
+    return this.plans?.askAssistant(sessionId, planId, question) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
   getPlanAutoApprove(): Promise<PlanAutoApproveRead> {
     return this.plans?.getAutoApprove() ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);

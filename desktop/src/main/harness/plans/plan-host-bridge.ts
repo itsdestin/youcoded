@@ -28,7 +28,7 @@ import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
 import { PlanBudget, pricingSnapshot } from './plan-budget';
 import { PlanService, type PlanHandoffProblem, type PlanProposal, type PlanRecommendation } from './plan-service';
-import { PLAN_HANDOFF_BACKSTOP_MS, planHandoffNotice } from './plan-handoff';
+import { PLAN_HANDOFF_BACKSTOP_MS, normalizePlanQuestion, planHandoffNotice } from './plan-handoff';
 import {
   PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, classifyChildTranscript, planRestartBrief,
   type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type TranscriptVerdict,
@@ -308,7 +308,11 @@ export class PlanHostBridge {
    *     question pending, and records the pending handoff (review 4-3);
    *  4. the notice is queued (§2 steps 3–5), with the backstop armed.
    */
-  async askAssistant(sessionId: string, planId: string): Promise<PlanActionResult> {
+  async askAssistant(sessionId: string, planId: string, question?: unknown): Promise<PlanActionResult> {
+    // Decision 20: an over-long question is refused before anything is held
+    // (the service checks it again inside its own action).
+    const q = normalizePlanQuestion(question);
+    if (!q.ok) return { ok: false, error: q.error };
     const refusal = this.port.noticeRefusal(sessionId);
     if (refusal !== undefined) return { ok: false, error: refusal };
     const cwd = this.port.rootCwd(sessionId);
@@ -318,7 +322,7 @@ export class PlanHostBridge {
     const entry: LiveHandoff = { ref, planId, handoffId: randomUUID(), turnId: randomUUID(), started: false };
     this.handoffs.set(entry.handoffId, entry);
     const waiting = this.port.noticeWouldWait(sessionId);
-    const res = await this.service.askAssistant(sessionId, planId, { id: entry.handoffId, turnId: entry.turnId, ...(waiting ? { waiting: true } : {}) });
+    const res = await this.service.askAssistant(sessionId, planId, { id: entry.handoffId, turnId: entry.turnId, ...(waiting ? { waiting: true } : {}) }, q.question);
     if (!res.ok) {
       // Refused inside the write (not paused, or a question already pending):
       // this press holds nothing.
@@ -363,7 +367,8 @@ export class PlanHostBridge {
         // write used); a difference is corrected below.
         const waitsNow = this.port.noticeWouldWait(ref.sessionId);
         queued = this.port.queuePlanNotice(ref.sessionId, {
-          text: planHandoffNotice(plan, handoffId),
+          // Decision 20: the question recorded in the same write as the handoff.
+          text: planHandoffNotice(plan, handoffId, plan.paused.handoff.question),
           turnId,
           planId,
           handoffId,

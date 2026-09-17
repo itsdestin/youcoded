@@ -19,7 +19,7 @@ import AssistantTurnBubble from './AssistantTurnBubble';
 import UsageCard from './UsageCard';
 import SystemMarker from './SystemMarker';
 import SkillInvocationCard from './SkillInvocationCard';
-import { shouldRenderAssistantTurn, userEntryRenderKind, type SessionChatState } from '../state/chat-types';
+import { shouldRenderAssistantTurn, userEntryRenderKind, planAskQuestion, type SessionChatState } from '../state/chat-types';
 import { PlanAskLine } from './plans/PlanAskLine';
 import { findArchiveBoundary } from '../state/archive-boundary';
 import { useTheme } from '../state/theme-context';
@@ -46,7 +46,7 @@ export default function PreviewTimeline({ state, sessionId, provider }: {
             const renderKind = userEntryRenderKind(entry);
             if (renderKind === 'hide') return null;
             key = entry.message.id;
-            content = renderKind === 'ask-line' ? <PlanAskLine /> : entry.injected ? (
+            content = renderKind === 'ask-line' ? <PlanAskLine question={planAskQuestion(entry.message.content)} /> : entry.injected ? (
               <SpecialistReportCard message={entry.message} injected={entry.injected} meta={entry.injectedMeta}
                 sessionId={sessionId} showTimestamps={showTimestamps} />
             ) : (
