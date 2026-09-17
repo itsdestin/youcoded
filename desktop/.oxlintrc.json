@@ -108,6 +108,25 @@
       }
     },
     {
+      // WHY: the voice install must run no other program — a shell-out to `tar`
+      // or `bzip2` works on this Linux machine and breaks on a stranger's computer
+      // that lacks it (Destin, 2026-09-05: "users don't have to enter terminal
+      // commands or download things externally"). This used to be a test that
+      // grepped the file's text (tests/voice-assets.test.ts, retired by Plan B,
+      // 2026-09-16); lint sees the import in either spelling. The call and
+      // program-name halves are the workspace ast-grep rule
+      // voice-assets-runs-no-other-program.
+      "files": ["src/main/voice/voice-assets.ts"],
+      "rules": {
+        "no-restricted-imports": ["error", {
+          "paths": [
+            { "name": "child_process", "message": "The voice install runs no other program — unpack in process (see untarGz)." },
+            { "name": "node:child_process", "message": "The voice install runs no other program — unpack in process (see untarGz)." }
+          ]
+        }]
+      }
+    },
+    {
       // The test tree: the syntactic rules only. Type-aware rules stay off here
       // because tsconfig.tests.json still EXCLUDES files with type errors, and a
       // type-aware rule on a file outside the project is a config error dressed up
