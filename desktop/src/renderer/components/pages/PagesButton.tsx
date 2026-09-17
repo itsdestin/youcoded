@@ -25,13 +25,16 @@ const HEADER_ICON_BUTTON =
   'relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg';
 
 export function PagesButton({ active = false }: { active?: boolean } = {}) {
-  const { dispatch } = useArtifact();
+  const { state, dispatch } = useArtifact();
+  // A second press leaves the page view (Destin, 2026-09-17: "clicking the
+  // page button again should exit/go back to chat").
+  const toggle = () => dispatch({ type: state.pageViewOpen ? 'PAGE_VIEW_CLOSED' : 'PAGE_VIEW_OPENED' });
   return (
-    <Tooltip text="Pages" placement="bottom">
+    <Tooltip text={active ? 'Back to chat' : 'Pages'} placement="bottom">
       <button
         type="button"
         className={`${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''}`}
-        onClick={() => dispatch({ type: 'PAGE_VIEW_OPENED' })}
+        onClick={toggle}
         aria-label="Open Pages"
         aria-pressed={active}
         data-guide-anchor="pages"

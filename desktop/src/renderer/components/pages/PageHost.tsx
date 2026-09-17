@@ -156,7 +156,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   }
 
   return (
-    <div className="fixed inset-0 bg-panel z-50 flex flex-col">
+    // z-[45]: above Project View (z-40) which it replaces, below the Settings
+    // drawer (z-50) so the gear in the band actually opens it, and below the
+    // library (z-[60]) that opens from Manage pages.
+    <div className="fixed inset-0 bg-panel z-[45] flex flex-col">
       {/* The band: same height, drag region and window buttons as the app's
           header; three columns so the page's name is truly centred. No border
           underneath — the page pane's own edge is the divider (round 4). */}

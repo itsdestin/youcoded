@@ -135,12 +135,14 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
     // Back gesture in detail view: return to list without closing the drawer.
     case 'ACTIVE_ARTIFACT_CLEARED':
       return { ...s, activeArtifactBySession: { ...s.activeArtifactBySession, [a.sessionId]: null } };
+    // Projects and Pages replace each other in place (Destin, 2026-09-17:
+    // "toggle back and forth between projects/pages from the header").
     case 'PROJECT_VIEW_OPENED':
-      return { ...s, projectViewOpen: true };
+      return { ...s, projectViewOpen: true, pageViewOpen: false, pagesViewOpen: false, openPageId: null };
     case 'PROJECT_VIEW_CLOSED':
       return { ...s, projectViewOpen: false };
     case 'PAGE_VIEW_OPENED':
-      return { ...s, pageViewOpen: true };
+      return { ...s, pageViewOpen: true, projectViewOpen: false };
     // Leaving the page view leaves pages altogether: the library over it goes too.
     case 'PAGE_VIEW_CLOSED':
       return { ...s, pageViewOpen: false, pagesViewOpen: false, openPageId: null };
@@ -152,7 +154,7 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
     // Opening a page (from a card, a pinned button or a panel row) opens the
     // page view too, and puts the library away.
     case 'PAGE_OPENED':
-      return { ...s, openPageId: a.pageId, pageViewOpen: true, pagesViewOpen: false };
+      return { ...s, openPageId: a.pageId, pageViewOpen: true, pagesViewOpen: false, projectViewOpen: false };
     case 'PAGE_CLOSED':
       return { ...s, openPageId: null };
     case 'GIT_REVIEW_OPENED':

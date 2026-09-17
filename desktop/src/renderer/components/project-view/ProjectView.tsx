@@ -19,6 +19,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { PagesButton } from '../pages/PagesButton';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
 import type { PastSession } from '../../../shared/types';
@@ -718,6 +719,10 @@ export function ProjectView(props: ProjectViewProps) {
     <div className="fixed inset-0 bg-canvas z-40 flex flex-col">
       {/* Header: title + global search + the shared screen exit (change 27) */}
       <header className="flex items-center gap-3 px-4 py-2.5 border-b border-edge shrink-0">
+        {/* Pages ↔ Projects toggle from the header (Destin, 2026-09-17): the
+            same Pages button the app's band has; opening the page view closes
+            this one in place. */}
+        <PagesButton />
         <h2 className="text-base font-semibold text-fg shrink-0">Projects</h2>
         <div className="flex-1" />
         {/* One exit per surface type (change 27) — identical on all three screens.
