@@ -3,10 +3,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
 import { Callout } from '../src/renderer/components/ui/Callout';
-import { inScopeFiles, stripComments } from './helpers/guard-scope';
+import { inScopeFiles, readSource, stripComments } from './helpers/guard-scope';
 
 // Guard for K4 — the callout.
 //
@@ -166,19 +164,23 @@ function tintedBlocks(src: string): number {
 describe('callout adoption', () => {
   // "this guard can see what it claims to cover" and "no in-scope file grows
   // a new hand-rolled callout" moved to ast-grep (Plan B, 2026-09-16): rule
-  // no-hand-rolled-callout-tint. The former was a non-vacuity self-test of
-  // TINT/inScopeFiles(); the fixture pass now proves that.
+  // no-hand-rolled-callout-tint (a tint and a border in one class string, or
+  // split across one className attribute). The former was a non-vacuity
+  // self-test of TINT/inScopeFiles(); the fixture pass now proves that.
 
   it('every exemption still exists and still applies', () => {
     // An exemption is a liability the moment it stops being true. In the dialog
     // guard, two of four turned out to be simply wrong — written off on a class
     // string without reading the style object underneath.
+    // WHY still a text read: each exempt file must hold EXACTLY `count` tinted
+    // blocks — a per-file total, which an ast-grep rule (it reports shapes, and
+    // exempts whole files) cannot assert.
     const byName = new Map(inScopeFiles().map((p) => [p.split(/[\\/]/).pop()!, p]));
     for (const [file, { count, why }] of Object.entries(NOT_CALLOUTS)) {
       const abs = byName.get(file);
       expect(abs, `${file} is exempted but no longer in scope — drop it`).toBeTruthy();
       expect(
-        tintedBlocks(readFileSync(abs!, 'utf8')),
+        tintedBlocks(readSource(abs!)),
         `${file} (${why}) no longer has ${count} — update or drop the exemption`,
       ).toBe(count);
     }
