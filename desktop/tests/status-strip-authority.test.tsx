@@ -125,16 +125,23 @@ describe('status adoption', () => {
     // held at zero by the ast-grep rule no-centred-status-paragraph; an exact
     // per-file count ("ShareSheet has 2") is not something a rule can express.
     const drift: string[] = [];
+    const seen = new Set<string>();
     for (const file of inScopeFiles()) {
       const name = file.split(/[\\/]/).pop()!;
       const allowed = CENTRED_STATUS_ELSEWHERE[name]?.count;
       if (allowed === undefined) continue;
+      seen.add(name);
       const src = readStripped(file);
       let n = 0;
       for (const m of src.matchAll(/className="[^"]*text-center[^"]*"/g)) {
         if (/text-(green|amber|red)-\d{3}|text-destructive-fg/.test(m[0])) n++;
       }
       if (n !== allowed) drift.push(`${name}: ${n} centred status lines, expected ${allowed}`);
+    }
+    // WHY (review of u9): a listed file that was moved or deleted used to be skipped
+    // silently, leaving a stale exemption that pre-approves whatever later takes its name.
+    for (const name of Object.keys(CENTRED_STATUS_ELSEWHERE)) {
+      if (!seen.has(name)) drift.push(`${name} is exempted but no longer in scope — drop it`);
     }
     expect(drift, 'A subsystem status line is a <StatusStrip>.').toEqual([]);
   });
@@ -152,13 +159,19 @@ describe('status adoption', () => {
     // held at zero by the ast-grep rule no-hardcoded-error-fallback; an exact
     // per-file count ("SyncSetupWizard has 6") is not something a rule can express.
     const drift: string[] = [];
+    const seen = new Set<string>();
     for (const file of inScopeFiles()) {
       const name = file.split(/[\\/]/).pop()!;
       const allowed = HARDCODED_ERROR_FALLBACK[name]?.count;
       if (allowed === undefined) continue;
+      seen.add(name);
       const src = readStripped(file);
       const n = [...src.matchAll(/\b\w*[eE]rror\s*\|\|\s*['"][^'"]+['"]/g)].length;
       if (n !== allowed) drift.push(`${name}: ${n} hardcoded error fallbacks, expected ${allowed}`);
+    }
+    // WHY (review of u9): same as above — a listed file no longer in scope is a stale exemption.
+    for (const name of Object.keys(HARDCODED_ERROR_FALLBACK)) {
+      if (!seen.has(name)) drift.push(`${name} is exempted but no longer in scope — drop it`);
     }
     expect(
       drift,
