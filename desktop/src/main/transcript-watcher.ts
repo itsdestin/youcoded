@@ -453,10 +453,10 @@ interface WatchedSession {
   seenUuidsRecent: Set<string>;
   seenUuidsOld: Set<string>;
   watcher: fs.FSWatcher | null;
-  // Whether this session still needs the global poll: true until fs.watch
-  // is attached, then stays true as a safety-net (fs.watch on Windows can
-  // silently miss notifications). A single class-level timer iterates all
-  // sessions rather than each session owning its own setInterval.
+  // Whether this session still needs the global poll: true until fs.watch is
+  // attached; after that only on Windows and after a watcher error (see
+  // attachFsWatch). A single class-level timer iterates all sessions rather
+  // than each session owning its own setInterval, and stops when none needs it.
   needsPoll: boolean;
   subagentIndex: SubagentIndex;
   subagentWatcher: SubagentWatcher;
@@ -474,7 +474,8 @@ export class TranscriptWatcher extends EventEmitter {
   // One global poll timer shared across sessions. Previously each session owned
   // its own setInterval, which meant N sessions → N independent timer ticks +
   // N fs.stat calls per second. The global timer ticks at pollIntervalMs and
-  // iterates the sessions map, skipping any that don't need polling.
+  // iterates the sessions map, skipping any that don't need polling — and it
+  // exists only while at least one does (see ensureGlobalPoll / attachFsWatch).
   private globalPollTimer: ReturnType<typeof setInterval> | null = null;
   private pollIntervalMs: number;
 
@@ -536,14 +537,18 @@ export class TranscriptWatcher extends EventEmitter {
     subagentWatcher.start();
 
     // Try to start an fs.watch; fall back to the global poll if the file
-    // doesn't exist yet. needsPoll stays true either way — when fs.watch is
-    // attached the global poll acts as a safety net (fs.watch on Windows can
-    // silently miss notifications).
+    // doesn't exist yet. attachFsWatch decides whether the poll stays on as a
+    // safety net once the watch is attached (Windows only).
     if (fs.existsSync(jsonlPath)) {
       void this.readNewLines(session);
       this.attachFsWatch(session);
     }
     this.ensureGlobalPoll();
+  }
+
+  /** Test-only: is the shared safety-net poll timer running right now? */
+  isPolling(): boolean {
+    return this.globalPollTimer !== null;
   }
 
   /**
@@ -665,16 +670,26 @@ export class TranscriptWatcher extends EventEmitter {
         void this.readNewLines(session);
       });
       session.watcher.on('error', () => {
-        // If the watcher errors, fall back to the global poll (already running)
+        // If the watcher errors, fall back to the global poll.
         if (session.watcher) {
           session.watcher.close();
           session.watcher = null;
         }
         session.needsPoll = true;
+        this.ensureGlobalPoll();
       });
-      // Global poll continues alongside fs.watch as a safety net — on Windows,
-      // fs.watch can silently miss change notifications. readNewLines is a
-      // no-op when the file hasn't grown, so this is cheap.
+      // WHY the poll stops here off Windows (2026-09-16 audit W7): it ran every
+      // 2 s for every open session on every platform as a "safety net", but the
+      // only platform that drops fs.watch notifications after the watch is
+      // armed is Windows (ReadDirectoryChangesW overflow). Linux inotify and
+      // macOS FSEvents deliver once armed, so there the poll was ~520k no-op
+      // stats a day for six sessions. Residual: a transcript on a network
+      // filesystem under ~/.claude gets no inotify events; a watcher error
+      // (above) still re-arms the poll, but a silent no-event mount does not.
+      session.needsPoll = process.platform === 'win32';
+      // One reconcile read at attach time: a line written between the last
+      // read and the watch arming would otherwise wait for the next write.
+      void this.readNewLines(session);
     } catch {
       // fs.watch can throw on some platforms — global poll will cover it.
       session.needsPoll = true;
@@ -682,23 +697,32 @@ export class TranscriptWatcher extends EventEmitter {
   }
 
   /**
-   * Start the class-level poll timer if it isn't already running. Runs every
-   * GLOBAL_POLL_MS, iterating all sessions that still need polling. Replaces
-   * the prior per-session setInterval (N timers → 1 timer).
+   * Start the class-level poll timer if any session needs it and it isn't
+   * already running. Runs every pollIntervalMs, iterating the sessions that
+   * still need polling, and stops itself once none does (a session whose
+   * watch attached, off Windows). Replaces the prior per-session setInterval
+   * (N timers → 1 timer → 0 timers while every watch is healthy).
    */
   private ensureGlobalPoll(): void {
     if (this.globalPollTimer) return;
+    if (![...this.sessions.values()].some((s) => s.needsPoll)) return;
     this.globalPollTimer = setInterval(() => {
+      let stillNeeded = false;
       for (const session of this.sessions.values()) {
         if (!session.needsPoll) continue;
         // No existsSync here (2026-09-16 C5): it was one synchronous stat per
         // open session every 2 s, forever, and readNewLinesOnce already stats
         // asynchronously and returns when the file is not there yet.
         void this.readNewLines(session);
-        // If fs.watch isn't attached yet, upgrade from poll-only to watch+poll.
+        // If fs.watch isn't attached yet, upgrade from poll-only to watch(+poll on Windows).
         if (!session.watcher) {
           this.attachFsWatch(session);
         }
+        if (session.needsPoll) stillNeeded = true;
+      }
+      if (!stillNeeded && this.globalPollTimer) {
+        clearInterval(this.globalPollTimer);
+        this.globalPollTimer = null;
       }
     }, this.pollIntervalMs);
   }

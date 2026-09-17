@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
+import { EventEmitter } from 'events';
 import os from 'os';
 import path from 'path';
 import {
@@ -1190,5 +1191,90 @@ describe('messages recorded outside an ordinary user line', () => {
   it("the dimmed echo of a command's output stays hidden", () => {
     const esc = String.fromCharCode(27);
     expect(parseTranscriptLine(commandLine(`<local-command-stdout>${esc}[2mCompacted${esc}[22m</local-command-stdout>`), 's1')).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The safety-net poll (simplification audit W7). It used to tick every 2 s for
+// every open session on every platform beside a working fs.watch. Only Windows
+// drops notifications after the watch is armed, so off Windows the poll now
+// stops once the watch is attached, and comes back only when a watch fails.
+// ---------------------------------------------------------------------------
+describe('TranscriptWatcher safety-net poll', () => {
+  let watcher: TranscriptWatcher;
+  let tmpDir: string;
+  const realPlatform = process.platform;
+
+  const setPlatform = (p: string) => Object.defineProperty(process, 'platform', { value: p, configurable: true });
+
+  function existingTranscript(name: string): string {
+    const jsonlPath = path.join(tmpDir, `${name}.jsonl`);
+    fs.writeFileSync(jsonlPath, '');
+    return jsonlPath;
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-poll-'));
+    watcher = new TranscriptWatcher(tmpDir, 500);
+  });
+
+  afterEach(() => {
+    setPlatform(realPlatform);
+    vi.restoreAllMocks();
+    watcher.stopAll();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('runs no poll timer on Linux and macOS once the watch is attached, and still delivers appended lines', async () => {
+    setPlatform('linux');
+    const jsonlPath = existingTranscript('healthy');
+    const events: TranscriptEvent[] = [];
+    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
+    watcher.startWatching('d-healthy', 'healthy', '/proj', jsonlPath);
+    expect(watcher.isPolling()).toBe(false);
+
+    fs.appendFileSync(jsonlPath, JSON.stringify({
+      type: 'assistant', uuid: 'u-healthy',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'via fs.watch' }], stop_reason: null },
+    }) + '\n');
+    await vi.waitFor(() => expect(events.length).toBeGreaterThanOrEqual(1), { timeout: WATCH_MS });
+    expect(events[0].data.text).toBe('via fs.watch');
+    expect(watcher.isPolling()).toBe(false);
+  });
+
+  it('keeps the poll alongside the watch on Windows', () => {
+    setPlatform('win32');
+    watcher.startWatching('d-win', 'win', '/proj', existingTranscript('win'));
+    expect(watcher.isPolling()).toBe(true);
+  });
+
+  it('polls when fs.watch cannot be attached at all', () => {
+    setPlatform('linux');
+    vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('EMFILE'); });
+    watcher.startWatching('d-nowatch', 'nowatch', '/proj', existingTranscript('nowatch'));
+    expect(watcher.isPolling()).toBe(true);
+  });
+
+  it('brings the poll back when an attached watcher reports an error', () => {
+    setPlatform('linux');
+    const fakeWatcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+    vi.spyOn(fs, 'watch').mockReturnValue(fakeWatcher as any);
+    watcher.startWatching('d-err', 'err', '/proj', existingTranscript('err'));
+    expect(watcher.isPolling()).toBe(false);
+
+    fakeWatcher.emit('error', new Error('watch dropped'));
+    expect(fakeWatcher.close).toHaveBeenCalled();
+    expect(watcher.isPolling()).toBe(true);
+  });
+
+  it('polls only until the transcript file appears, then hands over to the watch', async () => {
+    setPlatform('linux');
+    const jsonlPath = path.join(tmpDir, 'later', 'later.jsonl');
+    watcher.startWatching('d-later', 'later', '/proj', jsonlPath);
+    expect(watcher.isPolling()).toBe(true); // nothing to watch yet
+
+    fs.mkdirSync(path.dirname(jsonlPath), { recursive: true });
+    fs.writeFileSync(jsonlPath, '');
+    await vi.waitFor(() => expect(watcher.isPolling()).toBe(false), { timeout: WATCH_MS });
   });
 });
