@@ -79,7 +79,7 @@ import { installGh } from './github-auth';
 import { combinedGithubStatus } from './github-client';
 import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
-import { getJsonPath, setJsonPath } from './safe-json-path';
+import { getField, setField } from './claude-settings';
 import { resolveStaticFile } from './remote-static-path';
 
 // 4M UTF-16 units per session — enough for full conversation replay. Named for what it
@@ -3014,14 +3014,13 @@ export class RemoteServer {
       }
       // Claude Code settings.json bridge — mirrors ipc-handlers.ts 'settings:get'/'settings:set'.
       // Dot-path keys supported (e.g. 'permissions.defaultMode').
+      // Both go through claude-settings (2026-09-16 audit D5): the same memoised
+      // read, dot-path walker (prototype-pollution refused — a paired remote
+      // device reaches this handler, 2026-09-10 security review) and locked
+      // atomic write as the desktop handler.
       case 'settings:get': {
-        const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
         try {
-          const raw = await fs.promises.readFile(claudeSettingsPath, 'utf-8');
-          const parsed = JSON.parse(raw);
-          const field: string = (payload as any)?.field ?? '';
-          const value = getJsonPath(parsed, field);
-          this.respond(client.ws, type, id, value);
+          this.respond(client.ws, type, id, getField((payload as any)?.field ?? ''));
         } catch {
           this.respond(client.ws, type, id, undefined);
         }
@@ -3053,21 +3052,7 @@ export class RemoteServer {
         break;
       }
       case 'settings:set': {
-        const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-        try {
-          let existing: Record<string, any> = {};
-          try { existing = JSON.parse(await fs.promises.readFile(claudeSettingsPath, 'utf-8')); } catch {}
-          const field: string = (payload as any)?.field ?? '';
-          const value = (payload as any)?.value;
-          // setJsonPath refuses __proto__/constructor/prototype segments — a paired
-          // remote device reaches this handler (2026-09-10 security review).
-          setJsonPath(existing, field, value);
-          await fs.promises.mkdir(path.dirname(claudeSettingsPath), { recursive: true });
-          await fs.promises.writeFile(claudeSettingsPath, JSON.stringify(existing, null, 2));
-          this.respond(client.ws, type, id, true);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        this.respond(client.ws, type, id, await setField((payload as any)?.field ?? '', (payload as any)?.value));
         break;
       }
       // The folder picker's five operations: the SAME functions the Electron handlers call

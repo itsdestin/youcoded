@@ -30,7 +30,10 @@ type CategoryChip = typeof categoryChips[number];
 
 export default function CommandDrawer({ open, searchMode, externalFilter, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary, onOpenMarketplaceDetail }: Props) {
   const { drawerSkills, drawerCommands, favorites, setFavorite, loadError, retryLoad } = useSkills();
-  const mp = useMarketplace();
+  // Mounted under every session whether or not it is showing, so only OPENING
+  // it asks the marketplace to load (audit W16); the plugin-name badges fill
+  // in a beat after the first open.
+  const mp = useMarketplace(open);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<CategoryChip | null>(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
