@@ -6,7 +6,7 @@ import '@testing-library/jest-dom/vitest';
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { Callout } from '../src/renderer/components/ui/Callout';
-import { inScopeFiles, stripComments, assertScopeIsPopulated, assertPatternMatches } from './helpers/guard-scope';
+import { inScopeFiles, stripComments } from './helpers/guard-scope';
 
 // Guard for K4 — the callout.
 //
@@ -164,29 +164,10 @@ function tintedBlocks(src: string): number {
 }
 
 describe('callout adoption', () => {
-  it('this guard can see what it claims to cover', () => {
-    // A source-text guard that matches nothing PASSES and reads as clean.
-    // Three of this workstream's worst misses were exactly that.
-    assertScopeIsPopulated(inScopeFiles());
-    assertPatternMatches(TINT, 'border border-destructive/50 text-destructive-fg hover:bg-destructive/10',
-      'a border-FIRST tinted surface — the order that scored Button.tsx at zero');
-  });
-
-  it('no in-scope file grows a new hand-rolled callout', () => {
-    const drift: string[] = [];
-    for (const file of inScopeFiles()) {
-      const name = file.split(/[\\/]/).pop()!;
-      if (name === 'Callout.tsx') continue;  // where the three tones are defined
-      const n = tintedBlocks(readFileSync(file, 'utf8'));
-      const allowed = NOT_CALLOUTS[name]?.count ?? 0;
-      if (n !== allowed) drift.push(`${name}: ${n} tinted blocks, expected ${allowed}`);
-    }
-    expect(
-      drift,
-      'Passive information goes through <Callout>. If the block carries a button it is a K5 '
-        + 'status strip — add it to NOT_CALLOUTS with the reason rather than hand-rolling either one.',
-    ).toEqual([]);
-  });
+  // "this guard can see what it claims to cover" and "no in-scope file grows
+  // a new hand-rolled callout" moved to ast-grep (Plan B, 2026-09-16): rule
+  // no-hand-rolled-callout-tint. The former was a non-vacuity self-test of
+  // TINT/inScopeFiles(); the fixture pass now proves that.
 
   it('every exemption still exists and still applies', () => {
     // An exemption is a liability the moment it stops being true. In the dialog
