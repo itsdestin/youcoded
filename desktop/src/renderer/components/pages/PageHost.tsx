@@ -157,10 +157,13 @@ export function PageHost() {
               type="button"
               onClick={backToChat}
               aria-label="Back to chat"
-              className="px-2 py-1 rounded-[var(--radius-toggle)] transition-colors text-fg-dim hover:text-fg-2 flex items-center gap-1.5 text-xs"
+              className="px-2 py-1 rounded-[var(--radius-toggle)] transition-colors text-fg-dim hover:text-fg-2 flex items-center gap-1.5 text-xs leading-none"
             >
-              Back to chat
-              <kbd className="hidden sm:inline text-2xs font-mono text-fg-muted">Esc</kbd>
+              {/* One size and one baseline for all three parts (round 6: the
+                  key cap sat a hair low), with a dot between the words and the key. */}
+              <span>Back to chat</span>
+              <span aria-hidden="true" className="hidden sm:inline text-fg-faint">·</span>
+              <span className="hidden sm:inline text-fg-muted">Esc</span>
             </button>
           </div>
           {showCaptionButtons() && <CaptionButtons />}
