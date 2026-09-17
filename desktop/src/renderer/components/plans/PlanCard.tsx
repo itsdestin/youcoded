@@ -142,6 +142,12 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const pausedStep = pausedIndex >= 0 ? plan.steps[pausedIndex] : undefined;
   const minimum = plan.paused?.minimumAddTokens;
   const [extra, setExtra] = useState(String(minimum ?? pausedStep?.budgetTokens ?? 10000));
+  // Task 9b: "Add budget pre-filled" — the assistant's amount, never below
+  // the host's minimum (the host would refuse less).
+  const recommendedTokens = plan.paused?.handoff?.recommendation?.action === 'add_budget' ? plan.paused.handoff.recommendation.addTokens : undefined;
+  useEffect(() => {
+    if (recommendedTokens !== undefined) setExtra(String(Math.max(recommendedTokens, minimum ?? 0)));
+  }, [recommendedTokens, minimum]);
   // A later push can raise or set the minimum while the card is open: never
   // leave the field below the new floor.
   useEffect(() => {
@@ -149,6 +155,17 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   }, [minimum]);
   const belowMinimum = minimum !== undefined && (Number(extra) || 0) < minimum;
   const pause = classifyPause(plan.paused);
+  // Task 9b (pause handoff §2): the pause may be with the assistant first.
+  // Pending → greyed, no buttons. Answered → buttons again, led by the
+  // assistant's recommendation when it made one. The user presses every one.
+  const handoff = plan.status === 'paused' ? plan.paused?.handoff : undefined;
+  const handoffPending = handoff?.state === 'pending';
+  const recommendation = handoff?.state === 'answered' ? handoff.recommendation : undefined;
+  // The buttons this pause offers (main works them out from the same table
+  // that limits the assistant's recommendation). A record from before that
+  // field keeps the card's earlier rule.
+  const offered: ReadonlyArray<'add_budget' | 'continue' | 'stop'> = plan.paused?.actions
+    ?? (pause.kind === 'unknown-outcome' ? ['continue', 'stop'] : pause.kind === 'iteration-cap' ? ['stop'] : ['add_budget', 'stop']);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Task 5b: the card's error line offers Retry (error-message-standards:
@@ -220,7 +237,9 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   if (writing) return null;
 
   return (
-    <div className={`px-3 pb-2.5 pt-1.5 space-y-2 ${revised ? 'opacity-60' : ''}`} data-testid="plan-block" data-plan-status={plan.status}>
+    // Task 9b: a pause handed to the assistant greys the card like a revised
+    // one — it is waiting on someone else, and nothing on it can be pressed.
+    <div className={`px-3 pb-2.5 pt-1.5 space-y-2 ${revised || handoffPending ? 'opacity-60' : ''}`} data-testid="plan-block" data-plan-status={plan.status} {...(handoff ? { 'data-handoff': handoff.state } : {})}>
       <ol className="space-y-1" data-testid="plan-steps">
             {plan.steps.map((step, i) => (
               <StepRow key={step.id} step={step} index={i} plan={plan} sessionId={sessionId} />
@@ -274,20 +293,28 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               its own doc says a block with a button is this component instead.) */}
           {plan.status === 'paused' && plan.paused && (
             <StatusStrip
-              tone="warn"
+              // Task 9b: grey while the assistant has it — waiting, not warning.
+              tone={handoffPending ? 'idle' : 'warn'}
               surface="tinted"
               className="!py-2"
-              action={!adding ? (
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
-                  {/* Task 5b: the button that answers THIS pause. An unknown
-                      outcome is resolved by Continue (Task 4: pressing it is
-                      the explicit recovery); a used-up repeat can't be helped
-                      by budget or Continue (the executor pauses again), so it
-                      gets Stop alone; every other pause keeps Add budget. */}
-                  {pause.kind === 'unknown-outcome' ? (
+              action={handoffPending ? undefined : !adding ? (
+                <div className="flex items-center justify-end gap-2 shrink-0">
+                  {/* Task 9b (§2 step 7, design guide G-29): the filled button
+                      is the rightmost; Stop is the light one on its left. A
+                      recommended Stop is the card's one filled button. The
+                      defaults come from `offered`: Stop · Add budget for the
+                      budget kinds, Stop alone where only a revised plan can
+                      help, Stop · Continue otherwise (an unknown outcome's
+                      Continue is Task 4's explicit recovery). */}
+                  {recommendation?.action === 'stop' ? (
+                    <Button size="sm" variant="danger" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
+                  ) : (
+                    <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
+                  )}
+                  {(recommendation ? recommendation.action === 'continue' : offered.includes('continue')) && (
                     <Button size="sm" variant="primary" onClick={cont} disabled={blocked}>{busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
-                  ) : pause.kind === 'iteration-cap' ? null : (
+                  )}
+                  {(recommendation ? recommendation.action === 'add_budget' : offered.includes('add_budget')) && (
                     <Button size="sm" variant="primary" onClick={() => setAdding(true)} disabled={blocked}>Add budget</Button>
                   )}
                 </div>
@@ -302,6 +329,14 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               )}
             >
               <PausedReason plan={plan} pause={pause} stepNumber={pausedIndex + 1} />
+              {handoffPending && (
+                <span className="block mt-0.5 font-medium text-fg" data-testid="plan-handoff-pending">The assistant is looking into this.</span>
+              )}
+              {recommendation && (
+                <span className="block mt-0.5 text-fg" data-testid="plan-recommendation">
+                  <span className="font-medium">The assistant suggests:</span> {recommendation.message}
+                </span>
+              )}
               {/* Task 5b: the smallest amount that lets the plan go on, while
                   the amount is being chosen. Below it, the same words turn into
                   the field's error and Continue stays disabled. */}
@@ -336,7 +371,10 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
           )}
 
           {revised && (
-            <div className="text-2xs text-fg-muted">Revised after your comment — the new plan is below.</div>
+            <div className="text-2xs text-fg-muted">
+              {/* Task 9b: the assistant may revise a paused plan on its own. */}
+              {plan.revisedOnPause ? 'Revised by the assistant — the new plan is below.' : 'Revised after your comment — the new plan is below.'}
+            </div>
           )}
 
       {/* The proposal keeps its buttons on their own row: it has two forward

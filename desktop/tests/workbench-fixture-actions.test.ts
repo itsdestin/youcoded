@@ -18,6 +18,8 @@ const KNOWN_KINDS = new Set([
   // there is no separate line kind for it), and the folded background report.
   'subagent_text', 'subagent_thinking', 'subagent_tool_use', 'subagent_tool_result',
   'subagent_permission_request', 'specialist_run', 'specialist_report',
+  // Task 9b: a header-less host notice (a plan pause handed to the assistant).
+  'host_notice',
   // 'stalled' (Task 6): parks the turn via TRANSCRIPT_THINKING_HEARTBEAT so the
   // stalled card can be looked at in the workbench — no backend involved.
   'stalled',

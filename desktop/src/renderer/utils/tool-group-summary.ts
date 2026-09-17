@@ -73,6 +73,11 @@ const KIND_TABLE: Record<string, KindPhrasing> = {
     done: (n) => (n === 1 ? 'asked you a question' : `asked you ${n} questions`),
     active: (n) => (n === 1 ? 'asking you a question' : `asking you ${n} questions`),
   },
+  // Task 9b: the assistant's answer to a paused plan — it suggests, the user decides.
+  recommend_plan_action: {
+    done: () => 'suggested a next step for the plan',
+    active: () => 'suggesting a next step for the plan',
+  },
   ExitPlanMode: {
     done: () => 'put together a plan',
     active: () => 'putting together a plan',

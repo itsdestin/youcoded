@@ -411,6 +411,18 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'host_notice' && typeof parsed.text === 'string') {
+        // Task 9b: a host notice with no header (a plan pause handed to the
+        // assistant) — the chat shows it as the collapsed "Note for the
+        // assistant" row, exactly as the real notice turn renders.
+        const action: ChatAction = {
+          type: 'TRANSCRIPT_USER_MESSAGE', sessionId,
+          uuid: `${name}-note-${actions.length}`, text: parsed.text,
+          timestamp: FIXTURE_T0 + actions.length * 1000,
+          injected: 'specialist-report',
+        };
+        state = chatReducer(state, action);
+        actions.push(action);
       } else if (parsed.type === 'specialist_report') {
         // Specialists 1c: the host-injected user-role turn carrying a
         // BACKGROUND report — folds into the launching Task card.
