@@ -181,8 +181,9 @@ import {
 import { createRecommendPlanActionTool } from './tools/recommend-plan-action';
 import { isPlanEligible } from './plans/eligibility';
 import {
-  authoritativeTokens,
+  authoritativeTokens, planRequestPrefix, reservationInputBound,
   type PlanChildRequestGate, type PlanChildStop, type PlanWireTool, type PlanBudgetAdapter, type InputBoundResult,
+  type PlanPrefixMark,
 } from './plans/budget-adapter';
 import { ModelSearchTool } from './tools/model-search';
 import { BUILTIN_ROSTER, type SpecialistRoster } from './specialists/registry';
@@ -3395,10 +3396,27 @@ export class HarnessSession extends EventEmitter {
    *  sending anything or touching history. The host uses it to tell the user
    *  the smallest Add budget that lets a paused specialist continue. (A
    *  project-rule injection at that turn's start is not predicted; the host
-   *  adds a margin for it.) */
-  async planNextRequestBound(adapter: PlanBudgetAdapter, userText: string): Promise<InputBoundResult> {
+   *  adds a margin for it.)
+   *  Revision 5: with `warm` (the specialist's last completed request and the
+   *  time to judge it at), the answer follows the SAME reservation rule the
+   *  plan applies when the request is sent — only the new part while the
+   *  provider's cache is warm — so a short pause asks for far less. Without
+   *  it, the full certified bound. */
+  async planNextRequestBound(
+    adapter: PlanBudgetAdapter,
+    userText: string,
+    warm?: { last: PlanPrefixMark | undefined; now: number },
+  ): Promise<InputBoundResult> {
     const messages = this.planWireMessages([...this.history, { role: 'user', content: userText }]);
-    return adapter.inputBound({ system: this.systemText, messages, tools: await planWireTools(this.buildAiTools()) });
+    const request = { system: this.systemText, messages, tools: await planWireTools(this.buildAiTools()) };
+    const full = adapter.inputBound(request);
+    if (!full.ok || !warm) return full;
+    return {
+      ok: true,
+      tokens: reservationInputBound({
+        adapter, fullBound: full.tokens, prefix: planRequestPrefix(adapter, request), last: warm.last, now: warm.now,
+      }),
+    };
   }
 
   /**
@@ -3429,12 +3447,16 @@ export class HarnessSession extends EventEmitter {
       throw new PlanBudgetStopError(detail);
     }
     const messages = this.planWireMessages();
-    const bound = gate.adapter.inputBound({ system: this.systemText, messages, tools: await planWireTools(aiTools) });
+    const request = { system: this.systemText, messages, tools: await planWireTools(aiTools) };
+    const bound = gate.adapter.inputBound(request);
     if (!bound.ok) {
       this.notifyPlanStop(gate, { kind: 'unsupported-input', detail: bound.reason });
       throw new PlanBudgetStopError(bound.reason);
     }
-    const reservation = await gate.reserve({ inputBoundTokens: bound.tokens });
+    // Revision 5: the request's prefix chain lets the plan reserve only the
+    // new part when this specialist's previous request is still cached. The
+    // new part is measured lazily, only if the plan finds the cache warm.
+    const reservation = await gate.reserve({ inputBoundTokens: bound.tokens, prefix: planRequestPrefix(gate.adapter, request) });
     if (!reservation.ok) {
       if (reservation.kind === 'exhausted') return { exhausted: reservation.detail };
       this.notifyPlanStop(gate, { kind: 'refused', detail: reservation.detail });

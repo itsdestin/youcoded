@@ -334,6 +334,14 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     const minimum: number = paused.paused.minimumAddTokens;
     expect(minimum).toBeGreaterThan(0);
     expect(shown(planId)!.paused).toMatchObject({ minimumAddTokens: minimum });
+    // Revision 5 (design §7): right after the pause the specialist's prompt is
+    // still cached, so the top-up covers only what was added since its last
+    // request — far less than re-sending its whole setup (system prompt + tools).
+    // This also proves a specialist rebuilt from its saved conversation sends
+    // byte-for-byte the prompt the live one sent (otherwise it would be cold).
+    const setup = rec0.manifest.specialists.reviewer.setupTokens;
+    expect(minimum).toBeLessThan(setup);
+    expect(paused.steps[1].attempts[0].lastRequest).toMatchObject({ messages: expect.any(Number), hash: expect.any(String) });
 
     // Exactly the asked amount: the limit and that specialist's allowance
     // grow by precisely that, and nothing else changes.

@@ -9,6 +9,7 @@ import {
   GENERIC_BYTES_PER_TOKEN, REQUEST_FRAMING_TOKENS, PER_MESSAGE_FRAMING_TOKENS, PER_TOOL_FRAMING_TOKENS,
   genericInputBound, budgetAdapterFor, tightenedAdapter, checkAdapterConformance, authoritativeTokens, setupBound,
   disableAdapterForPlans, adapterDisabledReason, resetDisabledAdaptersForTests, type PlanWireRequest,
+  PLAN_CACHE_WINDOW_MS, planRequestPrefix, reservationInputBound, countedTokens, type PlanBudgetAdapter,
 } from '../src/main/harness/plans/budget-adapter';
 
 const bytes = (v: unknown) => Buffer.byteLength(typeof v === 'string' ? v : JSON.stringify(v), 'utf8');
@@ -163,5 +164,97 @@ describe('authoritativeTokens — only a complete provider report counts', () =>
   it('takes the larger of the sum and a reported total (a total can include tokens the split omits)', () => {
     expect(authoritativeTokens({ inputTokens: 10, outputTokens: 3, totalTokens: 20 })).toBe(20);
     expect(authoritativeTokens({ inputTokens: 10, outputTokens: 3, totalTokens: 5 })).toBe(13);
+  });
+});
+
+// Revision 5 (design §7, decision 22): the plan limit counts new work, not
+// cached re-reads. These pin the pure pieces: which routes may trust a warm
+// cache, how "the prompt so far is unchanged" is decided, and what is counted.
+describe('revision 5 — cached reads are not re-counted', () => {
+  const cachedAdapter = (): PlanBudgetAdapter => {
+    const found = budgetAdapterFor('anthropic');
+    if (!found.ok) throw new Error('unexpected');
+    return found.adapter;
+  };
+  const turn1: ModelMessage[] = [{ role: 'user', content: 'Review a.ts' }];
+  const turn2: ModelMessage[] = [...turn1, { role: 'assistant', content: 'Reading it now.' }, { role: 'user', content: 'Continue' }];
+
+  it.each(['anthropic', 'openai', 'google', 'openrouter', 'chatgpt', 'local-engine'] as const)(
+    '%s reads its cache reuse back, so it may reserve only the new part inside the 4-minute window', (type) => {
+      const found = budgetAdapterFor(type);
+      if (!found.ok) throw new Error('unexpected');
+      expect(found.adapter.cacheWindowMs).toBe(PLAN_CACHE_WINDOW_MS);
+      expect(PLAN_CACHE_WINDOW_MS).toBe(4 * 60 * 1000);
+    },
+  );
+
+  it('an arbitrary OpenAI-compatible endpoint is never trusted to cache: always the full bound', () => {
+    const found = budgetAdapterFor('openai-compatible');
+    if (!found.ok) throw new Error('unexpected');
+    expect(found.adapter.cacheWindowMs).toBeUndefined();
+    const r1 = planRequestPrefix(found.adapter, req({ messages: turn1 }));
+    const r2 = planRequestPrefix(found.adapter, req({ messages: turn2 }));
+    const last = { at: 0, messages: 1, hash: r1.chain[1] };
+    expect(reservationInputBound({ adapter: found.adapter, fullBound: 5000, prefix: r2, last, now: 1 })).toBe(5000);
+  });
+
+  it('a tightened adapter keeps its base route\'s cache window', () => {
+    expect(tightenedAdapter(cachedAdapter(), 'tight', () => 1).cacheWindowMs).toBe(PLAN_CACHE_WINDOW_MS);
+  });
+
+  it('the prefix chain is stable for an unchanged prompt and changes with any earlier byte', () => {
+    const adapter = cachedAdapter();
+    const a = planRequestPrefix(adapter, req({ messages: turn1 }));
+    const b = planRequestPrefix(adapter, req({ messages: turn2 }));
+    expect(a.chain).toHaveLength(2);
+    expect(b.chain).toHaveLength(4);
+    expect(b.chain.slice(0, 2)).toEqual(a.chain);
+    // A different system prompt, tool list or earlier message moves every link.
+    expect(planRequestPrefix(adapter, req({ system: 'Other.', messages: turn2 })).chain[1]).not.toBe(a.chain[1]);
+    expect(planRequestPrefix(adapter, req({ tools: [], messages: turn2 })).chain[0]).not.toBe(a.chain[0]);
+    const edited = [{ role: 'user', content: 'Review b.ts' }, ...turn2.slice(1)] as ModelMessage[];
+    expect(planRequestPrefix(adapter, req({ messages: edited })).chain[1]).not.toBe(a.chain[1]);
+  });
+
+  it('the new part is bounded by the same adapter over the added messages alone', () => {
+    const adapter = cachedAdapter();
+    const r2 = planRequestPrefix(adapter, req({ messages: turn2 }));
+    const added = genericInputBound({ system: '', messages: turn2.slice(1), tools: [] });
+    if (!added.ok) throw new Error('unexpected');
+    expect(r2.newPartBound(1)).toBe(added.tokens);
+    expect(r2.newPartBound(-1)).toBeUndefined();
+    expect(r2.newPartBound(4)).toBeUndefined();
+  });
+
+  it('warm: same prefix, within the window → only the new part; otherwise the full bound', () => {
+    const adapter = cachedAdapter();
+    const r1 = planRequestPrefix(adapter, req({ messages: turn1 }));
+    const r2 = planRequestPrefix(adapter, req({ messages: turn2 }));
+    const newPart = r2.newPartBound(1)!;
+    const last = { at: 1_000, messages: 1, hash: r1.chain[1] };
+    const full = 50_000;
+    expect(reservationInputBound({ adapter, fullBound: full, prefix: r2, last, now: 1_000 + PLAN_CACHE_WINDOW_MS })).toBe(newPart);
+    // Cold: the window passed, the clock went backwards, no previous request, no prefix, a changed prefix.
+    expect(reservationInputBound({ adapter, fullBound: full, prefix: r2, last, now: 1_001 + PLAN_CACHE_WINDOW_MS })).toBe(full);
+    expect(reservationInputBound({ adapter, fullBound: full, prefix: r2, last, now: 999 })).toBe(full);
+    expect(reservationInputBound({ adapter, fullBound: full, prefix: r2, last: undefined, now: 1_000 })).toBe(full);
+    expect(reservationInputBound({ adapter, fullBound: full, prefix: undefined, last, now: 1_000 })).toBe(full);
+    expect(reservationInputBound({ adapter, fullBound: full, prefix: r2, last: { ...last, hash: 'other' }, now: 1_000 })).toBe(full);
+    expect(reservationInputBound({ adapter, fullBound: full, prefix: r2, last: { ...last, messages: 9 }, now: 1_000 })).toBe(full);
+    // A new part that can't be measured, or is larger than the full bound, never lowers anything.
+    expect(reservationInputBound({ adapter, fullBound: full, prefix: { chain: r2.chain, newPartBound: () => undefined }, last, now: 1_000 })).toBe(full);
+    expect(reservationInputBound({ adapter, fullBound: full, prefix: { chain: r2.chain, newPartBound: () => Number.NaN }, last, now: 1_000 })).toBe(full);
+    expect(reservationInputBound({ adapter, fullBound: 10, prefix: r2, last, now: 1_000 })).toBe(10);
+  });
+
+  it('counted usage = uncached input + cache writes + output (cached reads excluded)', () => {
+    const usage = { inputTokens: 1_000, outputTokens: 50, cacheReadTokens: 700, cacheCreationTokens: 200 };
+    expect(countedTokens({ tokens: 1_050, usage })).toBe(350);
+    // No breakdown reported: the whole input counts, as before.
+    expect(countedTokens({ tokens: 1_050, usage: { ...usage, cacheReadTokens: 0, cacheCreationTokens: 0 } })).toBe(1_050);
+    // A reported total above the split is still counted in full.
+    expect(countedTokens({ tokens: 1_100, usage })).toBe(400);
+    // A cache-read count larger than the whole input can't drive the count below the reply.
+    expect(countedTokens({ tokens: 1_050, usage: { ...usage, cacheReadTokens: 5_000 } })).toBe(50);
   });
 });

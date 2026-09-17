@@ -15,6 +15,7 @@
 // text has bytes. Real text averages 3–4 bytes per token, so this
 // deliberately over-reserves roughly 3–4× — and anything unused is released
 // once the provider reports what it really charged.
+import { createHash } from 'crypto';
 import type { ModelMessage } from 'ai';
 import type { ProfileProviderType } from '../capability-profile';
 
@@ -54,6 +55,11 @@ export interface PlanBudgetAdapter {
    *  the request is still reserved and sent once, but its reply can overshoot,
    *  so the plan's limit is approximate. */
   readonly capsOutput: boolean;
+  /** Revision 5 (decision 22): how long after a completed request this
+   *  route's prompt cache is trusted to still hold that request's prompt.
+   *  Absent = never trusted, so every request reserves its full bound. Set
+   *  only on routes that cache prompts AND report how much they read back. */
+  readonly cacheWindowMs?: number;
   inputBound(request: PlanWireRequest): InputBoundResult;
 }
 
@@ -143,6 +149,7 @@ export function tightenedAdapter(
     id,
     providerType: base.providerType,
     capsOutput: base.capsOutput,
+    ...(base.cacheWindowMs !== undefined ? { cacheWindowMs: base.cacheWindowMs } : {}),
     inputBound(request) {
       const generic = genericInputBound(request);
       if (!generic.ok) return generic;
@@ -154,8 +161,12 @@ export function tightenedAdapter(
   };
 }
 
-function genericAdapter(providerType: ProfileProviderType, capsOutput: boolean): PlanBudgetAdapter {
-  return { id: `generic:${providerType}`, providerType, capsOutput, inputBound: genericInputBound };
+function genericAdapter(providerType: ProfileProviderType, capsOutput: boolean, cacheWindowMs?: number): PlanBudgetAdapter {
+  return {
+    id: `generic:${providerType}`, providerType, capsOutput,
+    ...(cacheWindowMs !== undefined ? { cacheWindowMs } : {}),
+    inputBound: genericInputBound,
+  };
 }
 
 /**
@@ -184,20 +195,122 @@ export type AdapterLookup = { ok: true; adapter: PlanBudgetAdapter } | { ok: fal
  */
 export function budgetAdapterFor(providerType: ProfileProviderType): AdapterLookup {
   switch (providerType) {
+    // Revision 5: these routes keep a prompt cache (Anthropic and OpenRouter
+    // through our cache markers, OpenAI/ChatGPT/Gemini automatically, the
+    // local engine in its KV cache) and report how much they read back.
     case 'anthropic':
     case 'openai':
     case 'google':
     case 'openrouter':
-    case 'openai-compatible':
     case 'local-engine':
+      return { ok: true, adapter: genericAdapter(providerType, true, PLAN_CACHE_WINDOW_MS) };
+    // WHY no cache window: an arbitrary OpenAI-compatible server may neither
+    // cache nor report it. Its whole input is counted anyway (no breakdown),
+    // so a small reservation would only open an overshoot with no benefit.
+    case 'openai-compatible':
       return { ok: true, adapter: genericAdapter(providerType, true) };
     case 'chatgpt':
-      return { ok: true, adapter: genericAdapter(providerType, false) };
+      return { ok: true, adapter: genericAdapter(providerType, false, PLAN_CACHE_WINDOW_MS) };
     default: {
       const unknownType: never = providerType;
       return { ok: false, reason: `Plans can't run specialists on this provider (${String(unknownType)}).` };
     }
   }
+}
+
+// ---- revision 5: warm-cache reservations (design §7, decision 22) ----
+//
+// Destin: "we should not be re-counting cached tokens". A long specialist
+// re-sends its whole conversation on every request; the provider reads most
+// of it back from its prompt cache at a fraction of the cost. So the plan's
+// limit counts only NEW work: uncached input + cache-written input + output.
+// And when the previous request of the same specialist finished moments ago
+// with the same prompt so far, the next request reserves only the part added
+// since then (plus its reply), instead of the whole re-sent conversation.
+
+/** The provider cache window a plan trusts, conservatively short of the
+ *  shortest real one (Anthropic's default is 5 minutes; ours is 1 hour). */
+export const PLAN_CACHE_WINDOW_MS = 4 * 60 * 1000;
+
+/** What a completed request leaves behind (journalled on the attempt): when
+ *  it finished, how many messages it sent, and the chain link naming them. */
+export interface PlanPrefixMark {
+  at: number;
+  messages: number;
+  hash: string;
+}
+
+/** The shape of the request about to be sent, for the warm-cache check. */
+export interface PlanRequestPrefix {
+  /** chain[i] names "system prompt + tool list + the first i messages"
+   *  exactly as sent; chain.length = messages + 1. */
+  chain: readonly string[];
+  /** The adapter's bound over messages[from..] alone (the part added since a
+   *  request that sent `from` messages), or undefined when it can't be measured. */
+  newPartBound(fromMessage: number): number | undefined;
+}
+
+const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+
+/**
+ * The prefix chain of a request. WHY a hash chain over the exact wire copy: a
+ * provider cache hits only when the bytes sent match, so "unchanged" is
+ * decided by the bytes — any edit to the system prompt, the tool list or an
+ * earlier message changes every later link, and the request is treated cold.
+ */
+export function planRequestPrefix(adapter: PlanBudgetAdapter, request: PlanWireRequest): PlanRequestPrefix {
+  const chain = [sha256(JSON.stringify({ system: request.system, tools: request.tools }))];
+  for (const message of request.messages) chain.push(sha256(`${chain[chain.length - 1]}\n${JSON.stringify(message)}`));
+  return {
+    chain,
+    newPartBound(from) {
+      if (!Number.isSafeInteger(from) || from < 0 || from > request.messages.length) return undefined;
+      const bound = adapter.inputBound({ system: '', messages: request.messages.slice(from), tools: [] });
+      return bound.ok ? bound.tokens : undefined;
+    },
+  };
+}
+
+/**
+ * The input side a request reserves (design §7): only the new part when the
+ * same specialist's previous request completed within the route's cache
+ * window and the prompt so far is byte-identical; otherwise the full
+ * certified bound. It can only LOWER the reservation, never raise it — and
+ * the full bound is still what a reported input is checked against.
+ */
+export function reservationInputBound(input: {
+  adapter: PlanBudgetAdapter;
+  fullBound: number;
+  prefix: PlanRequestPrefix | undefined;
+  last: PlanPrefixMark | undefined;
+  now: number;
+}): number {
+  const { adapter, fullBound, prefix, last, now } = input;
+  const window = adapter.cacheWindowMs;
+  if (window === undefined || !prefix || !last) return fullBound;
+  // A clock that went backwards proves nothing about the window.
+  if (now < last.at || now - last.at > window) return fullBound;
+  if (!Number.isSafeInteger(last.messages) || last.messages < 0 || last.messages >= prefix.chain.length) return fullBound;
+  if (prefix.chain[last.messages] !== last.hash) return fullBound;
+  const part = prefix.newPartBound(last.messages);
+  if (part === undefined || !Number.isSafeInteger(part) || part < 0) return fullBound;
+  return Math.min(part, fullBound);
+}
+
+/**
+ * What a reported request counts against the plan (design §7): everything
+ * reported except the input the provider read back from its cache. Cache
+ * WRITES stay counted — they are new input. A provider that reports no
+ * breakdown has cacheReadTokens 0, so its whole input counts, as before.
+ * WHY clamp to the input: a cache-read figure larger than the prompt (a
+ * provider quirk) must not erase the reply from the count.
+ */
+export function countedTokens(report: {
+  tokens: number;
+  usage: { inputTokens: number; outputTokens?: number; cacheReadTokens: number; cacheCreationTokens?: number };
+}): number {
+  const cachedRead = Math.min(Math.max(0, report.usage.cacheReadTokens || 0), Math.max(0, report.usage.inputTokens));
+  return Math.max(0, report.tokens - cachedRead);
 }
 
 // ---- conformance ----
@@ -296,8 +409,10 @@ export interface PlanChildStop {
 export interface PlanChildRequestGate {
   adapter: PlanBudgetAdapter;
   /** Durably reserve the attempt's whole remaining allowance for ONE request
-   *  whose input can be at most `inputBoundTokens`. */
-  reserve(input: { inputBoundTokens: number }): Promise<PlanRequestReservation>;
+   *  whose input can be at most `inputBoundTokens`. `prefix` (revision 5)
+   *  lets a warm request reserve only its new part; without it the full
+   *  bound is reserved. */
+  reserve(input: { inputBoundTokens: number; prefix?: PlanRequestPrefix }): Promise<PlanRequestReservation>;
   /** Charge the request just made and release what it provably did not use. */
   settle(outcome: PlanRequestOutcome): Promise<PlanRequestSettlement>;
   /** Told when a turn stops for a budget reason, so the executor can pause. */

@@ -26,7 +26,7 @@ import { log } from '../../logger';
 import { nativeToolEffect } from '../tools';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
-import { PlanBudget, pricingSnapshot } from './plan-budget';
+import { PlanBudget, lastRequestFor, pricingSnapshot } from './plan-budget';
 import { PlanService, type PlanHandoffProblem, type PlanProposal, type PlanRecommendation } from './plan-service';
 import { PLAN_HANDOFF_BACKSTOP_MS, normalizePlanQuestion, planHandoffNotice } from './plan-handoff';
 import {
@@ -247,7 +247,9 @@ export class PlanHostBridge {
         port.emit({ ...event, plan });
       },
     });
-    this.budget = new PlanBudget({ journal: this.journal });
+    // Revision 5: the budget judges cache windows by the same clock as the
+    // minimum Add budget below, so the two can never disagree about "warm".
+    this.budget = new PlanBudget({ journal: this.journal, ...(opts.now ? { now: opts.now } : {}) });
     this.executor = new PlanExecutor({
       journal: this.journal,
       budget: this.budget,
@@ -804,7 +806,12 @@ export class PlanHostBridge {
       gate: measurementGate(lookup.adapter), historyFromChildId: attempt.childId,
     });
     try {
-      const bound = await probe.session.planNextRequestBound(lookup.adapter, message);
+      // Revision 5: judged by the same reservation rule the retry's request
+      // will meet — the retry continues this specialist's conversation, so a
+      // prompt that is still cached reserves only the report request's new part.
+      const bound = await probe.session.planNextRequestBound(lookup.adapter, message, {
+        last: lastRequestFor(stepRec!.attempts, attempt), now: this.now(),
+      });
       return bound.ok ? bound.tokens : undefined;
     } finally {
       probe.dispose();
@@ -814,8 +821,9 @@ export class PlanHostBridge {
   /**
    * The smallest Add budget after which Continue can send the paused
    * specialist's next request: its fresh resume prompt must fit what is left
-   * of its allowance, and on a soft (ChatGPT) plan the plan's own limit must
-   * be above what was already used (Task 3 obligation). undefined when
+   * of its allowance, and the plan's own limit must be above what was
+   * already used (Task 3 obligation for soft plans; since revision 5 for any
+   * plan, as a cache miss can overshoot a capped one too). undefined when
    * nothing more is needed or it can't be measured.
    */
   private async minimumAddTokens(ref: PlanRef, plan: PlanRecord, attemptId: string): Promise<number | undefined> {
@@ -834,15 +842,18 @@ export class PlanHostBridge {
     const coveredByOthers = plan.steps.flatMap((s) => s.attempts)
       .filter((a) => a.attemptId !== attemptId && a.phase !== 'committed' && a.completedAt === undefined)
       .reduce((n, a) => n + Math.max(0, a.spentTokens - a.baseTokens - a.addedTokens), 0);
-    const softGap = !lookup.adapter.capsOutput && plan.usedTokens >= plan.ceilingTokens
+    // Revision 5: the plan-wide stop now covers capped routes too (a cache
+    // miss after a warm reservation can overshoot there), so the gap is asked
+    // for whatever the route.
+    const planGap = plan.usedTokens >= plan.ceilingTokens
       ? plan.usedTokens - plan.ceilingTokens + 1 - coveredByOthers : 0;
     const verdict = classifyChildTranscript(this.port.readChildEvents(attempt.childId, ref.cwd), nativeToolEffect);
     // A terminal transcript needs no request; an undelivered brief is covered
     // by the attempt's untouched allowance.
-    if (verdict.kind === 'terminal' || (verdict.kind === 'resumable' && !verdict.briefDelivered)) return softGap > 0 ? softGap : undefined;
+    if (verdict.kind === 'terminal' || (verdict.kind === 'resumable' && !verdict.briefDelivered)) return planGap > 0 ? planGap : undefined;
     const cwd = this.port.rootCwd(ref.sessionId);
     const def = cwd !== undefined ? this.port.roster(cwd).resolve(step.specialist) : undefined;
-    if (!def) return softGap > 0 ? softGap : undefined;
+    if (!def) return planGap > 0 ? planGap : undefined;
     const probe = this.port.probeSession({
       parentId: ref.sessionId, specialist: def, binding: frozen.binding, route,
       gate: measurementGate(lookup.adapter), historyFromChildId: attempt.childId,
@@ -850,12 +861,18 @@ export class PlanHostBridge {
     let need = 0;
     try {
       // The exact turn the restart will send (items 3/4).
-      const bound = await probe.session.planNextRequestBound(lookup.adapter, planRestartBrief(verdict));
+      // Revision 5 (design §7): the same reservation rule Continue will meet,
+      // so right after a short pause only the new part must fit. (Continue
+      // after the cache window has passed needs the full bound; if the
+      // top-up doesn't cover that, the plan pauses again and says so.)
+      const bound = await probe.session.planNextRequestBound(lookup.adapter, planRestartBrief(verdict), {
+        last: lastRequestFor(stepRec.attempts, attempt), now: this.now(),
+      });
       if (bound.ok) need = bound.tokens + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - left;
     } finally {
       probe.dispose();
     }
-    const minimum = Math.max(softGap, need);
+    const minimum = Math.max(planGap, need);
     return minimum > 0 ? minimum : undefined;
   }
 }

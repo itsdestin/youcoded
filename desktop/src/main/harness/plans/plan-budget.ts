@@ -13,6 +13,12 @@
 // request the whole held amount is committed to that one request; the reply
 // may use whatever the input does not. Afterwards the real usage is charged
 // and the rest goes back to being held. Unknown usage is charged in full.
+//
+// Revision 5 (design §7, decision 22): "real usage" means NEW work —
+// uncached input + cache writes + output; input the provider read back from
+// its cache is not counted again. And a request that re-sends a still-warm
+// prompt reserves only its new part on the input side, leaving the rest of
+// the held amount for the reply.
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import type { PlanView } from '../../../shared/types';
@@ -20,8 +26,8 @@ import { costForUsage, isFreePricing, type ModelPricing, type PricedUsage } from
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalIntegrityError, projectPlan } from './plan-journal';
 import {
-  adapterDisabledReason, disableAdapterForPlans,
-  type PlanBudgetAdapter, type PlanChildRequestGate, type PlanRequestOutcome,
+  adapterDisabledReason, countedTokens, disableAdapterForPlans, reservationInputBound,
+  type PlanBudgetAdapter, type PlanChildRequestGate, type PlanPrefixMark, type PlanRequestOutcome,
   type PlanRequestReservation, type PlanRequestSettlement,
 } from './budget-adapter';
 import { PLAN_BUDGET_REQUESTS_KEPT, type ExecutionManifest, type PlanAttemptRecord, type PlanRecord, type PlanRef } from './types';
@@ -149,6 +155,23 @@ export function planCeilingUsd(document: PlanDocumentV1, manifest: ExecutionMani
 }
 
 // ---- journal arithmetic ----
+
+/**
+ * Revision 5: the most recent completed request of this attempt's specialist
+ * session. WHY across attempts: a report-only retry is a new attempt that
+ * continues the SAME specialist conversation (same childId), so the failed
+ * attempt's last request is what the provider has cached.
+ */
+export function lastRequestFor(stepAttempts: readonly PlanAttemptRecord[], attempt: PlanAttemptRecord): PlanPrefixMark | undefined {
+  const sameSession = attempt.childId === undefined
+    ? [attempt]
+    : stepAttempts.filter((a) => a === attempt || a.childId === attempt.childId);
+  let latest: PlanPrefixMark | undefined;
+  for (const a of sameSession) {
+    if (a.lastRequest && (!latest || a.lastRequest.at > latest.at)) latest = a.lastRequest;
+  }
+  return latest;
+}
 
 const isCommitted = (a: PlanAttemptRecord) => a.phase === 'committed' || a.completedAt !== undefined;
 const allowanceLeft = (a: PlanAttemptRecord) => a.baseTokens + a.addedTokens - a.spentTokens;
@@ -353,14 +376,15 @@ export class PlanBudget {
   /** The per-request gate a plan-child HarnessSession is given (Task 4 wires it). */
   requestGate(ref: PlanRef, planId: string, fence: string, stepId: string, attemptId: string, adapter: PlanBudgetAdapter): PlanChildRequestGate {
     const locate = (plan: PlanRecord) => {
-      const attempt = plan.steps.find((s) => s.id === stepId)?.attempts.find((a) => a.attemptId === attemptId);
+      const stepAttempts = plan.steps.find((s) => s.id === stepId)?.attempts ?? [];
+      const attempt = stepAttempts.find((a) => a.attemptId === attemptId);
       const specialist = executableStep(plan.document, stepId)?.specialist;
       if (!attempt || specialist === undefined) throw new PlanJournalIntegrityError(`No attempt ${attemptId} in step "${stepId}" (plan ${planId}).`);
-      return { attempt, snapshot: snapshotFor(plan.manifest, specialist) };
+      return { attempt, stepAttempts, snapshot: snapshotFor(plan.manifest, specialist) };
     };
     return {
       adapter,
-      reserve: async ({ inputBoundTokens }): Promise<PlanRequestReservation> => {
+      reserve: async ({ inputBoundTokens, prefix }): Promise<PlanRequestReservation> => {
         const refused = (detail: string): PlanRequestReservation => ({ ok: false, kind: 'refused', detail });
         // A bound that isn't a whole, non-negative number can't authorize
         // anything (NaN would otherwise become a NaN reply cap).
@@ -372,23 +396,24 @@ export class PlanBudget {
             const disabled = adapterDisabledReason(adapter.id)
               ?? plan.disabledAdapters?.find((d) => d.adapterId === adapter.id)?.detail;
             if (disabled) return refused(`Plan budgets are switched off for this model after a request went over its limit: ${disabled}`);
-            const { attempt } = locate(plan);
+            const { attempt, stepAttempts } = locate(plan);
             if (isCommitted(attempt)) return refused('This specialist has already finished.');
             if (attempt.phase === 'request-sent' || attempt.phase === 'ambiguous') {
               return refused("This specialist's previous request hasn't been accounted for, so nothing more was sent.");
             }
-            // Plan-wide stop (review round 3). WHY: on a soft route one reply
-            // may overshoot, and a running sibling still holds its own
-            // allowance — without this it could keep sending (and overshoot
-            // again) after the PLAN's limit is already gone. On capped routes
-            // spending can never pass the ceiling, so it is applied to soft
-            // routes only (round 4): on a capped plan, unresolved priced
-            // attempts charged to exactly the dollar limit must not block a
-            // free/local specialist that still holds tokens — Add budget on a
-            // local step could never clear that. Dollars use `>`, matching
-            // settle's re-check: reaching the limit exactly is not passing it.
-            if (!adapter.capsOutput && (plan.usedTokens >= plan.ceilingTokens
-              || (plan.ceilingUsd !== null && (plan.usedUsd ?? 0) > plan.ceilingUsd + USD_EPSILON))) {
+            // Plan-wide stop (review round 3). WHY: one reply may overshoot its
+            // own allowance — on a soft route (no reply cap), and since
+            // revision 5 on a capped route too, when a warm-cache reservation
+            // meets a cache miss. A running sibling still holds its own
+            // allowance; without this it could keep sending after the PLAN's
+            // limit is already gone. Revision 5 widened it from soft routes to
+            // every route: on a capped plan with no overshoot, spending plus
+            // holds never pass the ceiling, so reaching it here means nothing
+            // was left to send anyway. Dollars use `>` (round 4): pessimistic
+            // charges that land exactly ON the limit must not block a
+            // free/local specialist that still holds tokens.
+            if (plan.usedTokens >= plan.ceilingTokens
+              || (plan.ceilingUsd !== null && (plan.usedUsd ?? 0) > plan.ceilingUsd + USD_EPSILON)) {
               return { ok: false, kind: 'exhausted', detail: "The plan has used its whole budget." };
             }
             const left = allowanceLeft(attempt);
@@ -397,19 +422,31 @@ export class PlanBudget {
             // or released attempt holds nothing and must be re-reserved (with the
             // plan-wide ceiling check) before it may send anything.
             if (attempt.reservedTokens !== left) return refused("This specialist's budget isn't reserved right now.");
+            // Revision 5: a warm prompt reserves only what was added since the
+            // specialist's last completed request; anything else, the full bound.
+            const reservedInput = reservationInputBound({
+              adapter, fullBound: inputBoundTokens, prefix, last: lastRequestFor(stepAttempts, attempt), now: this.now(),
+            });
             // Task 9a: a report-only turn's reply is capped at its fixed
             // allowance; the rest of what it holds pays for the input.
-            const uncapped = left - inputBoundTokens;
+            const uncapped = left - reservedInput;
             const room = attempt.reportOnly ? Math.min(uncapped, PLAN_REPORT_ONLY_REPLY_TOKENS) : uncapped;
             if (room < 1) {
               return {
                 ok: false, kind: 'exhausted',
-                detail: `The specialist's next request could need up to ${fmt(inputBoundTokens)} tokens, but only ${fmt(left)} are left in its budget.`,
+                detail: `The specialist's next request could need up to ${fmt(reservedInput)} tokens, but only ${fmt(left)} are left in its budget.`,
               };
             }
             attempt.phase = 'request-sent';
             // Kept until settlement: the input side of the certified bound.
+            // WHY the FULL bound even on a warm request: it is what a reported
+            // input is checked against — a cache miss is not a broken bound.
             attempt.requestInputBound = inputBoundTokens;
+            if (reservedInput < inputBoundTokens) attempt.requestReservedInput = reservedInput;
+            else delete attempt.requestReservedInput;
+            if (prefix && prefix.chain.length > 0) {
+              attempt.requestPrefix = { messages: prefix.chain.length - 1, hash: prefix.chain[prefix.chain.length - 1] };
+            } else delete attempt.requestPrefix;
             // Decision 5: this request's reply is not capped by the provider.
             if (!adapter.capsOutput) attempt.softLimit = true;
             return { ok: true, maxOutputTokens: room };
@@ -426,35 +463,50 @@ export class PlanBudget {
         }
         const held = attempt.reservedTokens;
         const inputBound = attempt.requestInputBound;
+        const reservedInput = attempt.requestReservedInput ?? inputBound;
+        const sentPrefix = attempt.requestPrefix;
         let charged: number;
         let usd: number | null;
         if (outcome.kind === 'unknown') {
           charged = held;
           usd = worstCaseUsd(snapshot, held);
         } else {
-          charged = outcome.tokens;
-          // Real rates for the split the provider reported; anything a larger
+          // Revision 5: counted = the report minus what the provider read back
+          // from its cache (budget-adapter.ts `countedTokens`).
+          charged = countedTokens(outcome);
+          // Dollars are unchanged: real rates for the split the provider
+          // reported (cached reads at the cached-read rate); anything a larger
           // reported total adds beyond that split is priced at the worst case.
           const split = outcome.usage.inputTokens + outcome.usage.outputTokens;
           const base = snapshot?.kind === 'priced' ? reportedUsd(outcome.usage, snapshot.rates) : null;
-          const extra = worstCaseUsd(snapshot, Math.max(0, charged - split));
+          const extra = worstCaseUsd(snapshot, Math.max(0, outcome.tokens - split));
           usd = base === null && extra === null ? null : (base ?? 0) + (extra ?? 0);
+          // WHY only a reported request leaves a mark: an unknown outcome
+          // proves nothing about the cache, so the previous mark (a request
+          // that really completed) stays the one a later request is judged by.
+          if (sentPrefix) attempt.lastRequest = { ...sentPrefix, at: this.now() };
         }
         this.charge(plan, attempt, charged, usd);
         attempt.reservedTokens = Math.max(0, allowanceLeft(attempt));
         attempt.phase = 'response-persisted';
         delete attempt.requestInputBound;
+        delete attempt.requestReservedInput;
+        delete attempt.requestPrefix;
         if (outcome.kind === 'reported') {
           // A broken CERTIFIED bound — either side of it. The input side is
-          // checked on its own: a breach there hides inside the total whenever
-          // the reply is short. The total is only a breach where the reply was
-          // capped; an uncapped (soft) reply is allowed to overshoot once.
+          // checked on its own, always against the FULL bound (revision 5: a
+          // warm request reserved less, but a miss is not a breach): a breach
+          // there hides inside the total whenever the reply is short. The total
+          // is only a breach where the reply was capped — at the full input
+          // bound plus the reply cap that was sent (held − reserved input); an
+          // uncapped (soft) reply is allowed to overshoot once.
           const inputBreach = inputBound !== undefined && outcome.usage.inputTokens > inputBound;
-          const totalBreach = adapter.capsOutput && outcome.tokens > held;
+          const totalLimit = held + Math.max(0, (inputBound ?? 0) - (reservedInput ?? 0));
+          const totalBreach = adapter.capsOutput && outcome.tokens > totalLimit;
           if (inputBreach || totalBreach) {
             const detail = inputBreach
               ? `a specialist's request read ${fmt(outcome.usage.inputTokens)} tokens of input, more than the ${fmt(inputBound!)} measured for it`
-              : `a specialist's request used ${fmt(outcome.tokens)} tokens, more than the ${fmt(held)} reserved for it`;
+              : `a specialist's request used ${fmt(outcome.tokens)} tokens, more than the ${fmt(totalLimit)} reserved for it`;
             if (!plan.disabledAdapters?.some((d) => d.adapterId === adapter.id)) {
               plan.disabledAdapters = [...(plan.disabledAdapters ?? []), { adapterId: adapter.id, detail }];
             }
@@ -467,12 +519,16 @@ export class PlanBudget {
         if (plan.ceilingUsd !== null && (plan.usedUsd ?? 0) > plan.ceilingUsd + USD_EPSILON) {
           return { kind: 'over-bound', chargedTokens: charged, detail: "the plan's spending passed its dollar limit" };
         }
-        if (!adapter.capsOutput && outcome.kind === 'reported' && outcome.tokens >= held) {
-          // Decision 5: the one allowed overshoot happened (or the allowance is
-          // exactly used). Charged as actually used; nothing more may be sent.
+        // Decision 5 (soft route): the one allowed overshoot happened, or the
+        // allowance is exactly used. Revision 5 (capped route): a warm-cache
+        // reservation met a cache miss and the reply ran long, so the counted
+        // usage passed what was held. Either way it is charged as actually
+        // used, the reply's tools don't run, and nothing more may be sent.
+        const overshoot = adapter.capsOutput ? charged > held : charged >= held;
+        if (outcome.kind === 'reported' && overshoot) {
           return {
             kind: 'limit-reached', chargedTokens: charged,
-            detail: `a specialist's reply used ${fmt(outcome.tokens)} tokens, reaching the ${fmt(held)} left in its budget`,
+            detail: `a specialist's reply used ${fmt(charged)} tokens, reaching the ${fmt(held)} left in its budget`,
           };
         }
         return { kind: 'ok', chargedTokens: charged };
@@ -507,6 +563,8 @@ export class PlanBudget {
     attempt.reservedTokens = 0;
     attempt.phase = 'ambiguous';
     delete attempt.requestInputBound;
+    delete attempt.requestReservedInput;
+    delete attempt.requestPrefix;
   }
 
   /**

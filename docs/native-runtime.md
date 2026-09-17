@@ -1100,11 +1100,43 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
   One step may be 500–30,000 tokens.
   <!-- verify: {"path": "youcoded/desktop/src/main/harness/plans/schema.ts", "contains": "PLAN_MAX_BUDGET_TOKENS = 30_000"} -->
 - **Certified input bound** (`genericInputBound`): 1 token per UTF-8 byte of the JSON form,
-  plus fixed framing. Provider tokenizers may only tighten it. A reply that reads more input than
-  was measured (or, on a capped route, exceeds its hold) disables that adapter for plans for the
-  rest of the process, and records it on the plan.
+  plus fixed framing. Provider tokenizers may only tighten it. A reply whose reported TOTAL input
+  is above the full bound (or, on a capped route, whose total is above the full bound plus the
+  reply cap it was sent with) disables that adapter for plans for the rest of the process, and
+  records it on the plan.
 - **Every request is reserved before it is sent, and sent once.** Unknown outcomes are charged
   in full. On capped routes the reply cap is the room left (`maxOutputTokens`).
+- **Cached tokens are not re-counted** (revision 5, decision 22; design
+  `2026-09-16-specialists-plans-pause-handoff.md` §7).
+  - **What counts** (`countedTokens`): uncached input + cache-written input + output. Input the
+    provider read back from its cache is left out. Dollars are unchanged: real usage at the real
+    rates, cached reads at the cached-read rate.
+  - **Where the cache numbers come from** (`cache-usage.ts`): the AI SDK's
+    `inputTokenDetails.cacheReadTokens` (Anthropic, OpenAI, ChatGPT, Gemini, OpenRouter), or
+    llama.cpp's `timings.cache_n` for the local engine. Every package reports `inputTokens` as the
+    whole prompt, cached part included. A route that reports no breakdown has 0 cached, so its
+    whole input counts.
+    <!-- verify: {"path": "youcoded/desktop/src/main/harness/plans/budget-adapter.ts", "contains": "export function countedTokens"} -->
+  - **Warm reservation** (`reservationInputBound`): each request carries a hash chain of its
+    exact wire prompt (`planRequestPrefix`), and a reported request leaves `lastRequest`
+    (time, message count, chain link) on its attempt. If the specialist's last request finished
+    within `PLAN_CACHE_WINDOW_MS` (4 minutes) and the new prompt starts with those exact bytes,
+    only the part added since is reserved on the input side (its own certified bound); the rest of
+    the hold is reply room. Otherwise the full bound. A report-only retry shares its failed
+    attempt's mark (same `childId`, `lastRequestFor`).
+  - **Which routes may be warm** (`cacheWindowMs` on the adapter): Anthropic, OpenAI, Gemini,
+    OpenRouter, ChatGPT and the local engine. Never an arbitrary OpenAI-compatible endpoint.
+  - **A cache miss after a warm reservation** is charged its real count, even above the hold.
+    Settlement then answers `limit-reached` (the reply's tools don't run), and the plan-wide stop
+    in `reserve` — used tokens at or past the ceiling, or dollars past it — now applies on every
+    route, so no sibling sends either. This is the only overshoot on a capped route: at most one
+    request's uncached prompt per running specialist.
+  - **Ceiling and minimum Add budget:** the ceiling stays the approved worst case. The minimum
+    Add budget and the report-only funding check use the same warm rule
+    (`planNextRequestBound(adapter, text, { last, now })`), so right after a pause they ask for
+    only the new part. A Continue after the window has passed needs the full bound; if the top-up
+    doesn't cover it, the plan pauses again with the new minimum. The card wording is unchanged;
+    its numbers now track new work.
 - **ChatGPT is a soft limit** (decision 5). Its endpoint rejects a reply cap, so the request goes
   without one (`harness-session.ts`: `capsOutput ? … : undefined`). After each reply, usage is
   checked: once a reply reaches its hold, or the plan's limit is used up, the plan pauses before
@@ -1119,7 +1151,8 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     allowance, unless the pause was a plan-limit shortfall (`ceilingShortfall`), in which case
     only the ceiling rises.
   - An amount below `paused.minimumAddTokens` is refused with the number. The minimum is what
-    the restart turn needs plus a 512-token margin, or the soft overshoot gap.
+    the restart turn needs (by the warm rule above) plus a 512-token margin, or the gap by which
+    the plan's used tokens passed its limit.
 - **Plan specialists don't spend the 30-per-conversation spawn budget** (decision 2). They
   still take a specialist slot (max 4) and the single-writer lock.
 - **At most one plan auto-starts per assistant turn** (final review F3). The host mints a
@@ -1187,7 +1220,7 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     specialist session, one dedicated message, tools off (`toolChoice: 'none'`; a call made
     anyway never runs), reply capped at `PLAN_REPORT_ONLY_REPLY_TOKENS` (2,000). Its allowance
     is the failed attempt's unspent share, which must cover the MEASURED input of that request
-    (the transcript is re-sent) plus 2,000; less, or unmeasurable → assistant. A Continue after
+    (the transcript is re-sent; only its new part while the cache is warm) plus 2,000; less, or unmeasurable → assistant. A Continue after
     the message was delivered sends `PLAN_REPORT_ONLY_RESEND`, never the message again.
   - Saved pauses carry `launch` / `retried` / `toolEffect` for `pausedRouting`; the card's
     specialist row shows "Retried after an error" (`PlanChildView.retried`) only for an error

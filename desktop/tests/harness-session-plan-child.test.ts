@@ -12,9 +12,9 @@ import { HarnessSession } from '../src/main/harness/harness-session';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { PermissionDecision } from '../src/shared/permission-types';
 import type {
-  PlanBudgetAdapter, PlanChildRequestGate, PlanChildStop, PlanRequestOutcome, PlanRequestReservation, PlanRequestSettlement, PlanWireRequest,
+  PlanBudgetAdapter, PlanChildRequestGate, PlanChildStop, PlanRequestOutcome, PlanRequestPrefix, PlanRequestReservation, PlanRequestSettlement, PlanWireRequest,
 } from '../src/main/harness/plans/budget-adapter';
-import { genericInputBound } from '../src/main/harness/plans/budget-adapter';
+import { genericInputBound, PLAN_CACHE_WINDOW_MS } from '../src/main/harness/plans/budget-adapter';
 import { currentChatGptRequest } from '../src/main/providers/chatgpt-request-diagnostics';
 import { textChunks, toolCallChunk, finishChunk, stream } from './helpers/scripted-model';
 import { makeOpts, fakeTool } from './helpers/harness-fakes';
@@ -27,6 +27,8 @@ interface FakeGate extends PlanChildRequestGate {
   log: string[];
   bounds: PlanWireRequest[];
   outcomes: PlanRequestOutcome[];
+  /** Revision 5: the prompt-prefix chain each reservation carried. */
+  prefixes: Array<PlanRequestPrefix | undefined>;
   reservedNow: () => boolean;
   onStop: Mock<(stop: PlanChildStop) => void>;
 }
@@ -34,6 +36,7 @@ interface FakeGate extends PlanChildRequestGate {
 function fakeGate(over: {
   providerType?: PlanBudgetAdapter['providerType'];
   capsOutput?: boolean;
+  cacheWindowMs?: number;
   bound?: (r: PlanWireRequest) => ReturnType<PlanBudgetAdapter['inputBound']>;
   reserve?: (n: number, call: number) => PlanRequestReservation;
   settle?: (o: PlanRequestOutcome) => PlanRequestSettlement;
@@ -41,19 +44,22 @@ function fakeGate(over: {
   const log: string[] = [];
   const bounds: PlanWireRequest[] = [];
   const outcomes: PlanRequestOutcome[] = [];
+  const prefixes: Array<PlanRequestPrefix | undefined> = [];
   let held = false;
   let reserveCalls = 0;
   return {
-    log, bounds, outcomes,
+    log, bounds, outcomes, prefixes,
     reservedNow: () => held,
     adapter: {
       id: 'fake-adapter',
       providerType: over.providerType ?? 'openrouter',
       capsOutput: over.capsOutput ?? true,
+      ...(over.cacheWindowMs !== undefined ? { cacheWindowMs: over.cacheWindowMs } : {}),
       inputBound: (r) => { bounds.push(r); log.push('bound'); return over.bound?.(r) ?? { ok: true, tokens: 123 }; },
     },
-    async reserve({ inputBoundTokens }) {
+    async reserve({ inputBoundTokens, prefix }) {
       log.push(`reserve:${inputBoundTokens}`);
+      prefixes.push(prefix);
       // A real reservation is a journal write — let it take a tick.
       await new Promise((r) => setTimeout(r, 1));
       const result = over.reserve?.(inputBoundTokens, reserveCalls++) ?? { ok: true, maxOutputTokens: 777 };
@@ -488,5 +494,75 @@ describe('the report-only turn (Task 9a)', () => {
     expect(calls[0].options.toolChoice).toEqual({ type: 'none' });
     expect(calls[1].options.toolChoice).not.toEqual({ type: 'none' });
     expect((read as any).calls).toHaveLength(1);
+  });
+});
+
+// Revision 5 (design §7, decision 22): what the harness hands the plan so it
+// can tell a warm cache from a cold one, and the cache breakdown it reports.
+describe('revision 5 — prompt prefix and cache breakdown', () => {
+  it('every request carries its prompt\'s prefix chain, and a later step extends the earlier one', async () => {
+    const gate = fakeGate({ bound: genericInputBound });
+    const { model } = recordingModel(gate, [
+      completing(toolCallChunk('c1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls')),
+      completing(...textChunks('b', 'report'), finishChunk('stop')),
+    ]);
+    const { session } = planSession(gate, model);
+    await session.send('go');
+    const [first, second] = gate.prefixes;
+    if (!first || !second) throw new Error('no prefix');
+    expect(first.chain).toHaveLength(gate.bounds[0].messages.length + 1);
+    expect(second.chain).toHaveLength(gate.bounds[1].messages.length + 1);
+    expect(second.chain.slice(0, first.chain.length)).toEqual(first.chain);
+    // The new part is bounded by the gate's own adapter over the added messages only.
+    const before = gate.bounds.length;
+    const part = second.newPartBound(first.chain.length - 1);
+    const measured = gate.bounds[before];
+    expect(measured).toEqual({ system: '', messages: gate.bounds[1].messages.slice(first.chain.length - 1), tools: [] });
+    const expected = genericInputBound(measured);
+    expect(expected.ok && part).toBe(expected.ok ? expected.tokens : false);
+    // Measuring the new part sends nothing and is not a request bound.
+    expect(gate.log.filter((l) => l === 'fetch')).toHaveLength(2);
+  });
+
+  it('planNextRequestBound follows the same reservation rule: warm → the new part; otherwise the full bound', async () => {
+    const gate = fakeGate({ bound: genericInputBound, cacheWindowMs: PLAN_CACHE_WINDOW_MS });
+    const { model } = recordingModel(gate, [completing(...textChunks('a', 'first'), finishChunk('stop'))]);
+    const { session } = planSession(gate, model);
+    await session.send('Review a.ts');
+    const sent = gate.prefixes[0]!;
+    const last = { at: 10_000, messages: sent.chain.length - 1, hash: sent.chain[sent.chain.length - 1] };
+    const full = await session.planNextRequestBound(gate.adapter, 'Continue please');
+    const warm = await session.planNextRequestBound(gate.adapter, 'Continue please', { last, now: 10_000 + 1 });
+    const expired = await session.planNextRequestBound(gate.adapter, 'Continue please', { last, now: 10_001 + PLAN_CACHE_WINDOW_MS });
+    const noMark = await session.planNextRequestBound(gate.adapter, 'Continue please', { last: undefined, now: 10_001 });
+    if (!full.ok || !warm.ok) throw new Error('unmeasured');
+    expect(warm.tokens).toBeLessThan(full.tokens);
+    // The new part: the assistant's reply and the new user turn.
+    const added = genericInputBound({ system: '', messages: [{ role: 'assistant', content: [{ type: 'text', text: 'first' }] }, { role: 'user', content: 'Continue please' }], tools: [] });
+    expect(added.ok && warm.tokens).toBe(added.ok ? added.tokens : false);
+    expect(expired).toEqual(full);
+    expect(noMark).toEqual(full);
+  });
+
+  it('the provider\'s cache breakdown reaches the settlement (SDK counts)', async () => {
+    const gate = fakeGate();
+    const finish = {
+      type: 'finish', finishReason: { unified: 'stop', raw: 'stop' },
+      usage: { inputTokens: { total: 900, noCache: 0, cacheRead: 600, cacheWrite: 300 }, outputTokens: { total: 50 } },
+    };
+    const { model } = recordingModel(gate, [completing(...textChunks('a', 'done'), finish)]);
+    const { session } = planSession(gate, model, { providerType: 'anthropic' });
+    gate.adapter = { ...gate.adapter, providerType: 'anthropic' };
+    await session.send('go');
+    expect(gate.outcomes[0]).toEqual({ kind: 'reported', tokens: 950, usage: { inputTokens: 900, outputTokens: 50, cacheReadTokens: 600, cacheCreationTokens: 300 } });
+  });
+
+  it('a local engine\'s reuse count (llama.cpp cache_n, provider metadata) reaches the settlement', async () => {
+    const gate = fakeGate({ providerType: 'local-engine' });
+    const finish = { ...finishChunk('stop', 900, 50), providerMetadata: { local: { cacheReadTokens: 700 } } };
+    const { model } = recordingModel(gate, [completing(...textChunks('a', 'done'), finish)]);
+    const { session } = planSession(gate, model, { providerType: 'local-engine' });
+    await session.send('go');
+    expect(gate.outcomes[0]).toMatchObject({ kind: 'reported', tokens: 950, usage: { inputTokens: 900, cacheReadTokens: 700 } });
   });
 });

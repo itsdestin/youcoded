@@ -75,6 +75,10 @@ const ExecutionManifestSchema = z.object({
 }).strict();
 export type ExecutionManifest = z.infer<typeof ExecutionManifestSchema>;
 
+/** Revision 5: a request's prompt, named by its prefix-chain link
+ *  (budget-adapter.ts `planRequestPrefix`). */
+const PrefixLinkSchema = z.object({ messages: nonNegativeInt, hash: z.string().min(1) }).strict();
+
 const ATTEMPT_PHASES = ['prepared', 'request-sent', 'response-persisted', 'committed', 'ambiguous'] as const;
 export type AttemptPhase = (typeof ATTEMPT_PHASES)[number];
 
@@ -100,6 +104,17 @@ const PlanAttemptSchema = z.object({
   /** While a request is unsettled: the certified input bound it was reserved
    *  with, so settlement can detect an input-side breach (Task 3 review). */
   requestInputBound: nonNegativeInt.optional(),
+  /** Revision 5 (decision 22), while a request is unsettled: the smaller
+   *  input side it reserved because the provider's cache was warm (absent =
+   *  the full bound above was reserved). */
+  requestReservedInput: nonNegativeInt.optional(),
+  /** Revision 5, while a request is unsettled: the prompt it sent. */
+  requestPrefix: PrefixLinkSchema.optional(),
+  /** Revision 5: the last request of this attempt that completed with a
+   *  usage report — when, and the prompt it sent. The next request is
+   *  reserved warm only if it starts with that same prompt within the
+   *  route's cache window. */
+  lastRequest: PrefixLinkSchema.extend({ at: z.number() }).strict().optional(),
   /** Set once a request went out through a soft (uncapped) adapter. */
   softLimit: z.boolean().optional(),
   /** Task 4: set in the SAME write that paused the plan to tell the user this

@@ -7,10 +7,11 @@ import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path'
 import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
 import {
-  PlanBudget, pricingSnapshot, worstCaseUsd, planCeilingUsd, planCeilingTokens, type PlanPricingSnapshot,
+  PlanBudget, pricingSnapshot, worstCaseUsd, planCeilingUsd, planCeilingTokens, lastRequestFor, type PlanPricingSnapshot,
 } from '../src/main/harness/plans/plan-budget';
 import {
-  adapterDisabledReason, resetDisabledAdaptersForTests, type PlanBudgetAdapter,
+  adapterDisabledReason, resetDisabledAdaptersForTests, PLAN_CACHE_WINDOW_MS,
+  type PlanBudgetAdapter, type PlanRequestPrefix,
 } from '../src/main/harness/plans/budget-adapter';
 import type { PlanRecord, PlanRef, PlanEvent, ExecutionManifest } from '../src/main/harness/plans/types';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
@@ -667,5 +668,213 @@ describe('restart recovery for an ownerless plan (Task 4)', () => {
     if (!r.ok) throw new Error(r.detail);
     await budget.settleOwnerless(REF, 'p1');
     expect((await plan()).steps[0].attempts[0].reservedTokens).toBe(1000);
+  });
+});
+
+// Revision 5 (design §7, decision 22): the limit stops re-counting cached
+// tokens. Every number is read back from the journal. The fake prefix stands
+// in for the harness's hash chain: chain[i] names "system + tools + the first
+// i messages"; the new part's bound is whatever the harness measured.
+describe('revision 5 — the usage limit does not re-count cached tokens', () => {
+  const CACHED: PlanBudgetAdapter = { ...ADAPTER, id: 'cached-adapter', cacheWindowMs: PLAN_CACHE_WINDOW_MS };
+  const NO_CACHE: PlanBudgetAdapter = { ...ADAPTER, id: 'uncached-adapter', providerType: 'openai-compatible' };
+  const prefix = (chain: string[], newPart = 300): PlanRequestPrefix => ({
+    chain, newPartBound: (from) => (from >= 0 && from < chain.length ? newPart : undefined),
+  });
+  const FIRST = ['sys', 'm1'];
+  const SECOND = ['sys', 'm1', 'm2', 'm3'];
+  const usage = (inputTokens: number, outputTokens: number, cacheReadTokens = 0, cacheCreationTokens = 0) =>
+    ({ inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens });
+  let clock: number;
+
+  /** s2 (allowance 2,000) after one cold request that counted 700: 1,300 left,
+   *  and a completed request with prefix "sys,m1" recorded at t = 1,000. */
+  async function afterFirstRequest(adapter: PlanBudgetAdapter, over: Partial<PlanRecord> = {}, extra: Array<{ stepId: string; itemIndex?: number }> = []) {
+    clock = 1_000;
+    budget = new PlanBudget({ journal, now: () => clock, newId: () => `id${++ids}` });
+    await seed(record(over));
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's2' }, ...extra]);
+    if (!r.ok) throw new Error(r.detail);
+    const id = r.attempts[0].attemptId;
+    const gate = budget.requestGate(REF, 'p1', fence, 's2', id, adapter);
+    expect(await gate.reserve({ inputBoundTokens: 800, prefix: prefix(FIRST) })).toEqual({ ok: true, maxOutputTokens: 1200 });
+    // 600 of input written to the cache, 100 out: all of it is new work.
+    expect(await gate.settle({ kind: 'reported', tokens: 700, usage: usage(600, 100, 0, 600) })).toEqual({ kind: 'ok', chargedTokens: 700 });
+    return { id, gate, others: r.attempts.slice(1) };
+  }
+
+  it('a completed request leaves a mark: when, and the prompt it sent', async () => {
+    const { id } = await afterFirstRequest(CACHED);
+    const a = await attempt('s2', id);
+    expect(a.lastRequest).toEqual({ at: 1_000, messages: 1, hash: 'm1' });
+    expect(a.requestPrefix).toBeUndefined();
+    expect(a.requestReservedInput).toBeUndefined();
+  });
+
+  it('warm-cache continue reserves and charges only the new part', async () => {
+    const { id, gate } = await afterFirstRequest(CACHED);
+    clock += 60_000;
+    // The full bound (1,500) no longer fits the 1,300 left — a cold request
+    // could not be sent at all. Warm, only the 300-token new part is reserved.
+    expect(await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) })).toEqual({ ok: true, maxOutputTokens: 1_000 });
+    const sent = await attempt('s2', id);
+    expect(sent).toMatchObject({ phase: 'request-sent', reservedTokens: 1_300, requestInputBound: 1_500, requestReservedInput: 300 });
+    // 900 input: 600 read back from the cache, 300 newly written; 50 out.
+    const u = usage(900, 50, 600, 300);
+    expect(await gate.settle({ kind: 'reported', tokens: 950, usage: u })).toEqual({ kind: 'ok', chargedTokens: 350 });
+    const a = await attempt('s2', id);
+    expect([a.spentTokens, a.reservedTokens]).toEqual([1_050, 950]);
+    expect(a.lastRequest).toEqual({ at: clock, messages: 3, hash: 'm3' });
+    const p = await plan();
+    expect(p.usedTokens).toBe(1_050);
+    // Dollars are unchanged: the real usage at the real (cached-read) rates.
+    expect(p.usedUsd).toBeCloseTo(costForUsage(usage(600, 100, 0, 600), WORKER_RATES)! + costForUsage(u, WORKER_RATES)!, 12);
+  });
+
+  it('cold continue (window passed) reserves the full bound and releases the unused part', async () => {
+    const { id, gate } = await afterFirstRequest(CACHED);
+    clock += PLAN_CACHE_WINDOW_MS + 1;
+    expect(await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) })).toMatchObject({ ok: false, kind: 'exhausted' });
+    expect(await gate.reserve({ inputBoundTokens: 1_200, prefix: prefix(SECOND) })).toEqual({ ok: true, maxOutputTokens: 100 });
+    expect((await attempt('s2', id)).requestReservedInput).toBeUndefined();
+    // The cache had expired: all 900 input tokens are new work.
+    expect(await gate.settle({ kind: 'reported', tokens: 950, usage: usage(900, 50) })).toEqual({ kind: 'ok', chargedTokens: 950 });
+    const a = await attempt('s2', id);
+    expect([a.spentTokens, a.reservedTokens]).toEqual([1_650, 350]);
+  });
+
+  it('a changed prompt prefix is cold even inside the window', async () => {
+    const { gate } = await afterFirstRequest(CACHED);
+    clock += 1;
+    expect(await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(['sys', 'EDITED', 'm2', 'm3']) })).toMatchObject({ ok: false, kind: 'exhausted' });
+  });
+
+  it('a cache miss after a small reservation is charged in full and pauses the plan before the next request', async () => {
+    // Ceiling 3,000 = s2 (2,000) + one s1 item (1,000), both running.
+    const { id, gate, others } = await afterFirstRequest(CACHED, { ceilingTokens: 3_000, ceilingUsd: null }, [{ stepId: 's1', itemIndex: 0 }]);
+    clock += 1;
+    expect(await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) })).toEqual({ ok: true, maxOutputTokens: 1_000 });
+    // The provider missed its cache: 1,400 uncached input + 1,000 out.
+    const settled = await gate.settle({ kind: 'reported', tokens: 2_400, usage: usage(1_400, 1_000) });
+    expect(settled).toMatchObject({ kind: 'limit-reached', chargedTokens: 2_400 });
+    const a = await attempt('s2', id);
+    expect([a.spentTokens, a.reservedTokens]).toEqual([3_100, 0]);
+    const p = await plan();
+    expect(p.usedTokens).toBe(3_100); // over the 3,000 limit — recorded, never hidden
+    // A legitimate miss is not a broken bound: the adapter stays trusted.
+    expect(adapterDisabledReason('cached-adapter')).toBeUndefined();
+    expect(p.disabledAdapters).toBeUndefined();
+    // Nothing more is sent — by this specialist, or by its sibling that still
+    // holds its own 1,000 (the plan-wide stop now covers capped routes too).
+    expect(await gate.reserve({ inputBoundTokens: 1, prefix: prefix(SECOND) })).toMatchObject({ ok: false, kind: 'exhausted' });
+    const sibling = budget.requestGate(REF, 'p1', fence, 's1', others[0].attemptId, CACHED);
+    expect(await sibling.reserve({ inputBoundTokens: 10 })).toMatchObject({ ok: false, kind: 'exhausted' });
+    expect((await attempt('s1', others[0].attemptId)).phase).toBe('prepared');
+  });
+
+  it('the breach check still compares reported TOTAL input against the full bound, never the small reservation', async () => {
+    const { gate } = await afterFirstRequest(CACHED);
+    clock += 1;
+    await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) });
+    // 1,400 input is far above the 300 reserved but inside the certified 1,500.
+    expect(await gate.settle({ kind: 'reported', tokens: 1_450, usage: usage(1_400, 50, 1_100, 300) })).toEqual({ kind: 'ok', chargedTokens: 350 });
+    expect(adapterDisabledReason('cached-adapter')).toBeUndefined();
+    clock += 1;
+    await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(['sys', 'm1', 'm2', 'm3', 'm4', 'm5']) });
+    // 1,600 input breaks the certified 1,500, even though 1,500 of it was cached.
+    const settled = await gate.settle({ kind: 'reported', tokens: 1_650, usage: usage(1_600, 50, 1_500, 100) });
+    expect(settled).toMatchObject({ kind: 'over-bound', detail: expect.stringMatching(/1,600.*1,500/) });
+    expect(adapterDisabledReason('cached-adapter')).toBeDefined();
+  });
+
+  it('a capped reply above its cap is still a breach on a warm request (full bound + cap)', async () => {
+    const { gate } = await afterFirstRequest(CACHED);
+    clock += 1;
+    await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) }); // cap 1,000
+    const settled = await gate.settle({ kind: 'reported', tokens: 2_600, usage: usage(1_500, 1_100) });
+    expect(settled).toMatchObject({ kind: 'over-bound' });
+    expect(adapterDisabledReason('cached-adapter')).toBeDefined();
+  });
+
+  it('providers that report no cache breakdown count their whole input, and are never reserved warm', async () => {
+    const { id, gate } = await afterFirstRequest(NO_CACHE);
+    clock += 1;
+    expect(await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) })).toMatchObject({ ok: false, kind: 'exhausted' });
+    expect(await gate.reserve({ inputBoundTokens: 1_000, prefix: prefix(SECOND) })).toEqual({ ok: true, maxOutputTokens: 300 });
+    expect(await gate.settle({ kind: 'reported', tokens: 950, usage: usage(900, 50) })).toEqual({ kind: 'ok', chargedTokens: 950 });
+    expect((await attempt('s2', id)).spentTokens).toBe(1_650);
+  });
+
+  it('local engine reuse (llama.cpp cache_n) is not counted again', async () => {
+    const m = manifest({ kind: 'local' }, { kind: 'local' });
+    const { id, gate } = await afterFirstRequest({ ...CACHED, providerType: 'local-engine' }, { manifest: m, ceilingUsd: null });
+    clock += 1;
+    await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) });
+    // 900-token prompt, 700 of it reused from the engine's KV cache.
+    expect(await gate.settle({ kind: 'reported', tokens: 950, usage: usage(900, 50, 700) })).toEqual({ kind: 'ok', chargedTokens: 250 });
+    const p = await plan();
+    expect((await attempt('s2', id)).spentTokens).toBe(950);
+    expect(p.usedTokens).toBe(950);
+    expect(p.usedUsd).toBeUndefined();
+  });
+
+  it('an unknown outcome is charged in full and leaves the previous mark alone', async () => {
+    const { id, gate } = await afterFirstRequest(CACHED);
+    clock += 1;
+    await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) });
+    expect(await gate.settle({ kind: 'unknown', why: 'error' })).toEqual({ kind: 'ok', chargedTokens: 1_300 });
+    const a = await attempt('s2', id);
+    expect(a.lastRequest).toEqual({ at: 1_000, messages: 1, hash: 'm1' });
+    expect(a.requestPrefix).toBeUndefined();
+    expect(a.requestReservedInput).toBeUndefined();
+  });
+
+  it('the pausing path clears the pending request fields', async () => {
+    const { id, gate } = await afterFirstRequest(CACHED);
+    clock += 1;
+    await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) });
+    await budget.chargeUnresolved(REF, 'p1', fence, 's2', id);
+    const a = await attempt('s2', id);
+    expect(a).toMatchObject({ phase: 'ambiguous', spentTokens: 2_000 });
+    expect(a.requestReservedInput).toBeUndefined();
+    expect(a.requestPrefix).toBeUndefined();
+  });
+
+  it('lastRequestFor: the latest mark of this specialist session (a report-only retry shares it)', () => {
+    const base = { itemIndex: 0, iteration: 0, baseTokens: 1, addedTokens: 0, reservedTokens: 0, spentTokens: 0, phase: 'prepared' as const };
+    const failed = { ...base, attemptId: 'f', childId: 'c1', lastRequest: { at: 5, messages: 2, hash: 'h2' } };
+    const older = { ...base, attemptId: 'o', childId: 'c1', lastRequest: { at: 3, messages: 1, hash: 'h1' } };
+    const otherChild = { ...base, attemptId: 'x', childId: 'c2', lastRequest: { at: 9, messages: 1, hash: 'z' } };
+    const retry = { ...base, attemptId: 'r', childId: 'c1' };
+    expect(lastRequestFor([older, failed, otherChild, retry], retry)).toEqual(failed.lastRequest);
+    expect(lastRequestFor([otherChild], { ...base, attemptId: 'n' })).toBeUndefined();
+    expect(lastRequestFor([older], older)).toEqual(older.lastRequest);
+  });
+
+  it('a report-only retry of the same specialist is reserved warm from the failed attempt\'s last request', async () => {
+    clock = 1_000;
+    budget = new PlanBudget({ journal, now: () => clock, newId: () => `id${++ids}` });
+    // A 2,000-token setup cost makes s2's allowance 4,000, so the retry has
+    // the 2,000-token report reply plus some input to spend.
+    const m = manifest({ kind: 'priced', rates: REVIEWER_RATES }, { kind: 'priced', rates: WORKER_RATES }, { reviewer: 0, worker: 2_000 });
+    await seed(record({ manifest: m, ceilingTokens: 10_000, ceilingUsd: null }));
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's2' }]);
+    if (!r.ok) throw new Error(r.detail);
+    const failedId = r.attempts[0].attemptId;
+    const gate = budget.requestGate(REF, 'p1', fence, 's2', failedId, CACHED);
+    await gate.reserve({ inputBoundTokens: 1_500, prefix: prefix(FIRST) });
+    await gate.settle({ kind: 'reported', tokens: 1_400, usage: usage(1_300, 100, 0, 1_300) });
+    // The attempt finished with an invalid report (the executor's commit).
+    await journal.mutateFenced(REF, 'p1', fence, (p) => {
+      const a = p.steps[1].attempts[0];
+      Object.assign(a, { childId: 'child-1', phase: 'committed', terminal: 'failed', completedAt: 2, reservedTokens: 0 });
+    });
+    const retry = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's2', reportOnlyOf: failedId }]);
+    if (!retry.ok) throw new Error(retry.detail);
+    clock += 1;
+    const retryGate = budget.requestGate(REF, 'p1', fence, 's2', retry.attempts[0].attemptId, CACHED);
+    // Unspent 2,600; a full 1,500 bound would leave the 2,000-token reply only
+    // 1,100. Warm, only the 300 new part is reserved and the reply gets its 2,000.
+    expect(await retryGate.reserve({ inputBoundTokens: 1_500, prefix: prefix(SECOND) })).toEqual({ ok: true, maxOutputTokens: 2_000 });
   });
 });

@@ -17,6 +17,7 @@ import { formatLongRunningNotice } from '../src/main/harness/shell-registry';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_NOTE_MAX_CHARS, SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../src/main/harness/specialists/limits';
 import { OWNER, DelegationLedger } from '../src/main/harness/specialists/delegation-ledger';
 import { ModelSearchTool } from '../src/main/harness/tools/model-search';
+import { PLAN_CACHE_WINDOW_MS } from '../src/main/harness/plans/budget-adapter';
 import type { CatalogModel } from '../src/shared/provider-types';
 
 /** Ceiling for this file's fire-and-forget-write polls, as a tries count at the
@@ -5705,6 +5706,18 @@ describe('specialists plans in the native host (Task 4)', () => {
   });
 
   it('review fix 2: with only the step\'s 2,000 tokens, the report-only turn cannot be funded and the pause goes to the assistant', async () => {
+    // Revision 5: a warm cache would reserve only the report turn's new part,
+    // which these 2,000 tokens CAN fund (next test). So the clock moves past
+    // the cache window the moment the failed attempt is recorded: cold, the
+    // whole re-sent conversation must fit, and it doesn't.
+    let clock = Date.now();
+    await host.destroyAll();
+    host = makeHost({ now: () => clock });
+    let moved = false;
+    host.on('plans-event', (e) => {
+      const failed = e.plan.steps.find((st) => st.id === 's1')?.children?.some((c) => c.status === 'failed');
+      if (failed && !moved) { moved = true; clock += PLAN_CACHE_WINDOW_MS + 1; }
+    });
     childReply = (prompt) => (prompt.includes('Review a.ts')
       ? { chunks: [finishChunk('stop', 10, 5)] }
       : { chunks: [...textChunks('r', 'REPORT'), finishChunk('stop', 10, 5)] });
@@ -5716,6 +5729,24 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(rec.paused).toMatchObject({ kind: 'invalid-report', stepId: 's1' });
     expect(rec.recoveries).toBeUndefined();
     expect(liveChildren()).toHaveLength(0);
+    expect(moved).toBe(true);
+  });
+
+  it('revision 5: right after the failed try (cache still warm), the same 2,000 tokens fund the report-only turn', async () => {
+    childReply = (prompt) => (prompt.includes('switched off')
+      ? { chunks: [...textChunks('r', 'REPORT for a'), finishChunk('stop', 10, 5)] }
+      : prompt.includes('Review a.ts')
+        ? { chunks: [finishChunk('stop', 10, 5)] }
+        : { chunks: [...textChunks('r', 'COMBINED'), finishChunk('stop', 10, 5)] });
+    const planId = await proposeOne();
+    await host.approvePlan(SID, planId);
+    await waitFor(() => ['completed', 'paused'].includes(planStatus()[0]), 'the plan to settle');
+    const reportOnly = childCalls.filter((c) => c.prompt.includes('switched off'));
+    expect(reportOnly).toHaveLength(1);
+    const rec = journalFile().plans[0];
+    expect(rec.recoveries).toEqual([expect.objectContaining({ stepId: 's1', cause: 'invalid-report' })]);
+    const retry = rec.steps.find((st: any) => st.id === 's1').attempts.find((a: any) => a.reportOnly);
+    expect(retry).toMatchObject({ terminal: 'completed', reportText: 'REPORT for a' });
   });
 
   // Task 5a: an ORDINARY specialist's card gets its past activity back after a
@@ -6078,7 +6109,10 @@ describe('specialists plans in the native host (Task 4)', () => {
       const res = await ask(planId);
       expect(res).toMatchObject({ ok: true, plan: { status: 'paused', paused: { handoff: { state: 'pending' } } } });
       expect((res as any).plan.paused.handoff.waiting).toBeUndefined();
-      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the recommendation');
+      // WHY also the revision: the recommendation marks the question answered
+      // DURING the notice turn; the turn's end clears its pending revision in a
+      // later journal write, which a loaded machine can run after idle is seen.
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID) && handoff()?.revisionTurnId === undefined, 'the recommendation and the end of its turn');
       // The notice: one injected turn, worded as the user's question, carrying this pause's ids.
       expect(notices()).toHaveLength(1);
       expect(notices()[0].data.injected).toBe('specialist-report');
@@ -6177,7 +6211,11 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(notices()).toHaveLength(0);
       busy.open();
       await waitFor(() => notices().length === 1, 'the notice turn to start');
-      await waitFor(() => handoff()?.waiting === undefined, 'waiting to clear');
+      // WHY wait on the CARD, not only the file: the journal writes the file
+      // first and emits the card update after its lock is released (a later
+      // tick). Reading the last card right after the file changed raced that
+      // emit and failed once in a full parallel run.
+      await waitFor(() => handoff()?.waiting === undefined && lastView(planId)?.paused?.handoff?.waiting === undefined, 'waiting to clear on the file and the card');
       expect(lastView(planId).paused.handoff).toEqual({ state: 'pending' });
       // The user's own turn ended — the notice turn has not.
       expect(handoff()?.state).toBe('pending');
@@ -6222,7 +6260,9 @@ describe('specialists plans in the native host (Task 4)', () => {
       const planId = await pauseOnBudget();
       const busy = await busyTurn();
       await ask(planId);
-      await waitFor(() => handoff()?.state === 'answered', 'the backstop');
+      // Same race as "asked during a reply": the card update is emitted a tick
+      // after the file changes, so wait for both.
+      await waitFor(() => handoff()?.state === 'answered' && lastView(planId)?.paused?.handoff?.state === 'answered', 'the backstop on the file and the card');
       expect(handoff().problem).toEqual({ kind: 'no-start' });
       expect(lastView(planId).paused.handoff).toEqual({ state: 'answered', problem: { kind: 'no-start' } });
       busy.open();
