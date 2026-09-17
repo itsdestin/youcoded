@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { parse as parseYaml } from 'yaml';
 import { findCachedDownload, deriveDownloadFilename } from '../src/main/update-installer';
+import { readSource } from './helpers/guard-scope';
 
 // WHY this file exists: the installer names in electron-builder.yml are read by
 // three things that never import the config — the in-app updater's "already
@@ -12,20 +14,14 @@ import { findCachedDownload, deriveDownloadFilename } from '../src/main/update-i
 // So each test expands the REAL pattern from the config and feeds the result to
 // the same checks those readers apply.
 
-const CONFIG = fs.readFileSync(path.join(__dirname, '..', 'electron-builder.yml'), 'utf8');
-
-/** `key:` inside a top-level `section:` of the YAML, unquoted. Comment lines are skipped. */
+// WHY a real parser: the hand-rolled line scanner returned null for every key on a
+// CRLF checkout and made two "must be absent" cases pass for the wrong reason
+// (Windows CI, 2026-09-16 review). electron-builder reads this file with a YAML
+// parser; so does this test now.
+const CONFIG: Record<string, any> = parseYaml(readSource(path.join(__dirname, '..', 'electron-builder.yml')));
 function sectionValue(section: string, key: string): string | null {
-  const lines = CONFIG.split('\n');
-  const start = lines.indexOf(`${section}:`);
-  if (start < 0) return null;
-  for (const line of lines.slice(start + 1)) {
-    if (/^\S/.test(line)) break; // reached the next top-level section
-    if (/^\s*#/.test(line)) continue;
-    const m = line.match(new RegExp(`^\\s+${key}:\\s*"?(.*?)"?\\s*$`));
-    if (m) return m[1];
-  }
-  return null;
+  const v = CONFIG?.[section]?.[key];
+  return v === undefined || v === null ? null : String(v);
 }
 
 /** Mirrors electron-builder's expandMacro for the macros these patterns use. */

@@ -334,9 +334,10 @@ describe('DelegationLedger', () => {
   // ---- Plan 1c Task 1: every write funnels through one private mutate()
   // chokepoint so a single onChange listener sees every touched record —
   // Task 5 wires this into the live `specialists:run-changed` push. These
-  // tests exercise the listener contract itself; the guard test below
-  // enforces the mechanism (one mutateJson call site) that makes it true by
-  // construction rather than by convention.
+  // tests exercise the listener contract itself; the workspace ast-grep rule
+  // ledger-single-mutatejson-call (Plan B, 2026-09-16 — it replaced a
+  // source-text guard here) enforces the mechanism (one mutateJson call site)
+  // that makes it true by construction rather than by convention.
   describe('change listener (plan 1c)', () => {
     it('recordStart fires with the new record', async () => {
       const onChange = vi.fn();
@@ -408,16 +409,6 @@ describe('DelegationLedger', () => {
       expect(onChange).not.toHaveBeenCalled();
     });
 
-    // Source-level guard (global constraint "Emit in the ledger, never in
-    // the host per method"): every write must go through mutate() so the
-    // change listener sees it, rather than each method calling
-    // home.mutateJson directly and some future method forgetting to notify.
-    it('THE GUARD: delegation-ledger.ts calls home.mutateJson exactly once (inside mutate())', () => {
-      const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'harness', 'specialists', 'delegation-ledger.ts'), 'utf8');
-      // Code lines only — the file's WHY comments name mutateJson freely; this guard is about CODE.
-      const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-      expect(code.match(/await this\.home\.mutateJson\(/g)?.length, 'every write must go through mutate() so the change listener sees it').toBe(1);
-    });
   });
 
   it('appendNote appends in order; a 1b record with no notes reads as []', async () => {

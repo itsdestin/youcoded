@@ -59,8 +59,8 @@ export interface EngineSupervisorOpts {
   readyPollMs?: number;      // default 250
   idleMs?: number;           // default 25 min (spec §3.2); raised 10→25 min 2026-09-07
   idleCheckMs?: number;      // default 60s
-  modelPollMs?: number;      // /models state poll cadence when idle; default 1500
-  modelPollLoadingMs?: number; // faster cadence while a model is loading; default 400
+  modelPollMs?: number;      // /models state poll cadence when idle; default MODEL_POLL_IDLE_MS
+  modelPollLoadingMs?: number; // faster cadence while a model is loading; default MODEL_POLL_LOADING_MS
   /** Test seam: resolve the PID listening on `port` (Linux). Default: ss + /proc scan. */
   pidOnPort?: (port: number) => number | null;
   /** Test seam: resolve a PID's executable path (for the stale-engine reaper).
@@ -91,6 +91,14 @@ export const SLEEP_IDLE_SECONDS = 900;
 // stop retrying until the user acts (EngineCard's Restart button).
 const STRIKE_LIMIT = 3;
 const STRIKE_WINDOW_MS = 5 * 60_000;
+// GET /models cadence (startModelPoll). WHY 10 s idle (2026-09-16 audit W11): the
+// fast cadence exists for the load progress bar, and the poll already knows when
+// a load is in flight; idle it was 1.5 s for up to 25 min after the last message
+// with no window listening — 2,400 localhost requests an hour. Accepted cost: an
+// engine-side eviction (sleep, unload) shows within 10 s instead of 1.5 s. A
+// user-driven load or unload still emits at once through pollModelsNow().
+const MODEL_POLL_IDLE_MS = 10_000;
+const MODEL_POLL_LOADING_MS = 400;
 
 /** Resolve the PID of the process listening on a localhost port, cross-platform:
  *  Linux `ss` (+ /proc fallback), macOS `lsof`, Windows `netstat`. Returns null
@@ -325,6 +333,7 @@ export class EngineSupervisor extends EventEmitter {
   private idleTimer: NodeJS.Timeout | null = null;
   private intentionalShutdown = false;
   private modelPollTimer: NodeJS.Timeout | null = null; // per-model /models state poll
+  private modelPollDelayMs = 0; // the cadence the pending timer was armed with (see nudgeModelPoll)
   private lastModelSig = '';                             // last emitted (id→state) signature
   // The most recent /models reading. Two readers, one field: the SYNCHRONOUS
   // status() path answers "how much memory are the loaded models using?" without
@@ -1125,18 +1134,36 @@ export class EngineSupervisor extends EventEmitter {
    *  ready, stopped on teardown. */
   private startModelPoll(): void {
     this.stopModelPoll();
-    const schedule = () => {
-      // Fast while a load is in flight (loadProgress tracks loading ids), else lazy.
-      const loading = this.loadProgress.size > 0;
-      const delay = loading ? (this.opts.modelPollLoadingMs ?? 400) : (this.opts.modelPollMs ?? 1500);
-      this.modelPollTimer = setTimeout(() => {
-        void this.emitModelsIfChanged().finally(() => {
-          if (this.state === 'running') schedule();
-        });
-      }, delay);
-      this.modelPollTimer.unref?.();
-    };
-    void this.emitModelsIfChanged().finally(() => { if (this.state === 'running') schedule(); });
+    void this.emitModelsIfChanged().finally(() => { if (this.state === 'running') this.scheduleModelPoll(); });
+  }
+
+  /** Arm the next poll, replacing any pending one. Fast while a load is in
+   *  flight (loadProgress tracks loading ids), else lazy. */
+  private scheduleModelPoll(): void {
+    if (this.modelPollTimer) { clearTimeout(this.modelPollTimer); this.modelPollTimer = null; }
+    const loading = this.loadProgress.size > 0;
+    const delay = loading ? (this.opts.modelPollLoadingMs ?? MODEL_POLL_LOADING_MS) : (this.opts.modelPollMs ?? MODEL_POLL_IDLE_MS);
+    this.modelPollDelayMs = delay;
+    this.modelPollTimer = setTimeout(() => {
+      this.modelPollTimer = null;
+      void this.emitModelsIfChanged().finally(() => {
+        if (this.state === 'running') this.scheduleModelPoll();
+      });
+    }, delay);
+    this.modelPollTimer.unref?.();
+  }
+
+  /** A user-driven load/unload: emit now and, if that put a load in flight
+   *  while the pending timer was armed at the idle cadence, bring it forward.
+   *  WHY (review of audit W11): the delay is chosen when the timer is armed,
+   *  so without this a load started mid-idle-wait left the progress bar
+   *  frozen for up to 10 s (the old idle cadence hid it at 1.5 s). */
+  private nudgeModelPoll(): void {
+    void this.emitModelsIfChanged().finally(() => {
+      if (this.state !== 'running' || !this.modelPollTimer) return;
+      const loadingMs = this.opts.modelPollLoadingMs ?? MODEL_POLL_LOADING_MS;
+      if (this.loadProgress.size > 0 && this.modelPollDelayMs !== loadingMs) this.scheduleModelPoll();
+    });
   }
 
   private stopModelPoll(): void {
@@ -1228,7 +1255,7 @@ export class EngineSupervisor extends EventEmitter {
         body: JSON.stringify({ model: modelId }),
       });
     } catch { /* best-effort */ }
-    void this.emitModelsIfChanged();
+    this.nudgeModelPoll();
   }
 
   /** Force a model resident (the [Reload Model] button AND eager load-on-open).
@@ -1262,7 +1289,7 @@ export class EngineSupervisor extends EventEmitter {
     });
     // Nudge the poll so 'loading' + the progress bar appear promptly (don't wait
     // for the next lazy tick). The adaptive poll then takes over at fast cadence.
-    void this.emitModelsIfChanged();
+    this.nudgeModelPoll();
   }
 
   /** Emit a fresh models-changed on demand. */

@@ -11,9 +11,10 @@
 // Two halves, because one alone would pass while the bug is back:
 //   1. FilesTab honours `hidden` by hiding, not by unmounting or refetching.
 //   2. ProjectView actually passes it, instead of conditionally mounting.
+// WHY half 2 is not in this file (Plan B, 2026-09-16): it read ProjectView.tsx as
+// text; it is the ast-grep rule filestab-mounted-with-hidden-prop now
+// (youcoded-dev scripts/ast-grep/rules/). Half 1 is the case below.
 import React from 'react';
-import fs from 'fs';
-import path from 'path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor } from '@testing-library/react';
 import { FilesTab } from '../src/renderer/components/project-view/tabs/FilesTab';
@@ -83,20 +84,5 @@ describe('Files tab survives a tab switch', () => {
     await waitFor(() => expect(container.firstElementChild?.className).not.toBe('hidden'));
     // The one call from the first mount, and no more.
     expect(listAllFiles).toHaveBeenCalledTimes(1);
-  });
-
-  it('ProjectView mounts FilesTab unconditionally and hands it `hidden`', () => {
-    // A rendering test for ProjectView would need the whole app shell mocked;
-    // the invariant that matters is one line at the call site, so read it. If
-    // FilesTab goes back behind `tab === 'files' &&`, the hook above still
-    // passes while the stall is fully restored.
-    const src = fs.readFileSync(
-      path.join(__dirname, '../src/renderer/components/project-view/ProjectView.tsx'), 'utf8',
-    );
-    const call = src.match(/<FilesTab[\s\S]*?\/>/);
-    expect(call, '<FilesTab> not found in ProjectView.tsx').toBeTruthy();
-    expect(call![0]).toContain("hidden={tab !== 'files'}");
-    // The conditional-mount form, in any spacing.
-    expect(src).not.toMatch(/tab\s*===\s*'files'\s*&&\s*\(?\s*<FilesTab/);
   });
 });

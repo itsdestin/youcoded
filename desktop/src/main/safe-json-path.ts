@@ -4,13 +4,9 @@
 // — reachable by a paired remote device — walked a client-supplied dot-path and
 // assigned into it. A field of `__proto__.polluted` therefore wrote onto
 // Object.prototype, changing every object in the main process. This helper is
-// wired into that remote handler (and its settings:get reader).
-//
-// NOTE: the LOCAL settings:set/get in ipc-handlers.ts are NOT yet routed through
-// this — that file is being changed concurrently by the remote batch-2/3 branch,
-// so re-pointing it is deferred to a coordinated change (tracked in the security
-// review STATUS). The local handler is only reachable by the app's own renderer,
-// a much narrower surface than a paired remote device.
+// wired into that remote handler (and its settings:get reader), and — since the
+// 2026-09-16 simplification pass (audit D6) — into the LOCAL settings:get/set in
+// ipc-handlers.ts as well, so both surfaces walk a dot-path the same way.
 //
 // A segment that is empty, `__proto__`, `constructor` or `prototype` is refused;
 // arrays are traversed (not clobbered), so an array-typed setting like

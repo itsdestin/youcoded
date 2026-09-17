@@ -15,9 +15,7 @@ import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 
 vi.mock('electron', () => ({
   app: { isPackaged: false, getPath: vi.fn(() => '/tmp'), getVersion: vi.fn(() => '0.0.0-test'), on: vi.fn() },
@@ -53,6 +51,11 @@ const canSymlink = (() => {
   finally { try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* best effort */ } }
 })();
 const posix = process.platform !== 'win32';
+// WHY two spellings: NTFS forbids `"` and control characters in a file name, so the POSIX
+// name threw ENOENT at the first write and took the WHOLE file down on every Windows CI run.
+// Both spellings still exercise what the header test is for — a name that must be
+// percent-encoded (spaces, `;`, an emoji) and, where the OS allows it, quotes and CRLF.
+const ODD_NAME = posix ? 'odd"; \r\nname 🎉.txt' : 'odd; name 🎉.txt';
 
 function serveWith(dl: RemoteDownloads): Promise<{ server: http.Server; origin: string }> {
   return new Promise((resolve) => {
@@ -98,7 +101,7 @@ beforeAll(async () => {
 
   fs.writeFileSync(path.join(root, 'notes.md'), 'x'.repeat(5000));
   fs.writeFileSync(path.join(root, 'page.html'), '<script>alert(1)</script>');
-  fs.writeFileSync(path.join(root, 'odd"; \r\nname 🎉.txt'), 'odd name');
+  fs.writeFileSync(path.join(root, ODD_NAME), 'odd name');
   const big = fs.openSync(path.join(root, 'big.bin'), 'w');
   fs.writeSync(big, 'BEGIN');
   fs.ftruncateSync(big, 60 * 1024 * 1024);
@@ -245,7 +248,7 @@ describe('GET /download/<token>', () => {
   });
 
   it('a name containing quote, semicolon, CR, LF and an emoji produces a valid header and a byte-exact body', async () => {
-    const file = path.join(root, 'odd"; \r\nname 🎉.txt');
+    const file = path.join(root, ODD_NAME);
     const { url } = await mint(file);
     const res = await fetch(url);
     expect(res.status).toBe(200);
@@ -256,7 +259,7 @@ describe('GET /download/<token>', () => {
     const fallback = /filename="([^"]*)"/.exec(cd)![1];
     expect(fallback).not.toMatch(/["\\\u0000-\u001f\u007f-\uffff]/);
     // The real name rides RFC 5987, percent-encoded.
-    expect(cd).toContain(`filename*=UTF-8''${encodeURIComponent('odd"; \r\nname 🎉.txt')}`);
+    expect(cd).toContain(`filename*=UTF-8''${encodeURIComponent(ODD_NAME)}`);
     expect(await res.text()).toBe('odd name');
   });
 
@@ -308,8 +311,13 @@ describe('GET /download/<token>', () => {
     const file = path.join(root, 'replace-me.txt');
     fs.writeFileSync(file, 'first');
     const { url } = await mint(file);
-    fs.unlinkSync(file);
-    fs.writeFileSync(file, 'second — a different inode at the same path');
+    // WHY write-then-rename, not unlink-then-write: the mint handle is closed, so an unlink
+    // frees the inode and ext4/tmpfs hands the SAME number straight back to the next file at
+    // that path — the guard then sees no change and answers 200, which is what every Linux CI
+    // run did. Creating the replacement while the original still exists forces a second inode.
+    const replacement = path.join(root, 'replace-me.new');
+    fs.writeFileSync(replacement, 'second — a different inode at the same path');
+    fs.renameSync(replacement, file);
     const res = await fetch(url);
     expect(res.status).toBe(404);
     expect(await res.text()).toBe('');
@@ -422,21 +430,10 @@ describe('through the WS host', () => {
       await new Promise<void>((r) => srv.close(() => r()));
     }
   });
-
-  it('the route is matched before the static handler AND before the Vite proxy', () => {
-    const src = readStripped(fileURLToPath(new URL('../src/main/remote-server.ts', import.meta.url)));
-    const createServer = src.indexOf('http.createServer((req, res) => {');
-    expect(createServer).toBeGreaterThan(0);
-    const body = src.slice(createServer);
-    const route = /this\.downloads\.handleHttpRequest\(req, res\)/;
-    assertPatternMatches(route, 'if (this.downloads.handleHttpRequest(req, res)) return;', 'the download route dispatch');
-    const routeAt = body.search(route);
-    const staticAt = body.indexOf('this.handleHttpRequest(req, res, staticDir)');
-    const proxyAt = body.indexOf('this.proxyToVite(req, res, viteDevUrl)');
-    expect(routeAt).toBeGreaterThan(0);
-    expect(staticAt).toBeGreaterThan(routeAt);
-    expect(proxyAt).toBeGreaterThan(routeAt);
-  });
+  // WHY no source-order case here any more: "the download route is tried before the
+  // static handler and the Vite proxy" is the ast-grep rule download-route-before-static
+  // in youcoded-dev scripts/ast-grep/ (Plan B, 2026-09-16), which reads the code's
+  // structure rather than character offsets.
 });
 
 // ── Hardening from the T7 review (2026-09-10) ──────────────────────────────────
@@ -673,11 +670,15 @@ describe('download hardening', () => {
     expect(dated.status).toBe(200);
     expect((await dated.arrayBuffer()).byteLength).toBe(5000);
 
-    const quoted = path.join(root, "Destin's (1)*.txt");
+    // WHY two spellings: `*` is illegal in an NTFS file name, so the POSIX name threw
+    // ENOENT at the write on Windows CI. The quote, space and parentheses still prove
+    // the encoding on every platform; the asterisk only where the OS can create it.
+    const quotedName = posix ? "Destin's (1)*.txt" : "Destin's (1).txt";
+    const quoted = path.join(root, quotedName);
     fs.writeFileSync(quoted, 'q');
     const minted = await mint(quoted);
     const res = await fetch(minted.url);
-    expect(res.headers.get('content-disposition')).toContain("filename*=UTF-8''Destin%27s%20%281%29%2A.txt");
+    expect(res.headers.get('content-disposition')).toContain(`filename*=UTF-8''${encodeURIComponent(quotedName).replace(/[!'()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())}`);
     await res.arrayBuffer();
   });
 
@@ -798,6 +799,12 @@ describe('download hardening, second review', () => {
       let ended = false;
       s.res.on('close', () => { ended = true; });
       s.res.on('error', () => { /* the host hung up, which is the point */ });
+      // Drain the body the way a real client does. An unread 60 MB response sits
+      // paused; when the host destroys the socket the client message is never
+      // finished, and 'close' does not fire until the stream is consumed — so this
+      // test only passed when an EARLIER test had already warmed the same keep-alive
+      // socket. Run alone it timed out 3/3 (2026-09-16); resumed, the hang-up lands.
+      s.res.resume();
       dl.revokeDevice(who.deviceId);
       await vi.waitFor(() => {
         expect(dl.liveStreams(who.socketId)).toBe(0);

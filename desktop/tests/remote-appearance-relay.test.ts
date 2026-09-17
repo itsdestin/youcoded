@@ -3,8 +3,6 @@
 // windows and every OTHER phone; a change made on the computer must reach every phone.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
-import fs from 'node:fs';
-import path from 'node:path';
 
 vi.mock('ws', async () => {
   const { EventEmitter: EE } = await import('events');
@@ -67,13 +65,7 @@ describe('remote-server: appearance:broadcast from a phone', () => {
   });
 });
 
-describe('main: a theme change on the computer reaches phones', () => {
-  const mainSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.ts'), 'utf8');
-  it('the window relay also broadcasts appearance:sync to remote clients', () => {
-    const relay = mainSource.match(/ipcMain\.on\(IPC\.APPEARANCE_BROADCAST,[\s\S]*?\n  \}\);/)?.[0] ?? '';
-    expect(relay).toMatch(/remoteServer\.broadcast\(\{\s*type:\s*IPC\.APPEARANCE_SYNC/);
-  });
-  it('the remote server is told how to reach the computer\'s windows', () => {
-    expect(mainSource).toMatch(/onAppearanceBroadcast:/);
-  });
-});
+// WHY no main.ts cases here any more: the computer-side wiring (the window relay also
+// broadcasting appearance:sync to phones, and RemoteServer getting onAppearanceBroadcast)
+// is the ast-grep rule appearance-broadcast-relays-to-remote in youcoded-dev
+// scripts/ast-grep/ (Plan B, 2026-09-16), which reads the code rather than its text.

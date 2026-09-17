@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, existsSync } from 'node:fs';
+import { readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { readSource } from './helpers/guard-scope';
 
 /**
  * Provider brand colours must be readable on EVERY theme, including ones that
@@ -21,7 +22,7 @@ import { join, resolve } from 'node:path';
  */
 
 const stylesDir = resolve(__dirname, '..', 'src', 'renderer', 'styles');
-const globalsCss = readFileSync(join(stylesDir, 'globals.css'), 'utf8');
+const globalsCss = readSource(join(stylesDir, 'globals.css'));
 
 /** Every `--brand-*: value` declaration inside the block opened by `selector`. */
 function brandBlock(selector: string): Record<string, string> {
@@ -78,9 +79,8 @@ describe('provider brand colours', () => {
   });
 
   it('is applied from the theme, not guessed from the slug', () => {
-    const engine = readFileSync(
+    const engine = readSource(
       resolve(__dirname, '..', 'src', 'renderer', 'themes', 'theme-engine.ts'),
-      'utf8',
     );
     expect(engine).toMatch(/setAttribute\('data-theme-mode',\s*theme\.dark \? 'dark' : 'light'\)/);
   });
@@ -114,7 +114,7 @@ const KNOWN_LIGHT_THEME_GAP = 25;
 describe.skipIf(!existsSync(themesRoot))('published community themes', () => {
   const themes = (existsSync(themesRoot) ? readdirSync(themesRoot) : [])
     .filter((d) => existsSync(join(themesRoot, d, 'manifest.json')))
-    .map((slug) => ({ slug, m: JSON.parse(readFileSync(join(themesRoot, slug, 'manifest.json'), 'utf8')) }))
+    .map((slug) => ({ slug, m: JSON.parse(readSource(join(themesRoot, slug, 'manifest.json'))) }))
     .filter((t) => typeof t.m.tokens?.panel === 'string' && t.m.tokens.panel.startsWith('#'));
 
   const measure = (t: { slug: string; m: any }) => {

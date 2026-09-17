@@ -28,11 +28,14 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { readSource } from './helpers/guard-scope';
 
 const HOOK_SCRIPTS = path.resolve(__dirname, '..', 'hook-scripts');
 const ANDROID_ASSETS = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets');
 const STATUSLINE = path.join(HOOK_SCRIPTS, 'statusline.sh');
-const scriptSource = fs.readFileSync(STATUSLINE, 'utf8');
+// WHY readSource: line endings normalised, so a CRLF checkout neither breaks the
+// parser extraction below nor fails the byte-for-byte parity case.
+const scriptSource = readSource(STATUSLINE);
 
 // ---------------------------------------------------------------------------
 // Part 1 — the legal invariant.
@@ -50,8 +53,11 @@ describe('no shipped hook script touches the Claude.ai OAuth token', () => {
   });
 
   it('never names the credentials file or the OAuth usage endpoint', () => {
+    // WHY still a source read (restored in the review of u9, 2026-09-16): the only
+    // automated guard that no shipped script can reach the token; these are shell
+    // scripts — not an ast-grep language here.
     for (const f of shipped) {
-      const src = fs.readFileSync(f, 'utf8');
+      const src = readSource(f);
       // Comments explaining WHY the old code is gone may say "usage-fetch.js"
       // and "api/oauth/usage" — that is the point of them. What must never
       // reappear is code that can reach the token: the credentials file name,
@@ -66,6 +72,8 @@ describe('no shipped hook script touches the Claude.ai OAuth token', () => {
   it('statusline.sh no longer shells out to a usage fetcher', () => {
     // The bash half: no `node "$USAGE_FETCH"`, no toolkit_root lookup whose
     // only purpose was to find it.
+    // WHY still a source read (restored in the review of u9, 2026-09-16): a shell
+    // script — not an ast-grep language here.
     expect(scriptSource).not.toMatch(/USAGE_FETCH/);
     expect(scriptSource).not.toMatch(/toolkit_root/);
   });
@@ -73,7 +81,9 @@ describe('no shipped hook script touches the Claude.ai OAuth token', () => {
   it('the Android statusline.sh is the same script', () => {
     // The two copies have always been byte-identical; a fix that lands on one
     // platform only would leave the other still doing the forbidden thing.
-    expect(fs.readFileSync(path.join(ANDROID_ASSETS, 'statusline.sh'), 'utf8')).toBe(scriptSource);
+    // WHY still a source read: two files in two trees must stay identical —
+    // cross-file parity, which no rule expresses.
+    expect(readSource(path.join(ANDROID_ASSETS, 'statusline.sh'))).toBe(scriptSource);
   });
 });
 

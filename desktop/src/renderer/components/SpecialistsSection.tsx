@@ -279,7 +279,8 @@ export default function SpecialistsSection({ cwd }: {
             SOURCE_ORDER.filter(src => bySource.has(src) || skippedFor(src).length > 0).map(src => (
               <div key={src} className="border-t border-edge-dim">
                 {/* Fix: was "uppercase tracking-wider" — the same four classes
-                    in a non-canonical order (section-label-authority.test.ts,
+                    in a non-canonical order (ast-grep rule
+                    section-label-canonical-classes, youcoded-dev/scripts/ast-grep/rules/;
                     K1 tranche 1). Pre-existing on this branch; fixed while
                     Task 10 already had this file open for the group-label
                     rewrite. */}
@@ -388,7 +389,7 @@ function RosterRow({ d, folders }: { d: SpecialistDefinitionView; folders?: Spec
             <span className="text-4xs uppercase tracking-wide px-1 rounded border border-edge text-fg-muted">prefers {d.modelPreference}</span>
           )}
           {d.warnings.length > 0 && (
-            <span className="text-4xs uppercase tracking-wide px-1 rounded border border-amber-500/40 text-amber-500">{d.warnings.length} warning{d.warnings.length === 1 ? '' : 's'}</span>
+            <span className="text-4xs uppercase tracking-wide px-1 rounded border border-amber-700/40 text-amber-700">{d.warnings.length} warning{d.warnings.length === 1 ? '' : 's'}</span>
           )}
         </div>
         {/* Task 10: provenance — where this row's definition actually came
@@ -411,11 +412,11 @@ function RosterRow({ d, folders }: { d: SpecialistDefinitionView; folders?: Spec
         <div className="mt-1 pl-2 border-l-2 border-edge-dim space-y-1 text-2xs">
           <div className="text-fg-muted">Tools: <span className="text-fg-dim">{d.allowedTools.join(', ')}</span></div>
           {d.path && <div className="text-fg-muted">File: <span className="font-mono text-fg-dim break-all">{d.path}</span></div>}
-          {d.warnings.map((w, i) => <div key={i} className="text-amber-500">⚠ {w}</div>)}
+          {d.warnings.map((w, i) => <div key={i} className="text-amber-700">⚠ {w}</div>)}
         </div>
       )}
       {!open && d.warnings.length > 0 && (
-        <div className="text-2xs text-amber-500 mt-0.5">⚠ {d.warnings[0]}</div>
+        <div className="text-2xs text-amber-700 mt-0.5">⚠ {d.warnings[0]}</div>
       )}
     </li>
   );
@@ -429,7 +430,7 @@ function SkippedRow({ s }: { s: { path: string; source: 'personal' | 'claude-cod
   return (
     <li className="px-3 py-1.5 opacity-50" data-testid={`specialist-skipped-${basename(s.path)}`}>
       <div className="text-xs font-medium text-fg-2 font-mono truncate">{basename(s.path)}</div>
-      <div className="text-2xs text-amber-500">⚠ {s.error} — not offered to the assistant.</div>
+      <div className="text-2xs text-amber-700">⚠ {s.error} — not offered to the assistant.</div>
     </li>
   );
 }

@@ -66,11 +66,10 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await mgr?.stopAll();
-  // WHY the retries (2026-09-07): this threw ENOTEMPTY on the ubuntu CI leg with
-  // 9,743 tests already passed — an engine write landing mid-removal fails a run
-  // that had nothing wrong with it. Same shape as engine-acquisition.test.ts:154,
-  // and what `.claude/rules/test-suite-hygiene.md` prescribes for a real temp root.
-  fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+  // No retries on purpose: stopAll() now abandons every pending apply, so nothing
+  // writes here after it (CI follow-ups Plan A, Task 3). If ENOTEMPTY ever returns,
+  // the cancellation regressed — fix that, do not put the retries back.
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 function plantInstall(backend = 'cpu') {
@@ -680,6 +679,43 @@ describe('each model\'s bound is its OWN, and a fallback boot applies nothing (�
     await settled();
 
     expect(storedFor('alpha').pendingApply).toBe(true);
+  });
+
+  it('stopAll() abandons pending applies: nothing is written, reloaded or spawned after it returns', async () => {
+    plantInstall();
+    await plantConfig();
+    const fetchImpl = makeFetch();
+    // A short bound, so an abandoned waiter's deadline passes INSIDE this test
+    // and would land its write if stopAll had not cancelled it.
+    mgr = makeManager(fetchImpl, { configApplyMaxWaitMs: 150 });
+    await startStreamingReply(mgr, fetchImpl, 'alpha');      // alpha is busy: both saves wait
+    // Both waiters: an engine-wide change (requestApply) and a per-model one
+    // (noteModelApply) — they are separate loops and each must stop.
+    await mgr.setConfig({ contextSize: 65_536 });
+    await mgr.setModelSettings('alpha', { contextLength: 4_096 });
+    expect(mgr.status().configApplyPending).toBe(true);
+    expect(storedFor('alpha').pendingApply).toBe(true);
+
+    await mgr.stopAll();
+    const presetAfterStop = readPreset();
+    const spawnsAfterStop = mockSpawn.mock.calls.length;
+    const urlsAfterStop = urls.length;
+    expect(mgr.status().configApplyPending).toBe(false);
+
+    // Past the deadline: an un-cancelled waiter would write models.ini, reload
+    // and unload here.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(readPreset()).toBe(presetAfterStop);
+    expect(mockSpawn.mock.calls.length).toBe(spawnsAfterStop);
+    expect(urls.length).toBe(urlsAfterStop);
+    expect(unloaded).toEqual([]);
+    // The saved change stays marked pending on disk: the next launch's engine
+    // reads it on its way up (notePresetInForce), so abandoning loses nothing.
+    expect(storedFor('alpha').pendingApply).toBe(true);
+    // And the temp root can be removed with NO retries — the ENOTEMPTY this file
+    // carried a retry band-aid for cannot happen once nothing writes after stop.
+    expect(() => fs.rmSync(root, { recursive: true })).not.toThrow();
+    fs.mkdirSync(root, { recursive: true }); // afterEach removes it again
   });
 });
 

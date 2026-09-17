@@ -1,0 +1,57 @@
+{
+  // The DESIGN check (`npm run lint:design`) — deliberately separate from the bug
+  // gate in .oxlintrc.json. It enforces the renderer's design system with
+  // @shadcn/lint: theme colors instead of raw ones, named sizes instead of
+  // arbitrary values, and the components/ui/ primitives instead of restyling
+  // them. Its errors name the color, size or component to use instead, which is
+  // what lets an agent fix a violation in one pass.
+  //
+  // A RATCHET, not a zero gate (2026-09-16): the tree is not at zero on these
+  // rules, so they stay warnings — but `npm run lint:design` carries
+  // `--max-warnings <count measured that day>` (package.json), and CI and
+  // scripts/verify.sh both run it. Until then it ran nowhere and the count had
+  // drifted from 539 to 542 with no one told. A change that ADDS a warning
+  // fails; a cleanup that removes some should lower the number in the same
+  // commit. Never raise it. A rule becomes warn → error only once its own
+  // count is driven to zero — the same green-gate rule as .oxlintrc.json.
+  // `no-inline-styles` is omitted: ~1,050 of its hits are legitimate runtime
+  // values (positions, measured sizes).
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "jsPlugins": ["@shadcn/lint"],
+  "categories": {
+    "correctness": "off",
+    "suspicious": "off",
+    "pedantic": "off",
+    "perf": "off",
+    "style": "off",
+    "restriction": "off",
+    "nursery": "off"
+  },
+  "settings": {
+    "shadcn": {
+      // The renderer imports its primitives relatively ('./ui', '../ui/Button').
+      "componentImports": ["(^|/)ui(/[A-Za-z]+)?$"],
+      // components/ui/Button.tsx merges caller classes through mergeClasses().
+      "mergeFunctions": ["mergeClasses"],
+      "note": "Theme colors and the type scale live in src/renderer/styles/globals.css; primitives in src/renderer/components/ui/."
+    }
+  },
+  "ignorePatterns": ["dist/**", "release/**", "**/*.test.tsx", "src/renderer/dev/**"],
+  "overrides": [
+    {
+      "files": ["src/renderer/**/*.tsx"],
+      "rules": {
+        "shadcn/no-restyle": ["warn", { "allow": ["layout"] }],
+        "shadcn/no-raw-colors": "warn",
+        "shadcn/no-arbitrary-values": "warn",
+        "shadcn/no-unknown-classes": "warn",
+        "shadcn/require-static-classes": "warn"
+      }
+    },
+    {
+      // The primitives ARE the design system — they define the classes the rule protects.
+      "files": ["src/renderer/components/ui/**"],
+      "rules": { "shadcn/no-restyle": "off" }
+    }
+  ]
+}

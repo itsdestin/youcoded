@@ -3,10 +3,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
 import { Callout } from '../src/renderer/components/ui/Callout';
-import { inScopeFiles, stripComments, assertScopeIsPopulated, assertPatternMatches } from './helpers/guard-scope';
+import { inScopeFiles, readSource, stripComments } from './helpers/guard-scope';
 
 // Guard for K4 — the callout.
 //
@@ -55,6 +53,18 @@ describe('Callout', () => {
     }
   });
 
+  it('collapsible: the title is the one visible line and the body opens under it', () => {
+    render(<Callout tone="warning" collapsible title="2 conversations not syncing">body</Callout>);
+    const summary = screen.getByText('2 conversations not syncing').closest('summary') as HTMLElement;
+    expect(summary).not.toBeNull();
+    // The arrow is the summary's LAST child — on the right, not the left.
+    expect(summary.lastElementChild?.tagName.toLowerCase()).toBe('svg');
+    const details = summary.parentElement as HTMLDetailsElement;
+    expect(details.tagName).toBe('DETAILS');
+    expect(details.open).toBe(false);
+    for (const cls of ['rounded-lg', 'p-3', 'border', 'bg-amber-500/10']) expect(details.className).toContain(cls);
+  });
+
   it('defaults to info', () => {
     render(<Callout>body</Callout>);
     expect(surface().className).toContain('bg-accent/10');
@@ -82,7 +92,10 @@ describe('Callout', () => {
  * list of known-bad recipes is the same correction K1 needed after a
  * known-orderings grep found 3 of its 6 violations.
  */
-const TINT = /bg-(amber-500|accent|destructive|red-500|green-500|emerald-500)\/(10|5)\b/g;
+// amber-700 / green-400 / red-400 are the app's own status colors (globals.css @theme).
+// The 2026-09-16 design-check pass moved stock tints onto them; without them here every
+// migrated block vanished from this guard's count instead of still being checked.
+const TINT = /bg-(amber-500|amber-700|accent|destructive|red-500|red-400|green-500|green-400|emerald-500)\/(10|5)\b/g;
 
 /**
  * Tinted blocks in scope that are NOT callouts, counted per file.
@@ -95,9 +108,18 @@ const TINT = /bg-(amber-500|accent|destructive|red-500|green-500|emerald-500)\/(
  * protect: **a block that states something and offers a button to resolve it is
  * a K5 status strip, not a callout.** Those are deferred to tranche 4 with the
  * rest of K5, not overlooked.
+ *
+ * Adding or removing a file here means editing the ast-grep rule
+ * no-hand-rolled-callout-tint's `ignores:` too — youcoded-dev's check.sh fails if
+ * the two lists differ.
  */
 const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   'Button.tsx': { count: 1, why: "danger-outline's hover fill — a control's own state" },
+  // A REAL hand-rolled warning callout, found 2026-09-16: it wrote its amber as a raw
+  // #FF9800, which this pattern could not see, until the design-check pass moved it onto
+  // the status amber (same colour). Moving it onto <Callout tone="warning"> changes its
+  // look, so it waits for its own review — filed in docs/roadmap (youcoded-dev).
+  'ModelPickerPopup.tsx': { count: 1, why: "Fast mode's \u26a0 Billed Per Token box — a hand-rolled warning callout, follow-up filed" },
   'ThemeShareSheet.tsx': { count: 1, why: 'an <a> styled as a button — it has a hover fill' },
   'AssistantTurnBubble.tsx': { count: 1, why: 'the Plan card in the chat timeline — not a menu surface at all' },
   'SessionContextBanner.tsx': {
@@ -144,40 +166,25 @@ function tintedBlocks(src: string): number {
 }
 
 describe('callout adoption', () => {
-  it('this guard can see what it claims to cover', () => {
-    // A source-text guard that matches nothing PASSES and reads as clean.
-    // Three of this workstream's worst misses were exactly that.
-    assertScopeIsPopulated(inScopeFiles());
-    assertPatternMatches(TINT, 'border border-destructive/50 text-destructive-fg hover:bg-destructive/10',
-      'a border-FIRST tinted surface — the order that scored Button.tsx at zero');
-  });
-
-  it('no in-scope file grows a new hand-rolled callout', () => {
-    const drift: string[] = [];
-    for (const file of inScopeFiles()) {
-      const name = file.split(/[\\/]/).pop()!;
-      if (name === 'Callout.tsx') continue;  // where the three tones are defined
-      const n = tintedBlocks(readFileSync(file, 'utf8'));
-      const allowed = NOT_CALLOUTS[name]?.count ?? 0;
-      if (n !== allowed) drift.push(`${name}: ${n} tinted blocks, expected ${allowed}`);
-    }
-    expect(
-      drift,
-      'Passive information goes through <Callout>. If the block carries a button it is a K5 '
-        + 'status strip — add it to NOT_CALLOUTS with the reason rather than hand-rolling either one.',
-    ).toEqual([]);
-  });
+  // "this guard can see what it claims to cover" and "no in-scope file grows
+  // a new hand-rolled callout" moved to ast-grep (Plan B, 2026-09-16): rule
+  // no-hand-rolled-callout-tint (a tint and a border in one class string, or
+  // split across one className attribute). The former was a non-vacuity
+  // self-test of TINT/inScopeFiles(); the fixture pass now proves that.
 
   it('every exemption still exists and still applies', () => {
     // An exemption is a liability the moment it stops being true. In the dialog
     // guard, two of four turned out to be simply wrong — written off on a class
     // string without reading the style object underneath.
+    // WHY still a text read: each exempt file must hold EXACTLY `count` tinted
+    // blocks — a per-file total, which an ast-grep rule (it reports shapes, and
+    // exempts whole files) cannot assert.
     const byName = new Map(inScopeFiles().map((p) => [p.split(/[\\/]/).pop()!, p]));
     for (const [file, { count, why }] of Object.entries(NOT_CALLOUTS)) {
       const abs = byName.get(file);
       expect(abs, `${file} is exempted but no longer in scope — drop it`).toBeTruthy();
       expect(
-        tintedBlocks(readFileSync(abs!, 'utf8')),
+        tintedBlocks(readSource(abs!)),
         `${file} (${why}) no longer has ${count} — update or drop the exemption`,
       ).toBe(count);
     }

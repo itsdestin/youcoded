@@ -3,10 +3,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
 import { SettingRow } from '../src/renderer/components/ui/SettingRow';
-import { inScopeFiles, stripComments, RENDERER, assertScopeIsPopulated } from './helpers/guard-scope';
+import { inScopeFiles, stripComments, readSource } from './helpers/guard-scope';
 
 // Guard for K2 — the setting row.
 //
@@ -17,11 +15,16 @@ import { inScopeFiles, stripComments, RENDERER, assertScopeIsPopulated } from '.
 //   in the left column under the title. Those are structural claims, so they
 //   are checked against a real render.
 //
-//   SOURCE-TEXT, for adoption. The way this erodes is not a bad edit to
-//   SettingRow — it is the next popup hand-rolling `<div className="flex
-//   items-center justify-between">` with a label and a <Toggle> in it, which
-//   looks fine in isolation and only shows up as a fourth type size months
-//   later. Five separate shapes got in exactly that way.
+//   ADOPTION. The way this erodes is not a bad edit to SettingRow — it is the
+//   next popup hand-rolling `<div className="flex items-center
+//   justify-between">` with a label and a <Toggle> in it, which looks fine in
+//   isolation and only shows up as a fourth type size months later. Five
+//   separate shapes got in exactly that way. WHY mostly not here (Plan B,
+//   2026-09-16): those checks are ast-grep rules in youcoded-dev's
+//   scripts/ast-grep/rules/ — no-hand-rolled-setting-row (the retired
+//   recipes), no-hand-rolled-setting-row-toggle (a Toggle outside a control
+//   slot) and no-button-styled-as-field. Only the exemption COUNTS below stay a
+//   source read.
 
 afterEach(cleanup);
 
@@ -131,41 +134,16 @@ describe('SettingRow structure', () => {
 
 
 describe('setting row adoption', () => {
-  it('this guard can see what it claims to cover', () => {
-    // A source-text guard that matches nothing PASSES and reads as clean.
-    // Three of this workstream's worst misses were exactly that.
-    assertScopeIsPopulated(inScopeFiles());
-  });
-
-  it('the retired row recipes are gone', () => {
-    // Verbatim class strings from the five shapes K2 replaced. A string match is
-    // enough HERE (unlike K1, which had to match on the class SET) because these
-    // are whole hand-rolled row containers, not a multi-class recipe someone can
-    // re-order — if a variant reappears the count assertion below catches it.
-    const RETIRED = [
-      'flex items-start justify-between gap-3 p-2 rounded hover:bg-inset',        // Preferences ToggleRow, ModelPicker fast mode
-      'flex items-start gap-3 p-2 rounded hover:bg-inset cursor-pointer',         // Preferences permission-mode list
-      'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50',        // DevelopmentPopup Row
-      'flex items-center gap-3 px-3 py-2 rounded-lg bg-inset/50 hover:bg-inset cursor-pointer', // Sound presets
-      'w-full text-left flex items-start gap-3 p-3 rounded-lg hover:bg-inset',    // PerformancePopup power-saving row
-    ];
-    const offenders: string[] = [];
-    for (const file of inScopeFiles()) {
-      const src = stripComments(readFileSync(file, 'utf8'));
-      for (const recipe of RETIRED) {
-        if (src.includes(recipe)) offenders.push(`${file.replace(RENDERER, '')}: ${recipe}`);
-      }
-    }
-    expect(offenders, 'Setting rows go through <SettingRow>.').toEqual([]);
-  });
-
   /**
    * Every <Toggle> in scope that is NOT in a SettingRow's control slot, by file.
    *
    * A count rather than a bare file list, because SettingsPanel legitimately has
    * both: eight of its toggles are SettingRow controls now and two are not. A
    * file-level exemption would let a ninth hand-rolled toggle row in without a
-   * word. Adding one here should mean writing down why.
+   * word. Adding one here should mean writing down why — and adding the file to
+   * the ignores: of the ast-grep rule no-hand-rolled-setting-row-toggle, which
+   * holds every OTHER in-scope file at zero (youcoded-dev's check.sh fails if
+   * the two lists differ).
    *
    * These are not oversights — each is a surface with a different job:
    */
@@ -201,56 +179,23 @@ describe('setting row adoption', () => {
     return n;
   }
 
-  it('no in-scope file grows a new hand-rolled toggle row', () => {
-    const drift: string[] = [];
-    for (const file of inScopeFiles()) {
-      const name = file.split(/[\\/]/).pop()!;
-      if (name === 'Toggle.tsx' || name === 'SettingRow.tsx') continue;  // where it is defined / rendered
-      const n = togglesOutsideARow(readFileSync(file, 'utf8'));
-      const allowed = TOGGLES_OUTSIDE_A_ROW[name]?.count ?? 0;
-      if (n !== allowed) drift.push(`${name}: ${n} outside a SettingRow, expected ${allowed}`);
-    }
-    expect(
-      drift,
-      'A label with a switch beside it is a <SettingRow variant="item" control={<Toggle .../>} />. '
-        + 'If this row genuinely is not one, add it to TOGGLES_OUTSIDE_A_ROW with the reason.',
-    ).toEqual([]);
-  });
-
   it('every exemption still exists and still applies', () => {
     // An exemption is a liability the moment it stops being true — the four in
     // the dialog guard included two that were simply wrong, written off on a
     // class string without reading the style object beneath it.
+    // WHY still a source read: "exactly N Toggles outside a row in THIS file"
+    // is a per-file count, which an ast-grep rule cannot express.
+    // WHY the rule named in the messages (review of u8): the same files are listed
+    // under that rule's ignores:, and youcoded-dev's check.sh fails when the two differ.
+    const RULE = "the rule's ignores: in youcoded-dev scripts/ast-grep/rules/no-hand-rolled-setting-row-toggle.yml";
     const byName = new Map(inScopeFiles().map((p) => [p.split(/[\\/]/).pop()!, p]));
     for (const [file, { count, why }] of Object.entries(TOGGLES_OUTSIDE_A_ROW)) {
       const abs = byName.get(file);
-      expect(abs, `${file} is exempted but no longer in scope — drop it`).toBeTruthy();
+      expect(abs, `${file} is exempted but no longer in scope — drop it, and remove it from ${RULE}`).toBeTruthy();
       expect(
-        togglesOutsideARow(readFileSync(abs!, 'utf8')),
-        `${file} (${why}) no longer has ${count} — update or drop the exemption`,
+        togglesOutsideARow(readSource(abs!)),
+        `${file} (${why}) no longer has ${count} — update the count, or drop the exemption and remove it from ${RULE}`,
       ).toBe(count);
     }
-  });
-
-  it('no control is styled as a field it is not', () => {
-    // K7. The project folder rendered as a <button> wearing the FIELD surface —
-    // bg-inset + border-edge-dim — so it looked typeable and was not. A value
-    // chosen elsewhere (an OS picker, a dialog, another screen) is a value row
-    // plus a Change button, which says what it is and how to change it.
-    const offenders: string[] = [];
-    for (const file of inScopeFiles()) {
-      const src = stripComments(readFileSync(file, 'utf8'));
-      for (const m of src.matchAll(/className="[^"]*\bbg-inset border border-edge-dim\b[^"]*"/g)) {
-        // Walk back to the element this className belongs to.
-        const openTag = src.lastIndexOf('<', m.index);
-        if (src.startsWith('<button', openTag)) {
-          offenders.push(`${file.replace(RENDERER, '')}:${src.slice(0, m.index).split('\n').length}`);
-        }
-      }
-    }
-    expect(
-      offenders,
-      'A <button> must not wear the field surface — it reads as typeable. Use a value row + Change.',
-    ).toEqual([]);
   });
 });

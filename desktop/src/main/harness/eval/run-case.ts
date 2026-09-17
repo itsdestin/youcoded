@@ -466,7 +466,8 @@ export async function runCase(opts: RunCaseOpts): Promise<CaseRun> {
       // (DEFAULT_INSTRUCTION_BUDGET_TOKENS), regardless of which model is being
       // tested — not the profile the real app would resolve for that model.
       //
-      // Currently safe: tests/prompt-assembly.test.ts:118-120 pins the
+      // Currently safe: tests/prompt-assembly.test.ts ("default/anthropic/gpt
+      // append nothing (byte-identical to no variant)") pins the
       // default/anthropic/gpt variants as byte-identical to no variant at all,
       // and only the local-small variant appends text — the OpenRouter roster
       // this evaluator drives never resolves to local-small. 20k tokens has also

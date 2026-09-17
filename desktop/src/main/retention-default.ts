@@ -1,6 +1,4 @@
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
+import { mutateSettings } from './claude-settings';
 
 // Seed `cleanupPeriodDays` into ~/.claude/settings.json when the key is
 // ABSENT. Claude Code deletes transcript JSONLs whose age exceeds
@@ -13,46 +11,39 @@ import os from 'os';
 // only writes when the key is missing: an explicit user value — even a
 // deliberately short one — is respected.
 //
+// This file used to refuse to touch a settings.json that does not parse
+// ("replacing a corrupt file with just our key would wipe the hooks"). The
+// 2026-09-16 simplification (audit D5) moved every read and write into
+// claude-settings.ts, and on 2026-09-17 Destin decided its ONE rule: a corrupt
+// file is backed up beside itself and rewritten fresh, because silent hook
+// loss is worse than a lost custom key and the backup keeps the key
+// recoverable. seedCleanupPeriodInto() edits a settings object in place so the
+// launch path can run it as one callback in a single locked read/write
+// alongside the other launch chores.
+//
 // CC-coupled: `cleanupPeriodDays` is a Claude Code settings contract. See
 // youcoded/docs/cc-dependencies.md → "Transcript retention (cleanupPeriodDays)".
 
 const DEFAULT_CLEANUP_PERIOD_DAYS = 365;
 
 export interface SeedRetentionResult {
-  /** True iff settings.json was rewritten (key was absent). */
+  /** True iff the key was absent and has been set. */
   changed: boolean;
-  /** The value now in effect, or undefined if settings were unreadable. */
+  /** The value now in effect, or undefined if settings were unwritable. */
   effective: number | undefined;
 }
 
-function settingsPath(): string {
-  return path.join(os.homedir(), '.claude', 'settings.json');
+export function seedCleanupPeriodInto(settings: Record<string, unknown>): SeedRetentionResult {
+  if (typeof settings.cleanupPeriodDays === 'number') {
+    return { changed: false, effective: settings.cleanupPeriodDays };
+  }
+  settings.cleanupPeriodDays = DEFAULT_CLEANUP_PERIOD_DAYS;
+  return { changed: true, effective: DEFAULT_CLEANUP_PERIOD_DAYS };
 }
 
-export function seedCleanupPeriodDefault(): SeedRetentionResult {
-  const p = settingsPath();
-  let settings: Record<string, unknown> = {};
-  if (fs.existsSync(p)) {
-    try {
-      settings = JSON.parse(fs.readFileSync(p, 'utf8'));
-    } catch {
-      // Do NOT rewrite on parse failure — settings.json carries hooks and
-      // enabledPlugins; replacing a corrupt file with just our key would wipe
-      // them. (disable-prompt-suggestion.ts writes fresh in this case; that
-      // convention is wrong for a low-stakes seeding like this one.)
-      return { changed: false, effective: undefined };
-    }
-  }
-
-  if (typeof settings.cleanupPeriodDays === 'number') {
-    return { changed: false, effective: settings.cleanupPeriodDays as number };
-  }
-
-  settings.cleanupPeriodDays = DEFAULT_CLEANUP_PERIOD_DAYS;
-  fs.mkdirSync(path.dirname(p), { recursive: true });
-  // Atomic write (tmp + rename) — same convention as disable-prompt-suggestion.
-  const tmp = `${p}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8');
-  fs.renameSync(tmp, p);
-  return { changed: true, effective: DEFAULT_CLEANUP_PERIOD_DAYS };
+/** Standalone form: one locked read/write cycle of settings.json. */
+export async function seedCleanupPeriodDefault(): Promise<SeedRetentionResult> {
+  let result: SeedRetentionResult = { changed: false, effective: undefined };
+  const r = await mutateSettings((settings) => { result = seedCleanupPeriodInto(settings); });
+  return r.refused ? { changed: false, effective: undefined } : result;
 }

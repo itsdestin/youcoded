@@ -15,6 +15,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readSource } from './helpers/guard-scope';
 
 const RENDERER = path.join(__dirname, '..', 'src', 'renderer');
 const WORKBENCH = path.join(RENDERER, 'dev', 'workbench');
@@ -32,7 +33,7 @@ function walk(dir: string, out: string[] = []): string[] {
 function dispatched(files: string[]): Map<string, string[]> {
   const found = new Map<string, string[]>();
   for (const file of files) {
-    const src = fs.readFileSync(file, 'utf8');
+    const src = readSource(file);
     for (const m of src.matchAll(/dispatchEvent\(\s*new CustomEvent\(\s*['"`](youcoded:[^'"`]+)['"`]/g)) {
       const list = found.get(m[1]) ?? [];
       list.push(path.relative(RENDERER, file));

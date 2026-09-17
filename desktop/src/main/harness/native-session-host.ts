@@ -19,18 +19,18 @@ import * as path from 'path';
 import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
-import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
+import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
 import { rebuildHistory } from './history-rebuild';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
 import { SessionStore, type NativeSessionListEntry } from './session-store';
-import { PermissionBroker, type AskDecision, type LateResponseEntry } from './permission-broker';
+import { PermissionBroker } from './permission-broker';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
 import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
-import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions } from './prompt-assembly';
+import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions, gitSnapshotAsync } from './prompt-assembly';
 import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
@@ -40,9 +40,9 @@ import { isUnderRoot } from '../artifacts/read-binary-access';
 import type { SpecialistDefinition } from './specialists/registry';
 import { SpecialistCatalog } from './specialists/catalog';
 import { buildChildDecide } from './specialists/child-permissions';
-import { childAskRouter, BUDGET_ASK_TOOL_NAMES } from './specialists/child-ask-router';
+import { childAskRouter } from './specialists/child-ask-router';
 import { assignSpecialistName } from './specialists/names';
-import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION, SPECIALIST_IDLE_STALE_MS, SPECIALIST_IN_TOOL_STALE_MS, SPECIALIST_ASK_HOLD_MS, SPECIALIST_NOTE_MAX_CHARS } from './specialists/limits';
+import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION, SPECIALIST_IDLE_STALE_MS, SPECIALIST_IN_TOOL_STALE_MS, SPECIALIST_NOTE_MAX_CHARS } from './specialists/limits';
 import { DelegationLedger, OWNER, RAW_REPORT_CAP_CHARS, isOwnerAlive, toRunView, type DelegationRecord } from './specialists/delegation-ledger';
 import { DelegatedModels, delegatedModelsView, type DelegatedTier } from './specialists/delegated-models';
 import type { NativeHome } from '../native-home';
@@ -171,6 +171,23 @@ export function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
  * resuming) more than once can never accumulate duplicate entries — there is
  * nothing on disk for a second call to duplicate.
  */
+/** One page of an already-merged history: the last PAGE_TURNS user turns
+ *  before `beforeIndex` (null = the end). The cursor is an ARRAY INDEX. */
+function pageOf(all: TranscriptEvent[], beforeIndex: number | null): { events: TranscriptEvent[]; nextIndex: number | null; hasMore: boolean } {
+  const end = beforeIndex == null ? all.length : Math.min(beforeIndex, all.length);
+  if (end <= 0) return { events: [], nextIndex: null, hasMore: false };
+  let boundaries = 0;
+  let start = 0;
+  for (let i = end - 1; i >= 0; i--) {
+    if (all[i].type === 'user-message') {
+      boundaries++;
+      if (boundaries === PAGE_TURNS) { start = i; break; }
+    }
+  }
+  const hasMore = start > 0;
+  return { events: all.slice(start, end), nextIndex: hasMore ? start : null, hasMore };
+}
+
 export function mergeChildEvents(
   parentId: string,
   parentEvents: TranscriptEvent[],
@@ -238,6 +255,15 @@ export interface SpecialistRunResult {
    *  and it over-counts a step that emitted parallel tool calls. */
   steps: number;
   usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number };
+}
+
+/** A specialist run's spend so far, carried OUT on the error when the run
+ *  throws. `runSpecialist` accumulates it in a closure local and only ever
+ *  returned it on the success path, so a helper that was stopped or hit an
+ *  error reported nothing at all — the whole bill for a run that may have
+ *  worked for several turns (Destin, 2026-09-16). */
+export interface SpecialistRunError extends Error {
+  specialistUsage?: SpecialistRunResult['usage'];
 }
 
 interface LiveEntry {
@@ -461,16 +487,14 @@ export class NativeSessionHost extends EventEmitter {
   private inMemoryFallback = new Map<string, { parentId: string; rec: DelegationRecord }>();
 
   // Plan 1b Task 8 — plain-text notices for a parent that are NOT a specialist
-  // RUN outcome (a DelegationRecord): today the only producer is a late answer
-  // to a routed permission ask that arrived after the child that raised it had
-  // already ended (onLateResponse below). Kept as its own, much simpler lane
-  // rather than shoehorned into DelegationRecord's completed/failed status
-  // machine — a late answer isn't a run the ledger models, it's a one-line
-  // follow-up. It still lands through the SAME idle-boundary injection
+  // RUN outcome (a DelegationRecord): today the producers are background
+  // shell commands (onShellLongRunning / onShellExit below). Kept as its own,
+  // much simpler lane rather than shoehorned into DelegationRecord's
+  // completed/failed status machine. It still lands through the SAME idle-boundary injection
   // mechanism Task 4 built for background completions (kickIdleDeliveryPass +
   // drainDeliveries' runNotice call) rather than a second delivery path.
   // Purely in-memory, like inMemoryFallback above: an app restart losing an
-  // unread late-answer notice is an accepted loss, not a durability promise
+  // unread notice is an accepted loss, not a durability promise
   // this lane makes.
   // G-1: notices now carry the structured meta the renderer folds into a
   // card; shell notices ready in one drain are concatenated into ONE turn (D8).
@@ -487,19 +511,6 @@ export class NativeSessionHost extends EventEmitter {
    *  once — so quitting the app inside that window left a process that ignores
    *  SIGTERM alive with nothing left to reach it. destroyAll sweeps this too. */
   private drainingShellRegistries = new Set<ShellRegistry>();
-
-  // Plan 1b Task 8 — a routed ask's late APPROVE, recorded once the child that
-  // raised it has already ended, keyed by childId.
-  //
-  // Final-review fix: this used to say "nothing in this file reads it back
-  // yet" / "honestly inert" — true when Task 8 first wrote it, false now.
-  // resumeSpecialist (below, around the `childApprovedAsks.get(opts.childId)`
-  // call) is its consumer: it folds any late approval into the resumed
-  // child's steer lines and clears the entry, so a later resume of the same
-  // child never repeats an ask the user already answered. A maintainer
-  // trusting the old wording could delete this write believing nothing reads
-  // it, which would silently break that ask-skipping on resume.
-  private childApprovedAsks = new Map<string, { tool: string }[]>();
 
   /** Pop (remove) the first in-memory fallback report belonging to `parentId`,
    *  if any — the delivery loop's second-choice lane, tried only after the
@@ -925,14 +936,15 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
     const title = header.title ?? record.title;
 
+    const gitSnapshot = await gitSnapshotAsync(workDir);
     const session = this.buildSpecialistSession(
-      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent,
+      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
     );
     // Cold state rebuilt from the child's OWN transcript — seedHistory resets
     // readRegistry + todos too (the same reset-on-resume contract root
     // sessions get in resume() above); readImageFromDisk re-reads any
     // persisted attachment paths so images survive the resume.
-    this.seedResumedHistory(opts.childId, workDir, session);
+    await this.seedResumedHistory(opts.childId, workDir, session);
     this.bindReservation(opts.reservation, opts.childId);
     this.wireChildLive(parentId, opts.childId, workDir, session, binding, opts.parentToolCallId);
 
@@ -1024,17 +1036,7 @@ export class NativeSessionHost extends EventEmitter {
       missedSteers = record.missedSteers ?? [];
     }
 
-    // childApprovedAsks (Task 8's forward-looking storage — this is its FIRST
-    // consumer): an approval that landed on a routed ask AFTER this child had
-    // already ended is otherwise invisible to the resumed run, which would
-    // have to re-ask something the user already answered. Folded in and
-    // cleared here, once, so a later resume of the SAME child never repeats it.
-    const approvals = this.childApprovedAsks.get(opts.childId) ?? [];
-    this.childApprovedAsks.delete(opts.childId);
-    const steerLines = [
-      ...missedSteers.map((s) => `<steer>\n${s}\n</steer>`),
-      ...approvals.map((a) => `<steer>\nThe user has now approved your earlier blocked request (${a.tool}) — you may do it now.\n</steer>`),
-    ];
+    const steerLines = missedSteers.map((s) => `<steer>\n${s}\n</steer>`);
     const prompt = steerLines.length > 0 ? `${steerLines.join('\n')}\n\n${opts.prompt}` : opts.prompt;
 
     const spawnOptsLike: SpecialistSpawnOpts = {
@@ -1165,51 +1167,10 @@ export class NativeSessionHost extends EventEmitter {
       // and has to say so, and the reverse — a metered parent delegating to a
       // local specialist — is why `free` rides along too.
       //
-      // Emitted HERE, before the ledger write and before the `finally`
+      // Reported HERE, before the ledger write and before the `finally`
       // teardown, because the child must still be in `this.live` for its price
-      // card to be readable. Log-only try/catch, the same contract every other
-      // bookkeeping call in this method follows: a failed usage report must
-      // never discard the report the child actually produced.
-      try {
-        const parentSession = this.live.get(parentId)?.session;
-        const childSession = this.live.get(childId)?.session;
-        if (parentSession && childSession) {
-          const { pricing, free } = childSession.priceCard;
-          parentSession.emitSubagentUsage({
-            // `free` WINS over any rate card (Task 23 item 1 — the specialist
-            // twin of the same fix Task 22 made for turn-complete in
-            // harness-session.ts). The two facts come from independent
-            // sources: `free` from the provider TYPE, the number from the
-            // catalog, which keys on the model id and has no idea where the
-            // model runs. A specialist delegated to a local model whose id
-            // happens to carry a published rate would otherwise report
-            // {"costUsd": 0.027, "free": true} — a run billed AND free. Free
-            // means free, and free is reported as null, never as a $0.00 bill.
-            usage: { ...run.usage, costUsd: free ? null : costForUsage(run.usage, pricing), free },
-            model: childSession.binding.modelId,
-            parentAgentToolUseId: opts.parentToolCallId,
-            agentId: childId,
-          });
-        } else {
-          // Task 23 item 2. This `if` used to have no `else`, so a teardown
-          // race that removed either session between the run finishing and its
-          // spend being priced dropped a whole delegated run's tokens and cost
-          // with ZERO log output — the parent's totals silently went short and
-          // nothing anywhere said so. A cost figure that is quietly short is
-          // worse than one that is visibly missing: the user has no way to know
-          // not to trust it.
-          //
-          // The message states ONLY what was just looked up and found absent —
-          // never a guessed cause (docs/error-message-standards.md). We know
-          // which half was missing; we do NOT know why, so we don't say.
-          const missing = !parentSession && !childSession ? 'neither session was still live'
-            : !parentSession ? 'the parent session was no longer live'
-            : 'the specialist session was no longer live';
-          log('ERROR', 'NativeSessionHost', `could not report a finished specialist's spend to its parent (${missing}) — the parent's session totals will be short by this run`, { childId, parentId });
-        }
-      } catch (usageErr) {
-        log('ERROR', 'NativeSessionHost', 'failed to report a finished specialist\'s spend to its parent — the parent\'s session totals will be short by this run', { childId, parentId, error: String(usageErr) });
-      }
+      // card to be readable.
+      this.reportSpecialistSpend(parentId, childId, opts.parentToolCallId, run.usage);
       // WHY drain HERE, not at turn start (folded Task 3 concern): pendingSteers
       // is not reset per-turn by design (harness-session.ts), so anything left
       // in the CHILD's queue at this point is a steer that arrived too late to
@@ -1273,6 +1234,14 @@ export class NativeSessionHost extends EventEmitter {
       }
       return run;
     } catch (err: any) {
+      // The run failed, but whatever it spent getting there was still billed.
+      // FIRST, while the child is still live for its price card to be read —
+      // the `finally` below tears it down. runSpecialist carries its
+      // accumulator out on the error precisely so this line has something to
+      // report; a run that threw before any step reported tokens carries
+      // nothing, and nothing is what gets reported.
+      const spentBeforeFailing = (err as SpecialistRunError)?.specialistUsage;
+      if (spentBeforeFailing) this.reportSpecialistSpend(parentId, childId, opts.parentToolCallId, spentBeforeFailing);
       const missedSteers = this.live.get(childId)?.session.drainUnappliedSteers() ?? [];
       if (this.ledger && parentCwd) {
         // Fix (review round 2, Finding 4), preserved: updateIfRunning (not
@@ -1315,6 +1284,69 @@ export class NativeSessionHost extends EventEmitter {
       } catch (err) {
         log('ERROR', 'NativeSessionHost', 'specialist teardown failed after the run finished', { childId, parentId, error: String(err) });
       }
+    }
+  }
+
+  /** Report one delegated run's spend to the parent that paid for it (spec §2).
+   *
+   *  Called from BOTH of runDelegation's exits. It used to be inlined on the
+   *  success path only, so a specialist that was STOPPED or hit a provider
+   *  error reported nothing — the whole bill for a run that may have worked for
+   *  several turns went uncounted, and the parent's Cost chip was quietly short
+   *  with nothing to trace it to (Destin, 2026-09-16). The codebase already
+   *  treated that loss as unacceptable for the much rarer teardown race below,
+   *  which logs an ERROR about it.
+   *
+   *  Must run while the child is still in `this.live` — its price card is read
+   *  here. Log-only throughout, the same contract every other bookkeeping call
+   *  in runDelegation follows: a failed usage report must never discard the
+   *  report the child actually produced, nor replace the error a failed run has
+   *  to rethrow. */
+  private reportSpecialistSpend(
+    parentId: string,
+    childId: string,
+    parentToolCallId: string,
+    usage: SpecialistRunResult['usage'],
+  ): void {
+    try {
+      const parentSession = this.live.get(parentId)?.session;
+      const childSession = this.live.get(childId)?.session;
+      if (parentSession && childSession) {
+        const { pricing, free } = childSession.priceCard;
+        parentSession.emitSubagentUsage({
+          // `free` WINS over any rate card (Task 23 item 1 — the specialist
+          // twin of the same fix Task 22 made for turn-complete in
+          // harness-session.ts). The two facts come from independent
+          // sources: `free` from the provider TYPE, the number from the
+          // catalog, which keys on the model id and has no idea where the
+          // model runs. A specialist delegated to a local model whose id
+          // happens to carry a published rate would otherwise report
+          // {"costUsd": 0.027, "free": true} — a run billed AND free. Free
+          // means free, and free is reported as null, never as a $0.00 bill.
+          usage: { ...usage, costUsd: free ? null : costForUsage(usage, pricing), free },
+          model: childSession.binding.modelId,
+          parentAgentToolUseId: parentToolCallId,
+          agentId: childId,
+        });
+      } else {
+        // Task 23 item 2. This `if` used to have no `else`, so a teardown
+        // race that removed either session between the run finishing and its
+        // spend being priced dropped a whole delegated run's tokens and cost
+        // with ZERO log output — the parent's totals silently went short and
+        // nothing anywhere said so. A cost figure that is quietly short is
+        // worse than one that is visibly missing: the user has no way to know
+        // not to trust it.
+        //
+        // The message states ONLY what was just looked up and found absent —
+        // never a guessed cause (docs/error-message-standards.md). We know
+        // which half was missing; we do NOT know why, so we don't say.
+        const missing = !parentSession && !childSession ? 'neither session was still live'
+          : !parentSession ? 'the parent session was no longer live'
+          : 'the specialist session was no longer live';
+        log('ERROR', 'NativeSessionHost', `could not report a specialist's spend to its parent (${missing}) — the parent's session totals will be short by this run`, { childId, parentId });
+      }
+    } catch (usageErr) {
+      log('ERROR', 'NativeSessionHost', 'failed to report a specialist\'s spend to its parent — the parent\'s session totals will be short by this run', { childId, parentId, error: String(usageErr) });
     }
   }
 
@@ -1531,7 +1563,7 @@ export class NativeSessionHost extends EventEmitter {
     this.kickIdleDeliveryPass(parentId);
   }
 
-  /** Shared by queueDelivery (the ledger lane) and queueHostNotice (Task 8's
+  /** Shared by queueDelivery (the ledger lane) and queueHostNotice (the
    *  plain-notice lane, below): if the parent is ALREADY idle, nothing else
    *  is going to reach runTurns' own post-drain tail on its own, so dispatch
    *  a no-op "first" turn just to get INTO runTurns from an idle start —
@@ -1559,11 +1591,10 @@ export class NativeSessionHost extends EventEmitter {
   private queueHostNotice(
     parentId: string,
     text: string,
-    meta?: InjectedMeta,
-    // Why a caller-supplied message: this lane now carries shell completions
-    // too, and "a late permission answer arrived" printed about a finished
-    // build would be a false log line (review I5).
-    whyDropped = 'a late permission answer arrived after its parent session was already destroyed — the notice has nowhere left to be delivered',
+    meta: InjectedMeta,
+    // Why a caller-supplied message: each producer knows what was lost, and a
+    // generic line printed about a finished build would be misleading (review I5).
+    whyDropped: string,
   ): void {
     if (!this.live.has(parentId)) {
       log('WARN', 'NativeSessionHost', whyDropped, { parentId });
@@ -1644,90 +1675,6 @@ export class NativeSessionHost extends EventEmitter {
     const reg = this.shellRegistries.get(sessionId);
     if (!reg || !this.live.has(sessionId)) return [];
     return reg.list().map((r) => reg.toView(r));
-  }
-
-  /** Plan 1b Task 8 — the ONE handler for a real response that arrives after
-   *  its routed ask already timed out (wired to the broker in the
-   *  constructor). Two cases, both honest about what "the entry stays
-   *  answerable" actually delivers:
-   *   - the child that raised the ask is STILL LIVE (it took the redirect and
-   *     kept working, hasn't finished yet) → course-correct it directly with
-   *     postSteer, naming the tool and the real decision. A `false` return
-   *     (no turn in flight right this instant) is fine to ignore, same
-   *     reasoning as the compaction steer above: the next turn-loop iteration
-   *     boundary drains it, and if there never is one the child is about to
-   *     end anyway with nothing left for a steer to change.
-   *   - the child has ALREADY ended (destroy() already ran — runDelegation's
-   *     finally tears every child down on every exit path) → there is no
-   *     session left to steer, so the answer reaches the PARENT instead, via
-   *     the same idle-boundary delivery path Task 4 built for background
-   *     completions (queueHostNotice). On an approval, the decision is also
-   *     recorded into childApprovedAsks — see that field's own WHY for what
-   *     this does and does not wire up yet. */
-  private onLateResponse(entry: LateResponseEntry, decision: AskDecision): void {
-    const allowed = decision.behavior === 'allow';
-    const childId = entry.raisedBy;
-
-    // Task 11 fix pass (Finding 2): a LATE "Always allow" used to silently
-    // drop the "and remember this" half — this handler only ever steered the
-    // still-live child or notified the parent, never persisted anything,
-    // even though decision.always rides the same AskDecision the in-time path
-    // (child-ask-router.ts) reads. This handler is reached ONLY for a routed
-    // (specialist) ask: a root session's own askUser is wired straight to
-    // `this.broker.ask(req)` with no `opts.timeoutMs` (see the `askUser:
-    // (req) => this.broker.ask(req)` root wiring below), so a root ask's
-    // PendingAsk.timedOut never flips true and it never reaches
-    // lateResponseHandler at all — only createChild's childAskRouter wiring
-    // passes a timeout. So `entry.specialist` is always set here in
-    // production; the `undefined` guard below is belt-and-suspenders for a
-    // hand-built test entry, not a real production path. Persisted against
-    // `entry.sessionId`, which childAskRouter already rewrote to the PARENT's
-    // id before ever calling broker.ask() (see AskRequest.raisedBy's own
-    // comment) — the same session/cwd pair the in-time path writes against.
-    // The doom_loop synthetic budget ask never supports "Always allow" even
-    // for a root session (child-ask-router.ts's BUDGET_ASK_TOOL_NAMES) —
-    // excluded here for the same reason the in-time path excludes it.
-    //
-    // Fix (Important 6, final review): same fix as child-ask-router.ts's
-    // in-time path, applied to the LATE path — this used to hand-build
-    // `{tool, pattern: subject, action:'allow'}` itself instead of calling
-    // the shared rememberedRuleFor() builder, discarding the grant WIDTH the
-    // user picked (decision.grantScope) and skipping the builder's own
-    // "never rememberable" cases. See child-ask-router.ts's own comment on
-    // its now-identical call for the full reasoning; both sites must derive
-    // the rule the SAME way or a late answer and an in-time answer to the
-    // identical ask could persist two different rules.
-    if (allowed && decision.always && entry.specialist && !BUDGET_ASK_TOOL_NAMES.has(entry.toolName)) {
-      const parent = this.live.get(entry.sessionId);
-      if (parent) {
-        const rule = rememberedRuleFor(entry.toolName, entry.subject, decision.grantScope);
-        if (rule) this.rememberRule(entry.sessionId, parent.cwd, { ...rule, specialist: entry.specialist.agentType });
-      } else {
-        // The parent session was torn down before the late answer arrived —
-        // there is no live cwd left to persist against (the store is keyed by
-        // project, not sessionId). Same accepted loss as queueHostNotice's own
-        // WARN below: nothing durable was ever promised once the parent is gone.
-        log('WARN', 'NativeSessionHost', 'a late "Always allow" arrived after its parent session was already destroyed — the rule could not be persisted', { sessionId: entry.sessionId, toolName: entry.toolName });
-      }
-    }
-
-    if (childId && this.live.has(childId)) {
-      this.live.get(childId)!.session.postSteer(
-        `The user has now responded to your earlier blocked request (${entry.toolName}): ${allowed ? 'APPROVED — you may do it now.' : 'DENIED — do not attempt it.'}`,
-      );
-      return;
-    }
-    const title = entry.specialist?.title ?? entry.toolName;
-    const idForNotice = entry.specialist?.childId ?? childId ?? 'unknown';
-    this.queueHostNotice(
-      entry.sessionId,
-      `[Specialist follow-up] The user ${allowed ? 'approved' : 'denied'} ${title}'s blocked ${entry.toolName} request after the specialist finished. Use task_id ${idForNotice} to continue that work if needed.`,
-    );
-    if (allowed && childId) {
-      const grants = this.childApprovedAsks.get(childId) ?? [];
-      grants.push({ tool: entry.toolName });
-      this.childApprovedAsks.set(childId, grants);
-    }
   }
 
   /** Task 4 — format one claimed ledger record into the text runNotice()
@@ -1857,6 +1804,10 @@ export class NativeSessionHost extends EventEmitter {
       }
     };
     const staleCheck = setInterval(() => {
+      // Waiting on the person is not being stuck: helper asks have no timeout
+      // (2026-09-16), so a helper can sit here for hours. Count the wait as
+      // activity, so the clock restarts from the answer.
+      if (this.broker.isWaitingOnUser(childId)) { lastActivityAt = Date.now(); setStale(false); return; }
       const threshold = openTools.size > 0 ? SPECIALIST_IN_TOOL_STALE_MS : SPECIALIST_IDLE_STALE_MS;
       if (Date.now() - lastActivityAt >= threshold) setStale(true);
     }, STALE_CHECK_INTERVAL_MS);
@@ -1870,6 +1821,16 @@ export class NativeSessionHost extends EventEmitter {
     let sinceLastTool = '';
     let steps = 0;
     const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    /** Fold one event's token counts into this run's total. FOUR event types
+     *  carry them — a completed turn, an interrupted one, a failed one, and the
+     *  child's own summarize call — and this accumulator is the only route any
+     *  of them has into the parent's totals. Absent usage adds nothing; a run
+     *  that measured nothing reports nothing rather than a fabricated zero. */
+    const addSpend = (u: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number } | undefined): void => {
+      if (!u) return;
+      usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
+      usage.cacheReadTokens += u.cacheReadTokens; usage.cacheCreationTokens += u.cacheCreationTokens;
+    };
     // Task 12, item 4 — compaction-finalize: counts SPONTANEOUS auto-compactions
     // (data.autoCompaction, harness-session.ts's maybeCompact) during this run.
     // A small local context window can force more than one across a long
@@ -1905,21 +1866,32 @@ export class NativeSessionHost extends EventEmitter {
           // cares about the tool remaining "open" for staleness purposes.
           if (event.data.toolUseId) openTools.delete(event.data.toolUseId);
           break;
-        case 'turn-complete': {
-          const u = event.data.usage;
-          if (u) {
-            usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
-            usage.cacheReadTokens += u.cacheReadTokens; usage.cacheCreationTokens += u.cacheCreationTokens;
-          }
+        case 'turn-complete':
+          addSpend(event.data.usage);
           break;
-        }
+        // An abandoned turn is billed like any other: since 2026-09-16 the
+        // harness carries what the completed steps spent on BOTH of these
+        // events, and this accumulator is the only route a specialist's spend
+        // has into the parent's totals. Stopping a helper mid-run is ordinary,
+        // not an edge case.
         case 'session-error':
+          addSpend(event.data.usage);
           errorText = String(event.data.text ?? '').trim() || null;
           break;
         case 'user-interrupt':
+          addSpend(event.data.usage);
           interrupted = true;
           break;
         case 'compact-summary':
+          // The child's OWN summarize request. Counted here for the same reason
+          // turn-complete is: this accumulator is the only route a specialist's
+          // spend has into the parent's totals (emitSubagentUsage below), and a
+          // child's compact-summary is not in SUBAGENT_DISPLAY_TYPES, so it never
+          // reaches the parent's stream either — the tokens were billed and
+          // counted absolutely nowhere. Not an edge case: the wrap-up steer just
+          // below exists precisely because a small local window compacts a
+          // specialist run repeatedly (fix 2026-09-16).
+          addSpend(event.data.usage);
           if (event.data.autoCompaction) {
             autoCompactionCount += 1;
             if (autoCompactionCount === 2 && !steered) {
@@ -1984,6 +1956,15 @@ export class NativeSessionHost extends EventEmitter {
       }
       // +1 for the step that produced the final message (see SpecialistRunResult).
       return { report, steps: steps + 1, usage };
+    } catch (err) {
+      // `usage` is a closure local, so a throw out of this method used to take
+      // the whole run's bill with it — a helper stopped after five real turns
+      // reported zero. Carry it out on the error instead; runDelegation's catch
+      // reports it while the child is still live for its price card to be read.
+      // A copy, not the live object: nothing after this may keep adding to what
+      // has already been reported.
+      if (err instanceof Error) (err as SpecialistRunError).specialistUsage = { ...usage };
+      throw err;
     } finally {
       // Detach BEFORE the caller tears the session down, so this listener can
       // never observe teardown-time events (and so a run that throws does not
@@ -2231,14 +2212,6 @@ export class NativeSessionHost extends EventEmitter {
     // recording, not a NativeHome pointed at a real home dir by accident);
     // the real wiring (ipc-handlers.ts) always passes the shared nativeHome.
     nativeHome?: NativeHome,
-    // Plan 1b Task 8: how long a routed specialist ask waits on the parent's
-    // screen before the redirect fires. Optional + LAST, same reasoning as
-    // every other trailing param here — defaults to the real 5-minute
-    // production value (specialists/limits.ts) so every existing construction
-    // is unaffected; tests that need the timeout to actually fire in a
-    // reasonable wall-clock time override it with a small number instead of
-    // fighting this file's setImmediate-heavy async machinery with fake timers.
-    private specialistAskHoldMs: number = SPECIALIST_ASK_HOLD_MS,
     // Task 4 (plan 1c) — the per-cwd specialist catalog: three folders read
     // per project folder (personal, ~/.claude/agents, <cwd>/.claude/agents),
     // merged with the four built-ins into one roster. Optional + LAST, same
@@ -2272,10 +2245,6 @@ export class NativeSessionHost extends EventEmitter {
     // Re-emit broker asks/expirations so ipc-handlers can forward them to the
     // renderer + remote clients (see the 'hook-event' listener there).
     this.broker.on('hook-event', (event) => this.emit('hook-event', event));
-    // Plan 1b Task 8: the ONE handler for a real answer that arrives after its
-    // ask already timed out — see onLateResponse's own comment for the
-    // live-child-vs-ended-child split.
-    this.broker.setLateResponseHandler((entry, decision) => this.onLateResponse(entry, decision));
     // Plan 1c — the ONE place a ledger write becomes a renderer-visible push.
     // The listener lives HERE, at construction, and nowhere else: the global
     // house rule is "emit in the ledger, never the host per method" — every
@@ -2558,12 +2527,21 @@ export class NativeSessionHost extends EventEmitter {
   }
 
   /** LiveEntry.refreshSlotsAfterTurn's action: re-read the engine now that a
-   *  turn has run (and so loaded the model), and if the helper cap it yields
-   *  differs from the one the session started with, re-apply the profile
-   *  through the same-binding refresh path setBinding already supports.
+   *  turn has run (and so loaded the model), and if EITHER the helper cap or the
+   *  real context window it yields differs from what the session started with,
+   *  re-apply through the same-binding refresh path setBinding already supports.
    *  Nothing else about the session moves; a still-unknown reading leaves
    *  the flag set for the next turn. Never throws — a failed status read
-   *  must not end a turn's delivery pass. */
+   *  must not end a turn's delivery pass.
+   *
+   *  Fix (2026-09-16): the guard asked about the helper cap ALONE and returned
+   *  before applying `r.contextLength`. At session start the model is usually not
+   *  resident, so the window came from the model-less `/props` branch — the
+   *  configured `-c`, which the server may have clamped down for VRAM. This
+   *  refresh is the one chance to replace that guess with the engine's real
+   *  `n_ctx`, and it was skipped whenever the cap happened to match, leaving the
+   *  context gauge's DENOMINATOR wrong for the whole session — always
+   *  optimistically, so the window looked roomier than it was. */
   private async refreshLocalSlots(sessionId: string, entry: LiveEntry): Promise<void> {
     try {
       const binding = entry.session.binding;
@@ -2577,7 +2555,9 @@ export class NativeSessionHost extends EventEmitter {
       if (now.providerId !== binding.providerId || now.modelId !== binding.modelId) return;
       if (r.slotsUnknown) return;
       entry.refreshSlotsAfterTurn = false;
-      if (r.profile.maxConcurrentSpecialists === entry.session.profileSnapshot.maxConcurrentSpecialists) return;
+      const capUnchanged = r.profile.maxConcurrentSpecialists === entry.session.profileSnapshot.maxConcurrentSpecialists;
+      const windowUnchanged = r.contextLength === entry.session.contextWindowTokens;
+      if (capUnchanged && windowUnchanged) return;
       entry.session.setBinding(binding, r.contextLength, r.profile, r.pricing, r.free);
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'could not re-read the local engine\u2019s slot count after the turn — helper cap unchanged', { sessionId, error: String((err as any)?.message ?? err) });
@@ -2592,7 +2572,7 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
+  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
@@ -2698,12 +2678,13 @@ export class NativeSessionHost extends EventEmitter {
           ? { models: { designated: this.delegatedModels, catalog: this.toolServices?.modelCatalog ?? (async () => null) } }
           : {}),
       },
-      // WHY assembleSystemPrompt is called synchronously here: it shells out to
-      // git twice (execFileSync, 3s timeout each → ~6s worst case). It runs ONCE
-      // per session create/resume — NEVER on the per-turn send() path — so the
-      // accepted sync cost sits off the hot loop. Threading an await through here
-      // would ripple through every construction site for no per-turn benefit
-      // (Task 11 review ruling — the sync cost is deliberate and bounded).
+      // The git line is PRECOMPUTED: `gitSnapshot` came from gitSnapshotAsync,
+      // awaited by the caller off the main thread (2026-09-16 C3). Until then
+      // assembleSystemPromptParts shelled out to git twice, synchronously (two
+      // 3 s timeouts, ~6 s worst case) — accepted as "once per session create
+      // or resume", but the specialist path spawns a helper mid-turn with the
+      // same call, so every helper froze the whole app for it. Passing the
+      // string keeps the prompt byte-stable and this function synchronous.
       // profile.promptVariant selects the capability-steering overlay (local-small only in v1).
       // hasTools mirrors buildAiTools()'s gate: a tool-less profile (supportsTools === false)
       // gets NO tools attached, so the prompt must also drop the tool-guidance line + overlay.
@@ -2720,7 +2701,7 @@ export class NativeSessionHost extends EventEmitter {
       // timeouts) and could land on a different date or branch than the prompt the
       // model actually got. presetName is label-only and reaches no model.
       ...(() => {
-        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name });
+        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name, gitSnapshot });
         return { promptParts, systemPrompt: promptParts.map((p) => p.text).join('\n\n') };
       })(),
     };
@@ -2819,7 +2800,12 @@ export class NativeSessionHost extends EventEmitter {
         switch (r.status) {
           case 'running': {
             const elapsedS = Math.max(0, Math.round((Date.now() - r.startedAt) / 1000));
-            const staleNote = r.stale ? `, may be stuck — no activity for at least ${Math.round(SPECIALIST_IDLE_STALE_MS / 60_000)}m` : '';
+            // A helper paused on an approval is reported as exactly that, so the
+            // assistant can point the person at the card instead of treating
+            // the helper as broken or redoing its step.
+            const staleNote = this.broker.isWaitingOnUser(r.childId)
+              ? ', waiting for the user to approve a request'
+              : r.stale ? `, may be stuck — no activity for at least ${Math.round(SPECIALIST_IDLE_STALE_MS / 60_000)}m` : '';
             return `${r.title} (${r.agentType}): running — ${elapsedS}s${staleNote}`;
           }
           case 'completed':
@@ -2982,9 +2968,13 @@ export class NativeSessionHost extends EventEmitter {
    * two resume paths used to do. Never throws: a signed-out ChatGPT makes
    * continuationIdentityFor throw, which is just another fallback.
    */
-  private seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): void {
+  private async seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): Promise<void> {
     const store = this.continuationStore();
-    const persisted = this.store.readEvents(sessionId, cwd);
+    // Off the main thread (2026-09-16 C2 review): this ran on every Resume
+    // click and read the whole transcript synchronously. (restore() below
+    // still reads it once more, synchronously, to verify the checkpoint's
+    // digest — filed as a follow-up in the plan.)
+    const persisted = await this.store.readEventsAsync(sessionId, cwd);
     if (store) {
       // WHY hydrate: `references` is in-memory, so every accepted uuid from a
       // previous process is unknown to this one. Without this the session's
@@ -3193,6 +3183,9 @@ export class NativeSessionHost extends EventEmitter {
     // this cwd. Awaited here so no session ever ships the model an empty
     // roster on its very first turn.
     await this.specialistCatalog.ensureFresh(opts.cwd);
+    // The <env> git line, read off the main thread before anything is built
+    // (2026-09-16 C3). Never throws (a non-repo answers a fixed string).
+    const gitSnapshot = await gitSnapshotAsync(opts.cwd);
     // Acquire this session's MCP servers (Task 6) BEFORE constructing the
     // session, so mcpServers is available for the very first buildAiTools().
     const mcpLease = await this.acquireMcp(opts.sessionId);
@@ -3210,7 +3203,7 @@ export class NativeSessionHost extends EventEmitter {
       session = new HarnessSession(
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile) },
+          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot) },
         this.modelFactory,
       );
     } catch (err) {
@@ -3288,12 +3281,13 @@ export class NativeSessionHost extends EventEmitter {
     takenNames.add(name);
 
     // Build the session BEFORE writing the header: everything inside
-    // buildSpecialistSession is fallible synchronous work (assembleSystemPrompt
-    // shells out to git, buildTriggerIndex walks the tree), and a throw after
-    // the header write would leave a session file on disk for a child that
-    // never existed.
+    // buildSpecialistSession is fallible synchronous work (buildTriggerIndex
+    // walks the tree), and a throw after the header write would leave a
+    // session file on disk for a child that never existed. The git line is
+    // awaited first, off the main thread (C3) — it never throws.
+    const gitSnapshot = await gitSnapshotAsync(workDir);
     const session = this.buildSpecialistSession(
-      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent,
+      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
     );
 
     // `title` was drawn earlier (before this session was built — see that
@@ -3342,6 +3336,8 @@ export class NativeSessionHost extends EventEmitter {
     // ring up real money through a metered specialist (spec §5).
     pricing: ModelPricing | null, free: boolean,
     parentToolCallId: string, preset: ResolvedPreset, parent: LiveEntry,
+    // The child's <env> git line, awaited by the caller off the main thread (C3).
+    gitSnapshot: string,
   ): HarnessSession {
     const allowed = new Set(specialist.allowedTools);
     return new HarnessSession(
@@ -3365,7 +3361,7 @@ export class NativeSessionHost extends EventEmitter {
         // parent's conversation crosses over — the brief in the first user turn
         // is the entire context the child gets.
         systemPrompt: assembleSystemPrompt({
-          presetBody: specialist.systemPrompt, cwd: workDir, appVersion: this.appVersion,
+          presetBody: specialist.systemPrompt, cwd: workDir, appVersion: this.appVersion, gitSnapshot,
           promptVariant: profile.promptVariant, hasTools: profile.supportsTools,
           instructionBudgetTokens: profile.injectionBudgetTokens,
           // audience 'parent': the shared doctrine's writing-for-the-user block is
@@ -3413,9 +3409,8 @@ export class NativeSessionHost extends EventEmitter {
         // ASKS (plan 1b Task 8): routed through the PARENT's broker under the
         // PARENT's sessionId — never the child's own (no window owns a raw
         // child id, so an ask emitted under it would never resolve; see
-        // child-ask-router.ts). Held up to specialistAskHoldMs before the
-        // child is unblocked with a scripted redirect; a later real answer
-        // still reaches it (postSteer) or the parent (onLateResponse) either way.
+        // child-ask-router.ts). The child waits for the person's answer with
+        // no time limit, exactly like the parent's own asks.
         //
         // `remember` (Task 11, closes a review finding): a routed ask's own
         // "Always allow" makes HarnessSession emit 'remember-rule' on ITSELF,
@@ -3431,7 +3426,6 @@ export class NativeSessionHost extends EventEmitter {
           // Task 6: carried through so a routed ask's `specialist` payload
           // lets the renderer nest the row under the right specialist card.
           parentToolCallId,
-          timeoutMs: this.specialistAskHoldMs,
           remember: (rule) => this.rememberRule(parentId, parent.cwd, rule),
         }),
         ...(this.toolServices ? { toolServices: this.toolServices } : {}),
@@ -3668,6 +3662,8 @@ export class NativeSessionHost extends EventEmitter {
     // structurally — this acquire() mints its own lease, and the outgoing
     // destroy() can only release the lease on the LiveEntry it captured. See
     // McpLease in mcp-manager.ts.
+    // The <env> git line, off the main thread, before the session is built (C3).
+    const gitSnapshot = await gitSnapshotAsync(cwd);
     const mcpLease = await this.acquireMcp(sessionId);
     const mcpServers = mcpLease?.servers;
     const harness = header.stepGuard === undefined
@@ -3686,7 +3682,7 @@ export class NativeSessionHost extends EventEmitter {
         // `binding` (not header.binding) — same override reason as above.
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(sessionId, cwd, preset, profile) },
+          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot) },
         this.modelFactory,
       );
       // Full history rebuild (spec §2.5): rebuildHistory reconstructs the assistant
@@ -3695,7 +3691,7 @@ export class NativeSessionHost extends EventEmitter {
       // already clears readRegistry + todos (the reset-on-resume ruling) — those
       // are runtime state, never persisted. readImageFromDisk re-reads any
       // persisted attachment paths so images survive resume (#290 follow-up fix 2).
-      this.seedResumedHistory(sessionId, cwd, session);
+      await this.seedResumedHistory(sessionId, cwd, session);
     } catch (err) {
       await mcpLease?.release();
       throw err;
@@ -3939,7 +3935,7 @@ export class NativeSessionHost extends EventEmitter {
         // D8: every shell notice already queued goes out as ONE turn — each
         // runNotice is a full model turn over the whole conversation, so three
         // builds finishing during one busy turn must not cost three turns.
-        // Specialist follow-ups keep their one-per-turn shape.
+        // Any other notice keeps its one-per-turn shape.
         const head = notices[0];
         // A still-running mark (2026-09-16) is only true while the run is
         // still running: one that finished while the mark waited behind a
@@ -4381,7 +4377,8 @@ export class NativeSessionHost extends EventEmitter {
     // Cancel pending asks FIRST (resolve them 'canceled') so a loop paused on a
     // permission await unwinds cleanly before the stream is aborted underneath
     // it (spec pending-ask ruling). Also expires the renderer's approval cards.
-    this.broker.cancelSession(sessionId);
+    // ownOnly: a background helper's routed ask survives Stop, like the helper.
+    this.broker.cancelSession(sessionId, { ownOnly: true });
     entry?.session.interrupt();
     // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
     // Root sessions only: a child's own deliveries go to its parent, not to it.
@@ -4499,35 +4496,61 @@ export class NativeSessionHost extends EventEmitter {
   getHistoryPage(sessionId: string, beforeIndex: number | null): { events: TranscriptEvent[]; nextIndex: number | null; hasMore: boolean } | null {
     const all = this.getHistory(sessionId);
     if (all === null) return null;
-    const end = beforeIndex == null ? all.length : Math.min(beforeIndex, all.length);
-    if (end <= 0) return { events: [], nextIndex: null, hasMore: false };
-    let boundaries = 0;
-    let start = 0;
-    for (let i = end - 1; i >= 0; i--) {
-      if (all[i].type === 'user-message') {
-        boundaries++;
-        if (boundaries === PAGE_TURNS) { start = i; break; }
-      }
-    }
-    const hasMore = start > 0;
-    return { events: all.slice(start, end), nextIndex: hasMore ? start : null, hasMore };
+    return pageOf(all, beforeIndex);
+  }
+
+  /** getHistoryPage with the reads off the main thread — the IPC page handler's
+   *  form. WHY (2026-09-16 C2): every scroll-up page re-read the whole
+   *  transcript (parent and every helper child) synchronously, so scrolling
+   *  back through a long native chat stuttered progressively and froze every
+   *  other window for each page. Same window, same cursor meaning. */
+  async getHistoryPageAsync(sessionId: string, beforeIndex: number | null): Promise<{ events: TranscriptEvent[]; nextIndex: number | null; hasMore: boolean } | null> {
+    const all = await this.getHistoryAsync(sessionId);
+    if (all === null) return null;
+    return pageOf(all, beforeIndex);
+  }
+
+  /** Whether `sessionId` is a live native session — what a caller that only
+   *  needs a yes/no must use. WHY (2026-09-16 C2): tear-off and re-dock asked
+   *  `getHistory(id) !== null`, which read the whole history (parent AND every
+   *  child) to compute a boolean and threw it away. */
+  isLive(sessionId: string): boolean {
+    return this.live.has(sessionId);
   }
 
   getHistory(sessionId: string): TranscriptEvent[] | null {
+    const plan = this.historyPlan(sessionId);
+    if (!plan) return null;
+    const parentEvents = this.store.readEvents(sessionId, plan.cwd);
+    if (plan.records.length === 0) return parentEvents;
+    const children = plan.records.map((record) => ({ record, events: this.store.readEvents(record.childId, record.workDir) }));
+    return mergeChildEvents(sessionId, parentEvents, children);
+  }
+
+  /** getHistory with every file read off the main thread; identical result. */
+  async getHistoryAsync(sessionId: string): Promise<TranscriptEvent[] | null> {
+    const plan = this.historyPlan(sessionId);
+    if (!plan) return null;
+    const parentEvents = await this.store.readEventsAsync(sessionId, plan.cwd);
+    if (plan.records.length === 0) return parentEvents;
+    const children = await Promise.all(plan.records.map(async (record) => ({ record, events: await this.store.readEventsAsync(record.childId, record.workDir) })));
+    return mergeChildEvents(sessionId, parentEvents, children);
+  }
+
+  /** The one decision both getHistory forms share: which files make up this
+   *  session's history. null for a non-live id; an empty `records` when there
+   *  is no ledger or it could not be read (logged, replay degrades to the
+   *  parent's own events — a broken ledger read must never break replay). */
+  private historyPlan(sessionId: string): { cwd: string; records: DelegationRecord[] } | null {
     const entry = this.live.get(sessionId);
     if (!entry) return null;
-    const parentEvents = this.store.readEvents(sessionId, entry.cwd);
-    if (!this.ledger) return parentEvents;
-    let records: DelegationRecord[];
+    if (!this.ledger) return { cwd: entry.cwd, records: [] };
     try {
-      records = this.ledger.listFor(entry.cwd, sessionId);
+      return { cwd: entry.cwd, records: this.ledger.listFor(entry.cwd, sessionId) };
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'getHistory: failed to read the delegation ledger — replaying the parent\'s own events without card replay', { sessionId, error: String((err as any)?.message ?? err) });
-      return parentEvents;
+      return { cwd: entry.cwd, records: [] };
     }
-    if (records.length === 0) return parentEvents;
-    const children = records.map((record) => ({ record, events: this.store.readEvents(record.childId, record.workDir) }));
-    return mergeChildEvents(sessionId, parentEvents, children);
   }
 
   /** Task 9 (plan 1c) — every run record for `sessionId`'s (as PARENT) live
@@ -4583,6 +4606,11 @@ export class NativeSessionHost extends EventEmitter {
   /** Resume Browser rows — every persisted native session, tagged 'native'. */
   list(): (NativeSessionListEntry & { provider: 'native' })[] {
     return this.store.list().map((r) => ({ ...r, provider: 'native' as const }));
+  }
+
+  /** list() with the disk reads off the main thread (2026-09-16 C6). */
+  async listAsync(): Promise<(NativeSessionListEntry & { provider: 'native' })[]> {
+    return (await this.store.listAsync()).map((r) => ({ ...r, provider: 'native' as const }));
   }
 
   /** Cascade-cancel: interrupt then destroy every live specialist child of this
@@ -4720,6 +4748,13 @@ export class NativeSessionHost extends EventEmitter {
     // still be reserved from an in-flight Task call this destroy() interrupted).
     this.specialistSlots.delete(sessionId);
     this.activeWriterChild.delete(sessionId);
+    // WHY (2026-09-16, per-session-maps investigation): the lifetime spawn
+    // counter is a runaway-loop backstop for ONE conversation's run; the
+    // conversation is gone, so the count is too (a resume in the same app run
+    // starts fresh, exactly as an app restart always did).
+    this.specialistSpawnCounts.delete(sessionId);
+    // (The childApprovedAsks sweep that sat here went away with the map itself:
+    // helper asks no longer time out, so there are no late approvals to park.)
     this.releaseModel(sessionId, modelId); // last session gone → unload it (#1)
     // Release THIS generation's MCP lease (Task 6), LAST — orthogonal to the
     // transcript/live-map teardown above (releasing never touches either), so

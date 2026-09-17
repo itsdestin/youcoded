@@ -2,7 +2,7 @@ import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react'
 import { ToolCallState, type ShellRunView } from '../../../shared/types';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import MarkdownContent from '../MarkdownContent';
-import { useChatState } from '../../state/chat-context';
+import { useSessionToolCalls } from '../../state/chat-context';
 import { buildTasksById, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
 import { SubagentTimeline } from './SubagentTimeline';
 import { ChevronIcon } from '../Icons';
@@ -10,6 +10,7 @@ import { useExpandAllToggle, getInitialExpanded, isExpandModeActive } from '../.
 import { useArtifactOptional } from '../../state/ArtifactContext';
 import { ArtifactThumbnail } from '../ArtifactThumbnail';
 import { matchSessionArtifact } from '../filepath-match';
+import { useSecondsTick } from '../../hooks/useSecondsTick';
 import { DeliverablesCard } from '../DeliverablesCard';
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 // Chatsearch session cards: same parser ToolCard uses for the header label,
@@ -201,9 +202,9 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
 // there's no hardcoded blue token — translucent blue on pink goes muddy.
 function Chip({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'add' | 'remove' | 'warn' | 'info' }) {
   const toneClass =
-    tone === 'add' ? 'bg-green-600/15 text-green-400 border-green-600/40'
-    : tone === 'remove' ? 'bg-red-600/15 text-red-400 border-red-600/40'
-    : tone === 'warn' ? 'bg-amber-600/15 text-amber-700 border-amber-600/40'
+    tone === 'add' ? 'bg-green-400/15 text-green-400 border-green-400/40'
+    : tone === 'remove' ? 'bg-red-400/15 text-red-400 border-red-400/40'
+    : tone === 'warn' ? 'bg-amber-700/15 text-amber-700 border-amber-700/40'
     : tone === 'info' ? 'bg-inset text-fg-2 border-edge'
     : 'bg-inset text-fg-muted border-edge';
   return (
@@ -295,7 +296,7 @@ function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
         }
       />
       {content ? (
-        <div className="rounded-sm overflow-hidden border border-green-600/30 bg-green-600/10">
+        <div className="rounded-sm overflow-hidden border border-green-400/30 bg-green-400/10">
           <CollapsibleBlock maxLines={20}>{content}</CollapsibleBlock>
         </div>
       ) : (
@@ -312,14 +313,10 @@ function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
 // command prominently, routes output through CR-strip + collapse, and promotes
 // error state to a pill at the top.
 // G-1 (background Bash): a ticking "2m 14s" for a running command, frozen at
-// its end time once it exits or is stopped. One interval per running card.
+// its end time once it exits or is stopped. Rides the shared seconds clock
+// (useSecondsTick) only while running, so a finished card costs nothing.
 function useElapsed(startedAt: number | undefined, endedAt: number | undefined): string {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (startedAt == null || endedAt != null) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [startedAt, endedAt]);
+  const now = useSecondsTick(startedAt != null && endedAt == null);
   if (startedAt == null) return '';
   const ms = Math.max(0, (endedAt ?? now) - startedAt);
   const s = Math.floor(ms / 1000);
@@ -794,7 +791,8 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
     prevSettled.current = settled;
   }, [settled, userToggled]);
   // Specialists 1c: a helper's ask lives in Activity — open it when one
-  // arrives, even on a settled card (a held ask outlives the run). Not when
+  // arrives, even on a card that looks settled (e.g. a resumed helper asking
+  // under an earlier card). Not when
   // the host shows the ask itself (suppressAsk): then Activity is just history.
   const nestedAsk = hasNestedAsk(tool);
   useEffect(() => { if (nestedAsk && !suppressAsk) setShowTimeline(true); }, [nestedAsk, suppressAsk]);
@@ -843,10 +841,7 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
             ? acc('activity')
             : { open: showTimeline, onToggle: () => { setShowTimeline(s => !s); setUserToggled(true); } })}
         >
-          {/* Task 12: `run` (specialistRun) is already resolved above for this
-              card — its status is what lets a nested held ask tell a finished
-              helper apart from a running one. */}
-          <SubagentTimeline segments={segments} sessionId={sessionId} specialistName={firstName} suppressAsk={suppressAsk} runStatus={run?.status} />
+          <SubagentTimeline segments={segments} sessionId={sessionId} specialistName={firstName} suppressAsk={suppressAsk} />
         </AgentSection>
       )}
       {children}
@@ -1123,10 +1118,15 @@ export default function ToolBody({ tool, sessionId }: { tool: ToolCallState; ses
   // TaskUpdate consumes this right now, but TaskGet/Stop could later.
   // `Task` (capital T) is the sub-agent launcher and is UNRELATED to the
   // TaskCreate/TaskUpdate agent-lifecycle tools despite the name overlap.
-  const chatState = useChatState(sessionId || '');
+  // WHY the selector, not useChatState (2026-09-16 A6): ToolCard is memoised
+  // with a comparator written to keep a card still while text streams, and a
+  // whole-session subscription down here routed around it — every EXPANDED
+  // card re-rendered per streamed word. The toolCalls Map's identity survives
+  // text deltas, so this re-renders on tool events only.
+  const toolCalls = useSessionToolCalls(sessionId || '');
   const tasksById = useMemo(
-    () => buildTasksById(chatState.toolCalls),
-    [chatState.toolCalls],
+    () => buildTasksById(toolCalls),
+    [toolCalls],
   );
   // Fix: this must sit above the `inner` IIFE's switch, not inside the Bash
   // case — hooks are unconditional, and the case only runs when toolName is

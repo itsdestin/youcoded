@@ -96,7 +96,7 @@ export function ConnectedAccountsBody({ status, refresh }: {
         {/* Keychain-less Linux stores the token as a plain 0600 file — the
             degraded policy is explicit everywhere, including here. */}
         {connected && status?.degradedStorage && (
-          <p className="text-2xs text-amber-500 leading-relaxed">
+          <p className="text-2xs text-amber-700 leading-relaxed">
             Your sign-in is stored without system-keychain encryption on this
             computer (no keychain service was available). It is protected only
             by file permissions.

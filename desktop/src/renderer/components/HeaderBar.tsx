@@ -371,7 +371,10 @@ export function SettingsGearButton({ settingsOpen, onToggleSettings, settingsBad
   );
 }
 
-export default function HeaderBar({
+// WHY memo (2026-09-16 audit W21): App hands this bar stable handlers now, so an
+// unrelated shell state change (a toast, a popup) no longer re-renders it and
+// its session strip; a status push still does, through sessionStatuses.
+export default React.memo(function HeaderBar({
   sessions, activeSessionId, onSelectSession, onCreateSession, onCloseSession,
   viewMode, onToggleView,
   gamePanelOpen, onToggleGamePanel, gameConnected, challengePending,
@@ -619,7 +622,7 @@ export default function HeaderBar({
               gamePanelOpen
                 ? 'bg-accent text-on-accent'
                 : challengePending && !gamePanelOpen
-                  ? 'text-orange-400'
+                  ? 'text-amber-700'
                   : 'text-fg-dim hover:text-fg-2'
             }`}
             // Perf: steps(8) instead of ease-in-out — this pulses for as long
@@ -633,7 +636,7 @@ export default function HeaderBar({
           >
             <GamepadIcon className="w-4 h-4" />
           {gameConnected && (
-            <span className={`w-1.5 h-1.5 rounded-full ${challengePending && !gamePanelOpen ? 'bg-orange-400' : 'bg-green-400'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${challengePending && !gamePanelOpen ? 'bg-amber-700' : 'bg-green-400'}`} />
           )}
           </button>
           </Tooltip>
@@ -644,7 +647,7 @@ export default function HeaderBar({
       </div>
     </div>
   );
-}
+});
 
 /** The welcome screen's header (P-6, Destin 2026-08-27: "a full frame around
  *  the welcome screen, as exists in terminal view, with settings/projects/

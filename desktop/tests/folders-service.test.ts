@@ -2,7 +2,9 @@
 // sessions isn't listing my projects?" The phone's folder list came from a hand-copied handler
 // in remote-server.ts that returned only ~/.claude/youcoded-folders.json, while the desktop
 // handler also lists every synced project under ~/YouCoded/Projects. Both transports now call
-// ONE service, pinned here, and the guard below keeps a copy from coming back.
+// ONE service, pinned here. WHY no source-text guard below any more (Plan B, 2026-09-16): the
+// "no copy comes back" half is the ast-grep rules no-folders-json-outside-service and
+// folders-service-called-by-both-transports (youcoded-dev scripts/ast-grep/rules/).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -55,12 +57,17 @@ describe('listPickerFolders — what the new-session picker shows, on every tran
 });
 
 describe('the folder writes behave as the desktop handlers always did', () => {
+  // WHY temp-rooted paths and not '/a', '/b': addFolder stores path.resolve() of what it is
+  // given, and on Windows '/b' resolves to 'D:\\b' — the literal '/b' never matched, so this
+  // failed on every Windows CI run. A path under the test's own temp dir resolves to itself.
   it('add dedupes by resolved path and puts the new folder first', () => {
-    fs.writeFileSync(file, JSON.stringify([{ path: '/a', nickname: 'a', addedAt: 1 }]));
-    const entry = addFolder('/b/', undefined, file);
-    expect(entry).toMatchObject({ path: '/b', nickname: 'b' });
-    expect(addFolder('/b', 'again', file)).toMatchObject({ nickname: 'b' });
-    expect(JSON.parse(fs.readFileSync(file, 'utf8')).map((f: any) => f.path)).toEqual(['/b', '/a']);
+    const a = path.join(dir, 'a');
+    const b = path.join(dir, 'b');
+    fs.writeFileSync(file, JSON.stringify([{ path: a, nickname: 'a', addedAt: 1 }]));
+    const entry = addFolder(b + path.sep, undefined, file);
+    expect(entry).toMatchObject({ path: b, nickname: 'b' });
+    expect(addFolder(b, 'again', file)).toMatchObject({ nickname: 'b' });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).map((f: any) => f.path)).toEqual([b, a]);
   });
 
   it('remove, rename and set-description report whether a folder matched', () => {
@@ -76,20 +83,5 @@ describe('the folder writes behave as the desktop handlers always did', () => {
     expect(removeFolder('/missing', file)).toBe(false);
     expect(removeFolder('/a', file)).toBe(true);
     expect(JSON.parse(fs.readFileSync(file, 'utf8'))).toEqual([]);
-  });
-});
-
-describe('guard: one folder store, two callers', () => {
-  const read = (rel: string) => fs.readFileSync(path.join(__dirname, '..', 'src', 'main', rel), 'utf8');
-  it('remote-server.ts no longer reads or writes youcoded-folders.json itself', () => {
-    expect(read('remote-server.ts')).not.toContain('youcoded-folders.json');
-  });
-  it('both transports call the shared service for all five folder channels', () => {
-    for (const file of ['remote-server.ts', 'ipc-handlers.ts']) {
-      const src = read(file);
-      for (const fn of ['listPickerFolders(', 'addFolder(', 'removeFolder(', 'renameFolder(', 'setFolderDescription(']) {
-        expect(src, `${file} calls ${fn}`).toContain(fn);
-      }
-    }
   });
 });

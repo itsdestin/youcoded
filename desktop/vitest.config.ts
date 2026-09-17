@@ -48,7 +48,17 @@ import react from '@vitejs/plugin-react';
 // is exported into the real process env so tests/global-setup.ts (which runs in
 // this same process, before any worker starts) wipes the SAME directory this
 // config named, rather than re-deriving it and racing.
-const TEST_HOME = path.join(os.tmpdir(), `youcoded-vitest-home-${process.pid}`);
+// The temp dir, spelled the way realpath() spells it. On the Windows CI runner
+// os.tmpdir() is `C:\Users\RUNNER~1\AppData\Local\Temp` (an 8.3 short name) while
+// every realpath() of a file under it says `C:\Users\runneradmin\…` — so a test that
+// mkdtemp()s under os.tmpdir() and compares against a path the product resolved
+// fails on Windows only. Three tests did, on every run from 2026-09-10 to 09-16
+// (chatsearch-transcript-reader, managed-workspace-setup, native-session-host-
+// continuation). Exporting the long form as TEMP/TMP/TMPDIR (what os.tmpdir()
+// reads on each platform) makes the whole class impossible instead of patching
+// each test: every worker's os.tmpdir() already IS the realpath spelling.
+const TMP_REAL = (() => { try { return fs.realpathSync.native(os.tmpdir()); } catch { return os.tmpdir(); } })();
+const TEST_HOME = path.join(TMP_REAL, `youcoded-vitest-home-${process.pid}`);
 process.env.YOUCODED_TEST_HOME = TEST_HOME;
 
 // Where `node_modules` REALLY is. In a worktree it is usually a hardlink farm
@@ -146,6 +156,10 @@ export default defineConfig({
     env: {
       HOME: TEST_HOME,
       USERPROFILE: TEST_HOME,
+      // See TMP_REAL above: the realpath spelling of the temp dir, on every platform.
+      TMPDIR: TMP_REAL,
+      TEMP: TMP_REAL,
+      TMP: TMP_REAL,
       YOUCODED_REAL_HOME: os.homedir(),
       // Lets tests and globalSetup name the sandbox without re-deriving it
       // (the pid suffix means re-deriving in a worker would get it wrong).

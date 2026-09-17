@@ -1,16 +1,20 @@
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { remoteConfigPath, remoteDeviceStorePath, remoteProfile } from '../src/main/remote-paths';
 
 const HOME = '/tmp/fake-home';
+// WHY path.join: the module joins with the platform separator, so a literal
+// '/tmp/fake-home/.claude/…' could never match on Windows (failed every Windows CI run).
+const under = (name: string) => path.join(HOME, '.claude', name);
 
 describe('remote file paths', () => {
   it('scopes both files by profile, so a dev instance cannot write the built app store', () => {
     // WHY this is the point of the module: remote-server.ts used to hardcode the token path
     // with no profile while remote-config.ts scoped its own, so dev runs shared real pairings.
-    expect(remoteConfigPath('', HOME)).toBe('/tmp/fake-home/.claude/youcoded-remote.json');
-    expect(remoteDeviceStorePath('', HOME)).toBe('/tmp/fake-home/.claude/.remote-devices.json');
-    expect(remoteConfigPath('dev', HOME)).toBe('/tmp/fake-home/.claude/youcoded-remote.dev.json');
-    expect(remoteDeviceStorePath('dev', HOME)).toBe('/tmp/fake-home/.claude/.remote-devices.dev.json');
+    expect(remoteConfigPath('', HOME)).toBe(under('youcoded-remote.json'));
+    expect(remoteDeviceStorePath('', HOME)).toBe(under('.remote-devices.json'));
+    expect(remoteConfigPath('dev', HOME)).toBe(under('youcoded-remote.dev.json'));
+    expect(remoteDeviceStorePath('dev', HOME)).toBe(under('.remote-devices.dev.json'));
   });
 
   it('gives two profiles different files in the same process', () => {

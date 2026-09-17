@@ -22,6 +22,7 @@ for (const stream of [process.stdout, process.stderr]) {
 import os from 'os';
 import fs from 'fs';
 import { SessionManager } from './session-manager';
+import { resolveNoFolderCwd } from './no-folder';
 import { HookRelay } from './hook-relay';
 import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
@@ -81,10 +82,6 @@ import { registerArcadeHandlers } from './arcade-handlers';
 import { registerVoiceHandlers, shutdownVoiceHandlers } from './voice/voice-handlers';
 import { requestMergedChatSnapshot } from './chat-snapshot';
 import { BuddyWindowManager } from './buddy-window-manager';
-import { BuddyOverlayManager, OVERLAY_TITLE } from './buddy-overlay-manager';
-import { chooseBuddyStrategy } from './buddy-manager';
-import type { BuddyManager } from './buddy-manager';
-import { applyKwinKeepAbove } from './kwin-keep-above';
 import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 // The KDE script that lets the buddy move itself on a Wayland desktop, and
 // the lookup that asks KDE how much of the screen the taskbar has taken.
@@ -173,13 +170,16 @@ if (process.platform === 'win32') {
 
 let mainWindow: BrowserWindow | null = null;
 // Module-level ref so createAppWindow's 'closed' handler can reach the buddy
-// manager (defined later inside the ready-handler closure), whichever
-// implementation is active — BuddyWindowManager (three windows) today,
-// BuddyOverlayManager (one DOM overlay, Linux Wayland) from Task 3. Typed as
-// the BuddyManager interface so this call site never depends on which one it
-// is. Assigned once during setup; `createAppWindow` uses it to hide the
-// buddy when the last main window closes (spec §7.6).
-let buddyManagerRef: BuddyManager | null = null;
+// manager (defined later inside the ready-handler closure). Assigned once
+// during setup; `createAppWindow` uses it to hide the buddy when the last main
+// window closes (spec §7.6).
+//
+// WHY a concrete class, not an interface (2026-09-16): the `BuddyManager`
+// interface existed so a second, one-window "overlay" implementation could be
+// swapped in on Linux Wayland. That implementation was never reachable
+// (`chooseBuddyStrategy` returned `windows` on every path) and was deleted;
+// the three-window manager is the only one, on every platform.
+let buddyManagerRef: BuddyWindowManager | null = null;
 let cleanupIpcHandlers: (() => Promise<void>) | null = null;
 // Sign in with ChatGPT: module scope only so runShutdown can dispose it (stops
 // the usage poll, closes a lingering sign-in listener). Assigned in createWindow.
@@ -293,6 +293,9 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   // The installed app serves the phone its built copy; a dev window serves live code unless
   // run-dev.sh --phone-build made a fresh copy (see choosePhonePageSource).
   serveBuiltPage: app.isPackaged || process.env.YOUCODED_REMOTE_BUILT === '1',
+  // The "No folder" sentinel → the app-owned empty folder, exactly as the desktop's
+  // own session:create does in ipc-handlers.ts (2026-09-16, remote-access.md).
+  prepareCreate: (payload) => resolveNoFolderCwd(payload, app.getPath('userData')),
   // The phone's / menu: the same list the desktop's commands:list handler returns.
   listCommands: () => commandProvider.getCommands(),
   requestSnapshot: () => requestMergedChatSnapshot({
@@ -306,7 +309,9 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   }),
   getFocusSessionId: () => windowRegistry.getFocusSessionId(),
   // A theme change made on a phone reaches every window here, the same message a peer
-  // window sends (tests/remote-appearance-relay.test.ts).
+  // window sends (tests/remote-appearance-relay.test.ts). This callback's presence is
+  // guarded by the ast-grep rule appearance-broadcast-relays-to-remote (workspace
+  // scripts/ast-grep/rules/).
   onAppearanceBroadcast: (prefs) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
@@ -617,6 +622,20 @@ const debouncedBroadcastAttention = (() => {
   };
 })();
 
+/** Called by ipc-handlers.ts on session-exit. WHY (2026-09-16, per-session-maps
+ *  investigation): a session's entry in every window's attention report was
+ *  only ever removed when THAT renderer volunteered `{ clear: true }`; a
+ *  session that died without one (crash, takeover, window reload mid-turn)
+ *  kept its last state in the aggregate for the life of the process, and a
+ *  "needs you" state there kept the buddy's attention signal lit. */
+export function forgetSessionAttention(sessionId: string): void {
+  let mutated = false;
+  for (const byWin of attentionReports.values()) {
+    if (byWin.delete(sessionId)) mutated = true;
+  }
+  if (mutated) debouncedBroadcastAttention();
+}
+
 // Shared BrowserWindow factory — used for the primary window AND for peer
 // windows spawned by the detach subsystem. Keeps webPreferences, security
 // hardening, and fullscreen relay consistent across every window so renderers
@@ -643,7 +662,8 @@ const debouncedBroadcastAttention = (() => {
  * read `#root.childElementCount`, and index.html began painting the boot
  * skeleton inside `#root`, so every stranded window reported "mounted". The
  * probe now lives in ./dev-mount-probe.ts, pinned against the real index.html by
- * tests/dev-load-recovery.test.tsx — do not inline a new one here. Neither
+ * tests/dev-load-recovery.test.tsx — do not inline a new one here (the
+ * workspace ast-grep rule main-uses-shared-mount-probe refuses it). Neither
  * sibling path can substitute: did-fail-load never fires (index.html itself
  * loads 200) and render-process-gone never fires (the renderer stays alive).
  * Prod loads local files and is deliberately untouched (callers gate on
@@ -694,7 +714,7 @@ function wireDevLoadRecovery(win: BrowserWindow, devUrl: string): void {
   });
 }
 
-function createAppWindow(opts?: { x?: number; y?: number; width?: number; height?: number; maximize?: boolean; inactive?: boolean; buddy?: 'mascot' | 'chat' | 'bar' | 'overlay'; buddyTitle?: string }): BrowserWindow {
+function createAppWindow(opts?: { x?: number; y?: number; width?: number; height?: number; maximize?: boolean; inactive?: boolean; buddy?: 'mascot' | 'chat' | 'bar'; buddyTitle?: string }): BrowserWindow {
   const iconPath = path.join(__dirname, '../../assets/icon.png');
   const icon = nativeImage.createFromPath(iconPath);
   const isMac = process.platform === 'darwin';
@@ -819,8 +839,8 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   //
   // preventDefault BEFORE setTitle, always: register the block first and the
   // name we set can never be clobbered. Doing it the other way round is a real
-  // bug this repo has already shipped once — buddy-overlay-manager.ts:203-209,
-  // found live on 2026-07-23.
+  // bug this repo has already shipped once — in the since-deleted one-window
+  // buddy overlay, found live on 2026-07-23.
   if (opts?.buddy) {
     win.on('page-title-updated', (e) => e.preventDefault());
     win.setTitle(opts.buddyTitle ?? BUDDY_WINDOW_TITLE);
@@ -1034,10 +1054,8 @@ function createWindow(firstRunManager?: FirstRunManager) {
   // installs share a hostname (the dev instance + built app dogfood gate).
   const requester = createRequesterTakeover({
     leaseClient,
-    // AWAITABLE sync (not the fire-and-forget syncSpacesSyncNow): the requester
-    // pulls the holder's final turn right after this, so the pull must not run
-    // until the push it depends on has actually landed. Bounded so a slow network
-    // can't wedge the resume.
+    // Waits for the push to land (the requester pulls the holder's final turn
+    // right after this), bounded so a slow network can't wedge the resume.
     syncNow: () => syncSpacesSyncNowAwaited('personal', HANDOFF_SYNC_TIMEOUT_MS),
     materializeOne: (id) => materializeOne(id),
     forceAcquire: (id) => hubLeaseRequest('force-acquire', id, deviceIdentity!.id),
@@ -1274,9 +1292,9 @@ function registerDetachIpc() {
   // hydration, opening on the dragged session, re-sending open permission asks)
   // silently did nothing on EVERY tear-off into a fresh window.
   //
-  // Fix shape follows the one already used for the buddy overlay's boot
-  // geometry (see BUDDY_OVERLAY_READY): the renderer PULLS once mounted rather
-  // than being pushed at before it can listen. `readyWindows` is what makes the
+  // Fix shape: the renderer PULLS once mounted rather than being pushed at
+  // before it can listen (the same shape the since-deleted buddy overlay used
+  // for its boot geometry). `readyWindows` is what makes the
   // two paths exclusive — before a window has pulled, transfers queue; after,
   // they push as before — so a payload is delivered exactly once either way.
   ipcMain.handle(IPC.DETACH_CLAIM_PENDING, (evt) => pendingAcquire.claim(evt.sender.id));
@@ -1587,9 +1605,10 @@ if (!app.isPackaged && process.env.YOUCODED_DEVTOOLS_PORT) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.YOUCODED_DEVTOOLS_PORT);
 }
 
-// NOTE — do NOT add `--disable-features=EvictionThrottlesDraw` here for the
-// buddy overlay (2026-07-23 lesson, full matrix in
-// docs/active/investigations/2026-07-23-buddy-overlay-wayland-presentation.md):
+// NOTE — do NOT add `--disable-features=EvictionThrottlesDraw` here for a
+// transparent window (2026-07-23 lesson from the since-deleted buddy overlay,
+// full matrix in the workspace's
+// docs/archive/investigations/2026-07-23-buddy-overlay-wayland-presentation.md):
 // a delayed-content probe on the X11 backend froze without that switch and
 // was "fixed" by it — but the probe was silently running XWayland, and on
 // the app's REAL backend (native Wayland) the switch has the exact opposite
@@ -1667,29 +1686,23 @@ void app.whenReady().then(async () => {
   // — those paths break the user's installed app the moment the worktree is
   // removed. Dev piggybacks on whatever hook paths the built app last wrote.
   //
-  // install-hooks.js already does in-place replacement of existing entries,
-  // so simply calling it repairs any stale paths. We scan first only to log a
-  // visible warning when staleness is detected — useful for diagnosing the
-  // "stuck on Initializing" symptom that follows a removed dev worktree.
+  // WHY one call (2026-09-16 audit W3/D5): the scripts are staged once per
+  // build (a version stamp in the stable dir) and the settings entries are
+  // written only when they differ; `repaired` replaces the pre-scan that used
+  // to parse the file a second time just to log a stale-path warning — the
+  // diagnostic for the "stuck on Initializing" symptom after a removed dev
+  // worktree.
   if (!process.env.YOUCODED_PROFILE) {
     try {
-      const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-      try {
-        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        for (const event of Object.values(settings.hooks ?? {}) as any[]) {
-          for (const matcher of event ?? []) {
-            for (const h of matcher.hooks ?? []) {
-              const cmd: string = h?.command ?? '';
-              const m = cmd.match(/"([^"]+\.(?:js|sh))"/);
-              if (m && (m[1].includes('.worktrees') || !fs.existsSync(m[1]))) {
-                log('WARN', 'Main', 'Stale hook command detected — install-hooks will repair', { command: cmd });
-              }
-            }
-          }
-        }
-      } catch { /* settings missing or unparseable — install-hooks will normalize */ }
-      const installScript = path.join(__dirname, '../../scripts/install-hooks.js');
-      require(installScript);
+      const { runInstallHooksChore } = require('./launch-settings-chores');
+      const r = await runInstallHooksChore({ version: app.getVersion(), packaged: app.isPackaged });
+      if (r.skippedWorktree) log('WARN', 'Main', 'Hook scripts live inside a dev worktree — install-hooks skipped (set YOUCODED_PROFILE when running dev)');
+      else {
+        if (r.repaired > 0) log('WARN', 'Main', 'Stale hook commands repaired', { count: r.repaired });
+        if (r.repairedFile) log('WARN', 'Main', 'Claude settings file was unreadable — backed up and rewritten with the hooks', { backupPath: r.repairedFile.backupPath });
+        if (r.refused) log('WARN', 'Main', 'Hook entries not written', { refused: r.refused });
+        else log('INFO', 'Main', 'Hooks installed', { copied: r.copied, written: r.written });
+      }
     } catch (e) {
       log('ERROR', 'Main', 'Failed to install hooks', { error: String(e) });
     }
@@ -1723,46 +1736,33 @@ void app.whenReady().then(async () => {
   }
   perfMark('main:chore:legacy-cleanup:done');
 
-  // Decomposition v3 §9.2: reconcile plugin hooks-manifest.json into
-  // ~/.claude/settings.json. Adds missing required hooks, updates stale paths
-  // (e.g., flattened core/hooks/ → hooks/), enforces MAX timeout, and prunes
-  // plugin-owned entries whose script file is gone (hooks dropped from the
-  // manifest in phase-3 flatten). Never removes user-added hooks. Runs after
-  // install-hooks.js so the app's own relay entries win any ordering contention.
+  // Three settings.json chores in ONE locked read/write (2026-09-16 audit W4/D5;
+  // the order is the one they always ran in — see launch-settings-chores.ts):
+  //  1. Decomposition v3 §9.2: reconcile plugin hooks-manifest.json — adds
+  //     missing required hooks, updates stale paths, enforces MAX timeout,
+  //     prunes plugin-owned entries whose script file is gone. Never removes
+  //     user-added hooks. Runs after install-hooks so the app's own relay
+  //     entries win any ordering contention.
+  //  2. Force CC's prompt-suggestion feature off — its ghost text interacts
+  //     badly with our chat→PTY write path (`docs/cc-dependencies.md` →
+  //     "Prompt suggestion (force-disabled by app)").
+  //  3. Seed a transcript-retention default so Claude Code's 30-day cleanup
+  //     doesn't silently delete Resume Browser history (retention-default.ts).
+  // The prompt-suggestion and retention-default marks below stay for the perf
+  // rig's chore table; they now measure nothing of their own.
   try {
-    const { reconcileHooks } = require('./hook-reconciler');
-    const hookSummary = reconcileHooks();
-    log('INFO', 'Main', 'Plugin hooks reconciled', hookSummary);
+    const { runSettingsChores } = require('./launch-settings-chores');
+    const r = await runSettingsChores();
+    log('INFO', 'Main', 'Plugin hooks reconciled', r.hooks);
+    if (r.promptSuggestion.changed) log('INFO', 'Main', 'Prompt suggestion force-disabled', { prior: r.promptSuggestion.prior });
+    if (r.retention.changed) log('INFO', 'Main', 'Seeded cleanupPeriodDays default', { effective: r.retention.effective });
+    if (r.repaired) log('WARN', 'Main', 'Claude settings file was unreadable — backed up and rewritten', { backupPath: r.repaired.backupPath });
+    if (r.refused) log('WARN', 'Main', 'Settings chores not written', { refused: r.refused });
   } catch (e) {
-    log('ERROR', 'Main', 'Failed to reconcile plugin hooks', { error: String(e) });
+    log('ERROR', 'Main', 'Failed to run settings chores', { error: String(e) });
   }
   perfMark('main:chore:hook-reconcile:done');
-
-  // Force CC's prompt-suggestion feature off in ~/.claude/settings.json on
-  // every launch. CC pre-fills the input bar with a generated next-prompt
-  // suggestion that interacts badly with our chat→PTY write path (the body
-  // gets concatenated with the ghost text and submitted on the trailing CR).
-  // See `docs/PITFALLS.md → PTY Writes` and `docs/cc-dependencies.md` →
-  // "Prompt suggestion (force-disabled by app)".
-  try {
-    const { enforcePromptSuggestionDisabled } = require('./disable-prompt-suggestion');
-    const r = enforcePromptSuggestionDisabled();
-    if (r.changed) log('INFO', 'Main', 'Prompt suggestion force-disabled', { prior: r.prior });
-  } catch (e) {
-    log('ERROR', 'Main', 'Failed to force-disable prompt suggestion', { error: String(e) });
-  }
   perfMark('main:chore:prompt-suggestion:done');
-
-  // Seed a transcript-retention default so Claude Code's 30-day cleanup
-  // doesn't silently delete Resume Browser history. Only writes when the
-  // user hasn't set cleanupPeriodDays themselves. See retention-default.ts.
-  try {
-    const { seedCleanupPeriodDefault } = require('./retention-default');
-    const r = seedCleanupPeriodDefault();
-    if (r.changed) log('INFO', 'Main', 'Seeded cleanupPeriodDays default', { effective: r.effective });
-  } catch (e) {
-    log('ERROR', 'Main', 'Failed to seed cleanupPeriodDays', { error: String(e) });
-  }
   perfMark('main:chore:retention-default:done');
 
   // Clean up orphan symlinks left by pre-decomposition post-update.sh —
@@ -1931,11 +1931,9 @@ void app.whenReady().then(async () => {
   interface BuddyPositionsFile {
     mascot?: { x: number; y: number };
     dock?: 'left' | 'right' | 'top' | 'bottom';
-    // Linux Wayland overlay only (Task 3+): whether the overlay window
-    // should stay above fullscreen apps via Task 8's KWin script. Absent
-    // (undefined/falsy) is the correct default everywhere else — the
-    // three-window model never reads this field.
-    keepAbove?: boolean;
+    // A `keepAbove` key may still sit in files written before 2026-09-16 (the
+    // deleted overlay's KDE pin preference). It is carried through the
+    // parse/save round trip untouched and read by nothing.
   }
   function loadBuddyPositions(): BuddyPositionsFile {
     try { return JSON.parse(fs.readFileSync(BUDDY_POS_FILE, 'utf8')); } catch { return {}; }
@@ -1990,7 +1988,7 @@ void app.whenReady().then(async () => {
     // KDE screen each of Electron's displays is, so all three events re-ask.
     //
     // Debounced because KDE fires display-metrics-changed THREE TIMES within
-    // 200 ms of a window appearing (measured — buddy-overlay-manager.ts:110),
+    // 200 ms of a window appearing (measured 2026-07-23 on the buddy overlay),
     // so an undebounced handler would run the whole lookup three times over
     // every time the buddy is shown.
     //
@@ -2010,45 +2008,11 @@ void app.whenReady().then(async () => {
     screen.on('display-removed', reresolveWorkArea);
   }
 
-  // WHY branch here (not inside BuddyWindowManager/BuddyOverlayManager
-  // themselves): main.ts is the only place that knows both which strategy
-  // is active AND how to build a BrowserWindow (createAppWindow) — the two
-  // managers stay ignorant of each other. Windows/macOS/Linux-X11 get the
-  // EXACT SAME BuddyWindowManager construction as before this branch existed
-  // (same deps object, unchanged) — only Linux Wayland (or an explicit
-  // YOUCODED_BUDDY_STRATEGY override) takes the overlay path.
-  const buddyStrategy = chooseBuddyStrategy(process.platform, process.env);
-  const buddyManager: BuddyManager = buddyStrategy === 'overlay'
-    ? new BuddyOverlayManager({
-        createOverlayWindow: ({ width, height }) => createAppWindow({ width, height, buddy: 'overlay' }),
-        getPersisted: () => ({
-          mascot: buddyPositions.mascot ?? null,
-          dock: buddyPositions.dock ?? null,
-          keepAbove: !!buddyPositions.keepAbove,
-        }),
-        persist: (state) => {
-          buddyPositions.mascot = state.mascot;
-          if (state.dock) buddyPositions.dock = state.dock;
-          else delete buddyPositions.dock;
-          saveBuddyPositions(buddyPositions);
-        },
-        registry: windowRegistry,
-        mainWindow: () => mainWindow,
-        // Status pushes go to every window (main app Settings panels + buddy
-        // surfaces) so the "Hidden until restart" row state renders live.
-        onStatusChanged: (status) => {
-          for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send(IPC.BUDDY_STATUS_CHANGED, status);
-          }
-        },
-        // Task 8: real KWin "keep above" script runner. Fire-and-forget —
-        // BuddyOverlayDeps.applyKeepAbove is `void`, and the overlay's own
-        // construction/recreate path shouldn't block on a DBus round-trip;
-        // a slow or failed call just means the window briefly isn't pinned,
-        // not a functional break (applyKwinKeepAbove never throws).
-        applyKeepAbove: (_win) => { void applyKwinKeepAbove(OVERLAY_TITLE, true); },
-      })
-    : new BuddyWindowManager({
+  // The buddy is three windows (mascot, chat, bar) on every platform. A second
+  // one-window "overlay" strategy for Linux Wayland was built behind a chooser
+  // that returned this one on every path; it was deleted 2026-09-16, and this
+  // construction is byte-for-byte what the chooser's `windows` arm built.
+  const buddyManager = new BuddyWindowManager({
         // `title` is the caption that positions the window on native-Wayland
         // Linux; it is undefined on every other platform (see buddy-caption.ts).
         createBuddyWindow: (variant, { x, y, title }) => createAppWindow({ x, y, buddy: variant, buddyTitle: title }),
@@ -2159,65 +2123,12 @@ void app.whenReady().then(async () => {
   });
   // Drag release → edge-snap detection against the window's final bounds.
   ipcMain.on(IPC.BUDDY_DRAG_ENDED, () => buddyManager.dragEnded());
-  // Linux Wayland overlay only (Task 4). Both handlers verify the sender is
-  // the overlay's own webContents before acting — guarding on sender identity
-  // keeps a compromised main window from puppeting the overlay's input mode
-  // (set-interactive) or writing bogus positions (persist). No-op everywhere
-  // else: buddyManager is a BuddyWindowManager on Windows/macOS/Linux-X11,
-  // so the `instanceof` check alone already short-circuits these to nothing.
-  ipcMain.on(IPC.BUDDY_OVERLAY_SET_INTERACTIVE, (evt, { interactive }: { interactive: boolean }) => {
-    if (buddyManager instanceof BuddyOverlayManager && buddyManager.isBuddyWindow(BrowserWindow.fromWebContents(evt.sender)!)) {
-      buddyManager.setInteractive(interactive);
-    }
-  });
-  ipcMain.on(IPC.BUDDY_OVERLAY_PERSIST, (evt, state: { mascot: { x: number; y: number }; dock: 'left' | 'right' | 'top' | 'bottom' | null }) => {
-    if (buddyManager instanceof BuddyOverlayManager && buddyManager.isBuddyWindow(BrowserWindow.fromWebContents(evt.sender)!)) {
-      buddyManager.persistFromRenderer(state);
-    }
-  });
-  // Overlay renderer pulls its boot geometry once mounted (replaces the old
-  // did-finish-load push, which raced React's mount and got dropped — see
-  // BuddyOverlayManager.initPayloadForSender / BuddyApi.overlayReady WHYs).
-  // Sender guard lives inside initPayloadForSender; non-overlay senders and
-  // three-window platforms get null.
-  ipcMain.handle(IPC.BUDDY_OVERLAY_READY, (evt) =>
-    buddyManager instanceof BuddyOverlayManager ? buddyManager.initPayloadForSender(evt.sender) : null
-  );
-  // Task 8: Settings' KDE keep-above toggle. Persists to BUDDY_POS_FILE (so
-  // the next overlay show()/recreate reads it via getPersisted() and
-  // reapplies — KWin state doesn't survive window recreation) AND applies
-  // it live immediately against the overlay's current window, since a
-  // toggle flip mid-session doesn't otherwise trigger a recreate. Not
-  // gated on buddyManager's type: applyKwinKeepAbove filters by caption, and
-  // only the overlay window is ever titled OVERLAY_TITLE (buddy-overlay-
-  // manager.ts), so this is naturally a no-op on the three-window model.
-  //
-  // WHY persist the REQUEST, not the outcome: a failed apply here
-  // (GNOME/wlroots, or KWin just not answering DBus yet at login) doesn't
-  // mean the user's intent changed. Persisting `enabled && ok` instead
-  // would silently downgrade a real "yes, pin me" request to off and stop
-  // retrying on every future recreate — including a later session where
-  // KWin has since become available. Controller ruling (2026-07-22): the
-  // Settings toggle mirrors this exactly — it's a saved preference, not a
-  // live-state indicator, and always displays/persists the request in both
-  // directions (see SettingsPanel.tsx's toggleKeepAbove). The `ok` this
-  // handler returns is used there only to drive a transient, honest inline
-  // hint ("couldn't reach KWin right now") — never to flip the toggle
-  // itself back.
-  ipcMain.handle(IPC.BUDDY_OVERLAY_KEEP_ABOVE, async (_evt, enabled: boolean) => {
-    buddyPositions.keepAbove = enabled;
-    saveBuddyPositions(buddyPositions);
-    return applyKwinKeepAbove(OVERLAY_TITLE, enabled);
-  });
   ipcMain.handle(IPC.BUDDY_DISMISS, () => buddyManager.dismiss());
-  // keepAbove rides along on getStatus() (see BuddyApi.getStatus WHY comment
-  // in shared/types.ts) — merged in from the persisted positions file here
-  // rather than through buddyManager.getStatus(), since keepAbove isn't part
-  // of the BuddyManager interface (Windows/macOS/Linux-X11 never touch it).
-  ipcMain.handle(IPC.BUDDY_GET_STATUS, () => ({
-    ...buddyManager.getStatus(),
-    keepAbove: !!buddyPositions.keepAbove,
-  }));
+  // WHY no `keepAbove` on the status any more (2026-09-16): it rode along here
+  // for the deleted overlay's KDE "pin above" toggle, whose Settings row went
+  // 2026-09-04. Nothing in the renderer read the field; the three-window buddy
+  // is pinned by the KWin helper, not by a saved preference.
+  ipcMain.handle(IPC.BUDDY_GET_STATUS, () => buddyManager.getStatus());
   // Restore + focus the main window, then ask it to switch to the buddy's
   // viewed session so the user lands in the same conversation (spec §4.2).
   ipcMain.handle(IPC.BUDDY_OPEN_MAIN, () => {
@@ -2254,12 +2165,9 @@ void app.whenReady().then(async () => {
   // three black rectangles in the screenshot.
   ipcMain.handle(IPC.BUDDY_CAPTURE_DESKTOP, async (): Promise<string | null> => {
     const { desktopCapturer } = require('electron') as typeof import('electron');
-    // WHY: go through the BuddyManager interface instead of the three-window
-    // getters (getMascotWindow/getChatWindow/getBarWindow) so this handler
-    // works unchanged whichever strategy is active (three windows or the
-    // Linux Wayland overlay). captureWindows() already filters to alive,
-    // non-destroyed windows, mascot first when present — same set and same
-    // ordering the old three getters produced.
+    // captureWindows() filters to alive, non-destroyed windows, mascot first
+    // when present — the same set and ordering the older three getters
+    // (getMascotWindow/getChatWindow/getBarWindow) produced.
     const liveBuddyWindows = buddyManager.captureWindows();
     const mascotWin = liveBuddyWindows[0] ?? null;
     // Pick the display the mascot lives on — multi-monitor users expect
@@ -2269,15 +2177,6 @@ void app.whenReady().then(async () => {
     // display as fallback. Theoretical "mascot gone but chat/bar alive" state
     // would pick the surviving window's display instead — but hide() clears all
     // three windows together, so behavior is unchanged in practice.
-    // WHY getBounds() here is safe even for the overlay (coordinator review
-    // finding 4 — this branch otherwise never reads getBounds()/getPosition()
-    // on the overlay window, since Wayland echoes stale/construction values
-    // for it): the overlay is always constructed AT the primary display's
-    // bounds and never moved (buddy-overlay-manager.ts's createWindow), so
-    // the echoed construction bounds still resolve to the correct (primary)
-    // display via getDisplayMatching — there's no live-position read being
-    // relied on here, just a display lookup that happens to land right by
-    // construction.
     const targetDisplay = mascotWin
       ? screen.getDisplayMatching(mascotWin.getBounds())
       : screen.getPrimaryDisplay();

@@ -185,14 +185,24 @@ function sweepStaleTmpFiles(dir: string): void {
   }
 }
 
+/** The three housekeeping passes — abandoned claims, old receipts, the CLI's
+ *  crash litter. WHY separate from the drain (2026-09-16 audit W9): they ran
+ *  on every pass, and the pass ran every 5 s, so an empty queue cost four
+ *  directory listings every 5 s (~69k a day). None of them is time-critical;
+ *  they run once at start and then hourly (startOutboxDrain). */
+export function sweepOutbox(homeRoot: string): void {
+  const dir = outboxDir(homeRoot);
+  if (!fs.existsSync(dir)) return;
+  recoverStaleProcessing(dir);
+  sweepReceipts(dir);
+  sweepStaleTmpFiles(dir);
+}
+
 /** One pass over the outbox. Returns how many requests this instance handled. */
 export async function drainOutboxOnce(opts: DrainOpts): Promise<number> {
   if (opts.isDevInstance && !opts.devOverride) return 0;
   const dir = outboxDir(opts.homeRoot);
   if (!fs.existsSync(dir)) return 0;
-  recoverStaleProcessing(dir);
-  sweepReceipts(dir);
-  sweepStaleTmpFiles(dir);
   let handled = 0;
   for (const name of fs.readdirSync(dir)) {
     if (!name.endsWith('.json')) continue; // the CLI's temp files end in .tmp-<pid>, so they never match
@@ -261,8 +271,14 @@ export async function drainOutboxOnce(opts: DrainOpts): Promise<number> {
 // ---- lifecycle -------------------------------------------------------------
 let watcher: fs.FSWatcher | null = null;
 let pollTimer: NodeJS.Timeout | null = null;
+let sweepTimer: NodeJS.Timeout | null = null;
+let storeWaitTimer: NodeJS.Timeout | null = null;
 let running = false;
 let rerun = false;
+const SWEEP_MS = 60 * 60_000;
+// How long the start-up drain keeps waiting for the conversation store to come
+// up, in 1 s tries. It used to lean on the 5 s poll for this (see startOutboxDrain).
+const STORE_WAIT_TRIES = 120;
 
 // WHY exported: startOutboxDrain/liveOpts/drainSerialized were entirely
 // unexercised by tests — nothing proved YOUCODED_PROFILE and
@@ -291,28 +307,52 @@ export async function drainSerialized(): Promise<void> {
   } finally { running = false; }
 }
 
+function startPoll(): void {
+  if (pollTimer) return;
+  pollTimer = setInterval(() => { void drainSerialized(); }, POLL_MS); pollTimer.unref?.();
+}
+
+/** startOutboxDrain() runs from main.ts before startConversationStore()'s
+ *  promise resolves (fired-and-forgotten, not awaited), so liveOpts() sees no
+ *  store yet and a drain now would be a no-op. Requests queued while the app
+ *  was closed used to be applied by the first 5 s poll instead; with that poll
+ *  gone off Windows, this waits for the store and drains once it is up. */
+function drainWhenStoreReady(triesLeft: number): void {
+  storeWaitTimer = null;
+  if (liveOpts()) { void drainSerialized(); return; }
+  if (triesLeft <= 0) return; // the store never came up; the watch still drains new requests
+  storeWaitTimer = setTimeout(() => drainWhenStoreReady(triesLeft - 1), 1000);
+  storeWaitTimer.unref?.();
+}
+
 export function startOutboxDrain(): void {
   stopOutboxDrain();
-  const dir = outboxDir(os.homedir());
+  const home = os.homedir();
+  const dir = outboxDir(home);
   try { fs.mkdirSync(dir, { recursive: true }); } catch { /* drain will no-op */ }
+  let watching = false;
   try {
     watcher = fs.watch(dir, () => { void drainSerialized(); });
-    watcher.on('error', () => { watcher?.close(); watcher = null; });
+    watcher.on('error', () => { watcher?.close(); watcher = null; startPoll(); });
+    watching = true;
   } catch { watcher = null; }
-  // WHY a poll alongside fs.watch: Windows drops notifications; 5 s matches subagent-watcher.
-  // Every pass also sweeps old receipts, so no separate sweep timer exists.
-  pollTimer = setInterval(() => { void drainSerialized(); }, POLL_MS); pollTimer.unref?.();
-  // Fix (comment only): this call is NOT what applies requests queued while
-  // the app was closed. startOutboxDrain() runs from main.ts before
-  // startConversationStore()'s promise resolves (it's fired-and-forgotten,
-  // not awaited — main.ts:1958), so liveOpts() still sees getConversationStore()
-  // === null here and this pass is a no-op. Those requests actually apply on
-  // the first 5s poll below, once the store has finished starting.
-  void drainSerialized();
+  // WHY the poll is Windows-only beside a healthy watch (2026-09-16 audit W9):
+  // Windows drops directory notifications, the other platforms do not, and this
+  // queue is empty almost always — the poll was ~17k listings a day for nothing.
+  // A watch that could not attach, or that errors later, gets the poll instead.
+  if (!watching || process.platform === 'win32') startPoll();
+  // Housekeeping: once now, then hourly — see sweepOutbox. The hourly tick also
+  // drains: if the store took longer than the start-up wait below, requests
+  // queued while the app was closed would otherwise sit until the next write.
+  sweepOutbox(home);
+  sweepTimer = setInterval(() => { sweepOutbox(home); void drainSerialized(); }, SWEEP_MS); sweepTimer.unref?.();
+  drainWhenStoreReady(STORE_WAIT_TRIES);
 }
 
 export function stopOutboxDrain(): void {
   watcher?.close(); watcher = null;
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  if (sweepTimer) { clearInterval(sweepTimer); sweepTimer = null; }
+  if (storeWaitTimer) { clearTimeout(storeWaitTimer); storeWaitTimer = null; }
   foreignStoreLogged.clear();
 }

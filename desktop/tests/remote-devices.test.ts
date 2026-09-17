@@ -48,7 +48,9 @@ describe('paired device store', () => {
     const raw = readFileSync(storePath, 'utf8');
     expect(raw).not.toContain(phone.secret);
     expect(raw).toContain('secretHash');
-    expect(statSync(storePath).mode & 0o077).toBe(0);
+    // WHY the guard: Windows has no POSIX mode bits (stat reports 0o666 for every file),
+    // so `& 0o077` is never 0 there; owner-only would be an ACL the store does not set.
+    if (process.platform !== 'win32') expect(statSync(storePath).mode & 0o077).toBe(0);
   });
 
   it('tells an unknown credential apart from a revoked one', () => {

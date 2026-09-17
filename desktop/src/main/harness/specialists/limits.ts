@@ -35,17 +35,6 @@ export const SPECIALIST_SPAWN_BUDGET_PER_SESSION = 30;
 export const SPECIALIST_IDLE_STALE_MS = 120_000;
 export const SPECIALIST_IN_TOOL_STALE_MS = 300_000;
 
-// Task 8 (plan 1b, spec: child asks route to the parent): how long a routed
-// ask (doom_loop / a deny-listed permission ask carried through from
-// child-permissions.ts) waits on the PARENT's screen before the child's
-// blocked call is unblocked with the scripted redirect. 5 minutes is enough
-// for a user who is at their machine to notice and answer, without leaving a
-// background specialist stalled indefinitely on a card nobody may ever see.
-// Not "how long until we give up" — the ask stays pending and answerable
-// past this deadline; this is only how long the CHILD waits before it is
-// told to route around the block and keep working.
-export const SPECIALIST_ASK_HOLD_MS = 300_000;
-
 // Task 5 (plan 1c): the cap on a user-typed mid-run note (steerFromUser).
 // Lives here, not inline in native-session-host.ts, for the same reason every
 // other specialist limit does — it is a spec-fixed number a reviewer should

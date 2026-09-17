@@ -29,7 +29,9 @@ describe('the indicator reports the listener, not the setting', () => {
     // A tester shown `listen EADDRINUSE: address already in use 100.82.14.7:9900` had no
     // idea what was wrong or what to do about it.
     expect(panel).toMatch(/Not running: .\{plainReason\(status\.reason\)\}/);
-    expect(panel).toContain('export function plainReason');
+    // WHY no `export` in the pin (2026-09-17): plainReason is file-local now (knip's
+    // unused-export ratchet); what matters is that the function exists.
+    expect(panel).toContain('function plainReason(');
     // Only codes we recognise are translated; anything else is passed through unchanged
     // rather than described with a guess.
     expect(panel).toContain('return reason;');

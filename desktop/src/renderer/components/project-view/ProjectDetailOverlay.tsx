@@ -60,7 +60,7 @@ export function ProjectDetailOverlay({ title, onClose, tools, meta, children }: 
 
         {/* Meta strip — only when the consumer supplies metadata. */}
         {meta != null && (
-          <div className="flex items-center gap-2 px-4 py-1.5 text-[11.5px] text-fg-muted border-b border-edge-dim bg-well shrink-0">
+          <div className="flex items-center gap-2 px-4 py-1.5 text-xs text-fg-muted border-b border-edge-dim bg-well shrink-0">
             {meta}
           </div>
         )}

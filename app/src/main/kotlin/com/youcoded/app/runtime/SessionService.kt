@@ -1562,6 +1562,9 @@ class SessionService : Service() {
                     bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
                         put("state", "stopped")
                         put("port", 0)
+                        // Same shape as desktop's RemoteStatus (audit W18): the phone is
+                        // its own one client, matching remote:get-client-count above.
+                        put("clientCount", 1)
                     })
                 }
             }

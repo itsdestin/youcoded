@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { structuredPatch } from 'diff';
 import { defineTool } from './registry';
 import { canonicalize, resolveP } from './guards';
+import { fingerprintOf } from './file-fingerprint';
+import { withPathLock } from './path-lock';
+import type { ToolContext, ToolResultPayload } from './types';
 import type { StructuredPatchHunk } from '../../../shared/types';
 
 /** jsdiff → the reducer's StructuredPatchHunk shape (same fields; keep explicit). */
@@ -34,6 +37,23 @@ export function preserveFormat(original: string, edited: string): string {
   return out;
 }
 
+// G-4 (2026-08-26 tools investigation): these were bare. Every peer harness
+// describes them, and the two rules that matter most live on old_string —
+// Read prints a `%6d\t` line-number prefix that a small model copies verbatim
+// into old_string and then gets "not found" with no hint why; and a huge
+// old_string wastes output tokens for no extra precision.
+// Hoisted out of defineTool so editLocked (below) can be typed from it.
+const EDIT_INPUT = z.object({
+  file_path: z.string().describe('Absolute or workspace-relative path of the file to edit'),
+  old_string: z.string().describe(
+    'The exact text to replace. Must match exactly once in the file (or pass replace_all). '
+    + 'Do NOT include the line-number prefix that Read prints (the number and the tab after it) — '
+    + 'copy only the text after the tab. Keep it minimal: usually 1-3 lines, just enough to be unique.',
+  ),
+  new_string: z.string().describe('The replacement text (inserted literally, whitespace preserved)'),
+  replace_all: z.boolean().optional().describe('Replace every occurrence instead of requiring a unique match'),
+}).strict(); // .strict(): an unknown parameter is an error the model can fix, never silently dropped (ledger D-2)
+
 export const EditTool = defineTool({
   name: 'Edit',
   // WHY the gate is spelled out rather than stated as a rule (2026-08-11 review
@@ -44,13 +64,13 @@ export const EditTool = defineTool({
   // a slice, which counts). The gate was correct every time; its STATE is
   // invisible, so a model cannot predict whether an Edit will be accepted and
   // guesses at why one was refused. Naming what satisfies it — and that a
-  // `cat` does not, because the stamp is an mtime and only the tools record one
-  // — is the whole fix.
+  // `cat` does not, because the stamp is a content fingerprint and only the
+  // tools record one — is the whole fix.
   description:
     'Replace an exact string in a file. old_string must match exactly once (or pass replace_all). '
     + 'This file must have been Read or Written by you in this session first, and not have changed on '
-    + 'disk since — those tools record the file\'s modification time, which is what detects a stale edit. '
-    + 'Viewing the file another way (cat, grep) does not count: it records no timestamp.',
+    + 'disk since — those tools record the file\'s contents, which is what detects a stale edit. '
+    + 'Viewing the file another way (cat, grep) does not count: it records nothing.',
   // Compact form for small local models (simplified presentation, spec §4.2).
   shortDescription: 'Replace an exact string in a file with new text.',
   // G-4 (2026-08-26 tools investigation): these were bare. Every peer harness
@@ -58,23 +78,22 @@ export const EditTool = defineTool({
   // Read prints a `%6d\t` line-number prefix that a small model copies verbatim
   // into old_string and then gets "not found" with no hint why; and a huge
   // old_string wastes output tokens for no extra precision.
-  inputSchema: z.object({
-    file_path: z.string().describe('Absolute or workspace-relative path of the file to edit'),
-    old_string: z.string().describe(
-      'The exact text to replace. Must match exactly once in the file (or pass replace_all). '
-      + 'Do NOT include the line-number prefix that Read prints (the number and the tab after it) — '
-      + 'copy only the text after the tab. Keep it minimal: usually 1-3 lines, just enough to be unique.',
-    ),
-    new_string: z.string().describe('The replacement text (inserted literally, whitespace preserved)'),
-    replace_all: z.boolean().optional().describe('Replace every occurrence instead of requiring a unique match'),
-  }).strict(), // .strict(): an unknown parameter is an error the model can fix, never silently dropped (ledger D-2)
+  inputSchema: EDIT_INPUT,
   permissionSubject: (a) => a.file_path,
   async execute(args, ctx) {
+    // Serialised per file (2026-09-16 C4): the read-check-write below is async
+    // now, so two parallel Edits of ONE file must queue — see path-lock.ts.
+    return withPathLock(canonicalize(args.file_path, ctx.cwd), () => editLocked(args, ctx));
+  },
+});
+
+/** The Edit tool's body, run under the per-path lock. */
+async function editLocked(args: z.infer<typeof EDIT_INPUT>, ctx: ToolContext): Promise<ToolResultPayload> {
     const abs = resolveP(args.file_path, ctx.cwd);
     const canonical = canonicalize(args.file_path, ctx.cwd);
     // Read-before-edit gate (spec §2.3): the single rule that prevents blind overwrites.
-    const readMtime = ctx.readRegistry.get(canonical);
-    if (readMtime === undefined) {
+    const readFingerprint = ctx.readRegistry.get(canonical);
+    if (readFingerprint === undefined) {
       // Says WHICH tools satisfy the gate and why a shell view doesn't — the
       // old message named only Read, and a model that had `cat`'d the file read
       // the refusal as arbitrary. See the WHY above the description.
@@ -84,20 +103,26 @@ export const EditTool = defineTool({
       return {
         text: `Edit rejected: ${args.file_path} has not been Read or Written by you in this session `
           + '(this also happens after a session resume — earlier reads are forgotten). '
-          + 'Read it first (a cat/grep does not count — the Read tool records the file\'s modification '
-          + 'time, which is what detects a later change), then retry.',
+          + 'Read it first (a cat/grep does not count — the Read tool records the file\'s contents, '
+          + 'which is what detects a later change), then retry.',
         isError: true,
       };
     }
-    if (fs.statSync(abs).mtimeMs !== readMtime) {
+    // Fingerprinted from the raw bytes, BEFORE decoding: Read fingerprints the
+    // buffer it got from disk, so a file that is not valid UTF-8 must be
+    // compared the same way or the decode→encode round trip would read as a
+    // change that never happened. See tools/file-fingerprint.ts for why the
+    // gate compares contents rather than modification times (2026-09-16).
+    const originalBuf = await fs.promises.readFile(abs); // off the main thread (C4)
+    if (fingerprintOf(originalBuf) !== readFingerprint) {
       return {
         text: `Edit rejected: ${args.file_path} changed on disk since you last Read or Wrote it `
-          + '(its modification time no longer matches), so your old_string may be stale. '
+          + '(its contents no longer match what you read), so your old_string may be stale. '
           + 'Read it again, then retry.',
         isError: true,
       };
     }
-    const original = fs.readFileSync(abs, 'utf8');
+    const original = originalBuf.toString('utf8');
     // Strip a BOM for matching so old_string anchors don't mysteriously miss at byte 0.
     const body = original.charCodeAt(0) === 0xfeff ? original.slice(1) : original;
     // Fix (CRLF defect): match in LF space. Read output shows LF only — the model
@@ -146,8 +171,7 @@ export const EditTool = defineTool({
       };
     }
     const final = preserveFormat(original, edited);
-    fs.writeFileSync(abs, final);
-    ctx.readRegistry.set(canonical, fs.statSync(abs).mtimeMs); // our own write stays "read"
+    await fs.promises.writeFile(abs, final);
+    ctx.readRegistry.set(canonical, fingerprintOf(final)); // our own write stays "read"
     return { text: `Edited ${args.file_path}.`, structuredPatch: hunks };
-  },
-});
+}

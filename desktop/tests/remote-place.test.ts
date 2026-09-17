@@ -1,7 +1,8 @@
 // Remote access batch 2, design §3/§4 (T4), contract R2 and R5: where a phone
 // opens. The rules live in state/remote-place.ts as pure functions because App
-// cannot be mounted in a unit test; App's use of them is pinned separately
-// (remote-place-app-wiring.test.ts).
+// cannot be mounted in a unit test; App's use of them was pinned separately
+// in remote-place-app-wiring.test.ts, an exact-line source pin deleted 2026-09-16
+// (Plan B Task 4) with no replacement.
 import { describe, it, expect } from 'vitest';
 import {
   remotePlaceHostId,

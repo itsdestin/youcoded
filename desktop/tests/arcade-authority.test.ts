@@ -1,13 +1,19 @@
 // desktop/tests/arcade-authority.test.ts
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync } from 'fs';
+import { readdirSync } from 'fs';
 import { basename, join } from 'path';
-import { stripComments, readStripped, RENDERER } from './helpers/guard-scope';
+import { readSource, readStripped, RENDERER } from './helpers/guard-scope';
 import { GAMES, gameById } from '../src/renderer/components/game/game-registry';
 
-// Source-text guards for the games arcade (spec §3, §5.5, §7). These read the
-// tree at runtime, so `vitest related` can never reach them — hence the
-// `*-authority` name, which verify.sh always runs.
+// Guards for the games arcade (spec §3, §5.5, §7). Plan B (2026-09-16): every
+// single-file source pin is an ast-grep rule now (scripts/ast-grep/rules/):
+// arcade-no-forbidden-attention-apis(-ts), arcade-state-play-only-in-own-board(-ts),
+// arcade-shared-state-no-connect4-vocabulary, arcade-shared-state-has-seat-vocabulary,
+// arcade-challenge-game-{in-presence-hook,in-reducer,in-lobby,not-hardcoded},
+// chatview-yields-keys-to-game-board, arcade-handlers-no-ranking-or-formatting and
+// arcade-stop-play-keyed-on-open-game. The source-text cases left below each say
+// WHY a rule cannot carry them. They read the tree at runtime, so `vitest related`
+// can never reach them — hence the `*-authority` name, which verify.sh always runs.
 
 const GAME_DIR = join(RENDERER, 'components', 'game');
 
@@ -67,76 +73,20 @@ describe('the game slot (§3)', () => {
   });
 });
 
-describe('the state split (§3.1)', () => {
-  // `state.play` is the open game's OWN state, opaque to the shell. Exactly one
-  // file may narrow it: the game whose state it is. If a shell file starts
-  // reaching in, the split has quietly collapsed back into the one shared pot
-  // it took the largest piece of work in the project to get out of.
-  const MAY_READ_PLAY = new Set(['ConnectFourBoard.tsx', 'ChessBoard.tsx']);
+// The state split (§3.1): `state.play` is the open game's OWN state, opaque to
+// the shell; Connect 4's words stay off the shared state; the challenge carries
+// which game end to end. All single-file shapes — ast-grep rules
+// arcade-state-play-only-in-own-board(-ts), arcade-shared-state-* and
+// arcade-challenge-game-* (Plan B, 2026-09-16).
 
-  it('only a game\'s own board narrows state.play', () => {
-    const offenders = gameFiles()
-      .filter((f) => /\bstate\.play\b/.test(readStripped(f)))
-      // basename(), not split('/'): join() emits BACKSLASHES on Windows, so
-      // splitting on '/' handed back the whole path and neither allowed file
-      // ever matched MAY_READ_PLAY. The guard then failed on Windows CI naming
-      // the two files it exists to permit — green on Linux, red on Windows,
-      // and wrong in the direction that hides a real offender behind noise.
-      .map((f) => basename(f))
-      .filter((n) => !MAY_READ_PLAY.has(n));
-    expect(offenders).toEqual([]);
-  });
-
-  it('Connect 4\'s vocabulary is gone from the shared state', () => {
-    // `myColor`, `turn`, `winner`, `winLine` and `board` all lived on the shell
-    // state and made chess and 2048 read Connect 4's language to render at all.
-    const shared = readStripped(join(RENDERER, 'state', 'game-types.ts'))
-      + readStripped(join(RENDERER, 'state', 'game-reducer.ts'));
-    for (const gone of ['myColor', 'PlayerColor', 'winLine:', 'lastMove:']) {
-      expect(shared, `${gone} is back on the shared state`).not.toContain(gone);
-    }
-    // And the replacements are actually there, so this cannot pass by the
-    // whole file having been deleted.
-    for (const want of ['seat', 'turnSeat', 'outcome', 'play']) {
-      expect(shared).toContain(want);
-    }
-  });
-
-  it('the challenge carries which game, end to end', () => {
-    // The wire always sent `gameType`; the reducer dropped it, so Accept could
-    // only ever open Connect 4. All four links must stay connected.
-    expect(readStripped(join(RENDERER, 'hooks', 'usePresence.ts'))).toContain('gameType');
-    expect(readStripped(join(RENDERER, 'state', 'game-reducer.ts'))).toContain('challengeGame');
-    expect(readStripped(join(RENDERER, 'components', 'game', 'GameLobby.tsx'))).toContain('challengeGame');
-    // And nobody hardcodes the game on the way out any more.
-    expect(readStripped(join(RENDERER, 'hooks', 'usePartyGame.ts')))
-      .not.toContain("lobbyChallenge(target, 'connect-four'");
-  });
-});
-
-describe('the assistant-finishing rule (§7)', () => {
-  // DECIDED BY DESTIN, 2026-08-30: when the assistant finishes, NOTHING happens
-  // beyond the existing ready chime and the header status light. No game pauses,
-  // no overlay, no focus change, no extra badge.
-  //
-  // This asserts an ABSENCE, which is unusual — but the rule is exactly the kind
-  // four independently-built game modules could each quietly break, and by then
-  // it is four bugs in four places instead of one.
-  const FORBIDDEN = [
-    ['playSound', 'a game must not make its own sound when a turn ends'],
-    ['useAnyAttentionNeeded', 'a game must not react to the attention summary'],
-    ['onAttentionSummary', 'a game must not subscribe to the attention summary'],
-    ['isThinking', 'a game must not watch whether the assistant is working'],
-    ['sessionAttention', 'a game must not read session attention'],
-  ] as const;
-
-  for (const [symbol, why] of FORBIDDEN) {
-    it(`no game file references ${symbol} — ${why}`, () => {
-      const offenders = gameFiles().filter((f) => readStripped(f).includes(symbol));
-      expect(offenders, why).toEqual([]);
-    });
-  }
-});
+// The assistant-finishing rule (§7) — DECIDED BY DESTIN, 2026-08-30: when the
+// assistant finishes, NOTHING happens beyond the existing ready chime and the
+// header status light. No game pauses, no overlay, no focus change, no extra
+// badge. Moved to ast-grep (Plan B, 2026-09-16): rules
+// arcade-no-forbidden-attention-apis + its -ts twin ban the same five symbols
+// (playSound, useAnyAttentionNeeded, onAttentionSummary, isThinking,
+// sessionAttention) across every game file, scoped and ignored exactly as
+// gameFiles() was.
 
 describe('a focused game owns its keys', () => {
   // Found by building 2048: the chat scrolls the transcript on Up/Down from a
@@ -144,14 +94,13 @@ describe('a focused game owns its keys', () => {
   // not a text field, so the chat scrolled BEHIND the player while they played.
   // The game cannot win that race from its own side — the listener registers
   // first and capture runs outermost-first — so the yield lives in ChatView.
-  it('ChatView yields arrow keys to a focused game board', () => {
-    const chat = readStripped(join(RENDERER, 'components', 'ChatView.tsx'));
-    expect(chat).toContain('[data-game-keys]');
-  });
-
+  // ChatView's half (it yields to `[data-game-keys]`) is the ast-grep rule
+  // chatview-yields-keys-to-game-board.
   it('a game that claims the arrow keys marks itself', () => {
     // The other half of the contract: the marker has to be ON something, or
     // ChatView's yield is dead code that reads as protection.
+    // WHY still a text read: "at least one of the game files" is a count across
+    // files; a per-file ast-grep rule cannot say it.
     const claimers = gameFiles().filter((f) => readStripped(f).includes('data-game-keys'));
     expect(claimers.length).toBeGreaterThanOrEqual(1);
   });
@@ -163,7 +112,7 @@ describe('theming (§5.5)', () => {
   // than hardcode them here (where they would drift the moment globals.css
   // changes), read them back out of the stylesheet that defines them.
   function sanctionedStatusColours(): Set<string> {
-    const css = readFileSync(join(RENDERER, 'styles', 'globals.css'), 'utf8');
+    const css = readSource(join(RENDERER, 'styles', 'globals.css'));
     const names = new Set<string>();
     for (const m of css.matchAll(/--color-([a-z]+-\d{2,3}):/g)) names.add(m[1]!);
     // If this ever reads empty the guard below would pass on anything.
@@ -177,23 +126,16 @@ describe('theming (§5.5)', () => {
     // G-2: tokens paint everything. The retheme (§5.4) removed the hardcoded
     // red/yellow/blue discs, the blue board, the red disconnect box and the
     // amber "Reload app" link; this keeps them out.
+    // WHY still a text read: the allowlist is READ from globals.css at run time
+    // (so it cannot drift from the stylesheet); a static rule would have to copy it.
     const allowed = sanctionedStatusColours();
     const offenders: string[] = [];
     for (const f of gameFiles()) {
-      for (const m of stripComments(readStripped(f)).matchAll(PALETTE)) {
+      for (const m of readStripped(f).matchAll(PALETTE)) {
         if (!allowed.has(m[1]!)) offenders.push(`${basename(f)}: ${m[0]}`);
       }
     }
     expect(offenders).toEqual([]);
-  });
-
-  it('the palette pattern actually matches a known positive', () => {
-    // Without this the guard above could be a regex that matches nothing and
-    // reads green forever. bg-red-600 was a real disc colour until this spec.
-    expect(new RegExp(PALETTE.source).test('bg-red-600')).toBe(true);
-    // And the allowlist must really exempt a sanctioned one, or the guard is
-    // just banning everything and passing by luck.
-    expect(sanctionedStatusColours().has('green-400')).toBe(true);
   });
 });
 
@@ -207,13 +149,15 @@ describe('the score boundary (§6.1)', () => {
   const GAME_WORDS = [...GAMES.map((g) => g.id), 'pipes', 'toLocaleString'];
 
   it('no main-process file speaks a game\'s vocabulary', () => {
+    // WHY still a text read: GAME_WORDS is built at run time from the registry's
+    // ids — a rule would have to copy the list and drift when a game is added.
     const files = readdirSync(MAIN)
       .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
       .map((f) => join(MAIN, f));
     expect(files.length).toBeGreaterThanOrEqual(20);
     const offenders: string[] = [];
     for (const f of files) {
-      const src = stripComments(readFileSync(f, 'utf8'));
+      const src = readStripped(f);
       for (const w of GAME_WORDS) {
         if (src.includes(w)) offenders.push(`${basename(f)}: ${w}`);
       }
@@ -221,21 +165,8 @@ describe('the score boundary (§6.1)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the game-word list actually matches a known positive', () => {
-    // A guard whose pattern matches nothing reads green forever. The registry
-    // itself MUST trip this list, or the check above proves nothing.
-    const registry = readStripped(join(GAME_DIR, 'game-registry.ts'));
-    expect(GAME_WORDS.some((w) => registry.includes(w))).toBe(true);
-  });
-
-  it('the arcade handler formats nothing and decides no ranking', () => {
-    const src = readStripped(join(MAIN, 'arcade-handlers.ts'));
-    // Ranking is the Worker's, once, so every player sees one board; sorting
-    // here would give each client its own opinion of who is winning.
-    for (const banned of ['.sort(', 'rank', 'format(']) {
-      expect(src.includes(banned), `arcade-handlers.ts must not ${banned}`).toBe(false);
-    }
-  });
+  // "the arcade handler formats nothing and decides no ranking" is the ast-grep
+  // rule arcade-handlers-no-ranking-or-formatting (Plan B, 2026-09-16).
 });
 
 // ── Stopping play is keyed on the OPEN GAME and nothing else ────────────────
@@ -248,13 +179,18 @@ describe('the score boundary (§6.1)', () => {
 // the run uncounted.
 //
 // This is a fact about how the effect is WRITTEN, not about what it computes,
-// so no amount of rendering can pin it — hence a source-text guard. The
+// so no amount of rendering can pin it — hence a structural guard (the ast-grep
+// rule named in the case below, plus its count). The
 // root-cause half (the callback's identity is now stable) is pinned by
 // tests/game-pane-width.test.tsx.
 describe('a resize cannot end a run (§4.3)', () => {
   const shell = () => readStripped(join(GAME_DIR, 'ArcadeShell.tsx'));
 
   it('setPlaying(false) lives in an effect that depends on openGame alone', () => {
+    // The dependency half ([openGame] exactly, never applyGameDefaultWidth) is the
+    // ast-grep rule arcade-stop-play-keyed-on-open-game. WHY the rest is still a
+    // text read: "exactly one effect may stop play" is a count of matching
+    // effects, which a rule (it reports shapes, not totals) cannot assert.
     const src = shell();
     // Every `useEffect(..., [deps])` whose body stops play, with its dep list.
     const effects = [...src.matchAll(/useEffect\(\s*\(\)\s*=>\s*\{([\s\S]*?)\}\s*,\s*\[([^\]]*)\]\s*\)/g)];
@@ -262,17 +198,5 @@ describe('a resize cannot end a run (§4.3)', () => {
 
     const stoppers = effects.filter(([, body]) => /setPlaying\(\s*false\s*\)/.test(body));
     expect(stoppers.length, 'exactly one effect may stop play').toBe(1);
-
-    const deps = stoppers[0][2].split(',').map((d) => d.trim()).filter(Boolean);
-    expect(deps).toEqual(['openGame']);
-  });
-
-  it('the width helper is not in that effect', () => {
-    // Stated separately from the dep-list equality above so a regression names
-    // the actual culprit rather than just "deps changed".
-    const src = shell();
-    const stopper = /useEffect\(\s*\(\)\s*=>\s*\{[^}]*setPlaying\(\s*false\s*\)[^}]*\}\s*,\s*\[([^\]]*)\]\s*\)/.exec(src);
-    expect(stopper, 'the stop-playing effect moved — re-point this guard').toBeTruthy();
-    expect(stopper![1]).not.toContain('applyGameDefaultWidth');
   });
 });

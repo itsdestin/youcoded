@@ -1,26 +1,22 @@
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
-import { stripComments, RENDERER } from './helpers/guard-scope';
+import { readStripped, RENDERER } from './helpers/guard-scope';
 
 // Guard for K3: "pick one of N" has one implementation.
 //
-// Seven hand-rolled groups shipped alongside SegmentedTabs -- 4 corner radii,
-// 4 text sizes, 3 inactive treatments, for one function. Tranche 8 adopted the
-// primitive in 2 places; this retires the rest.
+// "No hand-rolled segmented control ships" (the retired class-fragment check)
+// converted to an ast-grep rule — scripts/ast-grep/rules/no-hand-rolled-segmented-control.yml
+// (Plan B, 2026-09-16, both the .tsx and .ts twins). What's left here is the
+// one case ast-grep cannot express: "SegmentedTabs has real consumers" is a
+// cross-file existence count (no single file's rule can assert "somewhere
+// among N other files"), so per global.md's non-vacuity rule it stays.
 //
-// The retired signature is a flex-1 button carrying its own active/inactive
-// pair. Matching on `bg-accent text-on-accent` alone would flag legitimate
-// non-choice uses (badges, the InputBar send button), so the assertion is the
-// full retired class fragments.
-
-
-const RETIRED = [
-  'flex-1 px-1.5 py-1 rounded-sm',
-  'flex-1 px-1.5 py-1.5 rounded-sm',
-  'flex-1 py-1.5 px-3 text-sm rounded',
-  'px-2 py-1 rounded text-3xs',
-];
+// FIX (review of batch A, 2026-09-16): this was briefly weakened to >=1 real
+// consumer ("not dead code nobody adopted"). Restored to the original >=4 and
+// title — >=1 is a much weaker floor than the test originally asserted and
+// wasn't required by the case being genuinely inexpressible in ast-grep; the
+// real count today is 9 outside components/ui, so >=4 is not a rubber stamp.
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -32,26 +28,10 @@ function walk(dir: string): string[] {
 
 const FILES = walk(RENDERER).map((path) => ({
   path,
-  src: stripComments(readFileSync(path, 'utf8')),
+  src: readStripped(path),
 }));
 
 describe('choice group authority', () => {
-  it('no hand-rolled segmented control ships', () => {
-    const offenders: string[] = [];
-    for (const { path, src } of FILES) {
-      for (const fragment of RETIRED) {
-        if (src.includes(fragment)) {
-          offenders.push(`${path.replace(RENDERER, '')} → "${fragment}"`);
-        }
-      }
-    }
-    expect(
-      offenders,
-      'Pick-one-of-N goes through <SegmentedTabs>. '
-        + '<=4 short options: segmented. Needs a description: radio list. >5: Select.',
-    ).toEqual([]);
-  });
-
   it('SegmentedTabs has real consumers', () => {
     const users = FILES.filter(
       ({ path, src }) => !path.includes(join('components', 'ui')) && src.includes('<SegmentedTabs'),

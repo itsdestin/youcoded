@@ -10,7 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow } from './ui';
+import { Button, Callout, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow, RowStatus } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
@@ -22,7 +22,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import ConnectGithubModal from './ConnectGithubModal';
 import type { PastSession } from '../../shared/types';
-import { latestUnresolvedError, deriveSyncBoxState, type SyncStatusData } from './sync-dot-state';
+import { latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncStatusData } from './sync-dot-state';
 // relativeMs is co-located in the pure device-activity-label module (single
 // wording ladder, shared by the device recency label and the fallback below).
 import { deviceActivityLabel, relativeMs } from './device-activity-label';
@@ -181,14 +181,14 @@ function primaryLabelForState(state: SyncDisplayState, loading: boolean): string
 function badgeForState(state: SyncDisplayState): React.ReactNode {
   if (state.kind === 'failing') {
     return (
-      <span className="px-1.5 py-0.5 rounded-full bg-[#DD4444]/15 text-[#DD4444] text-4xs font-medium shrink-0">
+      <span className="px-1.5 py-0.5 rounded-full bg-red-400/15 text-red-400 text-4xs font-medium shrink-0">
         {state.warningCount}
       </span>
     );
   }
   if (state.kind === 'attention') {
     return (
-      <span className="px-1.5 py-0.5 rounded-full bg-[#FF9800]/15 text-[#FF9800] text-4xs font-medium shrink-0">
+      <span className="px-1.5 py-0.5 rounded-full bg-amber-700/15 text-amber-700 text-4xs font-medium shrink-0">
         {state.warningCount}
       </span>
     );
@@ -410,9 +410,22 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
   return (
     <>
       <SettingRow
-        icon={<div className={`w-2.5 h-2.5 rounded-full ${dotColor}`} />}
+        // WHY: the icon slot holds the same 16px outline icon as every other
+        // settings row (cloud + upload arrow); the status dot moved down next to
+        // the "Last synced\u2026" line it describes (Destin, 2026-09-16).
+        icon={
+          <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.24" />
+            <path d="M12 13v8" />
+            <path d="M8 17l4-4 4 4" />
+          </svg>
+        }
         title="Backup & Sync"
-        description={counts ? `${primaryLabel} \u00B7 ${counts}` : primaryLabel}
+        description={
+          <RowStatus dotClassName={dotColor}>
+            {counts ? `${primaryLabel} \u00B7 ${counts}` : primaryLabel}
+          </RowStatus>
+        }
         accessory={badge}
         onClick={() => setOpen(true)}
       />
@@ -1074,11 +1087,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               const dot =
                 hk === 'setup' ? 'bg-blue-400 animate-pulse' :
                 hk === 'off' ? 'bg-fg-muted/40' :
-                hk === 'waiting-github' ? 'bg-[#FF9800]' :
+                hk === 'waiting-github' ? 'bg-amber-700' :
                 hk === 'error' ? 'bg-red-500' :
                 hk === 'hydrating' ? 'bg-blue-400 animate-pulse' :
                 hk === 'syncing' ? 'bg-blue-400 animate-pulse' :
-                'bg-green-500';
+                'bg-green-400';
 
               const title =
                 hk === 'setup' ? 'Setting up…' :
@@ -1151,22 +1164,35 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   </Button>
                 ) : hk === 'error' ? (
                   <>
-                    {/* Try again reuses syncNow() with the existing .catch error routing. */}
-                    <Button size="sm" onClick={runSpacesSyncNow}>
-                      Try again
-                    </Button>
-                    {/* secondary (outline) so it reads as a peer of the primary "Try again"
-                        rather than competing with it for the same weight. */}
-                    {(githubUnauthed || authError) && (
+                    {/* Offered only when the failure IS a GitHub sign-in problem (the
+                        coded 'github-auth' error). "GitHub reads signed out" alone was
+                        not proof — sync can run on the system's own gh login — so the
+                        button appeared beside unrelated failures (Destin, 2026-09-16).
+                        Secondary (outline) and to the LEFT of the primary action. */}
+                    {authError && (
                       <Button variant="secondary" size="sm" onClick={() => setShowConnectGithub(true)}>
                         Connect GitHub…
                       </Button>
                     )}
+                    {/* Try again reuses syncNow() with the existing .catch error routing;
+                        the primary action sits at the far right. */}
+                    <Button size="sm" onClick={runSpacesSyncNow}>
+                      Try again
+                    </Button>
                   </>
                 ) : null;
 
               const conflict = enabled && visibleSpaceEvents.some((e: any) => e.type === 'conflict');
               const notice = enabled ? [...visibleSpaceEvents].reverse().find((e: any) => e.type === 'notice') : null;
+              // Files too big to sync. Named by conversation title where the file is
+              // a transcript (<id>.jsonl) the conversation list knows; else by path.
+              const oversizeLine = enabled ? oversizeNotice(spacesStatus as unknown as SyncStatusData | null) : null;
+              const oversizeNames = ((spacesStatus?.oversize ?? []) as Array<{ files: string[] }>)
+                .flatMap(o => o.files)
+                .map(f => {
+                  const id = f.replace(/\\/g, '/').split('/').pop()?.replace(/\.jsonl?$/, '');
+                  return conversations?.find(c => c.sessionId === id)?.name ?? f;
+                });
 
               return (
                 <div className="rounded-lg border border-edge bg-well overflow-hidden">
@@ -1199,15 +1225,20 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       />
                     </div>
                     {/* Action tucked under the reason — same box, no divider. */}
-                    {cta && <div className="mt-2 flex items-center gap-2 pl-[18px]">{cta}</div>}
-                    {/* Raw git/transport error kept available for debugging without
-                        making it the primary message (error-message-standards.md).
-                        Native <details> — no React state needed inside this render. */}
-                    {errorMsg && (hk === 'error' || offError) && (
-                      <details className="mt-2 pl-[18px]">
-                        <summary className="text-2xs text-fg-muted cursor-pointer hover:text-fg-2 select-none">Show details</summary>
-                        <pre className="mt-1 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{errorMsg as string}</pre>
-                      </details>
+                    {/* Raw git error stays behind "Show details" (error-message-standards.md).
+                        One row under the message (Destin, 2026-09-16): "Show details" on
+                        the left, the actions on the right. The details text opens below
+                        the row's left side, so the buttons never move. */}
+                    {(cta || (errorMsg && (hk === 'error' || offError))) && (
+                      <div className="mt-2 pl-[18px] flex items-start justify-between gap-2">
+                        {errorMsg && (hk === 'error' || offError) ? (
+                          <details className="min-w-0 flex-1 pt-1">
+                            <summary className="text-2xs text-fg-muted cursor-pointer hover:text-fg-2 select-none">Show details</summary>
+                            <pre className="mt-1 text-3xs leading-relaxed text-fg-dim whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{errorMsg as string}</pre>
+                          </details>
+                        ) : <div />}
+                        {cta && <div className="flex items-center gap-2 shrink-0">{cta}</div>}
+                      </div>
                     )}
                   </div>
 
@@ -1290,12 +1321,22 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   {enabled && !errorMsg && (
                     <div className="border-t border-edge-dim px-3 py-2.5 space-y-2">
                       {conflict && (
-                        <p className="text-xs text-amber-600">
+                        <p className="text-xs text-amber-700">
                           Some files had conflicting edits — the other device's copy was kept alongside yours
                           (look for "(from …)" files).
                         </p>
                       )}
                       {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
+                      {/* The app's warning card, collapsed to one informative line
+                          (review, 2026-09-16); it opens to the reason and the names. */}
+                      {oversizeLine && (
+                        <Callout tone="warning" collapsible title={oversizeLine.header}>
+                          {oversizeLine.body}
+                          <ul className="mt-1.5 list-disc pl-4 space-y-0.5">
+                            {oversizeNames.map((n, i) => <li key={i} className="break-words">{n}</li>)}
+                          </ul>
+                        </Callout>
+                      )}
                       {/* .catch (inside runSpacesSyncNow) routes a failed invoke into the red note slot. */}
                       <button onClick={runSpacesSyncNow} className="text-xs underline text-fg-muted hover:text-fg-2">Sync now</button>
                     </div>
@@ -1358,7 +1399,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         // Status light: blue in-flight / red error / green healthy / gray paused-or-disconnected.
                         const lightClass = inFlight ? 'bg-blue-400 animate-pulse'
                           : b.lastError ? 'bg-red-500 ring-2 ring-red-500/25'
-                          : (b.syncEnabled && b.connected) ? 'bg-green-500 ring-2 ring-green-500/25'
+                          : (b.syncEnabled && b.connected) ? 'bg-green-400 ring-2 ring-green-400/25'
                           : 'bg-fg-muted/40';
                         const failure = uploadFailure[b.id];
                         return (
@@ -1366,7 +1407,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           <div
                             className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
                               b.lastError ? 'border-red-500/20 bg-red-500/5' :
-                              b.syncEnabled && b.connected ? 'border-green-500/20 bg-green-500/5' :
+                              b.syncEnabled && b.connected ? 'border-green-400/20 bg-green-400/5' :
                               'border-edge bg-inset/30'
                             }`}
                           >
@@ -1384,7 +1425,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                  'Never backed up'}
                               </div>
                               {isPending && !actionFeedback[b.id] && (
-                                <span className="text-4xs font-medium text-amber-400">Changes pending upload</span>
+                                <span className="text-4xs font-medium text-amber-700">Changes pending upload</span>
                               )}
                               {actionFeedback[b.id] && (
                                 <span className={`text-4xs font-medium ${
@@ -1502,7 +1543,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       className={`rounded-lg border px-3 py-2 ${
                         w.level === 'danger'
                           ? 'border-red-500/30 bg-red-500/5'
-                          : 'border-amber-500/30 bg-amber-500/5'
+                          : 'border-amber-700/30 bg-amber-700/5'
                       }`}
                     >
                       <div className="text-xs font-medium text-fg">{w.title}</div>
@@ -1588,8 +1629,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         {logLines.map((line, i) => {
                           try {
                             const entry = JSON.parse(line);
-                            const levelColor = entry.level === 'ERROR' ? 'text-[#DD4444]'
-                              : entry.level === 'WARN' ? 'text-[#FF9800]'
+                            const levelColor = entry.level === 'ERROR' ? 'text-red-400'
+                              : entry.level === 'WARN' ? 'text-amber-700'
                               : 'text-fg-dim';
                             return (
                               <div key={i} className="py-0.5">

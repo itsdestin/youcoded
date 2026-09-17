@@ -509,7 +509,7 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, suppressAlwaysAllow, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, suppressAlwaysAllow, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false, noKeyboard = false }: {
   requestId: string;
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
@@ -546,6 +546,12 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
   onResponded?: () => void;
   onFailed?: () => void;
+  /** Click/tap only — no global arrow/Enter handling. WHY: every card's Enter
+   *  listener is window-wide and the first one registered wins, so with a
+   *  helper's request sitting beside the main assistant's, Enter meant for one
+   *  could approve the other (a deny-listed helper command included). Helper
+   *  requests therefore always take an explicit click. */
+  noKeyboard?: boolean;
 }) {
   const [responding, setResponding] = useState(false);
   // Native asks carry NO CC permission_suggestions, but Always-allow must still
@@ -670,7 +676,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // and while this card's chat is not the one on screen.
   const keysLive = useCardKeysLive();
   useEffect(() => {
-    if (responding || confirmingAlways || !keysLive) return;
+    if (responding || confirmingAlways || !keysLive || noKeyboard) return;
     const handler = (e: KeyboardEvent) => {
       // WHY: InputBar sends on an Enter that reaches the page body and marks it
       // handled. That one keypress is the message, not an answer to this card.
@@ -692,7 +698,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [responding, confirmingAlways, keysLive, focusIdx, count]);
+  }, [responding, confirmingAlways, keysLive, noKeyboard, focusIdx, count]);
 
   const pad = isAndroid() ? 'py-2' : 'py-1';
   const ring = 'ring-2 ring-white/40';
@@ -784,14 +790,14 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
           <button
             disabled={responding}
             onClick={() => handleRespond({ decision: { behavior: 'allow' } })}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-600/60 hover:bg-green-600/80 text-green-100 transition-colors disabled:opacity-50`}
+            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-400/60 hover:bg-green-400/80 text-green-100 transition-colors disabled:opacity-50`}
           >
             Nevermind, allow once
           </button>
           <button
             disabled={responding}
             onClick={() => handleRespond(alwaysAllowDecision())}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-600/60 hover:bg-red-600/80 text-red-100 transition-colors disabled:opacity-50`}
+            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50`}
           >
             Always allow
           </button>
@@ -821,7 +827,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
             ref={el => { buttonsRef.current[0] = el; }}
             disabled={responding}
             onClick={() => handleRespond({ decision: { behavior: 'allow' } })}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-600/60 hover:bg-green-600/80 text-green-100 transition-colors disabled:opacity-50 ${focusIdx === 0 ? ring : ''}`}
+            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-400/60 hover:bg-green-400/80 text-green-100 transition-colors disabled:opacity-50 ${focusIdx === 0 ? ring : ''}`}
           >
             Run it
           </button>
@@ -829,7 +835,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
             ref={el => { buttonsRef.current[1] = el; }}
             disabled={responding}
             onClick={() => handleRespond({ decision: { behavior: 'deny' } })}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-600/60 hover:bg-red-600/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
+            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === 1 ? ring : ''}`}
           >
             Skip it
           </button>
@@ -844,7 +850,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
             ref={el => { buttonsRef.current[2] = el; }}
             disabled={responding}
             onClick={onAlwaysAllow}
-            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-orange-600/60 hover:bg-orange-600/80 text-orange-100 transition-colors disabled:opacity-50 ${focusIdx === 2 ? ring : ''}`}
+            className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-orange-100 transition-colors disabled:opacity-50 ${focusIdx === 2 ? ring : ''}`}
           >
             Always Allow
           </button>
@@ -867,7 +873,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
         ref={el => { buttonsRef.current[0] = el; }}
         disabled={responding}
         onClick={() => handleRespond({ decision: { behavior: 'allow' } })}
-        className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-600/60 hover:bg-green-600/80 text-green-100 transition-colors disabled:opacity-50 ${focusIdx === 0 ? ring : ''}`}
+        className={`px-3 ${pad} text-xs font-medium rounded-lg bg-green-400/60 hover:bg-green-400/80 text-green-100 transition-colors disabled:opacity-50 ${focusIdx === 0 ? ring : ''}`}
       >
         Yes
       </button>
@@ -885,7 +891,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
         ref={el => { buttonsRef.current[canAlwaysAllow ? 2 : 1] = el; }}
         disabled={responding}
         onClick={() => handleRespond({ decision: { behavior: 'deny' } })}
-        className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-600/60 hover:bg-red-600/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === (canAlwaysAllow ? 2 : 1) ? ring : ''}`}
+        className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-red-100 transition-colors disabled:opacity-50 ${focusIdx === (canAlwaysAllow ? 2 : 1) ? ring : ''}`}
       >
         No
       </button>
@@ -1442,7 +1448,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         <span className="text-xs text-fg-muted truncate flex-1 min-w-0">{display.detail}</span>
       )}
       {run?.stale && run.status === 'running' && (
-        <Tooltip text="No activity for a while — may be stuck"><span className="text-4xs uppercase tracking-wide text-amber-500 shrink-0">may be stuck</span></Tooltip>
+        <Tooltip text="No activity for a while — may be stuck"><span className="text-4xs uppercase tracking-wide text-amber-700 shrink-0">may be stuck</span></Tooltip>
       )}
       {runIcon === 'stopped' && (
         <span className="text-4xs uppercase tracking-wide text-fg-muted shrink-0">stopped</span>
@@ -1520,6 +1526,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         ) : (
           <PermissionButtons
             requestId={tool.requestId}
+            // A helper's request is click-only — see PermissionButtons.noKeyboard.
+            noKeyboard={!!tool.specialist}
             suggestions={tool.permissionSuggestions}
             denyListed={tool.denyListed}
             permissionMode={tool.permissionMode}

@@ -1,8 +1,4 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-// @ts-ignore — Vite inline CSS import
-import hljsDarkCss from 'highlight.js/styles/github-dark.css?inline';
-// @ts-ignore — Vite inline CSS import
-import hljsLightCss from 'highlight.js/styles/github.css?inline';
 
 import { validateTheme } from '../themes/theme-validator';
 import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyle } from '../themes/theme-engine';
@@ -81,6 +77,9 @@ interface ThemeContextValue {
   font: string;
   reducedEffects: boolean;
   setReducedEffects: (v: boolean) => void;
+  /** Bumped one render after the theme (or Reduced Effects) has been written
+   *  to the DOM. Key on THIS to read the theme back out of the DOM. */
+  themeApplied: number;
   showTimestamps: boolean;
   setShowTimestamps: (v: boolean) => void;
   showTurnMetadata: boolean;
@@ -128,6 +127,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   cycleList: DEFAULT_CYCLE, setCycleList: () => {},
   font: DEFAULT_FONT_FAMILY,
   reducedEffects: false, setReducedEffects: () => {},
+  themeApplied: 0,
   showTimestamps: true, setShowTimestamps: () => {},
   showTurnMetadata: false, setShowTurnMetadata: () => {},
   showDeletedArtifacts: false, setShowDeletedArtifacts: () => {},
@@ -160,11 +160,53 @@ function applyFont(font: string) {
   document.documentElement.style.setProperty('--font-mono', font);
 }
 
+// WHY dynamic imports (2026-09-16 audit W25): both highlight.js stylesheets
+// used to be static `?inline` imports, so the entry bundle carried the one the
+// active theme never uses. Each is now its own chunk, fetched the first time a
+// theme of that polarity is applied and kept for the rest of the run. A theme
+// change is a user action; the sheet lands within the same tick on desktop.
+const hljsCss: { dark?: string; light?: string } = {};
+async function loadHighlightCss(dark: boolean): Promise<string> {
+  const key = dark ? 'dark' : 'light';
+  if (hljsCss[key] === undefined) {
+    const mod = dark
+      // @ts-ignore — Vite inline CSS import
+      ? await import('highlight.js/styles/github-dark.css?inline')
+      // @ts-ignore — Vite inline CSS import
+      : await import('highlight.js/styles/github.css?inline');
+    hljsCss[key] = mod.default as string;
+  }
+  return hljsCss[key]!;
+}
+
+// Once the active sheet is in, fetch the other polarity when the browser is
+// idle (setTimeout where requestIdleCallback is missing — jsdom, old WebViews)
+// so the first theme switch — over remote access, where a chunk is a network
+// round-trip — does not briefly show the wrong code colours.
+const PRELOAD_FALLBACK_MS = 1500;
+let preloadScheduled = false;
+function preloadOtherHighlightCss(dark: boolean) {
+  if (preloadScheduled) return;
+  preloadScheduled = true;
+  const run = () => { void loadHighlightCss(!dark).catch(() => { preloadScheduled = false; }); };
+  const ric = (globalThis as any).requestIdleCallback as ((cb: () => void, o?: { timeout: number }) => void) | undefined;
+  if (typeof ric === 'function') ric(run, { timeout: 5000 });
+  else setTimeout(run, PRELOAD_FALLBACK_MS);
+}
+
+// The polarity last asked for. A slower load for an earlier request must not
+// land over a later one (light → dark → light before the dark sheet arrived).
+let highlightWanted: boolean | null = null;
 function applyHighlightTheme(dark: boolean) {
-  const id = 'hljs-theme';
-  let el = document.getElementById(id) as HTMLStyleElement | null;
-  if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
-  el.textContent = dark ? hljsDarkCss : hljsLightCss;
+  highlightWanted = dark;
+  void loadHighlightCss(dark).then((css) => {
+    if (highlightWanted !== dark) return;
+    const id = 'hljs-theme';
+    let el = document.getElementById(id) as HTMLStyleElement | null;
+    if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
+    if (el.textContent !== css) el.textContent = css;
+    preloadOtherHighlightCss(dark);
+  });
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -172,6 +214,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [cycleList, setCycleListState] = useState<string[]>(() => getStoredJSON(CYCLE_KEY, DEFAULT_CYCLE));
   const [font, setFontState] = useState(DEFAULT_FONT_FAMILY);
   const [reducedEffects, setReducedEffectsState] = useState(() => getStored(REDUCED_EFFECTS_KEY, '') === '1');
+  // See the interface: a counter for consumers that read the theme back out of the DOM.
+  const [themeApplied, setThemeApplied] = useState(0);
   const [showTimestamps, setShowTimestampsState] = useState(() => getStored(SHOW_TIMESTAMPS_KEY, '1') !== '0');
   // Task 5.1: opt-in per-turn metadata strip (model, tokens, cache hit %).
   // Defaults to false — advanced diagnostic signal, mirrors the "default hidden"
@@ -586,6 +630,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       applyThemeFont(undefined); // clears any previously injected Google Font link
       applyFont(DEFAULT_FONT_FAMILY);
     }
+    // WHY (2026-09-16 A2 review): a consumer that reads the theme back OUT of the
+    // DOM (getComputedStyle — the session strip's pill font and reveal window)
+    // cannot key on `theme`: its layout effect runs in the same commit, BEFORE
+    // this passive effect has written the theme, so it would read the outgoing
+    // theme. This counter moves one render after the DOM is current, so an
+    // effect keyed on it reads the theme that is actually applied.
+    setThemeApplied((n) => n + 1);
   }, [activeTheme, reducedEffects]);
 
   const setTheme = useCallback((slug: string) => {
@@ -683,7 +734,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo(() => ({
     theme: activeSlug, setTheme, cycleTheme,
     cycleList, setCycleList, font,
-    reducedEffects, setReducedEffects,
+    reducedEffects, setReducedEffects, themeApplied,
     showTimestamps, setShowTimestamps,
     showTurnMetadata, setShowTurnMetadata,
     showDeletedArtifacts, setShowDeletedArtifacts,
@@ -693,7 +744,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     allThemes, activeTheme, bgStyle, patternStyle,
     setGlassOverride, reloadUserThemes,
   }), [activeSlug, setTheme, cycleTheme, cycleList, setCycleList, font,
-       reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps,
+       reducedEffects, setReducedEffects, themeApplied, showTimestamps, setShowTimestamps,
        showTurnMetadata, setShowTurnMetadata,
        showDeletedArtifacts, setShowDeletedArtifacts,
        contextDisplay, setContextDisplay,

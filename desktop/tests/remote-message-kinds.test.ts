@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { MESSAGE_KIND, REHYDRATE_ON_RECONNECT } from '../src/renderer/remote-shim';
+import { readSource } from './helpers/guard-scope';
 
-const shim = readFileSync(new URL('../src/renderer/remote-shim.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const shim = readSource(fileURLToPath(new URL('../src/renderer/remote-shim.ts', import.meta.url)));
 
 /** Every channel the shim sends without expecting a reply — the ones that could be queued. */
 function firedChannels(): string[] {
@@ -41,15 +42,15 @@ describe('nothing sends itself', () => {
     expect(REHYDRATE_ON_RECONNECT.length).toBeGreaterThan(0);
     // And only on a RECONNECT: a first connect already flushes the caller's own mount-time
     // fetches, so re-asking there would double the traffic of every connection.
-    const shimSrc = readFileSync(new URL('../src/renderer/remote-shim.ts', import.meta.url), 'utf8');
+    const shimSrc = readSource(fileURLToPath(new URL('../src/renderer/remote-shim.ts', import.meta.url)));
     expect(shimSrc).toContain('if (hasConnectedBefore) rehydrate();');
   });
 
   it('the composer asks whether it can send instead of writing to find out', () => {
-    const bar = readFileSync(new URL('../src/renderer/components/InputBar.tsx', import.meta.url), 'utf8');
+    const bar = readSource(fileURLToPath(new URL('../src/renderer/components/InputBar.tsx', import.meta.url)));
     expect(bar).toContain('window.claude.session.canSend?.() === false');
     // Both bridges answer it, so the composer never has to know which one it holds.
-    expect(readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8')).toContain('canSend: () => true');
+    expect(readSource(fileURLToPath(new URL('../src/main/preload.ts', import.meta.url)))).toContain('canSend: () => true');
     expect(shim).toContain('canSend: () =>');
   });
 });

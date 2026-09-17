@@ -1,6 +1,4 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
-import fs from 'node:fs';
-import path from 'node:path';
 
 /**
  * The buddy's consent gate lives in the MAIN process, not in the settings screen
@@ -191,57 +189,13 @@ describe('the cached status the drag path reads', () => {
   });
 });
 
-// The unit tests above prove the RULE. These prove main.ts actually applies it —
-// a correct gate nothing calls is the same bug with extra steps.
-describe('main.ts wires the gate to the window that gets created', () => {
-  // Normalised: a Windows checkout is CRLF; source-text assertions must not depend on it.
-  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'main.ts'), 'utf8').replace(/\r\n/g, '\n');
-  const handler = main.slice(main.indexOf('IPC.BUDDY_SHOW'), main.indexOf('IPC.BUDDY_HIDE'));
-
-  it('found the show handler (otherwise every assertion below is vacuous)', () => {
-    expect(handler).toContain('buddyManager.show()');
-    expect(handler.length).toBeLessThan(1200);
-  });
-
-  it('asks the gate, and re-reads the status rather than trusting launch', () => {
-    expect(handler).toContain('buddyShowRefusal(');
-    expect(handler).toContain('refreshBuddyHelperStatus()');
-  });
-
-  it('returns the refusal WITHOUT creating the buddy', () => {
-    const refuse = handler.indexOf('return { ok: false');
-    const show = handler.indexOf('buddyManager.show()');
-    expect(refuse).toBeGreaterThan(0);
-    expect(show).toBeGreaterThan(refuse);
-  });
-
-  it('answers the "is the helper live" question from the cache, never with a fresh call', () => {
-    // This is read on EVERY FRAME of a drag. A lookup here would mean two
-    // subprocess calls 60 times a second.
-    const dep = main.slice(main.indexOf('captionChannelLive: () =>'), main.indexOf('// Publish to module scope'));
-    expect(dep).toContain('cachedBuddyHelperStatus()');
-    expect(dep).not.toContain('await');
-    expect(dep).not.toContain('helperStatus()');
-  });
-
-  it('builds the usable-screen-area lookup only where a helper is needed', () => {
-    // Everywhere else the manager gets no work-area source at all, which is
-    // what keeps Electron's own number — today's behaviour — in use.
-    expect(main).toContain('helperAtLaunch.needed ? new WorkAreaResolver() : null');
-    expect(main).toContain('workArea: buddyWorkArea ?? undefined');
-  });
-
-  it('re-asks for the usable screen area on all three display events, debounced', () => {
-    // Screens being plugged in, unplugged or rearranged each invalidate which
-    // KDE screen an Electron display is. KDE fires the first of these three
-    // times within 200 ms of a window appearing, so it has to be debounced.
-    for (const evt of ['display-metrics-changed', 'display-added', 'display-removed']) {
-      expect(main, `${evt} is not wired to the work-area lookup`).toContain(`screen.on('${evt}', reresolveWorkArea)`);
-    }
-    const debouncer = main.slice(main.indexOf('const reresolveWorkArea'), main.indexOf("screen.on('display-metrics-changed'"));
-    expect(debouncer).toContain('clearTimeout(t)');
-  });
-});
+// The unit tests above prove the RULE. The proof that main.ts actually applies it
+// (a correct gate nothing calls is the same bug with extra steps) is ast-grep
+// since Plan B (2026-09-16), in scripts/ast-grep/rules/:
+// buddy-show-consults-refusal-gate (asks the gate, re-reads the status),
+// buddy-show-refuses-before-creating (refusal returned before buddyManager.show()),
+// buddy-drag-reads-cached-helper-status (the per-frame question reads the cache),
+// buddy-work-area-only-where-needed and buddy-work-area-reresolved-on-display-change.
 
 describe('losing the helper under a live buddy', () => {
   let gate: Gate;

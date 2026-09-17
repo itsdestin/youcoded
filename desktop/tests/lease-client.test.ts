@@ -38,6 +38,11 @@ describe('lease-client', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-test-'));
+    // WHY a per-client copy: `tmpRoot` is reassigned by the NEXT test's
+    // beforeEach, and leaseDir() is read when a queued file op runs — so a delete
+    // or write left over from one test used to land in the next test's folder
+    // (proven with YOUCODED_LEASE_DEBUG, 2026-09-16).
+    const clientRoot = tmpRoot;
     hubRequest = vi.fn();
     takeoverSpy = vi.fn();
     client = createLeaseClient({
@@ -48,7 +53,7 @@ describe('lease-client', () => {
       // 30s heartbeat; writing them into a synced folder made every renew a git
       // commit (2026-07-30 churn fix). The tests keep the same on-disk shape so
       // the existing fallback assertions still describe real layout.
-      leaseDir: () => path.join(tmpRoot, 'Leases'),
+      leaseDir: () => path.join(clientRoot, 'Leases'),
       hubRequest: hubRequest as any,
       onTakeoverRequest: takeoverSpy as any,
     });
@@ -80,6 +85,36 @@ describe('lease-client', () => {
     hubRequest.mockResolvedValue(okResult('renew', 's1', Date.now() + 300_000));
     await vi.advanceTimersByTimeAsync(RENEW_MS);
     expect(hubRequest).toHaveBeenCalledWith('renew', 's1', DEVICE_ID);
+  });
+
+  // 2026-09-16 (sync.md): open a conversation and close it within a second. The
+  // release lands while acquire is still waiting on the hub; when the reply
+  // arrives the session must NOT come back as held with a live heartbeat.
+  it('a release that lands while acquire is still waiting on the hub wins — nothing is held afterwards', async () => {
+    let answerAcquire!: (r: LeaseResult) => void;
+    hubRequest.mockImplementation((op: string, sid: string) => {
+      if (op === 'acquire') return new Promise<LeaseResult>((resolve) => { answerAcquire = resolve; });
+      return Promise.resolve(okResult(op, sid, 0));
+    });
+    const acquiring = client.acquire('s1');
+    await Promise.resolve();                 // let acquire reach its hub await
+    // The tab closes. release() clears the local hold SYNCHRONOUSLY and then
+    // waits for its file delete, which queues behind acquire's reserved slot —
+    // so it can only finish once the hub has answered, exactly as in the app.
+    const releasing = client.release('s1');
+    answerAcquire(okResult('acquire', 's1', Date.now() + 300_000));
+    await acquiring;
+    await releasing;
+
+    expect(client.isHeld('s1')).toBe(false);
+    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+    // The hub may have granted the lease after it processed the release, so it
+    // is told again — best-effort — that this device does not want it.
+    expect(hubRequest.mock.calls.filter(([op]) => op === 'release')).toHaveLength(2);
+    // And no heartbeat re-armed itself for a session that is gone.
+    hubRequest.mockClear();
+    await vi.advanceTimersByTimeAsync(RENEW_MS * 2);
+    expect(hubRequest).not.toHaveBeenCalledWith('renew', 's1', DEVICE_ID);
   });
 
   it('release stops the timer, deletes the file, and calls the hub', async () => {
@@ -277,9 +312,19 @@ describe('lease-client', () => {
     );
     await vi.advanceTimersByTimeAsync(RENEW_MS);
 
-    expect(client.isHeld('s1')).toBe(false);
-    expect(rmSpy).toHaveBeenCalledWith(leaseFilePath(tmpRoot, 's1'), { force: true });
-    await rmSpy.mock.results[0].value;
+    // WHY a wait and not a straight read: renew → lost re-acquire → teardown is
+    // a chain of awaited mocks, and one advance of the fake clock does not
+    // promise every link has run — `isHeld` read true once on macOS CI
+    // (2026-09-16) and once locally (09-11). vi.waitFor advances fake timers
+    // itself between checks, so this waits on the outcome, not on a tick count.
+    await vi.waitFor(() => {
+      expect(client.isHeld('s1')).toBe(false);
+      expect(rmSpy).toHaveBeenCalledWith(leaseFilePath(tmpRoot, 's1'), { force: true });
+    });
+    // The file is gone afterwards. This failed on CI (2026-09-16) because the
+    // PREVIOUS test's client wrote it back after this delete — see the per-client
+    // root in beforeEach and the "never lands" test below.
+    await Promise.all(rmSpy.mock.results.map((r) => r.value));
     expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
     rmSpy.mockRestore();
     expect(takeoverSpy).toHaveBeenCalledWith('s1', { deviceId: 'dev-B', device: 'phone-B' });
@@ -349,6 +394,31 @@ describe('lease-client', () => {
     await vi.advanceTimersByTimeAsync(RENEW_MS * 2);
     expect(hubRequest).not.toHaveBeenCalledWith('renew', 's1', DEVICE_ID);
     expect(hubRequest).not.toHaveBeenCalledWith('renew', 's2', DEVICE_ID);
+  });
+
+  it('a write still queued when the client is destroyed never lands', async () => {
+    // The CI cause of the "file back after its delete" flake (2026-09-16): a
+    // renew write queued behind a slow one outlived its test, then wrote into
+    // the NEXT test's folder after that test's delete. Staged here with a gate:
+    // write 1 is held mid-flight, write 2 is queued behind it (acquire claims
+    // its queue slot at call time), and destroy() lands before either finishes.
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    const realWrite = fs.promises.writeFile;
+    const writeSpy = vi.spyOn(fs.promises, 'writeFile')
+      .mockImplementation(async (...args: any[]) => { await gate; return (realWrite as any).apply(fs.promises, args); });
+    hubRequest.mockResolvedValue(okResult('acquire', 's1', Date.now() + 300_000));
+
+    const first = client.acquire('s1');
+    const second = client.acquire('s1');
+    await vi.waitFor(() => { expect(writeSpy).toHaveBeenCalledTimes(1); });
+    client.destroy();
+    open();
+    await first;
+    await second;   // resolves only after its own slot ran — skipped or written
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    writeSpy.mockRestore();
   });
 
   it('acquire on a hub reject (someone else holds it) does not start a timer or write a file', async () => {

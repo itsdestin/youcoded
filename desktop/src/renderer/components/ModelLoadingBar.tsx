@@ -4,6 +4,7 @@ import { Button, ProgressBar, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
+import { useSecondsTick } from '../hooks/useSecondsTick';
 
 // Centered status strip that floats just ABOVE the input area for a NATIVE
 // (local-model) session. States (2026-07-14 memory-lifecycle UX):
@@ -79,14 +80,16 @@ const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLo
   const showReload = !isThinking && notResident && everResident;
 
   // Elapsed-seconds ticker — also serves as a 1s re-render heartbeat so the
-  // plateau check below re-evaluates even when byte updates have stopped arriving.
-  const [elapsed, setElapsed] = useState(0);
+  // plateau check below re-evaluates even when byte updates have stopped
+  // arriving. Rides the shared seconds clock while loading (audit W19); the
+  // number derives from the moment this load began, so a pause loses nothing.
+  // The start is stamped when `loading` turns on (per model), as before.
+  const [loadStartedAt, setLoadStartedAt] = useState<number | null>(null);
   useEffect(() => {
-    if (!loading) { setElapsed(0); return; }
-    const started = Date.now();
-    const t = setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
-    return () => clearInterval(t);
+    setLoadStartedAt(loading ? Date.now() : null);
   }, [loading, modelInfo?.modelId]);
+  const now = useSecondsTick(loading);
+  const elapsed = loadStartedAt == null ? 0 : Math.max(0, Math.floor((now - loadStartedAt) / 1000));
 
   // Track the last time resident bytes increased, to detect a plateau (weights
   // fully read, backend still initializing) independent of the exact peak %.

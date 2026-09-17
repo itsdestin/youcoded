@@ -6,7 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  ShellRegistry, MAX_EXPLICIT_RUNNING, RING_LINES, WIRE_TAIL_LINES, READ_MAX_BYTES, LONG_RUN_NOTICE_MS,
+  ShellRegistry, MAX_EXPLICIT_RUNNING, RING_LINES, WIRE_TAIL_LINES, READ_MAX_BYTES, LONG_RUN_NOTICE_MS, EXIT_DRAIN_GRACE_MS,
   formatElapsed, formatFinishedNotice, formatLongRunningNotice, stateText, spawnDetached,
 } from '../src/main/harness/shell-registry';
 import { spillRoot, sweepOldSpillFiles } from '../src/main/harness/tools/spill-paths';
@@ -200,6 +200,60 @@ describe.skipIf(!posix)('ShellRegistry (POSIX processes)', () => {
     expect(r.run.partial).toBe('');
   });
 
+  it('output written in the last instant before exit is never lost (settles on close, not exit)', async () => {
+    // WHY twenty runs: the loss is a race between the child's `exit` event and the
+    // last stdout chunk. One run passes most of the time; twenty make the old
+    // exit-based settle fail reliably on a 2-core runner, and cost under a second.
+    for (let i = 0; i < 20; i++) {
+      const r = reg.start(startSpec(`printf 'p 1\\rp 2\\rp 3\\n'`, dir, `tu-drain-${i}`));
+      if (!r.ok) throw new Error('start failed');
+      await r.run.exited;
+      expect(r.run.tail).toEqual(['p 1', 'p 2', 'p 3']);
+      expect(r.run.partial).toBe('');
+    }
+  });
+
+  it('a chunk delivered AFTER the exit event still lands in the tail (the exact CI order, staged)', async () => {
+    // WHY a staged child: the real race needs a slow runner and never fired on the
+    // 32-core dev machine. Node's documented order is exit → last data → close;
+    // this fake replays it deterministically, so the fix is proven everywhere.
+    const { EventEmitter } = await import('events');
+    const child: any = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.exitCode = null; child.signalCode = null; child.pid = 999_999_999;
+    child.kill = () => true;
+    // What the finished notice quotes is the tail AT the exit event — snapshot it there.
+    let atExit: string[] | null = null;
+    reg.on('exit', (r) => { if (r.toolUseId === 'tu-staged') atExit = [...r.tail]; });
+    const run = reg.adopt({ toolUseId: 'tu-staged', command: 'x', cwd: dir, child, startedAt: Date.now(), seedLog: null, recent: '', logPath: null, logStream: null, captureEnv: false });
+    child.stdout.emit('data', 'p 1\n');
+    child.exitCode = 0;
+    child.emit('exit', 0, null);
+    child.stdout.emit('data', 'p 2\n');
+    child.emit('close', 0, null);
+    await run.exited;
+    expect(atExit).toEqual(['p 1', 'p 2']);
+    expect(run.exitCode).toBe(0);
+  });
+
+  it('a grandchild holding stdout open cannot hold the run open past the grace', async () => {
+    // `sleep 30 &` inherits the pipe; with a pure `close` settle the run would
+    // wait the full 30 s for it. WHY no clock assertion (test-suite-hygiene: never
+    // wall clock): the proof is that the run settled while the grandchild that
+    // holds the pipe is STILL alive — only the EXIT_DRAIN_GRACE_MS timer can do that.
+    const r = reg.start(startSpec('sleep 30 & echo $!; echo done', dir, 'tu-grace'));
+    if (!r.ok) throw new Error('start failed');
+    await r.run.exited;
+    const pid = Number(r.run.tail[0]);
+    try {
+      expect(r.run.tail).toEqual([String(pid), 'done']);
+      expect(alive(pid)).toBe(true);
+    } finally {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+
   it('read() is bounded: a huge log returns only the last READ_MAX_BYTES, and says nothing false about it', async () => {
     // 7 MB of output must not become a 7 MB string in the main process.
     const r = reg.start(startSpec(`for i in $(seq 1 200000); do echo "line-$i-padding-padding-padding"; done`, dir));
@@ -246,6 +300,12 @@ describe('spill retention sweep (moved out of bash.ts so background logs are swe
 // announced once per mark; the host turns the event into an idle-boundary
 // notice. Marks are a test seam here so the suite does not wait five minutes.
 describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
+  // WHY a tolerance: a mark fires from a timer armed at `startedAt`, and the elapsed
+  // it reports is a second Date.now() read. libuv rounds timers to its own tick, so a
+  // 60 ms mark can report 59 (Ubuntu CI, 2026-09-16, run 35089626563). What the
+  // assertions pin is that each mark measures from the run's OWN start, not the
+  // adopt time — a few milliseconds of clock jitter does not touch that.
+  const JITTER_MS = 5;
   let dir: string;
   let reg: ShellRegistry;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shell-reg-long-')); reg = new ShellRegistry(`t-${path.basename(dir)}`, { longRunNoticeMs: [60, 140] }); });
@@ -271,8 +331,8 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
     if (!r.ok) throw new Error('start failed');
     await waitFor(() => marks.length === 2);
     expect(marks.map((m) => m.shellId)).toEqual([r.run.shellId, r.run.shellId]);
-    expect(marks[0].ms).toBeGreaterThanOrEqual(60);
-    expect(marks[1].ms).toBeGreaterThanOrEqual(140);
+    expect(marks[0].ms).toBeGreaterThanOrEqual(60 - JITTER_MS);
+    expect(marks[1].ms).toBeGreaterThanOrEqual(140 - JITTER_MS);
     expect(r.run.status).toBe('running');
   });
 
@@ -297,7 +357,7 @@ describe('still-running marks (LONG_RUN_NOTICE_MS)', () => {
     // already past (fires at once), the 140 ms mark is 40 ms away.
     reg.adopt({ toolUseId: 'tu-adopt', command: 'sleep 5', cwd: dir, child, startedAt: Date.now() - 100, seedLog: null, recent: '', logPath: null, logStream: null, captureEnv: false });
     await waitFor(() => marks.length === 2);
-    expect(marks[0]).toBeGreaterThanOrEqual(100);
-    expect(marks[1]).toBeGreaterThanOrEqual(140);
+    expect(marks[0]).toBeGreaterThanOrEqual(100 - JITTER_MS);
+    expect(marks[1]).toBeGreaterThanOrEqual(140 - JITTER_MS);
   });
 });

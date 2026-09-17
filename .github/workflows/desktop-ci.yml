@@ -25,16 +25,78 @@ on:
   # given branch protection with `build` as a required check, docs-only PRs
   # will sit unmergeable forever waiting for a run that never starts. Turning
   # protection on means dropping this filter, or making the required check a
-  # tiny always-runs job. Master is unprotected as of 2026-09-04.
+  # tiny always-runs job. Master was unprotected until 2026-09-16 (see below
+  # and the `docs-only` job).
+  #
+  # 2026-09-16 (CI/test health review, Destin's deck answers Q-1 and Q-2): the
+  # `paths-ignore` filters are GONE, replaced by the `changes` job below, so a
+  # docs-only change still produces a COMPLETED check (skipped counts as passing
+  # for a required status check; a filtered-out workflow reports nothing and
+  # blocks forever). That is what lets master be protected. And every PR runs
+  # Linux only; Windows and macOS run on every push to master and once a night —
+  # they are the slow, machine-flaky legs, nobody on the project has either
+  # machine, and a Windows-only break is still caught the same day it lands.
   push:
     branches: [master]
-    paths-ignore: ['docs/**']
   pull_request:
-    paths-ignore: ['docs/**']
+  schedule:
+    # 07:23 UTC daily, off the hour on purpose (GitHub delays :00 cron under load).
+    - cron: '23 7 * * *'
   workflow_dispatch:
 
 jobs:
+  # Did anything outside docs/ change? Every step of `build` runs inside desktop/
+  # and none reads docs/, so a docs-only diff skips the matrix — but as a SKIPPED
+  # job with a completed check, never as a run that does not exist.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ github.event_name }}" in
+            pull_request) range="origin/${{ github.base_ref }}...HEAD" ;;
+            push)
+              before="${{ github.event.before }}"
+              # A brand-new branch has no `before`; run everything.
+              if [[ "$before" =~ ^0+$ ]]; then echo "code=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+              range="$before..${{ github.sha }}" ;;
+            *) echo "code=true" >> "$GITHUB_OUTPUT"; exit 0 ;;
+          esac
+          if git diff --name-only "$range" | grep -qv '^docs/'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "changed files outside docs/: $(git diff --name-only "$range" | grep -vc '^docs/' || true)"
+
+  # Stand-in for the required check on a docs-only change. WHY (2026-09-16,
+  # probe PR #492): master requires `build (ubuntu-latest)`, but a SKIPPED
+  # matrix job never expands its matrix — it reports as plain `build`, so the
+  # required context never appeared and a docs-only PR sat BLOCKED. This job
+  # carries the same display name and runs ONLY when `build` is skipped, so
+  # exactly one `build (ubuntu-latest)` result exists on every PR. If `changes`
+  # itself fails, both are skipped and the PR stays blocked — fail closed.
+  docs-only:
+    needs: changes
+    if: needs.changes.outputs.code == 'false'
+    name: build (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: echo "docs-only change — nothing under desktop/ to build or test"
+
   build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     # Windows runs the TESTS only (not the packaging build) because a whole
     # class of bug is invisible on Linux: Git Bash path semantics, MSYS mounts,
     # drive-relative resolution, CRLF. This job was ubuntu-only, so PR #174's
@@ -48,7 +110,9 @@ jobs:
         # coverage was desktop-test-build.yml, so a macOS-only failure could
         # not surface until a beta dispatch — which is exactly how the
         # sync-spaces-engine 5s-ceiling timeouts were found (run 29701441150).
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # PRs: Linux only. Master pushes, the nightly and a manual dispatch: all three.
+        # See the trigger comment above (2026-09-16).
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "windows-latest", "macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -65,6 +129,16 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Type check BOTH trees (src + tests) with tsgo, TypeScript 7's native
+      # compiler: ~3s together, where tsc took ~27s. Until now CI type-checked
+      # src only as a side effect of `npm run build`, Linux-only and after the
+      # tests — and never checked tests/ at all. Runs first so a type error
+      # fails in seconds instead of after the suite. The build below still
+      # compiles with TypeScript 6 (`tsc`), so an emit-only difference between
+      # the two compilers cannot ship unnoticed.
+      - name: Type check (tsgo)
+        run: npm run typecheck
 
       - name: Run tests
         run: npm test
@@ -83,9 +157,19 @@ jobs:
       # of an undeclared package shipped — none of those tools can see those
       # classes. Every enabled rule is at zero on the tree, so this fails only on
       # a NEW defect. Rule set and the measured cost of each deferred rule:
-      # desktop/eslint.config.mjs.
-      - name: Lint (eslint)
+      # desktop/.oxlintrc.json (oxlint replaced ESLint 2026-09-14, same rules).
+      - name: Lint (oxlint)
         run: npm run lint
+
+      # Design-system lint as a RATCHET, not a gate at zero (2026-09-16). The
+      # script carries `--max-warnings <count measured that day>` (see
+      # desktop/package.json), so this fails only when a change ADDS a raw
+      # colour, an arbitrary value or a restyled components/ui primitive. Lower
+      # the number in package.json whenever a cleanup brings the count down;
+      # never raise it. Before this step the check had zero callers and the
+      # count grew unseen.
+      - name: Design lint (oxlint, ratchet)
+        run: npm run lint:design
 
       # Must run BEFORE the build — electron-builder's deb/rpm/pacman packagers
       # run inside `npm run build` (see desktop/electron-builder.yml linux.target).

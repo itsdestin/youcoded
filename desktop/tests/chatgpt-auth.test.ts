@@ -597,7 +597,13 @@ describe('ChatGptAuth: the sign-in round', () => {
     const u = usageCalls()[0].init.headers as Record<string, string>;
     expect(u.authorization).toMatch(/^Bearer /);
     expect(u['chatgpt-account-id']).toBe('acct-1');
-    expect(await auth.models()).toEqual([expect.objectContaining({ id: 'gpt-5.5', providerId: 'chatgpt', label: 'GPT-5.5' })]);
+    // WHY a wait: the models request was KICKED above (modelsCalls has one entry), but
+    // its reply lands on its own tick — read too early the list is still empty, which
+    // is what Ubuntu CI saw under load (run 35094598795, 2026-09-16) and Windows CI on
+    // 2026-09-05. Waiting on the stored result is the signal; the count was not.
+    await vi.waitFor(async () => {
+      expect(await auth.models()).toEqual([expect.objectContaining({ id: 'gpt-5.5', providerId: 'chatgpt', label: 'GPT-5.5' })]);
+    });
   });
 
   it('a callback with the wrong state is a 400 that never exchanges and leaves the state waiting', async () => {

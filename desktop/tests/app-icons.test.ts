@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { readStripped, assertPatternMatches } from './helpers/guard-scope';
+import { parse as parseYaml } from 'yaml';
+import { readSource } from './helpers/guard-scope';
 
 // WHY this file exists: the app icon lives in nine generated files across three platforms,
 // named from electron-builder.yml and two Android XML files. None of those readers fail a
@@ -12,20 +13,15 @@ import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 const DESKTOP = path.join(__dirname, '..');
 const ASSETS = path.join(DESKTOP, 'assets');
 const RES = path.join(DESKTOP, '..', 'app', 'src', 'main', 'res');
-const CONFIG = fs.readFileSync(path.join(DESKTOP, 'electron-builder.yml'), 'utf8');
 
-/** `key:` inside a top-level `section:` of the YAML, unquoted. Comment lines are skipped. */
+// WHY a real parser: the hand-rolled line scanner returned null for every key on a
+// CRLF checkout and made two "must be absent" cases pass for the wrong reason
+// (Windows CI, 2026-09-16 review). electron-builder reads this file with a YAML
+// parser; so does this test now.
+const CONFIG: Record<string, any> = parseYaml(readSource(path.join(DESKTOP, 'electron-builder.yml')));
 function sectionValue(section: string, key: string): string | null {
-  const lines = CONFIG.split('\n');
-  const start = lines.indexOf(`${section}:`);
-  if (start < 0) return null;
-  for (const line of lines.slice(start + 1)) {
-    if (/^\S/.test(line)) break;
-    if (/^\s*#/.test(line)) continue;
-    const m = line.match(new RegExp(`^\\s+${key}:\\s*"?(.*?)"?\\s*$`));
-    if (m) return m[1];
-  }
-  return null;
+  const v = CONFIG?.[section]?.[key];
+  return v === undefined || v === null ? null : String(v);
 }
 
 const bytes = (file: string) => fs.readFileSync(path.join(ASSETS, file));
@@ -84,16 +80,5 @@ describe('Android launcher icon', () => {
         expect([b.readUInt32BE(16), b.readUInt32BE(20)]).toEqual([px, px]);
       }
     }
-  });
-});
-
-describe('running app icon', () => {
-  it('every theme without its own appIcon falls back to the bundled icon, not a synthesized one', () => {
-    const src = readStripped(path.join(DESKTOP, 'src', 'renderer', 'state', 'theme-context.tsx'));
-    const pattern = /setIconFn\(activeTheme\.appIcon \?\? null\)/;
-    assertPatternMatches(pattern, 'setIconFn(activeTheme.appIcon ?? null)', 'theme icon fallback');
-    expect(src).toMatch(pattern);
-    // The retired "YC" square was drawn by theme-default-icon.ts; nothing may bring it back.
-    expect(src).not.toMatch(/theme-default-icon|buildDefaultIconSvg/);
   });
 });

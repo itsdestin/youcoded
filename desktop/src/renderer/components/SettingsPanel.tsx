@@ -33,7 +33,7 @@ import { formatVersionLine } from '../../shared/version-line';
 import type { BuddyHelperStatus } from '../../shared/types';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
-import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, Callout, StatusStrip, ErrorState, FieldError } from './ui';
+import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, RowStatus, Callout, StatusStrip, ErrorState, FieldError } from './ui';
 import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
@@ -961,14 +961,10 @@ export function BuddyButton() {
   // 2026-09-04 (review B-2). It existed because raising the window was the only
   // thing the app could do on Wayland; the helper now pins the buddy itself, and
   // without the helper the buddy cannot be switched on at all — so the control
-  // had nothing left to control.
-  //
-  // Correction 2026-09-04 (design §7): the sentence that used to sit here said
-  // kwin-keep-above.ts "stays; the helper is what drives them". That is wrong and
-  // would have sent a future session to the wrong file. kwin-keep-above.ts is
-  // DEAD on this path — both its call sites pass the overlay window's caption,
-  // and chooseBuddyStrategy never picks the overlay strategy on Linux. The helper
-  // script sets keepAbove on the buddy window itself and does not call it.
+  // had nothing left to control. Its backend (`buddy.setKeepAbove`, the
+  // `buddy:overlay-keep-above` channel and kwin-keep-above.ts) went with the
+  // never-reachable one-window buddy overlay on 2026-09-16. The helper script
+  // sets keepAbove on the buddy window itself.
 
   useEffect(() => {
     if (!open) return;
@@ -1347,9 +1343,9 @@ function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAc
  *
  * Only codes we actually recognise are translated, and the original is kept after the
  * explanation. Anything unrecognised is passed through untouched rather than described
- * with a guess.
+ * with a guess. File-local on purpose: an unused export fails knip's ratchet.
  */
-export function plainReason(reason: string): string {
+function plainReason(reason: string): string {
   if (/EADDRINUSE/.test(reason)) {
     return `Another program on this computer is already using that address, so remote access could not start. Close it and try again. (${reason})`;
   }
@@ -1724,10 +1720,25 @@ function RemoteButton(props: RemoteButtonProps) {
   return (
     <>
       <SettingRow
-        // Status indicator dot — green when remote + Tailscale VPN fully active, gray otherwise
-        icon={<div className={`w-2.5 h-2.5 rounded-full ${isFullyConnected ? 'bg-green-500' : 'bg-fg-muted/40'}`} />}
+        // WHY: the icon slot holds the same 16px outline icon as every other
+        // settings row (a phone with signal waves — "reach this computer from
+        // your phone"); the status dot moved down next to the status line it
+        // describes (Destin, 2026-09-16).
+        icon={
+          <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4" y="5" width="10" height="16" rx="2" />
+            <line x1="8.5" y1="17.5" x2="9.5" y2="17.5" />
+            <path d="M17 7.5a3.5 3.5 0 0 1 0 5" />
+            <path d="M19.5 5a7 7 0 0 1 0 10" />
+          </svg>
+        }
         title="Remote Access"
-        description={subtitle}
+        // Status dot — green when remote + Tailscale VPN fully active, gray otherwise
+        description={
+          <RowStatus dotClassName={isFullyConnected ? 'bg-green-400' : 'bg-fg-muted/40'}>
+            {subtitle}
+          </RowStatus>
+        }
         onClick={() => setOpen(true)}
       />
 
@@ -1940,7 +1951,7 @@ function RemoteButton(props: RemoteButtonProps) {
                           Changing the password disconnects every device; each reconnects with the new one.
                         </p>
                         {config?.weakPassword && passwordStatus !== 'too-short' && (
-                          <p className="text-3xs text-amber-400 mt-1">
+                          <p className="text-3xs text-amber-700 mt-1">
                             Your current password is short. Consider setting a longer one.
                           </p>
                         )}
@@ -2004,7 +2015,7 @@ function RemoteButton(props: RemoteButtonProps) {
                             <SettingRow
                               key={row.id}
                               variant="item"
-                              icon={<span className={`w-2 h-2 rounded-full shrink-0 ${row.online ? 'bg-green-500' : 'bg-fg-faint'}`} />}
+                              icon={<span className={`w-2 h-2 rounded-full shrink-0 ${row.online ? 'bg-green-400' : 'bg-fg-faint'}`} />}
                               title={row.name}
                               description={revoking === row.id
                                 ? 'Unpair this device? It must pair again to reconnect.'
@@ -2410,7 +2421,7 @@ function ConnectToDesktopButton() {
 
               {/* Connected banner */}
               {remoteConnected && (
-                <div className="bg-green-500/10 border border-green-500/25 rounded-lg p-3">
+                <div className="bg-green-400/10 border border-green-400/25 rounded-lg p-3">
                   <div className="flex items-center gap-2 mb-2">
                     <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
                     <span className="text-xs text-green-400 font-medium">

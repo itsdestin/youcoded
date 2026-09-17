@@ -137,7 +137,8 @@ export function defaultRuntime(): Runtime {
   return 'claude';
 }
 
-// The ONLY writer of the runtime-default key (a source-scan test pins that). The
+// The ONLY writer of the runtime-default key (the ast-grep rule
+// runtime-default-key-single-owner pins that). The
 // first-run completion path calls it with 'native' when setup finished through
 // ChatGPT; nothing else should decide the install-wide default.
 export function persistRuntimeDefault(runtime: Runtime): void {

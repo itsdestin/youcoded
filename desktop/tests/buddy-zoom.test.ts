@@ -23,11 +23,13 @@ function boot(search: string) {
 }
 
 describe('buddy preload zoom', () => {
-  it.each(['mascot', 'chat', 'bar', 'overlay'])('pins %s CSS pixels to native DIPs on every document load', (role) => {
+  it.each(['mascot', 'chat', 'bar'])('pins %s CSS pixels to native DIPs on every document load', (role) => {
     expect(boot(`?mode=buddy-${role}`)).toHaveBeenCalledExactlyOnceWith(1);
     expect(boot(`?mode=buddy-${role}`)).toHaveBeenCalledExactlyOnceWith(1);
   });
-  it.each(['', '?mode=workbench', '?mode=buddy-unknown', '?other=buddy-mascot'])('leaves ordinary app zoom untouched (%s)', (search) => {
+  // buddy-overlay is listed on purpose: it was a real mode until 2026-09-16 and
+  // must now be treated like any other unknown string.
+  it.each(['', '?mode=workbench', '?mode=buddy-unknown', '?mode=buddy-overlay', '?other=buddy-mascot'])('leaves ordinary app zoom untouched (%s)', (search) => {
     expect(boot(search)).not.toHaveBeenCalled();
   });
 });

@@ -9,13 +9,12 @@
 //   2. The skills drawer actually renders it (its chips AND its Favorites
 //      toggle), so no surface quietly grows its own chip recipe again. (The
 //      marketplace bar stopped using chips in the 2026-08-28 overhaul round 2.)
+//      Since Plan B (2026-09-16) point 2 is the ast-grep rules
+//      no-local-filter-chip-recipe and -command-drawer, not a case here.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import React from 'react';
 import { render, cleanup, screen, fireEvent } from '@testing-library/react';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { FilterChip } from '../src/renderer/components/ui/FilterChip';
-import { stripComments, RENDERER } from './helpers/guard-scope';
 
 vi.mock('../src/renderer/state/marketplace-context', () => ({
   useMarketplace: () => ({ skillEntries: [], themeEntries: [] }),
@@ -75,19 +74,9 @@ describe('MarketplaceFilterBar after the extraction', () => {
     expect(screen.getByLabelText('Show')).toBeTruthy();
   });
 
-  it('no longer carries a chip recipe of its own', () => {
-    const src = stripComments(readFileSync(join(RENDERER, 'components', 'marketplace', 'MarketplaceFilterBar.tsx'), 'utf8'));
-    expect(src).not.toContain('bg-accent text-on-accent');
-    expect(src).not.toContain('rounded-full text-sm');
-  });
-
-  it('the skills drawer draws its chips with FilterChip too, not a local recipe', () => {
-    const src = stripComments(readFileSync(join(RENDERER, 'components', 'CommandDrawer.tsx'), 'utf8'));
-    expect(src).toContain('<FilterChip');
-    // The retired drawer recipe: 12px chips with their own border pair, and the
-    // Favorites toggle's third "on" colour.
-    expect(src).not.toContain('text-xs px-2 py-0.5 rounded-full');
-    expect(src).not.toContain('bg-accent/20 text-accent border-accent/50');
-    expect(src).not.toContain('ml-auto');
-  });
+  // WHY the two source-text cases that used to follow are gone (Plan B,
+  // 2026-09-16): "no longer carries a chip recipe of its own" and "the skills
+  // drawer draws its chips with FilterChip too, not a local recipe" are now the
+  // ast-grep rules no-local-filter-chip-recipe and its -command-drawer twin
+  // (youcoded-dev scripts/ast-grep/rules/).
 });

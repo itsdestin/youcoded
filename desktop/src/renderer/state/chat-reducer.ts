@@ -149,6 +149,35 @@ function appendAbovePending(timeline: TimelineEntry[], entry: TimelineEntry): Ti
 }
 
 /**
+ * Record a transcript uuid as applied, IN PLACE, and hand the same Set back.
+ *
+ * WHY in place — the reducer's ONE documented purity exception (2026-09-16
+ * smoothness sweep, A3): every streamed word used to copy the set of every
+ * uuid the session had ever seen (`new Set(session.seenUuids).add(uuid)`), so
+ * a 4,000-word reply did ~8M copies and its last paragraph lurched, and an
+ * old chat felt heavier than a fresh one for no other reason. Appending is
+ * safe because the set is append-only, nothing renders it (no component or
+ * selector reads it), the store only ever applies the reducer to its LATEST
+ * state, the page-replay scratch (HISTORY_PAGE_PREPEND) copies it before
+ * replaying so scratch appends cannot reach the live set, and serialisation
+ * snapshots it with Array.from. Every caller sits on a path that commits the
+ * new session object — a site that could still `return state` after calling
+ * this would mark the uuid as applied without applying it, so keep it that way.
+ *
+ * One more consumer runs this reducer: SessionPreviewPane feeds it through
+ * React's useReducer, which may invoke a reducer twice for one action (a
+ * discarded render, StrictMode). That pane only dispatches SESSION_INIT and the
+ * HISTORY_PAGE_* actions, whose replay copies the set first — never route a
+ * live TRANSCRIPT_* action through a React reducer, or a double invocation
+ * would find its uuid already seen and drop the entry.
+ */
+function markSeen(session: SessionChatState, uuid: string): Set<string> {
+  const set = session.seenUuids ?? new Set<string>();
+  set.add(uuid);
+  return set;
+}
+
+/**
  * Returns the current assistant turn (or creates a new one).
  * All assistant text and tool groups within a single turn accumulate here.
  */
@@ -604,7 +633,7 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
   // Only assistant-text needs to grow seenUuids — see the dedup check above
   // for why tool-use/tool-result deliberately don't participate.
   const seenUuids = action.type === 'TRANSCRIPT_ASSISTANT_TEXT'
-    ? new Set(session.seenUuids).add(action.uuid)
+    ? markSeen(session, action.uuid)
     : session.seenUuids;
   // A specialist's edits are the parent session's edits (spec §7). They live in
   // subagentSegments, NOT session.toolCalls, so a count over toolCalls alone
@@ -1084,8 +1113,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'NATIVE_SESSION_ERROR': {
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // Same reasoning as TRANSCRIPT_INTERRUPT's: a turn that died on a provider
+      // error still spent whatever its completed steps spent, and turn-complete —
+      // the only event that used to carry usage — never fires for it. Totals
+      // only; never stamped on the turn (see that case for why).
+      const totals = action.usage && action.uuid && !session.seenUuids.has(action.uuid)
+        ? addTurnUsage(session.totals, action.usage)
+        : session.totals;
       next.set(action.sessionId, {
         ...session,
+        totals,
+        seenUuids: totals === session.totals || !action.uuid
+          ? session.seenUuids
+          : markSeen(session, action.uuid),
         ...endTurn(session, action.message),
         attentionState: 'error',
         errorMessage: action.message,
@@ -1280,7 +1320,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // (there is no pending match on the second delivery). See seenUuids.
       if (action.uuid && session.seenUuids.has(action.uuid)) return state;
       const seenUuids = action.uuid
-        ? new Set(session.seenUuids).add(action.uuid)
+        ? markSeen(session, action.uuid)
         : session.seenUuids;
 
       // Task 12 (drain-side removal): independent of whether a pending
@@ -1332,6 +1372,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Oldest-first so two identical optimistic bubbles get confirmed by two
       // transcript events in order.
       let confirmedIdx = -1;
+      // The matched entry, captured where the loop already narrowed it to a
+      // user entry. WHY (2026-09-16 A3): this used to be re-read from the
+      // timeline below behind an `if (entry.kind !== 'user') return state`
+      // type guard — unreachable, but with markSeen above appending in place a
+      // `return state` after it would record the uuid without applying the
+      // message. Capturing the narrowed entry removes the guard and the hazard.
+      let confirmedEntry: Extract<TimelineEntry, { kind: 'user' }> | null = null;
       for (let i = 0; i < session.timeline.length; i++) {
         const entry = session.timeline[i];
         if (
@@ -1340,13 +1387,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           sameUserMessage(entry.message, action.text)
         ) {
           confirmedIdx = i;
+          confirmedEntry = entry;
           break;
         }
       }
 
-      if (confirmedIdx >= 0) {
-        const entry = session.timeline[confirmedIdx];
-        if (entry.kind !== 'user') return state; // type-narrowing safety
+      if (confirmedIdx >= 0 && confirmedEntry) {
+        const entry = confirmedEntry;
         // Confirming clears `pending`. Rebuilt object (rather than spreading
         // entry) so any stale extra field is dropped, not carried forward —
         // this arm only ever matches a `sent`-path bubble (Task 12: a queued
@@ -1517,7 +1564,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // streaming deltas (which merge by partId below).
       if (action.uuid && session.seenUuids.has(action.uuid)) return state;
       const seenUuids = action.uuid
-        ? new Set(session.seenUuids).add(action.uuid)
+        ? markSeen(session, action.uuid)
         : session.seenUuids;
 
       // Fix (2026-09-02, bubble grouping): some models stream NEWLINE-ONLY text
@@ -1930,7 +1977,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const next = new Map(state);
       next.set(action.sessionId, {
         ...session,
-        seenUuids: new Set([...(session.seenUuids ?? []), action.uuid]),
+        seenUuids: markSeen(session, action.uuid),
         // A skill invocation IS a turn start, so it must set the same state
         // TRANSCRIPT_USER_MESSAGE does — otherwise nothing tells the UI a turn
         // began and the thinking indicator, prompt-processing progress and stall
@@ -2035,7 +2082,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Widening the set cannot disturb the mint branch, which additionally
       // requires abnormalStop.
       const alreadyCounted = session.seenUuids.has(action.uuid);
-      seenUuids = alreadyCounted ? seenUuids : new Set(session.seenUuids).add(action.uuid);
+      seenUuids = alreadyCounted ? seenUuids : markSeen(session, action.uuid);
       if (targetTurnId) {
         const turn = assistantTurns.get(targetTurnId);
         if (turn) {
@@ -2072,7 +2119,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // many times the watcher re-delivers it.
       const totals = alreadyCounted ? session.totals : addTurnUsage(session.totals, action.usage ?? {});
 
-      next.set(action.sessionId, { ...session, timeline, seenUuids, totals, ...endTurn(session, undefined, assistantTurns) });
+      // A completed turn carries a MEASURED prompt-token count, which always
+      // beats the re-based figure a /compact or /clear left behind — so drop the
+      // override here rather than letting it outlive the measurement that
+      // supersedes it. Written unconditionally: this is one assignment of null on
+      // an object literal that is being rebuilt anyway.
+      next.set(action.sessionId, { ...session, timeline, seenUuids, totals, contextUsedOverride: null, ...endTurn(session, undefined, assistantTurns) });
       return next;
     }
 
@@ -2122,7 +2174,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         totals: addSubagentUsage(session.totals, action.usage),
-        seenUuids: new Set(session.seenUuids).add(action.uuid),
+        seenUuids: markSeen(session, action.uuid),
       });
       return next;
     }
@@ -2149,8 +2201,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         }
       }
 
+      // The tokens this turn had already spent. Bookkeeping ONLY — deliberately
+      // not stamped onto the turn's own `usage`, because an abandoned turn has no
+      // contextUsedTokens and the context gauge would fall back to summing every
+      // step's prompt, which re-counts the history once per step (the exact
+      // number StatusBar's WHY warns about). Totals take the sum; the gauge keeps
+      // the last MEASURED occupancy.
+      const totals = action.usage && !session.seenUuids.has(action.uuid)
+        ? addTurnUsage(session.totals, action.usage)
+        : session.totals;
       next.set(action.sessionId, {
         ...session,
+        totals,
+        seenUuids: totals === session.totals ? session.seenUuids : markSeen(session, action.uuid),
         ...endTurn(session, 'Turn interrupted', assistantTurns),
       });
       return next;
@@ -2311,6 +2374,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       let nameMatchId: string | null = null;
       const wantedInput = action.input ? stableStringify(action.input) : null;
       for (const [id, tool] of toolCalls) {
+        // A helper's ask with no Task card to nest under must never bind to one
+        // of the PARENT's running tools by name (the consent bug the specialist
+        // branch above exists to prevent) — it gets the synthetic card below.
+        if (action.specialist) break;
         if (tool.status !== 'running') continue;
         if (tool.toolName === action.toolName) {
           if (nameMatchId === null) nameMatchId = id;
@@ -2425,7 +2492,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Specialists 1c: the answered ask may be nested in a Task card.
       {
         const nested = patchNestedAsk(session.toolCalls, action.requestId, (seg) => ({
-          ...seg, status: 'running', requestId: undefined, askHeld: undefined,
+          ...seg, status: 'running', requestId: undefined,
         }));
         if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
       }
@@ -2524,7 +2591,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Nested (specialist) asks first — same clearing PERMISSION_RESPONDED does.
       if (single !== null) {
         const nested = patchNestedAsk(session.toolCalls, single, (seg) => ({
-          ...seg, status: 'running', requestId: undefined, askHeld: undefined, resolvedRequestId: seg.requestId,
+          ...seg, status: 'running', requestId: undefined, resolvedRequestId: seg.requestId,
         }));
         if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
       }
@@ -2549,7 +2616,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           for (const seg of tool.subagentSegments ?? []) {
             if (seg.type !== 'tool' || seg.status !== 'awaiting-approval' || !seg.requestId || pending.has(seg.requestId)) continue;
             const patched = patchNestedAsk(toolCalls ?? session.toolCalls, seg.requestId, (s) => ({
-              ...s, status: 'running', requestId: undefined, askHeld: undefined, resolvedRequestId: s.requestId,
+              ...s, status: 'running', requestId: undefined, resolvedRequestId: s.requestId,
             }));
             if (patched) toolCalls = patched;
           }
@@ -2557,17 +2624,6 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
       if (!toolCalls) return state;                 // nothing was awaiting: same reference, no re-render
       next.set(action.sessionId, { ...session, toolCalls });
-      return next;
-    }
-
-    case 'PERMISSION_HELD': {
-      // Specialists 1c: the 5-minute hold elapsed — the ask stays answerable,
-      // the row just says the helper carried on without it.
-      const session = next.get(action.sessionId);
-      if (!session) return state;
-      const nested = patchNestedAsk(session.toolCalls, action.requestId, (seg) => ({ ...seg, askHeld: true }));
-      if (!nested) return state;
-      next.set(action.sessionId, { ...session, toolCalls: nested });
       return next;
     }
 
@@ -2711,6 +2767,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // broke — the scratch replay accumulates the page's usage and it would
         // otherwise be thrown away, so a resumed session showed no totals at all.
         totals: mergeTotals(session.totals, pageSess.totals),
+        // NAMED deliberately, not left to the `...session` spread: pages are
+        // PREPENDED, so an OLDER page can carry a compaction whose re-based
+        // occupancy predates the live one. The live value always wins. Adding
+        // `pageSess.contextUsedOverride` here would read as a consistency fix and
+        // would silently roll the context gauge backwards.
+        contextUsedOverride: session.contextUsedOverride,
         history: { cursor: action.cursor, hasMore: action.hasMore, loading: false },
       });
       return next;
@@ -2762,7 +2824,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // the manual/CC path the guard still drops stale/spurious events (notably CC
       // resume-from-summary, which must NOT insert a marker).
       if (!session.compactionPending && !action.auto) return state; // Stale event — ignore
-      const before = session.compactionPending?.beforeContextTokens ?? null;
+      // The harness's own figure wins where it exists: it is the only source a
+      // NATIVE session has, and it measures the same window the chip does. The
+      // compactionPending fallback is Claude Code's statusline reading, captured
+      // when the user typed /compact.
+      const before = action.beforeContextTokens ?? session.compactionPending?.beforeContextTokens ?? null;
       const after = action.afterContextTokens;
       let label: string;
       if (action.aborted) {
@@ -2795,6 +2861,38 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           },
         ],
         compactionPending: null,
+      });
+      return next;
+    }
+
+    // A native /compact or /clear landed: re-base the context gauge and count
+    // what the summarize request itself cost. Both facts come off the same
+    // transcript event; neither has anywhere else to arrive from, because no turn
+    // completes for either action.
+    case 'NATIVE_HISTORY_REWRITTEN': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      // addTurnUsage is not idempotent, so a re-delivered event must not bill the
+      // summary twice. The override is idempotent (the same number either way)
+      // and is applied regardless.
+      const alreadyCounted = session.seenUuids.has(action.uuid);
+      const totals = alreadyCounted || !action.usage
+        ? session.totals
+        : addTurnUsage(session.totals, action.usage);
+      // A re-delivered rewrite must not roll the gauge back either: by the time
+      // it arrives again a later turn may have measured the window for real, and
+      // TRANSCRIPT_TURN_COMPLETE cleared this override on purpose. The uuid is
+      // recorded for EVERY rewrite, not only billing ones, so /clear gets the
+      // same protection as /compact.
+      const override = alreadyCounted ? session.contextUsedOverride : action.contextUsedTokens;
+      // Nothing to change → return the ORIGINAL state so the useSyncExternalStore
+      // snapshot keeps its object identity (session-totals.ts's contract).
+      if (totals === session.totals && alreadyCounted) return state;
+      next.set(action.sessionId, {
+        ...session,
+        totals,
+        seenUuids: alreadyCounted ? session.seenUuids : markSeen(session, action.uuid),
+        contextUsedOverride: override,
       });
       return next;
     }

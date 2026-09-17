@@ -18,6 +18,17 @@
 
 const PENDING_TTL_MS = 30_000;
 
+/** WHY (2026-09-16, per-session-maps investigation): a parent Agent tool_use
+ *  whose subagent JSONL never materialises (the subagent errored before
+ *  writing, or ran in a mode that writes none) used to sit in the FIFO for the
+ *  life of the session — the `pending` map next door ages out after 30 s, but
+ *  parents never did. A parent is only ever matched by a subagent that starts
+ *  right after it, so a queue this deep means the oldest entries are dead; the
+ *  cap is a count rather than a TTL because timing is injected only for the
+ *  pending side and a long-running parent turn should not expire its own
+ *  Task before the subagent's first line lands. */
+const MAX_UNMATCHED_PARENTS = 256;
+
 interface ParentRecord {
   toolUseId: string;
   description: string;
@@ -57,6 +68,9 @@ export class SubagentIndex {
 
   recordParentAgentToolUse(toolUseId: string, description: string, subagentType: string): void {
     this.unmatchedParents.push({ toolUseId, description, subagentType });
+    // Oldest first: FIFO order is the matching contract, so the entry least
+    // likely to still find its subagent is always at the front.
+    if (this.unmatchedParents.length > MAX_UNMATCHED_PARENTS) this.unmatchedParents.shift();
   }
 
   bindSubagent(agentId: string, meta: SubagentMeta): string | null {
@@ -117,6 +131,12 @@ export class SubagentIndex {
     if (!parentToolUseId) return null;
     this.pending.delete(agentId);
     return { parentToolUseId, events: entry.events };
+  }
+
+  /** Is anything buffered and waiting for its parent? SubagentWatcher keeps
+   *  its prune timer only while this is true (simplification audit W8). */
+  hasPending(): boolean {
+    return this.pending.size > 0;
   }
 
   /** Drop pending entries older than 30s. Caller invokes periodically. */

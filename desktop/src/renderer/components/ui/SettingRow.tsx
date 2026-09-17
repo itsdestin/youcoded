@@ -38,6 +38,28 @@ import { Radio } from './Radio';
 
 export type SettingRowVariant = 'nav' | 'item';
 
+/**
+ * A status dot leading a row's description ("● Last synced just now").
+ *
+ * WHY the margin math: Destin wants the dot centred on the capital letters
+ * ("center aligned with the D"). Neither `align-middle` (x-height middle) nor
+ * flex centering (line-box middle) gets there — both left the dot 1.5px low.
+ * An empty inline-block sits with its bottom edge on the text baseline, so a
+ * bottom margin of (cap height − dot size) / 2 puts its centre at exactly half
+ * the cap height, in whatever font the user picked. `cap` is Chromium 118+,
+ * which both Electron and the Android WebView exceed.
+ */
+const DOT_ON_CAPS: React.CSSProperties = { marginBottom: 'calc((1cap - 0.375rem) / 2)' };
+
+export function RowStatus({ dotClassName, children }: { dotClassName: string; children: React.ReactNode }) {
+  return (
+    <>
+      <span className={`inline-block w-1.5 h-1.5 rounded-full mr-1.5 ${dotClassName}`} style={DOT_ON_CAPS} />
+      {children}
+    </>
+  );
+}
+
 const DENSITY: Record<SettingRowVariant, { title: string; desc: string }> = {
   nav: { title: 'text-sm', desc: 'text-2xs' },
   item: { title: 'text-xs', desc: 'text-3xs' },
@@ -58,7 +80,8 @@ const DENSITY: Record<SettingRowVariant, { title: string; desc: string }> = {
 // folder headers are DISCLOSURE buttons — `SettingRow` has no `aria-expanded`
 // pass-through, and its `<button>` branch appends a static right-chevron that
 // cannot express open/closed. Taking the string by reference keeps one
-// definition; copying it is what setting-row-authority exists to stop.
+// definition; copying it is what the setting-row guards (the
+// no-hand-rolled-setting-row ast-grep rules) exist to stop.
 export const SETTING_ROW_BASE = 'w-full flex items-center gap-3 px-3 py-2 rounded-lg bg-inset/50 text-left transition-colors stepped-hover';
 
 /**

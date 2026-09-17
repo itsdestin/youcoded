@@ -114,7 +114,7 @@ function SpecialistManager({ summary, sessionId, onJump }: { summary: Specialist
 /** Status pill — the one word that answers "what state is this helper in". */
 function StatusPill({ h }: { h: HelperView }) {
   const base = 'inline-flex items-center gap-1 text-3xs font-medium px-1.5 py-0.5 rounded-full border';
-  if (h.group === 'needs-you') return <span className={`${base} border-amber-500/40 text-amber-500 bg-amber-500/10`}><QuestionIcon className="w-3 h-3" />Needs you</span>;
+  if (h.group === 'needs-you') return <span className={`${base} border-amber-700/40 text-amber-700 bg-amber-700/10`}><QuestionIcon className="w-3 h-3" />Needs you</span>;
   // Green, not blue (Destin, 2026-09-05 deck note). The session pills in the
   // header are this app's status vocabulary — StatusDot.tsx STATUS_LABEL reads
   // green: 'Working', blue: 'Response Ready' — so a blue "Working" pill here
@@ -145,7 +145,7 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
 
   return (
     <div
-      className={`rounded-lg border ${attention ? 'border-amber-500/40' : 'border-edge'} bg-inset/50 overflow-hidden ${done ? 'opacity-80' : ''}`}
+      className={`rounded-lg border ${attention ? 'border-amber-700/40' : 'border-edge'} bg-inset/50 overflow-hidden ${done ? 'opacity-80' : ''}`}
       data-testid={`helper-card-${run.childId}`}
     >
       {/* ── WHO / WHAT / HOW FAR ─────────────────────────────────────────── */}
@@ -194,16 +194,11 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
         const { label } = friendlyToolDisplay(segToTool(seg));
         const subject = askSubject(seg.input);
         return (
-          <div key={seg.requestId} className="border-t border-amber-500/30 bg-amber-500/[0.06] px-3 py-2" data-testid="helper-card-ask">
+          <div key={seg.requestId} className="border-t border-amber-700/30 bg-amber-700/[0.06] px-3 py-2" data-testid="helper-card-ask">
             <SpecialistAskBlock
               segment={seg}
               sessionId={sessionId}
               specialistName={first}
-              // Task 12: the popup already has this helper's run record (`run`,
-              // destructured from `h` above) — pass its status straight through
-              // so the held-ask line can tell a finished helper apart from a
-              // running one.
-              runStatus={run.status}
               compact
               leading={
                 <div className="text-xs leading-snug">

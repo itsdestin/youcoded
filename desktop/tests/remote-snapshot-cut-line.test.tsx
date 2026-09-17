@@ -30,7 +30,7 @@ function Probe({ holder }: { holder: Holder }) {
   const store = useChatStore();
   holder.store = store;
   useEffect(() => {
-    const batcher = installTranscriptBatcher((a) => { holder.dispatched.push(a); store.dispatch(a); });
+    const batcher = installTranscriptBatcher((batch) => { holder.dispatched.push(...batch); store.dispatchMany(batch); });
     holder.batcher = batcher;
     return () => batcher.dispose();
   }, [store, holder]);
