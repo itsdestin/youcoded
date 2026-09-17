@@ -59,6 +59,24 @@ describe('SyncService periodic health check', () => {
     svc.stop();
   });
 
+  it('runs one more check when sync is switched off, so a showing warning can clear and "No sync configured" can appear', async () => {
+    const { svc, check } = makeService({ configured: true });
+    let looking = true;
+    svc.setHealthCheckGate(() => looking);
+    await svc.start();
+    expect(check).toHaveBeenCalledTimes(1);
+    (svc as any).isPrimarySyncEnabled.mockReturnValue(false); // switched off mid-session
+    looking = false; // nobody looking at that tick — the transition must not be lost
+    await vi.advanceTimersByTimeAsync(FIVE_MIN);
+    expect(check).toHaveBeenCalledTimes(1);
+    looking = true;
+    await vi.advanceTimersByTimeAsync(FIVE_MIN);
+    expect(check).toHaveBeenCalledTimes(2); // the one transition check
+    await vi.advanceTimersByTimeAsync(3 * FIVE_MIN);
+    expect(check).toHaveBeenCalledTimes(2); // and then nothing while unconfigured
+    svc.stop();
+  });
+
   it('does not run at all while no sync of any kind is configured', async () => {
     const { svc, check } = makeService({ configured: false });
     svc.setHealthCheckGate(() => true);

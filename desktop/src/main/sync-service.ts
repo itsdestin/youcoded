@@ -150,6 +150,7 @@ export class SyncService extends EventEmitter {
   // timeout, since the delay depends on the last probe. Cleared in stop().
   private healthTimer: NodeJS.Timeout | null = null;
   private healthChecksActive = false;
+  private wasSyncConfigured = false; // as of the last check that ran — see scheduleHealthCheck
   // Consecutive failed reachability probes — the OFFLINE warning needs two.
   // See the comment at its use site in runHealthCheck.
   private failedInternetProbes = 0;
@@ -173,9 +174,16 @@ export class SyncService extends EventEmitter {
     this.healthTimer = setTimeout(async () => {
       this.healthTimer = null;
       let delay = HEALTH_POLL_INTERVAL_MS; // a skipped tick (nobody looking, nothing configured) is not a strike
-      if (this.healthCheckGate() && this.isSyncConfigured()) {
+      // WHY one more check after sync is switched off (review of audit W12):
+      // a warning showing at that moment (OFFLINE, PERSONAL_STALE) would
+      // otherwise never clear, and "No sync configured" would never appear,
+      // until relaunch. The transition is remembered until a check actually
+      // runs, so a tick skipped for lack of an audience does not lose it.
+      const configured = this.isSyncConfigured();
+      if (this.healthCheckGate() && (configured || this.wasSyncConfigured)) {
         try { await this.runHealthCheck({ probeBackends: false }); }
         catch (e) { this.logBackup('ERROR', `Periodic health check failed: ${e}`, 'sync.health'); }
+        this.wasSyncConfigured = configured;
         delay = this.nextHealthDelay();
       }
       if (this.healthChecksActive) this.scheduleHealthCheck(delay);
@@ -265,6 +273,7 @@ export class SyncService extends EventEmitter {
     // warning set changed — and skipped entirely while nobody can see the
     // result or nothing is configured (HEALTH_POLL_INTERVAL_MS).
     this.healthChecksActive = true;
+    this.wasSyncConfigured = this.isSyncConfigured();
     this.scheduleHealthCheck(this.nextHealthDelay());
 
     // Daily-snapshot poll. Non-force push() on launch (in case today's snapshot
