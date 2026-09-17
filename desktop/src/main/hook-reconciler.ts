@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { listInstalledPluginDirs } from './claude-code-registry';
+import { mutateSettings } from './claude-settings';
 
 /**
  * Hook Reconciler (decomposition v3, §9.2)
@@ -24,12 +25,14 @@ import { listInstalledPluginDirs } from './claude-code-registry';
  * Note: this reconciler is intentionally separate from install-hooks.js
  * which manages the app's OWN hooks (relay.js, title-update.sh, etc).
  * Those belong to the desktop app; this one belongs to plugins.
+ *
+ * WHY two entry points (2026-09-16 audit D5/W4): reconcileHooksInto() edits a
+ * settings object it is handed, so the launch path can run it as one callback
+ * in a single locked read/write of settings.json alongside the other launch
+ * chores; reconcileHooks() is the standalone form (after a plugin install)
+ * that opens its own cycle. All reading and writing of the file lives in
+ * claude-settings.ts.
  */
-
-// Resolved per-call (not cached at module load) so tests that stub os.homedir work.
-function settingsPath(): string {
-  return path.join(os.homedir(), '.claude', 'settings.json');
-}
 
 interface ManifestHookSpec {
   command: string;
@@ -89,21 +92,6 @@ function listPluginManifests(): PluginHooksManifest[] {
     if (m && m.hooks) manifests.push(m);
   }
   return manifests;
-}
-
-function readSettings(): Settings {
-  try {
-    if (!fs.existsSync(settingsPath())) return {};
-    return JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-  } catch { return {}; }
-}
-
-function writeSettingsAtomic(settings: Settings): void {
-  const dir = path.dirname(settingsPath());
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${settingsPath()}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8');
-  fs.renameSync(tmp, settingsPath());
 }
 
 export interface ReconcileHooksResult {
@@ -206,15 +194,15 @@ function findMatchingEntry(
   return null;
 }
 
-export function reconcileHooks(): ReconcileHooksResult {
+/** Reconcile plugin manifests into `settings` in place. The caller owns the
+ *  read and the write (see the header). */
+export function reconcileHooksInto(settings: Settings): ReconcileHooksResult {
   const manifests = listPluginManifests();
-  const settings = readSettings();
   settings.hooks = settings.hooks || {};
 
   let added = 0;
   let updatedPath = 0;
   let updatedTimeout = 0;
-  let changed = false;
 
   for (const manifest of manifests) {
     for (const [event, specs] of Object.entries(manifest.hooks)) {
@@ -231,7 +219,6 @@ export function reconcileHooks(): ReconcileHooksResult {
           if (existingHook.command !== spec.command) {
             existingHook.command = spec.command;
             updatedPath++;
-            changed = true;
           }
           // Enforce MAX timeout — never shorten a user-raised timeout
           const manifestTimeout = spec.timeout ?? 0;
@@ -240,7 +227,6 @@ export function reconcileHooks(): ReconcileHooksResult {
           if (maxTimeout !== existingTimeout) {
             existingHook.timeout = maxTimeout;
             updatedTimeout++;
-            changed = true;
           }
         } else if (spec.required) {
           // Add a new matcher entry for required hooks the user doesn't have yet
@@ -253,7 +239,6 @@ export function reconcileHooks(): ReconcileHooksResult {
             }],
           });
           added++;
-          changed = true;
         }
         // Non-required hooks that are missing stay missing — user may have
         // intentionally removed them.
@@ -268,11 +253,15 @@ export function reconcileHooks(): ReconcileHooksResult {
   // left by legacy-cleanup.ts is still recognised as ours to remove.
   const pluginRoots = [...listInstalledPluginDirs(), ...ownedLegacyRoots()];
   const pruned = pruneDeadPluginHooks(settings, pluginRoots);
-  if (pruned > 0) changed = true;
-
-  if (changed) writeSettingsAtomic(settings);
 
   return { added, updatedPath, updatedTimeout, pruned, manifestCount: manifests.length };
+}
+
+/** Standalone form: one locked read/write cycle of settings.json. */
+export async function reconcileHooks(): Promise<ReconcileHooksResult> {
+  let result: ReconcileHooksResult = { added: 0, updatedPath: 0, updatedTimeout: 0, pruned: 0, manifestCount: 0 };
+  await mutateSettings((settings) => { result = reconcileHooksInto(settings as Settings); });
+  return result;
 }
 
 // Exposed for tests

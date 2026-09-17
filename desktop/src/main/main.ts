@@ -1683,29 +1683,19 @@ void app.whenReady().then(async () => {
   // — those paths break the user's installed app the moment the worktree is
   // removed. Dev piggybacks on whatever hook paths the built app last wrote.
   //
-  // install-hooks.js already does in-place replacement of existing entries,
-  // so simply calling it repairs any stale paths. We scan first only to log a
-  // visible warning when staleness is detected — useful for diagnosing the
-  // "stuck on Initializing" symptom that follows a removed dev worktree.
+  // WHY one call (2026-09-16 audit W3/D5): the scripts are staged once per
+  // build (a version stamp in the stable dir) and the settings entries are
+  // written only when they differ; `repaired` replaces the pre-scan that used
+  // to parse the file a second time just to log a stale-path warning — the
+  // diagnostic for the "stuck on Initializing" symptom after a removed dev
+  // worktree.
   if (!process.env.YOUCODED_PROFILE) {
     try {
-      const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-      try {
-        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        for (const event of Object.values(settings.hooks ?? {}) as any[]) {
-          for (const matcher of event ?? []) {
-            for (const h of matcher.hooks ?? []) {
-              const cmd: string = h?.command ?? '';
-              const m = cmd.match(/"([^"]+\.(?:js|sh))"/);
-              if (m && (m[1].includes('.worktrees') || !fs.existsSync(m[1]))) {
-                log('WARN', 'Main', 'Stale hook command detected — install-hooks will repair', { command: cmd });
-              }
-            }
-          }
-        }
-      } catch { /* settings missing or unparseable — install-hooks will normalize */ }
-      const installScript = path.join(__dirname, '../../scripts/install-hooks.js');
-      require(installScript);
+      const { runInstallHooksChore } = require('./launch-settings-chores');
+      const r = await runInstallHooksChore({ version: app.getVersion(), packaged: app.isPackaged });
+      if (r.repaired > 0) log('WARN', 'Main', 'Stale hook commands repaired', { count: r.repaired });
+      if (r.refused) log('WARN', 'Main', 'Hook entries not written', { refused: r.refused });
+      log('INFO', 'Main', 'Hooks installed', { copied: r.copied, written: r.written });
     } catch (e) {
       log('ERROR', 'Main', 'Failed to install hooks', { error: String(e) });
     }
@@ -1739,46 +1729,32 @@ void app.whenReady().then(async () => {
   }
   perfMark('main:chore:legacy-cleanup:done');
 
-  // Decomposition v3 §9.2: reconcile plugin hooks-manifest.json into
-  // ~/.claude/settings.json. Adds missing required hooks, updates stale paths
-  // (e.g., flattened core/hooks/ → hooks/), enforces MAX timeout, and prunes
-  // plugin-owned entries whose script file is gone (hooks dropped from the
-  // manifest in phase-3 flatten). Never removes user-added hooks. Runs after
-  // install-hooks.js so the app's own relay entries win any ordering contention.
+  // Three settings.json chores in ONE locked read/write (2026-09-16 audit W4/D5;
+  // the order is the one they always ran in — see launch-settings-chores.ts):
+  //  1. Decomposition v3 §9.2: reconcile plugin hooks-manifest.json — adds
+  //     missing required hooks, updates stale paths, enforces MAX timeout,
+  //     prunes plugin-owned entries whose script file is gone. Never removes
+  //     user-added hooks. Runs after install-hooks so the app's own relay
+  //     entries win any ordering contention.
+  //  2. Force CC's prompt-suggestion feature off — its ghost text interacts
+  //     badly with our chat→PTY write path (`docs/cc-dependencies.md` →
+  //     "Prompt suggestion (force-disabled by app)").
+  //  3. Seed a transcript-retention default so Claude Code's 30-day cleanup
+  //     doesn't silently delete Resume Browser history (retention-default.ts).
+  // The prompt-suggestion and retention-default marks below stay for the perf
+  // rig's chore table; they now measure nothing of their own.
   try {
-    const { reconcileHooks } = require('./hook-reconciler');
-    const hookSummary = reconcileHooks();
-    log('INFO', 'Main', 'Plugin hooks reconciled', hookSummary);
+    const { runSettingsChores } = require('./launch-settings-chores');
+    const r = await runSettingsChores();
+    log('INFO', 'Main', 'Plugin hooks reconciled', r.hooks);
+    if (r.promptSuggestion.changed) log('INFO', 'Main', 'Prompt suggestion force-disabled', { prior: r.promptSuggestion.prior });
+    if (r.retention.changed) log('INFO', 'Main', 'Seeded cleanupPeriodDays default', { effective: r.retention.effective });
+    if (r.refused) log('WARN', 'Main', 'Settings chores not written', { refused: r.refused });
   } catch (e) {
-    log('ERROR', 'Main', 'Failed to reconcile plugin hooks', { error: String(e) });
+    log('ERROR', 'Main', 'Failed to run settings chores', { error: String(e) });
   }
   perfMark('main:chore:hook-reconcile:done');
-
-  // Force CC's prompt-suggestion feature off in ~/.claude/settings.json on
-  // every launch. CC pre-fills the input bar with a generated next-prompt
-  // suggestion that interacts badly with our chat→PTY write path (the body
-  // gets concatenated with the ghost text and submitted on the trailing CR).
-  // See `docs/PITFALLS.md → PTY Writes` and `docs/cc-dependencies.md` →
-  // "Prompt suggestion (force-disabled by app)".
-  try {
-    const { enforcePromptSuggestionDisabled } = require('./disable-prompt-suggestion');
-    const r = enforcePromptSuggestionDisabled();
-    if (r.changed) log('INFO', 'Main', 'Prompt suggestion force-disabled', { prior: r.prior });
-  } catch (e) {
-    log('ERROR', 'Main', 'Failed to force-disable prompt suggestion', { error: String(e) });
-  }
   perfMark('main:chore:prompt-suggestion:done');
-
-  // Seed a transcript-retention default so Claude Code's 30-day cleanup
-  // doesn't silently delete Resume Browser history. Only writes when the
-  // user hasn't set cleanupPeriodDays themselves. See retention-default.ts.
-  try {
-    const { seedCleanupPeriodDefault } = require('./retention-default');
-    const r = seedCleanupPeriodDefault();
-    if (r.changed) log('INFO', 'Main', 'Seeded cleanupPeriodDays default', { effective: r.effective });
-  } catch (e) {
-    log('ERROR', 'Main', 'Failed to seed cleanupPeriodDays', { error: String(e) });
-  }
   perfMark('main:chore:retention-default:done');
 
   // Clean up orphan symlinks left by pre-decomposition post-update.sh —
