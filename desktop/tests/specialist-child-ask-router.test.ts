@@ -92,6 +92,43 @@ describe('childAskRouter', () => {
     }
   });
 
+  // Merge with master (2026-09-16): the branch added the plan identity to a
+  // routed ask; master removed the 5-minute hold for every specialist. A plan
+  // specialist's ask must get BOTH: its plan tag on the card, and no timeout
+  // — and the parent's Stop (ownOnly) must not cancel it, because a plan's
+  // specialist is stopped by the plan's own Stop, never the conversation's.
+  it('a plan specialist\'s ask carries its plan, waits with no timeout, and survives the conversation\'s Stop', async () => {
+    vi.useFakeTimers();
+    try {
+      const broker = new PermissionBroker();
+      const askSpy = vi.spyOn(broker, 'ask');
+      const emitted: any[] = [];
+      broker.on('hook-event', (e) => emitted.push(e));
+      const plan = { planId: 'plan-1', stepId: 's1', attemptId: 'att-1' };
+      const router = childAskRouter({
+        broker, parentId: 'parent-1', childId: 'kid-1', agentType: 'reviewer', title: 'Idris',
+        parentToolCallId: 'plan-card', plan,
+      });
+      let settled = false;
+      const p = router({ sessionId: 'kid-1', toolName: 'Bash', toolInput: {}, denyListed: true })
+        .then((d) => { settled = true; return d; });
+      expect(askSpy.mock.calls[0]).toHaveLength(1);
+      expect(firstPayload(emitted).specialist).toEqual({
+        childId: 'kid-1', agentType: 'reviewer', title: 'Idris', parentToolCallId: 'plan-card', plan,
+      });
+      await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+      // The conversation's Stop (NativeSessionHost.interrupt) cancels only its own asks.
+      broker.cancelSession('parent-1', { ownOnly: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      // The plan's Stop interrupts the specialist itself, which does cancel it.
+      broker.cancelSession('kid-1', { ownOnly: true });
+      await expect(p).resolves.toMatchObject({ behavior: 'canceled' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a real user deny carries no message — the plain declined copy stands', async () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];

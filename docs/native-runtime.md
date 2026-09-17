@@ -1218,6 +1218,17 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
 - **Plan specialists** never wire as conversations. Their display copies ride the plan card
   under the parent (`parentAgentToolUseId` = the propose_plan id). Their asks route to the
   parent's broker with `specialist.plan`. History replays their past activity (`getHistory`).
+- **Plan specialists' asks and spend follow the ordinary specialist rules** (merged with master
+  2026-09-16). An ask waits with no time limit and survives the conversation's Stop
+  (`cancelSession(…, { ownOnly })`); only the plan's own Stop, which interrupts the specialist,
+  cancels it. It lights the red dot and joins the bottom-of-chat approval cards and the buddy
+  feed (`helperAsksOf` scans plan cards too, naming the asker from the plan record's row). A
+  plan specialist that is stopped or fails still reports its completed steps' spend to the
+  conversation (`runPlanChild` reads usage off `user-interrupt`/`session-error`); the plan's own
+  budget is charged per request by the gate and is untouched by that report. Plan pricing calls
+  `costForUsage` directly, which prices cache writes once.
+  Guards: `plans-lifecycle.integration` ("after merging master"), `plan-reducer`,
+  `specialist-child-ask-router`, `plan-budget`.
 <!-- verify: {"path": "youcoded/desktop/src/main/harness/plans/plan-requests.ts", "contains": "PLAN_REQUEST_CHANNELS"} -->
 
 ### Tests

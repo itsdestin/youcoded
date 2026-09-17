@@ -532,6 +532,41 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
   });
   // Merge with master (2026-09-16) — two interactions the merge had to reconcile.
   describe('after merging master', () => {
+    // Master #489: the conversation's Stop cancels only its OWN asks, so a
+    // background specialist's waiting request survives it. A plan's specialist
+    // belongs to the plan (interrupt() skips it), so its request must survive
+    // too — before the merge, Stop cancelled it and cut the specialist off.
+    it('the conversation\'s Stop leaves a plan specialist\'s waiting ask open; answering it finishes the plan', async () => {
+      const doc = { goal: 'Tidy up', steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, items: ['notes'] }] };
+      const planId = await propose(doc);
+      const target = path.join(root, 'old-notes.txt');
+      fs.writeFileSync(target, 'stale');
+      childReply = (_p, call) => (call === 1
+        ? { chunks: [toolCallChunk('b-1', 'Bash', { command: 'rm old-notes.txt' }), finishChunk('tool-calls', 5, 5)] }
+        : report('Removed the old notes.', 5, 5));
+      const asks: any[] = [];
+      const gone: any[] = [];
+      host.on('hook-event', (e: any) => {
+        if (e.type === 'PermissionRequest') asks.push(e);
+        if (e.type === 'PermissionExpired' || e.type === 'PermissionResolved') gone.push(e);
+      });
+      await host.approvePlan(SID, planId);
+      await waitFor(() => asks.length === 1, 'the routed ask');
+      const requestId = asks[0].payload._requestId;
+
+      host.interrupt(SID);
+      // Settle for the negative only after a positive signal: the parent is idle.
+      await waitFor(() => host.isIdle(SID), 'the conversation to settle after Stop');
+      expect(gone).toEqual([]);
+      expect(host.pendingAskEventsFor(SID).map((e: any) => e.payload._requestId)).toContain(requestId);
+      expect(plan(planId).status).toBe('running');
+
+      expect(host.respondPermission(requestId, { behavior: 'allow' })).toBeTruthy();
+      await waitForCard(planId, 'completed');
+      expect(fs.existsSync(target)).toBe(false);
+      expectOwnsNothing(plan(planId));
+    });
+
     // Master #491: a stopped or failed specialist still reports what it spent
     // (the harness now carries an abandoned turn's completed-step usage on
     // user-interrupt / session-error). A plan specialist cut off by the plan's

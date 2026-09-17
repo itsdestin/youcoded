@@ -371,3 +371,25 @@ describe('propose_plan: a truncated plan after text pushes the text once (findin
     await expectAllViewsAgree(session, events);
   });
 });
+
+// Merge with master (2026-09-16, #487/#491): master attaches an abandoned
+// turn's completed-step spend to the terminal `session-error` /
+// `user-interrupt` event; the branch's catch pairs a writing plan card before
+// that event goes out. Both must happen on the same path: the card closes,
+// history stays paired, and the steps that already ran still report their cost.
+describe('propose_plan: a provider failure mid-proposal still reports what the turn spent', () => {
+  it('closes the writing card, keeps pairing, and carries the earlier step\'s usage on session-error', async () => {
+    const { session, events } = planSession([
+      scripted(stream(toolCallChunk('r1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 300, 10))),
+      failing(...textChunks('t', 'Planning now.'), ...toolInputChunks('pw', 'propose_plan', '{"goal":')),
+    ], { tools: [fakeTool('Read')] });
+    await session.send('plan');
+    expect(resultsFor(events, 'pw')).toHaveLength(1);
+    expect(resultsFor(events, 'pw')[0].data).toMatchObject({ isError: true, plan: { status: 'failed' } });
+    expect(activePlans(session)).toEqual([]);
+    const errors = events.filter((e) => e.type === 'session-error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].data.usage).toMatchObject({ inputTokens: 300, outputTokens: 10 });
+    await expectAllViewsAgree(session, events);
+  });
+});

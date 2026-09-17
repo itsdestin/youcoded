@@ -12,7 +12,7 @@ import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatState, ChatAction } from '../src/renderer/state/chat-types';
 import type { PlanView, PlanChildView, SubagentSegment } from '../src/shared/types';
 import { planWithActivity } from '../src/renderer/components/plans/plan-activity';
-import { hasNestedAsk, hasPlanChildAsk } from '../src/renderer/utils/specialist-cards';
+import { hasNestedAsk, hasPlanChildAsk, helperAsksOf, hasHelperAsk } from '../src/renderer/utils/specialist-cards';
 import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 
 const S = 'sess';
@@ -190,6 +190,42 @@ describe('plan specialists: routed asks are answerable in the owning row', () =>
     expect(segsOf(s, A)[0]).toMatchObject({ status: 'awaiting-approval' });
     s = run(s, { type: 'PERMISSION_EXPIRED', sessionId: S, requestId: 'req-3' });
     expect(segsOf(s, A)[0]).toMatchObject({ status: 'failed' });
+  });
+});
+
+// Merge with master (2026-09-16, #489): master lifts every waiting specialist
+// request into the bottom-of-chat approval cards and the buddy feed
+// (helperAsksOf), scanning Task cards. A plan's specialist asks from inside the
+// PLAN card, and the branch already turns the dot red for it — so the bottom
+// cards must list it too, or the dot would point at nothing to answer.
+describe('plan specialists: a waiting ask joins the bottom-of-chat cards', () => {
+  it('lists a plan specialist\'s ask under that specialist\'s own name, once, until answered', () => {
+    let s = run(seeded(),
+      { type: 'PLAN_CHANGED', sessionId: S, plan: plan() },
+      toolUse(A, 'call_a', { command: 'rm -rf build' }, 'Bash'),
+      toolUse(B, 'call_b', { command: 'ls' }, 'Bash'),
+      ask(A, 'req-9'),
+    );
+    const calls = s.get(S)!.toolCalls;
+    expect(hasHelperAsk(calls)).toBe(true);
+    const asks = helperAsksOf(calls);
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toMatchObject({
+      toolUseId: 'call_a', toolName: 'Bash', status: 'awaiting-approval', requestId: 'req-9',
+      // Named from the plan record's row for THIS child, never the sibling's.
+      specialist: { childId: A, agentType: 'reviewer', title: `${A} the Reviewer` },
+    });
+    s = run(s, { type: 'PERMISSION_RESPONDED', sessionId: S, requestId: 'req-9' });
+    expect(helperAsksOf(s.get(S)!.toolCalls)).toEqual([]);
+    expect(hasHelperAsk(s.get(S)!.toolCalls)).toBe(false);
+  });
+
+  it('still names the ask when the plan record has not arrived yet', () => {
+    const s = run(seeded(), toolUse(A, 'call_a', { command: 'rm -rf build' }, 'Bash'), ask(A, 'req-10'));
+    // seeded() carries a proposal-time record whose rows do not include A yet.
+    const calls = new Map(s.get(S)!.toolCalls);
+    calls.set(CARD, { ...calls.get(CARD)!, plan: undefined });
+    expect(helperAsksOf(calls)).toMatchObject([{ requestId: 'req-10', specialist: { childId: A, title: 'A specialist' } }]);
   });
 });
 
