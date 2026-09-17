@@ -127,6 +127,15 @@ asarUnpack:
   - assets/kwin-helper/**
 files:
   - dist/**/*
+  # WHY: src/main/harness/eval/ is the harness evaluator — developer tooling
+  # driven only by test-engine/harness-eval.mjs and friends. It lives under
+  # src/main so each eval arm's `npm run build:main` compiles it beside the
+  # code it evaluates, which means tsc emits it into dist/ and, without this
+  # line, every installer carried ~4,200 lines (14 files, its OpenRouter
+  # factory and fixtures) that no IPC channel, npm script or screen reaches.
+  # Nothing packaged imports from it; tests/harness-eval-not-shipped.test.ts
+  # keeps both halves of that true. Quoted because "!" starts a YAML tag.
+  - "!dist/main/harness/eval/**"
   - node_modules/**/*
   - scripts/**/*
   - hook-scripts/**/*

@@ -31,7 +31,7 @@ Electron + React app that wraps Claude Code CLI in a GUI.
 - **AnnouncementService** (`src/main/announcement-service.ts`) — Fetches `announcements.txt` from the youcoded repo (raw.githubusercontent.com) every 1h and writes `~/.claude/.announcement-cache.json`. Both fetch-time and render-time expiry filters apply. Android mirror at `app/.../runtime/AnnouncementService.kt`. The toolkit's statusline reads the cache file but no longer owns the fetch.
 - **SettingsPanel** (`src/renderer/components/SettingsPanel.tsx`) — Settings UI for remote access config, appearance popup (theme + font)
 - **ThemeProvider** (`src/renderer/state/theme-context.tsx`) — Appearance state: active theme, cycle list, font family, reducedEffects, showTimestamps, showTurnMetadata. Persists to `~/.claude/youcoded-appearance.json` (source of truth; localStorage is a mirror for the anti-flash read — see Theming → Persistence), applies `data-theme` attribute on `<html>`, swaps highlight.js stylesheet, sets font CSS variables. See `docs/theme-spec.md` for details
-- **Buddy hosting** has two strategies: three separate windows (`BuddyWindowManager`, Windows/macOS/X11) vs one screen-sized transparent overlay window (`BuddyOverlayManager`, Linux Wayland). `chooseBuddyStrategy` in `src/main/buddy-manager.ts` picks between them (env override `YOUCODED_BUDDY_STRATEGY`).
+- **Buddy hosting** is three separate windows (mascot, chat, bar — `BuddyWindowManager`, `src/main/buddy-window-manager.ts`) on every platform. A second one-window "overlay" strategy for Linux Wayland was built dormant and deleted 2026-09-16; on Wayland the three windows are moved by the KWin helper (`src/main/kwin-helper.ts`).
 
 ## Chat View Data Flow
 

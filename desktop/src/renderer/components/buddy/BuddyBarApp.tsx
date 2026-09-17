@@ -65,13 +65,11 @@ const ICON_PROPS = {
 } as const;
 
 /**
- * The three action buttons alone, no wrapper/positioning — extracted (Task 6)
- * so the Linux-Wayland overlay (BuddyOverlayApp, one shared window) can host
- * the exact same buttons as the three-window model's own bar window,
- * producing identical DOM on both platforms instead of a second hand-copied
- * implementation drifting out of sync with this one.
+ * The three action buttons alone, no wrapper/positioning. (Once exported for a
+ * second, one-window buddy host; that host was deleted 2026-09-16 and the bar
+ * window below is the only caller.)
  */
-export function BuddyBarButtons() {
+function BuddyBarButtons() {
   const [capturing, setCapturing] = useState(false);
 
   const onCapture = useCallback(async () => {

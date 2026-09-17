@@ -10,8 +10,9 @@ export type { Rect };
 
 // Modern Plasma 6 ships `qdbus6`; some distros/older Plasma still resolve only
 // `qdbus`. Try the current name first, fall back to the legacy one. Lifted
-// verbatim out of kwin-keep-above.ts, which now imports it from here — the
-// technical design (§7) says reuse this discovery, do not re-implement it.
+// verbatim out of the former kwin-keep-above.ts (deleted 2026-09-16 with the
+// buddy overlay it served) — the technical design (§7) says reuse this
+// discovery, do not re-implement it.
 export const QDBUS_CANDIDATES = ['qdbus6', 'qdbus'] as const;
 
 // A DBus round trip to KWin or plasmashell is 2-10 ms when the service is
@@ -27,9 +28,9 @@ const KDE_CALL_TIMEOUT_MS = 4000;
  * non-zero exit, or the timeout.
  *
  * Deliberately dumb: it makes no judgement about the CONTENT of stdout. That
- * judgement lives in kdeCall() below, because kwin-keep-above.ts's own retry
- * loop predates it and must keep behaving exactly as it did (it passes no
- * options, so there is no timeout on that path either).
+ * judgement lives in kdeCall() below; the split dates from when the former
+ * kwin-keep-above.ts ran its own retry loop over this call with no options
+ * (so no timeout), and it has to keep working that way for any raw caller.
  */
 export async function execQdbus(
   bin: string,
@@ -128,7 +129,7 @@ function describeExecError(bin: string, err: unknown): string {
 /**
  * One qdbus call. Treats an unparseable/error stdout as failure even at exit 0
  * — see qdbusStdoutFailure above. This is the wrapper every NEW KDE read must
- * use; kwin-keep-above.ts's raw loop is not enough.
+ * use; a raw execQdbus loop is not enough.
  */
 export async function kdeCall(args: string[]): Promise<KdeCallResult> {
   const bin = await qdbusPath();

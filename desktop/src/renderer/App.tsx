@@ -119,7 +119,6 @@ import { ContextMenuHost } from './components/context-menu/ContextMenuHost';
 import { BuddyMascotApp } from './components/buddy/BuddyMascotApp';
 import { BuddyChatApp } from './components/buddy/BuddyChatApp';
 import { BuddyBarApp } from './components/buddy/BuddyBarApp';
-import { BuddyOverlayApp } from './components/buddy/BuddyOverlayApp';
 
 // ESC-passthrough: provider owns capture-phase ESC routing for overlays.
 // Mounted at app root so every overlay component is a descendant.
@@ -4660,17 +4659,10 @@ export default function App() {
   if (buddyMode === 'buddy-mascot') return <BuddyMascotApp />;
   if (buddyMode === 'buddy-chat') return <BuddyChatApp />;
   if (buddyMode === 'buddy-bar') return <BuddyBarApp />;
-  // The overlay strategy: the whole floater (mascot + chat + bar) mounted as DOM
-  // inside one screen-sized window instead of the three separate windows above.
-  //
-  // Correction 2026-09-04 (design §7): this comment used to say Linux Wayland
-  // takes this route. It does not, and has not — chooseBuddyStrategy
-  // (buddy-manager.ts) returns 'windows' on every path except an explicit
-  // YOUCODED_BUDDY_STRATEGY env override, so NO platform reaches
-  // ?mode=buddy-overlay on its own. The overlay code is dormant, kept behind that
-  // override; on Linux Wayland the buddy is three real windows moved by the KWin
-  // helper. Believing the old sentence sends a session to the wrong file.
-  if (buddyMode === 'buddy-overlay') return <BuddyOverlayApp />;
+  // There is no fourth buddy mode. A `buddy-overlay` mode (the whole floater as
+  // DOM inside one screen-sized window) existed until 2026-09-16 but no
+  // platform ever reached it; on Linux Wayland the buddy is these three real
+  // windows, moved by the KWin helper.
 
   // Main app wrapped in providers
   return (
