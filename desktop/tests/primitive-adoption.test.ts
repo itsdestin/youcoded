@@ -25,7 +25,9 @@ const UI_DIR = join(RENDERER, 'components', 'ui');
 // the very notes that explain the fix. Strip block comments (covers JSX
 // `{/* ... */}`) and whole-line `//` before asserting — the invariant is about
 // what ships in a class list, not what the prose may mention. Same trap that bit
-// overlay-layer-authority and type-scale-authority; third time, same fix.
+// overlay-layer-authority and type-scale-authority (both retired 2026-09-16 for the
+// ast-grep rules no-hardcoded-z-index-or-scrim and no-arbitrary-text-size); third
+// time, same fix.
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
     const full = join(dir, entry);

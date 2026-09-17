@@ -22,7 +22,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // jsdom in this suite ships NO localStorage — `window.localStorage` is undefined
-// (the gap tests/app-resume-session-listener.test.ts already ran into), and on
+// (the gap the retired tests/app-resume-session-listener.test.ts ran into), and on
 // Node 26 the bare `localStorage` global is the runtime's own, disabled unless
 // --localstorage-file is passed. The migration is a localStorage one-shot, so the
 // test supplies a real one rather than mocking the thing under test.
