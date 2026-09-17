@@ -74,7 +74,8 @@ describe('StatusStrip', () => {
  *
  * Every file NOT listed is held at zero by the matching ast-grep rule, which
  * names these same files under its `ignores:`. Adding or removing an entry here
- * means editing that rule's list too.
+ * means editing that rule's list too — youcoded-dev's check.sh fails if the two
+ * lists differ.
  */
 
 // Centred, colour-carrying status paragraphs on surfaces outside the settings
