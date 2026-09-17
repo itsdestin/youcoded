@@ -1,8 +1,7 @@
 // desktop/tests/menu-row-reachability.test.ts
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
 import { join } from 'path';
-import { RENDERER, stripComments } from './helpers/guard-scope';
+import { RENDERER, readStripped } from './helpers/guard-scope';
 
 // Most of this file's cases converted to ast-grep rules —
 // scripts/ast-grep/rules/shortcuts-dialog-keeps-scroll-body(.yml, -session-name.yml,
@@ -22,7 +21,11 @@ import { RENDERER, stripComments } from './helpers/guard-scope';
 // file. A whole-file rule can ban or require presence, but not pin a count,
 // so per global.md's "at most N matches" guidance this stays as a small
 // text case rather than being dropped.
-const modelPicker = stripComments(readFileSync(join(RENDERER, 'components', 'model', 'ModelPicker.tsx'), 'utf8'));
+// FIX (review of batch B, 2026-09-16): readStripped (readSource + comment
+// strip) instead of a bare readFileSync — readSource normalizes CRLF, which
+// a raw readFileSync does not (Windows checkout, see guard-scope.ts's own
+// WHY on readSource).
+const modelPicker = readStripped(join(RENDERER, 'components', 'model', 'ModelPicker.tsx'));
 
 describe('reference lists stay reachable', () => {
   it('the model filter portal remains inside its session-menu host', () => {
