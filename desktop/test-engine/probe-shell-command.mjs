@@ -51,8 +51,10 @@
 //
 // KNOWN LIMIT: this probe RE-IMPLEMENTS the write rule against a bare node-pty
 // rather than driving SessionManager, so it proves the rule works on real
-// shells, NOT that the app still follows it. tests/shell-session.test.ts is what
-// pins the app to the rule; if that test is ever weakened, this probe would
+// shells, NOT that the app still follows it. What pins the app to the rule is
+// the youcoded-dev ast-grep rules run-in-terminal-chunked-write and
+// pty-worker-passthrough-single-write (scripts/ast-grep/rules/), plus
+// tests/pty-worker-writes.test.ts; if those are ever weakened, this probe would
 // still pass. Both are needed.
 //
 // Usage: node test-engine/probe-shell-command.mjs [--shell /usr/bin/fish]...
