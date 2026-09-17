@@ -120,7 +120,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
     // linear one presents a frame at the display's full refresh rate throughout.
     // That is the exact shape the 2026-07-30 idle-CPU investigation measured at
     // ~30% of a core at 180 Hz, and its conclusion was that the only lever that
-    // works is presenting fewer frames. Pinned by tests/animation-frame-budget.test.ts.
+    // works is presenting fewer frames. Pinned by ast-grep rule voice-button-level-ring-stepped.
     ? { boxShadow: `0 0 0 ${2 + Math.round(level * 7)}px color-mix(in srgb, var(--accent) 35%, transparent)`, transition: 'box-shadow 90ms steps(3)' }
     : undefined;
 

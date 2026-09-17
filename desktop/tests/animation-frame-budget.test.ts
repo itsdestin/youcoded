@@ -1,6 +1,6 @@
-import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
+import { RENDERER, readSource } from './helpers/guard-scope';
 
 // Guard for the 2026-07-30 idle-CPU investigation's actual conclusion.
 //
@@ -14,30 +14,25 @@ import { describe, it, expect } from 'vitest';
 //
 // Investigation: youcoded-dev/docs/archive/investigations/2026-07-30-idle-cpu-burn.md
 //
-// Plan B (2026-09-16): the frame-budget describe block that used to open this
-// file ("perpetual animations are frame-budgeted") moved to
-// tests/animation-css-budget.test.ts (13 per-file text-read cases) plus the
-// ast-grep rule no-unstepped-infinite-animation (the 2 generic "walk every
-// .tsx" sweeps — "bans NEW inline infinite animations…" and "bans Tailwind
-// arbitrary-value infinite animations…"). What remains below, "motion
-// vocabulary", is a SEPARATE, correctly-scoped concern this file also carried
-// from the start: SessionStrip drag/hover/label mechanics and the app's
-// easing/duration tokens. It stays here, unrenamed, because
-// .claude/rules/session-strip-motion.md names THIS FILE, by path, as the guard
-// for several of its invariants (e.g. "holds the drag visuals as STATE",
-// "never draws a dot touching", "never glides a dot at the drop") — moving or
-// renaming it would silently break that rule's pointers.
-const RENDERER = join(__dirname, '..', 'src', 'renderer');
-const read = (...p: string[]) =>
-  // CRLF → LF: a Windows checkout (autocrlf) hands the pins below `\r\n`, and every
-  // regex written with a literal `\n` failed there while passing on Linux and macOS
-  // (youcoded#404 CI, 2026-09-03).
-  readFileSync(join(RENDERER, ...p), 'utf8').replace(/\r\n/g, '\n').replace(/\/\*[\s\S]*?\*\//g, '');
+// Plan B (2026-09-16): this file's first block moved to
+// tests/animation-css-budget.test.ts, and every COMPONENT-side (.tsx/.ts) pin
+// of the two blocks below is an ast-grep rule now (scripts/ast-grep/rules/):
+// the SessionStrip drag/hover/label mechanics are the session-strip-* rules
+// (see .claude/rules/session-strip-motion.md for which guards what), plus
+// index-no-arrival-scaffold, chatview-arrival-only-on-incoming,
+// pill-label-reveals-with-motion-tokens and voice-button-level-ring-stepped.
+// What stays here reads STYLESHEETS (CSS is not an ast-grep language in this
+// workspace's rule set), plus one cross-file comparison a rule cannot make.
+//
+// WHY this reader: the pins were written against a read that normalised line
+// endings (a Windows checkout failed every literal-`\n` regex, youcoded#404 CI,
+// 2026-09-03) and DELETED block comments only — not readStripped, which also
+// blanks `//`.
+const read = (...p: string[]) => readSource(join(RENDERER, ...p)).replace(/\/\*[\s\S]*?\*\//g, '');
 
-// The motion vocabulary (2026-08-31 spec §3). These are source-text assertions
-// for the same reason the rest of this file is: nothing breaks visually when a
-// token drifts back to a hand-written curve, the app just quietly grows a sixth
-// bespoke easing again.
+// The motion vocabulary (2026-08-31 spec §3). Source-text assertions on the
+// stylesheet: nothing breaks visually when a token drifts back to a
+// hand-written curve, the app just quietly grows a sixth bespoke easing again.
 describe('motion vocabulary', () => {
   const globals = read('styles', 'globals.css');
 
@@ -62,45 +57,16 @@ describe('motion vocabulary', () => {
     expect(globals).toMatch(/--dur-switch:\s*380ms/);
   });
 
-  it('arms the label window from the stylesheet, not a number tuned to an older vocabulary', () => {
-    // A fixed 360ms closed before Soft's reveal-then-badge had finished, and
-    // the badge popped to full size — "jank". The badge is gone; the rule stays.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/motionWindowMs\(/);
-    expect(strip).toMatch(/getPropertyValue\(name\)/);
-    expect(strip).not.toMatch(/useOneShotWindow\([^)]*,\s*\d+\)/);   // no literal duration at a call site
-  });
-
   it('never draws a dot touching the pill in hand — veiled by proximity, moved while hidden', () => {
     // Destin, 2026-09-02, after a slide and then a blink: "the dragged session
     // kept visibly overlapping dots before they appeared to begin to move. it
     // would be fine if they teleport or fade in/fade out as long as they dont
-    // visually touch the dragged pill." Geometric, not timed.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/const VEIL_PX = 1;/);
-    expect(strip).toMatch(/r\.right > t\.left - VEIL_PX && r\.left < t\.right \+ VEIL_PX/);
-    // A dot's step-aside is a jump (it is hidden); a wide neighbour still slides.
-    expect(strip).toMatch(/\(dragging \|\| settle !== null\) && isDot \? '0s' : 'var\(--dur-hover\) var\(--ease-out\)'/);
-    // The flow's scale stays on the dots THROUGH the settle, and the flow runs
-    // as a layout effect on every commit that moves a box (R9): a yield or a
-    // drop must never paint a frame the rAF loop has not sized yet.
-    expect(strip).toMatch(/settle !== null && isDot\n[\s\S]{0,600}\? 'scale\(var\(--flow, 1\)\)'/);
-    expect(strip).toMatch(/useLayoutEffect\(\(\) => \{\n\s+if \(!flowActive\) return;[\s\S]{0,600}flow\(bar, t, heldId\);/);
-    // And the dot FLOWS around the pill (2026-09-03): scaled per frame by the
-    // rAF loop, with a ghost at its mirror spot across the pill — two images
-    // whose sizes sum to one, on both sides of the yield, so the yield can
-    // fire at the dot's centre (R7) and show nothing. No hole beside the pill.
-    expect(strip).toMatch(/scale\(var\(--flow, 1\)\)/);
-    expect(strip).toMatch(/ghost\.dataset\.ghost = /);
-    expect(strip).toMatch(/const mirror = at\.origin === 'right center' \? left - \(t\.width \+ G\) : left \+ \(t\.width \+ G\);/);
-    expect(strip).not.toMatch(/travel\.current\.dir;\n\s+const barL/);   // the flow is direction-blind
-    expect(strip).toMatch(/ghost\.removeAttribute\('data-session-id'\)/);
-    expect(strip).toMatch(/twin\.style\.left = /);   // the rAF loop, not React, positions the twin
+    // visually touch the dragged pill." Geometric, not timed. The component
+    // half is ast-grep: session-strip-dot-flows-never-touches and
+    // pill-label-reveals-with-motion-tokens.
     // Hidden at once, no fade out; the class beats the inline transition list.
     expect(globals).toMatch(/\.session-pill--veiled \{ opacity: 0 !important; transition-duration: 0s !important; \}/);
     expect(globals).not.toMatch(/pill-hop|data-yield/);
-    const label = read('components/header', 'pill-label-style.ts');
-    expect(label).toMatch(/max-width var\(--dur-reveal\) var\(--ease-reveal\)/);
   });
 
   it('puts them in the theme-independent :root block', () => {
@@ -137,20 +103,10 @@ describe('motion vocabulary', () => {
     // lift on an overshooting curve.
     expect(globals).not.toMatch(/data-yield|--pill-yield/);
     expect(globals).not.toMatch(/data-motion|data-arrival|--switch-lift|--switch-ease/);
-    expect(read('.', 'index.tsx')).not.toMatch(/arrival/);
+    // index.tsx's `?arrival=` param and SessionStrip's select-on scaffold are
+    // ast-grep: index-no-arrival-scaffold, session-strip-no-select-on-scaffold.
     expect(globals).toMatch(/@keyframes switch-arrival \{[^}]*translateY\(14px\)/);
     expect(globals).toMatch(/\.switch-arrival \{\s*animation: switch-arrival var\(--dur-switch\) cubic-bezier\(0\.34, 1\.56, 0\.64, 1\) 1;/);
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).not.toMatch(/\[data-select\]|press-dot|readSelectOn/);   // data-select-portal is the Select menu's, unrelated
-  });
-
-  it('animates the incoming conversation, never the outgoing one', () => {
-    const chat = read('components', 'ChatView.tsx');
-    // The gate is sessionActive, not `visible` — `visible` also flips on Ctrl+`.
-    // The trailing `&& sessionActive` is what makes it one-directional: the
-    // window opens on the way out too, and this is what closes it. See the
-    // hook's header.
-    expect(chat).toMatch(/useOneShotWindow\(\s*sessionActive\s*\)\s*&&\s*sessionActive/);
   });
 
   it('defines the arrival animation with a finite iteration count', () => {
@@ -166,114 +122,6 @@ describe('motion vocabulary', () => {
     // The veil is a plain class, not an animation — nothing to gate.
   });
 
-  it('draws the pill in hand as a TWIN of the real pill, never a ghost or an insertion line', () => {
-    // Chrome's model: the pill itself moves and the neighbours step aside, so
-    // the gap IS the indicator. The 2026-09-01 shape: the in-flow pill keeps
-    // its slot invisibly (still animating its own width, so the row can
-    // reshape on a select-on-press) and a twin — the SAME markup and styles —
-    // floats at the cursor. The old ghost was a dimmed copy with its own
-    // label/colour state and a separate insertion line.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).not.toMatch(/ghostTarget/);
-    expect(strip).not.toMatch(/dragLabel|dragColor/);
-    expect(strip).not.toMatch(/opacity-30 scale-95/);
-    expect(strip).toMatch(/visibility: isBeingDragged \? 'hidden'/);
-    expect(strip).toMatch(/\{pillBody\}[\s\S]*\{pillBody\}/);            // the same body, twice
-    expect(strip).toMatch(/pointerEvents: 'none'/);
-    // The twin carries no data attributes: everything that walks the row by
-    // [data-session-id] must find exactly one node per session.
-    const twinStart = strip.indexOf('isBeingDragged && dragLeft !== null && (');
-    const twin = strip.slice(twinStart, strip.indexOf('{pillBody}', twinStart));
-    expect(twin).not.toMatch(/data-session/);
-  });
-
-  it('keeps the pill in hand under the cursor, with no transition on its position', () => {
-    // The review cut positioned the dragged pill by its SLOT with a 150ms ease
-    // on transform: it hopped 26px per slot while the cursor travelled 130px,
-    // and trailed the pointer like a rubber band. The twin follows the cursor
-    // 1:1 (clamped to the row); the SLOT is decided by nearest-slot against
-    // SYNTHETIC settled geometry, not the pill's drawn position.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/clampFloatLeft\(/);
-    expect(strip).toMatch(/layoutRects\(/);
-    expect(strip).toMatch(/nextSlotId\(/);
-    expect(strip).toMatch(/neighbourOffsets\(/);
-    expect(strip).not.toMatch(/draggedSlotOffset|nearestPillId|clampDragDx/);
-    // The twin's transition list must not name its position.
-    const twinStart = strip.indexOf('isBeingDragged && dragLeft !== null && (');
-    const twin = strip.slice(twinStart, strip.indexOf('{pillBody}', twinStart));
-    expect(twin).toMatch(/transition: 'box-shadow/);
-    expect(twin).not.toMatch(/transition: '[^']*(left|transform)/);
-  });
-
-  it('keeps the hover peek open through pointer-down and the drag', () => {
-    // Clearing hover on mouse-down collapsed the peek to a dot and the click
-    // re-expanded it as the active pill: open → shut → open on every click of
-    // a dot. And a peek collapsing mid-drag shrank the pill under the cursor
-    // while its neighbours had already stepped aside for its peek width — the
-    // ~150px void of 2026-09-01. Hover is released at the drop, not before.
-    const strip = read('components', 'SessionStrip.tsx');
-    const down = strip.slice(strip.indexOf('const handlePointerDown'), strip.indexOf('const handlePointerMove'));
-    // The ONE clear on pointer-down is ANOTHER pill's peek (R10): the pressed
-    // pill's own stays open. Guarded, so a press on the peeked pill itself
-    // still never shuts it.
-    expect(down.match(/setHoveredId\(null\)/g)?.length).toBe(1);
-    expect(down).toMatch(/hoveredRef\.current !== sessionId\) \{[\s\S]{0,160}setHoveredId\(null\);/);
-    const leave = strip.slice(strip.indexOf('const handleLeave'), strip.indexOf('const handleMenuToggle'));
-    expect(leave).toMatch(/dragIdRef\.current !== null\) return/);
-  });
-
-  it('keys drag state by session id, never by index', () => {
-    // See drag-order.ts's header for why. A single surviving `sessions[dragIdx]`
-    // puts the two index spaces back in the same code.
-    //
-    // NOTE the attribute is checked as PRESENT, not as gone: `data-session-idx`
-    // stays. It is read from outside the renderer by main.ts (torn-off window
-    // placement, inside a string tsc cannot see) and by scripts/perf-lab, both
-    // of which fail SILENTLY on a rename.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/data-session-id=\{s\.id\}/);
-    expect(strip).toMatch(/data-session-idx=\{idx\}/);
-    expect(strip).not.toMatch(/\bdragIdx\b/);
-    expect(strip).not.toMatch(/\boverIdx\b/);
-  });
-
-  it('keeps the open name in hand while dragging', () => {
-    // A round that collapsed the pill in hand to a dot was built and withdrawn
-    // (Destin, 2026-09-02: "i want to keep the fully expanded name"). The
-    // pill's settled width in the drag's geometry is its full width.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).not.toMatch(/if \(id === sessionId\) return COLLAPSED_PILL_PX;/);
-    expect(strip).toMatch(/: displayPack\.expanded\.has\(s\.id\) \|\| isHovered \|\| isActive;/);
-  });
-
-  it('packs the row into the room it really has, so a drag is judged against the widths that get drawn', () => {
-    // 2026-09-03: the packer was handed the wrapper's full width (the strip's
-    // own padding included) and never knew about the "+N" chip, so a full row
-    // was packed ~37px too wide; the active pill, the one flex item allowed to
-    // shrink, rendered 25px narrower than the width the drag geometry froze,
-    // and every dot moved 25px too far — snapping back on release.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/function stripBudget\(bar: HTMLElement\)/);
-    expect(strip).toMatch(/parseFloat\(cs\.paddingLeft\)[^\n]*parseFloat\(cs\.paddingRight\)/);
-    expect(strip).not.toMatch(/parentElement\?\.clientWidth \?\? bar(El)?\.clientWidth;/);   // only inside stripBudget
-    // Both packs — the live repack and the press-time freeze — reserve the chip.
-    expect(strip.match(/overflowChipWidth: OVERFLOW_CHIP_PX/g)?.length).toBe(2);
-    // The held pill's settled width is capped at the room the packer HAD, never at a re-derived number.
-    expect(strip).toMatch(/Math\.max\(COLLAPSED_PILL_PX, target\.pillBudget\)/);
-  });
-
-  it('tears a pill off only above or below the window — sideways stays in the row, as in Chrome', () => {
-    // Destin, R6 (2026-09-03): "i still cant drag a session into the leftmost
-    // position" — reaching for the first slot overshoots past the edge, which
-    // read as "outside the window" and spawned a window instead of a drop.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/const outsideOwnWindow = e\.clientY < 0 \|\| e\.clientY > window\.innerHeight;/);
-    expect(strip).toMatch(/const outsideOwnWindow = clientY < 0 \|\| clientY > window\.innerHeight;/);
-    expect(strip).not.toMatch(/clientX < 0/);
-    expect(strip).not.toMatch(/clientX > window\.innerWidth/);
-  });
-
   it('puts nothing but the dot and the name on a pill — the runtime lives in the menu', () => {
     // Until 2026-09-02 a native pill carried a "YouCoded · Coder" badge that
     // opened after the name on every switch — a second motion to wait for, and
@@ -281,14 +129,9 @@ describe('motion vocabulary', () => {
     // coder' tags in session names entirely. they still cause a bit of visual
     // jank." Runtime and model now sit under the name in the All Sessions
     // menu, with the brand mark the status bar's model chip uses.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).not.toMatch(/session-pill__badge|runtimeBadgeLabel|badgeArmed/);
+    // SessionStrip's half (no badge, runtime in the menu, the packer budgets the
+    // label box) is ast-grep: session-strip-pill-is-dot-and-name.
     expect(globals).not.toMatch(/session-pill__badge|badge-in/);
-    expect(strip).toMatch(/sessionRuntimeLabel\(s\)/);
-    expect(strip).toMatch(/<ProviderIcon icon=\{rt\.icon\}/);
-    // And the packer budgets exactly what the label box opens to.
-    expect(strip).toMatch(/pillMetrics\(s\.name, measure, font\)/);
-    expect(strip).toMatch(/expandedWidth: metrics\.get\(s\.id\)/);
   });
 
   it('lays the name out once and fades what does not fit', () => {
@@ -296,9 +139,10 @@ describe('motion vocabulary', () => {
     // re-ellipsises mid-animation ("theme …", "theme cont…", "theme contra…").
     // The 12px tail is LABEL_TAIL_PX: the mask stop, the name's padding and the
     // module constant must agree or the fade lands on the last letter.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/className="session-pill__name"/);
-    expect(strip).not.toMatch(/text-ellipsis \$\{isActive/);
+    // SessionStrip's half is ast-grep: session-strip-name-laid-out-once.
+    // WHY still a text read: the tail width is READ from pill-label-style.ts at
+    // run time and then looked for in globals.css — a cross-file comparison no
+    // single-file ast-grep rule can make.
     const label = read('components/header', 'pill-label-style.ts');
     const tail = Number(label.match(/LABEL_TAIL_PX = (\d+)/)?.[1]);
     expect(tail).toBeGreaterThan(0);
@@ -306,86 +150,6 @@ describe('motion vocabulary', () => {
     expect(globals).toMatch(new RegExp(`\\.session-pill__name\\s*\\{[^}]*width: max-content;[^}]*padding-right: ${tail}px`));
   });
 
-  it('leaves no hand-written curve in SessionStrip', () => {
-    // Five distinct curves accumulated in the renderer, three of them the same
-    // overshoot with drifted numbers (1.56 / 1.5 / 1.62), because each was
-    // typed out by hand. Scoped to the one file that has been converted — the
-    // rest of the app is a separate cleanup with its own before/after deck.
-    //
-    // This bans hand-written CURVES, not hand-written timing functions:
-    // `steps()` is the frame budget and is required, and the assertions at the
-    // top of this file pin the two `steps()` sites in this same file.
-    expect(read('components', 'SessionStrip.tsx')).not.toMatch(/cubic-bezier\(/);
-  });
-
-  it('holds the drag visuals as STATE until the drop is committed — never the isDragging ref', () => {
-    // 2026-09-03 (R10, fuzzed): pointerup flips the ref at once while the drop is
-    // committed after an IPC round trip; the last pointermove's render landed in
-    // between whenever the hand lifted while still moving (a touchpad, a finger),
-    // unmounted the twin and snapped the pill to its origin — then the commit
-    // jumped everything to the new order. "jumping around the switcher on release".
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/const \[dragActive, setDragActive\] = useState\(false\);/);
-    expect(strip).toMatch(/const dragging = dragId !== null && dragActive && dragLeft !== null;/);
-    expect(strip.match(/const isBeingDragged = dragId === s\.id && dragActive;/g)?.length).toBe(2);
-    // The ref is read only inside handlers, never in render.
-    const renderStart = strip.indexOf('const dragging = dragId !== null');
-    expect(strip.slice(renderStart)).not.toMatch(/isDragging\.current/);
-    // Cleared in the same render as the reorder — releaseVisuals — and by the live tear-off.
-    expect(strip).toMatch(/const releaseVisuals = \(\) => \{[\s\S]{0,200}setDragActive\(false\);/);
-  });
-
-  it('never glides a dot at the drop — the flow owns its two images; yields judge the visible edge', () => {
-    // Fuzzed 2026-09-03: a dot the pill was over at release was held at its old
-    // rect at FULL size under the settling pill, then slid 128px (the FLIP is
-    // for wide pills); and a twin still opening after a cold press had its
-    // centre placed with the settled width, so dots yielded 60px early.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/for \(const \[id, wasLeft\] of armed\.lefts\) \{[\s\S]{0,600}if \(dotIdsRef\.current\.has\(id\)\) continue;/);
-    expect(strip).toMatch(/const leadDrawn = floatLeft !== null\n\s+\? \(tv\.dir < 0 \? floatLeft : tv\.dir > 0 \? floatLeft \+ widthNow : floatLeft \+ widthNow \/ 2\)/);
-    expect(strip).toMatch(/mapToSettled\(drawn, rects, leadDrawn\) \+ \(tv\.dir < 0 \? heldWidth \/ 2 : tv\.dir > 0 \? -heldWidth \/ 2 : 0\)/);
-    // Only a dot-SIZED pill flows or is veiled: the old active pill is "collapsed"
-    // in the pack the moment another is pressed, but still 190px wide and closing.
-    expect(strip).toMatch(/if \(w > COLLAPSED_PILL_PX \+ 1\) \{ el\.style\.removeProperty\('--flow'\);/);
-    expect(strip).toMatch(/const wide = el\.offsetWidth > COLLAPSED_PILL_PX \+ 1;/);
-    // After a drop the peek lock lifts on leaving the strip or pressing — never by 8px of travel.
-    expect(strip).not.toMatch(/hoverLock\.current\.x\) > 8/);
-    // A finger never gets a peek (a tap leaves a sticky "hover" under it), and pressing
-    // one pill closes another pill's peek before the drag geometry freezes.
-    expect(strip).toMatch(/if \(lastPointerType\.current === 'touch'\) return;/);
-    expect(strip).toMatch(/if \(hoveredRef\.current !== null && hoveredRef\.current !== sessionId\) \{[\s\S]{0,200}setHoveredId\(null\);/);
-  });
-
-  it('opens a hover peek only after the hand rests on the dot — never in passing', () => {
-    // 2026-09-03 (R8): a hand that keeps moving after a drop drifted onto the
-    // next dot; its peek opened, the row widened and re-centred, then closed
-    // as the hand left — "jumping/glitching back and forth on release".
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/const PEEK_DWELL_MS = 150;/);
-    expect(strip).toMatch(/enterTimer\.current = setTimeout\(\(\) => \{[\s\S]{0,200}setHoveredId\(id\);\n\s+\}, PEEK_DWELL_MS\);/);
-    // An open peek still follows the cursor at once.
-    expect(strip).toMatch(/if \(hoveredRef\.current !== null\) \{ setHoveredId\(id\); return; \}/);
-    // Leaving the dot cancels a pending peek.
-    expect(strip).toMatch(/const handleLeave = useCallback\(\(\) => \{[\s\S]{0,700}clearTimeout\(enterTimer\.current\)/);
-  });
-
-  it('attaches pill hover handlers unconditionally', () => {
-    // Fix: attaching them only to non-pack-expanded pills means a pill the
-    // packer collapses UNDER a stationary cursor never gets its mouseenter,
-    // so it stays a dot until the user moves off and back on. Gate inside the
-    // handler instead, where the current pack state is read at event time.
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).not.toMatch(/onMouseEnter=\{pack\.expanded\.has\(s\.id\)\s*\?\s*undefined/);
-    expect(strip).not.toMatch(/onMouseLeave=\{pack\.expanded\.has\(s\.id\)\s*\?\s*undefined/);
-  });
-
-  it('routes the session pill label through pillLabelStyle', () => {
-    const strip = read('components', 'SessionStrip.tsx');
-    expect(strip).toMatch(/pillLabelStyle\(/);
-    // The old inline style is gone — both halves of it.
-    expect(strip).not.toMatch(/maxWidth:\s*showName/);
-    expect(strip).not.toMatch(/'max-width 200ms ease, opacity 150ms ease'/);
-  });
 });
 
 describe('the microphone budgets every frame it presents', () => {
@@ -393,8 +157,9 @@ describe('the microphone budgets every frame it presents', () => {
   // animates for MINUTES at a time under the user's direct attention, so it is
   // the worst possible place to lose this. The comment in globals.css claimed
   // this file pinned it and this file said nothing about voice at all.
+  // VoiceButton's inline level ring (stepped, whole-pixel) is ast-grep:
+  // voice-button-level-ring-stepped.
   const globals = read('styles', 'globals.css');
-  const button = read('components', 'VoiceButton.tsx');
 
   it('steps the breathing ring rather than smoothing it', () => {
     expect(globals).toMatch(/\.voice-mic-on\s*\{[^}]*steps\(/);
@@ -411,14 +176,4 @@ describe('the microphone budgets every frame it presents', () => {
     expect(globals).not.toMatch(/\.voice-bar\s*\{\s*transition:[^}]*linear/);
   });
 
-  it('steps the level ring — the motion that actually ships', () => {
-    // The other two are round-2 alternatives reachable only from the workbench;
-    // this inline transition is what every user sees.
-    expect(button).toMatch(/transition:\s*'box-shadow\s+\d+ms\s+steps\(\d+\)'/);
-    expect(button).not.toMatch(/transition:\s*'box-shadow[^']*linear'/);
-  });
-
-  it('keeps the ring on whole-pixel steps, so it repaints only when the level moves a step', () => {
-    expect(button).toMatch(/\$\{2 \+ Math\.round\(level \* 7\)\}px/);
-  });
 });
