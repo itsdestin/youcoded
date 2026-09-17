@@ -142,7 +142,8 @@ describe('setting row adoption', () => {
    * file-level exemption would let a ninth hand-rolled toggle row in without a
    * word. Adding one here should mean writing down why — and adding the file to
    * the ignores: of the ast-grep rule no-hand-rolled-setting-row-toggle, which
-   * holds every OTHER in-scope file at zero.
+   * holds every OTHER in-scope file at zero (youcoded-dev's check.sh fails if
+   * the two lists differ).
    *
    * These are not oversights — each is a surface with a different job:
    */
@@ -184,13 +185,16 @@ describe('setting row adoption', () => {
     // class string without reading the style object beneath it.
     // WHY still a source read: "exactly N Toggles outside a row in THIS file"
     // is a per-file count, which an ast-grep rule cannot express.
+    // WHY the rule named in the messages (review of u8): the same files are listed
+    // under that rule's ignores:, and youcoded-dev's check.sh fails when the two differ.
+    const RULE = "the rule's ignores: in youcoded-dev scripts/ast-grep/rules/no-hand-rolled-setting-row-toggle.yml";
     const byName = new Map(inScopeFiles().map((p) => [p.split(/[\\/]/).pop()!, p]));
     for (const [file, { count, why }] of Object.entries(TOGGLES_OUTSIDE_A_ROW)) {
       const abs = byName.get(file);
-      expect(abs, `${file} is exempted but no longer in scope — drop it`).toBeTruthy();
+      expect(abs, `${file} is exempted but no longer in scope — drop it, and remove it from ${RULE}`).toBeTruthy();
       expect(
         togglesOutsideARow(readSource(abs!)),
-        `${file} (${why}) no longer has ${count} — update or drop the exemption`,
+        `${file} (${why}) no longer has ${count} — update the count, or drop the exemption and remove it from ${RULE}`,
       ).toBe(count);
     }
   });
