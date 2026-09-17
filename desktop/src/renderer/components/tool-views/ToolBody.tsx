@@ -10,6 +10,7 @@ import { useExpandAllToggle, getInitialExpanded, isExpandModeActive } from '../.
 import { useArtifactOptional } from '../../state/ArtifactContext';
 import { ArtifactThumbnail } from '../ArtifactThumbnail';
 import { matchSessionArtifact } from '../filepath-match';
+import { useSecondsTick } from '../../hooks/useSecondsTick';
 import { DeliverablesCard } from '../DeliverablesCard';
 import type { ArtifactRecord } from '../../../shared/artifacts/types';
 // Chatsearch session cards: same parser ToolCard uses for the header label,
@@ -312,14 +313,10 @@ function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
 // command prominently, routes output through CR-strip + collapse, and promotes
 // error state to a pill at the top.
 // G-1 (background Bash): a ticking "2m 14s" for a running command, frozen at
-// its end time once it exits or is stopped. One interval per running card.
+// its end time once it exits or is stopped. Rides the shared seconds clock
+// (useSecondsTick) only while running, so a finished card costs nothing.
 function useElapsed(startedAt: number | undefined, endedAt: number | undefined): string {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (startedAt == null || endedAt != null) return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [startedAt, endedAt]);
+  const now = useSecondsTick(startedAt != null && endedAt == null);
   if (startedAt == null) return '';
   const ms = Math.max(0, (endedAt ?? now) - startedAt);
   const s = Math.floor(ms / 1000);
