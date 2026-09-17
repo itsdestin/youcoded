@@ -40,6 +40,14 @@ export interface RelevanceContext {
    *  The renderer cannot tell them apart on its own (SessionInfo carries no
    *  provider type), so this rides the totals from main as `anyFree`. */
   runsLocally: boolean;
+  /** A ChatGPT-plan native session has its own rolling 5h/7d windows (its
+   *  OpenAI plan's, not a Claude subscription's), fed into the bar as real
+   *  numbers — StatusBar.tsx's `show()` already draws the chip for exactly
+   *  this case (`chatgptWindows`). Without this the menu judged the row on
+   *  `runtime` alone, so a session whose chip was ON SCREEN with a real
+   *  number still read "Claude Code sessions only" in Customize — a reason
+   *  that was false for the one session drawing the chip. */
+  chatgptWindows: boolean;
 }
 
 /** Widgets that describe the Claude SUBSCRIPTION — an account a native session
@@ -65,7 +73,9 @@ export function widgetUnavailableReason(id: WidgetId, ctx: RelevanceContext): st
   if (ctx.runtime === 'claude') return null;
   // No "— see /usage" pointer: it is not a link here, and a path a user has to
   // retype is worse than not mentioning it (checkpoint #8).
-  if (CLAUDE_ONLY.has(id)) return 'Claude Code sessions only';
+  // Mirrors StatusBar.tsx's `show()` override for the same two widgets: a
+  // ChatGPT-plan session applies here too, so the row must stay a switch.
+  if (CLAUDE_ONLY.has(id)) return ctx.chatgptWindows ? null : 'Claude Code sessions only';
   // "yet" promised a feature that is not on the roadmap (checkpoint #7).
   if (UNMEASURED_IN_NATIVE.has(id)) return 'Not available in this kind of session';
   // Cost is the one row whose availability the BAR also decides, so this

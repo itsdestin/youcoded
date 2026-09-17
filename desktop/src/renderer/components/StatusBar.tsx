@@ -1715,7 +1715,7 @@ export default function StatusBar({
         toggle={toggle}
         // anyUnpriced rides along because the bar draws a "Cost: not listed"
         // chip for it — the menu has to offer the row whenever the chip is up.
-        relevance={{ runtime, hasPricedWork: nativeTotals?.anyPriced ?? true, anyUnpriced: nativeTotals?.anyUnpriced ?? false, runsLocally: nativeTotals?.anyFree ?? false }}
+        relevance={{ runtime, hasPricedWork: nativeTotals?.anyPriced ?? true, anyUnpriced: nativeTotals?.anyUnpriced ?? false, runsLocally: nativeTotals?.anyFree ?? false, chatgptWindows }}
       />
 
       {/* Update panel — opened from the version pill. Guard on updateStatus
