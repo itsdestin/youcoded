@@ -10,7 +10,7 @@ const CHANNELS = ['remote:devices:list', 'remote:devices:rename', 'remote:device
 
 describe('the device list exists on every platform', () => {
   it('each channel is registered in preload, the desktop handlers and the shim', () => {
-    // WHY a parity test and not a type: a bridge type (SharedBridge in shared/types.ts)
+    // WHY a parity test and not a type: a bridge type (SharedBridge in shared/bridge-types.ts)
     // compares SHAPES, so a channel missing from one side of the bridge type-checks and
     // then does nothing at runtime.
     for (const c of CHANNELS) {

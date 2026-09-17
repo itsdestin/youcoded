@@ -5,7 +5,7 @@
 
 // Type-only, so nothing is added to the bundle the Android WebView loads.
 import type { VoiceReadiness } from '../shared/voice-types';
-import type { RemoteBridge } from '../shared/types';
+import type { RemoteBridge } from '../shared/bridge-types';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
@@ -1898,7 +1898,7 @@ export function installShim(): void {
       // initial history load (tens of MB over the WS for large conversations).
       // `count || 10` / `all || false` mirror preload so the wire always carries
       // real number/boolean types (Android's optInt/optBoolean and the server's
-      // slice(-count) both need them). Guard: SessionBridge.loadHistory (shared/types.ts,
+      // slice(-count) both need them). Guard: SessionBridge.loadHistory (shared/bridge-types.ts,
       // parameter types) + remote-shim-loadhistory-args.test.ts (the order on the wire).
       loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) =>
         invoke('session:history', { sessionId, projectSlug, count: count || 10, all: all || false }),
@@ -3079,7 +3079,7 @@ export function installShim(): void {
     },
     // WHY `satisfies`: a compile-time-only check (no runtime effect) that this
     // object implements every `session`, `on` and favorites member preload.ts
-    // does — see SharedBridge in shared/types.ts.
+    // does — see SharedBridge in shared/bridge-types.ts.
   } satisfies RemoteBridge;
 
   // The one intentional gap in the shared shape: voice typing exists on the
