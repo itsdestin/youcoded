@@ -155,6 +155,19 @@ const OLD_CLIENT_FALLBACK_MS = 5000;
 // that could not hear it, so the phone said "may be out of date". A page that will announce
 // readiness is waited on; this timer only covers one that breaks before it can.
 const READY_CLIENT_FALLBACK_MS = 30_000;
+
+/** Latest-wins buffer: `buffers` is sessionId → key → the newest event for
+ *  that key. One helper for both the specialist-run and shell-run catch-up
+ *  buffers (simplification audit M8) — a card shows one current status, not
+ *  a history, so the previous entry for the same key is overwritten. */
+function bufferLatest<E>(buffers: Map<string, Map<string, E>>, sessionId: string, key: string, event: E): void {
+  let byKey = buffers.get(sessionId);
+  if (!byKey) {
+    byKey = new Map();
+    buffers.set(sessionId, byKey);
+  }
+  byKey.set(key, event);
+}
 // Broadcasts queued for a client that is still restoring. Overflow drops the oldest and
 // marks that client's hydrate `degraded`, so the phone knows to offer Refresh.
 const RESTORE_QUEUE_MAX = 2000;
@@ -1047,20 +1060,13 @@ export class RemoteServer {
    *  Latest-per-child, not append-only — see specialistRunBuffers' own
    *  comment for why overwriting the previous entry is correct here. */
   bufferSpecialistRun(event: SpecialistsEvent): void {
-    let byChild = this.specialistRunBuffers.get(event.sessionId);
-    if (!byChild) {
-      byChild = new Map();
-      this.specialistRunBuffers.set(event.sessionId, byChild);
-    }
-    byChild.set(event.run.childId, event);
+    bufferLatest(this.specialistRunBuffers, event.sessionId, event.run.childId, event);
   }
 
   /** G-1: connect-time catch-up for a background command's card — latest per
    *  shell id, never an append-only log (same reasoning as bufferSpecialistRun). */
   bufferShellRun(event: ShellEvent): void {
-    let byShell = this.shellRunBuffers.get(event.sessionId);
-    if (!byShell) { byShell = new Map(); this.shellRunBuffers.set(event.sessionId, byShell); }
-    byShell.set(event.run.shellId, event);
+    bufferLatest(this.shellRunBuffers, event.sessionId, event.run.shellId, event);
   }
 
   private onSessionCreated = (info: any) => {
