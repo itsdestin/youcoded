@@ -131,6 +131,11 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   useEffect(() => {
     const ranges = rangesRef.current;
     if (ranges.length === 0 || !highlightsSupported()) return;
+    // Never paint from ranges the content has outgrown. In practice the walk
+    // effect above runs first in the same commit (declaration order) and
+    // re-syncs the counters before this runs; this is the belt to that brace,
+    // and it only skips — a re-walk from here would re-walk per streamed token.
+    if (walkedAtRef.current !== mutationsRef.current) return;
     const cur = ((current % ranges.length) + ranges.length) % ranges.length;
     const HighlightCtor = (window as any).Highlight;
     (CSS as any).highlights.set(HL_CURRENT, new HighlightCtor(ranges[cur]));

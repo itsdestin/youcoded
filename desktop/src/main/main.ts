@@ -1698,7 +1698,7 @@ void app.whenReady().then(async () => {
         if (r.repaired > 0) log('WARN', 'Main', 'Stale hook commands repaired', { count: r.repaired });
         if (r.repairedFile) log('WARN', 'Main', 'Claude settings file was unreadable — backed up and rewritten with the hooks', { backupPath: r.repairedFile.backupPath });
         if (r.refused) log('WARN', 'Main', 'Hook entries not written', { refused: r.refused });
-        log('INFO', 'Main', 'Hooks installed', { copied: r.copied, written: r.written });
+        else log('INFO', 'Main', 'Hooks installed', { copied: r.copied, written: r.written });
       }
     } catch (e) {
       log('ERROR', 'Main', 'Failed to install hooks', { error: String(e) });
