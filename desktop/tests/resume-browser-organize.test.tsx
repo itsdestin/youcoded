@@ -124,6 +124,24 @@ describe('ResumeBrowser — organizing a conversation', () => {
     expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
   });
 
+  // WHY (Plan B review of u6, 2026-09-16): the retired "matches the file viewer
+  // styling" case scraped SessionDrawer.tsx for its expectations; this keeps only
+  // its source-free half — R5-1, both rename cues (dotted underline on the name,
+  // the pencil) are visible at rest, never revealed on hover/focus. A phone has
+  // no hover, so a hover-only cue is an invisible one there.
+  it('keeps both rename cues visible at rest, with no hover or focus reveal', async () => {
+    (window as any).claude.sessionNaming = {};
+    mount();
+    const button = await screen.findByRole('button', { name: 'Rename CC Chat' });
+    const name = screen.getByText('CC Chat');
+    expect(button).toContainElement(name);
+    expect(name).toHaveClass('underline', 'decoration-dotted', 'decoration-fg-muted');
+    const pencil = button.querySelector('svg')!.parentElement!;
+    for (const cue of [name, pencil]) {
+      expect(cue.className).not.toMatch(/hover:|focus:|opacity-0|invisible|hidden|touch-reveal/);
+    }
+  });
+
   it('marks a session complete from the card, without opening the menu', async () => {
     mount();
     fireEvent.click(await screen.findByRole('button', { name: 'Mark CC Chat complete' }));
