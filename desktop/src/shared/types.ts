@@ -1584,8 +1584,11 @@ export interface SessionMetaResult {
 // Parameter TYPES are checked, names are not: the 2026-08-12 loadHistory bug
 // (the shim took (sessionId, count, all, projectSlug)) is a type error, but a
 // swap of two same-typed parameters is not — remote-shim-loadhistory-args.test.ts
-// drives that order onto the wire. Signatures follow preload.ts. This is not the
-// renderer's view of window.claude (that is the `declare global` in useIpc.ts).
+// drives that order onto the wire, but for the SHIM only: preload.ts's
+// loadHistory takes the same-typed (sessionId, projectSlug) pair, and nothing
+// checks that preload keeps them in that order. Signatures follow preload.ts.
+// This is not the renderer's view of window.claude (that is the `declare global`
+// in useIpc.ts).
 
 /** A listener handle as the bridges return it — pass it back to `off()`. */
 export type BridgeHandler = (...args: any[]) => void;
