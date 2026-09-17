@@ -713,7 +713,8 @@ export class RemoteServer {
         server.removeListener('error', onError);
         this.running = true;
         this.lastStartError = null;
-        this.startLiveness();
+        // The liveness ping is armed by addClient (first client) and disarmed on
+        // the last drop — see startLiveness (simplification audit W14).
         console.log(`[RemoteServer] Listening on port ${this.config.port}`);
         this.emitStatus();
         resolve();
@@ -775,10 +776,10 @@ export class RemoteServer {
   invalidateTokens(): void {
     this.devices.revokeAll();
     this.downloads.revokeAll();
-    for (const client of this.clients) {
+    for (const client of [...this.clients]) {
       client.ws.close(4001, 'Password changed');
+      this.removeClient(client); // also disarms the liveness ping on the last one
     }
-    this.clients.clear();
   }
 
   /** Number of currently connected remote clients. */
@@ -827,10 +828,20 @@ export class RemoteServer {
     for (const client of this.clients) {
       if (client.deviceId === deviceId) {
         client.ws.close(4003, 'Device unpaired');
-        this.clients.delete(client);
+        this.removeClient(client);
       }
     }
     return true;
+  }
+
+  /** Every path that forgets a client goes through here so the liveness ping
+   *  can stand down when the last one leaves (simplification audit W14). */
+  private removeClient(client: AuthenticatedClient): void {
+    this.clients.delete(client);
+    if (this.clients.size === 0 && this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
   }
 
   // --- Event handlers for buffering ---
@@ -1353,7 +1364,11 @@ export class RemoteServer {
   }
 
   /** Close sockets that stopped answering. Without this a half-open connection is invisible
-   *  and the client waits the full 30s request timeout to learn anything is wrong. */
+   *  and the client waits the full 30s request timeout to learn anything is wrong.
+   *  WHY armed per client (simplification audit W14): this used to start with the
+   *  server and tick every 20 s with zero clients — 4,320 empty wakes a day on an
+   *  idle app. addClient arms it, removeClient disarms it on the last drop, the
+   *  same "nobody is listening" short-circuit broadcast() already has. */
   private startLiveness(): void {
     if (this.pingTimer) return;
     this.pingTimer = setInterval(() => {
@@ -1368,7 +1383,7 @@ export class RemoteServer {
           const socket = client.ws as WebSocket & { terminate?: () => void };
           if (typeof socket.terminate === 'function') socket.terminate();
           else socket.close(4008, 'No response');
-          this.clients.delete(client);
+          this.removeClient(client);
           continue;
         }
         client.missedPings = missed;
@@ -1385,6 +1400,7 @@ export class RemoteServer {
       phase: 'restoring', queue: [], queueDegraded: false, fallbackTimer: null,
     };
     this.clients.add(client);
+    this.startLiveness(); // no-op while already armed — see its WHY
     this.logDevice(client, `connected (${opts.sendsReady ? 'page announces readiness' : 'older page'})`);
     // WHY a fallback and not an immediate replay (design §1): the restore used to start
     // the moment auth succeeded, before the page had mounted App, and guessed with a
@@ -1402,7 +1418,7 @@ export class RemoteServer {
 
     const drop = () => {
       if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
-      this.clients.delete(client);
+      this.removeClient(client);
     };
     ws.on('pong', () => { client.missedPings = 0; client.lastHeardAt = Date.now(); });
     ws.on('message', (raw) => { client.missedPings = 0; client.lastHeardAt = Date.now(); void this.handleMessage(client, raw as Buffer | string); });
