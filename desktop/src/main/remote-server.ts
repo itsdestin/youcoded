@@ -242,10 +242,8 @@ export interface RemoteStatus {
   state: 'listening' | 'stopped' | 'failed';
   reason?: string;
   port: number;
-  /** Phones connected right now. WHY it rides the status push (2026-09-16 audit
-   *  W18): the gear badge asked `remote:get-client-count` every 10 s per window
-   *  for a number that changes a few times a session. With the count here, and
-   *  emitStatus() fired on every connect and disconnect, the renderer needs no poll. */
+  /** Phones connected right now. WHY here (audit W18): the gear badge polled it every
+   *  10 s per window; emitStatus() fires on every connect/disconnect, so nothing polls. */
   clientCount: number;
 }
 

@@ -158,7 +158,6 @@ interface RemoteStatus {
   state: 'listening' | 'stopped' | 'failed';
   reason?: string;
   port: number;
-  clientCount?: number; // rides the status push since audit W18; the panel reads the list instead
 }
 
 interface RemoteDeviceRow {

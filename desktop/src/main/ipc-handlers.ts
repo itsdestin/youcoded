@@ -2443,62 +2443,46 @@ export function registerIpcHandlers(
     }
     return statusBuildInFlight;
   }
-  // WHY (2026-09-16 audit W2): this push used to re-read every status file and
-  // send the whole payload to every window and phone every 10 s — the same
-  // answer, over and over, minimised or not. Three changes, none visible while
-  // a window is up: (a) a payload identical to the last one sent is not sent
-  // again, unless the set of windows changed (a new window has never seen it —
-  // there is no status:get, the push is its only source); (b) the tick does
-  // nothing while no main window is visible and no phone is connected; (c) the
-  // moment someone is looking again — a window shown, restored or focused, a
-  // phone connecting — a push goes out at once, so the bar is at most one
-  // build stale on return instead of waiting out the rest of the 10 s.
-  let lastStatusSent = '';
-  let lastStatusWindows = '';
-  let statusTickSkipped = false;
-  let statusPushStopped = false;
+  // WHY (2026-09-16 audit W2): this re-read every status file and sent the same
+  // payload to every window and phone every 10 s, minimised or not. Now (a) a
+  // payload equal to the last one sent is dropped unless the window set changed
+  // (there is no status:get — a new window's only source is this push); (b) the
+  // tick is skipped while no main window is visible and no phone is connected
+  // (buddy windows stay Electron-shown while CSS-hidden, so only main windows
+  // count); (c) the first look afterwards — show, restore, focus, a phone
+  // connecting — gets a push at once. A window double without the visibility
+  // methods (tests) reads as visible, the pre-W2 behaviour.
+  let lastStatusSent = '', lastStatusWindows = '', statusTickSkipped = false, statusPushStopped = false;
   function pushStatusData(): void {
     void buildStatusDataShared().then((data) => {
       const serialized = JSON.stringify(data);
       const windows = windowRegistry ? windowRegistry.getWindowIds().join(',') : '';
       if (serialized === lastStatusSent && windows === lastStatusWindows) return;
-      lastStatusSent = serialized;
-      lastStatusWindows = windows;
+      lastStatusSent = serialized; lastStatusWindows = windows;
       send(IPC.STATUS_DATA, data);
       // Feed full status data to remote server for browser clients (single polling source)
       if (remoteServer) remoteServer.broadcastStatusData(data);
     });
   }
-  // Is anyone able to see a status bar right now? Main windows only — the buddy
-  // windows stay Electron-shown while CSS-hidden (buddy-floater rule), so they
-  // never count. A window double without the visibility methods (tests) reads
-  // as visible, which is the pre-W2 behaviour.
   const windowIsVisible = (win: BrowserWindow | null): boolean =>
-    !!win && !win.isDestroyed()
-    && (typeof win.isVisible !== 'function' || (win.isVisible() && !win.isMinimized()));
-  function statusHasAudience(): boolean {
-    if ((remoteServer?.getClientCount() ?? 0) > 0) return true;
-    if (!windowRegistry) return windowIsVisible(mainWindow);
-    return windowRegistry.getMainWindowIds().some((wid) => {
-      const wc = webContents.fromId(wid);
-      return !!wc && !wc.isDestroyed() && windowIsVisible(BrowserWindow.fromWebContents(wc));
-    });
-  }
+    !!win && !win.isDestroyed() && (typeof win.isVisible !== 'function' || (win.isVisible() && !win.isMinimized()));
+  const statusHasAudience = (): boolean =>
+    (remoteServer?.getClientCount() ?? 0) > 0 || (!windowRegistry
+      ? windowIsVisible(mainWindow)
+      : windowRegistry.getMainWindowIds().some((wid) => {
+        const wc = webContents.fromId(wid);
+        return !!wc && !wc.isDestroyed() && windowIsVisible(BrowserWindow.fromWebContents(wc));
+      }));
   // Push status data every 10s — store handle so it can be cleared on shutdown
   const statusInterval = setInterval(() => {
-    if (!statusHasAudience()) { statusTickSkipped = true; return; }
-    pushStatusData();
+    if (statusHasAudience()) pushStatusData(); else statusTickSkipped = true;
   }, 10000);
-  // (c): the first look after skipped ticks gets a push right away.
   const pushStatusIfMissed = () => {
     if (statusPushStopped || !statusTickSkipped) return;
     statusTickSkipped = false;
     pushStatusData();
   };
-  const watchWindowForStatus = (win: BrowserWindow) => {
-    win.on('show', pushStatusIfMissed);
-    win.on('restore', pushStatusIfMissed);
-  };
+  const watchWindowForStatus = (win: BrowserWindow) => { win.on('show', pushStatusIfMissed); win.on('restore', pushStatusIfMissed); };
   if (typeof mainWindow.on === 'function') watchWindowForStatus(mainWindow);
   app.on('browser-window-created', (_e, win) => watchWindowForStatus(win));
   app.on('browser-window-focus', pushStatusIfMissed);
