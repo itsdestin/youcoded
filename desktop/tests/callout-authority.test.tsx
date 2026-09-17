@@ -108,6 +108,10 @@ const TINT = /bg-(amber-500|amber-700|accent|destructive|red-500|red-400|green-5
  * protect: **a block that states something and offers a button to resolve it is
  * a K5 status strip, not a callout.** Those are deferred to tranche 4 with the
  * rest of K5, not overlooked.
+ *
+ * Adding or removing a file here means editing the ast-grep rule
+ * no-hand-rolled-callout-tint's `ignores:` too — youcoded-dev's check.sh fails if
+ * the two lists differ.
  */
 const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   'Button.tsx': { count: 1, why: "danger-outline's hover fill — a control's own state" },
