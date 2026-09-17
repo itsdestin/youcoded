@@ -18,8 +18,8 @@ const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0))
 
 function bridge() {
   const skills = {
-    list: vi.fn(async () => []),
-    getFavorites: vi.fn(async () => []),
+    list: vi.fn(async (): Promise<any[]> => []),
+    getFavorites: vi.fn(async (): Promise<string[]> => []),
     getChips: vi.fn(async () => []),
     getCuratedDefaults: vi.fn(async () => []),
     listMarketplace: vi.fn(async () => []),
