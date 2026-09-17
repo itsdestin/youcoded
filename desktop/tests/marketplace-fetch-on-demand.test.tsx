@@ -9,10 +9,23 @@ import { render, act, cleanup } from '@testing-library/react';
 import { SkillProvider } from '../src/renderer/state/skill-context';
 import { MarketplaceProvider, useMarketplace } from '../src/renderer/state/marketplace-context';
 import { MarketplaceStatsProvider, useMarketplaceStats, __resetStatsCacheForTests } from '../src/renderer/state/marketplace-stats-context';
+import CommandDrawer from '../src/renderer/components/CommandDrawer';
 
 vi.mock('../src/renderer/state/theme-context', () => ({
   useTheme: () => ({ reloadUserThemes: vi.fn(async () => {}) }),
 }));
+
+if (typeof window.ResizeObserver === 'undefined') {
+  window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
+}
+
+// The real / drawer, as App mounts it under every session: present while closed.
+function Drawer({ open }: { open: boolean }) {
+  return (
+    <CommandDrawer open={open} searchMode={false} onSelect={() => {}} onSelectCommand={() => {}}
+      onClose={() => {}} onOpenManager={() => {}} onOpenMarketplace={() => {}} />
+  );
+}
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
@@ -78,6 +91,23 @@ describe('the marketplace providers at the app root', () => {
     // The command drawer's own data still loads at boot, once each.
     expect(b.skills.list).toHaveBeenCalledTimes(1);
     expect(b.skills.getFavorites).toHaveBeenCalledTimes(1);
+  });
+
+  it('a session\'s CLOSED / drawer is not a demand; opening it is, once', async () => {
+    const { rerender } = render(<Root><Drawer open={false} /></Root>);
+    await flush();
+    expect(marketplaceCalls(b)).toBe(0);
+    expect((globalThis as any).fetch).not.toHaveBeenCalled();
+
+    rerender(<Root><Drawer open={true} /></Root>);
+    await flush();
+    expect(b.skills.listMarketplace).toHaveBeenCalledTimes(1);
+    expect(marketplaceCalls(b)).toBe(5);
+
+    rerender(<Root><Drawer open={false} /></Root>);
+    rerender(<Root><Drawer open={true} /></Root>);
+    await flush();
+    expect(marketplaceCalls(b)).toBe(5);
   });
 
   it('the first consumer starts the fetch once; a second consumer does not repeat it', async () => {

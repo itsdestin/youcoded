@@ -86,6 +86,12 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   // even when the count and the current index happen to be unchanged.
   const rangesRef = useRef<Range[]>([]);
   const [rangesVersion, setRangesVersion] = useState(0);
+  // Content can change under an open search — a reply is still streaming in
+  // the chat timeline. A MutationObserver counts changes; a walk records the
+  // count it saw; Next/Previous re-walk only when the count has moved since.
+  const mutationsRef = useRef(0);
+  const walkedAtRef = useRef(0);
+  const [walkKey, setWalkKey] = useState(0);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
   // New artifact → clear the search.
@@ -93,23 +99,33 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   // New query → jump back to the first match.
   useEffect(() => { setCurrent(0); }, [query]);
 
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root || typeof MutationObserver === 'undefined') return;
+    const obs = new MutationObserver(() => { mutationsRef.current++; });
+    obs.observe(root, { childList: true, characterData: true, subtree: true });
+    return () => obs.disconnect();
+  }, [containerRef, resetKey]);
+
   // WHY two effects (2026-09-16 audit W22): one effect used to walk every text
   // node in the container on every keystroke AND on every next/previous match,
   // so moving the highlight by one rebuilt every range — on a fully read
   // conversation that is ~1.4M DOM nodes per Enter. The walk now happens only
-  // when the query or the artifact changes; moving the current match reuses
-  // the ranges from the ref.
+  // when the query or the artifact changes, or when Next/Previous finds the
+  // content changed since the last walk (walkKey); moving the current match
+  // otherwise reuses the ranges from the ref.
   useEffect(() => {
     const root = containerRef.current;
     if (!root || !highlightsSupported()) { rangesRef.current = []; setCount(0); return; }
     const ranges = computeRanges(root, query);
     rangesRef.current = ranges;
+    walkedAtRef.current = mutationsRef.current;
     setCount(ranges.length);
     setRangesVersion((v) => v + 1);
     if (ranges.length === 0) { clearHighlights(HL, HL_CURRENT); return; }
     const HighlightCtor = (window as any).Highlight;
     (CSS as any).highlights.set(HL, new HighlightCtor(...ranges));
-  }, [query, resetKey, containerRef, HL, HL_CURRENT]);
+  }, [query, resetKey, walkKey, containerRef, HL, HL_CURRENT]);
 
   // Paint the current match and scroll it into view if it's off-screen.
   useEffect(() => {
@@ -136,8 +152,13 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
   useEffect(() => () => clearHighlights(HL, HL_CURRENT), [HL, HL_CURRENT]);
 
   const go = useCallback((dir: number) => {
-    setCurrent((c) => (count === 0 ? 0 : (c + dir + count) % count));
-  }, [count]);
+    // Text arrived since the last walk (a streaming reply): re-walk first so a
+    // match in the new text is found and the count is right. The index is left
+    // unnormalised here — the current-match effect and the counter both take
+    // it modulo the fresh count.
+    if (mutationsRef.current !== walkedAtRef.current) setWalkKey((k) => k + 1);
+    setCurrent((c) => c + dir);
+  }, []);
 
   const shown = count > 0 ? `${((current % count) + count) % count + 1}/${count}` : (query ? '0/0' : '');
 

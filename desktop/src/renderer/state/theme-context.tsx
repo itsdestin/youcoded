@@ -179,6 +179,21 @@ async function loadHighlightCss(dark: boolean): Promise<string> {
   return hljsCss[key]!;
 }
 
+// Once the active sheet is in, fetch the other polarity when the browser is
+// idle (setTimeout where requestIdleCallback is missing — jsdom, old WebViews)
+// so the first theme switch — over remote access, where a chunk is a network
+// round-trip — does not briefly show the wrong code colours.
+const PRELOAD_FALLBACK_MS = 1500;
+let preloadScheduled = false;
+function preloadOtherHighlightCss(dark: boolean) {
+  if (preloadScheduled) return;
+  preloadScheduled = true;
+  const run = () => { void loadHighlightCss(!dark).catch(() => { preloadScheduled = false; }); };
+  const ric = (globalThis as any).requestIdleCallback as ((cb: () => void, o?: { timeout: number }) => void) | undefined;
+  if (typeof ric === 'function') ric(run, { timeout: 5000 });
+  else setTimeout(run, PRELOAD_FALLBACK_MS);
+}
+
 // The polarity last asked for. A slower load for an earlier request must not
 // land over a later one (light → dark → light before the dark sheet arrived).
 let highlightWanted: boolean | null = null;
@@ -190,6 +205,7 @@ function applyHighlightTheme(dark: boolean) {
     let el = document.getElementById(id) as HTMLStyleElement | null;
     if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
     if (el.textContent !== css) el.textContent = css;
+    preloadOtherHighlightCss(dark);
   });
 }
 

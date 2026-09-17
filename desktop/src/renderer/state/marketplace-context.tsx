@@ -104,13 +104,18 @@ type MarketplaceContextValue = MarketplaceState & MarketplaceActions;
 
 const MarketplaceContext = createContext<MarketplaceContextValue | null>(null);
 
-export function useMarketplace(): MarketplaceContextValue {
+/**
+ * @param demand Whether this consumer counts as a reason to load. The first
+ *   demanding consumer starts the fetch; later ones find it running or done.
+ *   A component that is MOUNTED while hidden (the / drawer lives under every
+ *   session, open or not) passes its `open` flag, so mounting it is not a
+ *   demand but opening it is — otherwise the seven calls fire at boot anyway.
+ */
+export function useMarketplace(demand: boolean = true): MarketplaceContextValue {
   const ctx = useContext(MarketplaceContext);
   if (!ctx) throw new Error('useMarketplace must be used within MarketplaceProvider');
-  // The consumer IS the demand (see the header): the first one to mount
-  // starts the fetch; later ones find it running or done.
   const { ensureLoaded } = ctx;
-  useEffect(() => { ensureLoaded(); }, [ensureLoaded]);
+  useEffect(() => { if (demand) ensureLoaded(); }, [demand, ensureLoaded]);
   return ctx;
 }
 

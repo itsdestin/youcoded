@@ -19,7 +19,7 @@ function Harness() {
   const ref = useRef<HTMLDivElement>(null);
   return (
     <div>
-      <div ref={ref}>
+      <div ref={ref} data-testid="searched">
         <p>alpha beta</p>
         <p>beta gamma beta</p>
       </div>
@@ -73,6 +73,39 @@ describe('ContentFindBar and the text-node walk', () => {
     await act(async () => { fireEvent.click(prev); });
     expect(walker).not.toHaveBeenCalled();
     expect(screen.getByText('1/3')).toBeTruthy();
+  });
+
+  it('text that arrives after the query (a streaming reply) is found by Next, with the count updated', async () => {
+    render(<Harness />);
+    const input = screen.getByLabelText('Find in document');
+    const next = screen.getByLabelText('Next (Enter)');
+    const searched = screen.getByTestId('searched');
+    fireEvent.change(input, { target: { value: 'beta' } });
+    expect(screen.getByText('1/3')).toBeTruthy();
+
+    // A fourth match streams in below the searched content. (The spy is armed
+    // AFTER the append: jsdom walks the tree itself when a node is inserted.)
+    await act(async () => {
+      const p = document.createElement('p');
+      p.textContent = 'delta beta';
+      searched.appendChild(p);
+      await Promise.resolve(); // let the MutationObserver deliver
+    });
+    expect(screen.getByText('1/3')).toBeTruthy(); // no walk until the user asks for a match
+    const walker = vi.spyOn(document, 'createTreeWalker');
+
+    await act(async () => { fireEvent.click(next); });
+    expect(walker).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('2/4')).toBeTruthy();
+    expect(highlights.get('artifact-find')!.ranges).toHaveLength(4);
+
+    // Stepping on to the streamed-in match reaches it, and needs no further walk.
+    walker.mockClear();
+    await act(async () => { fireEvent.click(next); });
+    await act(async () => { fireEvent.click(next); });
+    expect(walker).not.toHaveBeenCalled(); // checked BEFORE getByText, which walks the DOM itself
+    expect(screen.getByText('4/4')).toBeTruthy();
+    expect(highlights.get('artifact-find-current')!.ranges[0].startContainer.textContent).toBe('delta beta');
   });
 
   it('a new query with the same match count still repaints the current highlight from the new ranges', () => {
