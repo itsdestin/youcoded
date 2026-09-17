@@ -223,19 +223,12 @@ describe('accepted history privacy sentinels', () => {
     expect(JSON.stringify(extractNativeUserTurns(jsonl, sessionId, 0, true))).not.toContain(SENTINEL);
     expect(JSON.stringify(await readTranscriptPage({ jsonlPath: transcriptPath, sessionId, endOffset: null, format: 'native' }))).not.toContain(SENTINEL);
 
-    // ---- Reader 6: the bug-report / diagnostics attachment collector -------
-    // dev-tools.ts (gatherDiagnostics + readLogTail) is the whole attachment
-    // surface: fixed environment probes plus the tail of ~/.claude/desktop.log.
-    // It cannot be run offline (subprocess + network probes), so it is pinned
-    // structurally instead: the private directory name exists in exactly ONE
-    // module in the app, is not exported, and dev-tools never names userData.
-    const srcRoot = path.join(__dirname, '..', 'src');
-    const namesPrivateDir = filesUnder(srcRoot)
-      .filter((f) => /\.(ts|tsx)$/.test(f) && readIfExists(f).includes('private-continuation'))
-      .map((f) => path.relative(srcRoot, f).split(path.sep).join('/'));
-    expect(namesPrivateDir).toEqual(['main/harness/accepted-history-store.ts']);
-    const devTools = readIfExists(path.join(srcRoot, 'main', 'dev-tools.ts'));
-    expect(devTools).not.toContain('private-continuation');
-    expect(devTools).not.toContain('userData');
+    // Reader 6 (the bug-report / diagnostics attachment collector's structural
+    // pin — "private-continuation named in exactly one module" and "dev-tools
+    // never names userData") moved to ast-grep: rules
+    // private-continuation-dir-single-owner and its -devtools twin
+    // (scripts/ast-grep/rules/), Plan B 2026-09-16. Those run on every commit
+    // instead of only when this file happens to run, and don't false-fail on
+    // whitespace or line-ending changes to dev-tools.ts.
   });
 });
