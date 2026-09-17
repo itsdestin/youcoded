@@ -341,9 +341,11 @@ export function startOutboxDrain(): void {
   // queue is empty almost always — the poll was ~17k listings a day for nothing.
   // A watch that could not attach, or that errors later, gets the poll instead.
   if (!watching || process.platform === 'win32') startPoll();
-  // Housekeeping: once now, then hourly — see sweepOutbox.
+  // Housekeeping: once now, then hourly — see sweepOutbox. The hourly tick also
+  // drains: if the store took longer than the start-up wait below, requests
+  // queued while the app was closed would otherwise sit until the next write.
   sweepOutbox(home);
-  sweepTimer = setInterval(() => sweepOutbox(home), SWEEP_MS); sweepTimer.unref?.();
+  sweepTimer = setInterval(() => { sweepOutbox(home); void drainSerialized(); }, SWEEP_MS); sweepTimer.unref?.();
   drainWhenStoreReady(STORE_WAIT_TRIES);
 }
 

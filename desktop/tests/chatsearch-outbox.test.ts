@@ -475,6 +475,26 @@ describe('startOutboxDrain timers', () => {
     expect(fs.existsSync(second)).toBe(false); // the hourly pass did
   });
 
+  it('the hourly tick also drains, so a store that came up after the start-up wait still applies queued requests', async () => {
+    setPlatform('linux');
+    // A watch that never fires: off Windows nothing else drains, so only the
+    // hourly tick can apply what was queued.
+    vi.spyOn(fs, 'watch').mockImplementation((() => ({ on() { /* inert */ }, close() { /* inert */ } })) as any);
+    fs.mkdirSync(sandboxOutbox, { recursive: true });
+    storeAvailable = false;
+    startOutboxDrain();
+    await vi.advanceTimersByTimeAsync(130_000); // the start-up wait (120 tries) has given up
+    storeAvailable = true;
+    fs.writeFileSync(
+      path.join(sandboxOutbox, 'eeeeeeee-2222-3333-4444-555555555555.json'),
+      JSON.stringify(req([{ op: 'flag', targets: T, flag: 'complete', value: true }])),
+    );
+    // Written while nothing was listening for it: fs.watch may fire, but the
+    // hourly tick must apply it even if it did not.
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    await vi.waitFor(() => expect(flagCalls).toEqual([['c1', 'complete', true]]));
+  });
+
   it('a request queued while the app was closed is applied once the store comes up, without a poll', async () => {
     setPlatform('linux');
     fs.mkdirSync(sandboxOutbox, { recursive: true });
