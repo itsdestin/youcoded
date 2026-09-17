@@ -93,7 +93,8 @@ and **2048** are solo and never touch the network to be playable.
   `src/renderer/components/game/game-registry.ts`; the shell, the IPC surface and
   the Worker learn nothing new. Scores cross every boundary as RAW NUMBERS —
   "31 pipes" and "12,480" are the registry's words. Guarded by
-  `tests/arcade-authority.test.ts`.
+  `tests/arcade-authority.test.ts` and the `arcade-*` ast-grep rules
+  (`scripts/ast-grep/rules/` in the workspace).
 - **PartyKit server:** `partykit/` — `connectfour` → `src/connect-four-room.ts`,
   `chess` → `src/chess-room.ts`. Both are **relays that know no rules**; each
   client re-validates every incoming move (chess.js lives in the renderer, not in
