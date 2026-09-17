@@ -40,16 +40,6 @@ const DRAG_VELOCITY_GAIN = (80 / 112) * 2.4;
 interface DragState {
   grabOffsetX: number;
   grabOffsetY: number;
-  // Overlay-only (see OverlayDrive below): offset of the pointer WITHIN the
-  // mascot's own rendered box, captured via getBoundingClientRect at
-  // pointerdown. Needed because in overlay mode the mascot is a DIV positioned
-  // somewhere inside one screen-sized window, unlike the three-window model
-  // where the window IS the mascot (so its own top-left is always (0,0) and
-  // grabOffsetX/Y — captured from e.clientX/Y — already IS that offset).
-  // Kept separate from grabOffsetX/Y rather than redefining them so the
-  // legacy (non-overlay) path is untouched byte-for-byte.
-  overlayOffsetX: number;
-  overlayOffsetY: number;
   lastVirtualX: number;
   lastVirtualY: number;
   windowTravelX: number;
@@ -61,27 +51,12 @@ interface DragState {
 
 export interface MascotDockState { mode: 'free' | 'docked' | 'peeking'; edge: string | null; }
 
-// Linux-Wayland overlay wiring (Task 6): when present, BuddyMascot drives
-// drag/tap/dock through this instead of the three-window buddy IPC surface —
-// BuddyOverlayApp owns the reducer and hosts mascot/chat/bar as DOM inside one
-// transparent window, so there's no separate BrowserWindow for main to push
-// buddy:mascot-state to or receive moveMascot/dragEnded/toggleChat from.
-export interface OverlayDrive {
-  /** Replaces the onMascotState subscription below — dock state lives in
-   *  BuddyOverlayApp's reducer and is handed down as a prop instead. */
-  dock: MascotDockState;
-  /** Replaces the moveMascot IPC. Window-local (the coordinates rule) — the
-   *  caller (BuddyOverlayApp) rAF-coalesces via the same pendingTargetRef
-   *  machinery below, so this fires at most once per frame. */
-  onDragMove(target: { x: number; y: number }): void;
-  /** Replaces the dragEnded IPC (edge-snap/dock resolution happens in the
-   *  reducer instead of main). */
-  onDragEnd(): void;
-  /** Replaces the toggleChat IPC. */
-  onTap(): void;
-}
-
-export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = {}) {
+// WHY no props (2026-09-16): an `overlayDrive` prop used to let a one-window
+// overlay host drive drag/tap/dock through callbacks instead of the buddy IPC
+// surface. That host was never reachable and was deleted; the IPC surface
+// (`window.claude.buddy`) is the mascot's only input, and tests drive dock
+// state through the same `onMascotState` subscription main uses.
+export function BuddyMascot() {
   const attention = useAnyAttentionNeeded();
   const { theme, activeTheme, reducedEffects } = useTheme();
 
@@ -94,10 +69,7 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
 
   // Dock/peek state pushed from main (buddy:mascot-state). The sink/lean
   // transforms are data-attr driven via buddy.css so they CSS-transition.
-  // In overlay mode this local copy is unused — `dock` below reads straight
-  // from overlayDrive.dock (BuddyOverlayApp's reducer) instead.
-  const [ipcDock, setIpcDock] = useState<MascotDockState>({ mode: 'free', edge: null });
-  const dock = overlayDrive ? overlayDrive.dock : ipcDock;
+  const [dock, setIpcDock] = useState<MascotDockState>({ mode: 'free', edge: null });
   // Swing-out whip (spec §6.2): leaving a SIDE peek releases the −/+75° lean
   // through a short overshoot past vertical before settling at 0.
   const [swing, setSwing] = useState<'left' | 'right' | null>(null);
@@ -110,10 +82,6 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   }, []);
   const prevDockRef = useRef<MascotDockState>({ mode: 'free', edge: null });
   useEffect(() => {
-    // Overlay mode: dock comes from the overlayDrive prop (BuddyOverlayApp's
-    // reducer), not this IPC push — skip the subscription entirely rather
-    // than mounting a listener that will never fire in that mode.
-    if (overlayDrive) return;
     const off = window.claude?.buddy?.onMascotState?.((s: MascotDockState) => {
       const prev = prevDockRef.current;
       prevDockRef.current = s;
@@ -126,7 +94,7 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
       setIpcDock(s);
     });
     return off;
-  }, [triggerSwing, overlayDrive]);
+  }, [triggerSwing]);
 
   // Hover peek-out (Destin 2026-07-17): hovering a peeking buddy swings him OUT
   // of the edge and stands him up in idle for as long as the cursor stays over
@@ -204,9 +172,8 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   // event per frame is one extra IPC main has to drain, and every frame it
   // processes an already-stale cursor position. "Squishy" lag under fast
   // drags. rAF throttling keeps at most one move in flight per frame, always
-  // targeting the latest cursor position.
-  // What it holds depends on the path: overlay mode a window-local POSITION,
-  // three-window mode the cursor's OFFSET from the grab point (see DragState).
+  // targeting the latest cursor position. It holds the cursor's OFFSET from
+  // the grab point (see DragState).
   const pendingTargetRef = useRef<{ x: number; y: number } | null>(null);
   const rafIdRef = useRef<number | null>(null);
 
@@ -215,14 +182,13 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
     const target = pendingTargetRef.current;
     if (!target) return;
     pendingTargetRef.current = null;
-    if (overlayDrive) { overlayDrive.onDragMove({ x: target.x, y: target.y }); return; }
     window.claude?.buddy?.moveMascot?.({ localDx: target.x, localDy: target.y });
     // Record what we just asked for, HERE and not in the pointermove handler:
     // several pointermoves can land in one frame and only this last one is
     // sent, so counting them all would double-count the window's travel.
     const st = dragRef.current;
     if (st) { st.windowTravelX += target.x; st.windowTravelY += target.y; }
-  }, [overlayDrive]);
+  }, []);
 
   const cancelPendingMove = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -242,11 +208,8 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
     motionRef.current = { vx: 0, vy: 0, dragging: false };
     setGrabbed(false);
     // Snap detection runs main-side against final window bounds (spec §6.1).
-    if (notifyMain && wasDragging) {
-      if (overlayDrive) overlayDrive.onDragEnd();
-      else window.claude?.buddy?.dragEnded?.();
-    }
-  }, [overlayDrive]);
+    if (notifyMain && wasDragging) window.claude?.buddy?.dragEnded?.();
+  }, []);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     // Disarm hover-swing-out for the duration of this press and until the
@@ -256,17 +219,12 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
     // setPointerCapture keeps pointermove/up flowing even if the pointer
     // leaves the 80×80 window during a fast drag.
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    // Overlay-only: the mascot's window-local offset within its own box —
-    // see the DragState.overlayOffsetX/Y comment above.
-    const rect = overlayDrive ? e.currentTarget.getBoundingClientRect() : null;
     dragRef.current = {
       // clientX/Y is the cursor's offset inside the mascot content area.
       // Captured once and held constant — this is the anchor the rest of
       // the drag rewinds to.
       grabOffsetX: e.clientX,
       grabOffsetY: e.clientY,
-      overlayOffsetX: rect ? e.clientX - rect.left : 0,
-      overlayOffsetY: rect ? e.clientY - rect.top : 0,
       lastVirtualX: e.clientX,
       lastVirtualY: e.clientY,
       windowTravelX: 0,
@@ -276,7 +234,7 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
       pointerId: e.pointerId,
     };
     setGrabbed(true);
-  }, [overlayDrive]);
+  }, []);
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const st = dragRef.current;
@@ -303,22 +261,18 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
       m.dragging = true;
       m.vx = 0.7 * m.vx + 0.3 * (dx / dt) * 16 * DRAG_VELOCITY_GAIN;
       m.vy = 0.7 * m.vy + 0.3 * (dy / dt) * 16 * DRAG_VELOCITY_GAIN;
-      // Both paths are window-local, and both are recomputed from scratch
-      // against the anchor captured at pointerdown — nothing accumulates.
-      // Overlay mode wants a POSITION inside its screen-sized window (the
-      // coordinates rule: the reducer clamps against a window-local workArea);
-      // three-window mode wants the cursor's OFFSET from the grab point, which
-      // main turns into a screen position using the window position it owns.
+      // Window-local, and recomputed from scratch against the anchor captured
+      // at pointerdown — nothing accumulates. This is the cursor's OFFSET from
+      // the grab point, which main turns into a screen position using the
+      // window position it owns.
       // Schedule (don't fire) — rAF coalesces multiple moves within a frame to
       // the latest one so we don't queue stale positions behind main.
-      pendingTargetRef.current = overlayDrive
-        ? { x: e.clientX - st.overlayOffsetX, y: e.clientY - st.overlayOffsetY }
-        : { x: e.clientX - st.grabOffsetX, y: e.clientY - st.grabOffsetY };
+      pendingTargetRef.current = { x: e.clientX - st.grabOffsetX, y: e.clientY - st.grabOffsetY };
       if (rafIdRef.current === null) {
         rafIdRef.current = requestAnimationFrame(flushPendingMove);
       }
     }
-  }, [flushPendingMove, overlayDrive]);
+  }, [flushPendingMove]);
 
   const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     // Flush any unsent move synchronously before release — otherwise the
@@ -333,11 +287,8 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
     const wasClick = !!st && st.totalTravel <= DRAG_THRESHOLD_PX;
     if (st) { try { e.currentTarget.releasePointerCapture(st.pointerId); } catch { /* ignore */ } }
     endDrag(true);
-    if (wasClick) {
-      if (overlayDrive) overlayDrive.onTap();
-      else if (window.claude?.buddy?.toggleChat) window.claude.buddy.toggleChat();
-    }
-  }, [flushPendingMove, endDrag, overlayDrive]);
+    if (wasClick && window.claude?.buddy?.toggleChat) window.claude.buddy.toggleChat();
+  }, [flushPendingMove, endDrag]);
 
   // Safety net for "stuck being dragged": if the OS revokes pointer capture
   // (system modal, focus loss mid-drag) or a touch/pen device synthesizes

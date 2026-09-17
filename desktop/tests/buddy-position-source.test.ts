@@ -92,34 +92,8 @@ describe('where the buddy’s position comes from', () => {
       'if (!source) return display.workArea; // sanctioned-raw-work-area',
     ]);
   });
-
-  /**
-   * WHY THIS SCAN ONLY LOOKS AT ONE FILE.
-   *
-   * Two other files read positions and work areas the same way, and they must
-   * stay exempt: `buddy-overlay-manager.ts` and
-   * `renderer/components/buddy/overlay-state.ts`. They belong to the OTHER way
-   * of putting a buddy on screen — one big transparent window covering the whole
-   * desktop — which is written, kept, and never chosen: `chooseBuddyStrategy`
-   * returns the three-window strategy on every path except an explicit
-   * developer override.
-   *
-   * Widening the scan to them would fail the moment it was written, and
-   * "fixing" them would mean rewriting dormant code with no way to test it.
-   */
-  it('the dormant overlay strategy is deliberately out of scope, and still has the reads', () => {
-    const exempt = [
-      'src/main/buddy-overlay-manager.ts',
-      'src/renderer/components/buddy/overlay-state.ts',
-    ];
-    for (const rel of exempt) {
-      const src = read(rel);
-      const reads = src.filter(
-        (l) => !isComment(l) && (/\.(getBounds|getPosition)\(/.test(l) || /\.workArea\b/.test(l)),
-      );
-      // If this ever hits zero the exemption has stopped being load-bearing and
-      // the file can simply be folded into the scan above.
-      expect(reads.length, `${rel} was expected to still contain the reads this scan exempts`).toBeGreaterThan(0);
-    }
-  });
+  // Until 2026-09-16 a second buddy implementation (a one-window overlay) was
+  // exempt from this scan because it was written, kept and never chosen. It has
+  // been deleted, so buddy-window-manager.ts is the ONLY file that positions a
+  // buddy and this scan's scope is the whole story.
 });

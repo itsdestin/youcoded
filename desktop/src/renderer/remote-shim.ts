@@ -2821,17 +2821,6 @@ export function installShim(): void {
       onMascotState: () => () => { /* no-op unsubscribe */ },
       onChatState: () => () => { /* no-op unsubscribe */ },
       onFocusSession: () => () => { /* no-op unsubscribe */ },
-      // ── Linux Wayland overlay (Task 3+4) — same desktop-only contract:
-      // listeners return no-op unsubscribers, senders are no-ops (not
-      // throws) since overlaySetInteractive is a hover-hot path.
-      overlayReady: async () => null, // remote has no overlay window to init
-      onOverlayToggleChat: () => () => { /* no-op unsubscribe */ },
-      overlaySetInteractive: (_i: boolean) => { /* desktop-only */ },
-      overlayPersist: (_s: { mascot: { x: number; y: number }; dock: string | null }) => { /* desktop-only */ },
-      // Task 8 — KDE keep-above is Electron-only (KWin DBus scripting has
-      // no browser/Android equivalent); same desktop-only-throw contract as
-      // openMain/dismiss/getStatus above.
-      setKeepAbove: () => { throw new Error('Buddy is desktop-only in this version'); },
       // ── The Linux/KDE buddy helper (design §4) ──
       // Answered locally, not thrown and not sent over the wire. Two reasons.
       // First, the honest answer really is this one: a phone or a remote browser
