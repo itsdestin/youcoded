@@ -92,6 +92,22 @@
       }
     },
     {
+      // WHY: the ChatGPT limit sentence must never call a locale formatter — a
+      // UK/EU/JP machine turned "6:43pm" into "18:43" via toLocaleTimeString while
+      // the chip beside it said 6:43pm. It formats through shared/time-format.ts
+      // instead. This used to be a test that grepped the file's text
+      // (tests/chatgpt-oauth.test.ts, retired by Plan B, 2026-09-16); lint sees
+      // the call itself, in every member-access shape.
+      "files": ["src/shared/chatgpt-types.ts"],
+      "rules": {
+        "no-restricted-properties": ["error",
+          { "property": "toLocaleString", "message": "Use shared/time-format.ts — a locale formatter prints a different clock on a non-US machine." },
+          { "property": "toLocaleTimeString", "message": "Use shared/time-format.ts — a locale formatter prints a different clock on a non-US machine." },
+          { "property": "toLocaleDateString", "message": "Use shared/time-format.ts — a locale formatter prints a different clock on a non-US machine." }
+        ]
+      }
+    },
+    {
       // The test tree: the syntactic rules only. Type-aware rules stay off here
       // because tsconfig.tests.json still EXCLUDES files with type errors, and a
       // type-aware rule on a file outside the project is a config error dressed up

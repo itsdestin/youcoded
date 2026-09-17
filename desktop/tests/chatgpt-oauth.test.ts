@@ -289,17 +289,11 @@ describe('chatgpt-oauth: the limit sentence (words deck W-1, answer a)', () => {
     } finally {
       spy.mockRestore();
     }
-    // And the locale call is gone from the source, not just unreached.
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'shared', 'chatgpt-types.ts'), 'utf8');
-    expect(src).not.toMatch(/toLocale(Time|Date)?String/);
-    expect(src).toMatch(/from '\.\/time-format'/);
-    // The chip formats with the same function, so the two cannot drift.
-    const bar = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'components', 'StatusBar.tsx'), 'utf8');
-    // Any import list is fine as long as formatTime12 comes from the shared module —
-    // the chip may pull more helpers from it later (it already does), and pinning the
-    // exact list broke the moment the plan-window work widened it.
-    expect(bar).toMatch(/import \{[^}]*\bformatTime12\b[^}]*\} from '\.\.\/\.\.\/shared\/time-format'/);
-    expect(bar).not.toMatch(/function formatTime12/);
+    // WHY no source reads here any more (Plan B, 2026-09-16): "the locale call is
+    // gone from the source" is oxlint's no-restricted-properties on
+    // chatgpt-types.ts (desktop/.oxlintrc.json), and "the card and the chip format
+    // with the same shared function" is the workspace ast-grep rules
+    // limit-sentence-uses-shared-time-format + status-bar-uses-shared-format-time12.
   });
 
   // The Upgrade plan button deep-links to OpenAI's own upgrade page — the URL
