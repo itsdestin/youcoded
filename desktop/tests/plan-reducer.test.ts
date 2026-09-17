@@ -183,10 +183,11 @@ describe('plan specialists: routed asks are answerable in the owning row', () =>
     expect(segsOf(s, A)).toMatchObject([{ id: 'sa-tool-call_a', toolUseId: 'call_a', status: 'awaiting-approval', requestId: 'req-2' }]);
   });
 
-  it('expiry and hold reach the nested plan ask like any specialist ask', () => {
+  // Merge with master (2026-09-16): the 5-minute "held" state no longer
+  // exists, so only expiry is left to reach a nested plan ask.
+  it('expiry reaches the nested plan ask like any specialist ask', () => {
     let s = run(seeded(), toolUse(A, 'call_a', { command: 'rm -rf build' }, 'Bash'), ask(A, 'req-3'));
-    s = run(s, { type: 'PERMISSION_HELD', sessionId: S, requestId: 'req-3' });
-    expect(segsOf(s, A)[0]).toMatchObject({ askHeld: true, status: 'awaiting-approval' });
+    expect(segsOf(s, A)[0]).toMatchObject({ status: 'awaiting-approval' });
     s = run(s, { type: 'PERMISSION_EXPIRED', sessionId: S, requestId: 'req-3' });
     expect(segsOf(s, A)[0]).toMatchObject({ status: 'failed' });
   });

@@ -28,7 +28,7 @@ import { chatGptMiddleware } from '../src/main/providers/chatgpt-model';
 import { mirrorIn } from '../src/main/conversations/transcript-mirror';
 import { readSessionTranscriptMeta } from '../src/main/session-browser';
 import { extractNativeUserTurns } from '../src/main/chatsearch-index/index-core';
-import { parseNativeTranscript } from '../src/main/chatsearch-index/transcript-reader';
+import { readTranscriptPage } from '../src/main/transcript-page';
 import { completed, sse } from './helpers/responses-fakes';
 
 /** The one string that must exist in exactly one place on disk. Unique enough
@@ -136,7 +136,7 @@ describe('accepted history privacy sentinels', () => {
     };
     const host = new NativeSessionHost(
       sessionStore, factory as any, NO_CONTEXT, async () => null, async () => null,
-      undefined, undefined, undefined, undefined, undefined, undefined, nativeHome, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, nativeHome,
       new SpecialistCatalog({ claudeUserDir: null }), () => null,
       { acceptedHistory, continuationIdentityFor: identityFor as any },
     );
@@ -218,9 +218,10 @@ describe('accepted history privacy sentinels', () => {
     // chatsearch-index/index-service.ts reads ONLY
     // `<nativeHome>/sessions/<slug>/<id>.jsonl` and feeds it to these two pure
     // parsers, so the JSONL check above already covers it — this exercises the
-    // parsers over the real file to prove nothing is recovered from it.
+    // parsers over the real file to prove nothing is recovered from it. The
+    // conversation preview pages the same file with readTranscriptPage.
     expect(JSON.stringify(extractNativeUserTurns(jsonl, sessionId, 0, true))).not.toContain(SENTINEL);
-    expect(JSON.stringify(parseNativeTranscript(jsonl))).not.toContain(SENTINEL);
+    expect(JSON.stringify(await readTranscriptPage({ jsonlPath: transcriptPath, sessionId, endOffset: null, format: 'native' }))).not.toContain(SENTINEL);
 
     // ---- Reader 6: the bug-report / diagnostics attachment collector -------
     // dev-tools.ts (gatherDiagnostics + readLogTail) is the whole attachment

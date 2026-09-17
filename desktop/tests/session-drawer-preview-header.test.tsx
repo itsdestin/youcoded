@@ -34,6 +34,7 @@ vi.mock('../src/renderer/state/theme-context', () => ({
 }));
 
 import { SessionDrawer } from '../src/renderer/components/SessionDrawer';
+import { previewPage } from './helpers/preview-page';
 
 /**
  * Find a control by the words of its hover hint.
@@ -54,9 +55,8 @@ const findByHint = async (t: string): Promise<HTMLElement> => {
   return getByHint(t);
 };
 
-// jsdom does not implement scrollIntoView; ConversationTranscript (rendered
-// inside SessionPreviewPane) calls it to jump to the newest message.
-// jsdom also has no matchMedia — the preview header's narrow-viewport
+// jsdom does not implement scrollIntoView; the chat components the preview
+// renders may call it. jsdom also has no matchMedia — the preview header's narrow-viewport
 // collapse (spec A4) now calls useNarrowViewport() unconditionally on every
 // SessionDrawer render, same pattern as use-narrow-viewport.test.tsx's own
 // stub. `matches: false` keeps these header-shape assertions on the WIDE
@@ -97,7 +97,7 @@ function mockWindowClaude() {
   (window as any).claude = {
     artifacts: { get: vi.fn(), checkExistence: vi.fn().mockResolvedValue({ ok: true, missingIds: [] }) },
     chatsearch: {
-      read: vi.fn().mockResolvedValue({ ok: true, messages: [], hasMore: false }),
+      read: vi.fn(async (req: { id: string }) => previewPage(req.id, [])),
       // The preview header (A1/A2/A4) resolves the previewed id for Resume's
       // enabled/disabled state. Answering 'unknown' keeps these pre-existing
       // header-shape tests indifferent to Resume — they assert on the title/
@@ -107,7 +107,7 @@ function mockWindowClaude() {
     },
     session: { getMeta: vi.fn().mockResolvedValue({ tags: [], note: '', supported: true, flags: {} }) },
     tags: { list: vi.fn().mockResolvedValue([]) },
-  // The Resume options popover mounts ModelPicker, which asks for the model
+    // The resume card mounts ModelPicker, which asks for the model
     // lists on mount. Without these it throws on the undefined `.providers`
     // before anything renders.
     providers: { list: vi.fn().mockResolvedValue([]), catalog: vi.fn().mockResolvedValue([]) },
@@ -221,7 +221,7 @@ function mockWindowClaudeFor(row: ResolvedConversation | null, opts: {
   (window as any).claude = {
     artifacts: { get: vi.fn(), checkExistence: vi.fn().mockResolvedValue({ ok: true, missingIds: [] }) },
     chatsearch: {
-      read: vi.fn().mockResolvedValue({ ok: true, messages: [], hasMore: false }),
+      read: vi.fn(async (req: { id: string }) => previewPage(req.id, [])),
       resolve: vi.fn().mockResolvedValue({ ok: true, results: row ? [row] : [] }),
     },
     session: {
@@ -230,7 +230,7 @@ function mockWindowClaudeFor(row: ResolvedConversation | null, opts: {
       setNote: opts.setNote ?? vi.fn().mockResolvedValue({ ok: true }),
     },
     tags: { list: vi.fn().mockResolvedValue(TAGS), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
-  // The Resume options popover mounts ModelPicker, which asks for the model
+    // The resume card mounts ModelPicker, which asks for the model
     // lists on mount. Without these it throws on the undefined `.providers`
     // before anything renders.
     providers: { list: vi.fn().mockResolvedValue([]), catalog: vi.fn().mockResolvedValue([]) },
@@ -247,68 +247,64 @@ function renderDrawerWithPreview(preview: typeof PREVIEW = PREVIEW) {
   );
 }
 
-describe('Resume button (spec A2)', () => {
-  it('is enabled with the continue-in-a-tab hint when the conversation resolves resumable', async () => {
+// Resume lives in a card at the foot of the preview since 2026-09-16 (Destin:
+// "make the session artifact pane preview match this styling" — the Projects
+// preview, which carries the Resume browser's own action card). The top bar
+// keeps the tag button and gains Complete; it no longer carries Resume.
+describe('Resume card at the foot of the preview (spec A2 reasons)', () => {
+  const resumeButton = () => screen.queryByRole('button', { name: 'Resume Session' });
+
+  it('offers the model picker and Resume Session when the conversation resolves resumable, and nothing in the top bar', async () => {
     mockWindowClaudeFor(okRow());
     renderDrawerWithPreview();
-    const btn = await findByHint(COPY.resumeHint);
-    expect(btn).not.toBeDisabled();
-    expect(btn).toHaveTextContent(COPY.resume);
+    await waitFor(() => expect(resumeButton()).toBeTruthy());
+    expect(resumeButton()).not.toBeDisabled();
+    expect(screen.getByText('Model')).toBeTruthy();
+    // A resume from here always opens a tab (chat search's path), so there is
+    // no new-window switch.
+    expect(screen.queryByRole('switch', { name: 'Launch in New Window' })).toBeNull();
+    // The old top-bar button is gone.
+    expect(screen.queryByRole('button', { name: COPY.resume })).toBeNull();
   });
 
-  it('is disabled with the missing-project reason when the project folder is absent', async () => {
+  it('says why, and offers no Resume, when the project folder is absent', async () => {
     mockWindowClaudeFor(okRow({ missingProject: true, projectSlug: '', projectPath: '' }));
     renderDrawerWithPreview();
-    const btn = await findByHint(COPY.resumeMissingProject);
-    expect(btn).toBeDisabled();
+    await waitFor(() => expect(screen.getAllByText(COPY.resumeMissingProject).length).toBeGreaterThan(0));
+    expect(resumeButton()).toBeNull();
   });
 
-  it('is disabled with the not-synced reason when the transcript has not synced to this device', async () => {
+  it('says why, and offers no Resume, when the transcript has not synced to this device', async () => {
     mockWindowClaudeFor(okRow({ notSyncedYet: true }));
     renderDrawerWithPreview();
-    const btn = await findByHint(COPY.resumeNotSynced);
-    expect(btn).toBeDisabled();
+    await waitFor(() => expect(screen.getAllByText(COPY.resumeNotSynced).length).toBeGreaterThan(0));
+    expect(resumeButton()).toBeNull();
   });
 
-  it('labels the assistant lane "Resume…" — that lane opens a model picker before it launches', async () => {
+  it('keeps Resume off on the assistant lane until a model is picked — that lane never launches without one', async () => {
     mockWindowClaudeFor(okRow({ provider: 'native' }));
     renderDrawerWithPreview({ ...PREVIEW, provider: 'native' });
-    const btn = await findByHint(COPY.resumeNativeHint);
-    expect(btn).toHaveTextContent(COPY.resumeNative);
-    expect(btn).not.toBeDisabled();
+    await waitFor(() => expect(resumeButton()).toBeTruthy());
+    expect(resumeButton()).toBeDisabled();
+    // Skip Permissions is Claude-Code-only.
+    expect(screen.queryByRole('switch', { name: 'Skip Permissions' })).toBeNull();
   });
 
-  // Destin, 2026-08-27 gate (M-header): Resume no longer launches on click. It
-  // opens a small options popover — model, skip-permissions, then a confirm —
-  // "same as resume menus used elsewhere". The click itself must therefore
-  // dispatch NOTHING; the confirm inside the popover is what resumes.
-  it('clicking an enabled Resume opens the options popover instead of resuming', async () => {
+  it('Resume Session dispatches youcoded:resume-session with the conversation and the picked options', async () => {
     mockWindowClaudeFor(okRow({ projectSlug: 'my-slug', projectPath: '/my/path' }));
     renderDrawerWithPreview();
-    const btn = await findByHint(COPY.resumeHint);
+    await waitFor(() => expect(resumeButton()).toBeTruthy());
 
     const heard = vi.fn();
-    window.addEventListener('youcoded:resume-session', (e: any) => heard(e.detail));
-    fireEvent.click(btn);
-
-    expect(await screen.findByRole('dialog', { name: 'Resume options' })).toBeTruthy();
-    expect(heard).not.toHaveBeenCalled();
-  });
-
-  it('the popover\'s confirm dispatches youcoded:resume-session with the conversation and the picked options', async () => {
-    mockWindowClaudeFor(okRow({ projectSlug: 'my-slug', projectPath: '/my/path' }));
-    renderDrawerWithPreview();
-    fireEvent.click(await findByHint(COPY.resumeHint));
-    await screen.findByRole('dialog', { name: 'Resume options' });
-
-    const heard = vi.fn();
-    window.addEventListener('youcoded:resume-session', (e: any) => heard(e.detail));
-    fireEvent.click(screen.getByRole('button', { name: /Resume Session/ }));
+    const listen = (e: any) => heard(e.detail);
+    window.addEventListener('youcoded:resume-session', listen);
+    fireEvent.click(resumeButton()!);
+    window.removeEventListener('youcoded:resume-session', listen);
 
     // requestResume (tool-views/SessionRefActions.tsx) is reused verbatim —
-    // the same shape App.tsx's listener expects, now carrying what the popover
-    // collected. `binding` stays undefined on the Claude lane.
-    expect(heard).toHaveBeenCalledWith({
+    // the same shape App.tsx's listener expects. `binding` stays undefined on
+    // the Claude lane.
+    await waitFor(() => expect(heard).toHaveBeenCalledWith({
       claudeSessionId: PREVIEW.id,
       projectSlug: 'my-slug',
       projectPath: '/my/path',
@@ -316,20 +312,17 @@ describe('Resume button (spec A2)', () => {
       model: 'sonnet',
       dangerous: false,
       binding: undefined,
-    });
+    }));
   });
 
-  it('a disabled Resume (missing project) never dispatches the event — positive control above', async () => {
-    mockWindowClaudeFor(okRow({ missingProject: true, projectSlug: '', projectPath: '' }));
+  it('shows Complete in the top bar as the meta store has it, and toggling it writes the flag', async () => {
+    const setFlag = vi.fn().mockResolvedValue({ ok: true });
+    mockWindowClaudeFor(okRow(), { getMeta: vi.fn().mockResolvedValue({ tags: [], note: '', supported: true, flags: { complete: true } }) });
+    (window as any).claude.session.setFlag = setFlag;
     renderDrawerWithPreview();
-    const btn = await findByHint(COPY.resumeMissingProject);
-
-    const heard = vi.fn();
-    window.addEventListener('youcoded:resume-session', (e: any) => heard(e.detail));
-    fireEvent.click(btn);
-
-    expect(heard).not.toHaveBeenCalled();
-    expect(screen.queryByRole('dialog', { name: 'Resume options' })).toBeNull();
+    const done = await screen.findByRole('button', { name: `Mark ${PREVIEW.title} not complete` });
+    fireEvent.click(done);
+    expect(setFlag).toHaveBeenCalledWith(PREVIEW.id, 'complete', false);
   });
 });
 

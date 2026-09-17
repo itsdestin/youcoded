@@ -1,6 +1,6 @@
 // desktop/tests/sync-dot-state.test.ts
 import { describe, it, expect } from 'vitest';
-import { syncDotFor, findSpaceFor, lastSyncedLabel, latestUnresolvedError, deriveSyncBoxState, type SyncStatusData } from '../src/renderer/components/sync-dot-state';
+import { syncDotFor, findSpaceFor, lastSyncedLabel, latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncStatusData } from '../src/renderer/components/sync-dot-state';
 
 const status = (over: Partial<SyncStatusData> = {}): SyncStatusData => ({
   enabled: true,
@@ -149,6 +149,13 @@ describe('lastSyncedLabel', () => {
     const s = status({ recentEvents: [{ type: 'synced', spaceId: 'project:budget-app', at: NOW - 2 * 60_000 }] });
     expect(lastSyncedLabel('project:budget-app', s, NOW)).toBe('2 minutes ago');
   });
+  it('ignores an offline cycle (contacted:false) — "just now" must mean GitHub was reached', () => {
+    const s = status({ recentEvents: [
+      { type: 'synced', spaceId: 'project:budget-app', at: NOW - 3 * 60 * 60_000, contacted: true },
+      { type: 'synced', spaceId: 'project:budget-app', at: NOW - 5_000, contacted: false },
+    ] });
+    expect(lastSyncedLabel('project:budget-app', s, NOW)).toBe('3 hours ago');
+  });
   it('returns null when no synced event carries a timestamp', () => {
     const s = status({ recentEvents: [{ type: 'synced', spaceId: 'project:budget-app' }] });
     expect(lastSyncedLabel('project:budget-app', s, NOW)).toBeNull();
@@ -194,6 +201,12 @@ describe('deriveSyncBoxState', () => {
     expect(deriveSyncBoxState({ ...base, hasError: true, spaces: spaces([{ remote: null, lastSyncAt: null }]) })).toBe('error');
   });
 
+  // "Try again" sets syncing while the old error is still unresolved; letting
+  // the error win hid the retry entirely (2026-09-16).
+  it('a retry in flight shows syncing, not the error it is retrying', () => {
+    expect(deriveSyncBoxState({ ...base, hasError: true, syncing: true, spaces: spaces() })).toBe('syncing');
+  });
+
   it('green only with full evidence: all provisioned + Personal has synced', () => {
     expect(deriveSyncBoxState({ ...base, spaces: spaces() })).toBe('synced');
     expect(deriveSyncBoxState({ ...base, syncing: true, spaces: spaces() })).toBe('syncing');
@@ -222,5 +235,32 @@ describe('deriveSyncBoxState', () => {
 
   it('older payloads without kind/remote/lastSyncAt degrade to setup, not a crash or green', () => {
     expect(deriveSyncBoxState({ ...base, spaces: [{ id: 'personal', root: '/p' }] })).toBe('setup');
+  });
+});
+
+describe('oversizeNotice', () => {
+  const status = (files: string[], oversizeLimitMb?: number): SyncStatusData =>
+    ({ enabled: true, spaces: [], recentEvents: [], oversize: [{ spaceId: 'personal', files }], oversizeLimitMb });
+
+  it('says nothing when no file is over the limit, or the host sends no list', () => {
+    expect(oversizeNotice(status([]))).toBeNull();
+    expect(oversizeNotice({ enabled: true, spaces: [], recentEvents: [] })).toBeNull();
+    expect(oversizeNotice(null)).toBeNull();
+  });
+
+  it('names conversations as conversations, with the limit the host enforces', () => {
+    expect(oversizeNotice(status(['Conversations/claude/transcripts/p/a.jsonl'], 50))).toEqual({
+      header: '1 conversation too big to sync',
+      body: "It is over the 50 MB sync size limit, so your other devices won't get new changes. It stays safe on this device.",
+    });
+    expect(oversizeNotice(status(['Conversations/a.jsonl', 'Conversations\\b.jsonl'], 50))?.header)
+      .toBe('2 conversations too big to sync');
+  });
+
+  it('calls a mix of anything else files, and omits a limit it was not told', () => {
+    expect(oversizeNotice(status(['Conversations/a.jsonl', 'video.mp4']))).toEqual({
+      header: '2 files too big to sync',
+      body: "They are over the sync size limit, so your other devices won't get new changes. They stay safe on this device.",
+    });
   });
 });

@@ -95,7 +95,7 @@ export function ModelInfoTooltip({ model }: { model: ModelAlias }) {
             <div className="space-y-1">
               {info.pros.map((pro) => (
                 <div key={pro} className="flex items-start gap-1.5 text-2xs text-fg-2 leading-snug">
-                  <span className="text-green-500 shrink-0 font-bold mt-px">✓</span>
+                  <span className="text-green-400 shrink-0 font-bold mt-px">✓</span>
                   <span>{pro}</span>
                 </div>
               ))}
@@ -445,7 +445,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                     title text off the alignment every other row shares. */}
                 <SettingRow
                   variant="item"
-                  icon={<FastIcon className="w-3.5 h-3.5 text-yellow-500" />}
+                  icon={<FastIcon className="w-3.5 h-3.5 text-amber-700" />}
                   title="Fast mode"
                   description="Same model, faster output streaming"
                   control={
@@ -481,7 +481,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
           >
             <div className="p-5 space-y-4">
               <div className="flex items-start gap-3">
-                <div className="shrink-0 w-9 h-9 rounded-full bg-[#FF9800]/15 border border-[#FF9800]/40 flex items-center justify-center text-[#FF9800]">
+                <div className="shrink-0 w-9 h-9 rounded-full bg-amber-700/15 border border-amber-700/40 flex items-center justify-center text-amber-700">
                   <FastIcon className="w-5 h-5" />
                 </div>
                 <div className="flex-1">
@@ -490,8 +490,8 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 </div>
               </div>
 
-              <div className="rounded border border-[#FF9800]/40 bg-[#FF9800]/10 p-3 space-y-1.5">
-                <div className="text-xs font-semibold text-[#FF9800] uppercase tracking-wider">⚠ Billed Per Token</div>
+              <div className="rounded border border-amber-700/40 bg-amber-700/10 p-3 space-y-1.5">
+                <div className="text-xs font-semibold text-amber-700 uppercase tracking-wider">⚠ Billed Per Token</div>
                 <div className="text-xs text-fg">
                   Fast mode routes requests through a priority tier with per-token billing:
                 </div>
@@ -499,7 +499,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                   <span className="text-fg-2">Input:</span> $30 / million tokens<br />
                   <span className="text-fg-2">Output:</span> $150 / million tokens
                 </div>
-                <div className="text-2xs text-fg-muted pt-1 border-t border-[#FF9800]/25">
+                <div className="text-2xs text-fg-muted pt-1 border-t border-amber-700/25">
                   Your Claude Pro/Max subscription does not cover these charges. They bill directly against API credits on your Anthropic account.
                 </div>
               </div>
@@ -528,7 +528,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                     applyFast(true);
                     setFastConfirmOpen(false);
                   }}
-                  className={`px-3 py-1.5 text-xs rounded-lg bg-[#FF9800] text-black font-medium hover:bg-[#FF9800]/90 transition-colors ${FOCUS_RING}`}
+                  className={`px-3 py-1.5 text-xs rounded-lg bg-amber-700 text-black font-medium hover:bg-amber-700/90 transition-colors ${FOCUS_RING}`}
                 >
                   Enable & Accept Charges
                 </button>

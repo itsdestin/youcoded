@@ -54,6 +54,31 @@ export function useNativeSessionUsage(sessionId: string | null): TurnUsage | nul
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
+/** Occupancy the harness re-based after a /compact or /clear, or null.
+ *
+ *  Why a separate hook rather than a field on the usage object above: that
+ *  object is OWNED by the chat store (it is the turn's own `usage`), and the
+ *  snapshot must stay referentially stable — synthesising a merged object here
+ *  would allocate on every store change and loop React. A primitive is stable by
+ *  construction, so this needs no cache, exactly like useTurnsWithUsage below.
+ *
+ *  The two values are combined in `selectNativeStatusChips`, which both the
+ *  status bar and the /usage card call — see its parameter docs. */
+export function useNativeContextOverride(sessionId: string | null): number | null {
+  const store = useChatStore();
+  const sidRef = useRef(sessionId);
+  sidRef.current = sessionId;
+
+  const getSnapshot = useCallback((): number | null => {
+    const sid = sidRef.current;
+    if (!sid) return null;
+    return store.getState().get(sid)?.contextUsedOverride ?? null;
+  }, [store]);
+
+  const subscribe = useCallback((cb: () => void) => store.subscribeAll(cb), [store]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
 /** How many completed turns in this session carry usage, saturating at 2.
  *
  *  Why it exists: the cache-reuse chip needs to tell "nothing to reuse YET"

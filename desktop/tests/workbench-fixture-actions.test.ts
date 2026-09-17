@@ -135,14 +135,11 @@ describe('shipped fixtures replay', () => {
   it.each(fixtureFiles('conversations'))(
     'conversation $name emits one action per dispatched line',
     ({ name, raw }) => {
-      // A `subagent_permission_request` with `held: true` dispatches TWO
-      // actions (the ask, then PERMISSION_HELD) — the one line kind that is
-      // deliberately not 1:1.
       const dispatched = raw.split('\n')
         .map((l) => l.trim()).filter(Boolean)
         .map((l) => JSON.parse(l))
         .filter((p) => p.type !== 'text')
-        .reduce((n, p) => n + (p.type === 'subagent_permission_request' && p.held === true ? 2 : 1), 0);
+        .length;
       // includeStalled here so the count means what it says: EVERY dispatchable
       // line really was dispatched. The parked-turn line is opt-in at the
       // workbench level (see the default-off case below), not un-dispatchable.

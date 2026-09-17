@@ -90,7 +90,10 @@ describe('StatusStrip', () => {
 const CENTRED_STATUS_ELSEWHERE: Record<string, { count: number; why: string }> = {
   'FirstRunView.tsx': { count: 1, why: 'first-run setup screen, not a settings menu' },
   'ShareSheet.tsx': { count: 2, why: 'share flow' },
-  'ThemeShareSheet.tsx': { count: 1, why: 'theme share flow' },
+  // 2, not 1, since 2026-09-16: its green link-styled-as-a-button (the same <a> the
+  // callout guard exempts) moved from text-emerald-500 to the status text-green-400,
+  // which this pattern matches. Same element as before — it is a button, not a status line.
+  'ThemeShareSheet.tsx': { count: 2, why: 'theme share flow; one is the green open-link button' },
   // 'BugReportPopup.tsx' was here with count 1 — the legacy review screen's amber
   // "High Claude usage" caption. That screen was deleted on 2026-09-10 when the
   // approved ticket screen replaced it for every user, so the exemption goes with

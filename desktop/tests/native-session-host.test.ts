@@ -13,6 +13,7 @@ import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { scriptedModel, stream, textChunks, toolCallChunk, finishChunk } from './helpers/scripted-model';
 import { resolveSpecialist } from '../src/main/harness/specialists/registry';
 import { SpecialistCatalog } from '../src/main/harness/specialists/catalog';
+import { formatLongRunningNotice } from '../src/main/harness/shell-registry';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_NOTE_MAX_CHARS, SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../src/main/harness/specialists/limits';
 import { OWNER, DelegationLedger } from '../src/main/harness/specialists/delegation-ledger';
 import { ModelSearchTool } from '../src/main/harness/tools/model-search';
@@ -234,7 +235,7 @@ describe('NativeSessionHost', () => {
     const readGuard = vi.fn(() => 12);
     const guarded = new NativeSessionHost(
       new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null,
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
       new SpecialistCatalog({ claudeUserDir: null }), readGuard,
     );
     await guarded.create({ sessionId: 'guarded', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
@@ -249,7 +250,7 @@ describe('NativeSessionHost', () => {
     let preference = 14;
     const guarded = new NativeSessionHost(
       store, factory, NO_CONTEXT, async () => null, async () => null,
-      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
       new SpecialistCatalog({ claudeUserDir: null }), () => preference,
     );
     await guarded.create({ sessionId: 'stored', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
@@ -265,7 +266,7 @@ describe('NativeSessionHost', () => {
     for (const id of ['old', 'bad']) {
       const resumed = new NativeSessionHost(
         store, factory, NO_CONTEXT, async () => null, async () => null,
-        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined,
         new SpecialistCatalog({ claudeUserDir: null }), () => 77,
       );
       expect(await resumed.resume(id, root)).toBe(true);
@@ -865,6 +866,119 @@ describe('NativeSessionHost', () => {
     // for two DIFFERENT local bindings with two DIFFERENT slot counts and
     // proves each session's resolved cap is its own — never the other's,
     // never zeroed by the other landing in between.
+    // 2026-09-16 (docs/roadmap/local-models.md): the engine is asked for a
+    // model's slot count at create/resume/swap, BEFORE the model is loaded —
+    // and engine-manager's status-first read deliberately never loads one, so
+    // the answer is "unknown" and the cap falls to the one-helper floor. The
+    // first turn loads the model; the host now re-reads once after it.
+    it('a local model whose slots were unknown at create re-reads them after its first turn and lifts the cap', async () => {
+      let reads = 0;
+      const lateSlots = async (b: any) => ({
+        contextLength: b.providerId === 'local' ? 8192 : 200_000,
+        // First read: not loaded yet → unknown. Every later read: 4 slots.
+        totalSlots: b.providerId === 'local' ? (reads++ === 0 ? null : 4) : null,
+      });
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, lateSlots as any, providerTypeFor as any, async () => null);
+      await h.create({ sessionId: 'local-late', cwd: root, binding: { providerId: 'local', modelId: 'qwen3.6-35b-moe-q4' } });
+      expect(h.reserveSpecialist('local-late', { writer: false }).ok).toBe(true);
+      expect(h.reserveSpecialist('local-late', { writer: false })).toEqual({ ok: false, reason: 'at-capacity', max: 1 });
+      expect((h as any).live.get('local-late').refreshSlotsAfterTurn).toBe(true);
+
+      h.send('local-late', 'hi');
+      await (h as any).live.get('local-late').running;
+      await h.drain('local-late');
+
+      expect(reads).toBe(2);
+      expect((h as any).live.get('local-late').refreshSlotsAfterTurn).toBe(false);
+      expect((h as any).live.get('local-late').session.profileSnapshot.maxConcurrentSpecialists).toBe(4);
+      // One reservation is still held from above; three more fit under the real ceiling.
+      for (let i = 0; i < 3; i++) expect(h.reserveSpecialist('local-late', { writer: false }).ok).toBe(true);
+      expect(h.reserveSpecialist('local-late', { writer: false })).toEqual({ ok: false, reason: 'at-capacity', max: 4 });
+
+      // A second turn does not ask again — the flag is one-shot once answered.
+      h.send('local-late', 'again');
+      await (h as any).live.get('local-late').running;
+      await h.drain('local-late');
+      expect(reads).toBe(2);
+      await h.destroyAll();
+    });
+
+    // Fix 2026-09-16: the post-turn re-read's guard asked about the helper CAP
+    // alone and returned before applying the re-read contextLength. At create the
+    // model is usually not resident, so the window came from the model-less
+    // /props branch — the configured -c, which the server may have clamped down
+    // for VRAM. This refresh is the one chance to replace that guess with the
+    // engine's real n_ctx, and it was skipped whenever the cap happened to match,
+    // leaving the context gauge's DENOMINATOR wrong for the whole session — and
+    // wrong optimistically, so the window looked roomier than it was.
+    it('applies a corrected context window after the first turn even when the helper cap is unchanged', async () => {
+      let reads = 0;
+      const lateWindow = async (b: any) => {
+        const first = reads++ === 0;
+        return b.providerId === 'local'
+          // Cap: unknown first (→ the one-helper floor), then 1 — the SAME cap,
+          // which is what used to make the whole reading get dropped. Window:
+          // the configured 32k guess first, then the engine's real 8k.
+          ? { contextLength: first ? 32_768 : 8192, totalSlots: first ? null : 1 }
+          : { contextLength: 200_000, totalSlots: null };
+      };
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, lateWindow as any, providerTypeFor as any, async () => null);
+      await h.create({ sessionId: 'local-window', cwd: root, binding: { providerId: 'local', modelId: 'qwen3.6-35b-moe-q4' } });
+      const entry = (h as any).live.get('local-window');
+      expect(entry.session.contextWindowTokens).toBe(32_768);
+      const capBefore = entry.session.profileSnapshot.maxConcurrentSpecialists;
+
+      h.send('local-window', 'hi');
+      await entry.running;
+      await h.drain('local-window');
+
+      expect(reads).toBe(2);
+      // The cap genuinely did not move — so this pins the WINDOW, not a cap
+      // change smuggling the window along with it.
+      expect(entry.session.profileSnapshot.maxConcurrentSpecialists).toBe(capBefore);
+      expect(entry.session.contextWindowTokens).toBe(8192);
+      await h.destroyAll();
+    });
+
+    // Review 2026-09-16: a picker swap that lands WHILE the post-turn re-read
+    // is in the air must win — the stale reading is for the model the user
+    // just left and must not put the session back on it.
+    it('a model swap landing during the post-turn re-read is not reverted by it', async () => {
+      let releaseRead: () => void = () => {};
+      let reads = 0;
+      const slowSlots = async (b: any) => {
+        reads++;
+        if (b.modelId === 'qwen3.6-35b-moe-q4' && reads === 2) await new Promise<void>((r) => { releaseRead = r; });
+        // 2 slots, not 4: a stale local cap of 2 differs from the hosted ceiling,
+        // so a wrongly applied reading would visibly revert the swap.
+        return { contextLength: 8192, totalSlots: b.providerId === 'local' ? (reads === 1 ? null : 2) : null };
+      };
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, slowSlots as any, providerTypeFor as any, async () => null);
+      await h.create({ sessionId: 'local-race', cwd: root, binding: { providerId: 'local', modelId: 'qwen3.6-35b-moe-q4' } });
+      h.send('local-race', 'hi');
+      await vi.waitFor(() => expect(reads).toBe(2));            // the re-read is now in flight
+      await h.setBinding('local-race', { providerId: 'openrouter', modelId: 'gpt-4o' });
+      releaseRead();
+      await (h as any).live.get('local-race').running;
+      await h.drain('local-race');
+      expect((h as any).live.get('local-race').session.binding).toEqual({ providerId: 'openrouter', modelId: 'gpt-4o' });
+      expect((h as any).live.get('local-race').session.profileSnapshot.maxConcurrentSpecialists).toBe(HOSTED_MAX_CONCURRENT_SPECIALISTS);
+      await h.destroyAll();
+    });
+
+    it('a hosted parent never re-reads — the flag is a local-engine concern', async () => {
+      let reads = 0;
+      const counting = async () => { reads++; return { contextLength: 200_000, totalSlots: null }; };
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, counting as any, providerTypeFor as any, async () => null);
+      await h.create({ sessionId: 'cloud-late', cwd: root, binding: { providerId: 'openrouter', modelId: 'gpt-4o' } });
+      expect((h as any).live.get('cloud-late').refreshSlotsAfterTurn).toBeUndefined();
+      h.send('cloud-late', 'hi');
+      await (h as any).live.get('cloud-late').running;
+      await h.drain('cloud-late');
+      expect(reads).toBe(1);
+      await h.destroyAll();
+    });
+
     it('two overlapping local-engine session starts each resolve their OWN slot count — no cross-talk', async () => {
       let releaseA: () => void;
       const stallA = new Promise<void>((res) => { releaseA = res; });
@@ -1895,19 +2009,6 @@ describe('NativeSessionHost', () => {
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
       return { store, h };
     }
-    // Task 8: a host whose specialistAskHoldMs is overridden to a small,
-    // real (not fake-timer) delay — see the constructor param's own WHY for
-    // why tests prefer this over vi.useFakeTimers() against a file this
-    // heavy in setImmediate-driven async machinery.
-    async function withParentFastAskHold(askHoldMs: number, modelFactory: any = factory) {
-      const store = new SessionStore(new NativeHome(root));
-      const h = new NativeSessionHost(
-        store, modelFactory, NO_CONTEXT, async () => null, async () => null, undefined,
-        undefined, undefined, undefined, undefined, undefined, undefined, askHoldMs,
-      );
-      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-      return { store, h };
-    }
     // The child's live HarnessSession — Task 7 reaches it the same way (through
     // the host's live map); here it is the only route to the child's tool surface.
     const childSession = (h: NativeSessionHost, id: string) => (h as any).live.get(id).session;
@@ -2095,268 +2196,23 @@ describe('NativeSessionHost', () => {
       expect(ask.payload.denyListed).toBe(true);
       expect(ask.payload.specialist).toMatchObject({ childId, agentType: 'worker' });
       expect(fs.existsSync(path.join(root, 'marker.txt'))).toBe(true); // still hasn't run — awaiting an answer
-      // A real user answers (deny) within the window — real declines get the
-      // plain copy, no redirect wording.
+      // A real user answers (deny) — real declines get the plain copy.
       expect(h.respondPermission(requestId, { behavior: 'deny' })).toBe(true);
       await sendPromise;
       const res = events.find((e) => e.type === 'tool-result')!;
       expect(res.data.isError).toBe(true);
       expect(res.data.toolResult).toMatch(/user declined/i);
-      expect(res.data.toolResult).not.toMatch(/pending on their screen/i); // not the timeout redirect
       expect(fs.existsSync(path.join(root, 'marker.txt'))).toBe(true);     // never ran
       await h.destroyAll();
     });
 
-    it('an unanswered destructive-action ask times out into the redirect, and the ask stays answerable after', async () => {
+    it('destroy(childId) cancels a routed ask registered under the parent id (raisedBy match)', async () => {
       const WORKER = resolveSpecialist('worker')!;
       const rmOnce = () => scriptedModel([
         stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
         stream(...textChunks('t', 'done'), finishChunk('stop')),
       ]) as any;
-      const { h } = await withParentFastAskHold(20, async () => rmOnce());
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const asks: any[] = [];
-      const events: any[] = [];
-      h.on('hook-event', (e) => asks.push(e));
-      childSession(h, childId).on('transcript-event', (e: any) => events.push(e));
-      const askArrived = firstAsk(h);
-      await childSession(h, childId).send('go'); // resolves once the (timed-out) turn settles
-      const requestId = await askArrived;
-      const res = events.find((e) => e.type === 'tool-result')!;
-      expect(res.data.isError).toBe(true);
-      expect(res.data.toolResult).toMatch(/pending on their screen/i);
-      expect(res.data.toolResult).toMatch(/Do NOT attempt the blocked action by any other means/);
-      // Nothing expired the card — no PermissionExpired for this id, so it is
-      // exactly what "the entry stays answerable" means.
-      expect(asks.some((e) => e.type === 'PermissionExpired' && e.payload._requestId === requestId)).toBe(false);
-      expect(h.respondPermission(requestId, { behavior: 'allow' })).toBe(true); // still findable
-      await h.destroyAll();
-    });
-
-    it('a late APPROVE while the child is still live arrives as a steer naming the tool', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      const rmOnce = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-        stream(...textChunks('t', 'done'), finishChunk('stop')),
-      ]) as any;
-      const { h } = await withParentFastAskHold(20, async () => rmOnce());
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      const child = childSession(h, childId);
-      const steerSpy = vi.spyOn(child, 'postSteer');
-      await child.send('go'); // times out into the redirect; the child stays LIVE (never destroy()'d here)
-      const requestId = await askArrived;
-      expect(h.respondPermission(requestId, { behavior: 'allow' })).toBe(true);
-      expect(steerSpy).toHaveBeenCalledTimes(1);
-      const [text] = steerSpy.mock.calls[0];
-      expect(text).toMatch(/Bash/);
-      expect(text).toMatch(/APPROVED — you may do it now/);
-      await h.destroyAll();
-    });
-
-    it('a late DENY while the child is still live arrives as a steer naming the tool, denied', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      const rmOnce = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-        stream(...textChunks('t', 'done'), finishChunk('stop')),
-      ]) as any;
-      const { h } = await withParentFastAskHold(20, async () => rmOnce());
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      const child = childSession(h, childId);
-      const steerSpy = vi.spyOn(child, 'postSteer');
-      await child.send('go');
-      const requestId = await askArrived;
-      expect(h.respondPermission(requestId, { behavior: 'deny' })).toBe(true);
-      const [text] = steerSpy.mock.calls[0];
-      expect(text).toMatch(/DENIED — do not attempt it/);
-      await h.destroyAll();
-    });
-
-    // ---- Fix pass, Finding 2: a LATE "Always allow" must persist too, not
-    // just steer/notify. Before this fix onLateResponse never read
-    // decision.always at all — it only ever steered the live child or queued
-    // a host notice, so "Always allow" answered after the timeout silently
-    // dropped the "and remember this" half, reachable through a second door
-    // beyond child-ask-router.ts's in-time path. ----
-    it('a LATE "Always allow" while the child is still live BOTH steers AND persists a specialist-keyed rule (Fix 2)', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      const rmOnce = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-        stream(...textChunks('t', 'done'), finishChunk('stop')),
-      ]) as any;
-      const store = new PermissionStore(new NativeHome(root));
-      const h = new NativeSessionHost(
-        new SessionStore(new NativeHome(root)), async () => rmOnce(), NO_CONTEXT, async () => null, async () => null, undefined,
-        store, undefined, undefined, undefined, undefined, undefined, 20,
-      );
-      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      const child = childSession(h, childId);
-      const steerSpy = vi.spyOn(child, 'postSteer');
-      await child.send('go'); // times out into the redirect; child stays live
-      const requestId = await askArrived;
-      // Same "Always allow" payload shape the in-time router test uses.
-      expect(h.respondPermission(requestId, { decision: { behavior: 'allow' }, updatedPermissions: [{ tool: 'Bash' }] })).toBe(true);
-      expect(steerSpy).toHaveBeenCalledTimes(1); // the steer still happens — this fix must not regress it
-
-      let rules: any[] = [];
-      for (let i = 0; i < POLL_TRIES; i++) {
-        rules = await store.rulesFor(root);
-        if (rules.some((r) => r.specialist === 'worker')) break;
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      expect(rules).toContainEqual(expect.objectContaining({
-        tool: 'Bash', pattern: 'rm -rf marker.txt', action: 'allow', specialist: 'worker',
-      }));
-      await h.destroyAll();
-    });
-
-    it('a LATE "Always allow" after the child already ended ALSO persists a specialist-keyed rule (Fix 2)', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      let calls = 0;
-      const rmThenText = async () => {
-        calls += 1;
-        if (calls === 1) {
-          return scriptedModel([
-            stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-            stream(...textChunks('t', 'done'), finishChunk('stop')),
-          ]) as any;
-        }
-        return factory();
-      };
-      const store = new PermissionStore(new NativeHome(root));
-      const h = new NativeSessionHost(
-        new SessionStore(new NativeHome(root)), rmThenText, NO_CONTEXT, async () => null, async () => null, undefined,
-        store, undefined, undefined, undefined, undefined, undefined, 20,
-      );
-      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      await childSession(h, childId).send('go'); // times out into the redirect
-      const requestId = await askArrived;
-      await h.destroy(childId); // normal teardown AFTER the ask already timed out
-      const noticeArrived = waitForEvent(h, (e) => e.sessionId === 'root-1' && e.type === 'user-message' && e.data.injected === 'specialist-report');
-      expect(h.respondPermission(requestId, { decision: { behavior: 'allow' }, updatedPermissions: [{ tool: 'Bash' }] })).toBe(true);
-      await noticeArrived; // the host-notice half still fires — this fix must not regress it
-
-      let rules: any[] = [];
-      for (let i = 0; i < POLL_TRIES; i++) {
-        rules = await store.rulesFor(root);
-        if (rules.some((r) => r.specialist === 'worker')) break;
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      expect(rules).toContainEqual(expect.objectContaining({
-        tool: 'Bash', pattern: 'rm -rf marker.txt', action: 'allow', specialist: 'worker',
-      }));
-      await h.destroyAll();
-    });
-
-    // Fix (Important 6, final review): onLateResponse used to hand-build its
-    // own rule object, discarding decision.grantScope entirely — an exact
-    // rule was stored no matter what width the user picked. Same command
-    // shape (git push origin feat/x) the root-session-level rememberedRuleFor
-    // test suite already pins for the 'wide' grant, driven through the LATE
-    // routed path this time.
-    it('a LATE "Always allow" persists the DERIVED WIDE rule when the user picked that width, not an exact-match rule', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      let calls = 0;
-      const pushThenText = async () => {
-        calls += 1;
-        if (calls === 1) {
-          return scriptedModel([
-            stream(toolCallChunk('c1', 'Bash', { command: 'git push origin feat/x' }), finishChunk('tool-calls')),
-            stream(...textChunks('t', 'done'), finishChunk('stop')),
-          ]) as any;
-        }
-        return factory();
-      };
-      const store = new PermissionStore(new NativeHome(root));
-      const h = new NativeSessionHost(
-        new SessionStore(new NativeHome(root)), pushThenText, NO_CONTEXT, async () => null, async () => null, undefined,
-        store, undefined, undefined, undefined, undefined, undefined, 20,
-      );
-      await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      await childSession(h, childId).send('go'); // times out into the redirect
-      const requestId = await askArrived;
-      await h.destroy(childId); // normal teardown AFTER the ask already timed out
-      const noticeArrived = waitForEvent(h, (e) => e.sessionId === 'root-1' && e.type === 'user-message' && e.data.injected === 'specialist-report');
-      expect(h.respondPermission(requestId, { decision: { behavior: 'allow' }, updatedPermissions: [{ tool: 'Bash' }], grantScope: 'wide' })).toBe(true);
-      await noticeArrived;
-
-      let rules: any[] = [];
-      for (let i = 0; i < POLL_TRIES; i++) {
-        rules = await store.rulesFor(root);
-        if (rules.some((r) => r.specialist === 'worker')) break;
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      expect(rules).toContainEqual(expect.objectContaining({
-        tool: 'Bash', pattern: 'git push*origin feat/x', match: 'glob', action: 'allow', specialist: 'worker',
-      }));
-      // The forbidden shape (what the bug produced): an exact-match rule
-      // storing the literal command instead of the derived wide pattern.
-      expect(rules).not.toContainEqual(expect.objectContaining({
-        tool: 'Bash', pattern: 'git push origin feat/x', specialist: 'worker',
-      }));
-      await h.destroyAll();
-    });
-
-    it('a late APPROVE after the child ended queues a parent delivery naming task_id', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      // First factory call (the child's turn) attempts the destructive Bash
-      // call; every later call (the parent's own turns, including the
-      // injected notice's turn) gets the plain text-only model.
-      let calls = 0;
-      const rmThenText = async () => {
-        calls += 1;
-        if (calls === 1) {
-          return scriptedModel([
-            stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-            stream(...textChunks('t', 'done'), finishChunk('stop')),
-          ]) as any;
-        }
-        return factory();
-      };
-      const { h } = await withParentFastAskHold(20, rmThenText);
-      const { childId } = await h.createChild('root-1', {
-        specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const askArrived = firstAsk(h);
-      await childSession(h, childId).send('go'); // times out into the redirect
-      const requestId = await askArrived;
-      await h.destroy(childId); // the specialist's own normal teardown, AFTER its ask already timed out
-      const noticeArrived = waitForEvent(h, (e) => e.sessionId === 'root-1' && e.type === 'user-message' && e.data.injected === 'specialist-report');
-      expect(h.respondPermission(requestId, { behavior: 'allow' })).toBe(true);
-      const notice = await noticeArrived;
-      expect(notice.data.text).toMatch(/^\[Specialist follow-up\]/);
-      expect(notice.data.text).toMatch(/approved/i);
-      expect(notice.data.text).toMatch(/Bash/);
-      expect(notice.data.text).toContain(childId); // task_id, so the parent can name what to resume
-      await h.destroyAll();
-    });
-
-    it('destroy(childId) cancels a routed ask registered under the parent id (raisedBy match) while still within its window', async () => {
-      const WORKER = resolveSpecialist('worker')!;
-      const rmOnce = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
-        stream(...textChunks('t', 'done'), finishChunk('stop')),
-      ]) as any;
-      const { h } = await withParent(async () => rmOnce()); // real 5-minute hold — never lets the timeout race this test
+      const { h } = await withParent(async () => rmOnce());
       const { childId } = await h.createChild('root-1', {
         specialist: WORKER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
       });
@@ -2365,7 +2221,7 @@ describe('NativeSessionHost', () => {
       const askArrived = firstAsk(h);
       const sendPromise = childSession(h, childId).send('go');
       await askArrived;
-      await h.destroy(childId); // torn down WHILE the ask is still pending, not yet timed out
+      await h.destroy(childId); // torn down WHILE the ask is still pending
       await sendPromise; // the child's own turn unwinds via the 'canceled' interrupt path
       expect(asks.some((e) => e.type === 'PermissionExpired')).toBe(true); // card cleared
       await h.destroyAll();
@@ -3638,7 +3494,7 @@ describe('NativeSessionHost', () => {
         const home = new NativeHome(projectDir);
         const h = new NativeSessionHost(
           new SessionStore(home), factory, NO_CONTEXT, async () => null, async () => null,
-          undefined, undefined, undefined, undefined, undefined, undefined, home, undefined, catalog,
+          undefined, undefined, undefined, undefined, undefined, undefined, home, catalog,
         );
         // create() awaits catalog.ensureFresh(cwd), so the roster below is
         // loaded by the time any test reads it.
@@ -4984,7 +4840,7 @@ describe('NativeSessionHost', () => {
     function bootWithCatalog(catalog: SpecialistCatalog) {
       return new NativeSessionHost(
         new SessionStore(new NativeHome(projectDir)), factory, NO_CONTEXT, async () => null, async () => null,
-        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, catalog,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, catalog,
       );
     }
     // waitForTurnComplete alone isn't enough between TWO sends on the SAME
@@ -5338,6 +5194,75 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     expect((host as any).live.get('p1').session.opts.shells).toBe(reg('p1'));
   });
 
+  // 2026-09-16: the still-running mark (LONG_RUN_NOTICE_MS) rides the same
+  // idle-boundary lane as a finished notice, but as a PLAIN note — never a
+  // completion, so the run stays unreported and its Bash card stays running.
+  it.skipIf(!posix)('a still-running mark is injected as a shell-running note, not a completion', async () => {
+    const run = startIn('p1', 'sleep 5', 'tu-long');
+    const notice = waitForEvent(host, (e) => e.type === 'user-message' && e.data.injected === 'shell-running');
+    // The registry's own timers are minutes long; fire the mark by hand.
+    reg('p1').emit('long-running', run, 5 * 60_000);
+    const e = await notice;
+    expect(e.data.text).toBe(formatLongRunningNotice(run, 5 * 60_000));
+    expect(e.data.injectedMeta).toEqual({ kind: 'shell-running', runs: [{ shellId: run.shellId, toolUseId: 'tu-long', elapsedMs: 5 * 60_000 }] });
+    expect(run.reported).toBe(false);     // the finished notice is still owed
+    expect(run.status).toBe('running');
+    await reg('p1').kill(run.shellId, 'assistant');
+  });
+
+  // Review 2026-09-16: a mark queued while the parent was busy, whose run then
+  // finished before the parent went idle, must be DROPPED at delivery — the
+  // finished notice behind it tells the truth; announcing "still running"
+  // above an exited card would be false and cost a wasted turn.
+  it.skipIf(!posix)('a mark whose run finished while it waited is dropped at delivery; the finished notice still goes out', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    let first = true;
+    const factory2 = async () => new MockLanguageModelV4({
+      doStream: async () => {
+        if (first) { first = false; await gate; }
+        return { stream: simulateReadableStream({ chunks: stream(...textChunks('t', 'ok'), finishChunk('stop')) }) };
+      },
+    }) as any;
+    await host.destroyAll();
+    host = new NativeSessionHost(store, factory2, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 'p3', cwd: root, binding });
+    const injected: string[] = [];
+    host.on('transcript-event', (e: any) => { if (e.type === 'user-message' && e.data.injected) injected.push(e.data.injected); });
+    host.send('p3', 'busy');                                  // parent held mid-turn
+    const run = startIn('p3', 'echo a', 'ta');
+    reg('p3').emit('long-running', run, 5 * 60_000);          // mark queued behind the busy turn
+    await run.exited;                                         // ...then the run finishes (completion queued after it)
+    await new Promise((r) => setTimeout(r, 50));
+    expect(((host as any).pendingHostNotices.get('p3') ?? []).map((n: any) => n.meta?.kind)).toEqual(['shell-running', 'shell']);
+    release();
+    await waitForEvent(host, (e) => e.type === 'user-message' && e.data.injected === 'shell-complete');
+    await host.drain('p3');
+    expect(injected).toEqual(['shell-complete']);             // the stale mark never became a turn
+  });
+
+  it.skipIf(!posix)('two marks ready at the same idle boundary go out as ONE shell-running turn (D8)', async () => {
+    const a = startIn('p1', 'sleep 5', 'ta');
+    const b = startIn('p1', 'sleep 5', 'tb');
+    const notice = waitForEvent(host, (e) => e.type === 'user-message' && e.data.injected === 'shell-running');
+    // Queue both before any delivery pass can start (kick runs on setImmediate).
+    reg('p1').emit('long-running', a, 5 * 60_000);
+    reg('p1').emit('long-running', b, 15 * 60_000);
+    const e = await notice;
+    expect(e.data.injectedMeta.runs.map((r: any) => r.shellId)).toEqual([a.shellId, b.shellId]);
+    expect(e.data.text).toContain(`${a.shellId} has been running for 5m`);
+    expect(e.data.text).toContain(`${b.shellId} has been running for 15m`);
+    await reg('p1').kill(a.shellId, 'assistant'); await reg('p1').kill(b.shellId, 'assistant');
+  });
+
+  it.skipIf(!posix)('a mark for a run that already ended queues nothing', async () => {
+    const run = startIn('p1', 'echo x', 'tu-done');
+    await run.exited;
+    reg('p1').emit('long-running', run, 5 * 60_000);
+    const pending = ((host as any).pendingHostNotices.get('p1') ?? []) as Array<{ meta?: { kind?: string } }>;
+    expect(pending.filter((n) => n.meta?.kind === 'shell-running')).toEqual([]);
+  });
+
   it.skipIf(!posix)('a finished run is injected ONCE as a user turn with injected: shell-complete and shell meta', async () => {
     const notice = waitForEvent(host, (e) => e.type === 'user-message' && e.data.injected === 'shell-complete');
     const run = startIn('p1', 'echo done; exit 2', 'toolu_x');
@@ -5593,7 +5518,7 @@ describe('specialists plans in the native host (Task 4)', () => {
       new SessionStore(home), planFactory as any, NO_CONTEXT, async () => 'openrouter', async () => null,
       async () => ({ in: 1, out: 2 }), undefined, undefined,
       { modelCatalog: async () => CATALOG },
-      undefined, undefined, home, undefined, undefined, undefined, {},
+      undefined, undefined, home, undefined, undefined, {},
       {
         settleDeadlineMs: 60, heartbeatMs: opts.heartbeatMs ?? 5_000, slotPollMs: 5, ...(opts.now ? { now: opts.now } : {}),
         ...(opts.handoffBackstopMs !== undefined ? { handoffBackstopMs: opts.handoffBackstopMs } : {}),

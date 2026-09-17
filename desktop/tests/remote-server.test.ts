@@ -241,6 +241,18 @@ describe('RemoteServer and the shell provider', () => {
     expect(shellSessionManager.createSession).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-09-16 (remote-access.md): the phone's create used to reach the session
+  // manager with the "No folder" sentinel untouched, so such a session opened in
+  // the home folder. main.ts hands the same rewrite the desktop's handler uses.
+  it('applies the host’s create rewrite (the No-folder swap) before the session manager sees the payload', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig, undefined, {
+      prepareCreate: (p: any) => (p.cwd === '__no_folder__' ? { ...p, cwd: '/private/no-folder' } : p),
+    });
+    await drive(server, { type: 'session:create', id: 'c3', payload: { name: 'x', cwd: '__no_folder__', skipPermissions: false } });
+    expect(shellSessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/private/no-folder' }));
+  });
+
   it('refuses a run-in-terminal command carrying a carriage return', async () => {
     // The whole property: the app does not APPEND a carriage return, but a `\r`
     // already inside the string is the same keypress — measured on real bash,
@@ -1213,7 +1225,7 @@ describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
     expect(frames.find((m) => m.id === 'r2')?.payload).toEqual({ ok: true });
   });
 
-  it('a reconnecting client receives a held ask\'s PermissionRequest and its PermissionHeld, in that order', async () => {
+  it('a reconnecting client receives an open native ask\'s PermissionRequest', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
     const { frames, ws } = fakeWs();
@@ -1223,20 +1235,18 @@ describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
     // through this class's own onHookEvent (that's wired only to the legacy
     // hookRelay) — bufferHookEvent is the fix, called from that same site.
     server.bufferHookEvent({ sessionId: 's1', type: 'PermissionRequest', payload: { _requestId: 'native-x' }, timestamp: Date.now() });
-    server.bufferHookEvent({ sessionId: 's1', type: 'PermissionHeld', payload: { _requestId: 'native-x' }, timestamp: Date.now() });
 
     await replayAndWait(server, ws);
 
-    const held = frames.filter((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-x');
-    expect(held).toHaveLength(2);
-    expect(held[0].payload.type).toBe('PermissionRequest');
-    expect(held[1].payload.type).toBe('PermissionHeld');
+    const open = frames.filter((m) => m.type === 'hook:event' && m.payload.payload?._requestId === 'native-x');
+    expect(open).toHaveLength(1);
+    expect(open[0].payload.type).toBe('PermissionRequest');
   });
 
   // Fix pass (2026-08-16 review finding, "the catch-up replays asks that were
   // already answered"): PermissionBroker now emits PermissionResolved from
   // its one removal chokepoint (permission-broker.ts) whenever an entry
-  // leaves `pending` — respond() in time, respond() late, or a cancel.
+  // leaves `pending` — respond() or a cancel.
   // bufferHookEvent() must treat that as a purge signal instead of just
   // another event to append, or a reconnecting phone still gets replayed a
   // dead question with live-looking Yes/No buttons.

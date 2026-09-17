@@ -15,7 +15,7 @@ import { HookRelay } from './hook-relay';
 import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent, type PlansEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { hasRealTitle } from '../shared/session-title';
-import { setPermissionOverrides } from './main';
+import { setPermissionOverrides, forgetSessionAttention } from './main';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { IntegrationInstaller, listWithState } from './integration-installer';
@@ -158,7 +158,6 @@ import {
 import { initGitWatchers, watchGit, unwatchGit, dropGitSubscriber } from './git/git-watcher';
 import { resolveRepoRoot, invalidateRepoRootCache } from './git/git-exec';
 import { PROJECT_IPC } from './project/ipc-channels';
-import { projectConversationHistory } from './project-conversations';
 // The artifact and Project View READ bodies, shared with remote-server.ts
 // (remote access batch 3) so a phone gets the desktop's own answers.
 import {
@@ -2771,7 +2770,14 @@ export function registerIpcHandlers(
       const providers = await providerRegistry.list();
       const p = providers.find((x) => x.id === binding.providerId);
       if (p?.type === 'local-engine') return null;
-      const models = await modelCatalog.get(providers);
+      // `[p]`, not `providers` — the same narrowing the vision closure above
+      // already has, for the same reason: this lookup only ever reads the
+      // binding's own provider's rows, so handing over the whole list built
+      // and threw away every OTHER provider's catalog on every hosted
+      // create/resume/swap (measured 2026-09-05 while fixing the local half).
+      // A provider missing from the registry is caught below: `p` undefined
+      // means no rows, and the lookup falls through to null as before.
+      const models = await modelCatalog.get(p ? [p] : []);
       const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
       return hit?.pricing ?? null;
     },
@@ -2808,14 +2814,12 @@ export function registerIpcHandlers(
     // nativeHome instance every other ~/.youcoded/ writer above shares, never
     // a second one.
     nativeHome,
-    // specialistAskHoldMs (12th param) left at its real production default —
-    // explicit undefined only to reach the 13th positional slot below.
-    undefined,
-    // specialistCatalog (13th param, Task 4 plan 1c): the real catalog built
+    // specialistCatalog (12th param, Task 4 plan 1c; the ask-hold parameter
+    // that sat before it was removed 2026-09-16): the real catalog built
     // above, sharing nativeHome with every other ~/.youcoded/ writer here.
     specialistCatalog,
     () => stepGuardSettings.read(),
-    // Continuation (16th param): the private store above, plus the registry's
+    // Continuation (15th param): the private store above, plus the registry's
     // SINGLE continuation-identity method — the same one the ChatGPT model's
     // owner closure calls, so what the harness accepts and what a resume looks
     // up can never disagree. It throws when ChatGPT is signed out; the host
@@ -2997,13 +3001,12 @@ export function registerIpcHandlers(
       // native hook events reach remote clients ONLY through this direct
       // broadcast() call. RemoteServer's own onHookEvent — which is what
       // fills hookBuffers for connect-time replay — is wired solely to the
-      // LEGACY CC hookRelay, never to nativeHost. So a phone reconnecting
-      // while a native permission ask was HELD got nothing back: PermissionHeld
-      // is one-shot and the 3s heartbeat stops re-announcing once an ask is
-      // held (permission-broker.ts). bufferHookEvent() feeds the SAME
-      // hookBuffers map the legacy path fills, so the existing replay loop in
-      // restoreClient() picks these up for free, in the same push order
-      // (request, then held).
+      // LEGACY CC hookRelay, never to nativeHost. Without this a phone
+      // reconnecting while a native permission ask was open would see no card
+      // until the next 3s heartbeat (permission-broker.ts). bufferHookEvent()
+      // feeds the SAME hookBuffers map the legacy path fills, so the existing
+      // replay loop in restoreClient() picks these up for free, and its
+      // PermissionResolved purge keeps answered asks out of that replay.
       remoteServer.bufferHookEvent(event);
       remoteServer.broadcast({ type: 'hook:event', payload: event });
     }
@@ -3966,9 +3969,21 @@ export function registerIpcHandlers(
       // 2b Task 8: drop our lease so another device can acquire. Idempotent +
       // best-effort; release() never rejects, .catch guards a future change.
       void leaseWiring?.client.release(claudeId).catch(() => { /* best-effort */ });
+      // WHY (2026-09-16, per-session-maps investigation): the last-model
+      // dedupe is keyed by CLAUDE id and was never cleared, so every
+      // conversation opened this run left a string behind for the life of the
+      // process. Resolved here, while the claude id is still known.
+      lastModelSeen.delete(claudeId);
     }
     sessionIdMap.delete(sessionId);
     lastAttentionBySession.delete(sessionId);
+    // Same investigation: the per-session model-state signature (native
+    // sessions) had no removal path either.
+    lastSessionModelState.delete(sessionId);
+    // And the attention aggregate in main.ts only ever forgot a session when
+    // its renderer volunteered `{ clear: true }` — a session that died
+    // without one kept reporting its last state in every window's summary.
+    forgetSessionAttention(sessionId);
     // Drop the last-known status values so buildStatusData doesn't keep
     // broadcasting chips for a session that's gone.
     delete lastContextByDesktopId[sessionId];
@@ -4019,6 +4034,10 @@ export function registerIpcHandlers(
   remoteServer?.setSessionMetaWiring({
     resolve: (sessionId: string) => sessionIdMap.get(sessionId) || sessionId,
     canWrite: canWriteStoreRecord,
+    // The desktop half of a phone-originated tag/note: the same push the ipcMain
+    // handlers make after their own write (2026-09-16, sync.md).
+    notify: (sessionId: string, payload: Record<string, unknown>) =>
+      sendForSession(sessionId, IPC.SESSION_META_CHANGED, sessionId, payload),
   });
 
   // Provider bucket to READ a resolved session's meta from. 'native' when
@@ -4690,15 +4709,13 @@ export function registerIpcHandlers(
   ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, sessionId: string, projectRoot: string) =>
     listSessionFiles(sessionId, projectRoot));
 
-  // Project View IPC — list project-scoped conversations, their history, git
-  // repo info, and the discovered context files (CLAUDE.md, rules, etc.).
-  // The four reads go through project-read-service.ts (shared with the remote
-  // host); history and the context WRITE stay desktop-only.
+  // Project View IPC — list project-scoped conversations, git repo info, and
+  // the discovered context files (CLAUDE.md, rules, etc.). The reads go
+  // through project-read-service.ts (shared with the remote host); the context
+  // WRITE stays desktop-only. A conversation's messages are read through
+  // chatsearch:read (below), the one preview reader.
   ipcMain.handle(PROJECT_IPC.LIST_CONVERSATIONS, (_e, projectPath: string) =>
     listConversations(projectPath));
-  ipcMain.handle(PROJECT_IPC.CONVERSATION_HISTORY, async (_e, projectPath: string, sessionId: string, count: number, all: boolean) => {
-    return { ok: true, messages: await projectConversationHistory(projectPath, sessionId, count ?? 20, !!all) };
-  });
   ipcMain.handle(PROJECT_IPC.REPO_INFO, (_e, projectPath: string) => repoInfo(projectPath));
   ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, (_e, projectPath: string) => listContextFiles(projectPath));
   ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, (_e, projectPath: string, absolutePath: string) =>

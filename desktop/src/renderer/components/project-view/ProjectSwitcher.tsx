@@ -190,7 +190,7 @@ export function ProjectSwitcher({
                   {/* Name + path. */}
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
-                      <span className="text-[13.5px] font-medium text-fg truncate">
+                      <span className="text-sm font-medium text-fg truncate">
                         {shown}
                       </span>
                     </span>
@@ -240,7 +240,7 @@ export function ProjectSwitcher({
                     const dot = syncDotFor(p.path, syncStatus ?? null);
                     return dot ? (
                       <span
-                        className={`w-2 h-2 rounded-full shrink-0 ml-1 ${dot.color === 'green' ? 'bg-[#44A05C]' : dot.color === 'red' ? 'bg-[#DD4444]' : 'bg-fg-faint'}`}
+                        className={`w-2 h-2 rounded-full shrink-0 ml-1 ${dot.color === 'green' ? 'bg-green-400' : dot.color === 'red' ? 'bg-red-400' : 'bg-fg-faint'}`}
                         title={dot.label}
                         aria-label={dot.label}
                       />

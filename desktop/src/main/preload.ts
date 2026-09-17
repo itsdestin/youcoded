@@ -1182,7 +1182,8 @@ contextBridge.exposeInMainWorld('claude', {
   },
   // Multi-window detach: drag a session pill to a new OS window, re-dock, etc.
   // Main owns a WindowRegistry (sessionId → windowId); per-session events route
-  // only to the owning window. See docs/superpowers/specs/2026-04-12-drag-session-detach-window-design.md.
+  // only to the owning window. Design record: the workspace's
+  // docs/archive/plans/2026-04-12-drag-session-detach-window.md (youcoded-dev).
   detach: {
     // Subscriptions — main pushes these
     onDirectoryUpdated: (cb: (dir: any) => void) => {
@@ -1882,8 +1883,6 @@ contextBridge.exposeInMainWorld('claude', {
   project: {
     listConversations: (projectPath: string) =>
       ipcRenderer.invoke('project:list-conversations', projectPath),
-    conversationHistory: (projectPath: string, sessionId: string, count: number, all: boolean) =>
-      ipcRenderer.invoke('project:conversation-history', projectPath, sessionId, count, all),
     repoInfo: (projectPath: string) =>
       ipcRenderer.invoke('project:repo-info', projectPath),
     listContext: (projectPath: string) =>
@@ -1894,10 +1893,10 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('project:write-context-file', projectPath, absolutePath, content),
   },
   // Session references: turn the short ids a chatsearch result printed back
-  // into conversations, and read a bounded slice of one for the preview pane.
+  // into conversations, and read one page of one for the preview pane.
   chatsearch: {
     resolve: (shortIds: string[]) => ipcRenderer.invoke('chatsearch:resolve', shortIds),
-    read: (req: { provider: string; id: string; tail: number; before?: number; projectSlug?: string }) =>
+    read: (req: { provider: string; id: string; before?: number; projectSlug?: string }) =>
       ipcRenderer.invoke('chatsearch:read', req),
   },
 });

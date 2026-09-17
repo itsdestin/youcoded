@@ -356,6 +356,13 @@ export class RemoteServer {
       /** Serve the built copy of the app when one exists (see choosePhonePageSource). main.ts
        *  passes app.isPackaged or run-dev.sh --phone-build; the default keeps the old behaviour. */
       serveBuiltPage?: boolean;
+      /** The same rewrite the desktop's own session:create applies before the session
+       *  manager sees a cwd — today the "No folder" sentinel → the app-owned empty folder.
+       *  WHY (2026-09-16, remote-access.md): the phone's session:create went straight to
+       *  createSession, so a "No folder" conversation started from a phone opened in the
+       *  home folder instead of the private place the desktop gives it. main.ts wires it;
+       *  tests that pass nothing get the payload untouched. */
+      prepareCreate?: <T extends { cwd?: string }>(payload: T) => T;
     },
   ) {
     this.devices = new RemoteDeviceStore();
@@ -365,11 +372,13 @@ export class RemoteServer {
     this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
     this.onAppearanceBroadcast = opts?.onAppearanceBroadcast ?? (() => {});
     this.listCommands = opts?.listCommands ?? null;
+    this.prepareCreate = opts?.prepareCreate ?? ((p) => p);
     this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
     this.serveBuiltPage = opts?.serveBuiltPage ?? true;
   }
   private serveBuiltPage: boolean;
   private listCommands: (() => Promise<unknown[]>) | null;
+  private prepareCreate: <T extends { cwd?: string }>(payload: T) => T;
   private listThemes: () => string[];
 
   /** One line per connection event in the host's log. WHY (2026-09-11 phone pass): an empty
@@ -461,12 +470,21 @@ export class RemoteServer {
   setSessionMetaWiring(w: {
     resolve: (sessionId: string) => string;
     canWrite: (sessionId: string, resolved: string) => boolean;
+    /** Refresh the DESKTOP window that owns the session (ipc-handlers backs it
+     *  with sendForSession + SESSION_META_CHANGED). WHY (2026-09-16, sync.md):
+     *  a tag or note set from a phone reached every OTHER remote client through
+     *  the broadcast below, but the open desktop window kept the old value until
+     *  some unrelated event refreshed it — this server has no path to a window
+     *  of its own, so the wiring has to carry one. Optional so older wirings
+     *  and tests keep working. */
+    notify?: (sessionId: string, payload: Record<string, unknown>) => void;
   }): void {
     this.sessionMetaWiring = w;
   }
   private sessionMetaWiring?: {
     resolve: (sessionId: string) => string;
     canWrite: (sessionId: string, resolved: string) => boolean;
+    notify?: (sessionId: string, payload: Record<string, unknown>) => void;
   };
 
   /** Session naming, injected from ipc-handlers so a remote client runs the
@@ -982,25 +1000,23 @@ export class RemoteServer {
    *  broadcast() call in ipc-handlers.ts, never through this class's own
    *  onHookEvent (that listener is wired only to hookRelay.on('hook-event',
    *  ...) — see the call site's own comment for the gap this closes: without
-   *  it, a phone reconnecting while a native permission ask was HELD got
-   *  nothing, because PermissionHeld is one-shot and the reannounce heartbeat
-   *  stops once an ask is held). Reusing hookBuffers — rather than a parallel
-   *  native-only map — means the existing replay loop in restoreClient()
-   *  picks these up for free, in the same push order (request, then held). */
+   *  it, a phone reconnecting while a native permission ask was open saw no
+   *  card until the next heartbeat). Reusing hookBuffers — rather than a
+   *  parallel native-only map — means the existing replay loop in
+   *  restoreClient() picks these up for free, in push order. */
   bufferHookEvent(event: HookEvent): void {
     const sessionId = event.sessionId || '';
     // Fix pass (2026-08-16 review finding, "the catch-up replays asks that
     // were already answered"): PermissionBroker's one removal chokepoint
     // (permission-broker.ts's removeEntry) now emits this the moment an ask
-    // stops being open — respond() in time, respond() late, or a cancel.
+    // stops being open — respond() or a cancel.
     // Before this, a PermissionRequest sat in the buffer FOREVER once
     // answered (nothing ever removed it, and the buffer holds 10,000
     // events), so a reconnecting phone was replayed a dead question with
     // live-looking Yes/No buttons; tapping either returned false and the
     // card showed a "socket closed" error that was simply untrue — no
     // socket had closed. This is a purge signal, not a replayable card: it
-    // drops the matching PermissionRequest/PermissionHeld pair (same
-    // _requestId) instead of being appended itself. hook-dispatcher.ts's
+    // drops every matching PermissionRequest (same _requestId) instead of being appended itself. hook-dispatcher.ts's
     // switch defaults to null on this unknown type, so even if a live client
     // saw it broadcast, it is a harmless no-op — nothing here required a
     // renderer change.
@@ -1642,7 +1658,7 @@ export class RemoteServer {
         if (!reconnect && hookPass !== undefined && i < hookPass && !closes) continue;
         const requestId = msg.payload?.payload?._requestId;
         if (msg.payload?.type === 'PermissionRequest' && typeof requestId === 'string' && replayedAsks.has(requestId)) continue;
-        const asks = msg.payload?.type === 'PermissionRequest' || msg.payload?.type === 'PermissionHeld';
+        const asks = msg.payload?.type === 'PermissionRequest';
         if (asks && typeof requestId === 'string' && (resolvedAt.get(requestId) ?? -1) > i) continue;
       }
       if (!(await this.sendGated(client, msg))) return false;
@@ -1728,7 +1744,7 @@ export class RemoteServer {
           this.respond(client.ws, type, id, { ok: false, error: 'A terminal session can only be opened from the app itself.' });
           break;
         }
-        const info = this.sessionManager.createSession(payload);
+        const info = this.sessionManager.createSession(this.prepareCreate(payload));
         this.respond(client.ws, type, id, info);
         // session:created broadcast is handled by the onSessionCreated event listener
         break;
@@ -2202,6 +2218,8 @@ export class RemoteServer {
         // to the originating client is a harmless refetch (consumers ignore
         // the payload and refetch meta).
         this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, flag: tagFlagKey(tagId), value: !!payload?.value } });
+        // ...and the desktop window that owns it — see setSessionMetaWiring's notify.
+        this.sessionMetaWiring?.notify?.(resolved, { flag: tagFlagKey(tagId), value: !!payload?.value });
         this.respond(client.ws, type, id, { ok: true });
         break;
       }
@@ -2281,6 +2299,8 @@ export class RemoteServer {
         emitConversationMetaChanged();
         // Same parity gap as session:set-tag above — see that comment.
         this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, note: text } });
+        // ...and the desktop window that owns it — see setSessionMetaWiring's notify.
+        this.sessionMetaWiring?.notify?.(resolved, { note: text });
         this.respond(client.ws, type, id, { ok: true });
         break;
       }

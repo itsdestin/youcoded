@@ -16,7 +16,10 @@ const CONFIG = fs.readFileSync(path.join(__dirname, '..', 'electron-builder.yml'
 
 /** `key:` inside a top-level `section:` of the YAML, unquoted. Comment lines are skipped. */
 function sectionValue(section: string, key: string): string | null {
-  const lines = CONFIG.split('\n');
+  // WHY the \r strip: a Windows checkout converts this file to CRLF (root .gitattributes
+  // said `text=auto` until 2026-09-16), so `split('\n')` left "nsis:\r" in every element and
+  // the exact-match indexOf below found nothing — every case here failed on the Windows CI leg.
+  const lines = CONFIG.replace(/\r\n?/g, '\n').split('\n');
   const start = lines.indexOf(`${section}:`);
   if (start < 0) return null;
   for (const line of lines.slice(start + 1)) {

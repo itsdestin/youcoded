@@ -203,7 +203,7 @@ function renderPublishButton(args: {
         target="_blank"
         rel="noopener noreferrer"
         onClick={(e) => { e.preventDefault(); openExternal(state.marketplaceUrl); }}
-        className="block w-full py-2.5 text-xs font-medium rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 text-center hover:bg-emerald-500/20 transition-colors"
+        className="block w-full py-2.5 text-xs font-medium rounded-lg bg-green-400/10 border border-green-400/30 text-green-400 text-center hover:bg-green-400/20 transition-colors"
       >
         ✓ Published ↗
       </a>

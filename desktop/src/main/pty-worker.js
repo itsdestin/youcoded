@@ -117,31 +117,38 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // path character would send two broken halves and the child would render
 // garbage. Backing off by one keeps the pair whole; every chunk stays <=
 // CHUNK_SIZE units, which is what the ConPTY thresholds are measured in.
-function safeEnd(body, end) {
-  if (end <= 0 || end >= body.length) return end;
-  const code = body.charCodeAt(end - 1);
-  const isHighSurrogate = code >= 0xd800 && code <= 0xdbff;
-  return isHighSurrogate ? end - 1 : end;
-}
+// WHY bytes, not `String.length` (2026-09-16, claude-code-integration.md): every
+// threshold in this file is a count of BYTES on the pipe — that is what the
+// kernel and Claude Code's paste classifier see — but the comparisons used
+// `.length`, which counts UTF-16 code units. A 30-character Chinese or emoji
+// message is 90–120 bytes, so it sailed through the "atomic" path at 56
+// characters, crossed the 64-byte paste threshold, and its `\r` arrived as a
+// literal newline instead of a submit. Same fix on Android (PtyBridge.kt).
+function byteLen(s) { return Buffer.byteLength(s, 'utf8'); }
 
 async function writeChunked(body) {
-  if (body.length <= CHUNK_SIZE) {
+  if (byteLen(body) <= CHUNK_SIZE) {
     if (!ptyProcess) return;
     ptyProcess.write(body);
     trace('CHUNK', `k=1/1 len=${body.length}`);
     return;
   }
-  const total = Math.ceil(body.length / CHUNK_SIZE);
-  let offset = 0;
-  let chunkIdx = 0;
-  while (offset < body.length) {
+  // Cut on CODE POINT boundaries at most CHUNK_SIZE BYTES apiece: `for..of`
+  // walks code points, so a surrogate pair is never split, and the byte count
+  // is what keeps each chunk under ConPTY's truncation ceiling and under the
+  // paste threshold even when a chunk is read alone.
+  const chunks = [];
+  let cur = '';
+  for (const ch of body) {
+    if (cur && byteLen(cur) + byteLen(ch) > CHUNK_SIZE) { chunks.push(cur); cur = ''; }
+    cur += ch;
+  }
+  if (cur) chunks.push(cur);
+  for (let i = 0; i < chunks.length; i++) {
     if (!ptyProcess) return;
-    const end = safeEnd(body, Math.min(offset + CHUNK_SIZE, body.length));
-    ptyProcess.write(body.slice(offset, end));
-    chunkIdx++;
-    trace('CHUNK', `k=${chunkIdx}/${total} len=${end - offset}`);
-    offset = end;
-    if (offset < body.length) await sleep(CHUNK_DELAY_MS);
+    ptyProcess.write(chunks[i]);
+    trace('CHUNK', `k=${i + 1}/${chunks.length} len=${chunks[i].length}`);
+    if (i < chunks.length - 1) await sleep(CHUNK_DELAY_MS);
   }
 }
 
@@ -162,11 +169,18 @@ function waitForEcho(needle, timeoutMs) {
       resolve(ok);
     };
     const disposable = ptyProcess.onData((data) => {
-      buf += stripAnsi(typeof data === 'string' ? data : String(data));
+      // WHY the RAW bytes are kept and stripped on the whole (2026-09-16): the
+      // escape sequences Claude Code paints its input bar with arrive split
+      // across PTY chunks whenever the kernel read lands mid-sequence.
+      // Stripping each chunk on its own left the two halves of a broken
+      // sequence in the buffer as plain text — sitting between the needle's
+      // characters — so a valid echo went unrecognised, the 12 s timeout ran
+      // out, and the message's Enter was suppressed as if a menu had focus.
+      buf += typeof data === 'string' ? data : String(data);
       // Bound buffer growth — only the recent tail can possibly contain
       // the needle, since the body is written contiguously.
       if (buf.length > 50000) buf = buf.slice(-50000);
-      if (buf.includes(needle)) finish(true);
+      if (stripAnsi(buf).includes(needle)) finish(true);
     });
     const timer = setTimeout(() => finish(false), timeoutMs);
   });
@@ -198,9 +212,9 @@ async function handleInput(text) {
   // Path 2: Atomic submit — body+\r fits below the paste threshold. Single
   // write; \r unambiguously a keystroke regardless of how the kernel reads
   // it. This is the common case for short chat messages.
-  if (text.length <= SAFE_ATOMIC_LEN) {
+  if (byteLen(text) <= SAFE_ATOMIC_LEN) {   // bytes — see byteLen's WHY
     ptyProcess.write(text);
-    trace('ATOMIC', `len=${text.length}`);
+    trace('ATOMIC', `len=${text.length} bytes=${byteLen(text)}`);
     return;
   }
 

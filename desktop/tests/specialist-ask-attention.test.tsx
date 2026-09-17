@@ -90,14 +90,6 @@ describe('a specialist waiting on the user lights the conversation dot', () => {
     expect(result.current.attention.get(S)?.status).not.toBe('red');
   });
 
-  it('a held ask (the specialist carried on) is still answerable, so the dot stays red', () => {
-    const { result } = renderHook(useHarness, { wrapper: Providers });
-    act(() => seedBackgroundTask(result.current.dispatch));
-    act(() => result.current.dispatch(ask('req-1')));
-    act(() => result.current.dispatch({ type: 'PERMISSION_HELD', sessionId: S, requestId: 'req-1' } as ChatAction));
-    expect(result.current.attention.get(S)?.status).toBe('red');
-  });
-
   it('a second ask while the first is open keeps the SAME answer (no second alert)', () => {
     const { result } = renderHook(useHarness, { wrapper: Providers });
     act(() => seedBackgroundTask(result.current.dispatch));

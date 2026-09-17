@@ -360,6 +360,14 @@ export class EngineManager extends EventEmitter {
   // about repeated saves to ONE model, and the map's first-write-wins does that.
   private pendingModelApplies = new Map<string, number>();
   private modelApplyWaiter: Promise<void> | null = null;
+  // WHY a one-way flag: stopAll() is app-quit teardown. A waiter that was
+  // polling for a quiet engine kept running past it, and after its deadline
+  // re-created ~/.youcoded/engine/ and could respawn llama-server — in tests,
+  // into a temp root being removed (ENOTEMPTY, CI 2026-09-07/09-16).
+  private stopped = false;
+  // Wakes every waiter mid-poll, so stopAll() returns at once instead of after
+  // up to one poll interval (1 s in production) of quit delay.
+  private readonly pollWakers = new Set<() => void>();
   /** The supervisor state we last acted on, so "the engine just came up" can be
    *  told from "the engine is still up" (see notePresetInForce). */
   private lastSupervisorState: string | null = null;
@@ -753,6 +761,7 @@ export class EngineManager extends EventEmitter {
    *  behind a stream that never ends would wait ten minutes AFTER the first one
    *  already waited ten — the design says ten minutes regardless. */
   private requestApply(kind: 'reload' | 'restart'): void {
+    if (this.stopped) return;
     if (kind === 'reload') this.needsReload = true; else this.needsRestart = true;
     this.configApplyError = null;
     // An existing waiter keeps ITS deadline: that one is the oldest pending
@@ -769,9 +778,12 @@ export class EngineManager extends EventEmitter {
    *  wait began, in one pass. */
   private async drainApplies(): Promise<void> {
     const pollMs = this.opts.configApplyPollMs ?? CONFIG_APPLY_POLL_MS;
-    while (this.supervisor?.busy() && Date.now() < this.applyDeadline) {
-      await new Promise((resolve) => { const t = setTimeout(resolve, pollMs); t.unref?.(); });
+    while (!this.stopped && this.supervisor?.busy() && Date.now() < this.applyDeadline) {
+      await this.pollDelay(pollMs);
     }
+    // Quitting: abandon, don't apply. The change is already saved in config and
+    // the next launch's engine reads it on its way up.
+    if (this.stopped) { this.needsReload = false; this.needsRestart = false; return; }
     // Taken together, and cleared BEFORE the work: a change made while the
     // engine is being restarted is a new change and gets its own waiter.
     const reload = this.needsReload;
@@ -935,6 +947,7 @@ export class EngineManager extends EventEmitter {
    *  the drain loop's last check and this callback: a save that landed in there
    *  would otherwise sit pending with nobody watching for it. */
   private startModelApplyWaiter(): void {
+    if (this.stopped) return;
     if (this.modelApplyWaiter || this.pendingModelApplies.size === 0) return;
     this.modelApplyWaiter = this.drainModelApplies().finally(() => {
       this.modelApplyWaiter = null;
@@ -949,13 +962,13 @@ export class EngineManager extends EventEmitter {
    *  releases its hold cannot park a saved setting for the rest of the session. */
   private async drainModelApplies(): Promise<void> {
     const pollMs = this.opts.configApplyPollMs ?? CONFIG_APPLY_POLL_MS;
-    while (this.pendingModelApplies.size > 0) {
+    while (!this.stopped && this.pendingModelApplies.size > 0) {
       const now = Date.now();
       const ready = [...this.pendingModelApplies]
         .filter(([id, deadline]) => now >= deadline || this.inFlightForModel(id) === 0)
         .map(([id]) => id);
       if (ready.length === 0) {
-        await new Promise((resolve) => { const t = setTimeout(resolve, pollMs); t.unref?.(); });
+        await this.pollDelay(pollMs);
         continue;
       }
       // Taken out of the set BEFORE the work, with no await in between: a save
@@ -970,6 +983,19 @@ export class EngineManager extends EventEmitter {
         this.configApplyError = err?.message ? String(err.message) : String(err);
       }
     }
+    // Quitting: the flags stay `pendingApply: true` in config, which is what the
+    // next launch's notePresetInForce clears once its engine has read them.
+    if (this.stopped) this.pendingModelApplies.clear();
+  }
+
+  /** One poll interval for the apply waiters — cut short by stopAll(). */
+  private pollDelay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const wake = () => { clearTimeout(t); this.pollWakers.delete(wake); resolve(); };
+      const t = setTimeout(wake, ms);
+      t.unref?.();
+      this.pollWakers.add(wake);
+    });
   }
 
   /** Put these models' saved settings into force: clear their pending flags so
@@ -1992,8 +2018,15 @@ export class EngineManager extends EventEmitter {
     this.emit('status-changed');
   }
 
-  /** App-quit teardown — registered next to nativeHost.destroyAll(). */
+  /** App-quit teardown — registered next to nativeHost.destroyAll(). Resolves
+   *  only after every pending apply has been abandoned, so nothing writes or
+   *  spawns after it (see `stopped`). */
   async stopAll(): Promise<void> {
+    this.stopped = true;
+    for (const wake of [...this.pollWakers]) wake();
+    // Awaiting the waiters is what makes "nothing after stopAll" true rather
+    // than likely: one mid-apply finishes that apply, then sees the flag.
+    await Promise.all([this.applyWaiter, this.modelApplyWaiter].filter(Boolean));
     if (this.supervisor) await this.supervisor.stop();
   }
 }

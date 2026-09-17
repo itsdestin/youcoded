@@ -19,6 +19,11 @@ import { ENV_SENTINEL, normalizeNewlines, stripAnsi, stripSentinelLines } from '
 export const MAX_EXPLICIT_RUNNING = 5;
 /** Lines kept main-side per run — enough for the 50-line finished notice with margin. */
 export const RING_LINES = 200;
+/** After a child's `exit`, how long to wait for its stdio `close` before settling
+ *  the run anyway. WHY: `exit` fires before the last stdout chunk is delivered, so
+ *  settling on it lost the final line of output (macOS CI, 2026-09-16). Settling on
+ *  `close` alone would hang on `sleep 100 &` — a grandchild keeps the pipe open. */
+export const EXIT_DRAIN_GRACE_MS = 200;
 /** Lines sent to the card per 'change' event (review G: the wire is a phone on cellular). */
 export const WIRE_TAIL_LINES = 40;
 /** Lines quoted in the finished notice (spec §4.4). */
@@ -29,6 +34,15 @@ export const TERM_GRACE_MS = 2_000;
 export const KILL_WAIT_MS = 5_000;
 /** ≤4 'change' events per second per run (spec §5.1). */
 export const CHANGE_DEBOUNCE_MS = 250;
+/** How long a run may go before the model is told it is STILL running — once
+ *  at each mark, as a plain notice at the next idle boundary (the same lane a
+ *  finished notice rides). WHY (Destin, 2026-09-07, hit live): a model that
+ *  started a build in the background and heard nothing polled BashOutput 150
+ *  times on a hung command. The finished notice cannot help while nothing
+ *  finishes; this is the proactive half. Two marks, not a repeating timer:
+ *  a genuinely long job (a 40-minute test suite) must not nag every five
+ *  minutes, and a hung one is obvious by the second mark. */
+export const LONG_RUN_NOTICE_MS: readonly number[] = [5 * 60_000, 15 * 60_000];
 /** Most bytes one read() returns. A 20-minute build's log runs to hundreds of
  *  MB; reading all of it into the main process to slice off the tail is how you
  *  wedge the app (2026-08-28 review). 1 MB is far more than the 200 lines
@@ -77,6 +91,8 @@ export interface ShellRun {
   logWaiters: Array<() => void>;
   logDone: Promise<void> | null;
   changeTimer: NodeJS.Timeout | null;
+  /** The LONG_RUN_NOTICE_MS timers still pending; cleared on exit. */
+  longRunTimers: NodeJS.Timeout[];
 }
 
 export interface ShellStartSpec {
@@ -204,10 +220,24 @@ export function formatFinishedNotice(
   return `${head}\n$ ${run.command}\n${tail.trim() || '(no output)'}\nFull log: ${run.logPath}`;
 }
 
+/** The still-running notice: same header shape as the finished one so the
+ *  model recognises the family, then what to do — and what NOT to do. */
+export function formatLongRunningNotice(run: Pick<ShellRun, 'shellId' | 'command'>, elapsedMs: number): string {
+  return `[Background command ${run.shellId} has been running for ${formatElapsed(elapsedMs)}]\n$ ${run.command}\n`
+    + 'If that is within expectations, ignore this message. If it may be stuck, read its latest output with BashOutput '
+    + 'or stop it with KillShell. You will still be told when it finishes; do not poll for it.';
+}
+
 export class ShellRegistry extends EventEmitter {
   private runs = new Map<string, ShellRun>();
+  private readonly longRunNoticeMs: readonly number[];
 
-  constructor(private readonly sessionId: string) { super(); }
+  /** `longRunNoticeMs` is a test seam — production callers pass nothing and
+   *  get LONG_RUN_NOTICE_MS. */
+  constructor(private readonly sessionId: string, opts: { longRunNoticeMs?: readonly number[] } = {}) {
+    super();
+    this.longRunNoticeMs = opts.longRunNoticeMs ?? LONG_RUN_NOTICE_MS;
+  }
 
   get(shellId: string): ShellRun | undefined { return this.runs.get(shellId); }
 
@@ -278,7 +308,21 @@ export class ShellRegistry extends EventEmitter {
       logPath, logStream, tail: [], partial: '', lastReadBytes: 0, captureEnv: spec.captureEnv,
       startedAt: spec.startedAt, status: 'running', detached: flags.detached, explicit: flags.explicit,
       reported: false, exited, resolveExited, logPending: 0, logWaiters: [], logDone: null, changeTimer: null,
+      longRunTimers: [],
     };
+    // Still-running marks (LONG_RUN_NOTICE_MS): measured from the run's own
+    // startedAt, so an adopted hand-off that already ran two minutes in the
+    // foreground reaches its first mark three minutes from now, not five.
+    // unref'd — a pending mark must never hold the process open at quit.
+    for (const ms of this.longRunNoticeMs) {
+      const delay = Math.max(0, ms - (Date.now() - spec.startedAt));
+      const t = setTimeout(() => {
+        if (run.status !== 'running') return;
+        this.emit('long-running', run, Date.now() - run.startedAt);
+      }, delay);
+      t.unref();
+      run.longRunTimers.push(t);
+    }
     // stripAnsi, because bash.ts keeps headBuf RAW and strips only at write
     // time (its own spill does `stripAnsi(headBuf)`). Without this the seeded
     // half of a handed-off log carries colour codes while everything after it
@@ -292,7 +336,22 @@ export class ShellRegistry extends EventEmitter {
       this.ingest(run, `Failed to start shell: ${err.message}\n`, true);
       this.onExit(run, null, null);
     });
-    spec.child.on('exit', (code, signal) => this.onExit(run, code, signal));
+    spec.child.on('exit', (code, signal) => {
+      // WHY not onExit here directly: see EXIT_DRAIN_GRACE_MS. `close` arrives after
+      // the pipes drain; the timer covers a grandchild that never lets them close.
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        this.onExit(run, code, signal);
+      };
+      if (!spec.child.stdout && !spec.child.stderr) { settle(); return; } // nothing to drain
+      spec.child.once('close', settle);
+      timer = setTimeout(settle, EXIT_DRAIN_GRACE_MS);
+      timer.unref();
+    });
     // Adopted after it already died (a race with the time limit) — settle now.
     if (spec.child.exitCode !== null || spec.child.signalCode !== null) this.onExit(run, spec.child.exitCode, spec.child.signalCode);
     else this.emitChangeNow(run);
@@ -338,6 +397,7 @@ export class ShellRegistry extends EventEmitter {
   private onExit(run: ShellRun, code: number | null, signal: NodeJS.Signals | null): void {
     if (run.status !== 'running') return;
     run.endedAt = Date.now();
+    for (const t of run.longRunTimers.splice(0)) clearTimeout(t);
     if (run.stopReason) {
       run.status = 'stopped';
     } else {

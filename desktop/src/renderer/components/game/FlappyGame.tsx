@@ -445,12 +445,23 @@ export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
   // it cannot fire while the player is typing in the chat — with the field
   // unfocused this component listens to nothing at all. Space AND Enter both
   // flap, which is the single-non-pointer-input requirement in §10.
+  // Whether the flap key is currently down is OUR state, not the browser's.
+  // WHY (2026-09-16, games.md): the first version asked `e.repeat`, and Electron
+  // on Linux does not reliably set it — the same gamble the message box lost
+  // with its space bar (fixed there 2026-09-05 by tracking the key itself). A
+  // missing flag turned a held key into a machine-gun. Now every keydown while
+  // the key is known to be down is swallowed whatever the event says, and the
+  // key is released by keyup or by the playfield losing focus.
+  const flapKeyHeld = useRef(false);
+  const isFlapKey = (e: React.KeyboardEvent<HTMLDivElement>) =>
+    e.key === ' ' || e.key === 'Spacebar' || e.key === 'Enter';
   const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-    if (e.key !== ' ' && e.key !== 'Spacebar' && e.key !== 'Enter') return;
+    if (!isFlapKey(e)) return;
     // Holding the key down must not machine-gun the bird into the ceiling —
     // one press is one flap, the same as every other game in this genre.
-    if (e.repeat) { e.preventDefault(); return; }
+    if (flapKeyHeld.current) { e.preventDefault(); return; }
+    flapKeyHeld.current = true;
     // Space would otherwise scroll the pane this playfield sits in.
     e.preventDefault();
     if (sim.current.status === 'dead') {
@@ -459,6 +470,9 @@ export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
     }
     doFlap();
   }, [doFlap, restart]);
+  const onKeyUp = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (isFlapKey(e)) flapKeyHeld.current = false;
+  }, []);
 
   // Focus on open so the keyboard works without hunting for a click target —
   // but only if the player was not mid-sentence somewhere. `isTypingTarget` is
@@ -493,8 +507,9 @@ export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
           // while this field holds focus, Space belongs to the game.
           data-game-keys="space"
           onKeyDown={onKeyDown}
+          onKeyUp={onKeyUp}
           onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
+          onBlur={() => { setFocused(false); flapKeyHeld.current = false; }}
           onPointerDown={(e) => {
             e.preventDefault(); // keeps the click from stealing focus away again
             fieldRef.current?.focus({ preventScroll: true });

@@ -248,6 +248,10 @@ export interface ToolServices {
  *  tool call did it, and the line range it showed. */
 export interface ServedRead {
   mtimeMs: number;
+  /** The content fingerprint recorded for the read gate at that Read, so a
+   *  dedupe hit (mtime unchanged) can re-stamp the registry without reading
+   *  the file again (2026-09-16). */
+  fingerprint: string;
   callIndex: number;
   from: number;
   to: number;
@@ -267,8 +271,10 @@ export interface ToolContext {
    *  Absent for every non-driver test construction (harness-tools-core.test.ts
    *  and friends never set it), which is fine: those never drive the Task tool. */
   toolCallId?: string;
-  /** read-before-edit registry: canonical path → mtimeMs at last Read. RESETS on resume (spec §2.5). */
-  readRegistry: Map<string, number>;
+  /** read-before-edit registry: canonical path → content fingerprint
+   *  (tools/file-fingerprint.ts) at last Read/Write/Edit. Was an mtime until
+   *  2026-09-16 — see that file for why bytes, not clocks. RESETS on resume (spec §2.5). */
+  readRegistry: Map<string, string>;
   /** G-11 (2026-08-26 tools investigation) — re-read dedupe. Key is
    *  `${canonical}|${offset}|${limit}`; a second Read of the SAME slice with an
    *  unchanged mtime gets a short "unchanged since your earlier Read" notice

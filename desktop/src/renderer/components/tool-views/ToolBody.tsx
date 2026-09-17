@@ -201,9 +201,9 @@ function ToolFilePreview({ fp, sessionId, chips }: { fp: string; sessionId?: str
 // there's no hardcoded blue token — translucent blue on pink goes muddy.
 function Chip({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'add' | 'remove' | 'warn' | 'info' }) {
   const toneClass =
-    tone === 'add' ? 'bg-green-600/15 text-green-400 border-green-600/40'
-    : tone === 'remove' ? 'bg-red-600/15 text-red-400 border-red-600/40'
-    : tone === 'warn' ? 'bg-amber-600/15 text-amber-700 border-amber-600/40'
+    tone === 'add' ? 'bg-green-400/15 text-green-400 border-green-400/40'
+    : tone === 'remove' ? 'bg-red-400/15 text-red-400 border-red-400/40'
+    : tone === 'warn' ? 'bg-amber-700/15 text-amber-700 border-amber-700/40'
     : tone === 'info' ? 'bg-inset text-fg-2 border-edge'
     : 'bg-inset text-fg-muted border-edge';
   return (
@@ -295,7 +295,7 @@ function WriteView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
         }
       />
       {content ? (
-        <div className="rounded-sm overflow-hidden border border-green-600/30 bg-green-600/10">
+        <div className="rounded-sm overflow-hidden border border-green-400/30 bg-green-400/10">
           <CollapsibleBlock maxLines={20}>{content}</CollapsibleBlock>
         </div>
       ) : (
@@ -794,7 +794,8 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
     prevSettled.current = settled;
   }, [settled, userToggled]);
   // Specialists 1c: a helper's ask lives in Activity — open it when one
-  // arrives, even on a settled card (a held ask outlives the run). Not when
+  // arrives, even on a card that looks settled (e.g. a resumed helper asking
+  // under an earlier card). Not when
   // the host shows the ask itself (suppressAsk): then Activity is just history.
   const nestedAsk = hasNestedAsk(tool);
   useEffect(() => { if (nestedAsk && !suppressAsk) setShowTimeline(true); }, [nestedAsk, suppressAsk]);
@@ -843,10 +844,7 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
             ? acc('activity')
             : { open: showTimeline, onToggle: () => { setShowTimeline(s => !s); setUserToggled(true); } })}
         >
-          {/* Task 12: `run` (specialistRun) is already resolved above for this
-              card — its status is what lets a nested held ask tell a finished
-              helper apart from a running one. */}
-          <SubagentTimeline segments={segments} sessionId={sessionId} specialistName={firstName} suppressAsk={suppressAsk} runStatus={run?.status} />
+          <SubagentTimeline segments={segments} sessionId={sessionId} specialistName={firstName} suppressAsk={suppressAsk} />
         </AgentSection>
       )}
       {children}

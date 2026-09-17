@@ -128,7 +128,7 @@ function makeHost(): NativeSessionHost {
     // ChatGPT sign-in has no per-token price, so its plans have a token limit only.
     async (binding: { providerId: string }) => (binding.providerId === 'chatgpt' ? null : { in: 1, out: 2 }), undefined, undefined,
     { modelCatalog: async () => CATALOG },
-    undefined, undefined, home, undefined, undefined, undefined, {},
+    undefined, undefined, home, undefined, undefined, {},
     { settleDeadlineMs: 60, heartbeatMs: 5_000, slotPollMs: 5 },
   );
   h.on('transcript-event', (e) => events.push(e));

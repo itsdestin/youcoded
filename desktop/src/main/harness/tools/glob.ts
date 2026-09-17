@@ -84,6 +84,10 @@ function fileGlobToRegex(glob: string): RegExp {
         // escape behavior rather than guessing at a meaning.
         rx += '\\{';
       }
+    // WHY the disable: this is a set of regex metacharacters, not a template.
+    // oxlint's no-template-curly-in-string matches the empty `${}` in it;
+    // ESLint's version needs text between the braces and never did.
+    // eslint-disable-next-line no-template-curly-in-string
     } else if ('.+^${}()|[]\\'.includes(c)) {
       rx += '\\' + c;
     } else {

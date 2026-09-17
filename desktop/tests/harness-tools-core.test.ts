@@ -297,19 +297,36 @@ describe('Edit', () => {
     expect(r.text).toMatch(/read .* first/i);
   });
 
-  it('rejects an edit when the file changed since Read (mtime mismatch)', async () => {
+  // 2026-09-16: the gate compares CONTENTS, not modification times (closing
+  // docs/active/investigations/2026-09-01-write-edit-mtime-staleness.md). The
+  // two cases below are the two ways the old mtime check lied.
+  it('rejects an edit when the file’s contents changed since Read, even with the SAME mtime', async () => {
     const p = path.join(dir, 'a.txt');
     fs.writeFileSync(p, 'hello\n');
     await ReadTool.execute({ file_path: 'a.txt' }, ctx);
-    // Force a distinctly different mtime (+2s) — coarse fs granularity safe.
+    // A real outside edit inside one clock tick: rewrite the bytes, then put
+    // the ORIGINAL timestamp back — an mtime check would wave this through.
+    const { atime, mtime } = fs.statSync(p);
+    fs.writeFileSync(p, 'hello world\n');
+    fs.utimesSync(p, atime, mtime);
+    const r = await EditTool.execute({ file_path: 'a.txt', old_string: 'hello', new_string: 'bye' }, ctx);
+    expect(r.isError).toBe(true);
+    // Must name the mechanism, not just "changed" — the gate's invisibility is
+    // what four round-8 models misdiagnosed.
+    expect(r.text).toMatch(/changed on disk since you last Read or Wrote it/i);
+    expect(r.text).toMatch(/contents no longer match/i);
+    expect(fs.readFileSync(p, 'utf8')).toBe('hello world\n');
+  });
+
+  it('allows an edit after a touch or checkout that changed no bytes (mtime moved, contents did not)', async () => {
+    const p = path.join(dir, 'a.txt');
+    fs.writeFileSync(p, 'hello\n');
+    await ReadTool.execute({ file_path: 'a.txt' }, ctx);
     const future = new Date(Date.now() + 2000);
     fs.utimesSync(p, future, future);
     const r = await EditTool.execute({ file_path: 'a.txt', old_string: 'hello', new_string: 'bye' }, ctx);
-    expect(r.isError).toBe(true);
-    // Must name the mtime as the mechanism, not just "changed" — the gate's
-    // invisibility is what four round-8 models misdiagnosed.
-    expect(r.text).toMatch(/changed on disk since you last Read or Wrote it/i);
-    expect(r.text).toMatch(/modification time/i);
+    expect(r.isError).toBeFalsy();
+    expect(fs.readFileSync(p, 'utf8')).toBe('bye\n');
   });
 
   it('non-unique old_string message includes the count', async () => {
@@ -436,28 +453,38 @@ describe('Write', () => {
 
   // Regression pin (2026-08-10 review, Claim 2 -- THE HEADLINE ITEM): Write's
   // overwrite guard only checked registry PRESENCE ("was this path ever Read
-  // this session"), never freshness -- unlike Edit, which compares the recorded
-  // mtime against the current on-disk mtime. Opus 5's transcript demonstrated
-  // it: a Read at tool-call 11, an unrelated Write at tool-call 38 (27 calls
-  // later, file changed on disk in between) still succeeded with "no
-  // complaint". Mirrors Edit's existing mtime check (see the WHY comment in
-  // write.ts for why mtime over a content hash).
-  it('rejects overwriting a file that changed on disk since it was read (mtime mismatch, mirrors Edit)', async () => {
+  // this session"), never freshness -- unlike Edit. Opus 5's transcript
+  // demonstrated it: a Read at tool-call 11, an unrelated Write at tool-call 38
+  // (27 calls later, file changed on disk in between) still succeeded with "no
+  // complaint". Mirrors Edit's check; since 2026-09-16 both compare CONTENTS
+  // (see tools/file-fingerprint.ts), so the same-mtime edit below is the case
+  // that matters.
+  it('rejects overwriting a file whose contents changed since it was read, even with the same mtime (mirrors Edit)', async () => {
     const p = path.join(dir, 'a.txt');
     fs.writeFileSync(p, 'old\n');
     await ReadTool.execute({ file_path: 'a.txt' }, ctx);
-    // Force a distinctly different mtime (+2s) -- coarse fs granularity safe,
-    // same technique as the Edit staleness test above.
+    const { atime, mtime } = fs.statSync(p);
+    fs.writeFileSync(p, 'old but different\n');
+    fs.utimesSync(p, atime, mtime);
+    const r = await WriteTool.execute({ file_path: 'a.txt', content: 'new\n' }, ctx);
+    expect(r.isError).toBe(true);
+    // Must name the mechanism, not just "changed" — the gate's invisibility is
+    // what four round-8 models misdiagnosed.
+    expect(r.text).toMatch(/changed on disk since you last Read or Wrote it/i);
+    expect(r.text).toMatch(/contents no longer match/i);
+    // The file on disk must be untouched by the rejected write.
+    expect(fs.readFileSync(p, 'utf8')).toBe('old but different\n');
+  });
+
+  it('allows overwriting after a touch that changed no bytes', async () => {
+    const p = path.join(dir, 'a.txt');
+    fs.writeFileSync(p, 'old\n');
+    await ReadTool.execute({ file_path: 'a.txt' }, ctx);
     const future = new Date(Date.now() + 2000);
     fs.utimesSync(p, future, future);
     const r = await WriteTool.execute({ file_path: 'a.txt', content: 'new\n' }, ctx);
-    expect(r.isError).toBe(true);
-    // Must name the mtime as the mechanism, not just "changed" — the gate's
-    // invisibility is what four round-8 models misdiagnosed.
-    expect(r.text).toMatch(/changed on disk since you last Read or Wrote it/i);
-    expect(r.text).toMatch(/modification time/i);
-    // The file on disk must be untouched by the rejected write.
-    expect(fs.readFileSync(p, 'utf8')).toBe('old\n');
+    expect(r.isError).toBeFalsy();
+    expect(fs.readFileSync(p, 'utf8')).toBe('new\n');
   });
 
   it('allows overwriting when the read is still fresh (no intervening on-disk change)', async () => {
@@ -497,7 +524,7 @@ describe('the read gate explains itself (2026-08-11 review round 8)', () => {
     expect(r.text).toMatch(/Read or Written/);
     expect(r.text).toMatch(/cat.*grep|grep.*cat/);
     // The mechanism, not just the rule — this is what Opus 5 alone worked out.
-    expect(r.text).toMatch(/modification time/);
+    expect(r.text).toMatch(/records the file.s contents/);
   });
 
   it('a successful Write says out loud that it counts as a Read', async () => {
@@ -509,7 +536,7 @@ describe('the read gate explains itself (2026-08-11 review round 8)', () => {
   it('both tools describe the same gate in the same terms', () => {
     for (const d of [EditTool.description, WriteTool.description]) {
       expect(d).toMatch(/Read or Written/);
-      expect(d).toMatch(/modification time/);
+      expect(d).toMatch(/record the file.s contents/);
     }
   });
 });

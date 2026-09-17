@@ -608,7 +608,7 @@ export default function HeaderBar({
               gamePanelOpen
                 ? 'bg-accent text-on-accent'
                 : challengePending && !gamePanelOpen
-                  ? 'text-orange-400'
+                  ? 'text-amber-700'
                   : 'text-fg-dim hover:text-fg-2'
             }`}
             // Perf: steps(8) instead of ease-in-out — this pulses for as long
@@ -622,7 +622,7 @@ export default function HeaderBar({
           >
             <GamepadIcon className="w-4 h-4" />
           {gameConnected && (
-            <span className={`w-1.5 h-1.5 rounded-full ${challengePending && !gamePanelOpen ? 'bg-orange-400' : 'bg-green-400'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${challengePending && !gamePanelOpen ? 'bg-amber-700' : 'bg-green-400'}`} />
           )}
           </button>
           </Tooltip>

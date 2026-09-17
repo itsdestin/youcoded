@@ -10,12 +10,16 @@
 // scoped to one id instead of a session list.
 import { useEffect, useState } from 'react';
 import { plainMessage } from '../utils/ipc-error';
+import type { SessionFlagName } from '../../shared/types';
 
 export interface PreviewMetaState {
   /** Applied tag ids (not labels — see chatsearch-refs.ts's note on the
    *  index storing labels; the meta store is id-keyed). */
   tags: string[];
   note: string;
+  /** Reserved flags (priority, complete). Added 2026-09-16 for the Projects
+   *  page preview, which offers Priority and Complete like the Resume browser. */
+  flags: Partial<Record<SessionFlagName, boolean>>;
   loading: boolean;
   /** Why the tags and note could NOT be read, or null when they were (possibly as none).
    *  WHY (code review 2026-09-11, F1, on error inventory false message 12): a failed read
@@ -28,11 +32,12 @@ export interface PreviewMetaState {
 export interface PreviewMetaApi extends PreviewMetaState {
   toggleTag: (tagId: string, next: boolean) => Promise<void>;
   saveNote: (note: string) => Promise<void>;
+  toggleFlag: (flag: SessionFlagName, next: boolean) => Promise<void>;
   /** Read the tags and note again — the Retry on an `unreadable` failure. */
   reload: () => void;
 }
 
-const EMPTY: PreviewMetaState = { tags: [], note: '', loading: false, unreadable: null };
+const EMPTY: PreviewMetaState = { tags: [], note: '', flags: {}, loading: false, unreadable: null };
 
 /** id: the previewed conversation's id, or null when nothing is previewed —
  *  callers pass null rather than skipping the hook call (rules of hooks). */
@@ -48,7 +53,7 @@ export function usePreviewMeta(id: string | null): PreviewMetaApi {
     // superseded.
     let cancelled = false;
     if (!id) { setState(EMPTY); return; }
-    setState({ tags: [], note: '', loading: true, unreadable: null });
+    setState({ ...EMPTY, loading: true });
     // Fix: was `claude?.session?.getMeta?.(id).then(...)` — when `session`
     // (or `getMeta`) is absent, the optional chain short-circuits to
     // `undefined`, and `undefined.then` throws synchronously inside a
@@ -61,17 +66,19 @@ export function usePreviewMeta(id: string | null): PreviewMetaApi {
         const res: any = await (window as any).claude?.session?.getMeta?.(id);
         if (cancelled) return;
         if (typeof res?.unreadable === 'string' && res.unreadable) {
-          setState({ tags: [], note: '', loading: false, unreadable: res.unreadable });
+          setState({ ...EMPTY, unreadable: res.unreadable });
           return;
         }
         setState({
           tags: Array.isArray(res?.tags) ? res.tags : [],
           note: typeof res?.note === 'string' ? res.note : '',
+          // Missing = none set (an older peer answers without it).
+          flags: res?.flags && typeof res.flags === 'object' ? res.flags : {},
           loading: false,
           unreadable: null,
         });
       } catch (e) {
-        if (!cancelled) setState({ tags: [], note: '', loading: false, unreadable: plainMessage(e) });
+        if (!cancelled) setState({ ...EMPTY, unreadable: plainMessage(e) });
       }
     })();
     return () => { cancelled = true; };
@@ -112,5 +119,20 @@ export function usePreviewMeta(id: string | null): PreviewMetaApi {
     }
   };
 
-  return { ...state, toggleTag, saveNote, reload: () => setAttempt((a) => a + 1) };
+  // Same optimistic apply / revert as toggleTag.
+  const toggleFlag = async (flag: SessionFlagName, next: boolean) => {
+    if (!id || state.unreadable) return;
+    const apply = (val: boolean) => setState((s) => ({ ...s, flags: { ...s.flags, [flag]: val } }));
+    apply(next);
+    try {
+      const res: any = await (window as any).claude.session.setFlag(id, flag, next);
+      if (res && res.ok === false) apply(!next);
+    } catch (e) {
+      apply(!next);
+      // eslint-disable-next-line no-console
+      console.error('preview meta: setFlag failed', e);
+    }
+  };
+
+  return { ...state, toggleTag, saveNote, toggleFlag, reload: () => setAttempt((a) => a + 1) };
 }

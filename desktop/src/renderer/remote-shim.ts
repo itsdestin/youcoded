@@ -2390,7 +2390,10 @@ export function installShim(): void {
       status: () => (isAndroidLocal() ? refuseQuietlyOnPhone('syncspaces:status') : invoke('syncspaces:status')),
       enable: (enabled: boolean) => invoke('syncspaces:enable', { enabled }),
       // Optional spaceId narrows to one space (Project View "Sync now"); omit for all.
-      syncNow: (spaceId?: string) => invoke('syncspaces:sync-now', { spaceId }),
+      // Resolves only when the sync has finished (it drives "Syncing…"), and a
+      // big upload or a slow link can take many minutes — each git step alone
+      // may run 5. The 30s default would report a working sync as failed.
+      syncNow: (spaceId?: string) => invoke('syncspaces:sync-now', { spaceId }, { timeoutMs: 30 * 60_000 }),
       createProject: (name: string) => invoke('syncspaces:create-project', { name }),
       // Spec §3 import: move an existing folder into ~/YouCoded/Projects/<name>.
       // Shim wraps args in an object (the established convention).
@@ -2559,8 +2562,6 @@ export function installShim(): void {
     project: {
       listConversations: (projectPath: string) =>
         invoke('project:list-conversations', { projectPath }),
-      conversationHistory: (projectPath: string, sessionId: string, count: number, all: boolean) =>
-        invoke('project:conversation-history', { projectPath, sessionId, count, all }),
       repoInfo: (projectPath: string) =>
         invoke('project:repo-info', { projectPath }),
       listContext: (projectPath: string) =>
@@ -2574,7 +2575,7 @@ export function installShim(): void {
     // server reads named fields off `payload`, never positional arguments.
     chatsearch: {
       resolve: (shortIds: string[]) => invoke('chatsearch:resolve', { shortIds }),
-      read: (req: { provider: string; id: string; tail: number; before?: number; projectSlug?: string }) =>
+      read: (req: { provider: string; id: string; before?: number; projectSlug?: string }) =>
         invoke('chatsearch:read', req),
     },
     // Voice typing — the PHONE's half of window.claude.voice.

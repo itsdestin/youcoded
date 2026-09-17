@@ -236,7 +236,7 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
           const last = segs[segs.length - 1];
           keyParts.push(['plan', kid.childId, kid.status, kid.title, kid.steps ?? '', kid.model?.label ?? '', segs.length,
             last ? `${last.type}:${last.id}:${'content' in last ? last.content.length : (last as AskSegment).status}` : '',
-            kidTools.slice(-4).map(t => `${t.toolUseId}:${t.status}${t.askHeld ? 'h' : ''}${t.response ? t.response.length : ''}`).join('+'),
+            kidTools.slice(-4).map(t => `${t.toolUseId}:${t.status}${t.response ? t.response.length : ''}`).join('+'),
             asks.map(a => a.requestId).join('+')].join(':'));
         }
         if (rows.length === 0) continue;
@@ -265,11 +265,7 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
       // with Destin 2026-09-05: working/finished only, rather than guess at
       // attribution and risk pinning an ask on the wrong helper.
       const asks = cc ? [] : tools.filter(t => t.status === 'awaiting-approval' && !!t.requestId);
-      // A held ask on a finished run still counts as 'needs-you' — the ask is
-      // still answerable even after the helper is gone (Task 12). Do not
-      // fold this into 'finished': `run` (with `run.status`) is already
-      // carried on HelperView below, which is how SpecialistAskBlock knows
-      // whether to show its running-helper or finished-helper held-ask copy.
+      // An open ask always means 'needs-you', whatever the run status says.
       const group: HelperView['group'] = asks.length > 0 ? 'needs-you' : run.status === 'running' ? 'working' : 'finished';
       helpers.push({
         run, parentToolCallId: id, tool, asks, toolCalls: tools.length, group,
@@ -292,7 +288,7 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
         // native hire, whose title is minted once at spawn.
         run.childId, run.status, run.title, run.stale ? 's' : '', run.steps ?? '', run.model?.label ?? '', segs.length,
         last ? `${last.type}:${last.id}:${'content' in last ? last.content.length : (last as AskSegment).status}` : '',
-        tools.slice(-4).map(t => `${t.toolUseId}:${t.status}${t.askHeld ? 'h' : ''}${t.response ? t.response.length : ''}`).join('+'),
+        tools.slice(-4).map(t => `${t.toolUseId}:${t.status}${t.response ? t.response.length : ''}`).join('+'),
         asks.map(a => a.requestId).join('+'),
         tool.status, tool.response?.length ?? '', tool.specialistReport ? tool.specialistReport.status + tool.specialistReport.text.length : '',
       ].join(':'));

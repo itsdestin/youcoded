@@ -55,12 +55,17 @@ describe('listPickerFolders — what the new-session picker shows, on every tran
 });
 
 describe('the folder writes behave as the desktop handlers always did', () => {
+  // WHY temp-rooted paths and not '/a', '/b': addFolder stores path.resolve() of what it is
+  // given, and on Windows '/b' resolves to 'D:\\b' — the literal '/b' never matched, so this
+  // failed on every Windows CI run. A path under the test's own temp dir resolves to itself.
   it('add dedupes by resolved path and puts the new folder first', () => {
-    fs.writeFileSync(file, JSON.stringify([{ path: '/a', nickname: 'a', addedAt: 1 }]));
-    const entry = addFolder('/b/', undefined, file);
-    expect(entry).toMatchObject({ path: '/b', nickname: 'b' });
-    expect(addFolder('/b', 'again', file)).toMatchObject({ nickname: 'b' });
-    expect(JSON.parse(fs.readFileSync(file, 'utf8')).map((f: any) => f.path)).toEqual(['/b', '/a']);
+    const a = path.join(dir, 'a');
+    const b = path.join(dir, 'b');
+    fs.writeFileSync(file, JSON.stringify([{ path: a, nickname: 'a', addedAt: 1 }]));
+    const entry = addFolder(b + path.sep, undefined, file);
+    expect(entry).toMatchObject({ path: b, nickname: 'b' });
+    expect(addFolder(b, 'again', file)).toMatchObject({ nickname: 'b' });
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).map((f: any) => f.path)).toEqual([b, a]);
   });
 
   it('remove, rename and set-description report whether a folder matched', () => {

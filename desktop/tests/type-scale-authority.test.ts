@@ -42,12 +42,14 @@ describe('type scale authority', () => {
     }
   });
 
+  // Decimal sizes too (text-[12.5px]): 29 of them slipped past the whole-pixel
+  // pattern until the design check found them, 2026-09-14.
   it('no component sets a font size with an arbitrary text-[Npx]', () => {
     const offenders: string[] = [];
     for (const file of walk(join(RENDERER))) {
       const src = stripComments(readFileSync(file, 'utf8'));
       src.split('\n').forEach((line, i) => {
-        for (const hit of line.match(/text-\[\d+px\]/g) ?? []) {
+        for (const hit of line.match(/text-\[\d+(?:\.\d+)?px\]/g) ?? []) {
           offenders.push(`${file.slice(RENDERER.length + 1)}:${i + 1}  ${hit}`);
         }
       });

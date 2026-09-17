@@ -207,6 +207,16 @@ export interface NativeStatusChips {
 export function selectNativeStatusChips(
   usage: NativeUsageInput | undefined | null,
   contextLength: number | undefined | null,
+  /** Occupancy after a history rewrite that ran OUTSIDE a turn (/compact,
+   *  /clear). Those never produce a turn, so the usage above is the
+   *  PRE-rewrite reading and would leave the gauge showing a window the session
+   *  no longer has. Supplied by the harness on the rewrite's own event; cleared
+   *  by the next completed turn, whose measurement supersedes it.
+   *
+   *  Taken as a parameter rather than read from state so this stays the ONE
+   *  derivation both the status bar and the /usage card call — the two resolving
+   *  context separately is exactly how they came to disagree before. */
+  contextUsedOverride?: number | null,
 ): NativeStatusChips | null {
   if (!usage) return null;
   const tokensPerSecond = usage.tokensPerSecond ?? 0;
@@ -215,7 +225,13 @@ export function selectNativeStatusChips(
   // every step of the turn, which both re-counted history per step AND reset to
   // near-zero each turn (Destin, 2026-07-28). Older records carry no
   // contextUsedTokens; the in+out sum is the closest thing they have.
-  const contextUsedTokens = usage.contextUsedTokens ?? (usage.inputTokens + usage.outputTokens);
+  //
+  // The override wins where it exists, for the reason in its doc above. `?? `
+  // and not a truthiness check: 0 is a legitimate post-/clear reading on a
+  // session with no system prompt, and must not fall through to the stale turn.
+  const contextUsedTokens = contextUsedOverride
+    ?? usage.contextUsedTokens
+    ?? (usage.inputTokens + usage.outputTokens);
   // contextPct is REMAINING context. Falsy contextLength (unknown window) → null
   // so we never fabricate a percentage; the token + speed chips remain valid.
   let contextPct: number | null = null;
@@ -428,6 +444,10 @@ interface Props {
    *  main, Task 4/5) carried on the same usage payload. null when unknown → the
    *  context % chip is omitted but tokens + speed still render. */
   nativeContextLength?: number | null;
+  /** Native sessions only: occupancy re-based by a /compact or /clear, which run
+   *  outside any turn. Passed straight to `selectNativeStatusChips` — see its
+   *  parameter docs for why it wins over the last turn's reading. */
+  nativeContextOverride?: number | null;
   /** Completed turns carrying usage, saturating at 2 (any provider). Lets the
    *  reuse chip say "New" on a session's first turn instead of a red 0%, which
    *  is the same number meaning two very different things. Absent → treated as
@@ -441,8 +461,8 @@ interface Props {
 
 
 const warnStyles = {
-  danger: 'bg-[#DD4444]/15 text-[#DD4444] border-[#DD4444]/25',
-  warn: 'bg-[#FF9800]/15 text-[#FF9800] border-[#FF9800]/25',
+  danger: 'bg-red-400/15 text-red-400 border-red-400/25',
+  warn: 'bg-amber-700/15 text-amber-700 border-amber-700/25',
 };
 
 // --- Widget visibility system ---
@@ -943,7 +963,7 @@ export default function StatusBar({
   permissionMode, onCyclePermission, fast, effort, onOpenModelPicker,
   sessionId, onDispatch,
   openTasksCounts, onOpenOpenTasks,
-  nativeUsage, nativeContextLength, turnsWithUsage, nativeTotals,
+  nativeUsage, nativeContextLength, nativeContextOverride, turnsWithUsage, nativeTotals,
 }: Props) {
   const { usage, updateStatus, contextPercent, gitBranch, sessionStats, syncWarnings } = statusData;
 
@@ -981,7 +1001,7 @@ export default function StatusBar({
   // completed at least one turn; CC/idle sessions get null and render nothing
   // extra. Fed the session's real context window (resolved in main) so the
   // context % is accurate for the local model, not a hardcoded guess.
-  const nativeChips = selectNativeStatusChips(nativeUsage, nativeContextLength);
+  const nativeChips = selectNativeStatusChips(nativeUsage, nativeContextLength, nativeContextOverride);
 
   // In/Out are SESSION TOTALS for both runtimes. They used to come from the last
   // completed turn, which made one label mean two different measurements
@@ -1104,7 +1124,7 @@ export default function StatusBar({
         <Tooltip text="Fast mode on — click to configure">
         <button
           onClick={onOpenModelPicker}
-          className="flex items-center px-1.5 py-0.5 rounded-sm border border-yellow-500/40 bg-yellow-500/15 text-yellow-500 cursor-pointer hover:brightness-125 transition-colors"
+          className="flex items-center px-1.5 py-0.5 rounded-sm border border-amber-700/40 bg-amber-700/15 text-amber-700 cursor-pointer hover:brightness-125 transition-colors"
           aria-label="Fast mode on"
         >
           <FastIcon className="w-3 h-3" />
@@ -1440,7 +1460,7 @@ export default function StatusBar({
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
             <span className="text-fg-muted">Cached:</span>
-            <span className="text-[#4CAF50]">{formatTokens(cr)}</span>
+            <span className="text-green-400">{formatTokens(cr)}</span>
           </span>
           </Tooltip>
         );
@@ -1488,7 +1508,7 @@ export default function StatusBar({
             <span className="text-fg-muted">Reuse:</span>
             {display.kind === 'first-turn' && <span className="text-fg-muted">New</span>}
             {display.kind === 'percent' && (
-              <span className={display.pct >= 80 ? 'text-[#4CAF50]' : display.pct >= 50 ? 'text-[#FF9800]' : 'text-[#DD4444]'}>
+              <span className={display.pct >= 80 ? 'text-green-400' : display.pct >= 50 ? 'text-amber-700' : 'text-red-400'}>
                 {display.pct}%
               </span>
             )}
@@ -1552,8 +1572,8 @@ export default function StatusBar({
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
-            <span className="text-[#4CAF50]">+{added ?? 0}</span>
-            <span className="text-[#DD4444]">-{removed ?? 0}</span>
+            <span className="text-green-400">+{added ?? 0}</span>
+            <span className="text-red-400">-{removed ?? 0}</span>
             <span className="text-fg-muted hidden sm:inline">lines</span>
           </span>
           </Tooltip>
@@ -1661,7 +1681,7 @@ export default function StatusBar({
           }`}
         >
           {updateStatus.update_available ? (
-            <span className="text-[#EAB308] font-medium">
+            <span className="text-amber-700 font-medium">
               v{updateStatus.latest} — Update Available
             </span>
           ) : (

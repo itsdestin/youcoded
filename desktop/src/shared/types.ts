@@ -286,6 +286,26 @@ export interface TranscriptEvent {
     // shared across event types. Writers: turn-complete (the turn's requests)
     // and, since 2026-09-10, a native compact-summary (the summary call's OWN
     // bill, which is a separate request and used to vanish from every total).
+    /** Native runtime only — `compact-summary` and `context-clear`: tokens
+     *  OCCUPYING the window once that history rewrite has landed, and (compaction
+     *  only) what it occupied just before.
+     *
+     *  WHY they exist as their OWN fields rather than inside `usage` above: that
+     *  `usage` block is the summarize REQUEST's bill, a different measurement
+     *  entirely, and `usage.contextUsedTokens` on a turn-complete is a MEASURED
+     *  prompt count. These two are the measured count re-based by the estimated
+     *  size of what the rewrite removed (harness-session.ts →
+     *  reprojectContextUsed), because a rewrite outside a turn never gets a fresh
+     *  reading from the provider. Keeping them separate stops a reader treating
+     *  an estimate-adjusted figure as a measurement.
+     *
+     *  Consumers: the status bar's native context gauge re-bases on
+     *  `contextUsedAfter` (the chip otherwise showed the PRE-compaction window
+     *  until the next message), and the compaction marker subtracts the pair to
+     *  say how much was actually freed. `contextUsedBefore` is absent when the
+     *  session had never measured a window at all. */
+    contextUsedAfter?: number;
+    contextUsedBefore?: number;
     /** Model ID used for the completing turn (e.g. "claude-opus-4-7"). */
     model?: string;
     /** Anthropic API request id from the JSONL line's top-level `requestId`. */
@@ -361,7 +381,9 @@ export interface TranscriptEvent {
      * instead of a user bubble — the text is what the PARENT MODEL reads, and
      * showing it as the user's own words, or even as a big notice, put text in
      * the chat nobody actually said (Destin, 1b hands-on).
-     * Values today: 'specialist-report' (a background helper's report) and
+     * Values today: 'specialist-report' (a background helper's report),
+     * 'shell-running' (a background command still going at a 5/15-minute
+     * mark — a plain note, never a card) and
      * 'shell-complete' (G-1: a background command finished or was stopped by
      * the user); a plain `string` (not a union) so a future injected kind never
      * needs a TranscriptEvent schema change.
@@ -557,10 +579,6 @@ export type SubagentSegment = (
       denyListed?: boolean;
       external?: boolean;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
-      /** The 5-minute hold elapsed (child-ask-router's ASK_REDIRECT): the
-       *  specialist was told to carry on without this and the ask is STILL
-       *  answerable — a late answer becomes a follow-up. The row says so. */
-      askHeld?: boolean;
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
       resolvedRequestId?: string;
@@ -1174,7 +1192,19 @@ export interface ShellInjectedMeta {
   }>;
 }
 
-export type InjectedMeta = SpecialistInjectedMeta | ShellInjectedMeta;
+/** Companion to `injected: 'shell-running'` (2026-09-16): a background command
+ *  that is STILL running at one of the LONG_RUN_NOTICE_MS marks. Not a
+ *  completion — deliberately a different kind from ShellInjectedMeta so the
+ *  chat reducer never folds it into a Bash card as a finished run; the
+ *  renderer shows it as a plain system note. */
+export interface ShellRunningInjectedMeta {
+  kind: 'shell-running';
+  /** A list for the same reason ShellInjectedMeta's is: every mark ready at
+   *  one idle boundary goes out as ONE turn (D8), never one turn per build. */
+  runs: Array<{ shellId: string; toolUseId: string; elapsedMs: number }>;
+}
+
+export type InjectedMeta = SpecialistInjectedMeta | ShellInjectedMeta | ShellRunningInjectedMeta;
 
 /** The push event `native:shell-event` carries (G-1): one run record changed. */
 export type ShellEvent = { sessionId: string; run: ShellRunView };

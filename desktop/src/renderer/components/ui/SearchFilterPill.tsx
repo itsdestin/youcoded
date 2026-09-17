@@ -111,7 +111,7 @@ export const SearchFilterPill = React.forwardRef<HTMLDivElement, SearchFilterPil
           >
             <SlidersGlyph />
             {activeFilters > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-accent text-on-accent text-[9.5px] font-medium leading-[15px] text-center">
+              <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-0.5 rounded-full bg-accent text-on-accent text-3xs font-medium leading-[15px] text-center">
                 {activeFilters}
               </span>
             )}

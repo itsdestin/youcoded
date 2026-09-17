@@ -95,8 +95,8 @@ export function buildChildDecide(i: ChildPermissionInputs): ChildPermissionInput
     // typed message; plan 1b Task 8 gives specialists a real path to the parent's
     // user via childAskRouter, so this now passes the ask through UNCHANGED instead —
     // the router re-registers it under the PARENT's session with the specialist's
-    // identity attached, holds it up to SPECIALIST_ASK_HOLD_MS, and only THEN denies
-    // it (with a redirect, not a blame-the-user message) if nobody answers. A
+    // identity attached, and the child waits for the person's answer (no time
+    // limit, like the main assistant's own asks). A
     // remembered "Always allow" on the parent wins upstream (it produces action
     // 'allow', never reaching this branch) — the user stays sovereign either way.
     if (parent.action === 'ask' && parent.denyListed) {

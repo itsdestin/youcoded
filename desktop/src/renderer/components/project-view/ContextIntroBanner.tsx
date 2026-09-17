@@ -57,7 +57,7 @@ export function ContextIntroBanner() {
         {/* Uppercase micro-label / eyebrow, consistent with the design language. */}
         <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1">About context</div>
         {/* One plain-language paragraph — no jargon, no glyphs. */}
-        <p className="text-[12.5px] text-fg-2 leading-relaxed">
+        <p className="text-xs text-fg-2 leading-relaxed">
           These are the notes and rules YouCoded reads to understand how you want it to work. Some
           load every time you chat, some only in certain folders or situations. Open any file to see
           or edit what shapes Claude&rsquo;s behavior here.

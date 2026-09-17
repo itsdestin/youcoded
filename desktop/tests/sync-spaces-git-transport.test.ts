@@ -79,6 +79,182 @@ describe('GitTransport specifics', () => {
     await h.cleanup();
   });
 
+  // 2026-09-16 incident: a second app copy syncing the same folder raced the
+  // unstage step, so 50–107 MB transcripts got COMMITTED locally. Every push
+  // then carried a blob GitHub refuses (>100 MiB) and the device stopped
+  // uploading for 9 days. Whatever let a file in, push must never send it.
+  describe('an oversize file already committed locally never leaves the device', () => {
+    const gitIn = (space: SyncSpace, args: string[]) => execFileSync('git', args, {
+      cwd: space.root, encoding: 'utf8',
+      env: { ...process.env, GIT_DIR: path.join(space.root, '.youcoded', 'sync.git'), GIT_WORK_TREE: space.root },
+    });
+    // Bypasses the transport's own add/unstage — the shape a lost race leaves behind.
+    const commitRaw = (space: SyncSpace, msg: string) => { gitIn(space, ['add', '-A']); gitIn(space, ['commit', '-qm', msg]); };
+    const remoteBlobSizes = (bare: string) => execFileSync('sh', ['-c',
+      `git --git-dir="${bare}" rev-list --objects --no-object-names --all | git --git-dir="${bare}" cat-file --batch-check='%(objecttype) %(objectsize)' | awk '$1=="blob"{print $2}'`,
+    ], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number);
+    // Largest blob GitHub holds. Throws on an empty remote so a broken probe
+    // can never pass as "nothing too big" (Math.max() of nothing is -Infinity).
+    const largestRemoteBlob = (bare: string) => {
+      const sizes = remoteBlobSizes(bare);
+      if (!sizes.length) throw new Error('remote has no blobs — probe is broken');
+      return Math.max(...sizes);
+    };
+    const bareOf = (space: SyncSpace) => gitIn(space, ['remote', 'get-url', 'origin']).trim();
+
+    it('drops the oversize version, still pushes the rest, keeps the file on disk and reports it', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'chat.jsonl'), 'tiny');
+      await small.push(a, 'base'); // published at a legal size
+      fs.writeFileSync(path.join(a.root, 'chat.jsonl'), 'x'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'note.md'), 'hello');
+      commitRaw(a, 'leaked');
+      const r = await small.push(a, 'next');
+      expect(r.pushed).toBe(true);
+      expect(r.oversize).toEqual(['chat.jsonl']);
+      expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
+      // A second device receives note.md, and the last LEGAL chat.jsonl.
+      const b = await h.makeDeviceSpace();
+      await h.transport.pull(b);
+      expect(fs.readFileSync(path.join(b.root, 'note.md'), 'utf8')).toBe('hello');
+      expect(fs.readFileSync(path.join(b.root, 'chat.jsonl'), 'utf8')).toBe('tiny');
+      // Nothing on this device was touched.
+      expect(fs.readFileSync(path.join(a.root, 'chat.jsonl'), 'utf8')).toBe('x'.repeat(11));
+      await h.cleanup();
+    });
+
+    it('drops an oversize blob that only exists in an intermediate unpublished commit', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'ok.md'), 'fine');
+      await small.push(a, 'base');
+      fs.writeFileSync(path.join(a.root, 'dump.bin'), 'x'.repeat(11));
+      commitRaw(a, 'leaked');
+      fs.rmSync(path.join(a.root, 'dump.bin'));
+      fs.writeFileSync(path.join(a.root, 'ok.md'), 'fine again');
+      commitRaw(a, 'deleted it later');
+      const r = await small.push(a, 'next');
+      expect(r.pushed).toBe(true);
+      expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
+      await h.cleanup();
+    });
+
+    // Review 2026-09-16 F2/F11: when the over-cap file is the ONLY unpublished
+    // change there is nothing to send — not a "Sync failed (git commit)".
+    it('an over-cap file that is the only unpublished change ends quietly with nothing pushed', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'chat.jsonl'), 'tiny');
+      await small.push(a, 'base');
+      const before = gitIn(a, ['ls-remote', bareOf(a), 'refs/heads/main']);
+      fs.writeFileSync(path.join(a.root, 'chat.jsonl'), 'x'.repeat(11));
+      commitRaw(a, 'leaked');
+      const r = await small.push(a, 'next');
+      expect(r).toMatchObject({ pushed: false, oversize: ['chat.jsonl'] });
+      expect(gitIn(a, ['ls-remote', bareOf(a), 'refs/heads/main'])).toBe(before);
+      await h.cleanup();
+    });
+
+    // Review F3: a name git would read as pathspec magic must still be held back.
+    it('holds back a file whose name starts with a colon, and leaves a look-alike name alone', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'f1.md'), 'v1');
+      await small.push(a, 'base');
+      // Windows forbids ":" in file names, so the colon case is POSIX-only;
+      // the glob look-alike runs everywhere.
+      const colon = process.platform !== 'win32';
+      if (colon) fs.writeFileSync(path.join(a.root, ':big'), 'x'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'f[1].md'), 'x'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'f1.md'), 'v2');
+      commitRaw(a, 'leaked');
+      const r = await small.push(a, 'next');
+      expect(r.pushed).toBe(true);
+      expect([...r.oversize].sort()).toEqual(colon ? [':big', 'f[1].md'] : ['f[1].md']);
+      expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
+      expect(gitIn(a, ['show', 'origin/main:f1.md'])).toBe('v2');
+      await h.cleanup();
+    });
+
+    // Review F7: a big file already published and unchanged is not "held back".
+    it('does not report a big file that is already published and unchanged', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      fs.writeFileSync(path.join(a.root, 'old.bin'), 'x'.repeat(11));
+      await h.transport.push(a, 'published under the normal cap');
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'new.bin'), 'y'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'ok.md'), 'fine');
+      commitRaw(a, 'leaked');
+      const r = await small.push(a, 'next');
+      expect(r.oversize).toEqual(['new.bin']);
+      await h.cleanup();
+    });
+  });
+
+  // Review F1: a NEW big file is excluded by pull() before push() looks, and
+  // was never reported to the user.
+  it('keeps reporting a new over-cap file after an earlier cycle excluded it', async () => {
+    const h = await makeHarness();
+    const a = await h.makeDeviceSpace();
+    const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+    fs.writeFileSync(path.join(a.root, 'video [raw].bin'), 'x'.repeat(11));
+    await small.pull(a);
+    expect((await small.push(a, 'one')).oversize).toEqual(['video [raw].bin']);
+    expect((await small.push(a, 'two')).oversize).toEqual(['video [raw].bin']);
+    fs.rmSync(path.join(a.root, 'video [raw].bin'));
+    expect((await small.push(a, 'three')).oversize).toEqual([]);
+    await h.cleanup();
+  });
+
+  describe('first push guard', () => {
+    const gitIn = (space: SyncSpace, args: string[]) => execFileSync('git', args, {
+      cwd: space.root, encoding: 'utf8',
+      env: { ...process.env, GIT_DIR: path.join(space.root, '.youcoded', 'sync.git'), GIT_WORK_TREE: space.root },
+    });
+    const commitRaw = (space: SyncSpace, msg: string) => { gitIn(space, ['add', '-A']); gitIn(space, ['commit', '-qm', msg]); };
+    const largestRemoteBlob = (bare: string) => {
+      const sizes = execFileSync('sh', ['-c',
+        `git --git-dir="${bare}" rev-list --objects --no-object-names --all | git --git-dir="${bare}" cat-file --batch-check='%(objecttype) %(objectsize)' | awk '$1=="blob"{print $2}'`,
+      ], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number);
+      if (!sizes.length) throw new Error('remote has no blobs — probe is broken');
+      return Math.max(...sizes);
+    };
+    const bareOf = (space: SyncSpace) => gitIn(space, ['remote', 'get-url', 'origin']).trim();
+
+    it('an over-cap file that is the whole first commit is never pushed and throws nothing', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'big.bin'), 'x'.repeat(11));
+      commitRaw(a, 'leaked before any push');
+      const r = await small.push(a, 'first');
+      expect(r).toMatchObject({ pushed: false, oversize: ['big.bin'] });
+      expect(gitIn(a, ['ls-remote', bareOf(a)])).toBe('');
+      await h.cleanup();
+    });
+
+    it('also holds on the very first push, before GitHub has any history', async () => {
+      const h = await makeHarness();
+      const a = await h.makeDeviceSpace();
+      const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
+      fs.writeFileSync(path.join(a.root, 'big.bin'), 'x'.repeat(11));
+      fs.writeFileSync(path.join(a.root, 'ok.md'), 'fine');
+      commitRaw(a, 'leaked before any push');
+      const r = await small.push(a, 'first');
+      expect(r.pushed).toBe(true);
+      expect(r.oversize).toEqual(['big.bin']);
+      expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
+      expect(fs.existsSync(path.join(a.root, 'big.bin'))).toBe(true);
+      await h.cleanup();
+    });
+  });
+
   it('a merge that cannot complete surfaces an error instead of silently reporting no update', async () => {
     const h = await makeHarness();
     const a = await h.makeDeviceSpace();
@@ -465,6 +641,24 @@ describe('GitTransport auth-failure surfacing', () => {
     return t;
   }
 
+  // 2026-09-16 (sync.md): a repo too damaged for git to open answered the remote
+  // probe with "no remote", so the engine went to provision one — which offline or
+  // signed-out throws before any corruption-guarded op runs — and the network-free
+  // repair never fired. The probe now classifies corruption where it first shows.
+  it('hasRemote(): a corrupt repo THROWS coded repo-corrupt instead of reading as "no remote"', async () => {
+    const t = scripted({
+      remote: { code: 128, stderr: 'fatal: not a git repository: /nowhere/.youcoded/sync.git' },
+    });
+    await expect(t.hasRemote(space)).rejects.toMatchObject({ syncErrorCode: 'repo-corrupt' });
+  });
+
+  it('hasRemote(): a healthy repo with no origin still answers false, quietly', async () => {
+    const t = scripted({
+      remote: { code: 2, stderr: "error: No such remote 'origin'" },
+    });
+    await expect(t.hasRemote(space)).resolves.toBe(false);
+  });
+
   it('pull(): an auth-refused fetch THROWS the coded plain-language error (never mistaken for offline)', async () => {
     const t = scripted({
       remote: { code: 0, stdout: 'https://github.com/u/r.git' }, // hasRemote → true
@@ -483,7 +677,9 @@ describe('GitTransport auth-failure surfacing', () => {
       diff: { code: 0, stdout: '' },
       fetch: { code: 1, stderr: 'fatal: Could not resolve host: github.com' },
     });
-    await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [] });
+    // `contacted: false` is what stops an offline cycle from stamping
+    // "Last synced just now" (engine → service.broadcast).
+    await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [], contacted: false });
   });
 
   it('push(): an auth-refused push (after the recovery retry) THROWS the coded error', async () => {
@@ -553,7 +749,9 @@ describe('GitTransport benign-allowlist intent', () => {
     // downstream unscripted call falls through to its `{code:0}` default,
     // producing {pushed:true, commit:'', oversize:[]} — a silently wrong
     // result that still satisfies `toBeDefined()`.
-    await expect(t.push(space, 'msg')).resolves.toEqual({ pushed: false, oversize: [] });
+    // `contacted: false`: the lock was lost before any push ran, so origin
+    // was never reached and "Last synced" must not move.
+    await expect(t.push(space, 'msg')).resolves.toEqual({ pushed: false, contacted: false, oversize: [] });
   });
 
   it('LOCK_CONTENDED now also covers `checkout` (pull() adopting a fresh remote while a lock is still live) — but the checkout still did not happen, so it must not report updated:true', async () => {
@@ -582,7 +780,9 @@ describe('GitTransport benign-allowlist intent', () => {
       // exact-shape assertion below catches that value; the mock-calls check
       // proves `merge` specifically never ran.
     });
-    await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [] });
+    // Lost the lock race BEFORE the fetch: origin was never reached, so this
+    // cycle must not stamp "Last synced" either.
+    await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [], contacted: false });
     const calledMerge = (t as any).git.mock.calls.some((c: any[]) => c[1][0] === 'merge');
     expect(calledMerge).toBe(false);
   });
@@ -602,8 +802,10 @@ describe('GitTransport benign-allowlist intent', () => {
     // prior HEAD sha) — the field that actually decides whether the "nothing
     // was pushed" story is honest never gets checked. Pin the full result so
     // a future regression at any field surfaces here.
+    // `contacted: true` — the recovery pull's fetch DID reach origin; only the
+    // push itself had nothing to send.
     await expect(t.push(space, 'msg')).resolves.toEqual({
-      pushed: false, commit: undefined, oversize: [], updated: false, conflictCopies: [],
+      pushed: false, contacted: true, commit: undefined, oversize: [], updated: false, conflictCopies: [],
     });
   });
 
@@ -645,7 +847,7 @@ describe('GitTransport credentialed against real git', () => {
       fs.writeFileSync(path.join(root, 'note.md'), 'hello');
       const push = await t.push(space, 'first');
       expect(push.pushed).toBe(true);
-      await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [] });
+      await expect(t.pull(space)).resolves.toEqual({ updated: false, conflictCopies: [], contacted: true });
       // HYGIENE: the token must not appear in the hidden repo's config (the
       // helper is per-invocation argv config, and even that carries only the
       // env var NAME).

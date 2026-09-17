@@ -1,4 +1,5 @@
 import React from 'react';
+import { ChevronDown } from './ChevronDown';
 
 /**
  * K4 — the callout. Passive information, one geometry, three tones.
@@ -36,11 +37,29 @@ export type CalloutProps = {
   /** Optional bold lead-in line above the body. */
   title?: React.ReactNode;
   className?: string;
+  /** Collapse to the title line; the body opens on click. Needs `title`.
+   *  Opening is not an action, so this keeps the no-button rule — it is for a
+   *  warning whose headline says enough and whose detail is a list (the Sync
+   *  box's too-big conversations, 2026-09-16). */
+  collapsible?: boolean;
   children: React.ReactNode;
 };
 
-export function Callout({ tone = 'info', title, className = '', children }: CalloutProps) {
+export function Callout({ tone = 'info', title, className = '', collapsible = false, children }: CalloutProps) {
   const t = TONE[tone];
+  if (collapsible && title) {
+    return (
+      <details className={`group rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
+        {/* The browser's own left-hand triangle is hidden; the arrow sits on the
+            right and turns like the session switcher's (Destin, 2026-09-16). */}
+        <summary className={`flex items-center justify-between gap-2 list-none [&::-webkit-details-marker]:hidden text-xs font-medium cursor-pointer select-none ${t.title}`}>
+          <span className="min-w-0">{title}</span>
+          <ChevronDown className="w-3 h-3 shrink-0 text-fg-muted transition-transform group-open:rotate-180" strokeWidth={2.5} />
+        </summary>
+        <div className={`text-xs mt-1.5 ${t.body}`}>{children}</div>
+      </details>
+    );
+  }
   return (
     <div className={`rounded-lg p-3 border ${t.surface} ${className}`.trim()}>
       {/* Both slots are <div>, not <p>. A callout body can legitimately carry a

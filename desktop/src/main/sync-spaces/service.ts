@@ -2,7 +2,9 @@
 // Composition root: owns the singleton ManagedRoots/SpaceManager/Engine and
 // exposes the functions IPC + remote-server call. Mirrors the sync-state.ts
 // singleton pattern (setSyncService).
+import fs from 'fs';
 import os from 'os';
+import path from 'path';
 import { BrowserWindow } from 'electron';
 import { ManagedRoots } from './managed-roots';
 import { SpaceManager, repoNameForSpace } from './space-manager';
@@ -10,6 +12,7 @@ import { GitTransport } from './git-transport';
 import { SpaceSyncEngine } from './engine';
 import { DailyBackup, BackupTarget } from './daily-backup';
 import { importProjectFolder } from './import-project';
+import { MAX_SYNC_FILE_BYTES } from './guards';
 import { createSyncHubSocket } from '../sync-hub-socket';
 import { getGithubClient } from '../github-client';
 import type { LeaseResult, SyncHubEvent } from '../sync-hub-socket';
@@ -23,6 +26,12 @@ let engine: SpaceSyncEngine | null = null;
 let backup: DailyBackup | null = null;
 let backupTimer: ReturnType<typeof setInterval> | null = null;
 let recentEvents: SpaceSyncEvent[] = [];
+// Every over-limit file reported this launch, per space. Kept outside the
+// last-50 event buffer so the Sync panel can keep telling the user which
+// files are not syncing for as long as that is true (the engine reports each
+// file once per launch, so the buffer alone would forget it). status() drops
+// entries that have since shrunk or been deleted.
+const oversizeBySpace = new Map<string, Set<string>>();
 let logFn: (m: string) => void = console.log;
 
 // SyncHub (Plan 1b): the WebSocket that relays "something changed" signals
@@ -46,17 +55,15 @@ let lastSyncByDevice: Record<string, number> = {};
 // (the status:data push) — the two paths SyncPanel reads recency from.
 export function getLastSyncByDevice(): Record<string, number> { return lastSyncByDevice; }
 
-/** Max persisted last-COMPLETED-sync-CYCLE across this device's spaces (ms), or
- *  null when sync is off / has never completed a cycle. NOT "last successful
- *  sync": corruption and auth failures now THROW (spec §1) and correctly stop
- *  this from advancing, but a cycle that completes without shipping anything
- *  still stamps it — the engine emits 'synced' after pull+push regardless of
- *  push.pushed, and git-transport's offline path is silent-by-design (a failed
- *  retry push whose stderr matches isNetworkFailureStderr falls through
- *  without throwing, returning {pushed:false}). So a device offline for days,
- *  or hitting a lock-contended cycle, still advances this value every ~120s
- *  poll with nothing actually synced. Read it as "sync last ran", not "sync
- *  last succeeded". */
+/** Max persisted last-sync-that-REACHED-GitHub across this device's spaces
+ *  (ms), or null when sync is off / has never contacted the remote. Since
+ *  2026-09-16 broadcast() stamps the per-space marker only from a 'synced'
+ *  event whose `contacted` is not false — an offline cycle (git-transport's
+ *  silent-by-design network failure, spec §13) completes and emits, but no
+ *  longer advances this. Corruption and auth failures THROW (spec §1) and
+ *  never reach it either. Still the MAX across spaces: one healthy space and
+ *  two broken ones read as the healthy one's time — a separate decision
+ *  (docs/roadmap/sync.md), left as it was. */
 export function getSelfLastSyncEpochMs(): number | null {
   if (!manager || !roots) return null;
   let max: number | null = null;
@@ -167,14 +174,21 @@ function broadcast(e: SpaceSyncEvent): void {
   // so every stored + fanned-out copy must carry the same timestamp.
   const stamped: SpaceSyncEvent = { ...e, at: Date.now() };
   recentEvents = [...recentEvents.slice(-49), stamped];
-  // Persist "this space has actually synced" evidence. Safe to key on the bare
-  // 'synced' type: the engine now refuses to emit it for a space with no
-  // remote (it provisions or errors instead), so every 'synced' that reaches
-  // here really completed a pull+push against GitHub. The panel gates its
-  // green "All synced" on this marker — recentEvents alone is per-boot and
-  // can't distinguish "synced before" from "never synced".
+  if (stamped.type === 'oversize') {
+    const set = oversizeBySpace.get(stamped.spaceId) ?? new Set<string>();
+    for (const f of stamped.files) set.add(f);
+    oversizeBySpace.set(stamped.spaceId, set);
+  }
+  // Persist "this space has actually synced" evidence. The engine refuses to
+  // emit 'synced' for a space with no remote (it provisions or errors
+  // instead), and since 2026-09-16 the event also says whether the cycle
+  // REACHED GitHub: an offline cycle completes silently by design (spec §13)
+  // and still emits 'synced', but stamping recency from it is what made a
+  // device offline for days read "Synced just now" every poll. So the marker
+  // — which feeds "Last synced" on the self device row and the Settings row,
+  // and gates the panel's green "All synced" — moves only on contact.
   try {
-    if (stamped.type === 'synced' && stamped.at) manager?.recordSyncSuccess(stamped.spaceId, stamped.at);
+    if (stamped.type === 'synced' && stamped.at && stamped.contacted !== false) manager?.recordSyncSuccess(stamped.spaceId, stamped.at);
   } catch { /* a failed marker write must never block event delivery */ }
   for (const w of BrowserWindow.getAllWindows()) {
     try { w.webContents.send('syncspaces:event', stamped); } catch { /* window closing */ }
@@ -340,7 +354,9 @@ async function startEngine(log: (m: string) => void): Promise<void> {
       void e.syncSpace(space); // initial reconcile
     } catch (err: any) {
       log(`sync-spaces: failed to start space ${space.id}: ${String(err?.message ?? err)}`);
-      broadcast({ type: 'error', spaceId: space.id, message: String(err?.message ?? err) });
+      // Keep the typed marker (github-auth): the panel only offers Connect
+      // GitHub for a coded sign-in failure (2026-09-16 review F8).
+      broadcast({ type: 'error', spaceId: space.id, message: String(err?.message ?? err), errorCode: typeof err?.syncErrorCode === 'string' ? err.syncErrorCode : undefined });
     }
   }
 
@@ -357,9 +373,13 @@ async function startEngine(log: (m: string) => void): Promise<void> {
 
   // Cross-device discovery: await a fresh Personal pull so the registry is
   // current, register this device's own projects, then reconcile.
-  const personalSpace = roots!.spaces().find((s) => s.kind === 'personal');
-  if (personalSpace) { try { await e.syncSpace(personalSpace); } catch { /* offline — poll/connect retries */ } }
-  if (engine !== e) return; // disabled while we synced Personal — bail
+  // The loop above already started Personal's initial sync. Awaiting a second
+  // syncSpace call here now waits for that run AND a full follow-up (an
+  // in-flight call waits for the rerun it queues), which on a device with a
+  // backlog held discovery and SyncHub back for minutes (2026-09-16 review F4).
+  // Discovery doesn't need it: it re-runs when that sync lands with changes
+  // (broadcast → 'synced' + updated).
+  if (engine !== e) return; // disabled meanwhile — bail
   backfillRegistry();
   void runDiscovery();
 
@@ -474,8 +494,24 @@ export async function syncSpacesStatus() {
       };
     }) ?? [],
     recentEvents,
+    oversize: currentOversize(),
+    oversizeLimitMb: MAX_SYNC_FILE_BYTES / (1024 * 1024),
     syncHub: hubStatus, // SyncHub connection state (Plan 1b): 'off' when sync disabled
   };
+}
+
+/** Reported over-limit files that are still over the limit on disk. */
+function currentOversize(): Array<{ spaceId: string; files: string[] }> {
+  const out: Array<{ spaceId: string; files: string[] }> = [];
+  for (const [spaceId, set] of oversizeBySpace) {
+    const root = roots?.spaces().find((s) => s.id === spaceId)?.root;
+    if (!root) continue;
+    const files = [...set].filter((rel) => {
+      try { return fs.statSync(path.join(root, rel)).size > MAX_SYNC_FILE_BYTES; } catch { return false; }
+    });
+    if (files.length) out.push({ spaceId, files });
+  }
+  return out;
 }
 
 function repoNameFor(name: string): string {
@@ -485,7 +521,10 @@ function repoNameFor(name: string): string {
 async function pushPersonal(): Promise<void> {
   if (!engine || !roots) return;
   const personal = roots.spaces().find((s) => s.kind === 'personal');
-  if (personal) await engine.syncSpace(personal); // push the registry change to peers
+  // Not awaited: a sync never throws, so waiting only made rename/stop/description
+  // hang until the upload finished — longer still now that a call made mid-sync
+  // waits for the follow-up run (2026-09-16 review F4).
+  if (personal) void engine.syncSpace(personal); // push the registry change to peers
 }
 
 /** Rename = change the SYNCED display name only (no folder move). Propagates via
@@ -534,6 +573,9 @@ export async function syncSpacesEnable(enabled: boolean) {
       engine = null;
       teardownHub(); // stop cross-device signalling too — the engine is going away
       await current.stop();
+      // Turning sync off emitted nothing, so status-driven UI (the Settings gear's
+      // red dot, project dots) kept showing the last error (2026-09-16 review F6).
+      broadcast({ type: 'projects-changed', spaceId: 'projects' });
     }
   });
   transition = run;
@@ -544,39 +586,29 @@ export async function syncSpacesEnable(enabled: boolean) {
 export async function syncSpacesSyncNow(spaceId?: string) {
   // spaceId narrows to one space (the Project View hero's "Sync now" button);
   // no arg keeps the SyncPanel's existing sync-everything behavior.
-  if (engine && roots) {
-    for (const s of roots.spaces()) {
-      if (spaceId && s.id !== spaceId) continue;
-      void engine.syncSpace(s);
-    }
+  // Resolves when the requested syncs have FINISHED (engine.syncSpace never
+  // throws). It used to resolve at once, so the panel's "Syncing…" state
+  // cleared before git even started and "Try again" looked dead (2026-09-16).
+  // The outcome itself still arrives as a synced/error event.
+  const eng = engine;
+  const r = roots;
+  if (eng && r) {
+    await Promise.allSettled(r.spaces()
+      .filter((s) => !spaceId || s.id === spaceId)
+      .map((s) => eng.syncSpace(s)));
   }
   return { ok: true };
 }
 
-// Awaitable counterpart to syncSpacesSyncNow, for the takeover handoff barrier.
-// syncSpacesSyncNow is fire-and-forget (void engine.syncSpace) so a UI "Sync now"
-// click never blocks on the network — but that means its Promise resolves BEFORE
-// any git pull/push runs, which is exactly why the takeover "mirror-before-release"
-// barrier didn't exist (2026-07-18 investigation §3.2): the holder's flush and the
-// requester's pre-materialize pull both returned before the final turn reached the
-// space. This variant resolves only AFTER each targeted space's pull+push settles,
-// so the caller can genuinely sequence "push landed" before "peer pulls".
-//
-// Bounded by timeoutMs: on timeout we resolve anyway (the push keeps running in the
-// background) because a handoff must never hard-block on a slow network — the cost
-// of a timed-out wait is the pre-fix behavior (the turn may arrive a beat late),
-// never a wedged handoff. engine.syncSpace never throws (fully try/caught inside),
-// so allSettled is belt-and-suspenders.
+// Bounded variant of syncSpacesSyncNow for the takeover handoff barrier
+// (2026-07-18 investigation §3.2): the holder's flush and the requester's
+// pre-materialize pull must not return before the final turn reached the space,
+// but a handoff must never hard-block on a slow network either — on timeout we
+// resolve anyway and the push keeps running in the background.
 export async function syncSpacesSyncNowAwaited(spaceId: string, timeoutMs: number): Promise<void> {
-  // Capture engine/roots into locals: both are module-level `let` nulled on teardown,
-  // and a sync-disable could null them between the guard and the async resolution.
-  const eng = engine;
-  const r = roots;
-  if (!eng || !r) return;
-  const targets = r.spaces().filter((s) => s.id === spaceId);
-  if (targets.length === 0) return;
+  if (!roots?.spaces().some((s) => s.id === spaceId)) return; // no arg would mean "sync everything"
   await Promise.race([
-    Promise.allSettled(targets.map((s) => eng.syncSpace(s))),
+    syncSpacesSyncNow(spaceId),
     new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
   ]);
 }
