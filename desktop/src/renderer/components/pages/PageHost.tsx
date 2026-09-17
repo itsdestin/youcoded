@@ -232,7 +232,10 @@ export function PageHost() {
               {pages.length === 0 && <div className="px-3 py-3 text-xs text-fg-muted">No pages yet</div>}
             </div>
             <div className="p-3">
-              <Button variant="secondary" onClick={() => dispatch({ type: 'PAGES_VIEW_OPENED' })} className="w-full justify-center rounded-full">
+              {/* The library sits BELOW the page view (z-40 under z-50), so opening
+                  it alone changed nothing on screen (found 2026-09-17). Manage
+                  pages leaves the page and shows the library; a card reopens one. */}
+              <Button variant="secondary" onClick={() => { dispatch({ type: 'PAGE_CLOSED' }); dispatch({ type: 'PAGES_VIEW_OPENED' }); }} className="w-full justify-center rounded-full">
                 <PagesIcon className="w-3.5 h-3.5" />
                 Manage pages
               </Button>
