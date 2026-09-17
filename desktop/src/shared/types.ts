@@ -1529,13 +1529,13 @@ export interface SessionMetaResult {
 // loadHistory takes the same-typed (sessionId, projectSlug) pair, and nothing
 // checks that preload keeps them in that order. Signatures follow preload.ts.
 // This is not the renderer's view of window.claude (that is the `declare global`
-// in useIpc.ts).
+// in useIpc.ts). Only PreloadBridge/RemoteBridge are exported (knip ratchet).
 
 /** A listener handle as the bridges return it — pass it back to `off()`. */
-export type BridgeHandler = (...args: any[]) => void;
+type BridgeHandler = (...args: any[]) => void;
 
 /** window.claude.session — every member both bridges must implement. */
-export interface SessionBridge {
+interface SessionBridge {
   create(opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string }): Promise<unknown>;
   destroy(sessionId: string): Promise<unknown>;
   list(): Promise<unknown>;
@@ -1559,7 +1559,7 @@ export interface SessionBridge {
 /** window.claude.on — the push subscriptions both bridges must implement.
  *  Members returning `() => void` hand back an unsubscribe function; the rest
  *  return a handle for `off()`. */
-export interface BridgeListeners {
+interface BridgeListeners {
   sessionCreated(cb: (info: any) => void): BridgeHandler;
   sessionDestroyed(cb: (id: string, exitCode: number, focusSessionId?: string | null) => void): BridgeHandler;
   ptyOutput(cb: (sessionId: string, data: string) => void): BridgeHandler;
@@ -1584,7 +1584,7 @@ export interface BridgeListeners {
 
 /** The members of window.claude these types pin. Every other member is
  *  unchecked here (`Record<string, unknown>` below lets it through). */
-export interface SharedBridge {
+interface SharedBridge {
   session: SessionBridge;
   on: BridgeListeners;
   /** The arcade's favourite games (favorites:get / favorites:set). */
