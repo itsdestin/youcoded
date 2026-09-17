@@ -404,9 +404,11 @@ describe('review fix 2: an unsaved-progress pause keeps the system text for the 
     bridge();
     render(<ChatProvider><Card initial={orphanPause()} /></ChatProvider>);
     const block = screen.getByTestId('plan-block');
-    expect(within(block).getByTestId('plan-paused-reason')).toHaveTextContent(GENERAL);
+    // The reason continues "Paused —" in lower case (r11b review).
+    expect(within(block).getByTestId('plan-paused-reason').textContent).toBe(`Paused — ${GENERAL.charAt(0).toLowerCase()}${GENERAL.slice(1)}`);
     expect(block).not.toHaveTextContent('EIO');
     expect(block).not.toHaveTextContent('Something went wrong');
+    expect(screen.getByText('paused — something went wrong')).toBeInTheDocument();   // the card's header
     expect(within(block).queryByTestId('plan-paused-report')).toBeNull();
     expect(within(block).queryByRole('alert')).toBeNull();
     const row = within(block).getByTestId('plan-pause-actions');
@@ -471,5 +473,39 @@ describe('the fallback buttons match main\'s pause routing', () => {
   it.each(PLAN_PAUSE_KINDS.flatMap((kind) => [undefined, 'refused', 'drift'].map((launch) => [kind, launch] as const)))('%s (launch: %s)', (kind, launch) => {
     const paused = { stepId: 's1', reason: 'x', kind, ...(launch ? { launch } : {}) } as NonNullable<PlanView['paused']>;
     expect(fallbackActions(paused)).toEqual([...pausedRouting(paused as any).actions]);
+  });
+});
+
+// Coordinator review of r11b: the header phrase follows the pause's kind, and
+// the reason reads as one sentence after "Paused —".
+describe('a pause says what kind of pause it is', () => {
+  const at = (kind: NonNullable<PlanView['paused']>['kind'], reason = 'x') => paused({ paused: { stepId: 's1', reason, kind } });
+  it.each([
+    ['budget', 'paused — reached its limit'],
+    ['ceiling-shortfall', 'paused — reached its limit'],
+    ['plan-limit', 'paused — reached its limit'],
+    ['unexpected-error', 'paused — something went wrong'],
+    ['specialist-error', 'paused — something went wrong'],
+    ['launch-failed', 'paused — something went wrong'],
+    ['invalid-report', 'paused — something went wrong'],
+    ['unknown-request', 'paused — something went wrong'],
+    ['budget-refused', 'paused — needs a revised plan'],
+    ['local-pool', 'paused — needs a revised plan'],
+    ['specialist-stopped', 'paused — a specialist was stopped'],
+  ] as const)('%s → "%s"', (kind, phrase) => {
+    expect(planStatusPhrase(at(kind))).toBe(phrase);
+  });
+
+  it('a record with no kind claims nothing about why', () => {
+    expect(planStatusPhrase(paused({ paused: { stepId: 's1', reason: 'x' } }))).toBe('paused');
+  });
+
+  it('the reason continues the sentence after "Paused —" in lower case (acronyms kept)', () => {
+    bridge();
+    const { unmount } = render(<ChatProvider><Card initial={at('unexpected-error', "The plan stopped because its progress couldn't be saved.")} /></ChatProvider>);
+    expect(screen.getByTestId('plan-paused-reason').textContent).toBe("Paused — the plan stopped because its progress couldn't be saved.");
+    unmount();
+    render(<ChatProvider><Card initial={at('specialist-error', 'API key missing for this provider.')} /></ChatProvider>);
+    expect(screen.getByTestId('plan-paused-reason').textContent).toBe('Paused — API key missing for this provider.');
   });
 });

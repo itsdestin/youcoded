@@ -37,8 +37,22 @@ function pausedDetail(plan: PlanView): string {
   if (plan.paused?.handoff?.state === 'pending') {
     return plan.paused.handoff.waiting === 'reply' ? 'paused — waiting for the assistant' : 'paused — the assistant is looking into this';
   }
-  const kind = classifyPause(plan.paused).kind;
-  return kind === 'unknown-outcome' ? 'paused — check before continuing'
-    : kind === 'iteration-cap' ? 'paused — needs a revised plan'
-    : 'paused — reached its limit';
+  if (classifyPause(plan.paused).kind === 'unknown-outcome') return 'paused — check before continuing';
+  // r11b review: the phrase follows the pause's recorded KIND. It used to say
+  // "reached its limit" for every other pause — including an unsaved-progress
+  // (unexpected-error) pause, which has nothing to do with a limit.
+  switch (plan.paused?.kind) {
+    case 'budget': case 'ceiling-shortfall': case 'plan-limit':
+      return 'paused — reached its limit';
+    // Only a revised plan can help these (pause-routing.ts: Stop only).
+    case 'iteration-cap': case 'budget-refused': case 'local-pool':
+      return 'paused — needs a revised plan';
+    case 'specialist-stopped':
+      return 'paused — a specialist was stopped';
+    case 'unexpected-error': case 'specialist-error': case 'launch-failed': case 'invalid-report': case 'unknown-request': case 'unknown-outcome':
+      return 'paused — something went wrong';
+    // A record from before `kind`: say nothing about why.
+    default:
+      return 'paused';
+  }
 }

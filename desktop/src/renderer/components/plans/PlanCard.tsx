@@ -704,7 +704,14 @@ function PausedReason({ plan, pause, stepNumber }: { plan: PlanView; pause: Retu
       </>
     );
   }
-  return <span data-testid="plan-paused-reason">Paused — {plan.paused?.reason}</span>;
+  return <span data-testid="plan-paused-reason">Paused — {continueSentence(plan.paused?.reason ?? '')}</span>;
+}
+
+/** r11b review: after "Paused —" the host's reason continues the sentence, so
+ *  its capital goes ("Paused — the plan stopped …"). Only an ordinary
+ *  capitalised word is lowered; an acronym ("API key …") keeps its case. */
+function continueSentence(reason: string): string {
+  return /^[A-Z][a-z]/.test(reason) ? reason.charAt(0).toLowerCase() + reason.slice(1) : reason;
 }
 
 /** The header's own detail while the plan is being written: a live clock, so the
