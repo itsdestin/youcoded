@@ -2830,6 +2830,13 @@ html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
    data-screen-frame is the design round's variant switch (workbench-mode.ts →
    workbenchScreenFrame); the app always renders `cards`.
    ═══════════════════════════════════════════════════════════════════════════ */
+/* The body under the band: the panes sit in it with the frame edge as gutter
+   and gap, like the chat pane and the drawer in a chat session. Declared here
+   (not inline) so the floating rule below can change one side of it. */
+.screen-body {
+  gap: var(--frame-edge, 10px);
+  padding: 0 var(--frame-edge, 10px) var(--frame-edge, 10px);
+}
 [data-chrome-style='floating'] .screen-view {
   background-color: transparent !important;
 }
@@ -2841,11 +2848,13 @@ html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
 [data-chrome-style='floating'] [data-screen-open='true'] {
   visibility: hidden;
 }
-/* The band's pill has an 8px side margin and 6px above; the panes take the
-   same gutter so their edges line up with the pill's. */
+/* The band's pill has an 8px side margin; the panes take the same gutter so
+   their edges line up with the pill's, and the SAME 8px between the pill and
+   the panes — one number for every gap around a card (Destin, 2026-09-17: the
+   6px the chat's drawer pill uses read as cramped next to the 8px gutters). */
 [data-chrome-style='floating'] .screen-view .screen-body {
   --frame-edge: 8px;
-  padding-top: 6px;
+  padding-top: var(--frame-edge);
 }
 [data-chrome-style='floating'] .screen-pane {
   background-color: var(--panel);

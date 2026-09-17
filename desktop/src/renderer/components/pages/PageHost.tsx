@@ -196,7 +196,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       {/* Below the band: the panel in its own rounded container and the page
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
-      <div className="screen-body flex-1 min-h-0 flex" style={{ gap: 'var(--frame-edge, 10px)', padding: '0 var(--frame-edge, 10px) var(--frame-edge, 10px)' }}>
+      <div className="screen-body flex-1 min-h-0 flex">
         {!state.pageFocus && (
         <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
           <div className="flex-1 overflow-y-auto p-2">

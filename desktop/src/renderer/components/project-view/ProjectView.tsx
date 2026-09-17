@@ -739,7 +739,7 @@ export function ProjectView(props: ProjectViewProps) {
 
       {/* The framed pane: rounded, canvas-coloured, inset by the frame edge
           like the page view's panel and frame. */}
-      <div className="screen-body flex-1 flex overflow-hidden" style={{ padding: '0 var(--frame-edge, 10px) var(--frame-edge, 10px)' }}>
+      <div className="screen-body flex-1 flex overflow-hidden">
         {/* Main column — hero + segmented control + active tab. There is no
             project rail anymore; switching projects goes through the palette
             (ProjectSwitcher) opened from the hero name, and project removal
