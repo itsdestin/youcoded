@@ -23,14 +23,17 @@
 // top right. the rail should be collapsible with a button at the top left."
 // Round 4: no divider under the band and none above Manage pages — "the edge
 // of the frame itself should be the divider"; the page pane is inset from the
-// chrome by the frame edge on every side, like the chat pane; Back to chat is a
-// proper pill with the Esc key cap; Edit is an icon button with a tooltip in
-// the band's right cluster, not beside the name.
+// chrome by the frame edge on every side, like the chat pane. Round 5: the
+// panel sits in its own rounded container "kinda like games/files in framed
+// chat sessions"; Back to chat is styled like the window buttons (the same
+// inset pill, no outline); Edit is gone from the band — editing lives only in
+// the Manage pages screen.
 //
-//   ┌ [▣]                    ◷ Page name                 [✎] [Back to chat Esc] [– □ ×] ┐
-//   │  every page, grouped,  │╭──────────────────────────────────────────────────╮│
-//   │  pin beside each       ││  the page, in a rounded pane inset by the edge   ││
-//   │  ( Manage pages )      │╰──────────────────────────────────────────────────╯│
+//   ┌ [▣]                    ◷ Page name                    [Back to chat Esc] [– □ ×] ┐
+//   │╭─────────────────────╮ ╭──────────────────────────────────────────────────╮│
+//   ││ every page, grouped, │ │  the page, in a rounded pane inset by the edge   ││
+//   ││ pin beside each      │ │                                                  ││
+//   ││ [   Manage pages   ] │ ╰──────────────────────────────────────────────────╯│
 //
 // Opened by PAGE_OPENED (from a card, a pinned button, or a panel row); renders
 // nothing while no page is open. Sits above the library (z-50 over its z-40)
@@ -47,10 +50,6 @@ import { usePages, setPagePinned } from './use-pages';
 import { PAGE_KIT_CSS } from './page-kit';
 import { PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
 
-interface PageHostProps {
-  /** Opens the creator on THIS page: a conversation that edits it. Owned by App. */
-  onEditInChat: (pageId: string) => void;
-}
 
 type Load =
   | { state: 'loading' }
@@ -62,7 +61,7 @@ type Load =
 const BAND_ICON_BUTTON =
   'relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg';
 
-export function PageHost({ onEditInChat }: PageHostProps) {
+export function PageHost() {
   const { state, dispatch } = useArtifact();
   const pageId = state.openPageId;
   // Back to chat closes the page AND the library beneath it: the panel's
@@ -151,37 +150,30 @@ export function PageHost({ onEditInChat }: PageHostProps) {
           <span className="text-sm font-medium text-fg truncate">{title}</span>
         </div>
         <div className="flex items-center justify-end gap-1 sm:gap-2">
-          <Tooltip text="Edit this page in chat" placement="bottom">
+          {/* Same inset pill and quiet text as the window buttons beside it
+              (round 5: "should match styling of max/min/exit"). */}
+          <div className="flex bg-inset rounded-md p-0.5">
             <button
               type="button"
-              className={BAND_ICON_BUTTON}
-              onClick={() => onEditInChat(pageId)}
-              aria-label="Edit this page in chat"
+              onClick={backToChat}
+              aria-label="Back to chat"
+              className="px-2 py-1 rounded-[var(--radius-toggle)] transition-colors text-fg-dim hover:text-fg-2 flex items-center gap-1.5 text-xs"
             >
-              <EditIcon />
+              Back to chat
+              <kbd className="hidden sm:inline text-2xs font-mono text-fg-muted">Esc</kbd>
             </button>
-          </Tooltip>
-          <button
-            type="button"
-            onClick={backToChat}
-            aria-label="Back to chat"
-            className="shrink-0 inline-flex items-center gap-2 h-7 pl-2.5 pr-1.5 rounded-full border border-edge bg-inset text-xs font-medium text-fg-2 hover:text-fg hover:bg-well transition-colors"
-          >
-            Back to chat
-            <kbd className="hidden sm:inline-block text-2xs font-mono leading-none px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim text-fg-muted">Esc</kbd>
-          </button>
+          </div>
           {showCaptionButtons() && <CaptionButtons />}
         </div>
       </div>
 
-      {/* Below the band: the panel (no borders — it is part of the chrome)
-          and the page pane, inset by the frame edge on every side like the
-          chat pane is, so the gap between panel and page is the same edge as
-          the gap to the window. */}
+      {/* Below the band: the panel in its own rounded container and the page
+          pane, both inset by the frame edge, like the chat pane and the
+          files/games pane are in a chat session. */}
       <div className="flex-1 min-h-0 flex" style={{ gap: 'var(--frame-edge, 10px)', padding: '0 var(--frame-edge, 10px) var(--frame-edge, 10px)' }}>
         {railOpen && (
-          <aside className="w-56 shrink-0 flex flex-col select-none">
-            <div className="flex-1 overflow-y-auto">
+          <aside className="w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
+            <div className="flex-1 overflow-y-auto p-2">
               {personal.length > 0 && (
                 <RailGroup label="Personal">
                   {personal.map((p) => (
@@ -200,8 +192,8 @@ export function PageHost({ onEditInChat }: PageHostProps) {
               ))}
               {pages.length === 0 && <div className="px-3 py-3 text-xs text-fg-muted">No pages yet</div>}
             </div>
-            <div className="pt-3 flex justify-center">
-              <Button variant="secondary" size="sm" onClick={() => dispatch({ type: 'PAGES_VIEW_OPENED' })} className="rounded-full px-4">
+            <div className="p-3">
+              <Button variant="secondary" onClick={() => dispatch({ type: 'PAGES_VIEW_OPENED' })} className="w-full justify-center rounded-full">
                 <PagesIcon className="w-3.5 h-3.5" />
                 Manage pages
               </Button>
@@ -233,7 +225,7 @@ export function PageHost({ onEditInChat }: PageHostProps) {
 function RailGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="pb-2">
-      <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-3 pt-1 pb-1">{label}</div>
+      <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase px-2 pt-2 pb-1">{label}</div>
       {children}
     </div>
   );
@@ -253,7 +245,7 @@ function RailRow({ page, current, pinFull, onOpen }: { page: PageSummary; curren
       aria-current={current ? 'page' : undefined}
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
-      className={`group flex items-center gap-2.5 h-8 pl-3 pr-1 rounded-md text-sm text-left cursor-pointer transition-colors ${current ? 'bg-inset text-fg' : 'text-fg-2 hover:text-fg hover:bg-inset/60'}`}
+      className={`group flex items-center gap-2.5 h-8 pl-2 pr-1 rounded-md text-sm text-left cursor-pointer transition-colors ${current ? 'bg-inset text-fg' : 'text-fg-2 hover:text-fg hover:bg-inset/60'}`}
     >
       <PageGlyph icon={page.icon} className="w-4 h-4 shrink-0" />
       <span className="flex-1 min-w-0 truncate">{page.name}</span>

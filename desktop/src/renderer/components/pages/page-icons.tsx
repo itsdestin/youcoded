@@ -45,3 +45,14 @@ export function PinGlyph({ filled }: { filled: boolean }) {
     </svg>
   );
 }
+
+/** A pencil, for "Edit in chat" on a library card (round 5: editing lives only
+ *  in the Manage pages screen). */
+export function EditGlyph({ className = 'w-4 h-4' }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+        d="M16.5 3.5a2.1 2.1 0 013 3L8 18l-4 1 1-4L16.5 3.5zM14 6l4 4" />
+    </svg>
+  );
+}

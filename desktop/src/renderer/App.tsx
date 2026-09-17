@@ -4433,10 +4433,9 @@ function AppInner() {
           next task, not part of this shell. */}
       <PagesView
         onMakePage={() => { dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false); }}
+        onEditPage={() => { dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false); }}
       />
-      <PageHost
-        onEditInChat={() => { dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false); }}
-      />
+      <PageHost />
     </div>
     </ArtifactProvider>
   );

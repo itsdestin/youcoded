@@ -17,16 +17,19 @@ import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, CloseButton, LoadingState, ErrorState, Tooltip } from '../ui';
 import type { PageSummary } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
-import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
+import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned } from './use-pages';
 
 interface PagesViewProps {
   /** Starts the creator: a new conversation that builds a page. Owned by
    *  App, which knows how to open a session with an opening prompt. */
   onMakePage: () => void;
+  /** Opens the creator on an existing page. The ONLY place a page is edited
+   *  from (round 5: "keep it only accessible in the manage pages view"). */
+  onEditPage: (pageId: string) => void;
 }
 
-export function PagesView({ onMakePage }: PagesViewProps) {
+export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const { state, dispatch } = useArtifact();
   const open = state.pagesViewOpen;
   useEscClose(open, () => dispatch({ type: 'PAGES_VIEW_CLOSED' }));
@@ -86,14 +89,14 @@ export function PagesView({ onMakePage }: PagesViewProps) {
           {loaded && !failed && personal.length > 0 && (
             <Section label="Personal">
               {personal.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           )}
           {loaded && !failed && [...byProject.entries()].map(([name, list]) => (
             <Section key={name} label={name}>
               {list.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           ))}
@@ -112,7 +115,7 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function PageCard({ page, onOpen, pinFull }: { page: PageSummary; onOpen: () => void; pinFull: boolean }) {
+function PageCard({ page, onOpen, onEdit, pinFull }: { page: PageSummary; onOpen: () => void; onEdit: () => void; pinFull: boolean }) {
   // The card is one button (open); the pin is a second control INSIDE it, so
   // it stops propagation. The pin is always visible — unlike a theme card's
   // favourite star it sits on text, not on a picture (guide §4.4).
@@ -133,6 +136,17 @@ function PageCard({ page, onOpen, pinFull }: { page: PageSummary; onOpen: () => 
           <div className="text-sm font-medium text-fg truncate" title={page.name}>{page.name}</div>
           <div className="text-xs text-fg-muted line-clamp-2">{page.description}</div>
         </div>
+        <Tooltip text="Edit in chat" placement="bottom">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            aria-label={`Edit ${page.name} in chat`}
+            onClick={(e) => { e.stopPropagation(); onEdit(); }}
+            className="text-fg-muted"
+          >
+            <EditGlyph />
+          </Button>
+        </Tooltip>
         <Tooltip text={cannotPin ? `Up to ${MAX_PINNED_PAGES} pinned pages` : page.pinned ? 'Unpin from the top bar' : 'Pin to the top bar'} placement="bottom">
           <Button
             size="icon-sm"
