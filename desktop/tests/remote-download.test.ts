@@ -15,9 +15,7 @@ import http from 'node:http';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 
 vi.mock('electron', () => ({
   app: { isPackaged: false, getPath: vi.fn(() => '/tmp'), getVersion: vi.fn(() => '0.0.0-test'), on: vi.fn() },
@@ -432,21 +430,10 @@ describe('through the WS host', () => {
       await new Promise<void>((r) => srv.close(() => r()));
     }
   });
-
-  it('the route is matched before the static handler AND before the Vite proxy', () => {
-    const src = readStripped(fileURLToPath(new URL('../src/main/remote-server.ts', import.meta.url)));
-    const createServer = src.indexOf('http.createServer((req, res) => {');
-    expect(createServer).toBeGreaterThan(0);
-    const body = src.slice(createServer);
-    const route = /this\.downloads\.handleHttpRequest\(req, res\)/;
-    assertPatternMatches(route, 'if (this.downloads.handleHttpRequest(req, res)) return;', 'the download route dispatch');
-    const routeAt = body.search(route);
-    const staticAt = body.indexOf('this.handleHttpRequest(req, res, staticDir)');
-    const proxyAt = body.indexOf('this.proxyToVite(req, res, viteDevUrl)');
-    expect(routeAt).toBeGreaterThan(0);
-    expect(staticAt).toBeGreaterThan(routeAt);
-    expect(proxyAt).toBeGreaterThan(routeAt);
-  });
+  // WHY no source-order case here any more: "the download route is tried before the
+  // static handler and the Vite proxy" is the ast-grep rule download-route-before-static
+  // in youcoded-dev scripts/ast-grep/ (Plan B, 2026-09-16), which reads the code's
+  // structure rather than character offsets.
 });
 
 // ── Hardening from the T7 review (2026-09-10) ──────────────────────────────────
