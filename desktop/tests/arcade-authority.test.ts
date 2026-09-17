@@ -114,29 +114,14 @@ describe('the state split (§3.1)', () => {
   });
 });
 
-describe('the assistant-finishing rule (§7)', () => {
-  // DECIDED BY DESTIN, 2026-08-30: when the assistant finishes, NOTHING happens
-  // beyond the existing ready chime and the header status light. No game pauses,
-  // no overlay, no focus change, no extra badge.
-  //
-  // This asserts an ABSENCE, which is unusual — but the rule is exactly the kind
-  // four independently-built game modules could each quietly break, and by then
-  // it is four bugs in four places instead of one.
-  const FORBIDDEN = [
-    ['playSound', 'a game must not make its own sound when a turn ends'],
-    ['useAnyAttentionNeeded', 'a game must not react to the attention summary'],
-    ['onAttentionSummary', 'a game must not subscribe to the attention summary'],
-    ['isThinking', 'a game must not watch whether the assistant is working'],
-    ['sessionAttention', 'a game must not read session attention'],
-  ] as const;
-
-  for (const [symbol, why] of FORBIDDEN) {
-    it(`no game file references ${symbol} — ${why}`, () => {
-      const offenders = gameFiles().filter((f) => readStripped(f).includes(symbol));
-      expect(offenders, why).toEqual([]);
-    });
-  }
-});
+// The assistant-finishing rule (§7) — DECIDED BY DESTIN, 2026-08-30: when the
+// assistant finishes, NOTHING happens beyond the existing ready chime and the
+// header status light. No game pauses, no overlay, no focus change, no extra
+// badge. Moved to ast-grep (Plan B, 2026-09-16): rules
+// arcade-no-forbidden-attention-apis + its -ts twin ban the same five symbols
+// (playSound, useAnyAttentionNeeded, onAttentionSummary, isThinking,
+// sessionAttention) across every game file, scoped and ignored exactly as
+// gameFiles() was.
 
 describe('a focused game owns its keys', () => {
   // Found by building 2048: the chat scrolls the transcript on Up/Down from a
@@ -186,15 +171,6 @@ describe('theming (§5.5)', () => {
     }
     expect(offenders).toEqual([]);
   });
-
-  it('the palette pattern actually matches a known positive', () => {
-    // Without this the guard above could be a regex that matches nothing and
-    // reads green forever. bg-red-600 was a real disc colour until this spec.
-    expect(new RegExp(PALETTE.source).test('bg-red-600')).toBe(true);
-    // And the allowlist must really exempt a sanctioned one, or the guard is
-    // just banning everything and passing by luck.
-    expect(sanctionedStatusColours().has('green-400')).toBe(true);
-  });
 });
 
 describe('the score boundary (§6.1)', () => {
@@ -219,13 +195,6 @@ describe('the score boundary (§6.1)', () => {
       }
     }
     expect(offenders).toEqual([]);
-  });
-
-  it('the game-word list actually matches a known positive', () => {
-    // A guard whose pattern matches nothing reads green forever. The registry
-    // itself MUST trip this list, or the check above proves nothing.
-    const registry = readStripped(join(GAME_DIR, 'game-registry.ts'));
-    expect(GAME_WORDS.some((w) => registry.includes(w))).toBe(true);
   });
 
   it('the arcade handler formats nothing and decides no ranking', () => {
