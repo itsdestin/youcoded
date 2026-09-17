@@ -365,7 +365,10 @@ function SettingsGearButton({ settingsOpen, onToggleSettings, settingsBadge, set
   );
 }
 
-export default function HeaderBar({
+// WHY memo (2026-09-16 audit W21): App hands this bar stable handlers now, so an
+// unrelated shell state change (a toast, a popup) no longer re-renders it and
+// its session strip; a status push still does, through sessionStatuses.
+export default React.memo(function HeaderBar({
   sessions, activeSessionId, onSelectSession, onCreateSession, onCloseSession,
   viewMode, onToggleView,
   gamePanelOpen, onToggleGamePanel, gameConnected, challengePending,
@@ -633,7 +636,7 @@ export default function HeaderBar({
       </div>
     </div>
   );
-}
+});
 
 /** The welcome screen's header (P-6, Destin 2026-08-27: "a full frame around
  *  the welcome screen, as exists in terminal view, with settings/projects/
