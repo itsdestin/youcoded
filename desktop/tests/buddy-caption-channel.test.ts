@@ -183,8 +183,8 @@ describe('the caption channel', () => {
     const lines = SRC.split('\n');
 
     it('every one of the nine write sites and three creation sites is still there', () => {
-      // The scans above prove nothing moves the buddy EXCEPT through place().
-      // They cannot notice a write path being DELETED — and a deleted one is
+      // The ast-grep rule buddy-window-move-only-in-place proves nothing moves
+      // the buddy EXCEPT through place(). It cannot notice a write path being DELETED — and a deleted one is
       // invisible to the behaviour tests too, because other paths keep the same
       // totals non-zero (the bar, for instance, is also renamed by glideGroup
       // and by showBar's else-branch). Counting the call sites makes a deletion
@@ -197,6 +197,8 @@ describe('the caption channel', () => {
     });
 
     it('the three windows are built in exactly one place, inside create()', () => {
+      // WHY still a text read: "exactly one" createBuddyWindow call site is a
+      // count, which a rule (it reports shapes, not totals) cannot assert.
       const hits = lines
         .map((l, i) => ({ l, i }))
         .filter(({ l }) => /this\.deps\.createBuddyWindow\(/.test(l));
