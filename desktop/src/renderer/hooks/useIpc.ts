@@ -430,6 +430,8 @@ declare global {
         addBudget: (sessionId: string, planId: string, tokens: number) => Promise<import('../../shared/types').PlanActionResult>;
         resume: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
         stop: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
+        /** Task 11 (pause handoff §6): a paused card's "Ask the assistant". */
+        askAssistant: (sessionId: string, planId: string) => Promise<import('../../shared/types').PlanActionResult>;
         /** Settings → Specialists: run plans without asking when under this many tokens (0 = off). */
         getAutoApprove: () => Promise<import('../../shared/types').PlanAutoApproveRead>;
         setAutoApprove: (underTokens: number) => Promise<import('../../shared/types').PlanSettingsWriteResult>;

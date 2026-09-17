@@ -141,6 +141,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // ipc-handlers, remote-shim, remote-server, SessionService.kt); still
   // hand-written so the workbench can show every card state with no running plan.
   'plans.approve', 'plans.comment', 'plans.addBudget', 'plans.resume', 'plans.stop',
+  // Task 11: the paused card's "Ask the assistant" (plans:ask-assistant).
+  'plans.askAssistant',
   'plans.getAutoApprove', 'plans.setAutoApprove', 'on.planEvent',
   // Voice prompting (2026-09-05) — no real backend yet, registered in
   // mock-only.ts. Listed so the contract test covers the fake.
@@ -1716,6 +1718,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       ...p, status: 'stopped', endedAt: Date.now(),
       steps: p.steps.map((st) => st.status === 'running' || st.status === 'paused' ? { ...st, status: 'skipped', children: st.children?.map((c) => ({ ...c, status: 'interrupted' as const, endedAt: Date.now() })) } : st),
     })),
+    // Task 11 (pause handoff §6): the real host records a pending question
+    // and queues the notice; the fake only greys the card, so the review deck
+    // can show the state right after the press. It never answers — that is
+    // the assistant's turn.
+    askAssistant: async (_sessionId: string, planId: string) => nextPlan(planId, (p) => (p.status === 'paused' && p.paused
+      ? { ...p, paused: { ...p.paused, handoff: { state: 'pending' } } }
+      : p)),
     // Task 5a: the real forms (plan-service.ts) — the settings row reads `ok`.
     // A refused write answers `{ ok: false }` via `write`, which the bridge
     // turns into its general "Couldn't save" line.

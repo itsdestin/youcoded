@@ -1453,16 +1453,23 @@ export class HarnessSession extends EventEmitter {
   /** Keep propose_plan aligned with the CURRENT binding and session kind.
    * WHY this is separate from Task's canDelegate gate: plan authoring has its
    * own reviewed-local threshold, while every cloud tool-capable route qualifies. */
-  private syncPlanTool(): void {
+  /** Task 11 (pause handoff §6): whether this session's model is offered the
+   *  plan tools right now — the same gate syncPlanTool applies, so the plan
+   *  card can hide "Ask the assistant" when nobody could answer it. */
+  offersPlanTools(): boolean {
     // Provider provenance is security/capability input, not a cosmetic label.
     // Missing provenance cannot be promoted to a cloud route: fail closed.
-    const wanted = this.opts.providerType !== undefined && isPlanEligible({
+    return this.opts.providerType !== undefined && isPlanEligible({
       providerType: this.opts.providerType,
       providerBaseUrl: this.opts.providerBaseUrl,
       modelId: this.binding.modelId,
       supportsTools: this.profile.supportsTools,
       isSpecialistChild: this.opts.isSpecialistChild ?? false,
     });
+  }
+
+  private syncPlanTool(): void {
+    const wanted = this.offersPlanTools();
     // Task 9b (pause handoff §2): recommend_plan_action answers a plan's pause
     // notice, so it rides exactly the same gate as propose_plan — never a
     // specialist, never a model that can't propose plans.

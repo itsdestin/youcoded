@@ -15,11 +15,11 @@ import org.junit.Test
 class PlansBridgeTest {
 
     @Test
-    fun `names exactly the seven plan request channels`() {
+    fun `names exactly the eight plan request channels`() {
         assertEquals(
             setOf(
                 "plans:approve", "plans:comment", "plans:add-budget", "plans:resume",
-                "plans:stop", "plans:get-auto-approve", "plans:set-auto-approve",
+                "plans:stop", "plans:ask-assistant", "plans:get-auto-approve", "plans:set-auto-approve",
             ),
             PlansBridge.CHANNELS,
         )

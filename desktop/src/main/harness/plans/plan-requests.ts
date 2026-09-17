@@ -3,8 +3,8 @@ import type {
 } from '../../../shared/types';
 
 /**
- * Specialists plans, Task 6 (design §5) — the ONE handler behind the seven
- * plan request channels, shared by desktop IPC (ipc-handlers.ts) and the
+ * Specialists plans, Task 6 (design §5) — the ONE handler behind the eight
+ * plan request channels (Task 11 added "Ask the assistant", pause handoff §6), shared by desktop IPC (ipc-handlers.ts) and the
  * remote WebSocket (remote-server.ts).
  *
  * WHY one shared function rather than two copies: the design promises that a
@@ -14,7 +14,7 @@ import type {
  * card then behaves differently depending on which screen you used. Both
  * transports now pass the raw payload straight here.
  *
- * Android has no native runtime and answers the same seven channels with a
+ * Android has no native runtime and answers the same eight channels with a
  * typed `unsupported` refusal of its own (SessionService.kt → PlansBridge.kt).
  */
 
@@ -24,6 +24,8 @@ export const PLAN_REQUEST_CHANNELS = [
   'plans:add-budget',
   'plans:resume',
   'plans:stop',
+  // Task 11 (pause handoff §6): the paused card's "Ask the assistant".
+  'plans:ask-assistant',
   'plans:get-auto-approve',
   'plans:set-auto-approve',
 ] as const;
@@ -40,6 +42,7 @@ export interface PlanRequestHost {
   addPlanBudget(sessionId: string, planId: string, tokens: number): Promise<PlanActionResult>;
   resumePlan(sessionId: string, planId: string): Promise<PlanActionResult>;
   stopPlan(sessionId: string, planId: string): Promise<PlanActionResult>;
+  askAssistantAboutPlan(sessionId: string, planId: string): Promise<PlanActionResult>;
   getPlanAutoApprove(): Promise<PlanAutoApproveRead>;
   setPlanAutoApprove(underTokens: unknown): Promise<PlanSettingsWriteResult>;
 }
@@ -105,6 +108,7 @@ export async function handlePlanRequest(
         else if (channel === 'plans:comment') answer = await host.commentOnPlan(sessionId, planId, p.text as string);
         else if (channel === 'plans:add-budget') answer = await host.addPlanBudget(sessionId, planId, p.tokens as number);
         else if (channel === 'plans:resume') answer = await host.resumePlan(sessionId, planId);
+        else if (channel === 'plans:ask-assistant') answer = await host.askAssistantAboutPlan(sessionId, planId);
         else answer = await host.stopPlan(sessionId, planId);
       }
     }

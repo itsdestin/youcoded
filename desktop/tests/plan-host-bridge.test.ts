@@ -2,7 +2,7 @@
 // against a fake host port: which model a plan specialist runs on, what is
 // frozen into the manifest, when a launch is refused, and the smallest Add
 // budget after a soft (ChatGPT) overshoot.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
 import { PlanHostBridge, definitionFingerprint, PLAN_MINIMUM_ADD_MARGIN_TOKENS, type PlanHostPort, type PlanRoute } from '../src/main/harness/plans/plan-host-bridge';
@@ -41,8 +41,10 @@ function port(): PlanHostPort {
     readChildEvents: () => childEvents,
     queueTurn: () => {},
     currentTurnId: () => undefined,
-    // Task 9b: this file never hands a pause to the assistant.
-    canTakeNotice: () => false,
+    // Task 11: only the "Ask the assistant" tests below queue a notice.
+    noticeRefusal: () => undefined,
+    planToolsAvailable: () => true,
+    noticeWouldWait: () => false,
     queuePlanNotice: () => false,
     withdrawPlanNotice: () => false,
     startChild: async () => { throw new Error('not in this test'); },
@@ -236,51 +238,183 @@ describe('review fix 2: the report-only request is measured on the specialist\'s
   });
 });
 
-// Task 9b (pause handoff §2 steps 1 and 3) — the bridge's own decisions.
-describe('handing a pause to the assistant', () => {
+// Task 11 (pause handoff §6, revision 4) — "Ask the assistant": the bridge's
+// own decisions. Every rule here came from a review-4 finding.
+describe('Ask the assistant', () => {
   const REF = { cwd: '/proj', sessionId: SID };
-  const pausedPlan = (): PlanRecord => ({
+  const pausedPlan = (over: Partial<NonNullable<PlanRecord['paused']>> = {}): PlanRecord => ({
     planId: 'p-h', toolUseId: 't', document: DOC, maximumAttempts: 1, maxFanOut: 1,
     ceilingTokens: 1000, ceilingUsd: null, usedTokens: 1000, status: 'paused', seq: 1, createdAt: 1,
     manifest: { modelLabel: 'm', specialists: { reviewer: { definitionFingerprint: 'd', binding: { providerId: 'p', modelId: 'm' }, pricing: null, setupTokens: 0 } }, permissionFingerprint: 'x' },
     steps: [{ id: 's1', status: 'paused', attempts: [] }], fenceEpoch: 1,
-    paused: { stepId: 's1', reason: 'used it all', kind: 'budget', handoff: { id: 'h-q', state: 'pending', at: 1, revisionTurnId: 'turn-q' } },
+    paused: { stepId: 's1', reason: 'used it all', kind: 'budget', ...over },
   });
-
-  it('a notice that cannot be queued (e.g. Stop pressed just after the check) clears the handoff at once', async () => {
-    const queued: string[] = [];
-    const bridge = new PlanHostBridge({ ...port(), queuePlanNotice: (_s, n) => { queued.push(n.handoffId); return false; } });
+  type Notice = Parameters<PlanHostPort['queuePlanNotice']>[1];
+  async function setup(over: Partial<PlanHostPort> = {}, opts: { handoffBackstopMs?: number } = {}) {
+    const queued: Notice[] = [];
+    const withdrawn: string[] = [];
+    const emitted: any[] = [];
+    const bridge = new PlanHostBridge({
+      ...port(),
+      emit: (e) => emitted.push(e),
+      queuePlanNotice: (_s, n) => { queued.push(n); return true; },
+      withdrawPlanNotice: (_s, id) => { withdrawn.push(id); return true; },
+      ...over,
+    }, opts);
     await bridge.journal.mutate(REF, (file) => { file.plans.push(pausedPlan()); });
-    await (bridge as any).handoffCreated(REF, 'p-h', { id: 'h-q', turnId: 'turn-q' });
-    expect(queued).toEqual(['h-q']);
-    expect((await bridge.journal.get(REF, 'p-h'))!.paused!.handoff).toEqual({ id: 'h-q', state: 'answered', at: 1 });
-    // A proposal from that never-delivered turn is not treated as a notice turn.
-    expect((bridge as any).noticeTurns.has('turn-q')).toBe(false);
+    const handoff = async () => (await bridge.journal.get(REF, 'p-h'))!.paused?.handoff;
+    return { bridge, queued, withdrawn, emitted, handoff };
+  }
+
+  it('registers the handoff first, records it pending in the write, then queues the notice (§6, review 4-4)', async () => {
+    const order: string[] = [];
+    let bridge!: PlanHostBridge;
+    const t = await setup({
+      queuePlanNotice: (_s, n) => { order.push(`queue:${(bridge as any).handoffs.has(n.handoffId)}`); return true; },
+    });
+    bridge = t.bridge;
+    const realMutate = bridge.journal.mutate.bind(bridge.journal);
+    vi.spyOn(bridge.journal, 'mutate').mockImplementation(((ref: any, fn: any) => {
+      order.push(`write:${(bridge as any).handoffs.size}`);
+      return realMutate(ref, fn);
+    }) as any);
+    const res = await bridge.askAssistant(SID, 'p-h');
+    expect(res).toMatchObject({ ok: true, plan: { paused: { handoff: { state: 'pending' } } } });
+    expect(order).toEqual(['write:1', 'queue:true']);
+    const h = (await t.handoff())!;
+    expect(h).toMatchObject({ state: 'pending', id: expect.any(String), revisionTurnId: expect.any(String) });
+    // The notice carries this handoff, its own turn, and the new wording.
+    const bridgeQueued = (bridge as any).handoffs.get(h.id);
+    expect(bridgeQueued.turnId).toBe(h.revisionTurnId);
+    expect((bridge as any).noticeTurns.has(h.revisionTurnId)).toBe(true);
   });
 
-  it('hands over only an assistant-routed pause, and only when the conversation can take a notice', () => {
-    let can = true;
-    const bridge = new PlanHostBridge({ ...port(), canTakeNotice: () => can });
-    const prepare = (facts: object) => (bridge as any).prepareHandoff(REF, facts);
-    expect(prepare({ kind: 'budget' })).toEqual({ id: expect.any(String), turnId: expect.any(String) });
-    expect(prepare({ kind: 'specialist-stopped' })).toBeUndefined();
-    const a = prepare({ kind: 'iteration-cap' });
-    const b = prepare({ kind: 'iteration-cap' });
-    expect(a.id).not.toBe(b.id);   // unguessable, one per pause
-    can = false;
-    expect(prepare({ kind: 'budget' })).toBeUndefined();
+  it('the notice it queues is the one the user asked for', async () => {
+    const t = await setup();
+    await t.bridge.askAssistant(SID, 'p-h');
+    const h = (await t.handoff())!;
+    expect(t.queued).toHaveLength(1);
+    expect(t.queued[0]).toMatchObject({ planId: 'p-h', handoffId: h.id, turnId: h.revisionTurnId });
+    expect(t.queued[0].text.startsWith('[Plan paused] The user asked you about this paused plan.')).toBe(true);
   });
-});
 
-// Task 9b follow-up: a clear that lands while the notice is being queued (a
-// takeover, or Stop) must not leave that notice queued behind it.
-describe('a handoff cleared while its notice is being queued', () => {
-  it('withdraws the notice that was just queued, and it is not a notice turn', async () => {
-    const REF = { cwd: '/proj', sessionId: SID };
+  it('a conversation that cannot take a notice refuses with the real reason, before any write (§6)', async () => {
+    const t = await setup({ noticeRefusal: () => 'You stopped this conversation. Send the assistant a message, then ask again.' });
+    const seq = (await t.bridge.journal.get(REF, 'p-h'))!.seq;
+    expect(await t.bridge.askAssistant(SID, 'p-h')).toEqual({ ok: false, error: 'You stopped this conversation. Send the assistant a message, then ask again.' });
+    expect((await t.bridge.journal.get(REF, 'p-h'))!.seq).toBe(seq);
+    expect((t.bridge as any).handoffs.size).toBe(0);
+    expect(t.queued).toHaveLength(0);
+  });
+
+  it('a model that cannot use tools is refused, and every card it is shown hides Ask (§6, review 4-9)', async () => {
+    let tools: boolean | undefined = false;
+    const t = await setup({ planToolsAvailable: () => tools });
+    expect(await t.bridge.askAssistant(SID, 'p-h')).toEqual({ ok: false, error: "The model in this conversation can't use tools, so it can't look into the plan." });
+    expect((await t.handoff())).toBeUndefined();
+    // The flag rides every view main hands out: pushes, hydration, action answers.
+    const stopped = await t.bridge.stop(SID, 'p-h');
+    expect(stopped).toMatchObject({ ok: true });
+    await t.bridge.journal.mutate(REF, (file) => { file.plans.push({ ...pausedPlan(), planId: 'p-2' }); });
+    const pushed = t.emitted.filter((e) => e.plan.planId === 'p-2').pop();
+    expect(pushed.plan.paused.askUnavailable).toBe(true);
+    expect((await t.bridge.views(SID)).find((v) => v.planId === 'p-2')!.paused!.askUnavailable).toBe(true);
+    const add = await t.bridge.addBudget(SID, 'p-2', 10);
+    expect(add).toMatchObject({ ok: true, plan: { paused: { askUnavailable: true } } });
+    // Tools available, or not known (the conversation is not open here): Ask shows.
+    tools = true;
+    expect((await t.bridge.views(SID)).find((v) => v.planId === 'p-2')!.paused!.askUnavailable).toBeUndefined();
+    tools = undefined;
+    expect((await t.bridge.views(SID)).find((v) => v.planId === 'p-2')!.paused!.askUnavailable).toBeUndefined();
+  });
+
+  it('a second press while the first is pending is refused, and only one notice is queued (review 4-3)', async () => {
+    const t = await setup();
+    const [a, b] = await Promise.all([t.bridge.askAssistant(SID, 'p-h'), t.bridge.askAssistant(SID, 'p-h')]);
+    expect([a.ok, b.ok].sort()).toEqual([false, true]);
+    expect([a, b].find((r) => !r.ok)).toEqual({ ok: false, error: 'The assistant is already looking into this plan.' });
+    expect(t.queued).toHaveLength(1);
+    expect((t.bridge as any).handoffs.size).toBe(1);
+    expect((t.bridge as any).noticeTurns.size).toBe(1);
+  });
+
+  it('a notice that cannot be queued clears the handoff at once and says so on the card', async () => {
+    const t = await setup({ queuePlanNotice: () => false });
+    expect(await t.bridge.askAssistant(SID, 'p-h')).toEqual({ ok: false, error: "Couldn't ask the assistant: this conversation isn't running here right now." });
+    const h = (await t.handoff())!;
+    expect(h.state).toBe('answered');
+    expect(h.problem).toBeUndefined();
+    expect(h.revisionTurnId).toBeUndefined();
+    expect((t.bridge as any).handoffs.size).toBe(0);
+    expect((t.bridge as any).noticeTurns.size).toBe(0);
+  });
+
+  it('a question behind a reply in progress is recorded as waiting; delivery starting clears that (§6, review 4-5)', async () => {
+    const t = await setup({ noticeWouldWait: () => true });
+    const res = await t.bridge.askAssistant(SID, 'p-h');
+    expect(res).toMatchObject({ ok: true, plan: { paused: { handoff: { state: 'pending', waiting: 'reply' } } } });
+    t.queued[0].onStart();
+    await vi.waitFor(async () => expect((await t.handoff())!.waiting).toBeUndefined());
+    expect((await t.handoff())!.state).toBe('pending');
+  });
+
+  it('a conversation that turned busy between the check and the queue is corrected to waiting', async () => {
+    let busy = false;
+    const t = await setup({ noticeWouldWait: () => busy });
+    const realMutate = t.bridge.journal.mutate.bind(t.bridge.journal);
+    vi.spyOn(t.bridge.journal, 'mutate').mockImplementation(((ref: any, fn: any) => { busy = true; return realMutate(ref, fn); }) as any);
+    await t.bridge.askAssistant(SID, 'p-h');
+    await vi.waitFor(async () => expect((await t.handoff())!.waiting).toBe('reply'));
+  });
+
+  it('the backstop clears a question that never started, withdraws it, and leaves an error with Retry (§6, review 4-5)', async () => {
+    const t = await setup({}, { handoffBackstopMs: 20 });
+    await t.bridge.askAssistant(SID, 'p-h');
+    const id = (await t.handoff())!.id;
+    await vi.waitFor(async () => expect((await t.handoff())!.state).toBe('answered'));
+    expect((await t.handoff())!.problem).toEqual({ kind: 'no-start' });
+    expect(t.withdrawn).toEqual([id]);
+    const view = (await t.bridge.views(SID))[0];
+    expect(view.paused!.handoff).toEqual({ state: 'answered', problem: { kind: 'no-start' } });
+  });
+
+  it('a notice turn that failed leaves the real reason with Retry; one that ended normally leaves the default buttons (review 4-10)', async () => {
+    const t = await setup();
+    await t.bridge.askAssistant(SID, 'p-h');
+    t.queued[0].onStart();
+    t.queued[0].onEnd({ failed: 'The provider returned an error (529: overloaded).' });
+    await vi.waitFor(async () => expect((await t.handoff())!.state).toBe('answered'));
+    expect((await t.handoff())!.problem).toEqual({ kind: 'reply-failed', detail: 'The provider returned an error (529: overloaded).' });
+    // Asking again replaces the problem.
+    expect(await t.bridge.askAssistant(SID, 'p-h')).toMatchObject({ ok: true });
+    expect((await t.handoff())!.problem).toBeUndefined();
+    t.queued[1].onStart();
+    t.queued[1].onEnd({});
+    await vi.waitFor(async () => expect((await t.handoff())!.state).toBe('answered'));
+    expect((await t.handoff())!.problem).toBeUndefined();
+    expect((t.bridge as any).noticeTurns.size).toBe(0);
+  });
+
+  it('Stop on the conversation clears a pending question silently (the user chose it)', async () => {
+    const t = await setup();
+    await t.bridge.askAssistant(SID, 'p-h');
+    t.bridge.conversationStopped(SID);
+    await vi.waitFor(async () => expect((await t.handoff())!.state).toBe('answered'));
+    expect((await t.handoff())!.problem).toBeUndefined();
+    expect(t.withdrawn).toHaveLength(1);
+  });
+
+  it('restart recovery keeps a question this process holds (review 4-4)', async () => {
+    const t = await setup();
+    await t.bridge.askAssistant(SID, 'p-h');
+    await t.bridge.recover(SID, '/proj');
+    expect((await t.handoff())!.state).toBe('pending');
+  });
+
+  it('a clear that lands while the notice is being queued withdraws the notice just queued', async () => {
     const log: string[] = [];
     let bridge!: PlanHostBridge;
-    bridge = new PlanHostBridge({
-      ...port(),
+    const t = await setup({
       queuePlanNotice: (_s, n) => {
         // The clear runs in the middle of queueing (its synchronous part).
         bridge.conversationStopped(SID);
@@ -289,21 +423,13 @@ describe('a handoff cleared while its notice is being queued', () => {
       },
       withdrawPlanNotice: (_s, id) => { log.push(`withdrawn:${id}`); return true; },
     });
-    await bridge.journal.mutate(REF, (file) => {
-      file.plans.push({
-        planId: 'p-w', toolUseId: 't', document: DOC, maximumAttempts: 1, maxFanOut: 1,
-        ceilingTokens: 1000, ceilingUsd: null, usedTokens: 1000, status: 'paused', seq: 1, createdAt: 1,
-        manifest: { modelLabel: 'm', specialists: { reviewer: { definitionFingerprint: 'd', binding: { providerId: 'p', modelId: 'm' }, pricing: null, setupTokens: 0 } }, permissionFingerprint: 'x' },
-        steps: [{ id: 's1', status: 'paused', attempts: [] }], fenceEpoch: 1,
-        paused: { stepId: 's1', reason: 'used it all', kind: 'budget', handoff: { id: 'h-w', state: 'pending', at: 1, revisionTurnId: 'turn-w' } },
-      });
-    });
-    await (bridge as any).handoffCreated(REF, 'p-w', { id: 'h-w', turnId: 'turn-w' });
+    bridge = t.bridge;
+    await bridge.askAssistant(SID, 'p-h');
     await new Promise((r) => setTimeout(r, 20));
-    // The notice queued AFTER the clear's own withdrawal is withdrawn again.
-    expect(log.slice(log.indexOf('queued:h-w'))).toContain('withdrawn:h-w');
-    expect((bridge as any).noticeTurns.has('turn-w')).toBe(false);
+    const id = (await t.handoff())!.id;
+    expect(log.slice(log.indexOf(`queued:${id}`))).toContain(`withdrawn:${id}`);
+    expect((bridge as any).noticeTurns.size).toBe(0);
     expect((bridge as any).handoffs.size).toBe(0);
-    expect((await bridge.journal.get(REF, 'p-w'))!.paused!.handoff!.state).toBe('answered');
+    expect((await t.handoff())!.state).toBe('answered');
   });
 });

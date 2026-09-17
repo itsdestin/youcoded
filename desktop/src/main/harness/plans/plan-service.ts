@@ -15,7 +15,7 @@ import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
 import { planCeilingTokens, planCeilingUsd } from './plan-budget';
 import { pausedRouting, resetRecoveriesForContinue, type PlanPauseAction } from './pause-routing';
-import { PLAN_RECOMMENDATION_MAX_CHARS, addBudgetCap, addBudgetFloor } from './plan-handoff';
+import { PLAN_NOTICE_DETAIL_MAX_CHARS, PLAN_RECOMMENDATION_MAX_CHARS, addBudgetCap, addBudgetFloor } from './plan-handoff';
 import type {
   ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanRecord, PlanRef,
   PlanSettingsWriteResult, PlanUnsupported,
@@ -57,6 +57,20 @@ export interface PlanRecommendation {
   message: string;
 }
 export type PlanRecommendResult = { ok: true; plan: PlanView } | { ok: false; error: string };
+
+/** Task 11 (§6): the handoff the host minted for one press of "Ask the
+ *  assistant" — already registered in its in-memory map before this write. */
+export interface PlanAskHandoff {
+  id: string;
+  /** The notice turn's id: the pending revision a propose_plan from that
+   *  turn may link to. */
+  turnId: string;
+  /** The question will wait behind a reply already in progress. */
+  waiting?: boolean;
+}
+
+/** Task 11 (§6): why a question was cleared without an answer. */
+export type PlanHandoffProblem = { kind: 'no-start' } | { kind: 'reply-failed'; detail?: string };
 
 export interface PlanServiceDeps {
   journal: PlanJournal;
@@ -120,7 +134,17 @@ function supersedeHandoff(plan: PlanRecord): string | undefined {
   if (!h) return undefined;
   if (h.state === 'pending') h.state = 'answered';
   delete h.revisionTurnId;
+  // Task 11: the user acted, so neither "waiting" nor an old question's
+  // error line describes the card any more.
+  delete h.waiting;
+  delete h.problem;
   return h.id;
+}
+
+/** Task 11 (§6): a provider error can be long; the card shows at most this much. */
+function capDetail(detail: string): string {
+  const t = detail.trim();
+  return t.length <= PLAN_NOTICE_DETAIL_MAX_CHARS ? t : `${t.slice(0, PLAN_NOTICE_DETAIL_MAX_CHARS)}…`;
 }
 
 const STATUS_WORDS: Record<JournalPlanStatus, string> = {
@@ -234,7 +258,10 @@ export class PlanService {
    * Lease + transition to running in one journal write, then hand the fence
    * to the executor. `onStart` stamps fields in that same write.
    */
-  private async startRun(ref: PlanRef, planId: string, from: JournalPlanStatus[], onStart: (plan: PlanRecord) => void): Promise<PlanView> {
+  private async startRun(
+    ref: PlanRef, planId: string, from: JournalPlanStatus[],
+    onStart: (plan: PlanRecord, replaced: { paused?: PlanRecord['paused'] }) => void,
+  ): Promise<PlanView> {
     const executor = this.deps.executor!;
     const lease = await this.journal.acquireLease(ref, planId, { startFrom: from, onStart });
     if (!lease.ok) {
@@ -382,8 +409,15 @@ export class PlanService {
       // of the work it resumes, in the same write that takes the lease.
       // Task 9b: that write also drops the pause, and with it any handoff —
       // the user decided; its undelivered notice is withdrawn below.
-      const view = await this.startRun(ref, planId, ['paused', 'interrupted'], (p) => resetRecoveriesForContinue(p));
-      this.notifySuperseded(ref, planId, plan.paused?.handoff?.id);
+      // Task 11 (review 4-2): the handoff to withdraw is read INSIDE that
+      // write — an Ask can land during the drift check above, and an id read
+      // before it would leave that question queued behind a running plan.
+      let handoffId: string | undefined;
+      const view = await this.startRun(ref, planId, ['paused', 'interrupted'], (p, replaced) => {
+        handoffId = replaced.paused?.handoff?.id;
+        resetRecoveriesForContinue(p);
+      });
+      this.notifySuperseded(ref, planId, handoffId);
       return { ok: true, plan: view };
     });
   }
@@ -397,7 +431,11 @@ export class PlanService {
       // Bounded settle-before-visible (design §3): the executor disposes every
       // child, timer and reservation and releases its lease before the card
       // is allowed to say "stopped".
+      // Task 11 (review 4-2): whichever write stops the plan reads the handoff
+      // it drops, so a question asked a moment earlier is still withdrawn.
+      let handoffId: string | undefined;
       const markStopped = (p: PlanRecord): void => {
+        handoffId = p.paused?.handoff?.id ?? handoffId;
         p.status = 'stopped';
         p.endedAt = this.now();
         delete p.paused;
@@ -411,17 +449,18 @@ export class PlanService {
         // that drops its lease, so no crash can leave a released plan that
         // still says "running" (which recovery would show as interrupted).
         const applied = await this.deps.executor.stop({ ref, planId, finalize: markStopped });
-        if (applied === true) return { ok: true, plan: await this.view(ref, planId) };
+        if (applied === true) {
+          this.notifySuperseded(ref, planId, handoffId);
+          return { ok: true, plan: await this.view(ref, planId) };
+        }
       }
       // Task 9b: stopping a paused plan drops its pause and any handoff with it
       // (markStopped); "Stopping the plan withdraws its queued notice".
-      let handoffId: string | undefined;
       await this.journal.mutate(ref, (file) => {
         const p = file.plans.find((x) => x.planId === planId);
         if (!p) throw new PlanActionRefused('This plan no longer exists.');
         this.requireStatus(p, ['proposed', 'running', 'paused', 'interrupted']);
         if (this.journal.leaseOwner(p) === 'live') throw new PlanActionRefused('This plan is running in another YouCoded window. Stop it there.');
-        handoffId = p.paused?.handoff?.id;
         markStopped(p);
       });
       this.notifySuperseded(ref, planId, handoffId);
@@ -508,6 +547,59 @@ export class PlanService {
   }
 
   /**
+   * Task 11 (pause handoff §6): the user pressed "Ask the assistant". The host
+   * has already registered `handoff` in its in-memory map (so a restart
+   * recovery running now keeps it — review 4-4) and checked that the
+   * conversation can take a notice. Here, INSIDE the write, the plan must be
+   * paused with no question already pending (review 4-3: a second press from
+   * another window, the phone or a double click is refused by this check, not
+   * by an earlier read), and the pending handoff is recorded in that same
+   * write. Asking again after an answer replaces the old recommendation,
+   * error and revision link. The host queues the notice afterwards.
+   */
+  askAssistant(sessionId: string, planId: string, handoff: PlanAskHandoff): Promise<PlanActionResult> {
+    return this.act('ask the assistant about', async () => {
+      const { ref } = await this.loadPlan(sessionId, planId);
+      await this.journal.mutate(ref, (file) => {
+        const p = file.plans.find((x) => x.planId === planId);
+        if (!p) throw new PlanActionRefused('This plan no longer exists.');
+        // An interrupted card has no pause to hold a handoff (review 4-1).
+        if (p.status !== 'paused' || !p.paused) {
+          throw new PlanActionRefused(`Only a paused plan can be asked about. This plan is ${STATUS_WORDS[p.status]}.`);
+        }
+        if (p.paused.handoff?.state === 'pending') throw new PlanActionRefused('The assistant is already looking into this plan.');
+        p.paused.handoff = {
+          id: handoff.id, state: 'pending', at: this.now(), revisionTurnId: handoff.turnId,
+          ...(handoff.waiting ? { waiting: 'reply' as const } : {}),
+        };
+      });
+      return { ok: true, plan: await this.view(ref, planId) };
+    });
+  }
+
+  /**
+   * Task 11 (§6): set or clear "waiting behind a reply" on this pending
+   * handoff only. `stillApplies` is re-checked inside the write (the host's
+   * "has delivery started?"), so a late correction never overwrites the
+   * start of delivery. Never throws.
+   */
+  async setHandoffWaiting(ref: PlanRef, planId: string, handoffId: string, waiting: boolean, stillApplies: () => boolean = () => true): Promise<void> {
+    try {
+      const read = await this.journal.get(ref, planId);
+      const h0 = read?.paused?.handoff;
+      if (!h0 || h0.id !== handoffId || h0.state !== 'pending' || (h0.waiting === 'reply') === waiting) return;
+      await this.journal.mutate(ref, (file) => {
+        const h = file.plans.find((x) => x.planId === planId)?.paused?.handoff;
+        if (!h || h.id !== handoffId || h.state !== 'pending' || !stillApplies()) return;
+        if (waiting) h.waiting = 'reply';
+        else delete h.waiting;
+      });
+    } catch (e) {
+      console.error('[plan-service] could not update a plan question\'s waiting state', e);
+    }
+  }
+
+  /**
    * recommend_plan_action (§2 step 6). Records the button the assistant
    * recommends; it never resumes, stops or adds budget — the user presses the
    * button. Every refusal says why, so the assistant can advise in chat.
@@ -565,13 +657,26 @@ export class PlanService {
    * revision goes too — only a proposal from that turn could have used it.
    * Only for the same id: a newer pause is never touched. Never throws.
    */
-  async answerHandoff(ref: PlanRef, planId: string, handoffId: string): Promise<boolean> {
+  async answerHandoff(ref: PlanRef, planId: string, handoffId: string, problem?: PlanHandoffProblem): Promise<boolean> {
     let changed = false;
     try {
       await this.journal.mutate(ref, (file) => {
         const h = file.plans.find((x) => x.planId === planId)?.paused?.handoff;
         if (!h || h.id !== handoffId) return;
-        if (h.state === 'pending') { h.state = 'answered'; changed = true; }
+        if (h.state === 'pending') {
+          h.state = 'answered';
+          changed = true;
+          // Task 11 (§6, review 4-5/4-10): a question the assistant never
+          // answered because it did not start in time, or because its turn
+          // failed, leaves that on the card (with Retry). An answered one
+          // (a recommendation already recorded) keeps its answer instead.
+          if (problem) {
+            h.problem = problem.kind === 'reply-failed' && problem.detail?.trim()
+              ? { kind: 'reply-failed', detail: capDetail(problem.detail) }
+              : { kind: problem.kind };
+          }
+        }
+        if (h.waiting !== undefined) { delete h.waiting; changed = true; }
         if (h.revisionTurnId !== undefined) { delete h.revisionTurnId; changed = true; }
       });
     } catch (e) {
@@ -586,12 +691,15 @@ export class PlanService {
    * pending handoff this process is not delivering is answered. Reads first,
    * so a conversation that never had a plan gets no file.
    */
-  async clearStaleHandoffs(ref: PlanRef, keep: ReadonlySet<string>): Promise<void> {
+  async clearStaleHandoffs(ref: PlanRef, isLive: (handoffId: string) => boolean): Promise<void> {
     const read = await this.journal.read(ref);
     if (read.kind !== 'valid') return;
+    // Task 11 (review 4-4): `isLive` is asked again INSIDE the write below —
+    // an Ask pressed right after the app opened registers its handoff before
+    // its own write, so a question this process now holds is never cleared.
     const stale = (p: PlanRecord) => {
       const h = p.paused?.handoff;
-      return !!h && (h.state === 'pending' || h.revisionTurnId !== undefined) && !keep.has(h.id);
+      return !!h && (h.state === 'pending' || h.revisionTurnId !== undefined) && !isLive(h.id);
     };
     if (!read.file.plans.some(stale)) return;
     await this.journal.mutate(ref, (file) => {
@@ -600,6 +708,7 @@ export class PlanService {
         const h = p.paused!.handoff!;
         h.state = 'answered';
         delete h.revisionTurnId;
+        delete h.waiting;
       }
     });
   }

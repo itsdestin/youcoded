@@ -1452,14 +1452,17 @@ describe('specialists:* channel parity', () => {
   });
 });
 
-// Specialists plans, Task 6 (design §5): EXACTLY seven request channels plus
+// Specialists plans, Task 6 (design §5): EXACTLY these request channels plus
 // one push, on every surface. "Exactly" is the point — the plan card and
-// Settings call these seven and nothing else, so a stray eighth `plans:*`
-// string on one surface is a typo that silently breaks a button there.
-describe('plans:* channel parity (seven requests + plans:event)', () => {
+// Settings call these and nothing else, so a stray extra `plans:*` string on
+// one surface is a typo that silently breaks a button there. Task 11 (pause
+// handoff §6, revision 4): the eighth, `plans:ask-assistant`, is the card's
+// "Ask the assistant" button; it supersedes the backend design's "exactly seven".
+describe('plans:* channel parity (eight requests + plans:event)', () => {
   const REQUESTS = [
     'plans:add-budget',
     'plans:approve',
+    'plans:ask-assistant',
     'plans:comment',
     'plans:get-auto-approve',
     'plans:resume',
@@ -1471,34 +1474,34 @@ describe('plans:* channel parity (seven requests + plans:event)', () => {
   /** Every distinct `plans:*` channel string quoted in a source, in either quote style. */
   const plansStrings = (src: string) => [...new Set([...src.matchAll(/['"](plans:[a-z-]+)['"]/g)].map((m) => m[1]))].sort();
 
-  it('the shared list names exactly the seven', async () => {
+  it('the shared list names exactly the eight', async () => {
     const { PLAN_REQUEST_CHANNELS, PLANS_EVENT_CHANNEL } = await import('../src/main/harness/plans/plan-requests');
     expect([...PLAN_REQUEST_CHANNELS].sort()).toEqual(REQUESTS);
     expect(PLANS_EVENT_CHANNEL).toBe('plans:event');
   });
 
-  it('both IPC maps carry the seven plus the push, with the same strings', () => {
+  it('both IPC maps carry the eight plus the push, with the same strings', () => {
     for (const src of [read('src', 'main', 'preload.ts'), read('src', 'shared', 'types.ts')]) {
       expect(plansStrings(src)).toEqual([...REQUESTS, 'plans:event'].sort());
     }
   });
 
-  it('remote-shim.ts sends exactly the seven and listens for plans:event', () => {
+  it('remote-shim.ts sends exactly the eight and listens for plans:event', () => {
     const src = read('src', 'renderer', 'remote-shim.ts');
     expect(plansStrings(src)).toEqual([...REQUESTS, 'plans:event'].sort());
     for (const t of REQUESTS) expect(src, `${t} is not invoked by the shim`).toContain(`invoke('${t}'`);
   });
 
-  it('ipc-handlers.ts registers all seven and forwards the push', () => {
+  it('ipc-handlers.ts registers all eight and forwards the push', () => {
     const src = read('src', 'main', 'ipc-handlers.ts');
-    for (const c of ['PLANS_APPROVE', 'PLANS_COMMENT', 'PLANS_ADD_BUDGET', 'PLANS_RESUME', 'PLANS_STOP', 'PLANS_GET_AUTO_APPROVE', 'PLANS_SET_AUTO_APPROVE']) {
+    for (const c of ['PLANS_APPROVE', 'PLANS_COMMENT', 'PLANS_ADD_BUDGET', 'PLANS_RESUME', 'PLANS_STOP', 'PLANS_ASK_ASSISTANT', 'PLANS_GET_AUTO_APPROVE', 'PLANS_SET_AUTO_APPROVE']) {
       expect(src, `IPC.${c} is not handled`).toMatch(new RegExp(`ipcMain\\.handle\\(IPC\\.${c},`));
     }
     expect(src).toContain('IPC.PLANS_EVENT');
     expect(src).toContain(`nativeHost.on('plans-event'`);
   });
 
-  it('remote-server.ts has a case for each of the seven, and no other plans:* string', () => {
+  it('remote-server.ts has a case for each of the eight, and no other plans:* string', () => {
     const src = read('src', 'main', 'remote-server.ts');
     for (const t of REQUESTS) expect(src, `${t} has no WS case`).toContain(`case '${t}':`);
     // plans:event appears ONCE: the first transcript page's records, sent to
@@ -1508,7 +1511,7 @@ describe('plans:* channel parity (seven requests + plans:event)', () => {
     expect(src.match(/'plans:event'/g)).toHaveLength(1);
   });
 
-  it('SessionService.kt answers the seven, and never names the push', () => {
+  it('SessionService.kt answers the eight, and never names the push', () => {
     const kt = kotlin();
     expect(plansStrings(kt)).toEqual(REQUESTS);
     // Push-only, like specialists:event: outbound, so no request label.

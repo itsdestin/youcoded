@@ -1,7 +1,9 @@
 // Specialists plans, Task 9b — handing a pause to the assistant (pause handoff
-// design §2). Service, projection, notice template and executor hook, on a
-// real journal. The end-to-end lifecycle through the host lives in
-// native-session-host.test.ts ("Task 9b").
+// design §2). Service, projection and notice template, on a real journal.
+// Task 11 (§6, revision 4): the handoff starts only when the user presses
+// "Ask the assistant"; the executor no longer hands a pause over by itself.
+// The end-to-end lifecycle through the host lives in
+// native-session-host.test.ts ("Task 11").
 //
 // Every "never stuck, never stale" rule in the design came from a bug an
 // adversarial review found; each has a test here or in the host file.
@@ -277,13 +279,13 @@ describe('answering a handoff when its notice turn ends, or clearing it', () => 
   it('clearStaleHandoffs answers every pending handoff it is not told to keep (app restart)', async () => {
     await seedPlan(pausedRecord());
     await seedPlan(pausedRecord({ planId: 'plan-b', handoff: { id: 'h-2', state: 'pending', at: 11 } }));
-    await makeService().clearStaleHandoffs(REF, new Set(['h-2']));
+    await makeService().clearStaleHandoffs(REF, (id) => id === 'h-2');
     expect((await get()).paused!.handoff).toEqual({ id: 'h-1', state: 'answered', at: 10 });
     expect((await get('plan-b')).paused!.handoff!.state).toBe('pending');
   });
 
   it('clearStaleHandoffs on a conversation with no journal creates nothing', async () => {
-    await makeService().clearStaleHandoffs(REF, new Set());
+    await makeService().clearStaleHandoffs(REF, () => false);
     expect(fs.existsSync(path.join(root, 'sessions'))).toBe(false);
   });
 });
@@ -359,8 +361,10 @@ describe('the notice the assistant receives (§2 step 4)', () => {
   it('is the pinned template', async () => {
     const rec = pausedRecord({ minimumAddTokens: 700 });
     expect(planHandoffNotice(rec, 'h-1')).toBe([
-      '[Plan paused] The plan "Review the auth module" is paused and needs a decision from the user. You are asked to look into it first.',
+      // Task 11 (§6): the user asked; the notice says so first.
+      '[Plan paused] The user asked you about this paused plan.',
       '',
+      'Plan: "Review the auth module"',
       'Plan id: plan-a',
       'Handoff id: h-1',
       'Paused at: step 1 of 1, "Review the login flow"',
@@ -403,11 +407,10 @@ describe('the notice the assistant receives (§2 step 4)', () => {
   });
 });
 
-// ---- the executor's side: eligibility before the settle write ----
+// ---- Task 11 (pause handoff §6, revision 4): the handoff is on request only ----
 
-describe('the settle write records the handoff (§2 steps 1–3)', () => {
+describe('a pause is never handed to the assistant by itself (§6)', () => {
   class Runner implements PlanRunner {
-    constructor(private outcome: () => PlanChildOutcome) {}
     maxConcurrent(): number { return 4; }
     isWriter(): boolean { return false; }
     async localPoolTokens(): Promise<number | undefined> { return undefined; }
@@ -419,12 +422,13 @@ describe('the settle write records the handoff (§2 steps 1–3)', () => {
     async minimumAddTokens(): Promise<number | undefined> { return undefined; }
     async launch(input: PlanChildLaunch): Promise<PlanChildHandle> {
       await input.recordChild(`child-${input.attemptId}`);
-      return { childId: `child-${input.attemptId}`, outcome: Promise.resolve(this.outcome()), abort: () => {}, dispose: async () => {} };
+      const outcome: PlanChildOutcome = { kind: 'stopped', stop: { kind: 'exhausted', detail: 'The specialist used its whole allowance.' } };
+      return { childId: `child-${input.attemptId}`, outcome: Promise.resolve(outcome), abort: () => {}, dispose: async () => {} };
     }
   }
   const single: PlanDocumentV1 = { goal: 'One', steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a'] }] };
 
-  async function run(outcome: () => PlanChildOutcome, handoff: ConstructorParameters<typeof PlanExecutor>[0]['handoff']) {
+  it('an assistant-routed pause settles with its default buttons and no handoff; the executor has no pause-time hook', async () => {
     const rec: PlanRecord = {
       planId: 'p1', toolUseId: 't', document: single, maximumAttempts: 2, maxFanOut: 1,
       ceilingTokens: planCeilingTokens(single, MANIFEST), ceilingUsd: null, usedTokens: 0,
@@ -434,50 +438,172 @@ describe('the settle write records the handoff (§2 steps 1–3)', () => {
     await journal.mutate(REF, (file) => { file.plans.push(rec); });
     const lease = await journal.acquireLease(REF, 'p1', { startFrom: ['proposed'] });
     if (!lease.ok) throw new Error('lease');
-    const exec = new PlanExecutor({ journal, budget, runner: new Runner(outcome), settleDeadlineMs: 60, heartbeatMs: 10_000, handoff });
+    const exec = new PlanExecutor({ journal, budget, runner: new Runner(), settleDeadlineMs: 60, heartbeatMs: 10_000 });
     exec.start({ ref: REF, planId: 'p1', fence: lease.fence });
     await exec.settled('p1');
-    return (await journal.get(REF, 'p1'))!;
-  }
-  const exhausted = (): PlanChildOutcome => ({ kind: 'stopped', stop: { kind: 'exhausted', detail: 'The specialist used its whole allowance.' } });
-
-  it('an eligible conversation gets a pending handoff in the SAME write as the pause; the notice is queued after it', async () => {
-    const order: string[] = [];
-    const prepare = vi.fn((_ref: PlanRef, _planId: string, facts: { kind?: string }) => {
-      order.push(`prepare:${facts.kind}:${events.filter((e) => e.plan.status === 'paused').length}`);
-      return { id: 'h-new', turnId: 'turn-new' };
-    });
-    const created = vi.fn(async (_ref: PlanRef, _planId: string, h: { id: string }) => {
-      order.push(`created:${h.id}:${events.filter((e) => e.plan.status === 'paused').length}`);
-    });
-    const p = await run(exhausted, { prepare, created });
+    const p = (await journal.get(REF, 'p1'))!;
     expect(p.status).toBe('paused');
-    expect(p.paused).toMatchObject({ kind: 'budget', handoff: { id: 'h-new', state: 'pending', revisionTurnId: 'turn-new', at: expect.any(Number) } });
-    // Checked before the write, queued after it.
-    expect(order).toEqual(['prepare:budget:0', 'created:h-new:1']);
-    // The very first paused card is already deactivated.
-    const first = events.find((e) => e.plan.status === 'paused')!;
-    expect(first.plan.paused!.handoff).toEqual({ state: 'pending' });
-  });
-
-  it('an ineligible conversation (closed, or Stop pressed) gets no handoff and nothing is queued', async () => {
-    const created = vi.fn();
-    const p = await run(exhausted, { prepare: () => undefined, created });
-    expect(p.status).toBe('paused');
+    expect(p.paused!.kind).toBe('budget');
     expect(p.paused!.handoff).toBeUndefined();
-    expect(created).not.toHaveBeenCalled();
+    expect(events.filter((e) => e.plan.status === 'paused').every((e) => !e.plan.paused!.handoff)).toBe(true);
     expect(projectPlan(p).paused!.actions).toEqual(['add_budget', 'stop']);
+    // Review 4-11: the pause-time hook is gone — passing one no longer
+    // type-checks (tsc fails here if it comes back), and nothing stamps a
+    // handoff at pause time (asserted above).
+    const withHook = () => new PlanExecutor({
+      journal, budget, runner: new Runner(),
+      // @ts-expect-error the executor has no pause-time handoff hook (§6)
+      handoff: { prepare: () => undefined, created: () => {} },
+    });
+    expect(withHook).not.toThrow();
+  });
+});
+
+describe('Ask the assistant: the service write (§6)', () => {
+  const ask = (svc: PlanService, over: { planId?: string; id?: string; turnId?: string; waiting?: boolean } = {}) =>
+    svc.askAssistant(SID, over.planId ?? 'plan-a', { id: over.id ?? 'h-new', turnId: over.turnId ?? 'turn-new', ...(over.waiting ? { waiting: true } : {}) });
+
+  it('records a pending handoff (with its revision turn) in one write and answers the greyed card', async () => {
+    await seedPlan(pausedRecord({ handoff: null }));
+    const svc = makeService();
+    const seq = (await get()).seq;
+    const res = await ask(svc);
+    expect(res).toMatchObject({ ok: true, plan: { status: 'paused', paused: { handoff: { state: 'pending' } } } });
+    const after = await get();
+    expect(after.seq).toBe(seq + 1);
+    expect(after.paused!.handoff).toEqual({ id: 'h-new', state: 'pending', at: 5000, revisionTurnId: 'turn-new' });
+    // The id and the turn never leave main.
+    expect((res as any).plan.paused.handoff).toEqual({ state: 'pending' });
   });
 
-  it('the facts the routing needs reach the eligibility check (a user-route pause is still asked, and the bridge declines it)', async () => {
-    const seen: Array<Record<string, unknown>> = [];
-    await run(() => ({ kind: 'interrupted' }), { prepare: (_r, _p, facts) => { seen.push({ ...facts }); return undefined; }, created: vi.fn() });
-    expect(seen).toEqual([{ kind: 'specialist-stopped' }]);
+  it('records that the question waits behind a reply in progress (§6, review 4-5)', async () => {
+    await seedPlan(pausedRecord({ handoff: null }));
+    const res = await ask(makeService(), { waiting: true });
+    expect((res as any).plan.paused.handoff).toEqual({ state: 'pending', waiting: 'reply' });
+    expect((await get()).paused!.handoff).toMatchObject({ state: 'pending', waiting: 'reply' });
   });
 
-  it('a queueing failure inside created never breaks the settle', async () => {
-    const p = await run(exhausted, { prepare: () => ({ id: 'h-x', turnId: 't-x' }), created: async () => { throw new Error('boom'); } });
-    expect(p.status).toBe('paused');
-    expect(p.lease).toBeUndefined();
+  it('works for every pause kind, the user-stopped one included (§6)', async () => {
+    for (const [i, kind] of (['specialist-stopped', 'iteration-cap', 'unexpected-error', 'plan-limit'] as const).entries()) {
+      await seedPlan(pausedRecord({ planId: `plan-${i}`, kind, handoff: null }));
+      expect(await ask(makeService(), { planId: `plan-${i}`, id: `h-${i}` }), kind).toMatchObject({ ok: true });
+    }
+  });
+
+  it('refuses a second ask while one is pending — the check is inside the write (review 4-3)', async () => {
+    await seedPlan(pausedRecord({ handoff: null }));
+    const svc = makeService();
+    const [a, b] = await Promise.all([ask(svc, { id: 'h-a', turnId: 't-a' }), ask(svc, { id: 'h-b', turnId: 't-b' })]);
+    const oks = [a, b].filter((r) => r.ok);
+    expect(oks).toHaveLength(1);
+    const refused = [a, b].find((r) => !r.ok)!;
+    expect(refused).toEqual({ ok: false, error: 'The assistant is already looking into this plan.' });
+    expect((await get()).paused!.handoff!.id).toBe(a.ok ? 'h-a' : 'h-b');
+  });
+
+  it('refuses a plan that is not paused (an interrupted card has no pause to hold a handoff — review 4-1)', async () => {
+    await seedPlan({ ...pausedRecord({ handoff: null }), status: 'interrupted', paused: undefined });
+    await seedPlan({ ...pausedRecord({ planId: 'plan-r', handoff: null }), status: 'running', paused: undefined });
+    const svc = makeService();
+    expect(await ask(svc)).toEqual({ ok: false, error: 'Only a paused plan can be asked about. This plan is interrupted.' });
+    expect(await ask(svc, { planId: 'plan-r' })).toEqual({ ok: false, error: 'Only a paused plan can be asked about. This plan is already running.' });
+    expect(await ask(svc, { planId: 'nope' })).toEqual({ ok: false, error: 'This plan no longer exists.' });
+    expect((await get()).paused).toBeUndefined();
+  });
+
+  it('asking again after an answered handoff replaces its recommendation, problem and revision link (review 4-9)', async () => {
+    await seedPlan(pausedRecord({ handoff: {
+      id: 'h-1', state: 'answered', at: 10, revisionTurnId: 'turn-old',
+      recommendation: { action: 'stop', message: 'stop it' }, problem: { kind: 'reply-failed', detail: 'x' },
+    } }));
+    const svc = makeService();
+    expect(await ask(svc)).toMatchObject({ ok: true });
+    expect((await get()).paused!.handoff).toEqual({ id: 'h-new', state: 'pending', at: 5000, revisionTurnId: 'turn-new' });
+    // The old notice turn can no longer link a revision or recommend.
+    expect(await recommend(svc, { handoffId: 'h-1' })).toMatchObject({ ok: false, error: expect.stringMatching(/no longer waiting/) });
+    expect(await recommend(svc, { handoffId: 'h-new' })).toMatchObject({ ok: true });
+  });
+
+  it('a clear with a problem (not started in time, or the reply failed) marks only a still-pending handoff (§6, review 4-5/4-10)', async () => {
+    await seedPlan(pausedRecord({ handoff: { id: 'h-1', state: 'pending', at: 10, revisionTurnId: 't', waiting: 'reply' } }));
+    await seedPlan(pausedRecord({ planId: 'plan-b', handoff: { id: 'h-2', state: 'answered', at: 10, revisionTurnId: 't2', recommendation: { action: 'stop', message: 'm' } } }));
+    const svc = makeService();
+    expect(await svc.answerHandoff(REF, 'plan-a', 'h-1', { kind: 'no-start' })).toBe(true);
+    expect((await get()).paused!.handoff).toEqual({ id: 'h-1', state: 'answered', at: 10, problem: { kind: 'no-start' } });
+    expect(events[events.length - 1].plan.paused!.handoff).toEqual({ state: 'answered', problem: { kind: 'no-start' } });
+    await svc.answerHandoff(REF, 'plan-b', 'h-2', { kind: 'reply-failed', detail: 'boom' });
+    expect((await get('plan-b')).paused!.handoff).toEqual({ id: 'h-2', state: 'answered', at: 10, recommendation: { action: 'stop', message: 'm' } });
+  });
+
+  it('a reply-failed detail is capped so a long provider message cannot flood the card', async () => {
+    await seedPlan(pausedRecord());
+    await makeService().answerHandoff(REF, 'plan-a', 'h-1', { kind: 'reply-failed', detail: 'z'.repeat(2000) });
+    expect((await get()).paused!.handoff!.problem!.detail!.length).toBeLessThanOrEqual(PLAN_NOTICE_DETAIL_MAX_CHARS + 1);
+  });
+
+  it('delivery starting clears "waiting" for the same pending handoff only', async () => {
+    await seedPlan(pausedRecord({ handoff: { id: 'h-1', state: 'pending', at: 10, revisionTurnId: 't', waiting: 'reply' } }));
+    const svc = makeService();
+    await svc.setHandoffWaiting(REF, 'plan-a', 'h-other', false);
+    expect((await get()).paused!.handoff!.waiting).toBe('reply');
+    await svc.setHandoffWaiting(REF, 'plan-a', 'h-1', false);
+    expect((await get()).paused!.handoff!.waiting).toBeUndefined();
+    // A correction never lands once its guard says delivery already began.
+    await svc.setHandoffWaiting(REF, 'plan-a', 'h-1', true, () => false);
+    expect((await get()).paused!.handoff!.waiting).toBeUndefined();
+    await svc.setHandoffWaiting(REF, 'plan-a', 'h-1', true, () => true);
+    expect((await get()).paused!.handoff!.waiting).toBe('reply');
+  });
+});
+
+describe('user actions read the handoff to withdraw inside their own write (review 4-2)', () => {
+  /** An ask lands after the action's first read of the plan. */
+  function askLandsAfterFirstRead(svc: PlanService): void {
+    const realGet = journal.get.bind(journal);
+    let first = true;
+    vi.spyOn(journal, 'get').mockImplementation(async (ref, planId) => {
+      const got = await realGet(ref, planId);
+      if (first) { first = false; await svc.askAssistant(SID, 'plan-a', { id: 'h-late', turnId: 't-late' }); }
+      return got;
+    });
+  }
+
+  it('Continue withdraws a question asked during its drift check', async () => {
+    await seedPlan(pausedRecord({ kind: 'unexpected-error', handoff: null }));
+    const svc = makeService();
+    askLandsAfterFirstRead(svc);
+    expect(await svc.resume(SID, 'plan-a')).toMatchObject({ ok: true, plan: { status: 'running' } });
+    expect(superseded).toEqual([{ planId: 'plan-a', handoffId: 'h-late' }]);
+  });
+
+  it('Stop withdraws a question asked after its first read', async () => {
+    await seedPlan(pausedRecord({ handoff: null }));
+    const svc = makeService();
+    askLandsAfterFirstRead(svc);
+    expect(await svc.stop(SID, 'plan-a')).toMatchObject({ ok: true, plan: { status: 'stopped' } });
+    expect(superseded).toEqual([{ planId: 'plan-a', handoffId: 'h-late' }]);
+  });
+
+  it('Add budget withdraws a question asked after its first read', async () => {
+    await seedPlan(pausedRecord({ handoff: null }));
+    const svc = makeService();
+    askLandsAfterFirstRead(svc);
+    expect(await svc.addBudget(SID, 'plan-a', 50)).toMatchObject({ ok: true });
+    expect(superseded).toEqual([{ planId: 'plan-a', handoffId: 'h-late' }]);
+    expect((await get()).paused!.handoff).toMatchObject({ id: 'h-late', state: 'answered' });
+  });
+});
+
+describe('restart recovery keeps a handoff registered meanwhile (review 4-4)', () => {
+  it('re-checks "is it live" inside its own write, not only on its first read', async () => {
+    await seedPlan(pausedRecord());
+    let live = false;
+    const realMutate = journal.mutate.bind(journal);
+    vi.spyOn(journal, 'mutate').mockImplementation(((ref: PlanRef, fn: any) => {
+      live = true;   // the ask registered h-1 after recovery's read, before its write
+      return realMutate(ref, fn);
+    }) as any);
+    await makeService().clearStaleHandoffs(REF, (id) => live && id === 'h-1');
+    expect((await get()).paused!.handoff).toMatchObject({ id: 'h-1', state: 'pending' });
   });
 });

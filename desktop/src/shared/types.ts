@@ -773,6 +773,12 @@ export type PlanPauseAction = 'add_budget' | 'continue' | 'stop';
  *  header of its own, and older transcripts only have its text, so the text is
  *  the one mark every saved copy shares. */
 export const PLAN_NOTICE_PREFIX = '[Plan paused]';
+/** Task 11 (pause handoff §6, revision 4): the first line of the notice the
+ *  user's "Ask the assistant" sends. The chat, the buddy feed and previews draw
+ *  a notice that starts with it as one plain line on the user's side ("You
+ *  asked the assistant about this plan."), while an older automatic notice
+ *  (same prefix, different words) stays hidden — the user never asked that. */
+export const PLAN_ASK_NOTICE_LEAD = `${PLAN_NOTICE_PREFIX} The user asked you about this paused plan.`;
 
 /** Where one plan specialist's attempt stands (the journal's attempt phase):
  *  `prepared` means its first request was never sent. */
@@ -833,7 +839,19 @@ export interface PlanView {
     handoff?: {
       state: 'pending' | 'answered';
       recommendation?: { action: PlanPauseAction; addTokens?: number; message: string };
+      /** Task 11 (§6): pending, but queued behind a reply already in
+       *  progress — "The assistant will look at this after its current reply." */
+      waiting?: 'reply';
+      /** Task 11 (§6): the question was cleared without an answer. `no-start`
+       *  = it had not started after 10 minutes; `reply-failed` = its turn
+       *  failed, `detail` being the real error. The card shows an error line
+       *  whose Retry asks again. */
+      problem?: { kind: 'no-start' | 'reply-failed'; detail?: string };
     };
+    /** Task 11 (§6): the conversation's model can't use tools, so it can't
+     *  answer a question about the plan — the card hides "Ask the assistant".
+     *  Absent when it can, or when that isn't known here. */
+    askUnavailable?: true;
   };
   /** Task 9b: the assistant replaced this paused plan with a revised one (not
    *  a Comment), so the greyed card must not say "after your comment". */
@@ -2351,8 +2369,10 @@ export const IPC = {
   SPECIALISTS_INTERRUPT: 'specialists:interrupt',
   SPECIALISTS_EVENT: 'specialists:event',
   // ---- Specialists plans (Task 6, design §5) ----
-  // Exactly seven requests (the plan card's five buttons + Settings' read and
-  // write) and one push. Every surface answers all seven — Android with a typed
+  // Exactly eight requests (the plan card's six buttons + Settings' read and
+  // write) and one push. Task 11 added the eighth, "Ask the assistant" (pause
+  // handoff §6, which supersedes the backend design's seven). Every surface
+  // answers all eight — Android with a typed
   // `unsupported` — and the list is pinned by ipc-channels.test.ts. plans:event
   // is a PUSH: one per visible plan-journal change, never a request.
   PLANS_APPROVE: 'plans:approve',
@@ -2360,6 +2380,7 @@ export const IPC = {
   PLANS_ADD_BUDGET: 'plans:add-budget',
   PLANS_RESUME: 'plans:resume',
   PLANS_STOP: 'plans:stop',
+  PLANS_ASK_ASSISTANT: 'plans:ask-assistant',
   PLANS_GET_AUTO_APPROVE: 'plans:get-auto-approve',
   PLANS_SET_AUTO_APPROVE: 'plans:set-auto-approve',
   PLANS_EVENT: 'plans:event',

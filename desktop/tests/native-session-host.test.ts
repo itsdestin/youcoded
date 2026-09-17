@@ -6004,11 +6004,12 @@ describe('specialists plans in the native host (Task 4)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Task 9b — a pause that needs a decision goes to the assistant first
-  // (pause handoff design §2). Every "never stuck, never stale" rule has a
-  // test: each came from a bug a design review found.
+  // Task 9b + Task 11 — handing a pause to the assistant. Since revision 4
+  // (pause handoff design §6) it starts ONLY when the user presses "Ask the
+  // assistant"; every "never stuck, never stale" rule still has a test here,
+  // each from a bug a design review found.
   // -------------------------------------------------------------------------
-  describe('Task 9b: handing a pause to the assistant', () => {
+  describe('Task 11: asking the assistant about a paused plan', () => {
     const SMALL = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, items: ['a.ts'] }] };
     const handoff = () => journalFile().plans[0].paused?.handoff;
     const notices = () => events.filter((e) => e.type === 'user-message' && String(e.data.text).startsWith('[Plan paused]'));
@@ -6023,10 +6024,11 @@ describe('specialists plans in the native host (Task 4)', () => {
       const gate = new Promise<void>((r) => { open = r; });
       return { step: { gate, chunks: textStep('busy reply') }, open };
     };
+    const lastView = (planId: string) => planEvents.filter((e) => e.plan.planId === planId).pop()?.plan;
 
     /** Propose a one-specialist plan and run it into a budget pause (an
-     *  assistant-routed kind). `after` scripts the parent from the notice on. */
-    async function pauseOnBudget(after: any[] = [], opts: { beforeApprove?: () => void | Promise<void> } = {}) {
+     *  assistant-routed kind). Nothing is handed over until `ask`. */
+    async function pauseOnBudget() {
       await host.create({ sessionId: SID, cwd: root, binding: PARENT });
       parentSteps = [proposeStep('call-small', SMALL), textStep('Here is the plan.')];
       host.send(SID, 'Plan it');
@@ -6037,20 +6039,32 @@ describe('specialists plans in the native host (Task 4)', () => {
       childReply = (_prompt, call) => (call === 1
         ? { chunks: [toolCallChunk('read-1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 1, allowance - 6)] }
         : { chunks: [...textChunks('x', 'REPORT a'), finishChunk('stop', 1, 1)] });
-      await opts.beforeApprove?.();
-      parentSteps.push(...after);
       await host.approvePlan(SID, rec0.planId);
-      // WHY the card event and not the file: a quick notice turn can move the
-      // plan on (revised, stopped) before a 10 ms poll ever sees "paused".
-      await waitFor(() => planEvents.some((e) => e.plan.planId === rec0.planId && e.plan.status === 'paused'), 'the budget pause');
+      await waitFor(() => planStatus()[0] === 'paused' && !journalFile().plans[0].lease, 'the budget pause');
       return rec0.planId as string;
     }
+    /** Keep the conversation busy with a reply that waits on a gate. */
+    async function busyTurn() {
+      const busy = gated();
+      parentSteps.push(busy.step);
+      host.send(SID, 'keep busy');
+      await waitFor(() => !host.isIdle(SID), 'the busy turn');
+      return busy;
+    }
+    const ask = (planId: string) => host.askAssistantAboutPlan(SID, planId);
 
-    it('the card is greyed from its first paused state; the notice is delivered as its own turn; a recommendation reactivates it and changes nothing else', async () => {
+    it('a pause is not handed over by itself; Ask greys the card, the notice is its own turn, and a recommendation changes nothing else', async () => {
       const message = 'The reviewer ran out of room; adding the minimum lets it finish.';
       let noticeTurnId: string | undefined;
       let revisionTurnId: string | undefined;
-      const planId = await pauseOnBudget([
+      const planId = await pauseOnBudget();
+      // §6: nothing happens until the user asks.
+      await new Promise((r) => setTimeout(r, 40));
+      expect(handoff()).toBeUndefined();
+      expect(notices()).toHaveLength(0);
+      expect(parentPrompts.some((p) => p.includes('[Plan paused]'))).toBe(false);
+      expect(planEvents.filter((e) => e.plan.status === 'paused').every((e) => !e.plan.paused.handoff)).toBe(true);
+      parentSteps.push(
         (prompt: string) => {
           noticeTurnId = (host as any).live.get(SID).currentTurnId;
           revisionTurnId = journalFile().plans[0].paused.handoff.revisionTurnId;
@@ -6060,28 +6074,26 @@ describe('specialists plans in the native host (Task 4)', () => {
           }), finishChunk('tool-calls'));
         },
         textStep('I recommend adding the minimum.'),
-      ]);
-      const firstPaused = planEvents.find((e) => e.plan.planId === planId && e.plan.status === 'paused');
-      expect(firstPaused.plan.paused.handoff).toEqual({ state: 'pending' });
+      );
+      const res = await ask(planId);
+      expect(res).toMatchObject({ ok: true, plan: { status: 'paused', paused: { handoff: { state: 'pending' } } } });
+      expect((res as any).plan.paused.handoff.waiting).toBeUndefined();
       await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the recommendation');
-      // The notice: one injected turn, carrying this pause's ids, never shown as the user's words.
+      // The notice: one injected turn, worded as the user's question, carrying this pause's ids.
       expect(notices()).toHaveLength(1);
       expect(notices()[0].data.injected).toBe('specialist-report');
+      expect(String(notices()[0].data.text).startsWith('[Plan paused] The user asked you about this paused plan.')).toBe(true);
       const rec = journalFile().plans[0];
       expect(notices()[0].data.text).toContain(`Handoff id: ${rec.paused.handoff.id}`);
-      // The notice turn had its own turn id — the one its pending revision named.
       expect(noticeTurnId).toMatch(/.+/);
       expect(noticeTurnId).toBe(revisionTurnId);
       expect(rec.paused.handoff.revisionTurnId).toBeUndefined();   // the turn ended
+      expect(rec.paused.handoff.problem).toBeUndefined();
       expect(rec.paused.handoff.recommendation).toEqual({ action: 'add_budget', addTokens: rec.paused.minimumAddTokens, message });
-      const result = events.find((e) => e.type === 'tool-result' && e.data.toolUseId === 'rec-1');
-      expect(result.data.isError).toBe(false);
       // The assistant can never resume or add budget by itself.
       expect(rec.status).toBe('paused');
       expect(rec.tranches).toBeUndefined();
       expect(childCalls).toHaveLength(1);
-      const view = (await host.planViewsFor(SID))[0];
-      expect(view.paused).toMatchObject({ actions: ['add_budget', 'stop'], handoff: { state: 'answered', recommendation: { action: 'add_budget', message } } });
       // The user presses the button: the recommended minimum is always enough.
       expect(await host.addPlanBudget(SID, planId, rec.paused.handoff.recommendation.addTokens)).toMatchObject({ ok: true });
       expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true });
@@ -6091,7 +6103,9 @@ describe('specialists plans in the native host (Task 4)', () => {
     });
 
     it('recommend_plan_action is offered exactly where propose_plan is, and never to a specialist', async () => {
-      await pauseOnBudget([textStep('noted')]);
+      const planId = await pauseOnBudget();
+      parentSteps.push(textStep('noted'));
+      await ask(planId);
       await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the notice turn');
       expect(parentTools.length).toBeGreaterThan(0);
       for (const tools of parentTools) {
@@ -6104,74 +6118,89 @@ describe('specialists plans in the native host (Task 4)', () => {
       }
     });
 
+    it('a model that cannot use tools: Ask is refused with the reason and the card hides it', async () => {
+      const planId = await pauseOnBudget();
+      const session = (host as any).live.get(SID).session;
+      vi.spyOn(session, 'offersPlanTools').mockReturnValue(false);
+      expect(await ask(planId)).toEqual({ ok: false, error: "The model in this conversation can't use tools, so it can't look into the plan." });
+      expect(handoff()).toBeUndefined();
+      expect((await host.planViewsFor(SID))[0].paused!.askUnavailable).toBe(true);
+      vi.mocked(session.offersPlanTools).mockReturnValue(true);
+      expect((await host.planViewsFor(SID))[0].paused!.askUnavailable).toBeUndefined();
+    });
+
     it('a refused recommendation tells the assistant why and to advise in chat; the handoff is answered with no recommendation when that turn ends', async () => {
-      await pauseOnBudget([
+      const planId = await pauseOnBudget();
+      parentSteps.push(
         (prompt: string) => stream(toolCallChunk('rec-bad', 'recommend_plan_action', { ...idsIn(prompt), action: 'continue', message: 'try again' }), finishChunk('tool-calls')),
         textStep('Continue would not help; you could add budget.'),
-      ]);
+      );
+      await ask(planId);
       await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
       const result = events.find((e) => e.type === 'tool-result' && e.data.toolUseId === 'rec-bad');
       expect(result.data.isError).toBe(true);
       expect(result.data.toolResult).toContain('"continue" isn\'t allowed for this pause');
       expect(result.data.toolResult).toContain('advice to the user in chat');
       expect(handoff().recommendation).toBeUndefined();
+      expect(handoff().problem).toBeUndefined();
       expect(journalFile().plans[0].status).toBe('paused');
       expect(childCalls).toHaveLength(1);
     });
 
     it('"just explain": the turn that delivered THIS notice ends, and the card gets its default buttons', async () => {
-      await pauseOnBudget([textStep('It ran out of budget; you can add more or stop.')]);
+      const planId = await pauseOnBudget();
+      parentSteps.push(textStep('It ran out of budget; you can add more or stop.'));
+      await ask(planId);
       await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
       const view = (await host.planViewsFor(SID))[0];
       expect(view.paused!.handoff).toEqual({ state: 'answered' });
       expect(view.paused!.actions).toEqual(['add_budget', 'stop']);
     });
 
-    it('another turn ending first does not answer the handoff; only the notice turn does', async () => {
-      const busy = gated();
+    it('asked during a reply: "after its current reply" until delivery starts; only the notice turn answers it (review 4-5)', async () => {
+      const planId = await pauseOnBudget();
+      const busy = await busyTurn();
       let noticeGate!: () => void;
-      const noticeStep = { gate: new Promise<void>((r) => { noticeGate = r; }), chunks: textStep('explained') };
-      await pauseOnBudget([noticeStep], {
-        beforeApprove: async () => {
-          parentSteps.push(busy.step);
-          host.send(SID, 'keep busy');
-          await waitFor(() => !host.isIdle(SID), 'the busy turn');
-        },
-      });
-      // Reorder: the busy turn was queued first; it is still waiting.
-      expect(handoff()?.state).toBe('pending');
+      parentSteps.push({ gate: new Promise<void>((r) => { noticeGate = r; }), chunks: textStep('explained') });
+      const res = await ask(planId);
+      expect((res as any).plan.paused.handoff).toEqual({ state: 'pending', waiting: 'reply' });
+      expect(handoff()).toMatchObject({ state: 'pending', waiting: 'reply' });
+      expect(notices()).toHaveLength(0);
       busy.open();
       await waitFor(() => notices().length === 1, 'the notice turn to start');
+      await waitFor(() => handoff()?.waiting === undefined, 'waiting to clear');
+      expect(lastView(planId).paused.handoff).toEqual({ state: 'pending' });
       // The user's own turn ended — the notice turn has not.
       expect(handoff()?.state).toBe('pending');
       noticeGate();
       await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
     });
 
-    it('held deliveries (the user pressed Stop) skip the handoff: default buttons, no notice', async () => {
-      await pauseOnBudget([], { beforeApprove: () => { host.interrupt(SID); } });
-      await new Promise((r) => setTimeout(r, 50));
+    it('after Stop (deliveries held) Ask is refused with the reason; nothing is queued', async () => {
+      const planId = await pauseOnBudget();
+      host.interrupt(SID);
+      expect(await ask(planId)).toEqual({ ok: false, error: 'You stopped this conversation. Send the assistant a message, then ask again.' });
+      await new Promise((r) => setTimeout(r, 30));
       expect(handoff()).toBeUndefined();
       expect(notices()).toHaveLength(0);
-      const view = (await host.planViewsFor(SID))[0];
-      expect(view.paused!.actions).toEqual(['add_budget', 'stop']);
-      expect(planEvents.filter((e) => e.plan.status === 'paused').every((e) => !e.plan.paused.handoff)).toBe(true);
     });
 
-    it('Stop on the conversation while the notice waits clears the handoff and withdraws the notice', async () => {
-      const busy = gated();
-      await pauseOnBudget([], {
-        beforeApprove: async () => {
-          parentSteps.push(busy.step);
-          host.send(SID, 'keep busy');
-          await waitFor(() => !host.isIdle(SID), 'the busy turn');
-        },
-      });
+    it('a conversation that is not open here refuses Ask with the reason', async () => {
+      const planId = await pauseOnBudget();
+      expect(await host.askAssistantAboutPlan('someone-else', planId)).toMatchObject({ ok: false, error: "This conversation isn't running here right now, so the assistant can't be asked." });
+    });
+
+    it('Stop on the conversation while the question waits clears it silently and withdraws the notice', async () => {
+      const planId = await pauseOnBudget();
+      await busyTurn();
+      await ask(planId);
       expect(handoff()?.state).toBe('pending');
       host.interrupt(SID);
       await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the cleared handoff');
       expect(handoff().recommendation).toBeUndefined();
-      // The next user message does not carry the stale notice in either.
+      expect(handoff().problem).toBeUndefined();
+      // The next user message does not carry the stale notice in either — and
+      // no "You asked" line was ever drawn for it (the notice never ran).
       parentSteps.push(textStep('hi'));
       host.send(SID, 'hello again');
       await waitFor(() => host.isIdle(SID) && parentPrompts.some((p) => p.includes('hello again')), 'the next turn');
@@ -6179,42 +6208,46 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(parentPrompts.some((p) => p.includes('[Plan paused]'))).toBe(false);
     });
 
-    it('the 10-minute backstop clears a handoff whose notice never started, and withdraws it', async () => {
+    it('the 10-minute backstop clears a question that never started, withdraws it and leaves the error for Retry', async () => {
       host = makeHost({ handoffBackstopMs: 40 });
-      const busy = gated();
-      await pauseOnBudget([], {
-        beforeApprove: async () => {
-          parentSteps.push(busy.step);
-          host.send(SID, 'keep busy');
-          await waitFor(() => !host.isIdle(SID), 'the busy turn');
-        },
-      });
+      const planId = await pauseOnBudget();
+      const busy = await busyTurn();
+      await ask(planId);
       await waitFor(() => handoff()?.state === 'answered', 'the backstop');
+      expect(handoff().problem).toEqual({ kind: 'no-start' });
+      expect(lastView(planId).paused.handoff).toEqual({ state: 'answered', problem: { kind: 'no-start' } });
       busy.open();
       await waitFor(() => host.isIdle(SID), 'the busy turn to end');
       await new Promise((r) => setTimeout(r, 30));
       expect(notices()).toHaveLength(0);
+      // Retry asks again: the problem goes, the question is pending again.
+      parentSteps.push(textStep('Now looking.'));
+      expect(await ask(planId)).toMatchObject({ ok: true });
+      expect(handoff().problem).toBeUndefined();
+      await waitFor(() => notices().length === 1 && handoff()?.state === 'answered' && host.isIdle(SID), 'the retried question');
     });
 
     it('the backstop stops once delivery has started: the notice turn decides', async () => {
       host = makeHost({ handoffBackstopMs: 30 });
+      const planId = await pauseOnBudget();
       let noticeGate!: () => void;
-      await pauseOnBudget([{ gate: new Promise<void>((r) => { noticeGate = r; }), chunks: textStep('explained') }]);
+      parentSteps.push({ gate: new Promise<void>((r) => { noticeGate = r; }), chunks: textStep('explained') });
+      await ask(planId);
       await waitFor(() => notices().length === 1, 'the notice turn to start');
       await new Promise((r) => setTimeout(r, 120));
       expect(handoff()?.state).toBe('pending');
       noticeGate();
       await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the end of the notice turn');
+      expect(handoff().problem).toBeUndefined();
     });
 
-    it('a notice that fails to deliver clears the handoff and is never retried', async () => {
-      await pauseOnBudget([], {
-        beforeApprove: () => {
-          const session = (host as any).live.get(SID).session;
-          vi.spyOn(session, 'runNotice').mockRejectedValueOnce(new Error('the model route is gone'));
-        },
-      });
+    it('a notice that fails to deliver leaves the real reason for Retry and is never retried by itself (review 4-10)', async () => {
+      const planId = await pauseOnBudget();
+      const session = (host as any).live.get(SID).session;
+      vi.spyOn(session, 'runNotice').mockRejectedValueOnce(new Error('the model route is gone'));
+      await ask(planId);
       await waitFor(() => handoff()?.state === 'answered', 'the cleared handoff');
+      expect(handoff().problem).toEqual({ kind: 'reply-failed', detail: 'the model route is gone' });
       await waitFor(() => host.isIdle(SID), 'idle');
       parentSteps.push(textStep('hi'));
       host.send(SID, 'hello');
@@ -6222,28 +6255,46 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(parentPrompts.some((p) => p.includes('[Plan paused]'))).toBe(false);
     });
 
-    it('closing the conversation clears a pending handoff and drops its notice', async () => {
-      const busy = gated();
-      await pauseOnBudget([], {
-        beforeApprove: async () => {
-          parentSteps.push(busy.step);
-          host.send(SID, 'keep busy');
-          await waitFor(() => !host.isIdle(SID), 'the busy turn');
-        },
-      });
+    it('a notice turn that ends in a provider error leaves that error on the card (review 4-10)', async () => {
+      const planId = await pauseOnBudget();
+      parentSteps.push([{ type: 'stream-start', warnings: [] }, { type: 'error', error: new Error('upstream overloaded') }]);
+      await ask(planId);
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the failed notice turn');
+      const errorEvent = events.filter((e) => e.type === 'session-error').pop();
+      expect(errorEvent).toBeTruthy();
+      expect(handoff().problem).toEqual({ kind: 'reply-failed', detail: errorEvent.data.text });
+    });
+
+    it('the user stopping the notice turn itself leaves no error (they chose it)', async () => {
+      const planId = await pauseOnBudget();
+      parentSteps.push({ gate: new Promise<void>(() => {}), chunks: textStep('never') });
+      await ask(planId);
+      await waitFor(() => notices().length === 1, 'the notice turn to start');
+      host.interrupt(SID);
+      await waitFor(() => handoff()?.state === 'answered' && host.isIdle(SID), 'the stopped notice turn');
+      expect(handoff().problem).toBeUndefined();
+    });
+
+    it('closing the conversation clears a pending question and drops its notice', async () => {
+      const planId = await pauseOnBudget();
+      await busyTurn();
+      await ask(planId);
       expect(handoff()?.state).toBe('pending');
       await host.destroy(SID);
       expect(handoff()).toMatchObject({ state: 'answered' });
       expect(handoff().revisionTurnId).toBeUndefined();
+      expect(handoff().problem).toBeUndefined();
       expect(notices()).toHaveLength(0);
     });
 
-    it('an app restart clears a pending handoff left in the journal', async () => {
-      await pauseOnBudget([textStep('noted')]);
+    it('an app restart clears a pending question left in the journal', async () => {
+      const planId = await pauseOnBudget();
+      parentSteps.push(textStep('noted'));
+      await ask(planId);
       await waitFor(() => host.isIdle(SID) && handoff()?.state === 'answered', 'the notice turn');
       await host.destroyAll();
       const file = journalFile();
-      file.plans[0].paused.handoff = { id: 'left-over', state: 'pending', at: 1, revisionTurnId: 'old-turn' };
+      file.plans[0].paused.handoff = { id: 'left-over', state: 'pending', at: 1, revisionTurnId: 'old-turn', waiting: 'reply' };
       fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), JSON.stringify(file));
       host = makeHost();
       expect(await host.resume(SID, root)).toBe(true);
@@ -6252,16 +6303,28 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(parentPrompts.filter((p) => p.includes('left-over'))).toHaveLength(0);
     });
 
+    it('an interrupted plan (app restart mid-run) cannot be asked about (review 4-1)', async () => {
+      const planId = await pauseOnBudget();
+      await host.destroyAll();
+      const file = journalFile();
+      file.plans[0].status = 'interrupted';
+      delete file.plans[0].paused;
+      fs.writeFileSync(path.join(root, '.youcoded', 'sessions', nativeStoreSlug(root), `${SID}.plans.json`), JSON.stringify(file));
+      host = makeHost();
+      expect(await host.resume(SID, root)).toBe(true);
+      expect(await ask(planId)).toEqual({ ok: false, error: 'Only a paused plan can be asked about. This plan is interrupted.' });
+    });
+
     it('a revised plan from the notice turn is linked, stops the old plan as revised, and never auto-approves', async () => {
-      // Auto-approve is turned on only inside the notice turn: the first
-      // proposal must wait for its own Approve.
-      const planId = await pauseOnBudget([
+      const planId = await pauseOnBudget();
+      parentSteps.push(
         async () => {
           await host.setPlanAutoApprove(10_000_000);
           return proposeStep('call-revised', { ...SMALL, goal: 'Review a.ts with more room', steps: [{ ...SMALL.steps[0], budget_tokens: 3000 }] });
         },
         textStep('Here is a revised plan with more room.'),
-      ]);
+      );
+      await ask(planId);
       await waitFor(() => journalFile().plans.length === 2 && host.isIdle(SID), 'the revised proposal');
       const [oldPlan, newPlan] = journalFile().plans;
       expect(oldPlan).toMatchObject({ planId, status: 'stopped', revisedBy: newPlan.planId, revisedOnPause: true });
@@ -6272,15 +6335,17 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(oldView.revisedOnPause).toBe(true);
     });
 
-    it('a handoff superseded mid-turn (the user stopped the plan), then a proposal: it stands alone and never auto-approves', async () => {
-      const planId = await pauseOnBudget([
+    it('a question superseded mid-turn (the user stopped the plan), then a proposal: it stands alone and never auto-approves', async () => {
+      const planId = await pauseOnBudget();
+      parentSteps.push(
         async () => {
           expect(await host.stopPlan(SID, journalFile().plans[0].planId)).toMatchObject({ ok: true });
           await host.setPlanAutoApprove(10_000_000);
           return proposeStep('call-after-stop', { ...SMALL, goal: 'A fresh plan' });
         },
         textStep('Proposed a fresh plan.'),
-      ]);
+      );
+      await ask(planId);
       await waitFor(() => journalFile().plans.length === 2 && host.isIdle(SID), 'the new proposal');
       const [oldPlan, newPlan] = journalFile().plans;
       expect(oldPlan).toMatchObject({ planId, status: 'stopped' });
@@ -6291,7 +6356,7 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(childCalls).toHaveLength(1);
     });
 
-    it('two plans handed off at once: plan A\'s notice turn ending leaves plan B pending', async () => {
+    it('two plans asked about at once: plan A\'s notice turn ending leaves plan B pending', async () => {
       const gates: Array<{ planId: string; open: () => void }> = [];
       const gatedNotice = (prompt: string) => {
         const { planId } = idsIn(prompt);
@@ -6313,7 +6378,8 @@ describe('specialists plans in the native host (Task 4)', () => {
       const allowance = 500 + plans[0].manifest.specialists.reviewer.setupTokens;
       childReply = () => ({ chunks: [toolCallChunk('read-1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 1, allowance - 6)] });
       for (const p of plans) await host.approvePlan(SID, p.planId);
-      await waitFor(() => plans.every((p: any) => planEvents.some((e) => e.plan.planId === p.planId && e.plan.status === 'paused')), 'both pauses');
+      await waitFor(() => planStatus().every((st: string) => st === 'paused') && journalFile().plans.every((p: any) => !p.lease), 'both pauses');
+      for (const p of plans) expect(await ask(p.planId)).toMatchObject({ ok: true });
       await waitFor(() => gates.length === 1, 'the first notice turn');
       const first = gates[0].planId;
       const other = plans.map((p: any) => p.planId).find((id: string) => id !== first)!;
@@ -6321,7 +6387,6 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(handoffOf(other)?.state).toBe('pending');
       gates[0].open();
       await waitFor(() => handoffOf(first)?.state === 'answered' && gates.length === 2, "the first notice turn's end");
-      // Plan A's turn ending answered only plan A.
       expect(gates[1].planId).toBe(other);
       expect(handoffOf(other)).toMatchObject({ state: 'pending' });
       expect(handoffOf(other).revisionTurnId).toBeDefined();
@@ -6330,18 +6395,12 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(notices()).toHaveLength(2);
     });
 
-    it('a user Add budget while the notice waits supersedes it: accepted, withdrawn, and an old-id recommendation is refused', async () => {
-      const busy = gated();
-      let ids: { planId: string; handoffId: string } | undefined;
-      const planId = await pauseOnBudget([], {
-        beforeApprove: async () => {
-          parentSteps.push(busy.step);
-          host.send(SID, 'keep busy');
-          await waitFor(() => !host.isIdle(SID), 'the busy turn');
-        },
-      });
+    it('a user Add budget while the question waits supersedes it: accepted, withdrawn, and an old-id recommendation is refused', async () => {
+      const planId = await pauseOnBudget();
+      const busy = await busyTurn();
+      await ask(planId);
       const rec = journalFile().plans[0];
-      ids = { planId, handoffId: rec.paused.handoff.id };
+      const ids = { planId, handoffId: rec.paused.handoff.id };
       expect(await host.addPlanBudget(SID, planId, rec.paused.minimumAddTokens)).toMatchObject({ ok: true });
       expect(handoff()).toMatchObject({ state: 'answered' });
       // The busy turn now calls the tool with the old id (as a stale notice would).

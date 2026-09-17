@@ -202,16 +202,29 @@ const PlanRecordSchema = z.object({
      *  pause. `revisionTurnId` is this pause's pending revision: the id of the
      *  notice turn whose propose_plan may replace this plan. It lives HERE, on
      *  the plan, so a Comment on another plan can't overwrite it; any user
-     *  action or the end of that turn deletes it. */
+     *  action or the end of that turn deletes it.
+     *  Task 11 (design §6): a handoff only exists because the user pressed
+     *  "Ask the assistant". `waiting: 'reply'` = the question is queued
+     *  behind a reply already in progress (the card says so); delivery
+     *  starting removes it. `problem` = the question was cleared without an
+     *  answer because it never started in time (`no-start`, the backstop) or
+     *  its turn failed (`reply-failed`, with the real error) — the card then
+     *  shows an error line with Retry instead of silently returning its
+     *  buttons. Asking again replaces the whole object. */
     handoff: z.object({
       id: z.string().min(1),
       state: z.enum(['pending', 'answered']),
       at: z.number(),
       revisionTurnId: z.string().min(1).optional(),
+      waiting: z.literal('reply').optional(),
       recommendation: z.object({
         action: z.enum(PLAN_PAUSE_ACTIONS),
         addTokens: z.number().int().min(1).optional(),
         message: z.string().min(1).max(280),
+      }).strict().optional(),
+      problem: z.object({
+        kind: z.enum(['no-start', 'reply-failed']),
+        detail: z.string().min(1).optional(),
       }).strict().optional(),
     }).strict().optional(),
   }).strict().optional(),

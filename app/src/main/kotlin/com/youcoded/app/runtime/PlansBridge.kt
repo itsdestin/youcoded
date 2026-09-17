@@ -7,7 +7,7 @@ import org.json.JSONObject
  * Specialists plans (Task 6, design §5) on the phone.
  *
  * Plans run in YouCoded's own assistant runtime, which lives on the computer;
- * this app has none yet. So each of the seven plan requests gets a typed
+ * this app has none yet. So each of the eight plan requests gets a typed
  * refusal: `{ok:false, unsupported:true, error}`.
  *
  * WHY a typed refusal rather than the usual not-implemented answer: the shared
@@ -26,6 +26,8 @@ object PlansBridge {
         "plans:add-budget",
         "plans:resume",
         "plans:stop",
+        // Task 11 (pause handoff §6): the paused card's "Ask the assistant".
+        "plans:ask-assistant",
         "plans:get-auto-approve",
         "plans:set-auto-approve",
     )

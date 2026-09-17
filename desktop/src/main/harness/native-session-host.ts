@@ -1628,8 +1628,25 @@ export class NativeSessionHost extends EventEmitter {
   /** Task 9b (pause handoff §2): may this conversation take a plan notice now?
    *  Open here, a root conversation, and its deliveries not held by Stop. */
   private canTakePlanNotice(sessionId: string): boolean {
+    return this.planNoticeRefusal(sessionId) === undefined;
+  }
+
+  /** Task 11 (pause handoff §6): why "Ask the assistant" can't be answered in
+   *  this conversation right now, in the user's words — checked before the
+   *  plan's write, so the card shows the real reason. */
+  private planNoticeRefusal(sessionId: string): string | undefined {
     const entry = this.live.get(sessionId);
-    return !!entry && !entry.parentSessionId && !entry.holdDeliveries;
+    if (!entry || entry.parentSessionId) return "This conversation isn't running here right now, so the assistant can't be asked.";
+    // Held after Stop (LiveEntry.holdDeliveries): a notice would ride into the
+    // user's next message, leaving the card greyed until then (review 2-1).
+    if (entry.holdDeliveries) return 'You stopped this conversation. Send the assistant a message, then ask again.';
+    return undefined;
+  }
+
+  /** Task 11 (§6): would a plan notice queued now wait behind something — a
+   *  reply in progress, or notices already queued ahead of it? */
+  private planNoticeWouldWait(sessionId: string): boolean {
+    return !this.isIdle(sessionId) || (this.pendingHostNotices.get(sessionId)?.length ?? 0) > 0;
   }
 
   /** Task 9b: queue a plan pause notice. WHY never while held (review 2,
@@ -4060,14 +4077,26 @@ export class NativeSessionHost extends EventEmitter {
           }
           plan.delivering = true;
           entry.currentTurnId = plan.turnId;
+          // Task 11 (§6, review 4-10): a notice turn that fails must not end
+          // silently — the card shows the real error with Retry. A provider
+          // error ends a turn with a `session-error` event (runNotice itself
+          // resolves), so the turn's own events are watched; the user's Stop
+          // ends it with `user-interrupt` and is not a failure.
+          let failed: string | undefined;
+          const onTurnEvent = (event: TranscriptEvent) => {
+            if (event.type === 'session-error') failed = String(event.data?.text ?? '') || failed || 'The reply ended with an error.';
+          };
+          entry.session.on('transcript-event', onTurnEvent);
           try {
             plan.onStart();
             await this.deliverNotice(entry, 'turn', head.text);
           } catch (err) {
-            log('WARN', 'NativeSessionHost', 'plan pause notice delivery failed — its handoff is cleared, not retried', { sessionId, error: String((err as any)?.message ?? err) });
+            failed = String((err as any)?.message ?? err);
+            log('WARN', 'NativeSessionHost', 'plan pause notice delivery failed — its handoff is cleared, not retried', { sessionId, error: failed });
           } finally {
+            entry.session.off('transcript-event', onTurnEvent);
             entry.currentTurnId = undefined;
-            plan.onEnd();
+            plan.onEnd(failed !== undefined ? { failed } : {});
           }
           if (this.live.get(sessionId) !== entry) break;
           continue;
@@ -4741,7 +4770,7 @@ export class NativeSessionHost extends EventEmitter {
   }
 
   // ---- Specialists plans (Task 4) -----------------------------------------
-  // The seven card/settings actions Tasks 5–6 route here (desktop IPC and the
+  // The eight card/settings actions Tasks 5–6 and 11 route here (desktop IPC and the
   // remote server call the SAME methods), the journal projections for
   // hydration, and the session mechanics the plan bridge borrows. Every plan
   // change is pushed as a 'plans-event' ({ sessionId, plan: PlanView }).
@@ -4768,6 +4797,10 @@ export class NativeSessionHost extends EventEmitter {
   }
   stopPlan(sessionId: string, planId: string): Promise<PlanActionResult> {
     return this.plans?.stop(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  }
+  /** Task 11 (pause handoff §6): the paused card's "Ask the assistant". */
+  askAssistantAboutPlan(sessionId: string, planId: string): Promise<PlanActionResult> {
+    return this.plans?.askAssistant(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
   getPlanAutoApprove(): Promise<PlanAutoApproveRead> {
     return this.plans?.getAutoApprove() ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
@@ -4811,7 +4844,12 @@ export class NativeSessionHost extends EventEmitter {
         }
       },
       currentTurnId: (sessionId) => this.live.get(sessionId)?.currentTurnId,
-      canTakeNotice: (sessionId) => this.canTakePlanNotice(sessionId),
+      noticeRefusal: (sessionId) => this.planNoticeRefusal(sessionId),
+      planToolsAvailable: (sessionId) => {
+        const e = this.live.get(sessionId);
+        return e && !e.parentSessionId ? e.session.offersPlanTools() : undefined;
+      },
+      noticeWouldWait: (sessionId) => this.planNoticeWouldWait(sessionId),
       queuePlanNotice: (sessionId, notice) => this.queuePlanNotice(sessionId, notice),
       withdrawPlanNotice: (sessionId, handoffId) => this.withdrawPlanNotice(sessionId, handoffId),
       startChild: (input) => this.startPlanChild(input),

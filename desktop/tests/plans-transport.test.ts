@@ -87,6 +87,9 @@ vi.mock('../src/main/harness/native-session-host', async () => {
 
     stopPlan = vi.fn();
 
+    // Task 11: the eighth, the card's Ask the assistant.
+    askAssistantAboutPlan = vi.fn();
+
     getPlanAutoApprove = vi.fn();
 
     setPlanAutoApprove = vi.fn();
@@ -150,6 +153,7 @@ const REQUEST_PAYLOADS: Record<string, any> = {
   'plans:add-budget': { sessionId: 's1', planId: 'p1', tokens: 1200 },
   'plans:resume': { sessionId: 's1', planId: 'p1' },
   'plans:stop': { sessionId: 's1', planId: 'p1' },
+  'plans:ask-assistant': { sessionId: 's1', planId: 'p1' },
   'plans:get-auto-approve': {},
   'plans:set-auto-approve': { underTokens: 5000 },
 };
@@ -159,6 +163,7 @@ const HOST_METHOD: Record<string, string> = {
   'plans:add-budget': 'addPlanBudget',
   'plans:resume': 'resumePlan',
   'plans:stop': 'stopPlan',
+  'plans:ask-assistant': 'askAssistantAboutPlan',
   'plans:get-auto-approve': 'getPlanAutoApprove',
   'plans:set-auto-approve': 'setPlanAutoApprove',
 };
@@ -168,6 +173,7 @@ const EXPECTED_ARGS: Record<string, unknown[]> = {
   'plans:add-budget': ['s1', 'p1', 1200],
   'plans:resume': ['s1', 'p1'],
   'plans:stop': ['s1', 'p1'],
+  'plans:ask-assistant': ['s1', 'p1'],
   'plans:get-auto-approve': [],
   'plans:set-auto-approve': [5000],
 };
@@ -195,7 +201,7 @@ beforeEach(() => {
 });
 
 describe('the shared plan request handler', () => {
-  it('names exactly the seven channels', () => {
+  it('names exactly the eight channels', () => {
     expect([...PLAN_REQUEST_CHANNELS].sort()).toEqual(Object.keys(HOST_METHOD).sort());
   });
 

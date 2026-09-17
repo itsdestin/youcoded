@@ -3471,7 +3471,7 @@ export function registerIpcHandlers(
     nativeHost.steerFromUser(sessionId, childId, text));
   ipcMain.handle(IPC.SPECIALISTS_INTERRUPT, async (_e, sessionId: string, childId: string) =>
     nativeHost.interruptFromUser(sessionId, childId));
-  // Specialists plans (Task 6) — the seven card/settings calls. Each hands the
+  // Specialists plans (Task 6; Task 11 added Ask) — the eight card/settings calls. Each hands the
   // renderer's payload to the SAME shared handler the remote server uses, so
   // both answer identically (and never throw across IPC: a thrown invoke
   // would reach the card as a failure with Electron's wording in it).
@@ -3480,6 +3480,7 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.PLANS_ADD_BUDGET, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:add-budget', payload));
   ipcMain.handle(IPC.PLANS_RESUME, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:resume', payload));
   ipcMain.handle(IPC.PLANS_STOP, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:stop', payload));
+  ipcMain.handle(IPC.PLANS_ASK_ASSISTANT, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:ask-assistant', payload));
   ipcMain.handle(IPC.PLANS_GET_AUTO_APPROVE, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:get-auto-approve', payload));
   ipcMain.handle(IPC.PLANS_SET_AUTO_APPROVE, (_e, payload: unknown) => handlePlanRequest(nativeHost, 'plans:set-auto-approve', payload));
   // --- Local engine IPC (Plan B) ---

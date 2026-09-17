@@ -455,6 +455,7 @@ const IPC = {
   PLANS_ADD_BUDGET: 'plans:add-budget',
   PLANS_RESUME: 'plans:resume',
   PLANS_STOP: 'plans:stop',
+  PLANS_ASK_ASSISTANT: 'plans:ask-assistant',
   PLANS_GET_AUTO_APPROVE: 'plans:get-auto-approve',
   PLANS_SET_AUTO_APPROVE: 'plans:set-auto-approve',
   PLANS_EVENT: 'plans:event',
@@ -1653,6 +1654,8 @@ contextBridge.exposeInMainWorld('claude', {
     addBudget: (sessionId: string, planId: string, tokens: number) => ipcRenderer.invoke(IPC.PLANS_ADD_BUDGET, { sessionId, planId, tokens }),
     resume: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_RESUME, { sessionId, planId }),
     stop: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_STOP, { sessionId, planId }),
+    // Task 11 (pause handoff §6): a paused card's "Ask the assistant".
+    askAssistant: (sessionId: string, planId: string) => ipcRenderer.invoke(IPC.PLANS_ASK_ASSISTANT, { sessionId, planId }),
     getAutoApprove: () => ipcRenderer.invoke(IPC.PLANS_GET_AUTO_APPROVE),
     setAutoApprove: (underTokens: number) => ipcRenderer.invoke(IPC.PLANS_SET_AUTO_APPROVE, { underTokens }),
   },

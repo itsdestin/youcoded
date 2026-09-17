@@ -316,6 +316,9 @@ export function projectPlan(plan: PlanRecord): PlanView {
       // bookkeeping and never leave the main process.
       view.paused.handoff = { state: handoff.state };
       if (handoff.recommendation) view.paused.handoff.recommendation = { ...handoff.recommendation };
+      // Task 11 (§6): what the greyed card and its error line say.
+      if (handoff.waiting) view.paused.handoff.waiting = handoff.waiting;
+      if (handoff.problem) view.paused.handoff.problem = { ...handoff.problem };
     }
   }
   if (plan.revisedOnPause) view.revisedOnPause = true;
@@ -542,7 +545,10 @@ export class PlanJournal {
   async acquireLease(
     ref: PlanRef,
     planId: string,
-    opts: { startFrom?: JournalPlanStatus[]; force?: boolean; onStart?: (plan: PlanRecord) => void } = {},
+    // Task 11 (review 4-2): `onStart` is also told the pause this write
+    // replaces, so Continue reads the handoff to withdraw inside its OWN
+    // write rather than from an earlier read an Ask could have overtaken.
+    opts: { startFrom?: JournalPlanStatus[]; force?: boolean; onStart?: (plan: PlanRecord, replaced: { paused?: PlanRecord['paused'] }) => void } = {},
   ): Promise<LeaseResult> {
     return this.mutate<LeaseResult>(ref, (file) => {
       const plan = file.plans.find((p) => p.planId === planId);
@@ -558,11 +564,12 @@ export class PlanJournal {
         instanceId: this.identity.instanceId, pid: this.identity.pid,
         heartbeatAt: now, expiresAt: now + this.leaseTtlMs, epoch, fence,
       };
+      const replaced = { paused: plan.paused };
       if (plan.status !== 'running') {
         plan.status = 'running';
         delete plan.paused;
       }
-      opts.onStart?.(plan);
+      opts.onStart?.(plan, replaced);
       return { ok: true, fence, epoch };
     });
   }

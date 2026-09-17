@@ -12,7 +12,7 @@
 // a hostile web page or tool output must never read as the user's instruction.
 // Specialist report text is never included: it is model output about the
 // work, not a fact about the pause.
-import { PLAN_NOTICE_PREFIX, type PlanPauseKind } from '../../../shared/types';
+import { PLAN_ASK_NOTICE_LEAD, type PlanPauseKind } from '../../../shared/types';
 import { projectPlan } from './plan-journal';
 import { pausedRouting, type PlanPauseAction } from './pause-routing';
 import type { PlanRecord } from './types';
@@ -24,7 +24,9 @@ export const PLAN_NOTICE_DETAIL_MAX_CHARS = 500;
 /** §2 table: an add_budget recommendation is at most this × the plan's limit. */
 export const PLAN_ADD_BUDGET_MAX_MULTIPLE = 4;
 /** §2 "never stuck": a pending handoff whose notice has not started to be
- *  delivered by then is cleared, so the card never stays greyed. */
+ *  delivered by then is cleared, so the card never stays greyed. Task 11: the
+ *  card then says so ("didn't get to your question within 10 minutes"), so
+ *  the number in that sentence must follow this one. */
 export const PLAN_HANDOFF_BACKSTOP_MS = 10 * 60_000;
 
 const DETAIL_OPEN = '<untrusted-detail>';
@@ -83,7 +85,8 @@ function allowedLine(plan: PlanRecord, actions: readonly PlanPauseAction[]): str
     : a)).join(', ');
 }
 
-/** The notice for `plan`'s current pause (§2 step 4). */
+/** The notice for `plan`'s current pause (§2 step 4), sent when the user
+ *  presses "Ask the assistant" (Task 11, §6). */
 export function planHandoffNotice(plan: PlanRecord, handoffId: string): string {
   const paused = plan.paused;
   if (!paused) throw new Error(`Plan ${plan.planId} is not paused.`);
@@ -99,10 +102,13 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string): string {
   const approx = plan.approximateLimit || Object.values(plan.manifest.specialists).some((s) => s.approximateLimit);
   const { actions } = pausedRouting(paused);
   const lines = [
-    // Task 10: the prefix is shared with the renderer, which hides this
-    // notice's chat row by it (the text itself is unchanged).
-    `${PLAN_NOTICE_PREFIX} The plan "${plan.document.goal}" is paused and needs a decision from the user. You are asked to look into it first.`,
+    // Task 11 (§6): the user asked, and the notice says so first. The lead is
+    // shared with the renderer, which draws this notice as the one plain line
+    // "You asked the assistant about this plan." (the text itself is the
+    // transcript text, unchanged).
+    PLAN_ASK_NOTICE_LEAD,
     '',
+    `Plan: "${plan.document.goal}"`,
     `Plan id: ${plan.planId}`,
     `Handoff id: ${handoffId}`,
     `Paused at: ${where}`,

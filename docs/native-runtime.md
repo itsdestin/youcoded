@@ -1067,14 +1067,14 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
 <!-- verify: {"path": "youcoded/desktop/src/main/harness/plans/eligibility.ts", "contains": "REVIEWED_LOCAL_9B_PLUS"} -->
 
 **Pieces and who owns what.**
-- `plan-service.ts`: propose, the seven actions, auto-approve settings (`~/.youcoded/plans.json`).
+- `plan-service.ts`: propose, the card actions (Ask included), auto-approve settings (`~/.youcoded/plans.json`).
   Every action answers `{ok:true, plan}`, `{ok:false, error}` or `{ok:false, unsupported:true, error}`
   and never throws.
 - `plan-journal.ts`: the only place plan state is written.
 - `plan-budget.ts` + `budget-adapter.ts`: reservation, settlement, Add budget.
 - `plan-executor.ts`: waves, settle, stop/interrupt, restart.
 - `plan-host-bridge.ts`: manifest, specialist launch, recovery. It reaches `NativeSessionHost`
-  only through `PlanHostPort`; the host exposes the seven actions plus `planViewsFor` and the
+  only through `PlanHostPort`; the host exposes the eight actions plus `planViewsFor` and the
   `'plans-event'` push.
 
 ### Journal
@@ -1176,18 +1176,36 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     specialist row shows "Retried after an error" (`PlanChildView.retried`) only for an error
     retry (start error, specialist error, invalid report) that really relaunched
     (`recoveries[].relaunched`, set in that launch's write); one row per session.
-- **Handing a pause to the assistant** (Task 9b; design §2; `plans/plan-handoff.ts`).
-  - Before the settle write, the executor asks the bridge (`PlanHandoffPort.prepare`): an
-    assistant-routed pause in a conversation that is open here and not held by Stop gets
-    `paused.handoff = {id, state: 'pending', at, revisionTurnId}` in that same write, so the
-    first paused card is already greyed ("The assistant is looking into this."). After the
-    write the bridge queues the pinned notice (`planHandoffNotice`) on the host's notice lane,
-    tagged by handoff id; a queueing failure answers the handoff at once. Plan notices are
-    never queued while deliveries are held.
-  - The notice turn is its own turn with `currentTurnId = revisionTurnId`. Its end (success,
-    error, Stop) answers the handoff with no recommendation (default buttons from
-    `pausedRouting` → `PlanView.paused.actions`) and drops the pending revision. It is never
-    retried and never spliced.
+- **Asking the assistant about a pause** (Task 9b, then Task 11; design §2 and §6 revision 4;
+  `plans/plan-handoff.ts`). Nothing is handed over by itself: the executor has no pause-time
+  hook, and every paused card (all kinds, the user-stopped one included) shows its reason and
+  default buttons (`pausedRouting` → `PlanView.paused.actions`) plus **Ask the assistant**, the
+  light button on the far left. A restart-interrupted card has no Ask (its journal state has no
+  pause to hold a handoff). Ask is hidden when the conversation's model is not offered the plan
+  tools (`HarnessSession.offersPlanTools` → `PlanView.paused.askUnavailable`, added by the bridge
+  to every view it hands out).
+  - Pressing Ask (`plans:ask-assistant` → `PlanHostBridge.askAssistant`): liveness and held
+    deliveries are checked first (refusals are ordinary action errors with the real reason); the
+    handoff is registered in the bridge's in-memory map; then `PlanService.askAssistant` checks
+    INSIDE its write that the plan is paused with no question pending and records
+    `paused.handoff = {id, state: 'pending', at, revisionTurnId, waiting?}` in that write (a
+    second press from anywhere is refused there; the card also ignores clicks while its request
+    is in flight). The bridge then queues the pinned notice (`planHandoffNotice`, first line
+    `PLAN_ASK_NOTICE_LEAD`) on the host's notice lane, tagged by handoff id; a queueing failure
+    clears it and the press answers a failure. Asking again after an answer replaces the old
+    recommendation, error and revision link.
+  - `waiting: 'reply'` means the notice is queued behind a reply in progress (the card says "The
+    assistant will look at this after its current reply."); delivery starting removes it.
+  - The notice turn is its own turn with `currentTurnId = revisionTurnId`. Its end answers the
+    handoff with no recommendation and drops the pending revision. It is never retried and never
+    spliced. If delivery threw or the turn ended in `session-error`, the handoff also records
+    `problem: {kind: 'reply-failed', detail}`; the backstop records `problem: {kind: 'no-start'}`.
+    The card shows either as an error line whose Retry asks again. The user's own Stop leaves no
+    problem.
+  - The chat, the buddy feed and previews draw a delivered notice as one plain line on the user's
+    side, "You asked the assistant about this plan." (`chat-types.ts` `userEntryRenderKind`:
+    `show` / `hide` / `ask-line`); an older automatic notice stays hidden. No new transcript
+    event and no history-only note.
   - `recommend_plan_action` (offered with `propose_plan`, never to specialists) records
     `handoff.recommendation` after `PlanService.recommend` validates it (§2 table, floor =
     `minimumAddTokens`, cap = 4 × limit, message ≤ 280). It only records: the model-facing
@@ -1196,23 +1214,26 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     (`revisedOnPause`) in the same write, only while the old plan is still paused on that
     handoff. Any proposal made during a plan notice turn never auto-approves
     (`PlanProposal.fromPlanNotice`, from the bridge's set of notice turn ids).
-  - Cleared (answered, no recommendation, notice withdrawn) on: Stop on the conversation,
-    failed delivery, destroy/takeover (`interruptSession`), app restart (`recover` →
-    `clearStaleHandoffs`), and the 10-minute backstop, which only runs until delivery starts.
-    A user Continue/Add budget/Stop supersedes a pending handoff (`supersedeHandoff`, same
-    write) and withdraws its undelivered notice; an old-id recommendation is refused.
+  - Cleared (answered, notice withdrawn) on: Stop on the conversation, failed delivery,
+    destroy/takeover (`interruptSession`), app restart (`recover` → `clearStaleHandoffs`, which
+    re-checks inside its write whether this process holds the handoff), and the 10-minute
+    backstop, which only runs until delivery starts. A user Continue/Add budget/Stop supersedes a
+    pending handoff, reading its id inside that action's own write (`supersedeHandoff`; the
+    lease's `onStart` is told the pause it replaces), and withdraws its undelivered notice; an
+    old-id recommendation is refused.
 - **Comment** stops the proposal and stores a `pendingRevision` token keyed by a host turn id,
   then queues the follow-up turn. Only a proposal made in THAT turn is linked as the revision;
   the model cannot claim one.
 
 ### Transport
-- **Channels.** Seven request channels (`plan-requests.ts` `PLAN_REQUEST_CHANNELS`) plus the
+- **Channels.** Eight request channels (`plan-requests.ts` `PLAN_REQUEST_CHANNELS`; Task 11 added
+  `plans:ask-assistant`, superseding the backend design's seven) plus the
   `plans:event` push. Desktop IPC and the remote server both call `handlePlanRequest`, so their
   answers match by construction.
 - **Hydration.** Local Electron hydration awaits `planViewsFor` inside `sendLiveOnlyState`,
   before the replay-complete marker. A remote first page (`transcript:page`) sends the records
   to the asking client only. `chat:hydrate` carries the rest; there is no plan buffer.
-- **Unsupported answers.** The phone answers all seven with typed `unsupported`
+- **Unsupported answers.** The phone answers all eight with typed `unsupported`
   (`PlansBridge.kt`, in its own `when` branch). The shim resolves these as data
   (`RESOLVE_UNSUPPORTED`), so the card disables its controls and shows no toast.
 - **Plan specialists** never wire as conversations. Their display copies ride the plan card
@@ -1233,8 +1254,9 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
 
 ### Tests
 Unit tests: `plan-journal`, `plan-budget`, `plan-budget-adapter`, `plan-executor`,
-`plan-service`, `plan-host-bridge`, `plan-tool`, `plan-eligibility`, `plan-pause-routing`,
-`tool-effects`.
+`plan-service`, `plan-host-bridge`, `plan-handoff`, `plan-tool`, `plan-eligibility`,
+`plan-pause-routing`, `tool-effects`. Card and chat: `plan-card-ask`, `plan-card-handoff`,
+`plan-notice-hidden` (the ask line), `status-strip-authority` (`wrapAction`).
 
 Host wiring: `native-session-host` ("specialists plans in the native host").
 

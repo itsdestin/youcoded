@@ -68,6 +68,7 @@ const CALLS: Array<[string, (p: any) => Promise<unknown>, string, unknown]> = [
   ['addBudget', (p) => p.addBudget('s1', 'p1', 900), 'plans:add-budget', { sessionId: 's1', planId: 'p1', tokens: 900 }],
   ['resume', (p) => p.resume('s1', 'p1'), 'plans:resume', { sessionId: 's1', planId: 'p1' }],
   ['stop', (p) => p.stop('s1', 'p1'), 'plans:stop', { sessionId: 's1', planId: 'p1' }],
+  ['askAssistant', (p) => p.askAssistant('s1', 'p1'), 'plans:ask-assistant', { sessionId: 's1', planId: 'p1' }],
   ['getAutoApprove', (p) => p.getAutoApprove(), 'plans:get-auto-approve', {}],
   ['setAutoApprove', (p) => p.setAutoApprove(3000), 'plans:set-auto-approve', { underTokens: 3000 }],
 ];
@@ -88,7 +89,7 @@ describe('window.claude.plans over the shared shim', () => {
     delete (window as any).claude;
   });
 
-  it('sends each of the seven with its object payload and resolves the host’s answer', async () => {
+  it('sends each of the eight with its object payload and resolves the host’s answer', async () => {
     const { ws } = await connect('desktop');
     const plans = (window as any).claude.plans;
     for (const [name, call, type, payload] of CALLS) {
@@ -103,7 +104,7 @@ describe('window.claude.plans over the shared shim', () => {
     }
   });
 
-  it('the phone’s unsupported answer RESOLVES for all seven, quietly', async () => {
+  it('the phone’s unsupported answer RESOLVES for all eight, quietly', async () => {
     const { ws } = await connect('phone');
     // After the boot quiet window, so a notice WOULD show if one were raised.
     vi.useFakeTimers({ toFake: ['Date'] });

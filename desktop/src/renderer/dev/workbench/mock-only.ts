@@ -113,7 +113,8 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Specialists stage two — plans: the seven `plans.*` rows and `on.planEvent`
   // came off on 2026-09-16 (Task 6) when the real channels landed on all five
   // surfaces (preload, ipc-handlers, remote-shim, remote-server, and
-  // SessionService.kt, which answers a typed "unsupported"). The fakes in
-  // mock-shim.ts stay so the workbench can still show every card state without
-  // a running plan.
+  // SessionService.kt, which answers a typed "unsupported"). The eighth,
+  // `plans.askAssistant` (Task 11), was never listed here: it landed on all
+  // five at once. The fakes in mock-shim.ts stay so the workbench can still
+  // show every card state without a running plan.
 ];

@@ -11,6 +11,12 @@
 // This is one pure function so the executor (which decides at the moment a
 // specialist fails) and Task 9b (which decides from the saved pause) can never
 // disagree about a pause.
+//
+// Task 11 (design §6, revision 4): nothing is handed to the assistant by
+// itself any more. `assistant` now only means "the card's defaults come from
+// the §2 table" (Stop only, Stop · Add budget, or Stop · Continue) — the same
+// actions the assistant may recommend if the user presses "Ask the assistant".
+// Automatic recovery (`auto`) is unchanged.
 import type { PlanPauseAction, PlanPauseKind } from '../../../shared/types';
 import type { ToolEffect } from '../tools/types';
 import type { PlanRecord } from './types';
@@ -104,7 +110,8 @@ export interface RecordedPauseFacts {
 }
 
 /**
- * The route of a pause that is already on the card — Task 9b's entry point.
+ * The route of a pause that is already on the card: its default buttons, and
+ * what the assistant may recommend when asked (Task 9b, Task 11).
  * WHY never `auto`: a pause is only written when the executor did NOT recover
  * it (a second failure, an unfundable report turn, a missing decision), so a
  * recoverable kind read back here belongs to the assistant. A journal written

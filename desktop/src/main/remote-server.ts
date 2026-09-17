@@ -2138,6 +2138,7 @@ export class RemoteServer {
       case 'plans:add-budget':
       case 'plans:resume':
       case 'plans:stop':
+      case 'plans:ask-assistant':
       case 'plans:get-auto-approve':
       case 'plans:set-auto-approve': {
         this.respond(client.ws, type, id, await handlePlanRequest(this.nativeRuntime?.nativeHost ?? null, type, payload));

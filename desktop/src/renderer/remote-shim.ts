@@ -748,7 +748,7 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
  *  first paint, the host's own sentence shown, Settings → Plans hidden. If the
  *  shim rejected it, the caller would see an ordinary failure instead: buttons
  *  stay clickable and the refusal only appears after a tap, plus a toast that
- *  repeats what the card already says. The seven are also never in
+ *  repeats what the card already says. The eight are also never in
  *  REJECT_ON_NOT_OK, because a plain `{ ok:false, error }` is their normal
  *  refusal (tests/remote-shim-plans.test.ts). */
 export const RESOLVE_UNSUPPORTED: ReadonlySet<string> = new Set([
@@ -757,6 +757,8 @@ export const RESOLVE_UNSUPPORTED: ReadonlySet<string> = new Set([
   'plans:add-budget',
   'plans:resume',
   'plans:stop',
+  // Task 11 (pause handoff §6): "Ask the assistant".
+  'plans:ask-assistant',
   'plans:get-auto-approve',
   'plans:set-auto-approve',
 ]);
@@ -3051,13 +3053,14 @@ export function installShim(): void {
     // the desktop's WS case hands them to the same shared handler main uses.
     // Every answer resolves, a refusal or `unsupported` included (see
     // RESOLVE_UNSUPPORTED above): the card reads them as values. On the phone's
-    // own bridge the seven answer `unsupported` (SessionService.kt).
+    // own bridge the eight answer `unsupported` (SessionService.kt).
     plans: {
       approve: (sessionId: string, planId: string) => invoke('plans:approve', { sessionId, planId }),
       comment: (sessionId: string, planId: string, text: string) => invoke('plans:comment', { sessionId, planId, text }),
       addBudget: (sessionId: string, planId: string, tokens: number) => invoke('plans:add-budget', { sessionId, planId, tokens }),
       resume: (sessionId: string, planId: string) => invoke('plans:resume', { sessionId, planId }),
       stop: (sessionId: string, planId: string) => invoke('plans:stop', { sessionId, planId }),
+      askAssistant: (sessionId: string, planId: string) => invoke('plans:ask-assistant', { sessionId, planId }),
       getAutoApprove: () => invoke('plans:get-auto-approve', {}),
       setAutoApprove: (underTokens: number) => invoke('plans:set-auto-approve', { underTokens }),
     },
