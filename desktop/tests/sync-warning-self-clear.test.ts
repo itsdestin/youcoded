@@ -186,13 +186,15 @@ describe('runHealthCheck — resolved warnings clear themselves', () => {
       await svc.start();
       expect(health).toHaveBeenCalledTimes(1);
 
-      await vi.advanceTimersByTimeAsync(60 * 1000);
+      // Five minutes, not one, since audit W12 (tests/sync-service.test.ts pins
+      // the cadence and its gates; this test pins that a re-check happens at all).
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
       expect(health).toHaveBeenCalledTimes(2);
       // The re-check must not re-run the rclone backend probe.
       expect(health.mock.calls[1][0]).toEqual({ probeBackends: false });
 
       svc.stop();
-      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
       expect(health).toHaveBeenCalledTimes(2);
       // WHY: the interval-fired check does real async fs I/O that
       // advanceTimersByTimeAsync does not wait for, and stop() only clears the

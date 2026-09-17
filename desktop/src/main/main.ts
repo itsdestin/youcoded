@@ -2284,6 +2284,15 @@ void app.whenReady().then(async () => {
   // Start native sync service — owns push/pull lifecycle, background timer,
   // session-end sync. Replaces bash hook sync when app is running.
   const syncService = new SyncService();
+  // WHY (2026-09-16 audit W12): the periodic health check's only reader is the
+  // status push, so it runs only while someone could see a status bar — a main
+  // window that is visible and not minimised, or a connected phone. Buddy
+  // windows stay Electron-shown while CSS-hidden, so they never count.
+  syncService.setHealthCheckGate(() =>
+    remoteServer.getClientCount() > 0
+    || BrowserWindow.getAllWindows().some((w) =>
+      !w.isDestroyed() && w.isVisible() && !w.isMinimized()
+      && windowRegistry.getKind(w.webContents.id) !== 'buddy'));
   setSyncService(syncService);
   syncService.start().catch(e => log('ERROR', 'Main', 'SyncService start failed', { error: String(e) }));
 

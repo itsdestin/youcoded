@@ -94,9 +94,15 @@ const SNAPSHOT_POLL_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 // so re-evaluating only at launch pinned a red "No internet" banner over an
 // "All synced · 1m ago" panel for the rest of the session. Re-running is cheap
 // once the rclone probe is excluded (see runHealthCheck's probeBackends), and
-// the warnings file is only rewritten when the set actually changes, so a
-// steady state costs one DNS lookup a minute and no disk writes.
-const HEALTH_POLL_INTERVAL_MS = 60 * 1000; // 1 minute
+// the warnings file is only rewritten when the set actually changes.
+// WHY 5 minutes, gated (2026-09-16 audit W12): at one minute it was a DNS lookup
+// of github.com plus a config re-read 1,440 times a day, with the window hidden
+// and with sync switched off, and its only reader is the status push. The tick
+// now runs only while a window is visible or a phone is connected (main.ts
+// hands in the gate) and only when some sync is configured. Accepted cost: the
+// "No internet" banner clears within 5 min instead of 1, and — with the
+// two-strike rule kept — appears up to 10 min after the network goes away.
+const HEALTH_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * Do two warning lists say the same thing? Used to skip the write when a
@@ -141,6 +147,24 @@ export class SyncService extends EventEmitter {
   // Consecutive failed reachability probes — the OFFLINE warning needs two.
   // See the comment at its use site in runHealthCheck.
   private failedInternetProbes = 0;
+  // "Is anyone looking?" — see HEALTH_POLL_INTERVAL_MS. Defaults to yes so a
+  // service nobody wired (tests, a future caller) behaves as before.
+  private healthCheckGate: () => boolean = () => true;
+
+  /** Main hands in "a window is visible or a phone is connected"; the periodic
+   *  health check is skipped while it answers false. The launch-time check
+   *  is unaffected. */
+  setHealthCheckGate(gate: () => boolean): void {
+    this.healthCheckGate = gate;
+  }
+
+  /** No sync of any kind configured — the periodic check then has nothing to
+   *  report that the launch run did not already write. The transition to
+   *  configured is caught because this is re-read on every tick (a file read,
+   *  no DNS), so a mid-session setup still clears "No sync configured". */
+  private isSyncConfigured(): boolean {
+    return this.isPrimarySyncEnabled() || this.getSyncEnabledBackends().length > 0;
+  }
 
   // `home` is a TEST-ONLY override. Production passes nothing and keeps the
   // os.homedir() behavior; tests pass a tmp dir so they never touch the real
@@ -212,10 +236,13 @@ export class SyncService extends EventEmitter {
     // Fix: these warnings used to be computed once and then outlive their own
     // cause for the whole app run — a launch that lost the DNS race with the
     // WiFi coming up left "No internet" pinned above a panel reading
-    // "All synced · 1m ago". Re-check every minute so a fixed condition clears
+    // "All synced · 1m ago". Re-check periodically so a fixed condition clears
     // itself. Cheap by construction: no backend probe, no write unless the
-    // warning set changed.
+    // warning set changed — and skipped entirely while nobody can see the
+    // result or nothing is configured (HEALTH_POLL_INTERVAL_MS).
     this.healthTimer = setInterval(() => {
+      if (!this.healthCheckGate()) return;
+      if (!this.isSyncConfigured()) return;
       this.runHealthCheck({ probeBackends: false }).catch(e => {
         this.logBackup('ERROR', `Periodic health check failed: ${e}`, 'sync.health');
       });
