@@ -940,6 +940,38 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
+    // Merge with master (2026-09-16): master's post-turn re-read re-applies the
+    // binding through setBinding; on the specialists-plans branch setBinding
+    // also carries the provider identity, and an ABSENT base URL means "clear
+    // it" (a real swap to another provider). The same-binding refresh must pass
+    // both through, or the first local turn would wipe the provenance that
+    // plan eligibility reads (harness-session.ts syncPlanTool fails closed).
+    it('the post-turn re-read keeps the session\'s provider identity (plans read it)', async () => {
+      let reads = 0;
+      const lateSlots = async (b: any) => ({
+        contextLength: b.providerId === 'local' ? 8192 : 200_000,
+        totalSlots: b.providerId === 'local' ? (reads++ === 0 ? null : 4) : null,
+      });
+      const withUrl = async (b: any) => (b.providerId === 'local'
+        ? { type: 'local-engine', baseUrl: 'http://127.0.0.1:5999/v1' }
+        : 'openrouter');
+      const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, lateSlots as any, withUrl as any, async () => null);
+      await h.create({ sessionId: 'local-ident', cwd: root, binding: { providerId: 'local', modelId: 'qwen3.6-35b-moe-q4' } });
+      const entry = (h as any).live.get('local-ident');
+      expect(entry.session.opts).toMatchObject({ providerType: 'local-engine', providerBaseUrl: 'http://127.0.0.1:5999/v1' });
+
+      h.send('local-ident', 'hi');
+      await entry.running;
+      await h.drain('local-ident');
+
+      expect(reads).toBe(2);
+      // The re-read really re-applied the binding (the cap moved)…
+      expect(entry.session.profileSnapshot.maxConcurrentSpecialists).toBe(4);
+      // …and the provider identity survived it.
+      expect(entry.session.opts).toMatchObject({ providerType: 'local-engine', providerBaseUrl: 'http://127.0.0.1:5999/v1' });
+      await h.destroyAll();
+    });
+
     // Review 2026-09-16: a picker swap that lands WHILE the post-turn re-read
     // is in the air must win — the stale reading is for the model the user
     // just left and must not put the session back on it.

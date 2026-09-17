@@ -2618,7 +2618,11 @@ export class NativeSessionHost extends EventEmitter {
       const capUnchanged = r.profile.maxConcurrentSpecialists === entry.session.profileSnapshot.maxConcurrentSpecialists;
       const windowUnchanged = r.contextLength === entry.session.contextWindowTokens;
       if (capUnchanged && windowUnchanged) return;
-      entry.session.setBinding(binding, r.contextLength, r.profile, r.pricing, r.free);
+      // Merge note: the branch's setBinding also takes the provider identity,
+      // and an ABSENT base URL means "clear it" (a swap to another provider).
+      // This same-binding refresh must pass both through, or the first local
+      // turn would wipe the provenance plans read for their eligibility.
+      entry.session.setBinding(binding, r.contextLength, r.profile, r.pricing, r.free, r.providerType, r.providerBaseUrl);
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'could not re-read the local engine\u2019s slot count after the turn — helper cap unchanged', { sessionId, error: String((err as any)?.message ?? err) });
     }
