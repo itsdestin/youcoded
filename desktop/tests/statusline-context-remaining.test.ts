@@ -139,8 +139,7 @@ describe.skipIf(!hasBash)('statusline.sh end to end — the .context-<id> file',
     const home = freshHome();
     // (No network dodge needed any more: the script used to shell out to
     // usage-fetch.js, which called the Claude usage API; that is gone —
-    // see statusline-rate-limits.test.ts, which runs the rate_limits parser
-    // that replaced it.)
+    // see statusline-rate-limits.test.ts, which pins its absence.)
     // Run from a directory that is not a git checkout, so the script's branch
     // probe finds nothing and the run does not depend on where the tests live.
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-nogit-'));

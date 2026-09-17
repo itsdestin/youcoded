@@ -11,13 +11,10 @@
 // to it (docs: code.claude.com/docs/en/statusline#rate-limit-usage).
 //
 // Two things are pinned here:
-//   1. Both platforms ship the same statusline.sh, so a fix that lands on one
-//      cannot leave the other still reading the token. (Until Plan B,
-//      2026-09-16, this half also regex-scanned every shipped hook script for
-//      the credentials file, the Keychain item, claudeAiOauth and a Bearer
-//      header, for usage-fetch.js, and statusline.sh for USAGE_FETCH /
-//      toolkit_root. The source-grep sweep deleted those text reads — its
-//      classification row gives them no replacement rule.)
+//   1. The legal invariant — no shipped hook script names the credentials file,
+//      the usage endpoint, or usage-fetch.js, and no usage-fetch.js exists on
+//      either platform. A regex over the source is the right tool for THIS
+//      half: the thing being forbidden is the presence of the code at all.
 //   2. The data contract — statusline.sh writes ~/.claude/.usage-cache.json in
 //      the exact shape the readers (ipc-handlers buildStatusData, StatusBar's
 //      usage-5h/usage-7d chips, UsageCard, Android SessionService) parse:
@@ -45,6 +42,42 @@ const scriptSource = readSource(STATUSLINE);
 // ---------------------------------------------------------------------------
 
 describe('no shipped hook script touches the Claude.ai OAuth token', () => {
+  const shipped = [
+    ...fs.readdirSync(HOOK_SCRIPTS).map((f) => path.join(HOOK_SCRIPTS, f)),
+    ...fs.readdirSync(ANDROID_ASSETS).map((f) => path.join(ANDROID_ASSETS, f)),
+  ].filter((f) => fs.statSync(f).isFile());
+
+  it('ships no usage-fetch.js on either platform', () => {
+    const offenders = shipped.filter((f) => path.basename(f) === 'usage-fetch.js');
+    expect(offenders).toEqual([]);
+  });
+
+  it('never names the credentials file or the OAuth usage endpoint', () => {
+    // WHY still a source read (restored in the review of u9, 2026-09-16): the only
+    // automated guard that no shipped script can reach the token; these are shell
+    // scripts — not an ast-grep language here.
+    for (const f of shipped) {
+      const src = readSource(f);
+      // Comments explaining WHY the old code is gone may say "usage-fetch.js"
+      // and "api/oauth/usage" — that is the point of them. What must never
+      // reappear is code that can reach the token: the credentials file name,
+      // the Keychain item, or the bearer header.
+      expect(src, f).not.toMatch(/\.credentials\.json/);
+      expect(src, f).not.toMatch(/Claude Code-credentials/);
+      expect(src, f).not.toMatch(/claudeAiOauth/);
+      expect(src, f).not.toMatch(/Authorization.{0,20}Bearer/);
+    }
+  });
+
+  it('statusline.sh no longer shells out to a usage fetcher', () => {
+    // The bash half: no `node "$USAGE_FETCH"`, no toolkit_root lookup whose
+    // only purpose was to find it.
+    // WHY still a source read (restored in the review of u9, 2026-09-16): a shell
+    // script — not an ast-grep language here.
+    expect(scriptSource).not.toMatch(/USAGE_FETCH/);
+    expect(scriptSource).not.toMatch(/toolkit_root/);
+  });
+
   it('the Android statusline.sh is the same script', () => {
     // The two copies have always been byte-identical; a fix that lands on one
     // platform only would leave the other still doing the forbidden thing.
