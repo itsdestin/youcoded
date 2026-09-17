@@ -530,4 +530,28 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     expect(view.steps[0].children![0].report).toMatchObject({ status: 'completed', text: expect.stringContaining('Removed the old notes.') });
     expectOwnsNothing(plan(planId));
   });
+  // Merge with master (2026-09-16) — two interactions the merge had to reconcile.
+  describe('after merging master', () => {
+    // Master #491: a stopped or failed specialist still reports what it spent
+    // (the harness now carries an abandoned turn's completed-step usage on
+    // user-interrupt / session-error). A plan specialist cut off by the plan's
+    // Stop spent real tokens too; the conversation's Cost figure must count them.
+    it('a plan specialist stopped mid-turn still reports its completed steps\' spend to the conversation', async () => {
+      const doc = { goal: 'Read one file', steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 3000, items: ['a.ts'] }] };
+      const planId = await propose(doc);
+      fs.writeFileSync(path.join(root, 'a.ts'), 'export const a = 1;\n');
+      childReply = (_p, call) => (call === 1
+        ? { chunks: [toolCallChunk('r-1', 'Read', { file_path: path.join(root, 'a.ts') }), finishChunk('tool-calls', 400, 20)] }
+        : 'hang');
+      await host.approvePlan(SID, planId);
+      await waitFor(() => childCalls.length === 2, 'the specialist\'s second request');
+      const res = await host.stopPlan(SID, planId);
+      expect(res).toMatchObject({ ok: true, plan: { status: 'stopped' } });
+      const reports = events.filter((e) => e.type === 'subagent-usage' && e.sessionId === SID);
+      expect(reports).toHaveLength(1);
+      expect(reports[0].data.usage).toMatchObject({ inputTokens: 400, outputTokens: 20 });
+      expect(reports[0].data.usage.costUsd).toBeGreaterThan(0);
+      expectOwnsNothing(plan(planId));
+    });
+  });
 });

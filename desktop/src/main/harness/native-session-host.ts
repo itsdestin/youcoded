@@ -4896,16 +4896,29 @@ export class NativeSessionHost extends EventEmitter {
     let errorText: string | null = null;
     let interrupted = false;
     const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const addSpend = (u: TranscriptEvent['data']['usage']): void => {
+      if (!u) return;
+      usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
+      usage.cacheReadTokens += u.cacheReadTokens; usage.cacheCreationTokens += u.cacheCreationTokens;
+    };
+    // Merge note (master #491, "a stopped or failed specialist still reports
+    // what it spent"): the harness now carries an abandoned turn's completed-
+    // step spend on `user-interrupt` and `session-error`, and master's Task
+    // path folds it in. A plan specialist that is stopped or fails spent real
+    // tokens too, so it reports them to the conversation the same way. This
+    // is the conversation's Cost figure only — the plan's own budget is
+    // charged per request by the plan gate and is not touched here. (Plan
+    // specialists never compact, so compact-summary never carries spend.)
     const onEvent = (event: TranscriptEvent) => {
       if (event.type === 'assistant-text') report += String(event.data.text ?? '');
       else if (event.type === 'tool-use') report = '';
-      else if (event.type === 'session-error') errorText = String(event.data.text ?? '').trim() || 'the specialist stopped with an error';
-      else if (event.type === 'user-interrupt') interrupted = true;
-      else if (event.type === 'turn-complete' && event.data.usage) {
-        const u = event.data.usage;
-        usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
-        usage.cacheReadTokens += u.cacheReadTokens; usage.cacheCreationTokens += u.cacheCreationTokens;
-      }
+      else if (event.type === 'session-error') {
+        addSpend(event.data.usage);
+        errorText = String(event.data.text ?? '').trim() || 'the specialist stopped with an error';
+      } else if (event.type === 'user-interrupt') {
+        addSpend(event.data.usage);
+        interrupted = true;
+      } else if (event.type === 'turn-complete') addSpend(event.data.usage);
     };
     entry.session.on('transcript-event', onEvent);
     let disposed = false;
