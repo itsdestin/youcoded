@@ -115,9 +115,11 @@ class FakeRunner implements PlanRunner {
   latestUserText(_ref: PlanRef, childId: string): string | undefined { return this.userTexts.get(childId); }
   minimumAsked: string[] = [];
   minimum: number | undefined = undefined;
-  async minimumAddTokens(_ref: PlanRef, _plan: PlanRecord, attemptId: string): Promise<number | undefined> {
+  warm: { tokens: number; until: number } | undefined = undefined;
+  async minimumAddTokens(_ref: PlanRef, _plan: PlanRecord, attemptId: string): Promise<{ tokens?: number; warm?: { tokens: number; until: number } } | undefined> {
     this.minimumAsked.push(attemptId);
-    return this.minimum;
+    if (this.minimum === undefined && !this.warm) return undefined;
+    return { ...(this.minimum !== undefined ? { tokens: this.minimum } : {}), ...(this.warm ? { warm: this.warm } : {}) };
   }
   async launch(input: PlanChildLaunch): Promise<PlanChildHandle> {
     const childId = input.resumeChildId ?? `child-${++this.next}`;
@@ -982,6 +984,19 @@ describe('the minimum Add budget amount', () => {
     const stopped = runner.launches.find((l) => l.brief === 'Review a')!;
     expect(p.paused).toMatchObject({ attemptId: stopped.attemptId, minimumAddTokens: 1_234 });
     expect(runner.minimumAsked).toEqual([stopped.attemptId]);
+  });
+
+  it('Task 12 follow-up 1: the warm minimum is saved beside the cold one, with its expiry', async () => {
+    const runner = new FakeRunner((l) => (l.brief === 'Review a'
+      ? async () => ({ kind: 'stopped', stop: { kind: 'exhausted', detail: 'This specialist has used its whole budget.' } })
+      : completes('ok')));
+    runner.minimum = 1_234;
+    runner.warm = { tokens: 300, until: 777 };
+    const fence = await seed(record(TWO_STEP));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect((await plan()).paused).toMatchObject({ minimumAddTokens: 1_234, warmMinimum: { tokens: 300, until: 777 } });
   });
 
   it('a plan-limit pause that names no specialist records the shortfall itself (review item 1)', async () => {

@@ -15,7 +15,7 @@ import { NativeSessionHost } from '../src/main/harness/native-session-host';
 import { nativeStoreSlug } from '../src/main/slug-encoding';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { stream, textChunks, toolCallChunk, finishChunk } from './helpers/scripted-model';
-import { resetDisabledAdaptersForTests } from '../src/main/harness/plans/budget-adapter';
+import { PLAN_CACHE_WINDOW_MS, resetDisabledAdaptersForTests } from '../src/main/harness/plans/budget-adapter';
 import type { CatalogModel } from '../src/shared/provider-types';
 import type { PlanView } from '../src/shared/types';
 
@@ -50,6 +50,10 @@ let planEvents: Array<{ sessionId: string; plan: PlanView }>;
 // Streams still open when a test ends (hung specialists): closed in afterEach
 // so no scripted model outlives its test.
 let openStreams: Array<ReadableStreamDefaultController<any>>;
+// Task 12 follow-up 1: the host's clock, so a test can step past the 4-minute
+// cache window without waiting. Our own leases are judged by instance id, so
+// moving it never makes this process's plan look abandoned.
+let clock: number;
 
 const proposeStep = (id: string, doc: unknown) => stream(toolCallChunk(id, 'propose_plan', doc), finishChunk('tool-calls'));
 const textStep = (t: string) => stream(...textChunks(`t${Math.random()}`, t), finishChunk('stop'));
@@ -129,7 +133,7 @@ function makeHost(): NativeSessionHost {
     async (binding: { providerId: string }) => (binding.providerId === 'chatgpt' ? null : { in: 1, out: 2 }), undefined, undefined,
     { modelCatalog: async () => CATALOG },
     undefined, undefined, home, undefined, undefined, {},
-    { settleDeadlineMs: 60, heartbeatMs: 5_000, slotPollMs: 5 },
+    { settleDeadlineMs: 60, heartbeatMs: 5_000, slotPollMs: 5, now: () => clock },
   );
   h.on('transcript-event', (e) => events.push(e));
   h.on('plans-event', (e) => planEvents.push(e));
@@ -194,6 +198,7 @@ const reviewReply = (p: string): Reply => (isCombine(p) ? report('COMBINED') : r
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-plan-life-'));
+  clock = Date.now();
   parent = OPENROUTER_PARENT;
   events = []; planEvents = []; childCalls = []; parentSteps = []; openStreams = [];
   childReply = reviewReply;
@@ -307,7 +312,11 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     expect(plan(next).autoApproved).toBe(true);
   });
 
-  it('budget pause → Add budget of exactly the asked amount → Continue finishes the job without re-running the finished step', async () => {
+  // Task 12 follow-up 1: a budget pause records two minimums — the WARM one
+  // (the specialist's prompt is still cached: only the new part must fit),
+  // valid until its last request + 4 minutes, and the COLD one (the whole
+  // conversation re-sent). Continue is judged by whichever is valid then.
+  const pauseTwoStep = async () => {
     const doc = {
       goal: 'Two steps',
       steps: [
@@ -328,42 +337,72 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     };
     await host.approvePlan(SID, planId);
     await waitForCard(planId, 'paused');
+    return { planId, setup: rec0.manifest.specialists.reviewer.setupTokens as number };
+  };
+
+  it('budget pause → Add budget of exactly the WARM minimum inside the cache window → Continue finishes without re-running the finished step', async () => {
+    const { planId, setup } = await pauseTwoStep();
     const paused = plan(planId);
     expectOwnsNothing(paused);
     expect(paused.steps.map((s: any) => s.status)).toEqual(['done', 'paused']);
-    const minimum: number = paused.paused.minimumAddTokens;
-    expect(minimum).toBeGreaterThan(0);
-    expect(shown(planId)!.paused).toMatchObject({ minimumAddTokens: minimum });
-    // Revision 5 (design §7): right after the pause the specialist's prompt is
-    // still cached, so the top-up covers only what was added since its last
-    // request — far less than re-sending its whole setup (system prompt + tools).
-    // This also proves a specialist rebuilt from its saved conversation sends
-    // byte-for-byte the prompt the live one sent (otherwise it would be cold).
-    const setup = rec0.manifest.specialists.reviewer.setupTokens;
-    expect(minimum).toBeLessThan(setup);
-    expect(paused.steps[1].attempts[0].lastRequest).toMatchObject({ messages: expect.any(Number), hash: expect.any(String) });
+    const cold: number = paused.paused.minimumAddTokens;
+    const warm: number = paused.paused.warmMinimum.tokens;
+    const lastAt: number = paused.steps[1].attempts[0].lastRequest.at;
+    // Revision 5: right after the pause only the new part must fit — far less
+    // than re-sending the specialist's whole setup. This also proves a
+    // specialist rebuilt from its saved conversation sends byte-for-byte the
+    // prompt the live one sent (otherwise it would be cold).
+    expect(warm).toBeGreaterThan(0);
+    expect(warm).toBeLessThan(setup);
+    expect(cold).toBeGreaterThan(warm);
+    expect(paused.paused.warmMinimum.until).toBe(lastAt + PLAN_CACHE_WINDOW_MS);
+    // The card is told how long the warm number holds, relative to now.
+    expect(shown(planId)!.paused).toMatchObject({ minimumAddTokens: cold, warmMinimum: { tokens: warm, forMs: lastAt + PLAN_CACHE_WINDOW_MS - clock } });
 
-    // Exactly the asked amount: the limit and that specialist's allowance
+    // Exactly the warm amount: the limit and that specialist's allowance
     // grow by precisely that, and nothing else changes.
     const ceilingBefore = paused.ceilingTokens;
     const combineAttempt = paused.steps[1].attempts[0];
-    expect(await host.addPlanBudget(SID, planId, minimum)).toMatchObject({ ok: true, plan: { status: 'paused' } });
+    clock += 60_000;
+    expect(await host.addPlanBudget(SID, planId, warm - 1)).toMatchObject({ ok: false });
+    expect(await host.addPlanBudget(SID, planId, warm)).toMatchObject({ ok: true, plan: { status: 'paused' } });
     const topped = plan(planId);
-    expect(topped.ceilingTokens).toBe(ceilingBefore + minimum);
-    expect(topped.steps[1].attempts[0].addedTokens).toBe(combineAttempt.addedTokens + minimum);
+    expect(topped.ceilingTokens).toBe(ceilingBefore + warm);
+    expect(topped.steps[1].attempts[0].addedTokens).toBe(combineAttempt.addedTokens + warm);
     expect(topped.usedTokens).toBe(paused.usedTokens);
 
     const callsBefore = childCalls.length;
+    const pausesBefore = planEvents.filter((e) => e.plan.planId === planId && e.plan.status === 'paused').length;
     expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true, plan: { status: 'running' } });
     await waitForCard(planId, 'completed');
     const after = childCalls.slice(callsBefore);
     // One request: the combine specialist picking up where it stopped.
     expect(after).toHaveLength(1);
     expect(after.some((c) => c.prompt.includes('Review a.ts'))).toBe(false);
+    expect(planEvents.filter((e) => e.plan.planId === planId && e.plan.status === 'paused').length).toBe(pausesBefore);
     const done = plan(planId);
     expect(done.steps[0].attempts).toHaveLength(1);   // the finished step was never re-run
     expect(done.steps[0].attempts[0]).toEqual(paused.steps[0].attempts[0]);
     expectOwnsNothing(done);
+  });
+
+  it('after the cache window the warm amount is refused, and the COLD minimum lets Continue finish without a second pause', async () => {
+    const { planId } = await pauseTwoStep();
+    const paused = plan(planId);
+    const cold: number = paused.paused.minimumAddTokens;
+    const warm: number = paused.paused.warmMinimum.tokens;
+    clock = paused.paused.warmMinimum.until + 1;
+    expect(await host.addPlanBudget(SID, planId, warm)).toEqual({ ok: false, error: expect.stringContaining(cold.toLocaleString('en-US')) });
+    // Views read now carry no warm number any more.
+    expect((await host.planViewsFor(SID)).find((v) => v.planId === planId)!.paused!.warmMinimum).toBeUndefined();
+    expect(await host.addPlanBudget(SID, planId, cold)).toMatchObject({ ok: true });
+    const callsBefore = childCalls.length;
+    const pausesBefore = planEvents.filter((e) => e.plan.planId === planId && e.plan.status === 'paused').length;
+    expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true });
+    await waitForCard(planId, 'completed');
+    expect(childCalls.slice(callsBefore)).toHaveLength(1);
+    expect(planEvents.filter((e) => e.plan.planId === planId && e.plan.status === 'paused').length).toBe(pausesBefore);
+    expectOwnsNothing(plan(planId));
   });
 
   it('app quit mid-plan → reopen shows interrupted and runs nothing → Continue finishes without replaying a finished step', async () => {

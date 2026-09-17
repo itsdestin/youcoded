@@ -501,6 +501,30 @@ describe('result discriminants', () => {
     expect(addTokens).toHaveBeenCalledTimes(1);
   });
 
+  // Task 12 follow-up 1: a paused specialist's prompt stays cached only for a
+  // while. The warm minimum is valid until its expiry (main's own clock); after
+  // that the cold (full re-send) minimum is the one a press must meet.
+  it.each([
+    ['inside the cache window, the warm minimum is enough', 5_000, 800, true],
+    ['inside the cache window, less than the warm minimum is refused', 5_000, 799, false],
+    ['after the window, the warm amount is refused with the cold minimum', 6_001, 800, false],
+    ['after the window, the cold minimum is enough', 6_001, 2_500, true],
+  ] as const)('%s', async (_name, now, tokens, ok) => {
+    const addTokens = vi.fn(async ({ ref, planId }: { ref: PlanRef; planId: string }) => {
+      const { projectPlan } = await import('../src/main/harness/plans/plan-journal');
+      return projectPlan((await journal.get(ref, planId))!);
+    });
+    const svc = makeService({ budget: { addTokens }, now: () => now });
+    const view = await propose({ svc });
+    await journal.mutate(REF, (file) => {
+      file.plans[0].status = 'paused';
+      file.plans[0].paused = { stepId: 's1', reason: 'limit', attemptId: 'a1', minimumAddTokens: 2_500, warmMinimum: { tokens: 800, until: 6_000 } };
+    });
+    const res = await svc.addBudget(SID, view.planId, tokens);
+    if (ok) expect(res).toMatchObject({ ok: true });
+    else expect(res).toEqual({ ok: false, error: expect.stringContaining(now <= 6_000 ? '800' : '2,500') });
+  });
+
   it('Stop hands the executor the stopped write, so lease release and "stopped" are one write (review item 8)', async () => {
     const view = await propose();
     await service.approve(SID, view.planId);

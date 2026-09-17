@@ -9,9 +9,9 @@ import { PlanHostBridge, definitionFingerprint, PLAN_MINIMUM_ADD_MARGIN_TOKENS, 
 import { BUILTIN_ROSTER, resolveSpecialist } from '../src/main/harness/specialists/registry';
 import { DelegatedModels } from '../src/main/harness/specialists/delegated-models';
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
-import { disableAdapterForPlans, resetDisabledAdaptersForTests } from '../src/main/harness/plans/budget-adapter';
+import { PLAN_CACHE_WINDOW_MS, disableAdapterForPlans, resetDisabledAdaptersForTests } from '../src/main/harness/plans/budget-adapter';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
-import { PlanLaunchDriftError, PlanLaunchRefusedError } from '../src/main/harness/plans/plan-executor';
+import { PLAN_REPORT_ONLY_RESEND, PlanLaunchDriftError, PlanLaunchRefusedError } from '../src/main/harness/plans/plan-executor';
 import type { PlanRecord } from '../src/main/harness/plans/types';
 import type { TranscriptEvent } from '../src/shared/types';
 
@@ -125,16 +125,16 @@ describe('the minimum Add budget', () => {
     nextBound = 300;
     childEvents = [ev('user-message', { text: 'brief' }), ev('assistant-text', { text: 'long' }), ev('turn-complete', { stopReason: 'plan_budget_exhausted' })];
     const bridge = new PlanHostBridge(port()) as any;
-    const min = await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1');
+    const min = (await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1'))?.tokens;
     // left = 2000 − 2600 = −600 → the resume request needs 300 + 1 + margin + 600.
     expect(min).toBe(300 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
     // Review items 3/4: an unexplained action restarts with the tool-naming
     // brief, so that request is measured too.
     childEvents = [ev('user-message', { text: 'brief' }), ev('tool-use', { toolUseId: 'w', toolName: 'Write' })];
-    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1')).toBe(300 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
+    expect((await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1'))?.tokens).toBe(300 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
     // The plan-wide soft stop alone (nothing measurable) needs used − ceiling + 1.
     childEvents = [];
-    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1')).toBe(2600 - 2000 + 1);
+    expect((await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1'))?.tokens).toBe(2600 - 2000 + 1);
   });
 
   it('review item 2: the plan-wide gap is asked once — a sibling\'s own overshoot is left to its own pause', async () => {
@@ -150,7 +150,7 @@ describe('the minimum Add budget', () => {
     // A: its own need (0 + 1 + margin + its 600 overshoot). Without the fix the
     // whole gap (6600 − 4000 + 1 = 2601, which includes B's 2000) was asked here
     // AND again at B's own pause.
-    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, plan, 'a1')).toBe(1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
+    expect((await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, plan, 'a1'))?.tokens).toBe(1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
   });
 
   it('a capped route has no plan-wide gap; nothing is needed when the allowance already fits', async () => {
@@ -159,6 +159,54 @@ describe('the minimum Add budget', () => {
     const plan = soft({ usedTokens: 500, manifest: { ...soft().manifest, specialists: { reviewer: { ...soft().manifest.specialists.reviewer, binding: { providerId: 'openrouter', modelId: 'm' }, approximateLimit: undefined } } } });
     plan.steps[0].attempts[0].spentTokens = 500;
     expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, plan, 'a1')).toBeUndefined();
+  });
+});
+
+describe('Task 12 follow-up 1: warm and cold minimums', () => {
+  const capped = (over: Partial<PlanAttemptRecordLike> = {}): PlanRecord => {
+    const plan = soft({ usedTokens: 500, manifest: { ...soft().manifest, specialists: { reviewer: { ...soft().manifest.specialists.reviewer, binding: { providerId: 'openrouter', modelId: 'm' }, approximateLimit: undefined } } } });
+    Object.assign(plan.steps[0].attempts[0], { spentTokens: 1_900, softLimit: undefined, lastRequest: { at: 50_000, messages: 3, hash: 'h' } }, over);
+    return plan;
+  };
+  type PlanAttemptRecordLike = PlanRecord['steps'][number]['attempts'][number];
+  /** A probe whose warm answer (given a mark) is smaller than its full one. */
+  const twoBounds = (p: ReturnType<typeof port>, full: number, warmTokens: number, seen: Array<{ text: string; warm: unknown }>) => {
+    p.probeSession = () => ({
+      session: { planNextRequestBound: async (_a: unknown, text: string, warm?: unknown) => { seen.push({ text, warm }); return { ok: true, tokens: warm ? warmTokens : full }; } } as any,
+      dispose: () => {},
+    });
+    return p;
+  };
+
+  it('returns the cold minimum and, when smaller, the warm one valid until the last request + 4 minutes', async () => {
+    childEvents = [ev('user-message', { text: 'brief' }), ev('tool-use', { toolUseId: 'w', toolName: 'Read' }), ev('tool-result', { toolUseId: 'w', toolResult: 'x' })];
+    const seen: Array<{ text: string; warm: unknown }> = [];
+    const bridge = new PlanHostBridge(twoBounds(port(), 5_000, 1_200, seen), { now: () => 60_000 }) as any;
+    // left = 2000 − 1900 = 100.
+    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, capped(), 'a1')).toEqual({
+      tokens: 5_000 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100,
+      warm: { tokens: 1_200 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100, until: 50_000 + PLAN_CACHE_WINDOW_MS },
+    });
+    expect(seen[1].warm).toEqual({ last: { at: 50_000, messages: 3, hash: 'h' }, now: 60_000 });
+    // No previous request: cold only.
+    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, capped({ lastRequest: undefined }), 'a1')).toEqual({ tokens: 5_000 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100 });
+  });
+
+  it('a report-only turn is measured with its own message and its whole 2,000-token reply', async () => {
+    childEvents = [ev('user-message', { text: 'brief' })];
+    const seen: Array<{ text: string; warm: unknown }> = [];
+    const bridge = new PlanHostBridge(twoBounds(port(), 5_000, 1_200, seen), { now: () => 60_000 }) as any;
+    const min = await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, capped({ reportOnly: true, brief: 'Send your report now.' }), 'a1');
+    expect(seen[0].text).toBe('Send your report now.');
+    expect(min).toEqual({
+      tokens: 5_000 + 2_000 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100,
+      warm: { tokens: 1_200 + 2_000 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100, until: 50_000 + PLAN_CACHE_WINDOW_MS },
+    });
+    // Already delivered: the short nudge is what will be sent, so it is what is measured.
+    childEvents = [ev('user-message', { text: 'Send your report now.' })];
+    seen.length = 0;
+    await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, capped({ reportOnly: true, brief: 'Send your report now.' }), 'a1');
+    expect(seen[0].text).toBe(PLAN_REPORT_ONLY_RESEND);
   });
 });
 

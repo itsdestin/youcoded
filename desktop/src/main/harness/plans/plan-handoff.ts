@@ -16,7 +16,7 @@ import {
   PLAN_ASK_DETAIL_HEADER, PLAN_ASK_NOTICE_LEAD, PLAN_ASK_QUESTION_CLOSE, PLAN_ASK_QUESTION_LABEL, PLAN_ASK_QUESTION_OPEN,
   PLAN_QUESTION_MAX_CHARS, type PlanPauseKind,
 } from '../../../shared/types';
-import { projectPlan } from './plan-journal';
+import { pausedMinimum, projectPlan } from './plan-journal';
 import { pausedRouting, type PlanPauseAction } from './pause-routing';
 import type { PlanRecord } from './types';
 
@@ -115,26 +115,40 @@ function untrusted(text: string): string {
 }
 
 /** The smallest add_budget the service itself accepts (addBudget refuses less). */
-export function addBudgetFloor(plan: PlanRecord): number {
-  return Math.max(1, plan.paused?.minimumAddTokens ?? 1);
+export function addBudgetFloor(plan: PlanRecord, now: number = Date.now()): number {
+  // Task 12 follow-up 1: the minimum valid at `now` (warm or cold).
+  return Math.max(1, (plan.paused ? pausedMinimum(plan.paused, now) : undefined) ?? 1);
 }
 
 export function addBudgetCap(plan: PlanRecord): number {
   return plan.ceilingTokens * PLAN_ADD_BUDGET_MAX_MULTIPLE;
 }
 
-function allowedLine(plan: PlanRecord, actions: readonly PlanPauseAction[]): string {
+function allowedLine(plan: PlanRecord, actions: readonly PlanPauseAction[], now: number): string {
   return actions.map((a) => (a === 'add_budget'
-    ? `add_budget (addTokens from ${fmt(addBudgetFloor(plan))} to ${fmt(addBudgetCap(plan))})`
+    ? `add_budget (addTokens from ${fmt(addBudgetFloor(plan, now))} to ${fmt(addBudgetCap(plan))})`
     : a)).join(', ');
+}
+
+/** Task 12 follow-up 1: the top-up the assistant may cite. While the warm
+ *  minimum holds, both numbers and how long the smaller one lasts. */
+function topUpLine(paused: NonNullable<PlanRecord['paused']>, now: number): string[] {
+  const warm = paused.warmMinimum;
+  const cold = paused.minimumAddTokens;
+  if (warm && now <= warm.until && cold !== undefined && warm.tokens < cold) {
+    const minutes = Math.max(1, Math.floor((warm.until - now) / 60_000));
+    return [`Smallest top-up that lets it continue: ${fmt(warm.tokens)} tokens if it continues within the next ${minutes} minute${minutes === 1 ? '' : 's'}, ${fmt(cold)} tokens after that`];
+  }
+  const current = pausedMinimum(paused, now);
+  return current !== undefined ? [`Smallest top-up that lets it continue: ${fmt(current)} tokens`] : [];
 }
 
 /** The notice for `plan`'s current pause (§2 step 4), sent when the user
  *  presses "Ask the assistant" (Task 11, §6). */
-export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?: string): string {
+export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?: string, now: number = Date.now()): string {
   const paused = plan.paused;
   if (!paused) throw new Error(`Plan ${plan.planId} is not paused.`);
-  const view = projectPlan(plan);
+  const view = projectPlan(plan, now);
   const index = view.steps.findIndex((s) => s.id === paused.stepId);
   // A repeat pauses on the repeat's own id, which is not a card row: name the
   // first row of its body instead of inventing a number.
@@ -158,8 +172,8 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?
     `Paused at: ${where}`,
     `What happened: ${whatHappened(paused)}`,
     `Spent so far: ${fmt(plan.usedTokens)} of the ${approx ? '~' : ''}${fmt(plan.ceilingTokens)}-token limit${approx ? ' (approximate: one reply may go past it)' : ''}`,
-    ...(paused.minimumAddTokens !== undefined ? [`Smallest top-up that lets it continue: ${fmt(paused.minimumAddTokens)} tokens`] : []),
-    `You may recommend: ${allowedLine(plan, actions)}`,
+    ...topUpLine(paused, now),
+    `You may recommend: ${allowedLine(plan, actions, now)}`,
     '',
     // Decision 20: what the user typed, after the pinned facts, labelled as
     // theirs. A blank ask leaves the notice exactly as before.
@@ -172,7 +186,10 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?
     ] : []),
     PLAN_ASK_DETAIL_HEADER,
     DETAIL_OPEN,
-    untrusted(paused.reason),
+    // Task 12 follow-up 2: a general reason's system text (a failed save's
+    // EIO, say) is kept off the card but still reaches the assistant here,
+    // inside the same capped, tag-stripped untrusted block.
+    untrusted(paused.report ? `${paused.reason}\n${paused.report}` : paused.reason),
     DETAIL_CLOSE,
     '',
     'Reply in one of three ways. Call recommend_plan_action with this plan id and handoff id to put the button you recommend on the plan card, with a short message saying why. '

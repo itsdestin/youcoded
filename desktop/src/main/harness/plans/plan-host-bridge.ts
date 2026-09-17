@@ -26,12 +26,12 @@ import { log } from '../../logger';
 import { nativeToolEffect } from '../tools';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
-import { PlanBudget, lastRequestFor, pricingSnapshot } from './plan-budget';
+import { PLAN_REPORT_ONLY_REPLY_TOKENS, PlanBudget, lastRequestFor, pricingSnapshot } from './plan-budget';
 import { PlanService, type PlanHandoffProblem, type PlanProposal, type PlanRecommendation } from './plan-service';
 import { PLAN_HANDOFF_BACKSTOP_MS, normalizePlanQuestion, planHandoffNotice } from './plan-handoff';
 import {
-  PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, classifyChildTranscript, planRestartBrief,
-  type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type TranscriptVerdict,
+  PLAN_REPORT_ONLY_RESEND, PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, classifyChildTranscript, planReportOnlyBrief, planRestartBrief,
+  type PlanChildHandle, type PlanChildLaunch, type PlanMinimumAdd, type PlanRunner, type TranscriptVerdict,
 } from './plan-executor';
 import {
   adapterDisabledReason, budgetAdapterFor, setupBound, type PlanBudgetAdapter, type PlanChildRequestGate, type PlanChildStop,
@@ -260,6 +260,9 @@ export class PlanHostBridge {
     this.service = new PlanService({
       journal: this.journal,
       home: port.home,
+      // Task 12 follow-up 1: Add budget judges the warm minimum's expiry by
+      // the same clock that set it.
+      ...(opts.now ? { now: opts.now } : {}),
       sessionCwd: (sessionId) => port.rootCwd(sessionId),
       resolveManifest: (input) => this.resolveManifest(input),
       queueCommentTurn: ({ sessionId, turnId, text }) => {
@@ -357,14 +360,14 @@ export class PlanHostBridge {
     // nothing. Answer it here, or the card would stay greyed for good.
     if (this.handoffs.get(entry.handoffId) !== entry) {
       await this.answerOrphan(entry);
-      const now = await this.journal.get(ref, planId).then((p) => (p ? projectPlan(p) : res.plan), () => res.plan);
+      const now = await this.journal.get(ref, planId).then((p) => (p ? projectPlan(p, this.now()) : res.plan), () => res.plan);
       return { ok: true, plan: this.decorate(sessionId, now) };
     }
     const queued = await this.queueAsk(entry, waiting);
     if (!queued) return { ok: false, error: QUEUE_FAILED };
     // The answer is the card as it stands after the queueing (a clear that
     // landed meanwhile already shows its buttons again).
-    const view = await this.journal.get(ref, planId).then((p) => (p ? projectPlan(p) : res.plan), () => res.plan);
+    const view = await this.journal.get(ref, planId).then((p) => (p ? projectPlan(p, this.now()) : res.plan), () => res.plan);
     return { ok: true, plan: this.decorate(sessionId, view) };
   }
 
@@ -391,7 +394,7 @@ export class PlanHostBridge {
         const waitsNow = this.port.noticeWouldWait(ref.sessionId);
         queued = this.port.queuePlanNotice(ref.sessionId, {
           // Decision 20: the question recorded in the same write as the handoff.
-          text: planHandoffNotice(plan, handoffId, plan.paused.handoff.question),
+          text: planHandoffNotice(plan, handoffId, plan.paused.handoff.question, this.now()),
           turnId,
           planId,
           handoffId,
@@ -820,13 +823,21 @@ export class PlanHostBridge {
 
   /**
    * The smallest Add budget after which Continue can send the paused
-   * specialist's next request: its fresh resume prompt must fit what is left
-   * of its allowance, and the plan's own limit must be above what was
-   * already used (Task 3 obligation for soft plans; since revision 5 for any
-   * plan, as a cache miss can overshoot a capped one too). undefined when
-   * nothing more is needed or it can't be measured.
+   * specialist's next request: that request must fit what is left of its
+   * allowance, and the plan's own limit must be above what was already used
+   * (Task 3 obligation for soft plans; since revision 5 for any plan, as a
+   * cache miss can overshoot a capped one too).
+   *
+   * Task 12 follow-up 1: worked out twice. COLD — the whole conversation
+   * re-sent, valid whenever Continue comes — is `tokens`. WARM — only the part
+   * added since the specialist's last request, while the provider still has
+   * the rest cached — is `warm`, valid until that request's time + the cache
+   * window, and only when it is smaller. The service accepts whichever holds
+   * when the press arrives; the card switches from one to the other.
+   * A report-only turn (Task 9a) is measured with its own message and needs
+   * room for its whole 2,000-token reply, the executor's funding rule.
    */
-  private async minimumAddTokens(ref: PlanRef, plan: PlanRecord, attemptId: string): Promise<number | undefined> {
+  private async minimumAddTokens(ref: PlanRef, plan: PlanRecord, attemptId: string): Promise<PlanMinimumAdd | undefined> {
     const stepRec = plan.steps.find((s) => s.attempts.some((a) => a.attemptId === attemptId));
     const attempt = stepRec?.attempts.find((a) => a.attemptId === attemptId);
     const step = stepRec && leafSteps(plan.document.steps).find((s) => s.id === stepRec.id);
@@ -847,33 +858,53 @@ export class PlanHostBridge {
     // for whatever the route.
     const planGap = plan.usedTokens >= plan.ceilingTokens
       ? plan.usedTokens - plan.ceilingTokens + 1 - coveredByOthers : 0;
-    const verdict = classifyChildTranscript(this.port.readChildEvents(attempt.childId, ref.cwd), nativeToolEffect);
-    // A terminal transcript needs no request; an undelivered brief is covered
-    // by the attempt's untouched allowance.
-    if (verdict.kind === 'terminal' || (verdict.kind === 'resumable' && !verdict.briefDelivered)) return planGap > 0 ? planGap : undefined;
+    const gapOnly = (): PlanMinimumAdd | undefined => (planGap > 0 ? { tokens: planGap } : undefined);
+    let message: string;
+    let reply = 1;
+    if (attempt.reportOnly) {
+      // The exact turn the executor's launchBrief will send.
+      const brief = attempt.brief ?? planReportOnlyBrief({ finalLeaf: false, problem: '' });
+      const events = this.port.readChildEvents(attempt.childId, ref.cwd);
+      const lastUser = [...events].reverse().find((e) => e.type === 'user-message');
+      message = lastUser && String(lastUser.data.text ?? '') === brief ? PLAN_REPORT_ONLY_RESEND : brief;
+      reply = PLAN_REPORT_ONLY_REPLY_TOKENS;
+    } else {
+      const verdict = classifyChildTranscript(this.port.readChildEvents(attempt.childId, ref.cwd), nativeToolEffect);
+      // A terminal transcript needs no request; an undelivered brief is covered
+      // by the attempt's untouched allowance.
+      if (verdict.kind === 'terminal' || (verdict.kind === 'resumable' && !verdict.briefDelivered)) return gapOnly();
+      // The exact turn the restart will send (items 3/4).
+      message = planRestartBrief(verdict);
+    }
     const cwd = this.port.rootCwd(ref.sessionId);
     const def = cwd !== undefined ? this.port.roster(cwd).resolve(step.specialist) : undefined;
-    if (!def) return planGap > 0 ? planGap : undefined;
+    if (!def) return gapOnly();
     const probe = this.port.probeSession({
       parentId: ref.sessionId, specialist: def, binding: frozen.binding, route,
       gate: measurementGate(lookup.adapter), historyFromChildId: attempt.childId,
     });
-    let need = 0;
+    const now = this.now();
+    const last = lastRequestFor(stepRec.attempts, attempt);
+    const needFor = (tokens: number) => Math.max(planGap, tokens + reply + PLAN_MINIMUM_ADD_MARGIN_TOKENS - left);
+    let cold: number | undefined;
+    let warm: number | undefined;
     try {
-      // The exact turn the restart will send (items 3/4).
-      // Revision 5 (design §7): the same reservation rule Continue will meet,
-      // so right after a short pause only the new part must fit. (Continue
-      // after the cache window has passed needs the full bound; if the
-      // top-up doesn't cover that, the plan pauses again and says so.)
-      const bound = await probe.session.planNextRequestBound(lookup.adapter, planRestartBrief(verdict), {
-        last: lastRequestFor(stepRec.attempts, attempt), now: this.now(),
-      });
-      if (bound.ok) need = bound.tokens + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - left;
+      const full = await probe.session.planNextRequestBound(lookup.adapter, message);
+      if (full.ok) cold = needFor(full.tokens);
+      if (full.ok && last && lookup.adapter.cacheWindowMs !== undefined) {
+        const warmBound = await probe.session.planNextRequestBound(lookup.adapter, message, { last, now });
+        if (warmBound.ok && warmBound.tokens < full.tokens) warm = needFor(warmBound.tokens);
+      }
     } finally {
       probe.dispose();
     }
-    const minimum = Math.max(planGap, need);
-    return minimum > 0 ? minimum : undefined;
+    if (cold === undefined) return gapOnly();
+    const out: PlanMinimumAdd = {};
+    if (cold > 0) out.tokens = cold;
+    if (warm !== undefined && last && warm < cold) {
+      out.warm = { tokens: Math.max(0, warm), until: last.at + lookup.adapter.cacheWindowMs! };
+    }
+    return out.tokens === undefined && out.warm === undefined ? undefined : out;
   }
 }
 

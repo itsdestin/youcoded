@@ -410,3 +410,33 @@ describe('review fix 2: an unsaved-progress pause keeps the system text for the 
     expect(screen.queryByTestId('plan-paused-report')).toBeNull();
   });
 });
+
+// Task 12 follow-up 1: the card shows the warm minimum while the specialist's
+// prompt is still cached, then the cold one. The switch is timed from when the
+// card RECEIVED the view (forMs), never from main's clock.
+describe('follow-up: the minimum Add budget switches when the cache window closes', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  it('shows the warm number, then the cold number after forMs', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    bridge();
+    const view = paused({ paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget', actions: ['add_budget', 'stop'], minimumAddTokens: 2_500, warmMinimum: { tokens: 800, forMs: 60_000 } } });
+    render(<ChatProvider><Card initial={view} /></ChatProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
+    expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 800 tokens to continue.');
+    act(() => { vi.advanceTimersByTime(59_000); });
+    expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 800 tokens');
+    act(() => { vi.advanceTimersByTime(1_001); });
+    expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 2,500 tokens to continue.');
+  });
+
+  it('a warm minimum already met (0) shows no minimum until it expires', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    bridge();
+    const view = paused({ paused: { stepId: 's1', reason: 'x', kind: 'budget', actions: ['add_budget', 'stop'], minimumAddTokens: 1_700, warmMinimum: { tokens: 0, forMs: 1_000 } } });
+    render(<ChatProvider><Card initial={view} /></ChatProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
+    expect(screen.queryByTestId('plan-add-minimum')).toBeNull();
+    act(() => { vi.advanceTimersByTime(1_001); });
+    expect(screen.getByTestId('plan-add-minimum')).toHaveTextContent('Add at least 1,700 tokens');
+  });
+});

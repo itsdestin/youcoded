@@ -24,7 +24,9 @@ import { z } from 'zod';
 import type { PlanView } from '../../../shared/types';
 import { costForUsage, isFreePricing, type ModelPricing, type PricedUsage } from '../pricing';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
-import { PlanJournal, PlanJournalIntegrityError, projectPlan } from './plan-journal';
+import { PlanJournal, PlanJournalIntegrityError, pausedMinimum, projectPlan } from './plan-journal';
+
+export { pausedMinimum };
 import {
   adapterDisabledReason, countedTokens, disableAdapterForPlans, reservationInputBound,
   type PlanBudgetAdapter, type PlanChildRequestGate, type PlanPrefixMark, type PlanRequestOutcome,
@@ -657,6 +659,12 @@ export class PlanBudget {
         if (left > 0) plan.paused.minimumAddTokens = left;
         else delete plan.paused.minimumAddTokens;
       }
+      // Task 12 follow-up 1: the warm minimum shrinks the same way. At 0 it
+      // is kept until it expires, so "already met" still reads as met while
+      // the cache is warm (and the cold remainder applies after).
+      if (plan.paused.warmMinimum) {
+        plan.paused.warmMinimum = { ...plan.paused.warmMinimum, tokens: Math.max(0, plan.paused.warmMinimum.tokens - tokens) };
+      }
       plan.tranches = [...(plan.tranches ?? []), {
         trancheId: this.newId(), stepId, tokens, at: this.now(),
         ...(target ? { attemptId: target.attemptId } : reportOnlyOf !== undefined ? { reportOnlyOf } : { ceilingOnly: true as const }),
@@ -675,6 +683,6 @@ export class PlanBudget {
     });
     const plan = await this.journal.get(ref, planId);
     if (!plan) throw new Error('This plan no longer exists.');
-    return projectPlan(plan);
+    return projectPlan(plan, this.now());
   }
 }

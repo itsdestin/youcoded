@@ -7,6 +7,7 @@ import { BugReportPopup } from '../development/BugReportPopup';
 import type { ReportContext } from '../development/ReportDesign';
 import { toolActionLabel } from '../../utils/tool-group-summary';
 import { classifyPause } from './plan-pause';
+import { warmMinimumExpiresAt } from '../../state/plan-received';
 import { planStatusPhrase } from './plan-status';
 import BrailleSpinner from '../BrailleSpinner';
 import { SpecialistActions } from '../specialists/SpecialistActions';
@@ -190,7 +191,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // (`minimumAddTokens`), the field starts AT that minimum instead.
   const pausedIndex = plan.steps.findIndex((st) => st.id === plan.paused?.stepId);
   const pausedStep = pausedIndex >= 0 ? plan.steps[pausedIndex] : undefined;
-  const minimum = plan.paused?.minimumAddTokens;
+  const minimum = useMinimumNow(plan.paused);
   const defaultExtra = String(minimum ?? pausedStep?.budgetTokens ?? 10000);
   const [extra, setExtra] = useState(defaultExtra);
   // Final review F1: the id of this pause's Add budget press. Kept for Retry
@@ -203,6 +204,13 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // another window, say — the boxes close and the next pause starts fresh.
   const defaultExtraRef = useRef(defaultExtra);
   defaultExtraRef.current = defaultExtra;
+  // Task 12 follow-up 1: when the warm minimum expires (or a new one lands)
+  // a closed Add budget box opens at the minimum that holds now.
+  const addingRef = useRef(adding);
+  addingRef.current = adding;
+  useEffect(() => {
+    if (isPaused && !addingRef.current) setExtra(defaultExtraRef.current);
+  }, [minimum, isPaused]);
   useEffect(() => {
     if (isPaused) { setExtra(defaultExtraRef.current); return; }
     budgetRequest.current = null;
@@ -625,6 +633,27 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
       <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
     </div>
   );
+}
+
+/**
+ * Task 12 follow-up 1: the Add budget minimum that holds right now. While the
+ * paused specialist's prompt is still cached, only its new part must fit (the
+ * warm minimum); `forMs` after this window received the view, the cold one
+ * applies. A timer re-renders the card at that moment. undefined = none.
+ */
+function useMinimumNow(paused: PlanView['paused']): number | undefined {
+  const warm = paused?.warmMinimum;
+  const expiresAt = warm ? warmMinimumExpiresAt(warm) : undefined;
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (expiresAt === undefined) return undefined;
+    const left = expiresAt - Date.now();
+    if (left < 0) return undefined;
+    const timer = setTimeout(() => setTick((n) => n + 1), left + 1);
+    return () => clearTimeout(timer);
+  }, [expiresAt]);
+  if (warm && expiresAt !== undefined && Date.now() <= expiresAt) return warm.tokens > 0 ? warm.tokens : undefined;
+  return paused?.minimumAddTokens;
 }
 
 /**

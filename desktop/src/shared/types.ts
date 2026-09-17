@@ -825,6 +825,11 @@ export interface PlanView {
    *  Wording belongs to the card (Task 5). */
   paused?: {
     stepId: string; reason: string; minimumAddTokens?: number;
+    /** Task 12 follow-up 1: a smaller minimum that holds for `forMs` more
+     *  milliseconds, counted from when this view was RECEIVED (never compared
+     *  with another device's clock). After that, `minimumAddTokens` applies.
+     *  `tokens: 0` = already met while it lasts. */
+    warmMinimum?: { tokens: number; forMs: number };
     /** Task 12 review fix 2: the system's own text behind a general `reason`
      *  (a failed save's EIO, say). Never shown on the card — only handed to
      *  Report bug / Diagnose. */

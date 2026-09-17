@@ -1131,12 +1131,15 @@ the 9B class up (`plans/eligibility.ts`). Specialists never are.
     in `reserve` — used tokens at or past the ceiling, or dollars past it — now applies on every
     route, so no sibling sends either. This is the only overshoot on a capped route: at most one
     request's uncached prompt per running specialist.
-  - **Ceiling and minimum Add budget:** the ceiling stays the approved worst case. The minimum
-    Add budget and the report-only funding check use the same warm rule
-    (`planNextRequestBound(adapter, text, { last, now })`), so right after a pause they ask for
-    only the new part. A Continue after the window has passed needs the full bound; if the top-up
-    doesn't cover it, the plan pauses again with the new minimum. The card wording is unchanged;
-    its numbers now track new work.
+  - **Ceiling and minimum Add budget:** the ceiling stays the approved worst case. A pause
+    records BOTH minimums (`minimumAddTokens` = cold, the whole conversation re-sent;
+    `warmMinimum` = `{tokens, until}`, only the new part, valid until the last request + the
+    window; a report-only turn is measured with its own message plus its 2,000-token reply).
+    `pausedMinimum(paused, now)` picks the one that holds; `PlanService.addBudget` and the
+    notice use it with main's clock. The view carries `warmMinimum: {tokens, forMs}`, and the
+    card times the switch from its own receipt (`state/plan-received.ts`), never another
+    device's clock. The report-only funding check uses the warm rule at the moment it runs.
+    The card wording is unchanged; its numbers now track new work.
 - **ChatGPT is a soft limit** (decision 5). Its endpoint rejects a reply cap, so the request goes
   without one (`harness-session.ts`: `capsOutput ? … : undefined`). After each reply, usage is
   checked: once a reply reaches its hold, or the plan's limit is used up, the plan pauses before

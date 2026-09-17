@@ -242,7 +242,19 @@ function childView(plan: PlanRecord, step: PlanStepV1, stepStatus: string, a: Pl
  * inside a 5-iteration repeat is 15 specialists over time, and "at the same
  * time" would misdescribe what will happen.
  */
-export function projectPlan(plan: PlanRecord): PlanView {
+/**
+ * Task 12 follow-up 1: the Add budget minimum that applies at `now` — the warm
+ * one while it is valid, otherwise the cold one. undefined = nothing is needed.
+ */
+export function pausedMinimum(paused: NonNullable<PlanRecord['paused']>, now: number): number | undefined {
+  const warm = paused.warmMinimum;
+  if (warm && now <= warm.until) return warm.tokens > 0 ? warm.tokens : undefined;
+  return paused.minimumAddTokens;
+}
+
+/** `now` (Task 12 follow-up 1) only decides how long a warm minimum still
+ *  holds; every caller that has a clock passes it. */
+export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanView {
   const rows: PlanStepView[] = [];
   const row = (step: PlanStepV1, kind: PlanStepView['kind'], multiplier: number): void => {
     const rec = plan.steps.find((s) => s.id === step.id);
@@ -298,6 +310,11 @@ export function projectPlan(plan: PlanRecord): PlanView {
   if (plan.paused) {
     view.paused = { stepId: plan.paused.stepId, reason: plan.paused.reason };
     if (plan.paused.minimumAddTokens !== undefined) view.paused.minimumAddTokens = plan.paused.minimumAddTokens;
+    // Follow-up 1: the warm minimum travels as "for how much longer", so the
+    // card times it from its own receipt, not from main's clock. An expired
+    // one is simply not sent.
+    const warm = plan.paused.warmMinimum;
+    if (warm && now <= warm.until) view.paused.warmMinimum = { tokens: warm.tokens, forMs: warm.until - now };
     // Review fix 2: the system text for the bug report (the card never draws it).
     if (plan.paused.report) view.paused.report = plan.paused.report;
     // 5b follow-up: why it paused, so the card never reads `reason` for it.
@@ -454,7 +471,7 @@ export class PlanJournal {
   async list(ref: PlanRef): Promise<PlanView[]> {
     const result = await this.read(ref);
     if (result.kind === 'absent') return [];
-    if (result.kind === 'valid') return result.file.plans.map(projectPlan);
+    if (result.kind === 'valid') return result.file.plans.map((p) => projectPlan(p, this.now()));
     return salvagedFailedViews(this.home.readRawBytes(this.relPath(ref))?.toString('utf8') ?? '', result.detail);
   }
 
@@ -517,7 +534,7 @@ export class PlanJournal {
   private emit(ref: PlanRef, plan: PlanRecord): void {
     if (!this.onEvent) return;
     try {
-      this.onEvent({ sessionId: ref.sessionId, plan: projectPlan(plan) });
+      this.onEvent({ sessionId: ref.sessionId, plan: projectPlan(plan, this.now()) });
     } catch (e) {
       // The write already landed; a listener failure must not make it look failed.
       console.error('[plan-journal] event listener threw', e);

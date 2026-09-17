@@ -7,7 +7,7 @@ import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path'
 import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
 import {
-  PlanBudget, pricingSnapshot, worstCaseUsd, planCeilingUsd, planCeilingTokens, lastRequestFor, type PlanPricingSnapshot,
+  PlanBudget, pricingSnapshot, worstCaseUsd, planCeilingUsd, planCeilingTokens, lastRequestFor, pausedMinimum, type PlanPricingSnapshot,
 } from '../src/main/harness/plans/plan-budget';
 import {
   adapterDisabledReason, resetDisabledAdaptersForTests, PLAN_CACHE_WINDOW_MS,
@@ -347,6 +347,18 @@ describe('Add budget — an authorization tranche for the paused attempt', () =>
     expect(view.paused!.minimumAddTokens).toBe(300);
     await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 300 });
     expect((await plan()).paused!.minimumAddTokens).toBeUndefined();
+  });
+
+  it('lowers the warm minimum too, keeping it (at 0) until it expires (Task 12 follow-up 1)', async () => {
+    await pausedAfterExhaustion();
+    await journal.mutate(REF, (file) => {
+      file.plans[0].paused!.minimumAddTokens = 2_500;
+      file.plans[0].paused!.warmMinimum = { tokens: 800, until: 99 };
+    });
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 1_000 });
+    expect((await plan()).paused).toMatchObject({ minimumAddTokens: 1_500, warmMinimum: { tokens: 0, until: 99 } });
+    expect(pausedMinimum((await plan()).paused!, 99)).toBeUndefined();
+    expect(pausedMinimum((await plan()).paused!, 100)).toBe(1_500);
   });
 
   it('enlarges the paused attempt, the token ceiling and the dollar ceiling', async () => {

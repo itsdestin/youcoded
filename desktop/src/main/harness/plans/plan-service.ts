@@ -12,7 +12,7 @@ import { randomUUID } from 'crypto';
 import type { NativeHome } from '../../native-home';
 import type { PlanView } from '../../../shared/types';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
-import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
+import { PlanJournal, PlanJournalUnreadableError, pausedMinimum, projectPlan } from './plan-journal';
 import { planCeilingTokens, planCeilingUsd } from './plan-budget';
 import { pausedRouting, resetRecoveriesForContinue, type PlanPauseAction } from './pause-routing';
 import { PLAN_NOTICE_DETAIL_MAX_CHARS, PLAN_RECOMMENDATION_MAX_CHARS, addBudgetCap, addBudgetFloor, normalizePlanQuestion } from './plan-handoff';
@@ -278,7 +278,7 @@ export class PlanService {
   private async view(ref: PlanRef, planId: string): Promise<PlanView> {
     const plan = await this.journal.get(ref, planId);
     if (!plan) throw new PlanActionRefused('This plan no longer exists.');
-    return projectPlan(plan);
+    return projectPlan(plan, this.now());
   }
 
   /**
@@ -412,7 +412,7 @@ export class PlanService {
         }
       }
     }
-    return projectPlan(record);
+    return projectPlan(record, this.now());
   }
 
   // ---- card actions ----
@@ -565,13 +565,15 @@ export class PlanService {
       // The repeat is answered before the minimum check: the first press may
       // already have lowered or cleared that minimum.
       if (requestId !== undefined && plan.status === 'paused' && plan.paused?.budgetRequests?.includes(requestId)) {
-        return { ok: true, plan: projectPlan(plan) };
+        return { ok: true, plan: projectPlan(plan, this.now()) };
       }
       if (plan.status !== 'paused' || !plan.paused) throw new PlanActionRefused('Budget can only be added to a paused plan.');
       // Task 4: a smaller amount would let Continue start and then pause again
       // at once (the resume prompt, or a soft overshoot, would not fit), so it
       // is refused with the real minimum instead of being silently accepted.
-      const minimum = plan.paused.minimumAddTokens;
+      // Task 12 follow-up 1: the minimum that holds NOW (main's clock) — the
+      // warm one while the specialist's prompt is still cached, else the cold.
+      const minimum = pausedMinimum(plan.paused, this.now());
       if (minimum !== undefined && tokens < minimum) {
         return failure(`Add at least ${minimum.toLocaleString('en-US')} tokens so the paused specialist can continue.`);
       }
@@ -680,7 +682,7 @@ export class PlanService {
         if (action === 'add_budget') {
           const n = input.addTokens;
           if (!(typeof n === 'number' && Number.isSafeInteger(n))) throw new PlanActionRefused('add_budget needs addTokens, a whole number of tokens.');
-          const floor = addBudgetFloor(p);
+          const floor = addBudgetFloor(p, this.now());
           const cap = addBudgetCap(p);
           if (n < floor) throw new PlanActionRefused(`addTokens must be at least ${floor.toLocaleString('en-US')} for the plan to continue.`);
           if (n > cap) throw new PlanActionRefused(`addTokens can be at most ${cap.toLocaleString('en-US')} (four times the plan's limit).`);

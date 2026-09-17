@@ -6006,10 +6006,13 @@ describe('specialists plans in the native host (Task 4)', () => {
     const rec = journalFile().plans[0];
     expect(childCalls).toHaveLength(1);
     expect(rec.paused.attemptId).toBe(rec.steps[0].attempts[0].attemptId);
-    const minimum = rec.paused.minimumAddTokens;
+    // Task 12 follow-up 1: right after the pause the warm minimum (only the
+    // new part re-sent) is the one that holds; the cold one is kept beside it.
+    const minimum = rec.paused.warmMinimum.tokens;
     expect(minimum).toBeGreaterThan(5);
+    expect(rec.paused.minimumAddTokens).toBeGreaterThan(minimum);
     const view = (await host.planViewsFor(SID))[0];
-    expect(view.paused).toMatchObject({ minimumAddTokens: minimum });
+    expect(view.paused).toMatchObject({ minimumAddTokens: rec.paused.minimumAddTokens, warmMinimum: { tokens: minimum } });
     expect(await host.addPlanBudget(SID, rec.planId, minimum - 1)).toMatchObject({ ok: false, error: expect.stringContaining(minimum.toLocaleString('en-US')) });
     expect(await host.addPlanBudget(SID, rec.planId, minimum)).toMatchObject({ ok: true });
     // …and Continue can now send the restarted specialist's request.

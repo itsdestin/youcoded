@@ -212,6 +212,13 @@ const PlanRecordSchema = z.object({
      *  its next request (its fresh resume prompt plus any soft overshoot).
      *  Add budget lowers it by what was added; the service refuses less. */
     minimumAddTokens: nonNegativeInt.optional(),
+    /** Task 12 follow-up 1: the smaller minimum that holds while the paused
+     *  specialist's prompt is still in the provider's cache (only the part
+     *  added since its last request must fit), valid until `until` (main's
+     *  clock: that request's time + the cache window). `minimumAddTokens` is
+     *  then the COLD minimum (the whole conversation re-sent). Add budget
+     *  lowers both; 0 means "already met" and is kept until it expires. */
+    warmMinimum: z.object({ tokens: nonNegativeInt, until: z.number() }).strict().optional(),
     /** Task 4 round 2: the pause was the plan limit being too small for the
      *  next wave, not one specialist running out. Add budget then raises the
      *  limit only — even if the step has unfinished specialists — because an

@@ -169,9 +169,10 @@ export interface PlanRunner {
   /** The journal became unreadable mid-run: show a failed card (seq = last + 1). */
   onUnreadable(ref: PlanRef, planId: string, detail: string): void;
   /** The smallest Add budget that lets this paused attempt send its next
-   *  request (its fresh resume prompt, plus any soft-limit overshoot), or
-   *  undefined when it can't be worked out. */
-  minimumAddTokens?(ref: PlanRef, plan: PlanRecord, attemptId: string): Promise<number | undefined>;
+   *  request (its fresh resume prompt, plus any overshoot), or undefined when
+   *  it can't be worked out. Task 12 follow-up 1: `tokens` is the COLD
+   *  minimum; `warm`, when smaller, holds until `warm.until` (main's clock). */
+  minimumAddTokens?(ref: PlanRef, plan: PlanRecord, attemptId: string): Promise<PlanMinimumAdd | undefined>;
   /** Why `specialist` cannot run right now (no budget adapter for its route,
    *  or that adapter was switched off), or undefined. Asked BEFORE its wave is
    *  reserved, so a refusal never holds any budget (Task 3 obligation). */
@@ -196,6 +197,9 @@ const PLAN_BUDGET_EXHAUSTED_STOP_REASON = 'plan_budget_exhausted';
  *  landed. `reason` is the card's general line; `report` is the system's own
  *  text, for Report bug / Diagnose only. */
 export interface PlanOrphan { reason: string; report?: string }
+
+/** Task 12 follow-up 1: both Add budget minimums worked out at pause time. */
+export interface PlanMinimumAdd { tokens?: number; warm?: { tokens: number; until: number } }
 export const PLAN_PROGRESS_NOT_SAVED = "The plan stopped because its progress couldn't be saved.";
 
 /**
@@ -1409,11 +1413,14 @@ export class PlanExecutor implements PlanExecutorHooks {
       // must say how much Add budget is enough, instead of accepting a smaller
       // amount that would silently pause again on Continue.
       let minimumAddTokens: number | undefined;
+      let warmMinimum: PlanMinimumAdd['warm'];
       if (final.kind === 'pause' && final.minimumAddTokens !== undefined) {
         minimumAddTokens = final.minimumAddTokens;
       } else if (final.kind === 'pause' && final.attemptId && this.runner.minimumAddTokens) {
         try {
-          minimumAddTokens = await this.runner.minimumAddTokens(run.ref, await this.load(run), final.attemptId);
+          const found = await this.runner.minimumAddTokens(run.ref, await this.load(run), final.attemptId);
+          minimumAddTokens = found?.tokens;
+          warmMinimum = found?.warm;
         } catch (e) {
           if (e instanceof PlanFenceError || e instanceof PlanJournalUnreadableError) throw e;
           console.error('[plan-executor] could not work out the minimum Add budget', e);
@@ -1466,6 +1473,7 @@ export class PlanExecutor implements PlanExecutorHooks {
             ...(note ? { note } : {}),
             ...(final.attemptId ? { attemptId: final.attemptId } : {}),
             ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}),
+            ...(warmMinimum !== undefined ? { warmMinimum } : {}),
             ...(final.ceilingShortfall ? { ceilingShortfall: true as const } : {}),
             ...(final.reportOnlyOf !== undefined ? { reportOnlyOf: final.reportOnlyOf } : {}),
             ...(final.launch ? { launch: final.launch } : {}),
