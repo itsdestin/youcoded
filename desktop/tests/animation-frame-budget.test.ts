@@ -150,6 +150,19 @@ describe('motion vocabulary', () => {
     expect(globals).toMatch(new RegExp(`\\.session-pill__name\\s*\\{[^}]*width: max-content;[^}]*padding-right: ${tail}px`));
   });
 
+  it('declares isBeingDragged exactly twice in SessionStrip', () => {
+    // The shape (each declaration reads `dragId === s.id && dragActive`) is
+    // guarded by ast-grep: session-strip-drag-visuals-are-state (re-review of
+    // Task 6 batch A, 2026-09-16).
+    // WHY still a text read: that rule can require the shape to be RIGHT
+    // wherever it exists, but not COUNT how many times it exists — a stray
+    // third copy (or a dropped one, collapsing the row pill and the menu row
+    // back onto one derivation) would still pass a presence/shape check. Two:
+    // one for the row pill, one for the All Sessions menu row.
+    const strip = read('components', 'SessionStrip.tsx');
+    expect(strip.match(/const isBeingDragged = dragId === s\.id && dragActive;/g)?.length).toBe(2);
+  });
+
 });
 
 describe('the microphone budgets every frame it presents', () => {
