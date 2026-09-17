@@ -150,7 +150,7 @@ describe('reconcileHooks integration: prune runs after reconcile', () => {
   function mkdir(p: string) { fs.mkdirSync(p, { recursive: true }); }
   function write(p: string, content: string) { mkdir(path.dirname(p)); fs.writeFileSync(p, content); }
 
-  it('returns pruned count in the result', () => {
+  it('returns pruned count in the result', async () => {
     // Install a plugin with a manifest that lists session-start.sh only
     const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'marketplaces', 'youcoded', 'plugins', 'test-plugin');
     pluginDirsForTest = [pluginRoot];
@@ -177,7 +177,7 @@ describe('reconcileHooks integration: prune runs after reconcile', () => {
     };
     write(path.join(tmpHome, '.claude', 'settings.json'), JSON.stringify(settings));
 
-    const result = reconcileHooks();
+    const result = await reconcileHooks();
     expect(result.pruned).toBe(1);
 
     const written = JSON.parse(fs.readFileSync(path.join(tmpHome, '.claude', 'settings.json'), 'utf8'));
@@ -216,7 +216,7 @@ describe('reconcileHooks: legacy youcoded-core clone', () => {
     return path.join(tmpHome, '.claude', 'plugins', 'youcoded-core', 'hooks', name);
   }
 
-  it('prunes hooks pointing into the deleted legacy clone', () => {
+  it('prunes hooks pointing into the deleted legacy clone', async () => {
     write(path.join(tmpHome, '.claude', 'settings.json'), JSON.stringify({
       hooks: {
         SessionStart: [{ matcher: '', hooks: [
@@ -228,7 +228,7 @@ describe('reconcileHooks: legacy youcoded-core clone', () => {
       },
     }));
 
-    const result = reconcileHooks();
+    const result = await reconcileHooks();
 
     expect(result.pruned).toBe(2);
     const written = JSON.parse(fs.readFileSync(path.join(tmpHome, '.claude', 'settings.json'), 'utf8'));
@@ -236,28 +236,28 @@ describe('reconcileHooks: legacy youcoded-core clone', () => {
     expect(written.hooks.PreToolUse).toBeUndefined();
   });
 
-  it('keeps a legacy-path hook whose script somehow still exists', () => {
+  it('keeps a legacy-path hook whose script somehow still exists', async () => {
     const live = legacyHook('session-start.sh');
     write(live, '#!/bin/bash\n');
     write(path.join(tmpHome, '.claude', 'settings.json'), JSON.stringify({
       hooks: { SessionStart: [{ matcher: '', hooks: [{ type: 'command', command: `bash ${live}` }] }] },
     }));
 
-    const result = reconcileHooks();
+    const result = await reconcileHooks();
 
     expect(result.pruned).toBe(0);
     const written = JSON.parse(fs.readFileSync(path.join(tmpHome, '.claude', 'settings.json'), 'utf8'));
     expect(written.hooks.SessionStart[0].hooks).toHaveLength(1);
   });
 
-  it('still never prunes a dead user-added hook outside any plugin root', () => {
+  it('still never prunes a dead user-added hook outside any plugin root', async () => {
     write(path.join(tmpHome, '.claude', 'settings.json'), JSON.stringify({
       hooks: { SessionStart: [{ matcher: '', hooks: [
         { type: 'command', command: 'bash /opt/custom/my-hook.sh' },
       ] }] },
     }));
 
-    const result = reconcileHooks();
+    const result = await reconcileHooks();
 
     expect(result.pruned).toBe(0);
     const written = JSON.parse(fs.readFileSync(path.join(tmpHome, '.claude', 'settings.json'), 'utf8'));

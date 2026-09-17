@@ -54,12 +54,17 @@ describe('seedCleanupPeriodDefault', () => {
     expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).cleanupPeriodDays).toBe(7);
   });
 
-  it('does NOT rewrite a corrupt settings.json (never wipe hooks/plugins)', async () => {
+  // This file's old refusal became, on 2026-09-17, the shared rule in
+  // claude-settings.ts: back the corrupt file up beside itself, then write.
+  it('backs up a corrupt settings.json beside itself and seeds a fresh one', async () => {
     fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
     fs.writeFileSync(settingsPath(), '{ not json');
     const r = await seed();
-    expect(r.changed).toBe(false);
-    expect(fs.readFileSync(settingsPath(), 'utf8')).toBe('{ not json');
+    expect(r.changed).toBe(true);
+    expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).cleanupPeriodDays).toBe(365);
+    const backups = fs.readdirSync(path.dirname(settingsPath())).filter((n) => n.includes('.corrupt-'));
+    expect(backups).toHaveLength(1);
+    expect(fs.readFileSync(path.join(path.dirname(settingsPath()), backups[0]), 'utf8')).toBe('{ not json');
   });
 
   // Pins the wrong-type decision: a non-number value (e.g. "30" written by a

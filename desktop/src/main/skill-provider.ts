@@ -362,7 +362,7 @@ export class LocalSkillProvider {
       // Also reconcile hooks — the newly-installed plugin may declare
       // required hooks that need to land in settings.json before the user's
       // next Claude session starts.
-      try { reconcileHooks(); } catch (e) { log('ERROR', 'SkillProvider', 'hook reconcile after install failed', { error: String(e) }); }
+      try { await reconcileHooks(); } catch (e) { log('ERROR', 'SkillProvider', 'hook reconcile after install failed', { error: String(e) }); }
       // Also reconcile MCP servers — packages like youcoded-core-messaging
       // declare MCP servers that need to land in .claude.json on install.
       // reconcileMcp() is async (registry secrets decrypt via safeStorage);
@@ -1254,7 +1254,7 @@ export class LocalSkillProvider {
         // settings.json, with nothing in the log to say so — reusing those
         // catch bodies verbatim here.
         try {
-          reconcileHooks();
+          await reconcileHooks();
         } catch (e) {
           log('ERROR', 'SkillProvider', 'hook reconcile after install failed', { error: String(e) });
         }
