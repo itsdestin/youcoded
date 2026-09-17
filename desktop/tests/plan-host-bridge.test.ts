@@ -271,3 +271,39 @@ describe('handing a pause to the assistant', () => {
     expect(prepare({ kind: 'budget' })).toBeUndefined();
   });
 });
+
+// Task 9b follow-up: a clear that lands while the notice is being queued (a
+// takeover, or Stop) must not leave that notice queued behind it.
+describe('a handoff cleared while its notice is being queued', () => {
+  it('withdraws the notice that was just queued, and it is not a notice turn', async () => {
+    const REF = { cwd: '/proj', sessionId: SID };
+    const log: string[] = [];
+    let bridge!: PlanHostBridge;
+    bridge = new PlanHostBridge({
+      ...port(),
+      queuePlanNotice: (_s, n) => {
+        // The clear runs in the middle of queueing (its synchronous part).
+        bridge.conversationStopped(SID);
+        log.push(`queued:${n.handoffId}`);
+        return true;
+      },
+      withdrawPlanNotice: (_s, id) => { log.push(`withdrawn:${id}`); return true; },
+    });
+    await bridge.journal.mutate(REF, (file) => {
+      file.plans.push({
+        planId: 'p-w', toolUseId: 't', document: DOC, maximumAttempts: 1, maxFanOut: 1,
+        ceilingTokens: 1000, ceilingUsd: null, usedTokens: 1000, status: 'paused', seq: 1, createdAt: 1,
+        manifest: { modelLabel: 'm', specialists: { reviewer: { definitionFingerprint: 'd', binding: { providerId: 'p', modelId: 'm' }, pricing: null, setupTokens: 0 } }, permissionFingerprint: 'x' },
+        steps: [{ id: 's1', status: 'paused', attempts: [] }], fenceEpoch: 1,
+        paused: { stepId: 's1', reason: 'used it all', kind: 'budget', handoff: { id: 'h-w', state: 'pending', at: 1, revisionTurnId: 'turn-w' } },
+      });
+    });
+    await (bridge as any).handoffCreated(REF, 'p-w', { id: 'h-w', turnId: 'turn-w' });
+    await new Promise((r) => setTimeout(r, 20));
+    // The notice queued AFTER the clear's own withdrawal is withdrawn again.
+    expect(log.slice(log.indexOf('queued:h-w'))).toContain('withdrawn:h-w');
+    expect((bridge as any).noticeTurns.has('turn-w')).toBe(false);
+    expect((bridge as any).handoffs.size).toBe(0);
+    expect((await bridge.journal.get(REF, 'p-w'))!.paused!.handoff!.state).toBe('answered');
+  });
+});

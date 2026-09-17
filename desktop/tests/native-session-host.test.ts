@@ -6055,9 +6055,11 @@ describe('specialists plans in the native host (Task 4)', () => {
     const SMALL = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, items: ['a.ts'] }] };
     const handoff = () => journalFile().plans[0].paused?.handoff;
     const notices = () => events.filter((e) => e.type === 'user-message' && String(e.data.text).startsWith('[Plan paused]'));
+    // The prompt is the whole conversation: the LATEST notice's ids count.
+    const lastMatch = (re: RegExp, text: string) => [...text.matchAll(re)].pop()![1];
     const idsIn = (prompt: string) => ({
-      planId: /Plan id: ([\w-]+)/.exec(prompt)![1],
-      handoffId: /Handoff id: ([\w-]+)/.exec(prompt)![1],
+      planId: lastMatch(/Plan id: ([\w-]+)/g, prompt),
+      handoffId: lastMatch(/Handoff id: ([\w-]+)/g, prompt),
     });
     const gated = () => {
       let open!: () => void;
@@ -6330,6 +6332,45 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(newPlan.status).toBe('proposed');
       expect(newPlan.revisionOf).toBeUndefined();
       expect(childCalls).toHaveLength(1);
+    });
+
+    it('two plans handed off at once: plan A\'s notice turn ending leaves plan B pending', async () => {
+      const gates: Array<{ planId: string; open: () => void }> = [];
+      const gatedNotice = (prompt: string) => {
+        const { planId } = idsIn(prompt);
+        let open!: () => void;
+        const gate = new Promise<void>((r) => { open = r; });
+        gates.push({ planId, open });
+        return { gate, chunks: textStep(`About ${planId}.`) };
+      };
+      const handoffOf = (planId: string) => journalFile().plans.find((p: any) => p.planId === planId)?.paused?.handoff;
+      await host.create({ sessionId: SID, cwd: root, binding: PARENT });
+      parentSteps = [
+        proposeStep('call-a', { ...SMALL, goal: 'Plan A' }), proposeStep('call-b', { ...SMALL, goal: 'Plan B' }),
+        textStep('Two plans.'), gatedNotice, gatedNotice,
+      ];
+      host.send(SID, 'Plan both');
+      await waitFor(() => planStatus().filter((st: string) => st === 'proposed').length === 2, 'both proposals');
+      await waitFor(() => host.isIdle(SID), 'the proposing turn to end');
+      const plans = journalFile().plans;
+      const allowance = 500 + plans[0].manifest.specialists.reviewer.setupTokens;
+      childReply = () => ({ chunks: [toolCallChunk('read-1', 'Read', { file_path: 'a.ts' }), finishChunk('tool-calls', 1, allowance - 6)] });
+      for (const p of plans) await host.approvePlan(SID, p.planId);
+      await waitFor(() => plans.every((p: any) => planEvents.some((e) => e.plan.planId === p.planId && e.plan.status === 'paused')), 'both pauses');
+      await waitFor(() => gates.length === 1, 'the first notice turn');
+      const first = gates[0].planId;
+      const other = plans.map((p: any) => p.planId).find((id: string) => id !== first)!;
+      expect(handoffOf(first)?.state).toBe('pending');
+      expect(handoffOf(other)?.state).toBe('pending');
+      gates[0].open();
+      await waitFor(() => handoffOf(first)?.state === 'answered' && gates.length === 2, "the first notice turn's end");
+      // Plan A's turn ending answered only plan A.
+      expect(gates[1].planId).toBe(other);
+      expect(handoffOf(other)).toMatchObject({ state: 'pending' });
+      expect(handoffOf(other).revisionTurnId).toBeDefined();
+      gates[1].open();
+      await waitFor(() => handoffOf(other)?.state === 'answered' && host.isIdle(SID), "the second notice turn's end");
+      expect(notices()).toHaveLength(2);
     });
 
     it('a user Add budget while the notice waits supersedes it: accepted, withdrawn, and an old-id recommendation is refused', async () => {

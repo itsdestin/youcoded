@@ -306,6 +306,20 @@ export class PlanHostBridge {
       await this.clearHandoff(h.id, { force: true });
       return;
     }
+    // Task 9b follow-up: a clear (takeover, Stop) can land between the journal
+    // read above and the queueing — it removed the handoff and withdrew
+    // nothing, because nothing was queued yet. The notice just queued would
+    // then reach the assistant for a pause that is no longer handed over, so
+    // it is withdrawn here, and its turn is not a notice turn after all.
+    if (!this.handoffs.has(h.id)) {
+      if (!entry.started) {
+        this.noticeTurns.delete(h.turnId);
+        try { this.port.withdrawPlanNotice(ref.sessionId, h.id); } catch (e) {
+          log('WARN', 'PlanHostBridge', 'could not withdraw a plan pause notice', { error: String(e) });
+        }
+      }
+      return;
+    }
     // The host starts delivery on a later tick, so the backstop is armed
     // before any delivery can begin; it only ever clears a notice not started.
     if (!entry.started && this.handoffs.has(h.id)) {
