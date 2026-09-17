@@ -1,8 +1,4 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-// @ts-ignore — Vite inline CSS import
-import hljsDarkCss from 'highlight.js/styles/github-dark.css?inline';
-// @ts-ignore — Vite inline CSS import
-import hljsLightCss from 'highlight.js/styles/github.css?inline';
 
 import { validateTheme } from '../themes/theme-validator';
 import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyle } from '../themes/theme-engine';
@@ -164,11 +160,37 @@ function applyFont(font: string) {
   document.documentElement.style.setProperty('--font-mono', font);
 }
 
+// WHY dynamic imports (2026-09-16 audit W25): both highlight.js stylesheets
+// used to be static `?inline` imports, so the entry bundle carried the one the
+// active theme never uses. Each is now its own chunk, fetched the first time a
+// theme of that polarity is applied and kept for the rest of the run. A theme
+// change is a user action; the sheet lands within the same tick on desktop.
+const hljsCss: { dark?: string; light?: string } = {};
+async function loadHighlightCss(dark: boolean): Promise<string> {
+  const key = dark ? 'dark' : 'light';
+  if (hljsCss[key] === undefined) {
+    const mod = dark
+      // @ts-ignore — Vite inline CSS import
+      ? await import('highlight.js/styles/github-dark.css?inline')
+      // @ts-ignore — Vite inline CSS import
+      : await import('highlight.js/styles/github.css?inline');
+    hljsCss[key] = mod.default as string;
+  }
+  return hljsCss[key]!;
+}
+
+// The polarity last asked for. A slower load for an earlier request must not
+// land over a later one (light → dark → light before the dark sheet arrived).
+let highlightWanted: boolean | null = null;
 function applyHighlightTheme(dark: boolean) {
-  const id = 'hljs-theme';
-  let el = document.getElementById(id) as HTMLStyleElement | null;
-  if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
-  el.textContent = dark ? hljsDarkCss : hljsLightCss;
+  highlightWanted = dark;
+  void loadHighlightCss(dark).then((css) => {
+    if (highlightWanted !== dark) return;
+    const id = 'hljs-theme';
+    let el = document.getElementById(id) as HTMLStyleElement | null;
+    if (!el) { el = document.createElement('style'); el.id = id; document.head.appendChild(el); }
+    if (el.textContent !== css) el.textContent = css;
+  });
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
