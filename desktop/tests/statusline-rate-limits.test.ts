@@ -11,10 +11,13 @@
 // to it (docs: code.claude.com/docs/en/statusline#rate-limit-usage).
 //
 // Two things are pinned here:
-//   1. The legal invariant — no shipped hook script names the credentials file,
-//      the usage endpoint, or usage-fetch.js, and no usage-fetch.js exists on
-//      either platform. A regex over the source is the right tool for THIS
-//      half: the thing being forbidden is the presence of the code at all.
+//   1. Both platforms ship the same statusline.sh, so a fix that lands on one
+//      cannot leave the other still reading the token. (Until Plan B,
+//      2026-09-16, this half also regex-scanned every shipped hook script for
+//      the credentials file, the Keychain item, claudeAiOauth and a Bearer
+//      header, for usage-fetch.js, and statusline.sh for USAGE_FETCH /
+//      toolkit_root. The source-grep sweep deleted those text reads — its
+//      classification row gives them no replacement rule.)
 //   2. The data contract — statusline.sh writes ~/.claude/.usage-cache.json in
 //      the exact shape the readers (ipc-handlers buildStatusData, StatusBar's
 //      usage-5h/usage-7d chips, UsageCard, Android SessionService) parse:
@@ -28,52 +31,26 @@ import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { readSource } from './helpers/guard-scope';
 
 const HOOK_SCRIPTS = path.resolve(__dirname, '..', 'hook-scripts');
 const ANDROID_ASSETS = path.resolve(__dirname, '..', '..', 'app', 'src', 'main', 'assets');
 const STATUSLINE = path.join(HOOK_SCRIPTS, 'statusline.sh');
-const scriptSource = fs.readFileSync(STATUSLINE, 'utf8');
+// WHY readSource: line endings normalised, so a CRLF checkout neither breaks the
+// parser extraction below nor fails the byte-for-byte parity case.
+const scriptSource = readSource(STATUSLINE);
 
 // ---------------------------------------------------------------------------
 // Part 1 — the legal invariant.
 // ---------------------------------------------------------------------------
 
 describe('no shipped hook script touches the Claude.ai OAuth token', () => {
-  const shipped = [
-    ...fs.readdirSync(HOOK_SCRIPTS).map((f) => path.join(HOOK_SCRIPTS, f)),
-    ...fs.readdirSync(ANDROID_ASSETS).map((f) => path.join(ANDROID_ASSETS, f)),
-  ].filter((f) => fs.statSync(f).isFile());
-
-  it('ships no usage-fetch.js on either platform', () => {
-    const offenders = shipped.filter((f) => path.basename(f) === 'usage-fetch.js');
-    expect(offenders).toEqual([]);
-  });
-
-  it('never names the credentials file or the OAuth usage endpoint', () => {
-    for (const f of shipped) {
-      const src = fs.readFileSync(f, 'utf8');
-      // Comments explaining WHY the old code is gone may say "usage-fetch.js"
-      // and "api/oauth/usage" — that is the point of them. What must never
-      // reappear is code that can reach the token: the credentials file name,
-      // the Keychain item, or the bearer header.
-      expect(src, f).not.toMatch(/\.credentials\.json/);
-      expect(src, f).not.toMatch(/Claude Code-credentials/);
-      expect(src, f).not.toMatch(/claudeAiOauth/);
-      expect(src, f).not.toMatch(/Authorization.{0,20}Bearer/);
-    }
-  });
-
-  it('statusline.sh no longer shells out to a usage fetcher', () => {
-    // The bash half: no `node "$USAGE_FETCH"`, no toolkit_root lookup whose
-    // only purpose was to find it.
-    expect(scriptSource).not.toMatch(/USAGE_FETCH/);
-    expect(scriptSource).not.toMatch(/toolkit_root/);
-  });
-
   it('the Android statusline.sh is the same script', () => {
     // The two copies have always been byte-identical; a fix that lands on one
     // platform only would leave the other still doing the forbidden thing.
-    expect(fs.readFileSync(path.join(ANDROID_ASSETS, 'statusline.sh'), 'utf8')).toBe(scriptSource);
+    // WHY still a source read: two files in two trees must stay identical —
+    // cross-file parity, which no rule expresses.
+    expect(readSource(path.join(ANDROID_ASSETS, 'statusline.sh'))).toBe(scriptSource);
   });
 });
 
