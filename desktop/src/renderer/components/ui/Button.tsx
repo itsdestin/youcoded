@@ -41,6 +41,12 @@ const BUTTON_BASE =
   FOCUS_RING;
 
 /** Hover is ALWAYS a background fade toward the surface — the label stays crisp.
+ *  PRESS (2026-09-18) is the same fade, one step further: every variant's
+ *  `active:` is its hover pushed once more in the same direction (Destin picked
+ *  "darker fill on press" over a squish — nothing moves, so nothing can jitter).
+ *  There was no press state anywhere in this primitive before. `raised` has none:
+ *  its hover is already `edge`, the last step the ladder has. The ladder itself:
+ *  styles/motion.css → "Hover and press: one ladder".
  *  Rejected: `hover:brightness-110` (invisible on Light/Crème's near-black accent)
  *  and `hover:opacity-90` (fades the label too, and on glow themes like Halftone
  *  the fill fades out from under the theme's own box-shadow glow).
@@ -55,18 +61,18 @@ const BUTTON_BASE =
  *  themes --destructive is too dark to read as text — no single red satisfies
  *  both roles at AA across our themes, which is why the token is split. */
 const BUTTON_VARIANT: Record<ButtonVariant, string> = {
-  primary: 'bg-accent text-on-accent hover:bg-accent/90',
-  secondary: 'border border-edge-dim text-fg-2 hover:bg-inset',
-  ghost: 'text-fg-dim hover:text-fg hover:bg-inset',
-  danger: 'bg-destructive text-on-destructive hover:bg-destructive/90',
-  'danger-outline': 'border border-destructive/50 text-destructive-fg hover:bg-destructive/10',
+  primary: 'bg-accent text-on-accent hover:bg-accent/90 active:bg-accent/80',
+  secondary: 'border border-edge-dim text-fg-2 hover:bg-inset active:bg-edge',
+  ghost: 'text-fg-dim hover:text-fg hover:bg-inset active:bg-edge',
+  danger: 'bg-destructive text-on-destructive hover:bg-destructive/90 active:bg-destructive/80',
+  'danger-outline': 'border border-destructive/50 text-destructive-fg hover:bg-destructive/10 active:bg-destructive/20',
   // ghost, but for a control sitting ON an accent-filled surface (ViewToggleHint's
   // ✕). Added 2026-09-04: ghost there was wrong twice over — its hover fill is
   // --inset, a panel colour that reads as a foreign patch on accent, and its
   // hover TEXT is --fg, which on Light's near-black accent turns the glyph
   // black-on-black. Both roles derive from --on-accent instead, so the whole
   // control tracks whatever a theme pack sets the accent to.
-  'on-accent': 'text-on-accent/80 hover:text-on-accent hover:bg-on-accent/15',
+  'on-accent': 'text-on-accent/80 hover:text-on-accent hover:bg-on-accent/15 active:bg-on-accent/25',
   // A small control that sits ON a picture or chip (the × on an attachment
   // thumbnail): a solid panel fill and outline so it stays visible over any image.
   // Added 2026-09-16 — the attachment chip hand-restyled a ghost button into this.

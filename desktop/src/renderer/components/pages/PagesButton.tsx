@@ -23,9 +23,8 @@ import { Tooltip } from '../ui';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { PageGlyph, PagesIcon } from './page-icons';
 import { usePages } from './use-pages';
-
-const HEADER_ICON_BUTTON =
-  'relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg';
+// Shared with Settings and Projects — it used to be a private copy here.
+import { HEADER_ICON_BUTTON } from '../header/control-states';
 
 export function PagesButton({ active = false }: { active?: boolean } = {}) {
   const { state, dispatch } = useArtifact();

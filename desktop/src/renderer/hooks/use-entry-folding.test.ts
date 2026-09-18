@@ -9,7 +9,7 @@
 // moment — not the happy path.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useEntryFolding, FOLD_IDLE_MS, UNFOLD_DEBOUNCE_MS, FOLD_ROOT_MARGIN } from './use-entry-folding';
+import { useEntryFolding, FOLD_IDLE_MS, INACTIVE_FOLD_MS, UNFOLD_DEBOUNCE_MS, FOLD_ROOT_MARGIN } from './use-entry-folding';
 
 type Cb = (entries: Array<{ target: Element; isIntersecting: boolean }>) => void;
 let fire: Cb;
@@ -227,6 +227,107 @@ describe('useEntryFolding', () => {
     act(() => { fire([{ target: b, isIntersecting: false }]); vi.advanceTimersByTime(FOLD_IDLE_MS); });
     expect(result.current.isFolded('m1')).toBe(true);
     expect(result.current.isFolded('m2')).toBe(true);
+  });
+
+  // ── Session switch (2026-09-18) ────────────────────────────────────────────
+  // WHY these exist: a background pane is content-visibility:hidden, so the
+  // observer reports EVERY entry out of view, and 0.8s later the whole
+  // conversation was a column of blank spacers. Switching back played the
+  // arrival animation on those spacers and the messages popped in afterwards
+  // (Destin, 2026-09-18: "messages often appear to pop-in instead of animating
+  // in smoothly").
+
+  it('a pane that just went to the background keeps what was on screen', () => {
+    const { result, rerender } = renderHook(({ active }) => useEntryFolding(true, rootRef, active), { initialProps: { active: true } });
+    const el = entry('kept', 200);
+    act(() => { result.current.registerEntry(el); });
+    act(() => { fire([{ target: el, isIntersecting: true }]); vi.advanceTimersByTime(UNFOLD_DEBOUNCE_MS); });
+
+    rerender({ active: false });
+    Object.defineProperty(el, 'offsetHeight', { get: () => 0, configurable: true });
+    act(() => { fire([{ target: el, isIntersecting: false }]); vi.advanceTimersByTime(FOLD_IDLE_MS * 5); });
+    // A quick there-and-back must find the messages still built.
+    expect(result.current.isFolded('kept')).toBe(false);
+  });
+
+  it('a pane left in the background long enough still folds, so memory stays bounded', () => {
+    const { result, rerender } = renderHook(({ active }) => useEntryFolding(true, rootRef, active), { initialProps: { active: true } });
+    const el = entry('old', 200);
+    act(() => { result.current.registerEntry(el); });
+    act(() => { fire([{ target: el, isIntersecting: true }]); vi.advanceTimersByTime(UNFOLD_DEBOUNCE_MS); });
+
+    rerender({ active: false });
+    Object.defineProperty(el, 'offsetHeight', { get: () => 0, configurable: true });
+    act(() => { fire([{ target: el, isIntersecting: false }]); vi.advanceTimersByTime(INACTIVE_FOLD_MS); });
+    expect(result.current.isFolded('old')).toBe(true);
+    expect(result.current.heightOf('old')).toBe(200);
+  });
+
+  it('coming back re-arms the normal fold, so leftovers do not wait out the long timer', () => {
+    // The return scrolls to the bottom, so what was on screen when the pane left
+    // can now be far away. The observer reports TRANSITIONS and those entries do
+    // not transition again — without this they would stay built until scrolled past.
+    const { result, rerender } = renderHook(({ active }) => useEntryFolding(true, rootRef, active), { initialProps: { active: true } });
+    const el = entry('left-behind', 200);
+    act(() => { result.current.registerEntry(el); });
+    act(() => { fire([{ target: el, isIntersecting: true }]); vi.advanceTimersByTime(UNFOLD_DEBOUNCE_MS); });
+    rerender({ active: false });
+    act(() => { fire([{ target: el, isIntersecting: false }]); vi.advanceTimersByTime(1000); });
+    expect(result.current.isFolded('left-behind')).toBe(false);
+
+    rerender({ active: true });
+    act(() => { vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(result.current.isFolded('left-behind')).toBe(true);
+  });
+
+  it('unfoldNearViewport rebuilds folded entries near the screen at once, and only those', () => {
+    // The switch-back path for a pane that DID fold: no observer report and no
+    // debounce to wait for — the caller runs this before the first paint.
+    const { result } = renderHook(() => useEntryFolding(true, rootRef));
+    rootRef.current!.getBoundingClientRect = () => ({ top: 0, bottom: 800 } as DOMRect);
+    const near = entry('near', 100);
+    const far = entry('far', 100);
+    near.getBoundingClientRect = () => ({ top: 700, bottom: 800 } as DOMRect);
+    far.getBoundingClientRect = () => ({ top: -9000, bottom: -8900 } as DOMRect);
+    // Document order: far (older) first, near (newer) last — it is walked from the end.
+    rootRef.current!.append(far, near);
+    act(() => { result.current.registerEntry(near); result.current.registerEntry(far); });
+    act(() => {
+      fire([{ target: near, isIntersecting: false }, { target: far, isIntersecting: false }]);
+      vi.advanceTimersByTime(FOLD_IDLE_MS);
+    });
+    expect(result.current.isFolded('near')).toBe(true);
+
+    act(() => { result.current.unfoldNearViewport(); });
+    expect(result.current.isFolded('near')).toBe(false);
+    expect(result.current.isFolded('far')).toBe(true);
+  });
+
+  it('unfoldNearViewport stops measuring at the first entry above the band', () => {
+    // It runs inside the click, ahead of the switch's first frame. A conversation
+    // read to its top holds thousands of folded entries far above; measuring all
+    // of them on every switch was a visible delay (Destin, 2026-09-18).
+    const { result } = renderHook(() => useEntryFolding(true, rootRef));
+    rootRef.current!.getBoundingClientRect = () => ({ top: 0, bottom: 800 } as DOMRect);
+    let reads = 0;
+    const els: HTMLElement[] = [];
+    for (let i = 0; i < 3000; i++) {
+      const el = entry(`old-${i}`, 100);
+      el.getBoundingClientRect = () => { reads++; return { top: -500000 + i, bottom: -499900 + i } as DOMRect; };
+      els.push(el);
+    }
+    const near = entry('near', 100);
+    near.getBoundingClientRect = () => { reads++; return { top: 700, bottom: 800 } as DOMRect; };
+    els.push(near);
+    rootRef.current!.append(...els);
+    act(() => { for (const el of els) result.current.registerEntry(el); });
+    act(() => { fire(els.map((target) => ({ target, isIntersecting: false }))); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(result.current.isFolded('near')).toBe(true);
+
+    reads = 0;
+    act(() => { result.current.unfoldNearViewport(); });
+    expect(result.current.isFolded('near')).toBe(false);
+    expect(reads).toBe(2);   // the one near the screen, and the first one above the band
   });
 
   it('returns a cleanup even with no element or no observer', () => {

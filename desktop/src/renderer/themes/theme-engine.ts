@@ -722,6 +722,17 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     glassEl.id = glassCSSId;
     document.head.appendChild(glassEl);
   }
+  // WHY a marker for "the chat bubbles are frosted right now" (2026-09-18): the
+  // session-switch arrival fades the conversation's wrapper, and an ancestor with
+  // opacity < 1 is a BACKDROP ROOT — a bubble's backdrop-filter may not sample past
+  // it. So for the whole fade the bubbles had no glass, and it snapped on as the
+  // animation ended (Destin: "the blur/glass effect isn't present at the beginning
+  // of the animation, then pops-in right as the animation ends"). globals.css keys
+  // a glass-safe arrival off this attribute; it is the SAME condition as
+  // `bubbleRule` below and must stay so.
+  const bubbleGlass = hasBackgroundLayer(bg) && !reducedEffects && panelsBlur > 0 && bubbleBlur > 0;
+  root.toggleAttribute('data-bubble-glass', bubbleGlass);
+
   if (hasBackgroundLayer(bg) && !reducedEffects && panelsBlur > 0) {
     const scrimBlur = Math.min(panelsBlur, 8);
     const bubbleRule = bubbleBlur > 0 ? `
