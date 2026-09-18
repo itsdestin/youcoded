@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import type { SkillEntry } from '../../shared/types';
 import FavoriteStar from './marketplace/FavoriteStar';
 
@@ -86,27 +86,19 @@ function SourceTag({ skill }: { skill: SkillEntry }) {
   );
 }
 
-// Custom memo comparator. Without this, every parent re-render rebuilds the
-// inline `favorite` and `pluginBadge` objects (CommandDrawer.renderSkillCard
-// creates them fresh each render — see CommandDrawer.tsx:165-174), so default
-// shallow-equal would always fail and every card would re-render on every
-// chat-store dispatch. Compare the values that actually drive what the user
-// sees (filled, name) and ignore the closure-identity of onToggle/onClick —
-// React only cares which function fires on click, and the latest one fires
-// either way thanks to React's render-phase capture. Fixes the v1.2.2 drawer
-// flicker (chat dispatches → AppInner re-render → 20 cards re-render → paint
-// glitch on Windows Electron).
-function skillCardPropsEqual(prev: Props, next: Props): boolean {
-  if (prev.skill !== next.skill) return false;
-  if (prev.onClick !== next.onClick) return false;
-  const pf = prev.favorite, nf = next.favorite;
-  if ((pf == null) !== (nf == null)) return false;
-  if (pf && nf && pf.filled !== nf.filled) return false;
-  const pb = prev.pluginBadge, nb = next.pluginBadge;
-  if ((pb == null) !== (nb == null)) return false;
-  if (pb && nb && pb.name !== nb.name) return false;
-  return true;
-}
+// Latest handlers, read through a ref — the "RowMemo" pattern ResumeBrowser's
+// RowMemo/rowActions.current uses. CommandDrawer.renderSkillCard rebuilds
+// `onClick`/`favorite`/`pluginBadge` as fresh closures on every render (see
+// CommandDrawer.tsx:167-192), so a naive default-compare memo would re-render
+// every card on every chat-store dispatch (the v1.2.2 drawer flicker this
+// file used to fix with a comparator that IGNORED handler identity — which
+// meant a skipped render could go on calling a stale onToggle/onClick
+// forever, since nothing ever refreshed it).
+type Handlers = {
+  onClick: (skill: SkillEntry) => void;
+  onToggle?: () => void;
+  onPluginClick?: () => void;
+};
 
 // Root is a <div role="button"> with `relative` so the FavoriteStar (itself a
 // <button>) can sit inside without an outer wrapper distorting the drawer
@@ -119,15 +111,35 @@ function skillCardPropsEqual(prev: Props, next: Props): boolean {
 // prop, and LibraryScreen's similarly-named renderSkillCard actually renders a
 // MarketplaceCard. Deleted rather than migrated — MarketplaceCard owns the
 // marketplace card. See spec §14.2.
-function SkillCardImpl({ skill, onClick, favorite, pluginBadge }: Props) {
-  const badge = pluginBadge ? <PluginBadge {...pluginBadge} /> : <SourceTag skill={skill} />;
+//
+// Reads every handler through `handlersRef` instead of taking them as props
+// directly, so it is safe to memoize on DATA alone (skill/favoriteFilled/
+// pluginName) with React's default shallow compare — no custom comparator.
+// A skipped render still fires the newest handler: `handlersRef.current` is
+// refreshed by the OUTER SkillCard below on every one of ITS renders, and the
+// outer component is never memoized, so it runs on every CommandDrawer
+// render even when this inner one is skipped.
+function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPluginBadge, pluginName }: {
+  skill: SkillEntry;
+  handlersRef: React.RefObject<Handlers>;
+  hasFavorite: boolean;
+  favoriteFilled: boolean;
+  hasPluginBadge: boolean;
+  pluginName?: string;
+}) {
+  const onCardClick = () => handlersRef.current.onClick(skill);
+  const onPluginClick = () => handlersRef.current.onPluginClick?.();
+  const onFavoriteToggle = () => handlersRef.current.onToggle?.();
+  const badge = hasPluginBadge && pluginName
+    ? <PluginBadge name={pluginName} onClick={onPluginClick} />
+    : <SourceTag skill={skill} />;
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={() => onClick(skill)}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(skill); } }}
+      onClick={onCardClick}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onCardClick(); } }}
       // Change 22: .layer-surface replaces `bg-panel border border-edge-dim`.
       // The two overrides are load-bearing, not stylistic — .layer-surface is
       // --radius-xl with a `0 8px 32px` shadow, and this grid is flat by
@@ -136,14 +148,14 @@ function SkillCardImpl({ skill, onClick, favorite, pluginBadge }: Props) {
       className="relative layer-surface !rounded-lg card-interactive p-3 text-left flex flex-col cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       style={{ boxShadow: 'none' }}
     >
-      {(favorite || pluginBadge) && (
+      {(hasFavorite || hasPluginBadge) && (
         // Each icon carries its OWN bg-panel + hover:bg-inset — two distinct
         // bare icons, not one shared pill. (A single background behind both
         // read as one button when hovering the card — rejected 2026-09-06.)
         <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5">
-          {pluginBadge && <MarketplaceIconButton onClick={pluginBadge.onClick} />}
-          {favorite && (
-            <FavoriteStar size="sm" bg filled={favorite.filled} onToggle={favorite.onToggle} />
+          {hasPluginBadge && <MarketplaceIconButton onClick={onPluginClick} />}
+          {hasFavorite && (
+            <FavoriteStar size="sm" bg filled={favoriteFilled} onToggle={onFavoriteToggle} />
           )}
         </div>
       )}
@@ -154,5 +166,29 @@ function SkillCardImpl({ skill, onClick, favorite, pluginBadge }: Props) {
   );
 }
 
-const SkillCard = React.memo(SkillCardImpl, skillCardPropsEqual);
+// Default shallow compare (no custom comparator) is now SAFE: `handlersRef`
+// is the SAME ref object on every render of the outer SkillCard below (only
+// its `.current` mutates), and the rest are primitives/skill's own identity —
+// exactly "data props only", as intended.
+const SkillCardMemo = React.memo(SkillCardImpl);
+
+// Outer, UNMEMOIZED wrapper — called fresh on every CommandDrawer render
+// (like ResumeBrowser itself, which owns rowActions.current). Its only job is
+// keeping handlersRef current so SkillCardMemo can skip re-rendering on data
+// alone without ever risking a stale click handler.
+function SkillCard({ skill, onClick, favorite, pluginBadge }: Props) {
+  const handlersRef = useRef<Handlers>({ onClick, onToggle: favorite?.onToggle, onPluginClick: pluginBadge?.onClick });
+  handlersRef.current = { onClick, onToggle: favorite?.onToggle, onPluginClick: pluginBadge?.onClick };
+  return (
+    <SkillCardMemo
+      skill={skill}
+      handlersRef={handlersRef}
+      hasFavorite={favorite != null}
+      favoriteFilled={favorite?.filled ?? false}
+      hasPluginBadge={pluginBadge != null}
+      pluginName={pluginBadge?.name}
+    />
+  );
+}
+
 export default SkillCard;
