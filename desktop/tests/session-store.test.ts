@@ -383,7 +383,7 @@ describe('SessionStore', () => {
   // id native?" before letting a flag/note seed a conversation-store record.
   // It must answer for PERSISTED sessions, not just live ones — a past native
   // session opened from the Resume Browser is not live but must still be
-  // recognized, which is the case isNative()/this.live cannot answer.
+  // recognized, which is the case isLive()/this.live cannot answer.
   describe('has', () => {
     it('finds a persisted session regardless of which project it lives under', async () => {
       await store.create(HEADER);

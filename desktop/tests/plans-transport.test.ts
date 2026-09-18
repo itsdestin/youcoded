@@ -68,7 +68,7 @@ vi.mock('../src/main/harness/native-session-host', async () => {
 
     history: any[] = [];
 
-    isNative(id: string) { return this.nativeIds.has(id); }
+    isLive(id: string) { return this.nativeIds.has(id); }
 
     isIdle() { return true; }
 

@@ -51,7 +51,7 @@ describe('NativeSessionHost — MCP acquire/release leak guard (fix pass 1, Find
     // Confirms the id was never registered live — the exact condition that
     // makes the hold otherwise unreleasable (destroy() early-returns for a
     // non-live id).
-    expect(h.isNative('s-1')).toBe(false);
+    expect(h.isLive('s-1')).toBe(false);
 
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   });

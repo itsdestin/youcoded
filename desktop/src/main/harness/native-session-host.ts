@@ -3861,14 +3861,15 @@ export class NativeSessionHost extends EventEmitter {
    *  needs a yes/no must use. WHY (2026-09-16 C2): tear-off and re-dock asked
    *  `getHistory(id) !== null`, which read the whole history (parent AND every
    *  child) to compute a boolean and threw it away.
-   *  (Merge note: master added an `isLive()` with the same body for that fix;
-   *  this is the same predicate under its original name, so there is one.) */
-  isNative(sessionId: string): boolean {
+   *  (Merge: this was `isNative()` on the branch; master's C2 fix added an
+   *  `isLive()` with the identical body, so the two collapsed into this one
+   *  under master's name — the name the ast-grep invariant is written about.) */
+  isLive(sessionId: string): boolean {
     return this.live.has(sessionId);
   }
 
   /** Is this id a native session AT ALL — live now, or persisted from any
-   *  earlier run? isNative() only answers for LIVE sessions, which is the wrong
+   *  earlier run? isLive() only answers for LIVE sessions, which is the wrong
    *  question for the phantom-record gate: a past native session picked from the
    *  Resume Browser is not live, but must still never seed a CC store record. */
   isNativeSessionId(sessionId: string): boolean {
