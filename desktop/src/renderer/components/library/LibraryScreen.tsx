@@ -106,13 +106,15 @@ export default function LibraryScreen({
     return m;
   }, [mp.skillEntries]);
 
-  // Fix round 1 (review finding #2, explicit instruction): MarketplaceCard is
-  // memoized (Task 8) — each render helper below used to pass a fresh
-  // `() => setDetail(...)` closure per row, defeating that memo on every
-  // Your Library re-render (any install/uninstall anywhere touches marketplace
-  // context). One id-taking handler, mirroring MarketplaceScreen's own
-  // `openEntry`, covers all three: MarketplaceCard always reports its OWN id
-  // (bare skill id here, or `theme:<slug>`), which is exactly what routes it.
+  // WHY one id-taking handler (render-cost consolidation 2026-09-18): every
+  // MarketplaceCard caller now opens a card the same way, mirroring
+  // MarketplaceScreen's `openEntry` — the card reports its OWN id (bare skill
+  // id, or `theme:<slug>`), which is exactly what routes it. This does NOT
+  // make the card's memo hold here: the `item`/`pluginBadge` objects below are
+  // still built per render, and the card reads marketplace context itself, so
+  // Your Library redraws its cards on every re-render. That is deliberate —
+  // these lists are tens of cards, not the thousands the Marketplace grid
+  // windows; stabilising them would buy nothing a user could feel.
   const openLibraryEntry = useCallback((id: string) => {
     setDetail(id.startsWith("theme:") ? { kind: "theme", slug: id.slice("theme:".length) } : { kind: "skill", id });
   }, []);

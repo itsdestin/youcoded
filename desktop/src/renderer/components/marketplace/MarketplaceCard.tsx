@@ -485,11 +485,17 @@ function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, ac
   );
 }
 
-// WHY memo (Task 8, render-cost consolidation 2026-09-18): the two lists that
-// now window through useChunkedReveal (MarketplaceScreen's bottom catalog and
-// search grid) still redraw 50-100 cards on every parent re-render otherwise —
-// mp.installingIds/mp.favorites etc. change on every install click. Memoizing
-// only pays off with a stable `onOpen` (see the Props comment above); callers
-// of lists that stay small (rails, Your Library) may keep inline closures —
-// they cost a few dozen skipped bail-outs, not tens of thousands of elements.
+// WHY memo (render-cost consolidation 2026-09-18): the two lists that window
+// through useChunkedReveal (MarketplaceScreen's bottom catalog and search grid)
+// pass stable `item` objects and a stable `onOpen`, so a MarketplaceScreen
+// re-render that changes nothing a card shows skips every card
+// (pinned in tests/MarketplaceScreen.test.tsx).
+// Known limit: this card reads useMarketplace() itself, and React re-renders
+// every context reader when the value changes — so an install click still
+// redraws the (at most 50–100) visible cards. That is one short redraw per
+// click, not the thousands of elements the window removed; closing it needs a
+// selector-scoped marketplace store, the same shape as splitting
+// ArtifactContext (plan: "Deliberately out of scope").
+// Your Library's cards gain nothing from this memo (their `item` objects are
+// per render) — deliberately, see LibraryScreen's openLibraryEntry comment.
 export default memo(MarketplaceCard);
