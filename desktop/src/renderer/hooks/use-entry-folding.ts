@@ -39,7 +39,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * At ~1.5 screens either side this keeps roughly 3-4 screens of real content
  * mounted, which for the 7,000-entry fixture is ~100 entries instead of 7,000.
  */
-export const FOLD_MARGIN_PX = 1500;
+const FOLD_MARGIN_PX = 1500;
 export const FOLD_ROOT_MARGIN = `${FOLD_MARGIN_PX}px 0px`;
 
 /**
