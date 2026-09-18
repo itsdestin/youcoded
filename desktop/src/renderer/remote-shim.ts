@@ -2968,6 +2968,15 @@ export function installShim(): void {
       cancelSignIn: () => invoke('chatgpt:cancel-sign-in'),
       signOut: () => invoke('chatgpt:sign-out'),
     },
+    // Sign in with OpenRouter: the browser round-trip and its listener live on
+    // the desktop, so a phone can't run it — supported:false hides the button
+    // and the card keeps its paste-a-key route. The invokes exist for parity.
+    openrouter: {
+      supported: false,
+      status: () => invoke('openrouter:sign-in-status'),
+      signIn: () => invoke('openrouter:sign-in'),
+      cancelSignIn: () => invoke('openrouter:cancel-sign-in'),
+    },
     // Claude Code's live sign-in (2026-09-09). Real over the wire: remote-server
     // answers from the DESKTOP's probe, which is the machine the session
     // actually runs on. A browser has no `claude` binary of its own, so asking

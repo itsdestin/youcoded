@@ -60,6 +60,11 @@ export interface FirstRunNativeDeps {
 // only starts a sign-in and waits for it, so a test can hand in a two-method
 // fake instead of the whole account machine (main.ts passes the real one).
 export type ChatGptSignInAuth = Pick<ChatGptAuth, 'signIn' | 'waitForSignIn'>;
+/** The same two verbs of Sign in with OpenRouter (providers/openrouter-oauth.ts). */
+export interface OpenRouterSignInAuth {
+  signIn(opts?: { timeoutMs?: number }): Promise<boolean>;
+  waitForSignIn(): Promise<'signed-in' | 'cancelled' | 'timed-out' | { error: string }>;
+}
 
 // The wizard's ChatGPT sign-in window (design §9.1, review R2-11): a first
 // ChatGPT sign-in on a fresh machine is an email code or 2FA away, and this
@@ -710,15 +715,37 @@ export class FirstRunManager extends EventEmitter {
     this.updatePrereq('auth', { status: 'failed', error: reason });
   }
 
-  /** Called from IPC when the user chooses "Log in with OpenRouter". The
-   *  button is on the approved card but its sign-in is not built yet (spec
-   *  2026-08-31-openrouter-connection-trust-design.md); a button that does
-   *  nothing was review R1-6, so it answers with this one line (design §9.5). */
-  handleOpenRouterNotBuilt(): void {
-    this.updateState({
-      authMode: 'none',
-      lastError: 'OpenRouter sign-in is coming in a later update.',
-    });
+  /** "Log in with OpenRouter" (connection-trust design §3.5). Opens the
+   *  browser, waits for OpenRouter to hand back a key — which the sign-in
+   *  checks and saves itself — then finishes setup on OpenRouter. Never sees
+   *  the key. Replaced the "coming in a later update" line (2026-09-18). */
+  async handleOpenRouterLogin(auth: OpenRouterSignInAuth): Promise<void> {
+    this.updateState({ authMode: 'openrouter', statusMessage: 'Waiting for you to sign in…', lastError: undefined });
+    try {
+      await auth.signIn({ timeoutMs: CHATGPT_FIRST_RUN_TIMEOUT_MS });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      log('ERROR', 'first-run', 'OpenRouter sign-in could not start', { detail });
+      this.updateState({ authMode: 'none', lastError: detail });
+      return;
+    }
+    const outcome = await auth.waitForSignIn();
+    if (outcome === 'signed-in') {
+      log('INFO', 'first-run', 'OpenRouter sign-in succeeded');
+      // setupProvider makes OpenRouter the default for new sessions
+      // (FirstRunView reads it on completion), like the API-key path.
+      this.finishNativeSetup({ authMode: 'openrouter', setupProvider: 'openrouter' });
+      return;
+    }
+    // No failed 'auth' row, same reason as handleNativeApiKey: that would offer
+    // "Try Again", which re-runs the whole install pass. The buttons come back
+    // with one line under them.
+    const lastError =
+      outcome === 'timed-out' ? 'Sign-in timed out. Try again?'
+      : outcome === 'cancelled' ? 'Sign-in was cancelled.'
+      : outcome.error;
+    log('WARN', 'first-run', 'OpenRouter sign-in did not complete', { reason: lastError });
+    this.updateState({ authMode: 'none', lastError });
   }
 
   // -------------------------------------------------------------------------

@@ -1854,6 +1854,59 @@ describe('voice:* channel parity', () => {
 // and Android has no native runtime to hold any of that until M8. A REAL arm
 // there would be wrong, and a missing entry would make a phone's invoke hang
 // ~30 s instead of rejecting fast.
+// Sign in with OpenRouter (2026-09-18) — the same five-surface contract as
+// chatgpt:* below, including the invoke-through-the-constant check (review T4 F2).
+describe('openrouter:* sign-in channel parity', () => {
+  const CONSTS: Record<string, string> = {
+    'openrouter:sign-in-status': 'OPENROUTER_SIGN_IN_STATUS',
+    'openrouter:sign-in': 'OPENROUTER_SIGN_IN',
+    'openrouter:cancel-sign-in': 'OPENROUTER_CANCEL_SIGN_IN',
+  };
+  const TYPES = Object.keys(CONSTS);
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+
+  it('exposed in preload.ts and actually invoked there', () => {
+    const src = read('src', 'main', 'preload.ts');
+    for (const t of TYPES) {
+      expect(src, t + ' missing from preload.ts').toContain("'" + t + "'");
+      expect(src, t + ' is only in the constants table').toContain('ipcRenderer.invoke(IPC.' + CONSTS[t] + ')');
+    }
+  });
+
+  it('registered in ipc-handlers.ts through the shared constants', () => {
+    const types = read('src', 'shared', 'types.ts');
+    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    for (const t of TYPES) {
+      expect(types).toContain(`${CONSTS[t]}: '${t}'`);
+      expect(handlers).toContain(`ipcMain.handle(IPC.${CONSTS[t]}`);
+    }
+  });
+
+  it('exposed in remote-shim.ts and handled by remote-server.ts', () => {
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    const server = read('src', 'main', 'remote-server.ts');
+    for (const t of TYPES) {
+      expect(shim, `${t} missing from remote-shim.ts`).toContain(`invoke('${t}')`);
+      expect(server, `${t} missing from remote-server.ts`).toContain(`case '${t}'`);
+    }
+  });
+
+  it('is listed in the Android not-implemented fall-through, NOT a real arm', () => {
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
+    for (const t of TYPES) {
+      expect(kt).toContain(`"${t}"`);
+      expect(kt).not.toContain(`"${t}" ->`);
+    }
+  });
+
+  it('supported is set on every surface: on in preload and the workbench, off over remote', () => {
+    expect(read('src', 'main', 'preload.ts')).toMatch(/openrouter:\s*\{\s*supported: process\.env\.YOUCODED_NATIVE !== '0'/);
+    expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts')).toMatch(/const openrouter = \{[\s\S]*?supported: true,/);
+    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/openrouter:\s*\{\s*supported: false,/);
+  });
+});
+
 describe('chatgpt:* channel parity', () => {
   const TYPES = ['chatgpt:status', 'chatgpt:sign-in', 'chatgpt:cancel-sign-in', 'chatgpt:sign-out'];
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));

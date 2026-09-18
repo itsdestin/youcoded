@@ -32,6 +32,7 @@ import { NativeHome } from './native-home';
 import { SecretsStore } from './providers/secrets-store';
 import { ProviderRegistry } from './providers/provider-registry';
 import { OpenRouterHealth } from './providers/openrouter-health';
+import { OpenRouterSignIn } from './providers/openrouter-oauth';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
 // (it needs the post-dev-profile userData) and passed IN; this file only wires it.
 import type { ChatGptAuth } from './providers/chatgpt-auth';
@@ -2618,6 +2619,16 @@ export function registerIpcHandlers(
   // (The ChatGPT usage poll's cadence — providers/chatgpt-auth.ts USAGE_POLL_MS.)
   setTimeout(() => { void providerRegistry.refreshOpenRouter(); }, 5_000).unref?.();
   setInterval(() => { void providerRegistry.refreshOpenRouter(); }, 5 * 60_000).unref?.();
+  // Sign in with OpenRouter (§3.5). The key it brings back takes the paste
+  // path: checked first, and saved only if OpenRouter didn't refuse it.
+  const openRouterSignIn = new OpenRouterSignIn({
+    openExternal: (url) => shell.openExternal(url),
+    acceptKey: async (key) => {
+      const check = await providerRegistry.testConnection('openrouter', key);
+      if (check.verdict !== 'rejected') await providerRegistry.setKey('openrouter', key);
+      return check;
+    },
+  });
   const modelCatalog = new ModelCatalog(app.getPath('userData'), undefined, {
     // WHY read defaults at resolution time, never mutate budgets of active sessions.
     contextPreferences: () => contextSettings.read(),
@@ -3084,7 +3095,7 @@ export function registerIpcHandlers(
   // stale data relative to whichever surface wrote last.
   // chatgptAuth (Sign in with ChatGPT §5): the remote chatgpt:* WS cases read
   // the SAME account object, already kill-switched (null → signed-out/false).
-  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount });
+  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount, openRouterSignIn });
 
   // Plan 2b Task 11: give the remote server the SAME lease client/requester +
   // deviceId so its WS clients reach the identical lease/device state the
@@ -3403,6 +3414,9 @@ export function registerIpcHandlers(
   // catches them, so Electron rejects the renderer's promise and preload's
   // unwrapInvokeError strips the transport prefix before the card shows
   // e.message. Under the kill switch chatgptForUi is null: signed-out / false.
+  ipcMain.handle(IPC.OPENROUTER_SIGN_IN_STATUS, async () => openRouterSignIn.status());
+  ipcMain.handle(IPC.OPENROUTER_SIGN_IN, async () => openRouterSignIn.signIn());
+  ipcMain.handle(IPC.OPENROUTER_CANCEL_SIGN_IN, async () => openRouterSignIn.cancelSignIn());
   ipcMain.handle(IPC.CHATGPT_STATUS, async () => chatgptForUi ? chatgptForUi.status() : { state: 'signed-out' as const });
   ipcMain.handle(IPC.CHATGPT_SIGN_IN, async () => chatgptForUi ? chatgptForUi.signIn() : false);
   ipcMain.handle(IPC.CHATGPT_CANCEL_SIGN_IN, async () => chatgptForUi ? chatgptForUi.cancelSignIn() : false);
@@ -5258,6 +5272,7 @@ export function registerIpcHandlers(
   };
   const cleanup = function cleanup(): Promise<void> {
     stopThemeWatcher();
+    openRouterSignIn.dispose();
     statusPush.stop();
     transcriptWatcher.stopAll();
     // Flush + tear down every live native session on quit (best-effort, bounded
@@ -5290,5 +5305,5 @@ export function registerIpcHandlers(
     engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
     models: modelManager,
   };
-  return { cleanup, hasUsableProvider, firstRunDeps };
+  return { cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn };
 }

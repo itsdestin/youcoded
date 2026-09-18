@@ -9,8 +9,8 @@
 //     one accurate line; a THROW from signIn() (port 1455 held, no keychain) is
 //     folded into lastError verbatim (review R3-3 — both IPC handlers swallow
 //     throws, so without this the button would silently do nothing).
-//   - handleOpenRouterNotBuilt: the approved card's OpenRouter button must not
-//     be silent (review R1-6).
+//   - handleOpenRouterLogin: the OpenRouter button signs in through the browser
+//     and finishes setup on OpenRouter; every other outcome puts the buttons back.
 //   - FirstRunView's completion path: a ChatGPT-only install remembers 'native'
 //     as its runtime default and seeds the model picker with the plan's first
 //     model only when the catalog already has one (review R2-12) — and never
@@ -128,8 +128,8 @@ describe('FirstRunManager.handleChatGptLogin', () => {
     const auth = fakeAuth('signed-in');
     // A failed first attempt leaves a red line on screen; the sign-in that
     // then works must take it away with it (fix 7).
-    m.handleOpenRouterNotBuilt();
-    expect(m.getState().lastError).toBe('OpenRouter sign-in is coming in a later update.');
+    await m.handleOpenRouterLogin({ signIn: async () => true, waitForSignIn: async () => 'timed-out' });
+    expect(m.getState().lastError).toBe('Sign-in timed out. Try again?');
 
     await m.handleChatGptLogin(auth);
 
@@ -197,14 +197,43 @@ describe('FirstRunManager.handleChatGptLogin', () => {
   });
 });
 
-describe('FirstRunManager.handleOpenRouterNotBuilt', () => {
-  it("answers the approved card's OpenRouter button with its one line (R1-6)", () => {
+// Sign in with OpenRouter (2026-09-18) — replaced the "coming in a later
+// update" line the button used to answer with.
+describe('FirstRunManager.handleOpenRouterLogin', () => {
+  const auth = (outcome: Awaited<ReturnType<Parameters<FirstRunManager['handleOpenRouterLogin']>[0]['waitForSignIn']>>, throwOnSignIn?: string) => ({
+    signIn: vi.fn(async (_o?: { timeoutMs?: number }) => { if (throwOnSignIn) throw new Error(throwOnSignIn); return true; }),
+    waitForSignIn: vi.fn(async () => outcome),
+  });
+
+  it('signed-in finishes setup on OpenRouter, with the 5-minute window', async () => {
     const m = managerAtAuth();
-    m.handleOpenRouterNotBuilt();
+    const a = auth('signed-in');
+    await m.handleOpenRouterLogin(a);
+    expect(a.signIn).toHaveBeenCalledWith({ timeoutMs: 300_000 });
     const s = m.getState();
-    expect(s.lastError).toBe('OpenRouter sign-in is coming in a later update.');
+    expect(s.currentStep).toBe('COMPLETE');
+    expect(s.authMode).toBe('openrouter');
+    expect(s.setupProvider).toBe('openrouter');
+  });
+
+  it.each([
+    ['timed-out', 'Sign-in timed out. Try again?'],
+    ['cancelled', 'Sign-in was cancelled.'],
+    [{ error: "OpenRouter didn't accept the sign-in. Try again." }, "OpenRouter didn't accept the sign-in. Try again."],
+  ] as const)('%s puts the buttons back with one line and no failed row', async (outcome, line) => {
+    const m = managerAtAuth();
+    await m.handleOpenRouterLogin(auth(outcome as any));
+    const s = m.getState();
+    expect(s.lastError).toBe(line);
     expect(s.authMode).toBe('none');
     expect(s.currentStep).toBe('AUTHENTICATE');
+    expect(authPrereq(m).status).not.toBe('failed');
+  });
+
+  it("a sign-in that can't start shows its own sentence", async () => {
+    const m = managerAtAuth();
+    await m.handleOpenRouterLogin(auth('cancelled', "YouCoded couldn't open your browser for the sign-in."));
+    expect(m.getState().lastError).toBe("YouCoded couldn't open your browser for the sign-in.");
   });
 });
 
@@ -491,16 +520,16 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
 describe('FirstRunView — Try Again is offered only when something actually failed', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
-  it('the OpenRouter "not built yet" line shows the message with no Try Again button', async () => {
+  it('a refused OpenRouter key shows the message with no Try Again button', async () => {
     // One click reaches this state and nothing broke. "Try Again" here would
     // re-run the whole Node/Git/Claude install pass against a working machine.
     stubClaude({ state: viewState({
       currentStep: 'AUTHENTICATE',
-      lastError: 'OpenRouter sign-in is coming in a later update.',
+      lastError: "OpenRouter didn't accept this key. Check that you copied all of it.",
     }) });
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
-    await waitFor(() => expect(screen.getByText('OpenRouter sign-in is coming in a later update.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("OpenRouter didn't accept this key. Check that you copied all of it.")).toBeTruthy());
     expect(screen.queryByText('Try Again')).toBeNull();
     // …and the headline stays the step's own line, not "Something went wrong".
     expect(screen.queryByText(/Something went wrong/)).toBeNull();

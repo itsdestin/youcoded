@@ -2013,6 +2013,11 @@ export const IPC = {
   CHATGPT_SIGN_IN: 'chatgpt:sign-in',
   CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
   CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
+  // Sign in with OpenRouter (connection-trust §3.5): status → OpenRouterSignInStatus
+  // (shared/provider-types.ts); sign-in / cancel → boolean, or a THROWN sentence.
+  OPENROUTER_SIGN_IN_STATUS: 'openrouter:sign-in-status',
+  OPENROUTER_SIGN_IN: 'openrouter:sign-in',
+  OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
   // ---- Claude Code's own sign-in, read LIVE (2026-09-09) ----
   // → ClaudeAccountStatus (shared/claude-account-types.ts). Payload
   // `{refresh?: true}` drops the cache first. There is no sign-in/sign-out verb
