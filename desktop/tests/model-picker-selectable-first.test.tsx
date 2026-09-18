@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import ModelPicker, { type ModelChoice } from '../src/renderer/components/model/ModelPicker';
+import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
+import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 
 let providers: any[];
 let catalog: any[];
@@ -137,5 +139,30 @@ describe('ModelPicker selectable-first ordering', () => {
       'Astra selected offline · Offline selected',
       'Astra favourite offline · Offline favourite',
     ]));
+  });
+});
+
+// A big catalog (an OpenRouter-class provider is dozens of models; stress
+// scale is 300+) used to draw every matching row at once — ~24,000 page
+// elements for a one-letter query. Search results now share the same
+// draw-50-then-grow-on-scroll window every other long list uses.
+describe('ModelPicker search results reveal', () => {
+  let io: ReturnType<typeof installFiringIntersectionObserver>;
+  beforeEach(() => { io = installFiringIntersectionObserver(); });
+  afterEach(() => io.restore());
+
+  it('draws one chunk of a 400-model search result and grows it on scroll', async () => {
+    providers = [{ id: 'astra', type: 'openrouter', label: 'Astra', ready: true }];
+    catalog = Array.from({ length: 400 }, (_, i) => ({
+      id: `astra-${i}`, providerId: 'astra', label: `Astra Model ${i}`,
+    }));
+
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+    fireEvent.change(await screen.findByPlaceholderText('Search all models…'), { target: { value: 'a' } });
+
+    await waitFor(() => expect(modelRows().length).toBe(REVEAL_CHUNK));
+    act(() => io.fireAll());
+    await waitFor(() => expect(modelRows().length).toBe(REVEAL_CHUNK * 2));
   });
 });
