@@ -90,7 +90,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'session.setFlag', 'session.setTag', 'session.setNote', 'session.getMeta',
   'session.sendInput', 'session.respondToPermission', 'on.transcriptEvent', 'on.hookEvent',
   'native.send', 'native.setBinding',
-  'providers.list', 'providers.catalog', 'models.memoryCheck',
+  'providers.list', 'providers.catalog', 'providers.test', 'providers.setKey', 'models.memoryCheck',
   // Local Models rows + Resume (2026-08-26). WHY these must be listed: the
   // contract test only checks members named here, so a hand-written mock left
   // off this list escapes the real-or-registered check entirely.
@@ -708,6 +708,15 @@ function chatgptUsageFixture() {
   };
 }
 
+/** `?openrouter=<state>` — what the OpenRouter key looks like to the card:
+ *  verified | rejected | expired | wrong-type | unchecked | none. Absent = the
+ *  fixture as it always was (no key reported), so no other deck's baseline
+ *  moves. WHY a pin: the connection-trust review (2026-09-18) needs the same
+ *  card shot with a live key, a dead key and an unreachable service. */
+function openrouterPin(): string | null {
+  return (typeof location !== 'undefined' && new URLSearchParams(location.search).get('openrouter')) || null;
+}
+
 /** The `?chatgpt=` pin, read fresh so both the account state and the status:data
  *  usage fixture answer from the same URL. */
 function chatgptPlanPin(): string | null {
@@ -1072,10 +1081,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const providers: Ns<'providers'> = {
     // The ChatGPT row is keyless: `ready` IS "signed in", derived here so the
     // picker, the Settings row and the runtime selector never disagree.
-    list: async () => store.getState().providers.map((p) =>
+    list: async () => store.getState().providers.map((p) => {
       // `&&` so a scenario that turns every provider off (no-providers) still wins.
-      p.type === 'chatgpt' ? { ...p, ready: p.ready && chatgptStatus.state === 'signed-in' } : p),
+      if (p.type === 'chatgpt') return { ...p, ready: p.ready && chatgptStatus.state === 'signed-in' };
+      const pin = openrouterPin();
+      if (p.type === 'openrouter' && pin) return { ...p, hasKey: pin !== 'none', ready: p.ready && pin !== 'none' };
+      return p;
+    }),
     catalog: async () => store.getState().catalog,
+    // Today's OpenRouter Test probes a public list that answers for any key,
+    // so the fake answers the way the real one does: always "Connected."
+    test: async () => ({ ok: true, message: 'Connected.' }),
+    setKey: async () => { if (store.refuseWrites) throw new Error('refused'); return true; },
   };
 
   // M5 2a. Real backend since (permissions:* on preload + remote-shim); the fake
