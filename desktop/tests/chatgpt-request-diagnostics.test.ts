@@ -65,6 +65,15 @@ describe('private request diagnostics', () => {
     expect(d.stats().writeFailures).toBe(1001);
   });
 
+  // WHY: crossing the 8 MiB fingerprint budget needs ~262,144 stored items
+  // (size = entries.length*32+1024 per lane) at minimum, and every item is
+  // individually HMAC-hashed (dispatch()'s per-entry hash loop) — a real,
+  // near-floor ~300k hash operations, not padding. Solo this measures ~3.5s
+  // (a raw 300k-HMAC microbenchmark alone is ~5.5s on this machine), well
+  // under the suite's 30s default, but the full suite runs hundreds of files
+  // under CPU contention and this test timed out there (2026-09-18) though it
+  // passed every solo run — load-sensitive, not a logic bug. Named, measured
+  // budget instead of shrinking the workload below the invariant's floor.
   it('evicts inactive fingerprints within 8 MiB and drops an oversized observation', async () => {
     const d = new ChatGptRequestDiagnostics({ directory: '/unused', write: async () => {} });
     const large = body(Array(10000).fill('x'));
@@ -74,7 +83,7 @@ describe('private request diagnostics', () => {
     expect(d.dispatch(scope, body(Array(270000).fill('x')))).toBeUndefined();
     expect(d.stats().dropped).toBe(1);
     await d.flush();
-  });
+  }, 60_000);
 
   it('drops a scan that did not walk every item instead of reporting differing requests as identical', async () => {
     const rows: any[] = [];
