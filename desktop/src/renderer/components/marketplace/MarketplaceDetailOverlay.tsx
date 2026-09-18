@@ -171,7 +171,7 @@ function NotFound({ label, onClose }: { label: string; onClose(): void }) {
   return (
     <div className="text-center py-12 text-fg-dim">
       <p>{label} not found in the current registry.</p>
-      <button type="button" onClick={onClose} className="mt-4 underline text-fg-2">Close</button>
+      <button type="button" onClick={onClose} className="mt-4 underline text-fg-2 link-control">Close</button>
     </div>
   );
 }

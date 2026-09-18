@@ -81,7 +81,7 @@ describe('GitReviewView', () => {
     const diffText = screen.getByText('old line');
     const scrollContainer = diffText.closest('.overflow-y-auto');
     expect(scrollContainer).not.toBeNull();
-    expect(scrollContainer?.className).toContain('max-h-[45vh]');
+    expect(scrollContainer?.className).toContain('scroll-box-cap');
     // The action row (staged checkbox) must NOT be inside that scroll cap.
     const actionRow = screen.getByText('Include in commit');
     expect(scrollContainer?.contains(actionRow)).toBe(false);

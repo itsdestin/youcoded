@@ -24,6 +24,7 @@ import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
+import { useSwitchFirstFrame } from '../hooks/use-switch-first-frame';
 import { useArtifact } from '../state/ArtifactContext';
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
@@ -102,7 +103,8 @@ interface Props {
   onRefreshConversation?: () => void;
 }
 
-export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
+// Memoised at the bottom of the file — see the WHY there.
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
 
@@ -568,7 +570,16 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // Suspended while the find bar is open: ContentFindBar finds text by walking
   // the DOM, so a folded entry would be unfindable and the user would be told
   // "0 results" for text that is in their conversation.
-  const folding = useEntryFolding(!findOpen, scrollContainerRef);
+  //
+  // `sessionActive` (2026-09-18): a background pane is content-visibility:hidden,
+  // which reads to the folding observer as "everything scrolled away". Telling
+  // it the pane is merely in the background is what stops a tab you left a
+  // moment ago from being blank when you come back — see INACTIVE_FOLD_MS.
+  const folding = useEntryFolding(!findOpen, scrollContainerRef, sessionActive);
+
+  // Scroll, unfold and re-frost BEFORE the first painted frame of a switch —
+  // the three reasons messages popped in. WHY per step: the hook's header.
+  useSwitchFirstFrame(visible, scrollContainerRef, stickToBottom, folding.unfoldNearViewport);
 
   // One ref for both observers — the blur-gating one and the folding one — so a
   // timeline entry still carries a single callback ref.
@@ -1472,3 +1483,17 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
     </CardKeysLiveContext.Provider>
   );
 }
+
+// WHY memo (2026-09-18): App renders a ChatView for EVERY open session and
+// re-renders on every session switch; unmemoised, each re-walked its whole
+// timeline inside the click, ahead of the switch's first frame. Chat state still
+// arrives through useChatState, which memo does not block. App must hand this
+// STABLE props — hooks/use-chatview-handlers.ts says what one inline arrow costs.
+// Guard: tests/chatview-skips-uninvolved-sessions.test.tsx.
+export default React.memo(ChatView);
+
+// For tests of the view's OWN render logic (scan counts, scroll pinning). Their
+// harness mocks useChatState as a plain getter and delivers "new state" by
+// re-rendering with identical props — exactly what memo exists to skip. In the
+// app, state arrives through the store's subscription, which memo never blocks.
+export { ChatView as UnmemoizedChatView };

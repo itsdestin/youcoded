@@ -111,10 +111,10 @@ describe('UnifiedDiff long diffs draw a slice, then scroll in chunks', () => {
   it('collapsed draws only the first 15 rows; expanded fills a capped scroller 200 rows at a time; Show less drops back', () => {
     const { container } = render(<UnifiedDiff oldStr="" newStr="" structuredPatch={[hunkOf(5000)]} />);
     expect(rowCount(container)).toBe(15);
-    expect(box(container).className).not.toContain('max-h-[45vh]');
+    expect(box(container).className).not.toContain('scroll-box-cap');
     fireEvent.click(screen.getByText('Show 4985 more lines'));
     expect(rowCount(container)).toBe(200);
-    expect(box(container).className).toContain('max-h-[45vh]');
+    expect(box(container).className).toContain('scroll-box-cap');
     act(() => io.fireAll());
     expect(rowCount(container)).toBe(400);
     fireEvent.click(screen.getByText('Show less'));
@@ -135,7 +135,7 @@ describe('UnifiedDiff long diffs draw a slice, then scroll in chunks', () => {
     const { container } = render(<UnifiedDiff oldStr="" newStr="" structuredPatch={[hunkOf(5000)]} fill />);
     expect(rowCount(container)).toBe(200);
     expect(screen.queryByRole('button')).toBeNull();
-    expect(box(container).className).not.toContain('max-h-[45vh]');
+    expect(box(container).className).not.toContain('scroll-box-cap');
     act(() => io.fireAll());
     expect(rowCount(container)).toBe(400);
   });

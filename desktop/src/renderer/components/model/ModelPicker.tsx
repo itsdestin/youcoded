@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button, ErrorState, fieldClasses, Tooltip } from '../ui';
+import { FIELD_TRIGGER_STATES } from '../ui/field';
 import { plainMessage } from '../../utils/ipc-error';
 import { triggerTip } from '../guide/tips';
 import { SearchFilterPill } from '../ui/SearchFilterPill';
@@ -772,7 +773,7 @@ export default function ModelPicker({
         // behind it and read as a label rather than a control (reported
         // 2026-07-31 with a screenshot). One step deeper on the surface ladder
         // fixes it without disturbing the other ~25 fields.
-        className={fieldClasses('sm', 'w-full text-left truncate flex items-center gap-1.5 justify-between bg-well border-edge')}
+        className={fieldClasses('sm', `w-full text-left truncate flex items-center gap-1.5 justify-between bg-well border-edge ${FIELD_TRIGGER_STATES}`)}
       >
         {/* The current model's company mark, in its brand colour — the same
             pairing the status-bar chip shows, so the control you set it from and

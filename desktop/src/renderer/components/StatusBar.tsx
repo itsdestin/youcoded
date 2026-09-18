@@ -809,7 +809,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                           <button
                             onClick={() => { if (!w.locked) toggle(w.id); }}
                             disabled={w.locked}
-                            className={`flex items-center gap-2 flex-1 text-left ${w.locked ? 'cursor-default' : ''}`}
+                            className={`flex items-center gap-2 flex-1 text-left rounded-md px-1 -mx-1 ${w.locked ? 'cursor-default' : 'state-layer stepped-hover'}`}
                           >
                             <span
                               className={`w-3.5 h-3.5 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${

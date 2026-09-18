@@ -12,6 +12,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { syncDotFor, findSpaceFor, type SyncStatusData } from './sync-dot-state';
 import { fieldClasses, Tooltip, ErrorState } from './ui';
+import { FIELD_TRIGGER_STATES } from './ui/field';
 import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import { NO_FOLDER_CWD, NO_FOLDER_DIR_NAME } from '../../shared/no-folder';
 import { isAndroid } from '../platform';
@@ -214,7 +215,7 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
       <button
         ref={triggerRef}
         onClick={() => setOpen(!open)}
-        className={fieldClasses('sm', 'w-full text-left truncate flex items-center gap-1.5 justify-between')}
+        className={fieldClasses('sm', `w-full text-left truncate flex items-center gap-1.5 justify-between ${FIELD_TRIGGER_STATES}`)}
       >
         <svg className="w-3 h-3 shrink-0 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />

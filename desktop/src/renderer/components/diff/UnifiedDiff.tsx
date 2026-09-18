@@ -182,7 +182,7 @@ export function UnifiedDiff({
         // slice, or a host-driven reveal) so there is nothing to scroll inside
         // THIS box — only the expanded scroller needs `overflow-auto` + the cap
         // (review round 1, 2026-09-18).
-        className={expanded ? `${DIFF_BOX_BASE} overflow-auto max-h-[45vh]` : DIFF_BOX_BASE}
+        className={expanded ? `${DIFF_BOX_BASE} overflow-auto scroll-box-cap` : DIFF_BOX_BASE}
       >
         {drawn.map((row, idx) => {
           const showSeparator = hunkBoundaries.has(idx);

@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./buddy.css";
 @import "./mascot.css";
+@import "./motion.css";
 
 @source "../../";
 
@@ -680,6 +681,9 @@ body[data-mode="buddy-chat"] #theme-bg {
 [data-wallpaper] [data-input-style='floating'] .header-bar {
   background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
+
+/* WHY: one height cap for every box that scrolls once opened (file boxes, command output, git review) — was max-h-[45vh] in five places. */
+.scroll-box-cap { max-height: 45vh; }
 
 /* Chat scroll area extends behind header and bottom chrome —
    extra padding so content starts below the header / above the

@@ -86,7 +86,7 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
     return (
       <button
         onClick={() => setExpanded(true)}
-        className="layer-surface"
+        className="layer-surface ring-state"
         style={{
           alignSelf: 'center',
           padding: '4px 14px',
@@ -105,7 +105,7 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
   }
 
   return (
-    <div className="layer-surface" style={{ padding: 6, borderRadius: 10, alignSelf: 'stretch' }}>
+    <div className="layer-surface ring-state" style={{ padding: 6, borderRadius: 10, alignSelf: 'stretch' }}>
       {/* Collapse toggle */}
       <button
         onClick={() => { if (awaiting.length === 0) setExpanded((e) => !e); }}

@@ -59,7 +59,7 @@ rather than coming back empty.
 
 ## Lists and render cost (added 2026-09-18)
 
-The terse layer is the workspace rule `.claude/rules/renderer-lists.md`. The standard: **nothing the user cannot see is built**, picked by shape. Built by the render-cost plan (`youcoded-dev/docs/active/plans/2026-09-18-render-cost-consolidation.md`) after Destin reported that clicking Projects → Conversations froze; the sweep that found every surface with the same shape is `youcoded-dev/docs/active/investigations/2026-09-18-list-render-cost-sweep.md`.
+The terse layer is the workspace rule `.claude/rules/renderer-lists.md`. The standard: **nothing the user cannot see is built**, picked by shape. Built by the render-cost plan (`youcoded-dev/docs/archive/plans/2026-09-18-render-cost-consolidation.md`) after Destin reported that clicking Projects → Conversations froze; the sweep that found every surface with the same shape is `youcoded-dev/docs/archive/investigations/2026-09-18-list-render-cost-sweep.md`.
 
 **Numbers.** Resume browser (the precedent, `f8ca631b`, 2026-07-31): 1,642 conversations opened in 804 → 96 ms, DOM 37,920 → 1,585 nodes, flat at 4,000 rows. Projects → Conversations (perf-lab, 700 conversations, median of 3): 174.8 → 58.6 ms per click; each switch to Conversations in the Files ↔ Conversations thrash 181.6 → 65.2 ms, long tasks 959 → 0 ms. DOM-size sweep at `stressRows=2000` (budget 8,000 elements): Conversations 17,546 → 1,508, Files search 11,242 → 1,278, Marketplace 58,706 → 3,281, model search 24,679 → 1,255. perf-lab judges `projects.median.conversations.ms` and `projects.median.thrash.toConversations.medianMs` since this change (`scripts/perf-lab/compare.mjs` `PRIMARY`).
 

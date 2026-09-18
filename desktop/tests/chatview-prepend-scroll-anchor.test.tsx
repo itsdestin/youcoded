@@ -48,7 +48,9 @@ vi.mock('../src/renderer/hooks/use-stick-to-bottom', () => ({
   observe() {} unobserve() {} disconnect() {}
 };
 
-import ChatView from '../src/renderer/components/ChatView';
+// The unmemoised view: this harness delivers new state by re-rendering with the
+// SAME props, which the memoised default export skips by design (see ChatView.tsx).
+import { UnmemoizedChatView as ChatView } from '../src/renderer/components/ChatView';
 
 const userEntry = (id: string) => ({ kind: 'user', message: { id, role: 'user', content: id, timestamp: 1 } });
 

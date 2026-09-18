@@ -14,6 +14,7 @@
 import React, { useRef } from 'react';
 import { CaptionButtons, MacTrafficLights, ProjectsButton, SettingsGearButton, showCaptionButtons } from './HeaderBar';
 import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
+import { ON_INSET_CONTROL } from './header/control-states';
 
 export interface ScreenBandProps {
   settingsOpen: boolean;
@@ -55,7 +56,7 @@ export function ScreenBand({ settingsOpen, onToggleSettings, settingsBadge, sett
             type="button"
             onClick={onBack}
             aria-label={backLabel}
-            className="px-2 py-1 rounded-sm transition-colors text-fg-dim hover:text-fg-2 flex items-center gap-1.5 text-xs leading-none"
+            className={`px-2 py-1 rounded-sm flex items-center gap-1.5 text-xs leading-none ${ON_INSET_CONTROL}`}
           >
             {/* One size and one baseline for all three parts (round 6), with a
                 dot between the words and the key. */}

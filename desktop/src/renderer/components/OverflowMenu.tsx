@@ -24,6 +24,7 @@ import { GamepadIcon } from './Icons';
 import { useAnchoredMenu } from '../hooks/useAnchoredMenu';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { Tooltip } from './ui';
+import { FOCUS_RING } from './ui/Button';
 
 const MENU_WIDTH = 208; // w-52
 
@@ -141,7 +142,7 @@ export default function OverflowMenu({
         onClick={toggle}
         // coarse-hit gives this a 44x44 touch target without changing its
         // visual box (globals.css). p-2 matches the Android cog sizing.
-        className={`coarse-hit relative p-2 rounded-sm hover:bg-inset transition-colors shrink-0 ${open ? 'text-fg bg-inset' : 'text-fg-muted'}`}
+        className={`coarse-hit relative p-2 rounded-sm hover:bg-inset hover:text-fg transition-colors shrink-0 ${FOCUS_RING} ${open ? 'text-fg bg-inset' : 'text-fg-muted'}`}
         aria-label="Open menu"
         aria-haspopup="menu"
         aria-expanded={open}
