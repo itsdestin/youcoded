@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
-// Remote access batch 2, design §7 (T2): on `pty:reset` the terminal clears
-// and jumps to the bottom before the host's full buffer is redrawn, and the
-// reset listener exists before the output listener so a backlog drains in order.
+// WHY its own file: it drives the REAL useIpc / usePtyRawBytes hooks through
+// window.claude.on, which TerminalView.test.tsx replaces with a file-wide vi.mock.
+//
+// On `pty:reset` the terminal clears and jumps to the bottom before the host's
+// full buffer is redrawn, and the reset listener exists before the output
+// listener so a backlog drains in order.
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
