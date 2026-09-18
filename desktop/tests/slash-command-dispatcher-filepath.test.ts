@@ -36,7 +36,9 @@ describe('dispatchSlashCommand — absolute paths are text, not commands', () =>
       // The bug: an invoke-skill intent here makes the native route claim the
       // input as consumed, which is what wiped the box.
       expect(r.nativeAction).toBeUndefined();
-      expect(r.rewritten).toBeUndefined();
+      // WHY the cast: `rewritten` exists only on the handled:false arm of the
+      // result union, and expect() does not narrow — reads the same field.
+      expect((r as { rewritten?: string }).rewritten).toBeUndefined();
     });
   }
 

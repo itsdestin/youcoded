@@ -88,7 +88,6 @@
     "tests/session-title.test.ts",
     "tests/skill-tool-gating.test.ts",
     "tests/skill-tool.test.ts",
-    "tests/slash-command-filepath.test.ts",
     "tests/slug-repair-sweep-keying.test.ts",
     "tests/specialist-catalog.test.ts",
     "tests/specialist-run.test.ts",
