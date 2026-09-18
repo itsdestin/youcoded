@@ -46,6 +46,51 @@ describe('UnifiedDiff fill prop', () => {
   });
 });
 
+// Two hunks so hunkBoundaries carries a real, non-zero index. Because every
+// drawn slice (collapsed or the chunked reveal) always starts at row 0, `idx`
+// inside `drawn.map` stays the ORIGINAL row index without re-indexing — this
+// pins that alignment surviving both slice paths.
+const twoHunks = (n1: number, n2: number): StructuredPatchHunk[] => [
+  { oldStart: 1, oldLines: 0, newStart: 1, newLines: n1, lines: Array.from({ length: n1 }, (_, i) => `+A${i + 1}`) },
+  { oldStart: n1 + 1, oldLines: 0, newStart: n1 + 1, newLines: n2, lines: Array.from({ length: n2 }, (_, i) => `+B${i + 1}`) },
+];
+
+describe('hunk separator stays aligned to the original row after slicing', () => {
+  let io: ReturnType<typeof installFiringIntersectionObserver>;
+  beforeEach(() => { io = installFiringIntersectionObserver(); });
+  afterEach(() => io.restore());
+
+  // The separator div and each row div are DOM siblings (React.Fragment adds
+  // no wrapper), so "immediately precedes B1" is a real position check, not
+  // just a presence count — a re-indexed slice keeps the same separator COUNT
+  // but attaches it to the wrong row (proved by the break-it run below).
+  const separatorPrecedes = (rowText: string) => {
+    const row = screen.getByText(rowText).closest('.items-start');
+    return row?.previousElementSibling?.textContent?.trim();
+  };
+
+  it('draws the separator before the row it belongs to when the second hunk starts inside the 15-row collapsed slice', () => {
+    // Boundary at row 10 (0-indexed), inside the 15-row collapsed slice.
+    render(<UnifiedDiff oldStr="" newStr="" structuredPatch={twoHunks(10, 10)} />);
+    expect(screen.getAllByText('⋯')).toHaveLength(1);
+    expect(separatorPrecedes('B1')).toBe('⋯');
+    // A10 (the last row of hunk 1) is NOT preceded by the separator.
+    expect(separatorPrecedes('A10')).not.toBe('⋯');
+  });
+
+  it('draws no separator while collapsed, then draws it once expanding reveals that row, when the second hunk starts past the 15-row slice', () => {
+    // Boundary at row 20 (0-indexed), past the 15-row collapsed slice.
+    const { container } = render(<UnifiedDiff oldStr="" newStr="" structuredPatch={twoHunks(20, 10)} />);
+    expect(screen.queryByText('⋯')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText(/more lines/));
+    act(() => io.fireAll());
+    expect(container.querySelectorAll('.font-mono')).not.toHaveLength(0);
+    expect(screen.getAllByText('⋯')).toHaveLength(1);
+    expect(separatorPrecedes('B1')).toBe('⋯');
+    expect(separatorPrecedes('A20')).not.toBe('⋯');
+  });
+});
+
 const hunkOf = (n: number): StructuredPatchHunk => ({
   oldStart: 1,
   oldLines: 0,

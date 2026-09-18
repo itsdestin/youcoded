@@ -23,6 +23,10 @@ import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
 
 const DIFF_PREVIEW_LINES = 15;
 
+// Shared base for the row box's collapsed/expanded class strings (review round
+// 1, 2026-09-18) — the two variants only ever differed by the scroll cap.
+const DIFF_BOX_BASE = 'text-xs font-mono rounded-sm border border-edge';
+
 // WHY 200 and not the lists' 50 (REVEAL_CHUNK): a diff line is 3–4 DOM nodes
 // where a list card is 15–25, so 200 lines cost about what 50 cards do — and a
 // 50-line step would make scrolling a long file stutter for no saving.
@@ -174,9 +178,11 @@ export function UnifiedDiff({
     <>
       <div
         ref={boxRef}
-        className={expanded
-          ? 'text-xs font-mono rounded-sm border border-edge overflow-auto max-h-[45vh]'
-          : 'text-xs font-mono rounded-sm border border-edge overflow-auto'}
+        // WHY one base string: collapsed/fill draw exactly what fits (a 15-row
+        // slice, or a host-driven reveal) so there is nothing to scroll inside
+        // THIS box — only the expanded scroller needs `overflow-auto` + the cap
+        // (review round 1, 2026-09-18).
+        className={expanded ? `${DIFF_BOX_BASE} overflow-auto max-h-[45vh]` : DIFF_BOX_BASE}
       >
         {drawn.map((row, idx) => {
           const showSeparator = hunkBoundaries.has(idx);

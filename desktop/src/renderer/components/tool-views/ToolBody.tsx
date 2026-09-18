@@ -602,6 +602,10 @@ function parseCatN(resp: string): { lineNo: number; text: string }[] {
 
 const READ_PREVIEW_LINES = 15;
 
+// Shared base for the read box's collapsed/expanded class strings (review
+// round 1, 2026-09-18) — see UnifiedDiff's DIFF_BOX_BASE for the same fix.
+const READ_BOX_BASE = 'text-xs font-mono rounded-sm border border-edge bg-panel';
+
 function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string }) {
   // Fix: an object file_path crashed basename(); non-number offset/limit
   // interpolated as "lines [object Object]–NaN". typeof (never truthiness) so a
@@ -651,9 +655,12 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
         <>
           <div
             ref={boxRef}
-            className={expanded
-              ? 'text-xs font-mono rounded-sm border border-edge bg-panel overflow-auto max-h-[45vh]'
-              : 'text-xs font-mono rounded-sm border border-edge bg-panel overflow-auto'}
+            data-testid="read-box"
+            // WHY one base string: collapsed draws a real 15-row slice, so
+            // there is nothing to scroll inside THIS box until expanded —
+            // only the expanded scroller needs overflow-auto + the cap
+            // (review round 1, 2026-09-18).
+            className={expanded ? `${READ_BOX_BASE} overflow-auto max-h-[45vh]` : READ_BOX_BASE}
           >
             {drawn.map(r => (
               <div key={r.lineNo} className="flex items-start">

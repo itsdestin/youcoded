@@ -30,7 +30,10 @@ const catN = (n: number) =>
 const renderBody = (t: ToolCallState) =>
   render(<ChatProvider><ToolBody tool={t} sessionId="s1" /></ChatProvider>).container;
 
-const readBox = (c: HTMLElement) => c.querySelector('.font-mono.bg-panel') as HTMLElement;
+// data-testid, not `.font-mono.bg-panel`: CollapsibleBlock's <pre> also
+// carries both classes, so that selector could pick up the wrong box the
+// moment a test renders both (review round 1, 2026-09-18).
+const readBox = (c: HTMLElement) => c.querySelector('[data-testid="read-box"]') as HTMLElement;
 const readRows = (c: HTMLElement) => readBox(c).querySelectorAll(':scope > div.flex').length;
 
 describe('Read box draws a slice collapsed and scrolls in chunks expanded', () => {
