@@ -155,9 +155,6 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   const gameOpen = !!gamePane;
   // Either occupant means the right slot is in use → frame the chat accordingly.
   const rightPaneOpen = gameOpen || drawerOpen;
-  // The pane animates when it OPENS — not when it is merely re-created by a
-  // session switch (`arriving`) or a chat/terminal toggle. WHY: motion.css.
-  const paneArriving = useOneShotWindow(rightPaneOpen) && rightPaneOpen && !arriving;
 
   // Resolve the active project when the artifact drawer opens — SessionDrawer's
   // in-place `save` IPC needs projectRoot/id/name. Lazy + non-blocking (renders
@@ -1423,12 +1420,12 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         {visible && (gameOpen ? (
           <>
             <div className="frame-divider" />
-            <div className={`drawer-pane game-pane${paneArriving ? ' pane-arriving' : ''}`}>{gamePane}</div>
+            <div className="drawer-pane game-pane">{gamePane}</div>
           </>
         ) : drawerOpen && (
           <>
             <div className="frame-divider" />
-            <div className={`drawer-pane${paneArriving ? ' pane-arriving' : ''}`}>
+            <div className="drawer-pane">
               <SessionDrawer
                 sessionId={sessionId}
                 cwd={cwd ?? ''}
