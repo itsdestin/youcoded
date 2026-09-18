@@ -63,12 +63,42 @@ describe('ConversationsTab', () => {
   it('does not redraw cards when the tag registry answers', async () => {
     render(<ConversationsTab conversations={convs} onOpenPreview={() => {}} />);
     const first = renders.meta;
-    expect(first).toBeGreaterThan(0);
+    // Every card is drawn ONCE at mount — one per row in the first chunk, no
+    // double pass. (was `toBeGreaterThan(0)`, which passed even if the tab
+    // drew each of the 50 cards twice before settling.)
+    expect(first).toBe(REVEAL_CHUNK);
     // The registry answers (a new byId Map, even for an empty list). Rows with
     // no tags show nothing from it, so none may redraw.
     await act(async () => {});
     expect((window as any).claude.tags.list).toHaveBeenCalled();
     expect(renders.meta).toBe(first);
+  });
+
+  it('a tagged row redraws when its tag changes', async () => {
+    // The registry answers 'Alpha' first, then 'Beta' on the next read — the
+    // shape of a real tag rename pushed from another window/device.
+    const list = vi.fn()
+      .mockResolvedValueOnce([{ id: 't1', label: 'Alpha', color: 'blue' }])
+      .mockResolvedValueOnce([{ id: 't1', label: 'Beta', color: 'blue' }]);
+    // WHY capture the push callback: useTagRegistry's module-level store
+    // re-reads via window.claude.on.tagsChanged, not via a prop — a test that
+    // wants a second answer has to fire that same push, not re-render.
+    let pushed: (() => void) | undefined;
+    (window as any).claude = {
+      tags: { list },
+      on: { tagsChanged: (cb: () => void) => { pushed = cb; return () => {}; } },
+    };
+    const tagged = {
+      sessionId: 'tagged', name: 'Tagged conversation', projectSlug: 'p', projectPath: '/p',
+      lastModified: 1, size: 1, tags: ['t1'],
+    } as any;
+    const { container } = render(<ConversationsTab conversations={[tagged]} onOpenPreview={() => {}} />);
+    await act(async () => {});
+    expect(container.textContent).toContain('Alpha');
+
+    await act(async () => { pushed?.(); });
+    expect(container.textContent).toContain('Beta');
+    expect(container.textContent).not.toContain('Alpha');
   });
 
   it('on a narrow screen still draws one chunk and grows on scroll', () => {
