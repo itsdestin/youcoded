@@ -86,8 +86,8 @@ vi.mock('../src/renderer/hooks/terminal-registry', () => ({
 vi.mock('../src/renderer/hooks/useIpc', () => ({ usePtyOutput: vi.fn() }));
 vi.mock('../src/renderer/hooks/usePtyRawBytes', () => ({ usePtyRawBytes: vi.fn() }));
 
-import fs from 'node:fs';
-import path from 'node:path';
+import { join } from 'node:path';
+import { readSource } from './helpers/guard-scope';
 import TerminalView from '../src/renderer/components/TerminalView';
 import { renderTerminalScreen } from '../src/renderer/dev/workbench/fixtures/terminal-screen';
 import { applyThemeToDom } from '../src/renderer/themes/theme-engine';
@@ -370,7 +370,9 @@ describe('the shipped terminal surface (P-20.2 guarantee, app mode)', () => {
     // xterm.css ships `background-color: #000` on the viewport; globals.css
     // overrides it. Under a wallpaper that strip must be panel-coloured or a
     // canvas line shows under the last cell row.
-    const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles/globals.css'), 'utf8');
+    // WHY still a text read (Plan B, 2026-09-16): a stylesheet declaration, and CSS is not an
+    // ast-grep language in this rule set; readSource strips \r so a CRLF checkout matches too.
+    const css = readSource(join(__dirname, '../src/renderer/styles/globals.css'));
     const rule = css.slice(css.indexOf('.xterm-viewport {'));
     expect(rule).toMatch(/background-color:\s*var\(--terminal-backing,\s*var\(--canvas\)\)\s*!important/);
   });

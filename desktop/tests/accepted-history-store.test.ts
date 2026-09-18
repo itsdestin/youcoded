@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -458,5 +458,115 @@ describe('AcceptedHistoryStore', () => {
     fs.rmSync(transcript);
     await store.cleanupOrphans();
     expect(fs.existsSync(store.manifestPath(sessionId))).toBe(false);
+  });
+
+  // 2026-09-16 smoothness sweep, C1: publish() runs at every turn boundary and
+  // used to re-read and re-parse the whole transcript synchronously. The reader
+  // now keeps the parsed prefix and reads only what was appended, off the main
+  // thread — and must answer exactly what the whole-file reader answered.
+  describe('incremental transcript reader', () => {
+    const extra: Fixture[] = [
+      { type: 'user-message', sessionId, uuid: 'u2', data: { text: 'more' } },
+      { type: 'assistant-text', sessionId, uuid: 'a2', data: { partId: 'text-1', text: 'reply' } },
+    ];
+    function appendTranscript(events: Fixture[]): void {
+      fs.appendFileSync(transcript, events.map(e => JSON.stringify(e)).join('\n') + '\n');
+    }
+    async function publishFresh(input: Partial<AcceptedHistoryProposal> = {}) {
+      const revision = await store.invalidate(sessionId, 'history-mutation');
+      return store.publish(proposal({ ...input, revision }));
+    }
+
+    it('a second publish after an append reads incrementally and restore still sees the whole-file digest', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 1, incremental: 0 });
+      appendTranscript(extra);
+      await expect(publishFresh({ references: [...base.slice(0, 3), ...extra].map(refFor), messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: [
+          { type: 'reasoning', text: 'summary' },
+          { type: 'text', text: 'answer' },
+        ] },
+        { role: 'user', content: 'more' },
+        { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
+      ] as any })).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 1, incremental: 1 });
+      // restore() reads the whole file and compares its digest to the manifest's.
+      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      expect(restored.ok).toBe(true);
+      expect((restored as any).eventUuids).toEqual(['u1', 'r1', 'a1', 'u2', 'a2']);
+    });
+
+    it('a transcript whose earlier bytes changed (header rewritten) is re-read in full', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      // Rewrite with a LONGER header line and the same events: size grows, prefix differs.
+      fs.writeFileSync(transcript, [JSON.stringify({ v: 1, sessionId, title: 'renamed later' }), ...base.map(e => JSON.stringify(e)), ''].join('\n'));
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 2, incremental: 0 });
+      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+    });
+
+    it('a transcript that shrank is re-read in full', async () => {
+      appendTranscript(extra);
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      writeTranscript(base); // back to the shorter file
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 2, incremental: 0 });
+      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+    });
+
+    it('a duplicate uuid appended later still fails the publish', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      appendTranscript([{ type: 'user-message', sessionId, uuid: 'u1', data: { text: 'again' } }]);
+      await expect(publishFresh()).resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
+    });
+
+    it('a torn tail is hashed into the digest but never cached; completing the line reads on', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      fs.appendFileSync(transcript, '{"type":"user-message","sessionId":"' + sessionId + '","uuid":"u2","data":{"te');
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      // The manifest's digest must be of the WHOLE file, torn tail included.
+      expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }).ok).toBe(true);
+      fs.appendFileSync(transcript, 'xt":"more"}}\n');
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      expect(store.reader.stats.full).toBe(1);
+      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      expect(restored.ok).toBe(true);
+    });
+
+    it('a junk line in the middle is skipped, and events after it stay referenceable — incrementally too', async () => {
+      // WHY (review, 2026-09-16): a crash-sealed torn record is exactly this
+      // shape. An earlier draft stopped parsing at it, which made every later
+      // publish for that session "unreferenced-history" for good.
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      fs.appendFileSync(transcript, '{"type":"user-message","sessionId":"x","uuid":"torn","data":{"te\n');
+      appendTranscript(extra);
+      await expect(publishFresh({ references: [...base.slice(0, 3), ...extra].map(refFor), messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: [{ type: 'reasoning', text: 'summary' }, { type: 'text', text: 'answer' }] },
+        { role: 'user', content: 'more' },
+        { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
+      ] as any })).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 1, incremental: 1 });
+      const restored = store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+      expect(restored.ok).toBe(true);
+      expect((restored as any).eventUuids).toEqual(['u1', 'r1', 'a1', 'u2', 'a2']);
+      // The cached prefix survives the junk line: a third publish is incremental again.
+      await expect(publishFresh({ references: [...base.slice(0, 3), ...extra].map(refFor), messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: [{ type: 'reasoning', text: 'summary' }, { type: 'text', text: 'answer' }] },
+        { role: 'user', content: 'more' },
+        { role: 'assistant', content: [{ type: 'text', text: 'reply' }] },
+      ] as any })).resolves.toEqual({ ok: true });
+      expect(store.reader.stats).toEqual({ full: 1, incremental: 2 });
+    });
+
+    it('remove() forgets the session\'s cached prefix', async () => {
+      await expect(publishFresh()).resolves.toEqual({ ok: true });
+      await store.remove(sessionId);
+      const revision = await store.invalidate(sessionId, 'history-mutation');
+      await expect(store.publish(proposal({ revision }))).resolves.toEqual({ ok: true });
+      expect(store.reader.stats.full).toBe(2);
+    });
   });
 });

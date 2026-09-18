@@ -1,7 +1,5 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import vm from 'node:vm';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ handle: vi.fn(), readFile: vi.fn(), realpath: vi.fn() }));
@@ -17,20 +15,11 @@ beforeEach(() => {
   handler = mocks.handle.mock.calls[0][1];
 });
 
+// WHY no main.ts read here any more (Plan B, 2026-09-16): "no main-process file
+// (any non-test .ts under src/main/, main.ts included) sets `webSecurity: false`"
+// is the ast-grep rule main-web-security-never-disabled
+// (scripts/ast-grep/rules/ in the workspace repo).
 describe('theme rig cross-origin fetch contract', () => {
-  it('registers the scheme for CORS fetch without disabling web security', () => {
-    const source = fs.readFileSync(path.join(__dirname, '../src/main/main.ts'), 'utf8');
-    const registration = source.match(/protocol\.registerSchemesAsPrivileged\(\[[\s\S]*?\]\);/)?.[0];
-    expect(registration).toBeTruthy();
-    const register = vi.fn();
-    vm.runInNewContext(registration!, { protocol: { registerSchemesAsPrivileged: register } });
-    expect(register.mock.calls[0][0]).toContainEqual(expect.objectContaining({
-      scheme: 'theme-asset',
-      privileges: expect.objectContaining({ supportFetchAPI: true, corsEnabled: true }),
-    }));
-    expect(source).not.toMatch(/webSecurity\s*:\s*false/);
-  });
-
   it('serves SVG bytes with CORS permission for dev and packaged renderer origins', async () => {
     mocks.readFile.mockResolvedValue(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'));
     const response = await handler({ url: 'theme-asset://meadow-mist/assets/mascot-rig.svg' });

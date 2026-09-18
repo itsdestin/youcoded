@@ -1,6 +1,6 @@
-import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
+import { readSource } from './helpers/guard-scope';
 
 // Guard: the app's own "Reduced Effects" setting must actually stop perpetual
 // CSS animations.
@@ -37,7 +37,7 @@ const GATED_SELECTORS = [
 ];
 
 describe('Reduced Effects stops perpetual CSS animations', () => {
-  const css = readFileSync(GLOBALS, 'utf8');
+  const css = readSource(GLOBALS);
   // Strip comments so the WHY prose (which names these selectors) cannot satisfy
   // an assertion on its own.
   const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
@@ -77,7 +77,7 @@ describe('Reduced Effects stops perpetual CSS animations', () => {
 // touches theme-engine.ts's logic.
 describe('Reduced Effects also cancels theme-injected animation (theme-engine.ts)', () => {
   const THEME_ENGINE = join(__dirname, '..', 'src', 'renderer', 'themes', 'theme-engine.ts');
-  const engineCode = readFileSync(THEME_ENGINE, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const engineCode = readSource(THEME_ENGINE).replace(/\/\*[\s\S]*?\*\//g, '');
 
   it('applies the theme-custom-reduced override sheet', () => {
     expect(engineCode).toContain('theme-custom-reduced');

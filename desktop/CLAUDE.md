@@ -22,7 +22,7 @@ Electron + React app that wraps Claude Code CLI in a GUI.
 - **RemoteServer** (`src/main/remote-server.ts`) — HTTP + WebSocket server for remote browser access. Handles auth tokens, PTY buffer replay, hook event relay, transcript event relay, and cross-device session sync
 - **RemoteConfig** (`src/main/remote-config.ts`) — Reads/writes `~/.claude/youcoded-remote.json` for port, password hash, and Tailscale trust settings
 - **SkillScanner** (`src/main/skill-scanner.ts`) — Scans installed skills: (1) YouCoded skills at `~/.claude/plugins/youcoded-core/skills/`, (2) marketplace plugins via `~/.claude/plugins/installed_plugins.json` (inside the plugin cache dir — an earlier version wrote to `~/.claude/installed_plugins.json`, fixed in the marketplace-paths refactor)
-- **LocalSkillProvider** (`src/main/skill-provider.ts`) — Skill marketplace backend: discovery, search, install, uninstall, overrides, sharing. Implements the `SkillProvider` interface used by both IPC handlers and RemoteServer
+- **LocalSkillProvider** (`src/main/skill-provider.ts`) — Skill marketplace backend: discovery, search, install, uninstall, overrides, sharing. The class itself is the type both IPC handlers and RemoteServer take (there is no separate interface)
 - **PluginInstaller** (`src/main/plugin-installer.ts`) — Installs Claude Code plugins to `~/.claude/plugins/marketplaces/youcoded/plugins/<name>/` and wires them into all four Claude Code registries via `ClaudeCodeRegistry`. Source types: git clone (url), copy from cache (local), sparse checkout (git-subdir)
 - **ClaudeCodeRegistry** (`src/main/claude-code-registry.ts`) — Writes the four on-disk registries that Claude Code v2.1+ requires to recognize a plugin: `settings.json` (`enabledPlugins["id@youcoded"]: true`), `installed_plugins.json` (v2 entry with absolute `installPath`), `known_marketplaces.json` (marketplace source), and `marketplaces/youcoded/.claude-plugin/marketplace.json` (plugin manifest list). Without entries in all four, `/reload-plugins` silently reports 0 new plugins and the plugin is invisible to the CLI
 - **SkillConfigStore** (`src/main/skill-config-store.ts`) — Reads/writes `~/.claude/youcoded-skills.json`: favorites, chips, overrides, private prompt skills, and marketplace-installed plugin tracking
@@ -31,7 +31,7 @@ Electron + React app that wraps Claude Code CLI in a GUI.
 - **AnnouncementService** (`src/main/announcement-service.ts`) — Fetches `announcements.txt` from the youcoded repo (raw.githubusercontent.com) every 1h and writes `~/.claude/.announcement-cache.json`. Both fetch-time and render-time expiry filters apply. Android mirror at `app/.../runtime/AnnouncementService.kt`. The toolkit's statusline reads the cache file but no longer owns the fetch.
 - **SettingsPanel** (`src/renderer/components/SettingsPanel.tsx`) — Settings UI for remote access config, appearance popup (theme + font)
 - **ThemeProvider** (`src/renderer/state/theme-context.tsx`) — Appearance state: active theme, cycle list, font family, reducedEffects, showTimestamps, showTurnMetadata. Persists to `~/.claude/youcoded-appearance.json` (source of truth; localStorage is a mirror for the anti-flash read — see Theming → Persistence), applies `data-theme` attribute on `<html>`, swaps highlight.js stylesheet, sets font CSS variables. See `docs/theme-spec.md` for details
-- **Buddy hosting** has two strategies: three separate windows (`BuddyWindowManager`, Windows/macOS/X11) vs one screen-sized transparent overlay window (`BuddyOverlayManager`, Linux Wayland). `chooseBuddyStrategy` in `src/main/buddy-manager.ts` picks between them (env override `YOUCODED_BUDDY_STRATEGY`).
+- **Buddy hosting** is three separate windows (mascot, chat, bar — `BuddyWindowManager`, `src/main/buddy-window-manager.ts`) on every platform. A second one-window "overlay" strategy for Linux Wayland was built dormant and deleted 2026-09-16; on Wayland the three windows are moved by the KWin helper (`src/main/kwin-helper.ts`).
 
 ## Chat View Data Flow
 
@@ -93,7 +93,8 @@ and **2048** are solo and never touch the network to be playable.
   `src/renderer/components/game/game-registry.ts`; the shell, the IPC surface and
   the Worker learn nothing new. Scores cross every boundary as RAW NUMBERS —
   "31 pipes" and "12,480" are the registry's words. Guarded by
-  `tests/arcade-authority.test.ts`.
+  `tests/arcade-authority.test.ts` and the `arcade-*` ast-grep rules
+  (`scripts/ast-grep/rules/` in the workspace).
 - **PartyKit server:** `partykit/` — `connectfour` → `src/connect-four-room.ts`,
   `chess` → `src/chess-room.ts`. Both are **relays that know no rules**; each
   client re-validates every incoming move (chess.js lives in the renderer, not in

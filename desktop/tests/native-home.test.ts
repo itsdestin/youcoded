@@ -232,3 +232,36 @@ describe('NativeHome', () => {
     expect(fs.readFileSync(path.join(root, '.youcoded', 'q', 'a.bin')).equals(bytes)).toBe(true);
   });
 });
+
+// 2026-09-16 smoothness sweep, C6: the Resume list reads through async twins
+// of the head read and the listing. They must answer exactly what the sync
+// forms answer — including the truncated-last-line rule and the .jsonl filter.
+describe('async twins of the listing and the bounded head read', () => {
+  let root: string;
+  let home: NativeHome;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-native-home-async-'));
+    home = new NativeHome(root);
+  });
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  it('readSessionHeadAsync equals readSessionHead, full and truncated', async () => {
+    await home.appendSessionLine('my-slug', 'abc', { v: 1, sessionId: 'abc' });
+    await home.appendSessionLine('my-slug', 'abc', { type: 'user-message', data: { text: 'a fairly long first message' } });
+    await home.appendSessionLine('my-slug', 'abc', { type: 'assistant-text', data: { text: 'reply' } });
+    expect(await home.readSessionHeadAsync('my-slug', 'abc')).toEqual(home.readSessionHead('my-slug', 'abc'));
+    expect(await home.readSessionHeadAsync('my-slug', 'abc', 40)).toEqual(home.readSessionHead('my-slug', 'abc', 40));
+    expect(await home.readSessionHeadAsync('my-slug', 'abc', 40)).toHaveLength(1); // the cut line is dropped
+    expect(await home.readSessionHeadAsync('my-slug', 'missing')).toEqual([]);
+  });
+
+  it('listSessionFilesAsync equals listSessionFiles and skips non-.jsonl siblings', async () => {
+    await home.appendSessionLine('slug-a', 's1', { v: 1, sessionId: 's1' });
+    await home.appendSessionLine('slug-b', 's2', { v: 1, sessionId: 's2' });
+    fs.writeFileSync(path.join(root, '.youcoded', 'sessions', 'slug-a', 's1.delegations.json'), '{}');
+    const sync = home.listSessionFiles();
+    const async = await home.listSessionFilesAsync();
+    expect(async).toEqual(sync);
+    expect(async.map((f) => f.sessionId).sort()).toEqual(['s1', 's2']);
+  });
+});

@@ -288,7 +288,8 @@ export default function SpecialistsSection({ cwd }: {
             SOURCE_ORDER.filter(src => bySource.has(src) || skippedFor(src).length > 0).map(src => (
               <div key={src} className="border-t border-edge-dim">
                 {/* Fix: was "uppercase tracking-wider" — the same four classes
-                    in a non-canonical order (section-label-authority.test.ts,
+                    in a non-canonical order (ast-grep rule
+                    section-label-canonical-classes, youcoded-dev/scripts/ast-grep/rules/;
                     K1 tranche 1). Pre-existing on this branch; fixed while
                     Task 10 already had this file open for the group-label
                     rewrite. */}

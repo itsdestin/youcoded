@@ -50,6 +50,11 @@ export interface SessionCreateRequest {
   preset?: string;
   /** Set to resume a past conversation instead of starting a fresh one. */
   resumeSessionId?: string;
+  /** Text to prefill (not send) in the message box of the new session — how
+   *  Make a page opens a conversation with `/page-builder` ready to go. Main
+   *  already carries it (session-manager.ts → SessionInfo.initialInput →
+   *  InputBar); this is the typed builder catching up (Pages design review F5). */
+  initialInput?: string;
 }
 
 /** The exact object `window.claude.session.create` expects. */
@@ -62,6 +67,7 @@ export interface SessionCreateArgs {
   binding?: SessionBinding;
   preset?: string;
   resumeSessionId?: string;
+  initialInput?: string;
 }
 
 export function buildSessionCreateArgs(req: SessionCreateRequest): SessionCreateArgs {
@@ -78,5 +84,6 @@ export function buildSessionCreateArgs(req: SessionCreateRequest): SessionCreate
     binding: native ? (req.binding ?? undefined) : undefined,
     preset: native ? req.preset : undefined,
     resumeSessionId: req.resumeSessionId,
+    ...(req.initialInput !== undefined ? { initialInput: req.initialInput } : {}),
   };
 }

@@ -76,10 +76,10 @@ describe('MarketplaceContext refreshes SkillContext after install/uninstall', ()
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
     const baseline = listCalls;
     await act(async () => { await installFn!('foo'); });
-    // After install: MarketplaceContext.fetchAll() calls skills.list once,
-    // and SkillContext.refreshInstalled() also calls skills.list once.
-    // So listCalls should be baseline + 2 (or more if there's any other call).
-    expect(listCalls).toBeGreaterThanOrEqual(baseline + 2);
+    // After install exactly ONE skills.list: SkillContext.refreshInstalled().
+    // The marketplace no longer keeps its own copy of the installed list
+    // (2026-09-16 audit W17), so its fetchAll() makes no second call.
+    expect(listCalls).toBe(baseline + 1);
     expect(installCalls).toBe(1);
   });
 
@@ -100,6 +100,6 @@ describe('MarketplaceContext refreshes SkillContext after install/uninstall', ()
     await act(async () => { await new Promise(r => setTimeout(r, 0)); });
     const baseline = listCalls;
     await act(async () => { await uninstallFn!('foo'); });
-    expect(listCalls).toBeGreaterThanOrEqual(baseline + 2);
+    expect(listCalls).toBe(baseline + 1);
   });
 });

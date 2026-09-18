@@ -1,6 +1,6 @@
-import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
+import { readSource } from './helpers/guard-scope';
 
 // Guard: command-drawer tiles must never carry their own backdrop-filter.
 //
@@ -44,9 +44,9 @@ const stripCss = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '');
 const stripTs = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 describe('command-drawer tiles opt out of glassmorphism', () => {
-  const css = stripCss(readFileSync(GLOBALS, 'utf8'));
-  const drawer = stripTs(readFileSync(DRAWER, 'utf8'));
-  const engine = stripTs(readFileSync(THEME_ENGINE, 'utf8'));
+  const css = stripCss(readSource(GLOBALS));
+  const drawer = stripTs(readSource(DRAWER));
+  const engine = stripTs(readSource(THEME_ENGINE));
 
   it('globals.css cancels backdrop-filter for .layer-surface inside the drawer', () => {
     expect(css).toMatch(
@@ -101,7 +101,7 @@ describe('command-drawer tiles opt out of glassmorphism', () => {
 // against the blur rule's (0,3,0), so it wins on specificity alone; it is also
 // emitted later in the same sheet, so source order agrees.
 describe('assistant-bubble cards opt out of nested glassmorphism', () => {
-  const engine = stripTs(readFileSync(THEME_ENGINE, 'utf8'));
+  const engine = stripTs(readSource(THEME_ENGINE));
 
   it('does not nest per-card blur inside an already-blurred assistant bubble', () => {
     expect(engine).toMatch(/\.assistant-bubble \.bg-inset\s*\{[^}]*backdrop-filter:\s*none/);

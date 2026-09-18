@@ -16,6 +16,7 @@ import { nextSlotId, clampFloatLeft, layoutRects, reorderIndices, neighbourOffse
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useArtifact } from '../state/ArtifactContext';
+import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { useSessionMeta } from '../hooks/useSessionMeta';
@@ -710,16 +711,25 @@ export default function SessionStrip({
   // header/pill-metrics.ts so the two cannot drift apart.
   //
   // The font is read off the REAL rendered label, not assumed: the UI font is
-  // a monospace, and a system-font canvas measured it ~15% narrow. Read after
-  // every commit (one getComputedStyle), stored only when it changes, so a theme
-  // that swaps the font re-measures and everything else costs a string compare.
+  // a monospace, and a system-font canvas measured it ~15% narrow. Read when
+  // the theme (or its font setting) changes and when the first pill appears,
+  // stored only when it changes, so a theme that swaps the font re-measures.
+  // WHY not after every commit (2026-09-16 A2): getComputedStyle in the layout
+  // phase is a forced style flush, and this effect ran once per render of the
+  // strip — with the shell re-rendering per streamed word that was one forced
+  // flush per word for the length of every reply. The font only changes with
+  // the theme, so the dependency is `themeApplied`: the provider bumps it one
+  // render AFTER it has written the theme to the DOM (its own WHY explains
+  // why keying on the theme itself would read the outgoing theme).
+  const { themeApplied } = useTheme();
+  const hasPills = sessions.length > 0;
   const [font, setFont] = useState<string>(NAME_FONT);
   useLayoutEffect(() => {
     const nameEl = pillBarRef.current?.querySelector('.session-pill__name');
     if (!nameEl) return;
     const name = getComputedStyle(nameEl).font;
-    if (name && name !== font) setFont(name);
-  });
+    setFont((prev) => (name && name !== prev ? name : prev));
+  }, [themeApplied, hasPills]);
   const metrics = useMemo(() => {
     const out = new Map<string, PillMetrics>();
     const ctx = measureCanvasRef.current?.getContext('2d') ?? null;
@@ -1759,11 +1769,15 @@ export default function SessionStrip({
   // the stylesheet — see motionWindowMs. Also armed when a drag starts and
   // ends, so a label that opens or closes at pickup or drop is inside the
   // repack-churn kill-switch's exception.
+  // WHY themeApplied (2026-09-16 A2): motionWindowMs is a getComputedStyle
+  // read — a forced style flush — and it ran after EVERY render. The reveal
+  // duration lives in the stylesheet and changes only with the theme or with
+  // Reduced Effects, both of which bump `themeApplied` once the DOM has them.
   const [windowMs, setWindowMs] = useState(EXPAND_WINDOW_FALLBACK_MS);
   useLayoutEffect(() => {
     const ms = motionWindowMs(pillBarRef.current);
-    if (ms !== windowMs) setWindowMs(ms);
-  });
+    setWindowMs((prev) => (ms !== prev ? ms : prev));
+  }, [themeApplied]);
   const expandArmed = useOneShotWindow(`${activeSessionId}:${dragLeft !== null}`, windowMs);
 
   // Everything below reads the pack the drag was packed against (frozen at
@@ -2228,7 +2242,9 @@ export default function SessionStrip({
               // reorder system above (session-strip-motion.md) — deliberately not
               // touching that fragile, heavily-reviewed code path. Background stays
               // inline (not a class) so this div's className keeps matching the
-              // literal string menu-row-reachability.test.ts pins.
+              // literal string
+              // scripts/ast-grep/rules/shortcuts-dialog-keeps-scroll-body-session-menu-height.yml
+              // pins (retired tests/menu-row-reachability.test.ts, Plan B 2026-09-16).
               style={{
                 maxHeight: 'min(432px, 55vh)',
                 background: peerDropActive ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : undefined,

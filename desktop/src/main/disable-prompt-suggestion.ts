@@ -1,6 +1,4 @@
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
+import { mutateSettings } from './claude-settings';
 
 // Force `promptSuggestionEnabled: false` in the user's ~/.claude/settings.json
 // at every app launch. Claude Code 2.1.x ships an opt-out next-prompt
@@ -11,52 +9,32 @@ import os from 'os';
 // suggestion ghost text gets concatenated with the user's chat send and
 // submitted as one combined user prompt. Re-enable here only if/when the
 // underlying interaction is fixed.
-
-function settingsPath(): string {
-  return path.join(os.homedir(), '.claude', 'settings.json');
-}
-
-interface Settings {
-  promptSuggestionEnabled?: boolean;
-  [k: string]: unknown;
-}
+//
+// WHY the split (2026-09-16 audit D5/W4): applyPromptSuggestionDisabled()
+// edits a settings object in place so the launch path can run it as one
+// callback in a single locked read/write of settings.json; the file itself
+// is only ever read and written by claude-settings.ts. An unparseable
+// settings.json is backed up beside itself before the fresh write — see that
+// module's header for the one rule every writer now follows.
 
 export interface EnforcePromptSuggestionResult {
-  /** True iff settings.json was rewritten because the value didn't match. */
+  /** True iff the value didn't match and was set. */
   changed: boolean;
   /** The value before this call. `undefined` when the key was absent (CC's
    *  default is `enabled`, so absent === enabled from CC's perspective). */
   prior: boolean | undefined;
 }
 
-function readSettings(): Settings {
-  try {
-    if (!fs.existsSync(settingsPath())) return {};
-    return JSON.parse(fs.readFileSync(settingsPath(), 'utf8')) as Settings;
-  } catch {
-    // Treat unreadable / unparseable settings as empty — same convention as
-    // hook-reconciler. We'll write a fresh, well-formed file with our key set.
-    return {};
-  }
-}
-
-function writeSettingsAtomic(settings: Settings): void {
-  const dir = path.dirname(settingsPath());
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${settingsPath()}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8');
-  fs.renameSync(tmp, settingsPath());
-}
-
-export function enforcePromptSuggestionDisabled(): EnforcePromptSuggestionResult {
-  const settings = readSettings();
-  const prior = settings.promptSuggestionEnabled;
-
-  if (prior === false) {
-    return { changed: false, prior };
-  }
-
+export function applyPromptSuggestionDisabled(settings: Record<string, unknown>): EnforcePromptSuggestionResult {
+  const prior = settings.promptSuggestionEnabled as boolean | undefined;
+  if (prior === false) return { changed: false, prior };
   settings.promptSuggestionEnabled = false;
-  writeSettingsAtomic(settings);
   return { changed: true, prior };
+}
+
+/** Standalone form: one locked read/write cycle of settings.json. */
+export async function enforcePromptSuggestionDisabled(): Promise<EnforcePromptSuggestionResult> {
+  let result: EnforcePromptSuggestionResult = { changed: false, prior: undefined };
+  const r = await mutateSettings((settings) => { result = applyPromptSuggestionDisabled(settings); });
+  return r.refused ? { changed: false, prior: result.prior } : result;
 }

@@ -44,6 +44,20 @@ describe('SessionStore', () => {
     expect(store.list()[0]).not.toHaveProperty('stepGuard');
   });
 
+  // 2026-09-16 smoothness sweep, C6: the Resume list reads through listAsync,
+  // whose rows and order must match list() exactly — a derived title, a
+  // hidden specialist child, and the includeChildren opt-in included.
+  it('listAsync answers exactly what list answers', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, { type: 'user-message', sessionId: 's-1', uuid: 'u1', timestamp: 1, data: { text: 'first prompt becomes the title' } } as any);
+    await store.create({ ...HEADER, sessionId: 's-2', title: 'Explicit', sessionKind: 'specialist', parentSessionId: 's-1' } as any);
+    expect(await store.listAsync()).toEqual(store.list());
+    expect(await store.listAsync({ includeChildren: true })).toEqual(store.list({ includeChildren: true }));
+    expect((await store.listAsync()).map((r) => r.sessionId)).toEqual(['s-1']);
+    expect((await store.listAsync({ includeChildren: true })).map((r) => r.sessionId).sort()).toEqual(['s-1', 's-2']);
+    expect((await store.listAsync())[0].title).toBe('first prompt becomes the title');
+  });
+
   it('returns an exact successful-persistence barrier for coalesced ranges under the first UUID', async () => {
     await store.create(HEADER);
     await store.append(HEADER.cwd, ev('assistant-text', { text: 'Hel', partId: 'p1' }, 'a1') as any);

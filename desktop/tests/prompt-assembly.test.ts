@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions } from '../src/main/harness/prompt-assembly';
+import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions, gitSnapshotAsync } from '../src/main/harness/prompt-assembly';
+import { execFileSync } from 'child_process';
 import { CODER_DEFAULT_BODY } from '../src/main/harness/prompts/coder-default';
 
 // Each test gets a fresh tmp sandbox so filesystem walk-up state never leaks.
@@ -137,6 +138,43 @@ describe('assembleSystemPrompt — byte stability (KV-cache pin)', () => {
   });
 });
 
+// 2026-09-16 smoothness sweep, C3: the host reads the git line ahead, off the
+// main thread, and passes it in. The assembled prompt must be byte-identical
+// either way, and the async reader must say exactly what the sync one says.
+describe('gitSnapshot — precomputed and async', () => {
+  it('a supplied gitSnapshot lands in <env> verbatim and the prompt equals the sync assembly', async () => {
+    const sync = assembleSystemPrompt({ presetBody: PRESET, cwd: dir, appVersion: '2.3.4' });
+    const pre = assembleSystemPrompt({ presetBody: PRESET, cwd: dir, appVersion: '2.3.4', gitSnapshot: await gitSnapshotAsync(dir) });
+    expect(pre).toBe(sync);
+    const custom = assembleSystemPrompt({ presetBody: PRESET, cwd: dir, appVersion: '2.3.4', gitSnapshot: 'Git branch: feature/x (2 uncommitted change(s))' });
+    expect(custom).toContain('\nGit branch: feature/x (2 uncommitted change(s))\n');
+    expect(custom).not.toContain('Git: not a repository');
+  });
+
+  it('answers the fixed line for a non-repository', async () => {
+    expect(await gitSnapshotAsync(dir)).toBe('Git: not a repository');
+  });
+
+  it('answers the same line as the sync reader for a real repository', async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-git-'));
+    try {
+      execFileSync('git', ['-C', repo, 'init', '-q', '-b', 'main']);
+      fs.writeFileSync(path.join(repo, 'a.txt'), 'x');
+      // A repository with no commits has no HEAD, and both readers answer
+      // "not a repository" for it — so commit first, then leave one change.
+      execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'add', 'a.txt']);
+      execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'one']);
+      fs.writeFileSync(path.join(repo, 'b.txt'), 'y');
+      const line = await gitSnapshotAsync(repo);
+      expect(line).toBe('Git branch: main (1 uncommitted change(s))');
+      // The sync form is what the prompt falls back to; both must agree.
+      expect(assembleSystemPrompt({ presetBody: PRESET, cwd: repo, appVersion: '1' })).toContain(line);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('CODER_DEFAULT_BODY', () => {
   it('is a non-empty original coder-shaped body', () => {
     expect(CODER_DEFAULT_BODY.length).toBeGreaterThan(100);
@@ -218,21 +256,6 @@ describe('assembleSystemPrompt — shared doctrine (2026-09-04)', () => {
 // own WHY comment on why two parallel implementations would drift invisibly.
 describe('assembleSystemPromptParts — the pieces ARE the prompt', () => {
   const base = { presetBody: PRESET, cwd: '/tmp', appVersion: '1.0.0' };
-
-  // The join test below is TAUTOLOGICAL while assembleSystemPrompt is literally
-  // defined as that join — it proves nothing today and would only go red if
-  // someone later gave the prompt its own assembly. That day is exactly the
-  // failure worth catching, so this reads the source and refuses the split
-  // outright, rather than trusting a test that certifies its own definition.
-  it('the prompt is assembled FROM the parts, never beside them', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'harness', 'prompt-assembly.ts'), 'utf8');
-    const body = src.slice(src.indexOf('export function assembleSystemPrompt(i: PromptInputs): string {'));
-    expect(
-      body.slice(0, body.indexOf('\n}')),
-      'assembleSystemPrompt must return assembleSystemPromptParts joined — the System tab shows what it returns, '
-        + 'so a second assembly would drift from the prompt invisibly',
-    ).toContain('assembleSystemPromptParts(i)');
-  });
 
   it('joining the parts reproduces the prompt exactly, in every shape', () => {
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Rules\nPROJECT_INSTR_MARKER');

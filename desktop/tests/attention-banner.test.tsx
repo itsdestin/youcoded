@@ -9,9 +9,7 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, fireEvent } from '@testing-library/react';
 
-import { join } from 'path';
 import AttentionBanner from '../src/renderer/components/AttentionBanner';
-import { RENDERER, readStripped } from './helpers/guard-scope';
 
 // The literal message provider-registry throws when a provider has no API key.
 const CONFIG_ERROR = 'OpenRouter needs an API key — add one in Settings → Providers.';
@@ -131,12 +129,8 @@ describe('AttentionBanner — the stuck line', () => {
   });
 
   // The component tests above prove nothing if ChatView never hands the
-  // session's provider to the banner.
-  it('ChatView passes the session provider to the banner', () => {
-    const src = readStripped(join(RENDERER, 'components', 'ChatView.tsx'));
-    const banner = src.slice(src.indexOf('<AttentionBanner'), src.indexOf('/>', src.indexOf('<AttentionBanner')));
-    expect(banner).toMatch(/\bprovider=\{provider\}/);
-  });
+  // session's provider to the banner. Moved to ast-grep (Plan B, 2026-09-16):
+  // rule chatview-passes-provider-to-attentionbanner.
 });
 
 describe('AttentionBanner — the stalled card', () => {

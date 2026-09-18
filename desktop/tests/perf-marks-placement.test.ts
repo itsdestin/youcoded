@@ -1,6 +1,6 @@
-import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
+import { readSource } from './helpers/guard-scope';
 
 // The perf lab (youcoded-dev/scripts/perf-lab) parses these names verbatim.
 // Renaming or dropping one silently blanks a column in every future report.
@@ -8,7 +8,7 @@ import { describe, it, expect } from 'vitest';
 // each chore's duration as mark[n] − mark[n−1], so a mark in the wrong place
 // doesn't fail loudly, it just bills the time to the wrong chore. That's what
 // the source-order test below guards.
-const src = readFileSync(join(__dirname, '..', 'src', 'main', 'main.ts'), 'utf8');
+const src = readSource(join(__dirname, '..', 'src', 'main', 'main.ts'));
 const REQUIRED = [
   'main:imports-done', 'main:when-ready',
   'main:chore:rotate-log:done', 'main:chore:prelude:done',

@@ -8,8 +8,6 @@
 // Claude Code session, or the app typing "/reload-plugins" at someone's prompt.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
-import fs from 'fs';
-import path from 'path';
 import { SessionManager, resolveShellCommand, shellDisplayName, prepareRunInTerminal } from '../src/main/session-manager';
 
 const tmpDir = os.tmpdir();
@@ -194,14 +192,14 @@ describe('shell sessions', () => {
   // could be CRLF-shaped on Windows.
   // The validator only protects what routes through it. This is the assertion
   // that nothing builds a shell session around it.
+  // WHY the source shapes are not here (Plan B, 2026-09-16): that both entry
+  // points call the validator, that the initial command takes the chunked
+  // channel, that ordinary typing keeps its single write, and that the remote
+  // session:create case refuses a shell provider are ast-grep rules in
+  // youcoded-dev's scripts/ast-grep/rules/ — run-in-terminal-entry-points-validate
+  // (+ -remote), run-in-terminal-chunked-write, pty-worker-passthrough-single-write
+  // and remote-session-create-refuses-shell-provider.
   describe('every way to open a shell goes through the validator', () => {
-    const mainSrc = (f: string) => fs.readFileSync(path.join(__dirname, '..', 'src', 'main', f), 'utf8');
-
-    it('both entry points call it', () => {
-      expect(mainSrc('ipc-handlers.ts')).toContain('prepareRunInTerminal(command)');
-      expect(mainSrc('remote-server.ts')).toContain('prepareRunInTerminal(payload?.command ?? payload)');
-    });
-
     it('and there is no third way to build one — the gate is the token, not a grep', () => {
       // This used to be a source scan for the exact string `provider: 'shell',`,
       // which two evasions walked straight past while staying green: a whole new
@@ -233,30 +231,6 @@ describe('shell sessions', () => {
         name: 'fish', cwd: tmpDir, skipPermissions: false, provider: 'shell',
         initialCommand: ok.command, shellToken: ok.shellToken,
       }).provider).toBe('shell');
-    });
-
-    it('the initial command goes out on the chunked channel, not ordinary input', () => {
-      // Windows ConPTY silently truncates a single write over ~600 chars, which
-      // is why the two submit paths in pty-worker chunk at 56. A run-in-terminal
-      // command carries no trailing \r, so it would otherwise take the plain
-      // passthrough and could land HALF-TYPED on the prompt for the user to run.
-      expect(mainSrc('session-manager.ts')).toContain("send({ type: 'input-chunked', data: command })");
-    });
-
-    it('...and ordinary typing and paste keep their single unchunked write', () => {
-      // The regression this replaced: chunking the general passthrough made a
-      // 10 KB terminal paste 179 writes 30 ms apart. Behaviour pinned for real
-      // in tests/pty-worker-writes.test.ts; this is the shape, here because this
-      // is the file someone reads when changing how the command is written.
-      const worker = mainSrc('pty-worker.js');
-      const passthrough = worker.slice(worker.indexOf('if (!endsCR) {'));
-      expect(passthrough.slice(0, passthrough.indexOf('return;'))).toContain('ptyProcess.write(text);');
-    });
-
-    it('the remote session:create case refuses a client-supplied shell provider', () => {
-      // Pinned behaviourally in tests/remote-server.test.ts; pinned here as the
-      // shape, because this file is where someone looks when adding a caller.
-      expect(mainSrc('remote-server.ts')).toContain("if (payload?.provider === 'shell')");
     });
   });
 

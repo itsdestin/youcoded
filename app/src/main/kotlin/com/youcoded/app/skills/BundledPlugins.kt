@@ -13,6 +13,7 @@ object BundledPlugins {
         "wecoded-themes-plugin",
         "wecoded-marketplace-publisher",
         "youcoded-chatsearch",
+        "wecoded-pages-plugin",
     )
 
     fun isBundled(id: String): Boolean = IDS.contains(id)

@@ -6,8 +6,9 @@
 // learned to list synced projects (~/YouCoded/Projects) and to remove case-insensitively on
 // Windows, the copy never did, so a phone saw only the saved-folders file. ipc-handlers.ts
 // and remote-server.ts are now two callers of these functions — the same pattern as
-// artifacts/read-service.ts. tests/folders-service.test.ts pins the behaviour and guards
-// against a copy coming back.
+// artifacts/read-service.ts. tests/folders-service.test.ts pins the behaviour; the ast-grep
+// rules no-folders-json-outside-service and folders-service-called-by-both-transports
+// (youcoded-dev scripts/ast-grep/rules/) guard against a copy coming back.
 import fs from 'fs';
 import os from 'os';
 import path from 'path';

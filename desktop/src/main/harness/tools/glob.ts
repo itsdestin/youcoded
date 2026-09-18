@@ -202,7 +202,7 @@ export const GlobTool = defineTool({
     // stat failure (permission, etc.) falls through to walk()'s own catch,
     // unchanged from before.
     try {
-      fs.statSync(root);
+      await fs.promises.stat(root);
     } catch (err: any) {
       if (err?.code === 'ENOENT') {
         const hint = shellCwdMissHint(args.path ?? '.', ctx, (p) => {
@@ -235,12 +235,18 @@ export const GlobTool = defineTool({
     // shape Grep already uses (grep.ts) — one convention for "the user hit
     // interrupt mid-search", not a second one invented here.
     let interrupted = false;
-    const walk = (dir: string, rel: string) => {
+    // WHY async (2026-09-16 smoothness sweep, C4): this walk ran on the main
+    // process with readdirSync/statSync, so every Glob the model issued — often
+    // several per turn — froze every window's typing and streaming for the
+    // whole walk (hundreds of ms to seconds on a monorepo). Sequential awaits,
+    // not Promise.all: the hit order before the sort and the ceiling semantics
+    // stay exactly what they were.
+    const walk = async (dir: string, rel: string): Promise<void> => {
       if (ctx.signal.aborted) { interrupted = true; return; }
       if (hits.length >= WALK_CEILING) { ceilingHit = true; return; }
       let entries: fs.Dirent[];
       try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
+        entries = await fs.promises.readdir(dir, { withFileTypes: true });
       } catch {
         return;
       }
@@ -260,20 +266,20 @@ export const GlobTool = defineTool({
         // the unconditional never-walk set, this is the opt-in-by-naming rule.
         if (e.name.startsWith('.') && !admitHidden.some((a) => a.test(e.name))) continue;
         if (e.isDirectory()) {
-          if (!SKIP_DIRS.has(e.name)) walk(path.join(dir, e.name), rel ? `${rel}/${e.name}` : e.name);
+          if (!SKIP_DIRS.has(e.name)) await walk(path.join(dir, e.name), rel ? `${rel}/${e.name}` : e.name);
           continue;
         }
         const r = rel ? `${rel}/${e.name}` : e.name;
         if (rx.test(r)) {
           try {
-            hits.push({ rel: r, mtime: fs.statSync(path.join(dir, e.name)).mtimeMs });
+            hits.push({ rel: r, mtime: (await fs.promises.stat(path.join(dir, e.name))).mtimeMs });
           } catch {
             /* raced delete */
           }
         }
       }
     };
-    walk(root, '');
+    await walk(root, '');
     if (interrupted) {
       return { text: 'Canceled: the user interrupted this search.', isError: true };
     }

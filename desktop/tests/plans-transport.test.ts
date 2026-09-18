@@ -58,6 +58,11 @@ vi.mock('../src/main/harness/native-session-host', async () => {
 
     getHistoryPage() { return null; }
 
+    // The async twins the IPC handlers read through since 2026-09-16 C2. They
+    // delegate here exactly as the real host's do, so this fake cannot drift
+    // into answering the two forms differently.
+    async getHistoryPageAsync() { return this.getHistoryPage(); }
+
     // Replay / live-state surface, driven per test.
     nativeIds = new Set<string>();
 
@@ -68,6 +73,8 @@ vi.mock('../src/main/harness/native-session-host', async () => {
     isIdle() { return true; }
 
     getHistory(id: string) { return this.nativeIds.has(id) ? this.history : null; }
+
+    async getHistoryAsync(id: string) { return this.getHistory(id); }
 
     pendingAskEventsFor() { return []; }
 
@@ -400,7 +407,9 @@ describe('the plans-event push', () => {
 describe('a remote first page brings its plan records along', () => {
   function pagingServer(planViews: any[]) {
     const host = {
-      getHistoryPage: vi.fn((_id: string, before: number | null) => ({
+      // Async since 2026-09-16 C2 — the phone's scroll-up reads off the main
+      // thread, like the desktop page handler.
+      getHistoryPageAsync: vi.fn(async (_id: string, before: number | null) => ({
         events: [{ type: 'user-message', sessionId: 's1', uuid: `u-${before}`, timestamp: 1, data: { text: 'hi' } }],
         hasMore: before === null, nextIndex: 5,
       })),

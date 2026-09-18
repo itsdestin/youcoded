@@ -82,9 +82,17 @@ export function stripComments(src: string): string {
     .replace(/(^|[^:])\/\/[^\n]*/g, (m, p) => p + ' '.repeat(m.length - p.length));
 }
 
+/** Read a source or config file as text, line endings normalised. WHY: a Windows
+ *  checkout is CRLF, and every guard that split on '\n' saw a trailing \r on each
+ *  line — two YAML guards returned null for every key (Windows CI, 2026-09-10 to
+ *  09-16). Every text read in the test tree goes through here. */
+export function readSource(path: string): string {
+  return readFileSync(path, 'utf8').replace(/\r\n?/g, '\n');
+}
+
 /** Read a file with its comments blanked — what every guard actually wants. */
 export function readStripped(path: string): string {
-  return stripComments(readFileSync(path, 'utf8'));
+  return stripComments(readSource(path));
 }
 
 /**

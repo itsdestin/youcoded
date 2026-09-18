@@ -11,9 +11,11 @@
 // path on Wayland too, which would have thrown away the strip's in-strip motion
 // to fix a cross-window problem — hence the test that says what is NOT chosen.
 // ---------------------------------------------------------------------------
+//
+// WHY no preload source-scan cases here any more (Plan B, 2026-09-16): "preload
+// reports facts, not a verdict" is the ast-grep rule preload-no-drag-model-decision
+// in the workspace's scripts/ast-grep/rules/.
 import { describe, it, expect } from 'vitest';
-import fs from 'fs';
-import path from 'path';
 import {
   chooseTearOffModel,
   SESSION_DRAG_MIME,
@@ -87,25 +89,5 @@ describe('the drag this window started', () => {
     expect(localSessionDrag()).toEqual({ sessionId: 'a', lone: false });
     endLocalSessionDrag();
     expect(localSessionDrag()).toBeNull();
-  });
-});
-
-describe('preload reports facts, not a verdict', () => {
-  // The decision must stay in this module — testable without a live Electron.
-  // If preload ever starts deciding, this test is the thing that notices.
-  const preload = fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8');
-
-  it('exposes the raw facts', () => {
-    expect(preload).toMatch(/platformFacts:\s*\{/);
-    expect(preload).toMatch(/wayland:/);
-  });
-
-  it('does not name a drag model', () => {
-    expect(preload).not.toMatch(/'html-drag'|"html-drag"/);
-    expect(preload).not.toMatch(/chooseTearOffModel/);
-  });
-
-  it('never starts a drag from main — Linux startDrag crops the picture and carries only a file', () => {
-    expect(preload).not.toMatch(/startDrag|dragHandoff/);
   });
 });

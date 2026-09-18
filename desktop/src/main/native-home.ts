@@ -24,6 +24,31 @@ export interface SessionFileInfo {
 // ~15s of contention before giving up loudly.
 const LOCK_MAX_RETRIES = 5;
 
+/** One JSON value per non-blank line; an unparseable line is skipped
+ *  PERMANENTLY (a crash-torn record stays torn on disk; appendSessionLine's
+ *  tail guard only protects the NEXT record from fusing into it). A
+ *  mid-live-append read may also see a torn tail transiently; that one heals
+ *  on the next read. Shared by the sync and async whole-file readers. */
+/** The bounded head-read's parse, shared by its sync and async forms. If the
+ *  read was TRUNCATED (didn't reach EOF), the last line is a possibly-half
+ *  record — drop it so we never parse a fragment. A full read leaves a
+ *  trailing '' after the final newline, which the trim guard skips anyway, so
+ *  only the truncated case needs the pop. */
+function parseHead(buf: Buffer, bytesRead: number, fileSize: number): unknown[] {
+  const lines = buf.toString('utf8', 0, bytesRead).split('\n');
+  if (bytesRead < fileSize) lines.pop();
+  return parseSessionLines(lines.join('\n'));
+}
+
+function parseSessionLines(raw: string): unknown[] {
+  const out: unknown[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch { /* skipped, see above */ }
+  }
+  return out;
+}
+
 export class NativeHome {
   private readonly dir: string;
 
@@ -227,19 +252,22 @@ export class NativeHome {
     } catch {
       return []; // no such session yet — empty transcript, not an error
     }
-    const out: unknown[] = [];
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        out.push(JSON.parse(line));
-      } catch {
-        // Unparseable line — skipped PERMANENTLY (a crash-torn record stays
-        // torn on disk; appendSessionLine's tail guard only protects the NEXT
-        // record from fusing into it). A mid-live-append read may also see a
-        // torn tail transiently; that one heals on the next read.
-      }
+    return parseSessionLines(raw);
+  }
+
+  /** readSessionLines with the read off the main thread. WHY (2026-09-16 C2):
+   *  the history page a scroll-up asks for, and the replay a tear-off asks
+   *  for, read the whole session file — synchronously, on the main thread,
+   *  every window frozen for it. Same parse, same skip rules. */
+  async readSessionLinesAsync(slug: string, sessionId: string): Promise<unknown[]> {
+    const p = this.sessionFilePath(slug, sessionId);
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(p, 'utf8');
+    } catch {
+      return []; // no such session yet — empty transcript, not an error
     }
-    return out;
+    return parseSessionLines(raw);
   }
 
   /**
@@ -272,23 +300,30 @@ export class NativeHome {
     } catch {
       return []; // no such session yet — empty transcript, not an error
     }
-    const raw = buf.toString('utf8', 0, bytesRead);
-    const lines = raw.split('\n');
-    // If the read was TRUNCATED (didn't reach EOF), the last line is a
-    // possibly-half record — drop it so we never parse a fragment. A full read
-    // leaves a trailing '' after the final newline, which the trim guard below
-    // skips anyway, so only the truncated case needs the pop.
-    if (bytesRead < fileSize) lines.pop();
-    const out: unknown[] = [];
-    for (const line of lines) {
-      if (!line.trim()) continue;
+    return parseHead(buf, bytesRead, fileSize);
+  }
+
+  /** readSessionHead with the read off the main thread (2026-09-16 C6): the
+   *  Resume list read 256 KB of every session file ever, synchronously, on
+   *  every open. Same window, same truncated-last-line rule. */
+  async readSessionHeadAsync(slug: string, sessionId: string, maxBytes = 262144): Promise<unknown[]> {
+    const p = this.sessionFilePath(slug, sessionId);
+    let buf: Buffer;
+    let bytesRead: number;
+    let fileSize: number;
+    try {
+      const fh = await fs.promises.open(p, 'r');
       try {
-        out.push(JSON.parse(line));
-      } catch {
-        // Unparseable line — skipped (same policy as readSessionLines).
+        fileSize = (await fh.stat()).size;
+        buf = Buffer.alloc(Math.min(maxBytes, fileSize));
+        bytesRead = (await fh.read(buf, 0, buf.length, 0)).bytesRead;
+      } finally {
+        await fh.close();
       }
+    } catch {
+      return []; // no such session yet — empty transcript, not an error
     }
-    return out;
+    return parseHead(buf, bytesRead, fileSize);
   }
 
   /**
@@ -392,15 +427,8 @@ export class NativeHome {
           // it resolves native transcript paths itself in index-service.ts. The
           // CC lane proved what following a symlink costs. No size floor here:
           // listSessionFiles must keep enumerating small native sessions.
-          const st = fs.lstatSync(full);
-          if (transcriptSkipReason(st)) continue;
-          out.push({
-            slug,
-            sessionId: f.slice(0, -'.jsonl'.length),
-            mtimeMs: st.mtimeMs,
-            sizeBytes: st.size,
-            path: full,
-          });
+          const entry = sessionFileEntry(slug, f, full, fs.lstatSync(full));
+          if (entry) out.push(entry);
         } catch {
           // deleted between readdir and stat — skip
         }
@@ -408,4 +436,49 @@ export class NativeHome {
     }
     return out;
   }
+
+  /** listSessionFiles with every readdir and lstat off the main thread
+   *  (2026-09-16 C6). Same filters, same skip rules — see the sync form's WHYs. */
+  async listSessionFilesAsync(): Promise<SessionFileInfo[]> {
+    const base = path.join(this.dir, 'sessions');
+    const out: SessionFileInfo[] = [];
+    let slugs: string[] = [];
+    try {
+      slugs = await fs.promises.readdir(base);
+    } catch {
+      return out; // no sessions dir yet — nothing to list
+    }
+    for (const slug of slugs) {
+      let files: string[] = [];
+      try {
+        files = await fs.promises.readdir(path.join(base, slug));
+      } catch {
+        continue; // stray file (not a dir) or deleted mid-scan — skip
+      }
+      for (const f of files) {
+        if (!f.endsWith('.jsonl')) continue;
+        const full = path.join(base, slug, f);
+        try {
+          const entry = sessionFileEntry(slug, f, full, await fs.promises.lstat(full));
+          if (entry) out.push(entry);
+        } catch {
+          // deleted between readdir and stat — skip
+        }
+      }
+    }
+    return out;
+  }
+}
+
+/** One listing row from a session file's lstat, or null when it must be
+ *  skipped (a symlink, or whatever transcriptSkipReason names). */
+function sessionFileEntry(slug: string, f: string, full: string, st: fs.Stats): SessionFileInfo | null {
+  if (transcriptSkipReason(st)) return null;
+  return {
+    slug,
+    sessionId: f.slice(0, -'.jsonl'.length),
+    mtimeMs: st.mtimeMs,
+    sizeBytes: st.size,
+    path: full,
+  };
 }

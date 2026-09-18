@@ -133,6 +133,12 @@ export class SubagentIndex {
     return { parentToolUseId, events: entry.events };
   }
 
+  /** Is anything buffered and waiting for its parent? SubagentWatcher keeps
+   *  its prune timer only while this is true (simplification audit W8). */
+  hasPending(): boolean {
+    return this.pending.size > 0;
+  }
+
   /** Drop pending entries older than 30s. Caller invokes periodically. */
   pruneExpired(): void {
     const cutoff = this.nowMs() - PENDING_TTL_MS;

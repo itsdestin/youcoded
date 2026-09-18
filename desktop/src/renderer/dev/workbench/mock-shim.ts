@@ -206,6 +206,10 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // future feature gated on isLeader) never connects.
   'window.getId', 'detach.getDirectory',
   'appearance.getFavoriteThemes', 'appearance.favoriteTheme', 'appearance.get',
+  // YouCoded Pages (Phase 1 shell) — designed ahead of the backend; mock-only.ts
+  // carries the four rows. The fake keeps pin state for the tab's lifetime so the
+  // header's pinned buttons follow the library's pin toggles.
+  'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -452,6 +456,8 @@ const NAMESPACES = [
   // Sign in with ChatGPT (design 2026-09-04) — real on all five surfaces since
   // the backend design of 2026-09-05; typed by shared/chatgpt-types.ts.
   'chatgpt',
+  // YouCoded Pages (Phase 1 shell) — no real backend yet, registered in mock-only.ts.
+  'pages',
   // Web search keys (Tavily / Exa). Real channels (search:* in main); the fake
   // was missing, which left Assistant settings → Web search an empty page in
   // the workbench (UX review 1, U1).
@@ -459,6 +465,8 @@ const NAMESPACES = [
 ];
 
 import { createNamingPreview } from './naming-preview';
+import { seedPages } from './fixtures/pages';
+import type { PagesBridge, PageDocument, PageSummary } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -2240,7 +2248,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     detectTailscale: async () => ({ installed: true, connected: true, ip: '100.92.14.3', hostname: 'destin-laptop', url: 'http://destin-laptop:7842' }),
     getClientCount: async () => remoteClients.length,
     getClientList: async () => remoteClients,
-    getStatus: async () => ({ state: 'listening', port: 7842 }),
+    getStatus: async () => ({ state: 'listening', port: 7842, clientCount: remoteClients.length }),
     onStatus: () => () => {},
     devices: {
       list: async () => remoteClients.map((c, i) => ({ id: c.id, name: i === 0 ? 'My phone' : 'My tablet', online: i === 0, createdAt: 0, lastSeenAt: 0 })),
@@ -3044,14 +3052,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   let buddyHelperInstalled = buddyHelperMode === 'installed' || buddyHelperMode === 'not-needed-installed';
   const buddyHelperSupported = buddyHelperNeeded && buddyHelperMode !== 'none';
   let buddyDismissed = false;
-  let buddyKeepAbove = true;
   const buddyStatusSubs = new Set<(s: unknown) => void>();
   const pushBuddyStatus = () => {
-    const snap = { dismissed: buddyDismissed, keepAbove: buddyKeepAbove };
+    const snap = { dismissed: buddyDismissed };
     buddyStatusSubs.forEach((cb) => cb(snap));
   };
   const buddy = {
-    getStatus: async () => ({ dismissed: buddyDismissed, keepAbove: buddyKeepAbove }),
+    getStatus: async () => ({ dismissed: buddyDismissed }),
     // Mirrors main's refusal (design §5): a desktop that NEEDS a helper and does
     // not have one says no rather than putting a buddy on screen that cannot be
     // dragged. The sentence is main's own (ipc-handlers.ts buddyShowRefusal), so
@@ -3069,9 +3076,6 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     hide: async () => {},
     dismiss: async () => { buddyDismissed = true; pushBuddyStatus(); },
-    // Mirrors the real one's contract exactly: resolves FALSE when KWin could
-    // not be reached, never throws. On the `none` desktop that is every call.
-    setKeepAbove: async (v: boolean) => { buddyKeepAbove = v; return buddyHelperSupported; },
     onStatusChanged: (cb: (s: unknown) => void) => {
       buddyStatusSubs.add(cb);
       return () => buddyStatusSubs.delete(cb);
@@ -3161,7 +3165,41 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, plans, shell,
     skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search,
     update, dev: devMock, ...(remote ? { remote } : {}),
+    pages: createPagesMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;
+}
+
+/** `window.claude.pages` for the workbench (Phase 1 shell). `empty` seeds no
+ *  pages so the library's first-run card is reviewable; every other scenario
+ *  gets the three fixture pages. Pin toggles publish through onChanged the way
+ *  the real host will, so the header and the library never disagree. */
+function createPagesMock(empty: boolean): PagesBridge {
+  let pages: PageDocument[] = empty ? [] : seedPages();
+  const subs = new Set<(p: PageSummary[]) => void>();
+  const summaries = () => pages.map(({ html: _html, data: _data, ...rest }) => rest);
+  const publish = () => subs.forEach((cb) => cb(summaries()));
+  return {
+    list: async () => summaries(),
+    get: async (id) => {
+      const page = pages.find((p) => p.id === id);
+      return page
+        ? { ok: true, page }
+        : { ok: false, failure: { kind: 'missing', message: 'This page is no longer in your library.' } };
+    },
+    setPinned: async (id, pinned) => {
+      pages = pages.map((p) => (p.id === id ? { ...p, pinned } : p));
+      publish();
+      return summaries();
+    },
+    // Page data lives for the tab: reopen the page and it is still there, which
+    // is exactly what the real store gives across app restarts and devices.
+    setData: async (id, data) => {
+      if (!pages.some((p) => p.id === id)) return { ok: false, message: 'This page is no longer in your library.' };
+      pages = pages.map((p) => (p.id === id ? { ...p, data } : p));
+      return { ok: true };
+    },
+    onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
+  };
 }
 
 const VOICE_SCRIPT = "Can you look at the budget spreadsheet I sent yesterday? Row 14 is wrong: it says $2,300 but Sarah's invoice was $2,030. Fix it and draft a short reply to her.".split(' ');

@@ -4,6 +4,8 @@ import { structuredPatch } from 'diff';
 import { defineTool } from './registry';
 import { canonicalize, resolveP } from './guards';
 import { fingerprintOf } from './file-fingerprint';
+import { withPathLock } from './path-lock';
+import type { ToolContext, ToolResultPayload } from './types';
 import type { StructuredPatchHunk } from '../../../shared/types';
 
 /** jsdiff → the reducer's StructuredPatchHunk shape (same fields; keep explicit). */
@@ -35,6 +37,23 @@ export function preserveFormat(original: string, edited: string): string {
   return out;
 }
 
+// G-4 (2026-08-26 tools investigation): these were bare. Every peer harness
+// describes them, and the two rules that matter most live on old_string —
+// Read prints a `%6d\t` line-number prefix that a small model copies verbatim
+// into old_string and then gets "not found" with no hint why; and a huge
+// old_string wastes output tokens for no extra precision.
+// Hoisted out of defineTool so editLocked (below) can be typed from it.
+const EDIT_INPUT = z.object({
+  file_path: z.string().describe('Absolute or workspace-relative path of the file to edit'),
+  old_string: z.string().describe(
+    'The exact text to replace. Must match exactly once in the file (or pass replace_all). '
+    + 'Do NOT include the line-number prefix that Read prints (the number and the tab after it) — '
+    + 'copy only the text after the tab. Keep it minimal: usually 1-3 lines, just enough to be unique.',
+  ),
+  new_string: z.string().describe('The replacement text (inserted literally, whitespace preserved)'),
+  replace_all: z.boolean().optional().describe('Replace every occurrence instead of requiring a unique match'),
+}).strict(); // .strict(): an unknown parameter is an error the model can fix, never silently dropped (ledger D-2)
+
 export const EditTool = defineTool({
   name: 'Edit',
   // Pause handoff §1 (WHY): changes this computer only, so a plan restart checks first.
@@ -61,18 +80,17 @@ export const EditTool = defineTool({
   // Read prints a `%6d\t` line-number prefix that a small model copies verbatim
   // into old_string and then gets "not found" with no hint why; and a huge
   // old_string wastes output tokens for no extra precision.
-  inputSchema: z.object({
-    file_path: z.string().describe('Absolute or workspace-relative path of the file to edit'),
-    old_string: z.string().describe(
-      'The exact text to replace. Must match exactly once in the file (or pass replace_all). '
-      + 'Do NOT include the line-number prefix that Read prints (the number and the tab after it) — '
-      + 'copy only the text after the tab. Keep it minimal: usually 1-3 lines, just enough to be unique.',
-    ),
-    new_string: z.string().describe('The replacement text (inserted literally, whitespace preserved)'),
-    replace_all: z.boolean().optional().describe('Replace every occurrence instead of requiring a unique match'),
-  }).strict(), // .strict(): an unknown parameter is an error the model can fix, never silently dropped (ledger D-2)
+  inputSchema: EDIT_INPUT,
   permissionSubject: (a) => a.file_path,
   async execute(args, ctx) {
+    // Serialised per file (2026-09-16 C4): the read-check-write below is async
+    // now, so two parallel Edits of ONE file must queue — see path-lock.ts.
+    return withPathLock(canonicalize(args.file_path, ctx.cwd), () => editLocked(args, ctx));
+  },
+});
+
+/** The Edit tool's body, run under the per-path lock. */
+async function editLocked(args: z.infer<typeof EDIT_INPUT>, ctx: ToolContext): Promise<ToolResultPayload> {
     const abs = resolveP(args.file_path, ctx.cwd);
     const canonical = canonicalize(args.file_path, ctx.cwd);
     // Read-before-edit gate (spec §2.3): the single rule that prevents blind overwrites.
@@ -97,7 +115,7 @@ export const EditTool = defineTool({
     // compared the same way or the decode→encode round trip would read as a
     // change that never happened. See tools/file-fingerprint.ts for why the
     // gate compares contents rather than modification times (2026-09-16).
-    const originalBuf = fs.readFileSync(abs);
+    const originalBuf = await fs.promises.readFile(abs); // off the main thread (C4)
     if (fingerprintOf(originalBuf) !== readFingerprint) {
       return {
         text: `Edit rejected: ${args.file_path} changed on disk since you last Read or Wrote it `
@@ -155,8 +173,7 @@ export const EditTool = defineTool({
       };
     }
     const final = preserveFormat(original, edited);
-    fs.writeFileSync(abs, final);
+    await fs.promises.writeFile(abs, final);
     ctx.readRegistry.set(canonical, fingerprintOf(final)); // our own write stays "read"
     return { text: `Edited ${args.file_path}.`, structuredPatch: hunks };
-  },
-});
+}

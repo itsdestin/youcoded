@@ -8,12 +8,17 @@ import fs from 'fs';
 import path from 'path';
 import { LINK_SERVER_JS } from '../src/main/claude-code-mcp';
 import { CLAUDE_CODE_LINK_TOOL, CLAUDE_CODE_MCP_SERVER_ID, SEND_USER_LINK_TOOL } from '../src/shared/send-user-link';
+import { readSource } from './helpers/guard-scope';
 
 const ANDROID_ASSET = path.join(__dirname, '..', '..', 'app', 'src', 'main', 'assets', 'send-user-link-mcp.js');
 const ANDROID_KT = path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'ClaudeCodeMcp.kt');
 
 describe('SendUserLink MCP server parity', () => {
   it('the embedded desktop copy is byte-identical to the Android asset', () => {
+    // WHY: byte-identical comparison — LINK_SERVER_JS is a TS string constant,
+    // never a disk read, so it cannot be run through readSource; normalising
+    // only the Android side would compare a stripped string against a raw one
+    // and mask real drift. Left as a raw read on purpose (Task 2 clarification).
     expect(LINK_SERVER_JS).toBe(fs.readFileSync(ANDROID_ASSET, 'utf8'));
   });
 
@@ -33,7 +38,7 @@ describe('SendUserLink MCP server parity', () => {
   });
 
   it('Kotlin declares the same server id and tool name', () => {
-    const kt = fs.readFileSync(ANDROID_KT, 'utf8');
+    const kt = readSource(ANDROID_KT);
     expect(kt).toContain(`const val SERVER_ID = "${CLAUDE_CODE_MCP_SERVER_ID}"`);
     expect(kt).toContain(`const val TOOL_NAME = "${CLAUDE_CODE_LINK_TOOL}"`);
     expect(kt).toContain('const val SERVER_FILE = "send-user-link-mcp.js"');

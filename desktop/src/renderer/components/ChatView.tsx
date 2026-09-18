@@ -985,7 +985,12 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
         bottom: 0,
         display: 'flex',
         flexDirection: 'column',
-        visibility: visible ? 'visible' : 'hidden',
+        // `undefined`, not 'visible': the active pane INHERITS visibility, so
+        // an ancestor can hide the whole chat column (App's data-screen-open
+        // under a floating-chrome screen, 2026-09-17). An explicit 'visible'
+        // here overrode that and the chat painted through the page view's
+        // glass. Inactive panes stay explicitly hidden.
+        visibility: visible ? undefined : 'hidden',
         opacity: visible ? 1 : 0,
         pointerEvents: visible ? 'auto' : 'none',
         // Fix (window-resize jank): App renders a ChatView for EVERY open

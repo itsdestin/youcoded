@@ -1,6 +1,7 @@
-import { readFileSync, existsSync } from 'fs';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
+import { readSource } from './helpers/guard-scope';
 
 // WHY these Android guards live in the DESKTOP suite: it is the only suite that runs
 // on every change (scripts/verify.sh); Gradle only runs when someone builds the phone
@@ -8,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 // silently shipped broken for months because nothing checked it.
 // Test file is at desktop/tests/, so two levels up reaches the repo root.
 const ROOT = join(__dirname, '..', '..');
-const read = (...p: string[]) => readFileSync(join(ROOT, ...p), 'utf8');
+const read = (...p: string[]) => readSource(join(ROOT, ...p));
 
 describe('Android builds tell the truth about themselves', () => {
   it('requests POST_NOTIFICATIONS at runtime, not just in the manifest', () => {

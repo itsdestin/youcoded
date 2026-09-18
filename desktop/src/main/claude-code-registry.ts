@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { mutateSettings } from './claude-settings';
 
 /**
  * Claude Code Registry Integration.
@@ -114,7 +115,6 @@ export function listInstalledPluginDirs(): string[] {
 const MARKETPLACE_MANIFEST = path.join(YOUCODED_MARKETPLACE_ROOT, '.claude-plugin', 'marketplace.json');
 const KNOWN_MARKETPLACES = path.join(PLUGIN_CACHE_DIR, 'known_marketplaces.json');
 const INSTALLED_PLUGINS = path.join(PLUGIN_CACHE_DIR, 'installed_plugins.json');
-const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 
 // --- Key helpers ---
 
@@ -270,33 +270,29 @@ function removeInstalledPlugin(id: string): void {
 }
 
 // --- settings.json enabledPlugins ---
+//
+// WHY (2026-09-16 audit D5): settings.json is read and written ONLY by
+// claude-settings.ts — under the cross-process lock, atomically, with a
+// corrupt file backed up beside itself before a fresh write (this module used
+// to overwrite one silently). The mutators below edit the object they are
+// handed; the module decides whether anything changed.
 
-function readSettings(): any {
-  return readJson(SETTINGS) || {};
-}
-
-function writeSettings(data: any): void {
-  writeJsonAtomic(SETTINGS, data);
-}
-
-function enablePluginInSettings(id: string): void {
-  const settings = readSettings();
-  if (!settings.enabledPlugins || typeof settings.enabledPlugins !== 'object') {
-    settings.enabledPlugins = {};
-  }
+async function enablePluginInSettings(id: string): Promise<void> {
   const key = pluginKey(id);
-  if (settings.enabledPlugins[key] === true) return;
-  settings.enabledPlugins[key] = true;
-  writeSettings(settings);
+  await mutateSettings((settings) => {
+    if (!settings.enabledPlugins || typeof settings.enabledPlugins !== 'object') {
+      settings.enabledPlugins = {};
+    }
+    (settings.enabledPlugins as Record<string, unknown>)[key] = true;
+  });
 }
 
-function disablePluginInSettings(id: string): void {
-  const settings = readSettings();
-  if (!settings.enabledPlugins) return;
+async function disablePluginInSettings(id: string): Promise<void> {
   const key = pluginKey(id);
-  if (!(key in settings.enabledPlugins)) return;
-  delete settings.enabledPlugins[key];
-  writeSettings(settings);
+  await mutateSettings((settings) => {
+    const enabled = settings.enabledPlugins;
+    if (enabled && typeof enabled === 'object') delete (enabled as Record<string, unknown>)[key];
+  });
 }
 
 // --- Public API ---
@@ -314,7 +310,7 @@ export interface RegisterInstallInput {
  * Wires a YouCoded-installed plugin into all four Claude Code registries
  * so /reload-plugins (and session start) loads it as a first-class plugin.
  */
-export function registerPluginInstall(input: RegisterInstallInput): void {
+export async function registerPluginInstall(input: RegisterInstallInput): Promise<void> {
   const { id, installPath, version, description, author, category } = input;
   ensureMarketplaceRegistered();
   upsertPluginInManifest({
@@ -329,16 +325,16 @@ export function registerPluginInstall(input: RegisterInstallInput): void {
     strict: true,
   });
   writeInstalledPlugin(id, installPath, version || '1.0.0');
-  enablePluginInSettings(id);
+  await enablePluginInSettings(id);
 }
 
 /**
  * Removes the plugin from all four registries. Does NOT delete the plugin
  * directory — that's the caller's job (plugin-installer.ts).
  */
-export function unregisterPluginInstall(id: string): void {
+export async function unregisterPluginInstall(id: string): Promise<void> {
   removePluginFromManifest(id);
   removeInstalledPlugin(id);
-  disablePluginInSettings(id);
+  await disablePluginInSettings(id);
 }
 

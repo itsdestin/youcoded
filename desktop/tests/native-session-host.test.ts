@@ -230,6 +230,18 @@ describe('NativeSessionHost', () => {
     expect(history).not.toBeNull();
     expect(history!.map((e) => e.type)).toEqual(['user-message', 'assistant-text', 'turn-complete']);
     expect(history![1].data.text).toBe('Hi there');   // coalesced on disk
+    // 2026-09-16 C2: the IPC handlers read through the async twins, which must
+    // answer exactly what the sync forms do; isNative answers the tear-off's
+    // boolean without reading anything. (Merge: master's fix added an isLive()
+    // with the same body as the host's older isNative(); one predicate, so this
+    // asks the one that survived.)
+    expect(await host.getHistoryAsync('s-1')).toEqual(history);
+    expect(await host.getHistoryPageAsync('s-1', null)).toEqual(host.getHistoryPage('s-1', null));
+    expect(await host.getHistoryPageAsync('s-1', 2)).toEqual(host.getHistoryPage('s-1', 2));
+    expect(host.isNative('s-1')).toBe(true);
+    expect(host.isNative('nope')).toBe(false);
+    expect(await host.getHistoryAsync('nope')).toBeNull();
+    expect(await host.getHistoryPageAsync('nope', null)).toBeNull();
   });
 
   it('fresh roots persist and use one exact step-guard snapshot', async () => {
@@ -5780,6 +5792,32 @@ describe('specialists plans in the native host (Task 4)', () => {
     // The page a restarted window loads carries them too.
     const page = host.getHistoryPage(SID, null)!;
     expect(page.events.filter((e) => attempts.some((a: any) => a.childId === e.data?.agentId) && e.type !== 'subagent-usage').length).toBe(replayed.length);
+  });
+
+  // Merge guard (master 2026-09-16 C2 × Task 5a): master moved every history
+  // read off the main thread and introduced getHistoryAsync/getHistoryPageAsync
+  // beside the sync forms. Both forms now share ONE `historyPlan()` that decides
+  // which files make up a session's history — and that decision is where the
+  // plan journal's children (which have no delegation-ledger row) are added. If
+  // a future edit gives the async twin its own list of children, the desktop
+  // page handler, the phone's scroll-up and the re-dock replay — all of which
+  // read through the async form — would silently lose every plan specialist's
+  // past activity while the sync form still had it. That is invisible in a
+  // suite that only exercises the sync form, so it is asserted here.
+  it('merge: the async history twins splice plan specialists exactly like the sync forms', async () => {
+    const planId = await proposeOne();
+    await host.approvePlan(SID, planId);
+    await waitFor(() => planStatus()[0] === 'completed', 'completion');
+    const attempts = journalFile().plans[0].steps.flatMap((st: any) => st.attempts);
+    const ofPlanChild = (list: TranscriptEvent[]) =>
+      list.filter((e) => attempts.some((a: any) => a.childId === (e.data as any)?.agentId));
+
+    const sync = host.getHistory(SID)!;
+    expect(ofPlanChild(sync).length).toBeGreaterThan(0);   // the thing being guarded exists
+    expect(await host.getHistoryAsync(SID)).toEqual(sync);
+    expect(await host.getHistoryPageAsync(SID, null)).toEqual(host.getHistoryPage(SID, null));
+    expect(ofPlanChild((await host.getHistoryPageAsync(SID, null))!.events).length)
+      .toBe(ofPlanChild(host.getHistoryPage(SID, null)!.events).length);
   });
 
   it('review item 6: a plan specialist\'s routed ask carries the plan, step and specialist identity', async () => {

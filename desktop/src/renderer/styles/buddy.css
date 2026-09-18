@@ -1,23 +1,13 @@
 /* Buddy-specific CSS scopes. Loaded globally but only apply when
    body[data-mode="buddy-chat"] or buddy-mascot is active. */
 
-/* WHY buddy-overlay is unioned into every rule below (fix pass, Task 6):
-   the Linux-Wayland overlay (BuddyOverlayApp) hosts the SAME mascot/chat/bar
-   DOM as the three-window model, just inside one shared window instead of
-   three separate BrowserWindows — so it needs the exact same visuals. The
-   original implementation plan's file list for this task omitted this
-   stylesheet; without these additions the overlay would mount with none of
-   this chrome/animation and render as unstyled boxes. Additive only —
-   every existing selector below is untouched, so three-window platforms
-   (Windows/macOS/Linux-X11) keep byte-identical computed styles. The one
-   rule that assumed its selector's element WAS the whole window
-   (`body[data-mode="buddy-chat"]`'s font-size/overflow, further down) is
-   NOT blindly unioned — see that rule's own comment for why. */
+/* Three buddy modes, one per window: buddy-mascot, buddy-chat, buddy-bar. A
+   fourth, buddy-overlay (the whole floater inside one window), was unioned
+   into every rule here until 2026-09-16; no platform ever loaded it. */
 
 body[data-mode="buddy-chat"],
 body[data-mode="buddy-mascot"],
-body[data-mode="buddy-bar"],
-body[data-mode="buddy-overlay"] {
+body[data-mode="buddy-bar"] {
   background: transparent !important;
   --canvas: transparent;
 }
@@ -36,21 +26,18 @@ body[data-mode="buddy-overlay"] {
    Electron window. */
 html[data-mode="buddy-mascot"],
 html[data-mode="buddy-chat"],
-html[data-mode="buddy-bar"],
-html[data-mode="buddy-overlay"] {
+html[data-mode="buddy-bar"] {
   background: transparent !important;
   color-scheme: normal !important;
 }
 html[data-mode="buddy-mascot"] body,
 html[data-mode="buddy-chat"] body,
-html[data-mode="buddy-bar"] body,
-html[data-mode="buddy-overlay"] body {
+html[data-mode="buddy-bar"] body {
   background: transparent !important;
 }
 html[data-mode="buddy-mascot"] #root,
 html[data-mode="buddy-chat"] #root,
-html[data-mode="buddy-bar"] #root,
-html[data-mode="buddy-overlay"] #root {
+html[data-mode="buddy-bar"] #root {
   background: transparent !important;
 }
 
@@ -99,8 +86,7 @@ html[data-mode="buddy-overlay"] #root {
    animate — which made the bouncy entrance invisible (Destin 2026-07-16).
    BuddyChatApp puts .buddy-chat-panel on the animated div, which is #root's
    only child at 100%×100%, so the geometry is unchanged. */
-html[data-mode="buddy-chat"] .buddy-chat-panel,
-html[data-mode="buddy-overlay"] .buddy-chat-panel {
+html[data-mode="buddy-chat"] .buddy-chat-panel {
   background:
     linear-gradient(
       180deg,
@@ -136,8 +122,7 @@ html[data-mode="buddy-overlay"] .buddy-chat-panel {
    so the grain picks up the panel tint underneath. z-index:-1 inside
    the panel's isolated stacking context keeps it ABOVE the panel tint and
    BELOW the chat UI. 120×120 tile with stitchTiles avoids visible seams. */
-html[data-mode="buddy-chat"] .buddy-chat-panel::before,
-html[data-mode="buddy-overlay"] .buddy-chat-panel::before {
+html[data-mode="buddy-chat"] .buddy-chat-panel::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -163,32 +148,21 @@ html[data-mode="buddy-overlay"] .buddy-chat-panel::before {
    in globals.css as a belt-and-suspenders guard.) */
 html[data-mode="buddy-mascot"] #theme-effects-overlay,
 html[data-mode="buddy-chat"] #theme-effects-overlay,
-html[data-mode="buddy-bar"] #theme-effects-overlay,
-html[data-mode="buddy-overlay"] #theme-effects-overlay {
+html[data-mode="buddy-bar"] #theme-effects-overlay {
   display: none !important;
 }
 
-/* WHY the overlay variant targets .buddy-chat-panel, not body: this rule
-   means "the chat surface is small text" — true of the whole BODY in the
-   three-window model because the chat window's body IS the chat. In the
-   overlay, body also hosts the mascot and bar, so unioning body[data-
-   mode="buddy-overlay"] here would leak 13px font-size onto everything in
-   the shared tree instead of just the chat panel. .buddy-chat-panel is
-   already the chat's own root element in both models (BuddyChatApp.tsx /
-   BuddyOverlayApp.tsx), so scoping to it gets the identical visual result
-   without the leak. overflow:hidden is redundant here for the panel (the
-   glass-chrome rule above already sets it) but kept for clarity/symmetry. */
-body[data-mode="buddy-chat"],
-body[data-mode="buddy-overlay"] .buddy-chat-panel {
+/* "The chat surface is small text" — true of the whole BODY because the chat
+   window's body IS the chat. overflow:hidden is redundant here for the panel
+   (the glass-chrome rule above already sets it) but kept for clarity. */
+body[data-mode="buddy-chat"] {
   font-size: 13px;
   overflow: hidden;
 }
 
 /* Compact bubbles inside buddy chat */
 body[data-mode="buddy-chat"] .user-bubble,
-body[data-mode="buddy-chat"] .assistant-bubble,
-body[data-mode="buddy-overlay"] .user-bubble,
-body[data-mode="buddy-overlay"] .assistant-bubble {
+body[data-mode="buddy-chat"] .assistant-bubble {
   padding: 9px 13px;
   font-size: 13px;
   line-height: 1.5;
@@ -213,9 +187,7 @@ body[data-mode="buddy-overlay"] .assistant-bubble {
    with no whitespace inside. Scoped to buddy only — main keeps the cleaner
    "break only when needed" behavior. */
 body[data-mode="buddy-chat"] .assistant-bubble a,
-body[data-mode="buddy-chat"] .user-bubble a,
-body[data-mode="buddy-overlay"] .assistant-bubble a,
-body[data-mode="buddy-overlay"] .user-bubble a {
+body[data-mode="buddy-chat"] .user-bubble a {
   word-break: break-all;
 }
 
@@ -231,8 +203,7 @@ body[data-mode="buddy-overlay"] .user-bubble a {
    / [data-chrome-style="floating"] theme variants already use !important
    on .input-bar-container (margin, border-radius, padding, box-shadow).
    We need to beat all of them. */
-body[data-mode="buddy-chat"] .input-bar-container,
-body[data-mode="buddy-overlay"] .input-bar-container {
+body[data-mode="buddy-chat"] .input-bar-container {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
@@ -263,8 +234,7 @@ body[data-mode="buddy-overlay"] .input-bar-container {
    + 4px bottom. In the tight 320px buddy bubble, that + BuddyChat's
    own root padding stacks to ~18px of dead space around the pill,
    which reads as a second container framing the pill. Drop it. */
-body[data-mode="buddy-chat"] .input-bar-container > div:last-child,
-body[data-mode="buddy-overlay"] .input-bar-container > div:last-child {
+body[data-mode="buddy-chat"] .input-bar-container > div:last-child {
   padding: 0 !important;
 }
 
@@ -276,8 +246,7 @@ body[data-mode="buddy-overlay"] .input-bar-container > div:last-child {
    the pill's corners match the bubble's curvature — at 12px inside an
    18px bubble, the pill reads as visibly squarer than its container,
    which is the "sharp/rectangular corners" the user observed. */
-body[data-mode="buddy-chat"] .input-bar-container form,
-body[data-mode="buddy-overlay"] .input-bar-container form {
+body[data-mode="buddy-chat"] .input-bar-container form {
   border-radius: 18px !important;
   box-shadow:
     0 2px 8px rgba(0, 0, 0, 0.18),
@@ -291,8 +260,7 @@ body[data-mode="buddy-overlay"] .input-bar-container form {
    uses `border:none` which strips .layer-surface's 1px solid edge —
    box-shadow ring restores the ring without fighting the inline override.
    !important because layer-surface already sets box-shadow. */
-body[data-mode="buddy-chat"] .layer-surface,
-body[data-mode="buddy-overlay"] .layer-surface {
+body[data-mode="buddy-chat"] .layer-surface {
   box-shadow:
     0 2px 8px rgba(0, 0, 0, 0.18),
     0 0 0 1px color-mix(in srgb, var(--edge) 50%, transparent) !important;
@@ -302,19 +270,13 @@ body[data-mode="buddy-overlay"] .layer-surface {
 body[data-mode="buddy-chat"] .prose h1,
 body[data-mode="buddy-chat"] .prose h2,
 body[data-mode="buddy-chat"] .prose h3,
-body[data-mode="buddy-chat"] .prose h4,
-body[data-mode="buddy-overlay"] .prose h1,
-body[data-mode="buddy-overlay"] .prose h2,
-body[data-mode="buddy-overlay"] .prose h3,
-body[data-mode="buddy-overlay"] .prose h4 {
+body[data-mode="buddy-chat"] .prose h4 {
   font-size: inherit;
   font-weight: 700;
   margin: 0;
 }
-body[data-mode="buddy-chat"] .prose table,
-body[data-mode="buddy-overlay"] .prose table { display: none; }
-body[data-mode="buddy-chat"] .prose blockquote,
-body[data-mode="buddy-overlay"] .prose blockquote {
+body[data-mode="buddy-chat"] .prose table { display: none; }
+body[data-mode="buddy-chat"] .prose blockquote {
   font-style: italic;
   border: none;
   padding: 0;
@@ -322,15 +284,12 @@ body[data-mode="buddy-overlay"] .prose blockquote {
 }
 
 /* Thin scrollbar in buddy chat */
-body[data-mode="buddy-chat"] ::-webkit-scrollbar,
-body[data-mode="buddy-overlay"] ::-webkit-scrollbar { width: 4px; }
-body[data-mode="buddy-chat"] ::-webkit-scrollbar-thumb,
-body[data-mode="buddy-overlay"] ::-webkit-scrollbar-thumb {
+body[data-mode="buddy-chat"] ::-webkit-scrollbar { width: 4px; }
+body[data-mode="buddy-chat"] ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: 2px;
 }
-body[data-mode="buddy-chat"] ::-webkit-scrollbar-thumb:hover,
-body[data-mode="buddy-overlay"] ::-webkit-scrollbar-thumb:hover {
+body[data-mode="buddy-chat"] ::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-hover);
 }
 
@@ -342,12 +301,10 @@ body[data-mode="buddy-overlay"] ::-webkit-scrollbar-thumb:hover {
    on a deliberate mascot click rather than an incidental hover — so the reveal
    gets a real entrance: the buttons pop in one after another, left to right.
    The root only carries the fade; the pop lives on the buttons. */
-body[data-mode="buddy-bar"] .buddy-bar-root,
-body[data-mode="buddy-overlay"] .buddy-bar-root {
+body[data-mode="buddy-bar"] .buddy-bar-root {
   transition: opacity 140ms ease;
 }
-body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="0"],
-body[data-mode="buddy-overlay"] .buddy-bar-root[data-visible="0"] {
+body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="0"] {
   opacity: 0;
   pointer-events: none;
 }
@@ -360,16 +317,13 @@ body[data-mode="buddy-overlay"] .buddy-bar-root[data-visible="0"] {
    inline `scale(0.92)` busy transform, which resumes control the moment the
    animation ends (no `forwards`). Re-runs on every reveal because the
    [data-visible="1"] selector stops matching while hidden. */
-body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn,
-body[data-mode="buddy-overlay"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn {
+body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn {
   animation: buddy-btn-pop 300ms cubic-bezier(0.34, 1.62, 0.64, 1) backwards;
 }
-body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth-child(2),
-body[data-mode="buddy-overlay"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth-child(2) {
+body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth-child(2) {
   animation-delay: 70ms;
 }
-body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth-child(3),
-body[data-mode="buddy-overlay"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth-child(3) {
+body[data-mode="buddy-bar"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn:nth-child(3) {
   animation-delay: 140ms;
 }
 @keyframes buddy-btn-pop {
@@ -383,16 +337,12 @@ body[data-mode="buddy-overlay"] .buddy-bar-root[data-visible="1"] .buddy-bar-btn
    Exactly the trick .mascot-wrap uses for hover-scale vs breathing-translate.
    The bar window is padded (BAR_PADDING in buddy-bar-geometry.ts) so the grown
    button has room; without that it would clip against the window frame. */
-body[data-mode="buddy-bar"] .buddy-bar-btn,
-body[data-mode="buddy-overlay"] .buddy-bar-btn {
+body[data-mode="buddy-bar"] .buddy-bar-btn {
   transition: scale 160ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity 120ms ease;
 }
-body[data-mode="buddy-bar"] .buddy-bar-btn:hover,
-body[data-mode="buddy-overlay"] .buddy-bar-btn:hover { scale: 1.14; }
-body[data-mode="buddy-bar"] .buddy-bar-btn:active,
-body[data-mode="buddy-overlay"] .buddy-bar-btn:active { scale: 0.94; }
-body[data-mode="buddy-bar"] .buddy-bar-btn[data-busy="1"],
-body[data-mode="buddy-overlay"] .buddy-bar-btn[data-busy="1"] {
+body[data-mode="buddy-bar"] .buddy-bar-btn:hover { scale: 1.14; }
+body[data-mode="buddy-bar"] .buddy-bar-btn:active { scale: 0.94; }
+body[data-mode="buddy-bar"] .buddy-bar-btn[data-busy="1"] {
   scale: 0.92;
   opacity: 0.7;
 }
@@ -402,20 +352,16 @@ body[data-mode="buddy-overlay"] .buddy-bar-btn[data-busy="1"] {
    `scale` (hover/grab) and `translate` (flat-art breathing) are independent
    CSS properties so the animations compose without clobbering each other.
    (Rig mascots breathe internally — the motion-style loop on #rig-root.) */
-body[data-mode="buddy-mascot"] .mascot-wrap,
-body[data-mode="buddy-overlay"] .mascot-wrap {
+body[data-mode="buddy-mascot"] .mascot-wrap {
   position: relative; /* anchors the edge-pinned peek mittens */
   width: 100%;
   height: 100%;
   transition: scale 120ms ease;
 }
-body[data-mode="buddy-mascot"] .mascot-wrap:hover,
-body[data-mode="buddy-overlay"] .mascot-wrap:hover { scale: 1.06; }
-body[data-mode="buddy-mascot"] .mascot-wrap.mascot-grabbed,
-body[data-mode="buddy-overlay"] .mascot-wrap.mascot-grabbed { scale: 0.94; }
+body[data-mode="buddy-mascot"] .mascot-wrap:hover { scale: 1.06; }
+body[data-mode="buddy-mascot"] .mascot-wrap.mascot-grabbed { scale: 0.94; }
 
-body[data-mode="buddy-mascot"] .mascot-breathing,
-body[data-mode="buddy-overlay"] .mascot-breathing {
+body[data-mode="buddy-mascot"] .mascot-breathing {
   animation: buddy-breathe 4s ease-in-out infinite;
 }
 @keyframes buddy-breathe {
@@ -425,8 +371,7 @@ body[data-mode="buddy-overlay"] .mascot-breathing {
 
 /* Attention bounce — removing/reapplying the class on attention changes
    retriggers it without remounting the animated rig. */
-body[data-mode="buddy-mascot"] .mascot-bounce,
-body[data-mode="buddy-overlay"] .mascot-bounce {
+body[data-mode="buddy-mascot"] .mascot-bounce {
   animation: buddy-bounce 500ms cubic-bezier(0.28, 0.84, 0.42, 1);
 }
 @keyframes buddy-bounce {
@@ -446,8 +391,7 @@ body[data-mode="buddy-overlay"] .mascot-bounce {
    property (composes with the wrapper scale + flat-art translate); the
    edge-pinned mittens (PeekHands) are OUTSIDE this element so they stay
    planted on the frame while the body sags between them. */
-body[data-mode="buddy-mascot"] .mascot-sink,
-body[data-mode="buddy-overlay"] .mascot-sink {
+body[data-mode="buddy-mascot"] .mascot-sink {
   width: 100%;
   height: 100%;
   /* Bouncier than the original 1.2 overshoot (Destin 2026-07-17): peek is now
@@ -456,14 +400,11 @@ body[data-mode="buddy-overlay"] .mascot-sink {
      carries him a little past the sink and back. */
   transition: transform 380ms cubic-bezier(0.34, 1.5, 0.5, 1);
 }
-body[data-mode="buddy-mascot"] .mascot-lean,
-body[data-mode="buddy-overlay"] .mascot-lean {
+body[data-mode="buddy-mascot"] .mascot-lean {
   transition: rotate 380ms cubic-bezier(0.34, 1.5, 0.5, 1);
 }
-body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="bottom"],
-body[data-mode="buddy-overlay"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="bottom"] { transform: translateY(45%); }
-body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="top"],
-body[data-mode="buddy-overlay"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="top"] { transform: translateY(-45%); }
+body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="bottom"] { transform: translateY(45%); }
+body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="top"] { transform: translateY(-45%); }
 /* Side peeks: the sink slides the box past the edge (18% visible), shifted up
    so the body sags below the hand line; the LEAN layer inside rotates the
    body ∓75° about its own (already-moved) center, tipping the head back out
@@ -477,21 +418,15 @@ body[data-mode="buddy-overlay"] .mascot-sink[data-dock-mode="peeking"][data-dock
    Walked down over two rounds: -22.6% (face at 27.4%, crowding the top mitten)
    → -16% (34%, still reading high) → -11% (39%, head sitting just under the
    grip line). */
-body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="right"],
-body[data-mode="buddy-overlay"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="right"] { transform: translate(45%, -11%); }
-body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="right"] .mascot-lean,
-body[data-mode="buddy-overlay"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="right"] .mascot-lean { rotate: -75deg; }
-body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="left"],
-body[data-mode="buddy-overlay"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="left"] { transform: translate(-45%, -11%); }
-body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="left"] .mascot-lean,
-body[data-mode="buddy-overlay"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="left"] .mascot-lean { rotate: 75deg; }
+body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="right"] { transform: translate(45%, -11%); }
+body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="right"] .mascot-lean { rotate: -75deg; }
+body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="left"] { transform: translate(-45%, -11%); }
+body[data-mode="buddy-mascot"] .mascot-sink[data-dock-mode="peeking"][data-dock-edge="left"] .mascot-lean { rotate: 75deg; }
 /* Swing-out whip: leaving a side peek releases the lean THROUGH ±14° past
    vertical (~230ms, set by BuddyMascot), then the transition settles it to 0
    — the "whips around the edge" read from the workbench. */
-body[data-mode="buddy-mascot"] .mascot-sink[data-swing="right"] .mascot-lean,
-body[data-mode="buddy-overlay"] .mascot-sink[data-swing="right"] .mascot-lean { rotate: 14deg; }
-body[data-mode="buddy-mascot"] .mascot-sink[data-swing="left"] .mascot-lean,
-body[data-mode="buddy-overlay"] .mascot-sink[data-swing="left"] .mascot-lean { rotate: -14deg; }
+body[data-mode="buddy-mascot"] .mascot-sink[data-swing="right"] .mascot-lean { rotate: 14deg; }
+body[data-mode="buddy-mascot"] .mascot-sink[data-swing="left"] .mascot-lean { rotate: -14deg; }
 
 /* Chat open/close: fade + scale instead of popping (spec §5). Origin is the
    top edge — the chat normally hangs BELOW the mascot, so growing downward
@@ -514,13 +449,11 @@ body[data-mode="buddy-overlay"] .mascot-sink[data-swing="left"] .mascot-lean { r
 
    Close stays quick and non-bouncy: main hides the window 140ms after cueing
    the exit, and anything longer would just get truncated mid-animation. */
-body[data-mode="buddy-chat"] .buddy-chat-enter,
-body[data-mode="buddy-overlay"] .buddy-chat-enter {
+body[data-mode="buddy-chat"] .buddy-chat-enter {
   animation: buddy-chat-in 360ms ease-out;
   transform-origin: 50% 0%;
 }
-body[data-mode="buddy-chat"] .buddy-chat-exit,
-body[data-mode="buddy-overlay"] .buddy-chat-exit {
+body[data-mode="buddy-chat"] .buddy-chat-exit {
   animation: buddy-chat-out 120ms ease-in forwards;
   transform-origin: 50% 0%;
 }

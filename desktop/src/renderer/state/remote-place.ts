@@ -5,8 +5,11 @@
 // exercised in a unit test (App does not mount outside the real bridge), and the rules
 // are exactly the part that is easy to get subtly wrong — a phone that jumps away from
 // what you were reading, or loads a page of history on top of the computer's copy and
-// shows every message twice. The rules are tested here (tests/remote-place.test.ts);
-// App's use of them is pinned in tests/remote-place-app-wiring.test.ts.
+// shows every message twice. The rules are tested here (tests/remote-place.test.ts).
+// App's own use of them was pinned in tests/remote-place-app-wiring.test.ts, an exact-line
+// source pin with no behaviour value; deleted 2026-09-16 (Plan B Task 4) with no replacement —
+// App still cannot be mounted in a unit test, so that wiring stays covered only by this file's
+// pure-function tests plus manual/E2E verification.
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>;
 export interface PlaceStorages { session: StorageLike; local: StorageLike }

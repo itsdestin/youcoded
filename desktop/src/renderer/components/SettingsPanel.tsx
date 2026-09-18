@@ -961,14 +961,10 @@ export function BuddyButton() {
   // 2026-09-04 (review B-2). It existed because raising the window was the only
   // thing the app could do on Wayland; the helper now pins the buddy itself, and
   // without the helper the buddy cannot be switched on at all — so the control
-  // had nothing left to control.
-  //
-  // Correction 2026-09-04 (design §7): the sentence that used to sit here said
-  // kwin-keep-above.ts "stays; the helper is what drives them". That is wrong and
-  // would have sent a future session to the wrong file. kwin-keep-above.ts is
-  // DEAD on this path — both its call sites pass the overlay window's caption,
-  // and chooseBuddyStrategy never picks the overlay strategy on Linux. The helper
-  // script sets keepAbove on the buddy window itself and does not call it.
+  // had nothing left to control. Its backend (`buddy.setKeepAbove`, the
+  // `buddy:overlay-keep-above` channel and kwin-keep-above.ts) went with the
+  // never-reachable one-window buddy overlay on 2026-09-16. The helper script
+  // sets keepAbove on the buddy window itself.
 
   useEffect(() => {
     if (!open) return;
@@ -1347,9 +1343,9 @@ function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAc
  *
  * Only codes we actually recognise are translated, and the original is kept after the
  * explanation. Anything unrecognised is passed through untouched rather than described
- * with a guess.
+ * with a guess. File-local on purpose: an unused export fails knip's ratchet.
  */
-export function plainReason(reason: string): string {
+function plainReason(reason: string): string {
   if (/EADDRINUSE/.test(reason)) {
     return `Another program on this computer is already using that address, so remote access could not start. Close it and try again. (${reason})`;
   }

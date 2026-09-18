@@ -462,7 +462,7 @@ export async function upgradePluginFromLocal(id: string, sourceRef: string, sour
   // not a hardcoded '1.0.0' — this is the whole point of the upgrade path.
   const version = readPluginVersion(targetDir) ?? '1.0.0';
   try {
-    registerPluginInstall({ id, installPath: targetDir, version });
+    await registerPluginInstall({ id, installPath: targetDir, version });
   } catch (err: any) {
     return { status: 'failed', error: `Registry write failed: ${err?.message || String(err)}` };
   }
@@ -624,7 +624,7 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
       // /reload-plugins reports "0 new plugins" because the loader never scans
       // the filesystem — it only iterates enabledPlugins from settings.json.
       try {
-        registerPluginInstall({
+        await registerPluginInstall({
           id,
           installPath: path.join(PLUGINS_DIR, id),
           // WHY: read the version that just landed on disk first — installFromLocal
@@ -666,7 +666,7 @@ export async function uninstallPlugin(id: string): Promise<boolean> {
   try {
     // Remove from all four Claude Code registries first so /reload-plugins
     // stops trying to load a directory we're about to delete.
-    try { unregisterPluginInstall(id); } catch {}
+    try { await unregisterPluginInstall(id); } catch {}
 
     const targetDir = pluginInstallDir(id);
     // Double-check: resolved path must stay within plugins directory

@@ -5,6 +5,7 @@
 
 // Type-only, so nothing is added to the bundle the Android WebView loads.
 import type { VoiceReadiness } from '../shared/voice-types';
+import type { RemoteBridge } from '../shared/bridge-types';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
@@ -1134,6 +1135,10 @@ function handleMessage(data: string, generation: number): void {
       // payload is used — the event itself is the signal.
       dispatchEvent('system:back', payload);
       break;
+    case 'pages:changed':
+      // YouCoded Pages: the host's fresh page list after any change in a home.
+      dispatchEvent('pages:changed', payload);
+      break;
     case 'artifacts:changed':
       // Artifact viewer update event — dispatched when artifacts are added,
       // modified, or excluded. The payload contains change metadata.
@@ -1958,8 +1963,8 @@ export function installShim(): void {
       // initial history load (tens of MB over the WS for large conversations).
       // `count || 10` / `all || false` mirror preload so the wire always carries
       // real number/boolean types (Android's optInt/optBoolean and the server's
-      // slice(-count) both need them). Guard: shim-parity.test.ts +
-      // remote-shim-loadhistory-args.test.ts.
+      // slice(-count) both need them). Guard: SessionBridge.loadHistory (shared/bridge-types.ts,
+      // parameter types) + remote-shim-loadhistory-args.test.ts (the order on the wire).
       loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) =>
         invoke('session:history', { sessionId, projectSlug, count: count || 10, all: all || false }),
       switch: (sessionId: string) => invoke('session:switch', { sessionId }),
@@ -2567,6 +2572,17 @@ export function installShim(): void {
         return () => removeListener('artifacts:changed', handler);
       },
     },
+    pages: {
+      list: () => invoke('pages:list'),
+      get: (id: string) => invoke('pages:get', { id }),
+      setPinned: (id: string, pinned: boolean) => invoke('pages:set-pinned', { id, pinned }),
+      setData: (id: string, data: unknown) => invoke('pages:set-data', { id, data }),
+      onChanged: (cb: (pages: any[]) => void) => {
+        const handler: Callback = (pages: any) => cb(pages);
+        addListener('pages:changed', handler);
+        return () => removeListener('pages:changed', handler);
+      },
+    },
     git: {
       fileStatus: (projectRoot: string, relPath: string) =>
         invoke('git:file-status', { projectRoot, relPath }),
@@ -2884,17 +2900,6 @@ export function installShim(): void {
       onMascotState: () => () => { /* no-op unsubscribe */ },
       onChatState: () => () => { /* no-op unsubscribe */ },
       onFocusSession: () => () => { /* no-op unsubscribe */ },
-      // ── Linux Wayland overlay (Task 3+4) — same desktop-only contract:
-      // listeners return no-op unsubscribers, senders are no-ops (not
-      // throws) since overlaySetInteractive is a hover-hot path.
-      overlayReady: async () => null, // remote has no overlay window to init
-      onOverlayToggleChat: () => () => { /* no-op unsubscribe */ },
-      overlaySetInteractive: (_i: boolean) => { /* desktop-only */ },
-      overlayPersist: (_s: { mascot: { x: number; y: number }; dock: string | null }) => { /* desktop-only */ },
-      // Task 8 — KDE keep-above is Electron-only (KWin DBus scripting has
-      // no browser/Android equivalent); same desktop-only-throw contract as
-      // openMain/dismiss/getStatus above.
-      setKeepAbove: () => { throw new Error('Buddy is desktop-only in this version'); },
       // ── The Linux/KDE buddy helper (design §4) ──
       // Answered locally, not thrown and not sent over the wire. Two reasons.
       // First, the honest answer really is this one: a phone or a remote browser
@@ -2930,8 +2935,10 @@ export function installShim(): void {
     // (Task 7). Response shape is {text: string}; normalize to Promise<string>
     // with a '' fallback for safety.
     terminal: {
-      getScreenText: async (sessionId: string): Promise<string> => {
-        const response = await invoke('terminal:get-screen-text', { sessionId });
+      // tailRows rides along for parity with preload (audit W24); the Kotlin
+      // handler reads the visible screen and ignores it today.
+      getScreenText: async (sessionId: string, tailRows?: number): Promise<string> => {
+        const response = await invoke('terminal:get-screen-text', { sessionId, tailRows });
         return response?.text ?? '';
       },
     },
@@ -3164,7 +3171,10 @@ export function installShim(): void {
         return () => removeListener('models:download-progress', handler);
       },
     },
-  };
+    // WHY `satisfies`: a compile-time-only check (no runtime effect) that this
+    // object implements every `session`, `on` and favorites member preload.ts
+    // does — see SharedBridge in shared/bridge-types.ts.
+  } satisfies RemoteBridge;
 
   // The one intentional gap in the shared shape: voice typing exists on the
   // Android app and on the desktop, and NOWHERE else. Deleting the namespace

@@ -3,10 +3,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
-import { readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
 import { Callout } from '../src/renderer/components/ui/Callout';
-import { inScopeFiles, stripComments, assertScopeIsPopulated, assertPatternMatches } from './helpers/guard-scope';
+import { inScopeFiles, readSource, stripComments } from './helpers/guard-scope';
 
 // Guard for K4 — the callout.
 //
@@ -110,6 +108,10 @@ const TINT = /bg-(amber-500|amber-700|accent|destructive|red-500|red-400|green-5
  * protect: **a block that states something and offers a button to resolve it is
  * a K5 status strip, not a callout.** Those are deferred to tranche 4 with the
  * rest of K5, not overlooked.
+ *
+ * Adding or removing a file here means editing the ast-grep rule
+ * no-hand-rolled-callout-tint's `ignores:` too — youcoded-dev's check.sh fails if
+ * the two lists differ.
  */
 const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   'StatusStrip.tsx': {
@@ -171,40 +173,25 @@ function tintedBlocks(src: string): number {
 }
 
 describe('callout adoption', () => {
-  it('this guard can see what it claims to cover', () => {
-    // A source-text guard that matches nothing PASSES and reads as clean.
-    // Three of this workstream's worst misses were exactly that.
-    assertScopeIsPopulated(inScopeFiles());
-    assertPatternMatches(TINT, 'border border-destructive/50 text-destructive-fg hover:bg-destructive/10',
-      'a border-FIRST tinted surface — the order that scored Button.tsx at zero');
-  });
-
-  it('no in-scope file grows a new hand-rolled callout', () => {
-    const drift: string[] = [];
-    for (const file of inScopeFiles()) {
-      const name = file.split(/[\\/]/).pop()!;
-      if (name === 'Callout.tsx') continue;  // where the three tones are defined
-      const n = tintedBlocks(readFileSync(file, 'utf8'));
-      const allowed = NOT_CALLOUTS[name]?.count ?? 0;
-      if (n !== allowed) drift.push(`${name}: ${n} tinted blocks, expected ${allowed}`);
-    }
-    expect(
-      drift,
-      'Passive information goes through <Callout>. If the block carries a button it is a K5 '
-        + 'status strip — add it to NOT_CALLOUTS with the reason rather than hand-rolling either one.',
-    ).toEqual([]);
-  });
+  // "this guard can see what it claims to cover" and "no in-scope file grows
+  // a new hand-rolled callout" moved to ast-grep (Plan B, 2026-09-16): rule
+  // no-hand-rolled-callout-tint (a tint and a border in one class string, or
+  // split across one className attribute). The former was a non-vacuity
+  // self-test of TINT/inScopeFiles(); the fixture pass now proves that.
 
   it('every exemption still exists and still applies', () => {
     // An exemption is a liability the moment it stops being true. In the dialog
     // guard, two of four turned out to be simply wrong — written off on a class
     // string without reading the style object underneath.
+    // WHY still a text read: each exempt file must hold EXACTLY `count` tinted
+    // blocks — a per-file total, which an ast-grep rule (it reports shapes, and
+    // exempts whole files) cannot assert.
     const byName = new Map(inScopeFiles().map((p) => [p.split(/[\\/]/).pop()!, p]));
     for (const [file, { count, why }] of Object.entries(NOT_CALLOUTS)) {
       const abs = byName.get(file);
       expect(abs, `${file} is exempted but no longer in scope — drop it`).toBeTruthy();
       expect(
-        tintedBlocks(readFileSync(abs!, 'utf8')),
+        tintedBlocks(readSource(abs!)),
         `${file} (${why}) no longer has ${count} — update or drop the exemption`,
       ).toBe(count);
     }

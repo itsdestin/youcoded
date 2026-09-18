@@ -85,9 +85,7 @@ describe('dev-load-recovery blank-mount probe', () => {
     expect(runProbe()).toBe(true);
   });
 
-  it('main.ts uses the shared probe rather than an inlined copy', () => {
-    const mainTs = fs.readFileSync(path.resolve(__dirname, '../src/main/main.ts'), 'utf8');
-    expect(mainTs).toMatch(/executeJavaScript\(MOUNT_PROBE_JS\)/);
-    expect(mainTs).toMatch(/from '\.\/dev-mount-probe'/);
-  });
+  // WHY no main.ts source read here any more (Plan B, 2026-09-16): "main.ts uses the
+  // shared probe rather than an inlined copy" is the workspace ast-grep rule
+  // main-uses-shared-mount-probe.
 });

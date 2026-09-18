@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { readSource } from './helpers/guard-scope';
 
 /**
  * Structural sync tests — verify that theme-preview.css covers the same
@@ -16,8 +17,8 @@ const GLOBALS_PATH = path.join(ROOT, 'desktop', 'src', 'renderer', 'styles', 'gl
 const PREVIEW_PATH = path.resolve(ROOT, '..', 'wecoded-marketplace', 'wecoded-themes-plugin', 'skills', 'theme-builder', 'theme-preview.css');
 
 const previewExists = fs.existsSync(PREVIEW_PATH);
-const globals = fs.readFileSync(GLOBALS_PATH, 'utf8');
-const preview = previewExists ? fs.readFileSync(PREVIEW_PATH, 'utf8') : '';
+const globals = readSource(GLOBALS_PATH);
+const preview = previewExists ? readSource(PREVIEW_PATH) : '';
 
 /** Extract all selectors from a CSS string (rough but sufficient for sync checking). */
 function extractSelectors(css: string): string[] {

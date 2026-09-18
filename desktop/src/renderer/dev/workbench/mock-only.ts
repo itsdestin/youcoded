@@ -97,6 +97,10 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // YouCoded Pages (2026-09-17): `pages.list/get/setPinned/setData/onChanged` were designed
+  // here ahead of the backend and came off when main/pages/pages-service.ts landed on all
+  // five surfaces. The fake in mock-shim.ts stays so the library, the pinned buttons and the
+  // page view stay reviewable without a Personal space on disk.
   // First-run local models (2026-09-14): `firstRun.localSetup`, `.localDownload`,
   // `.resumeLocalDownload`, `.connectLocalApp` and `claudeCode.install` were designed
   // here ahead of their backend and came off when the real channels landed. The fakes

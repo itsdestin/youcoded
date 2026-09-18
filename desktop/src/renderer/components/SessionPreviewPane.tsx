@@ -93,8 +93,9 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
     // the real reason when chatsearch:read supplied one — surfaced verbatim.
     // When it did not, `new Error(undefined)` has an EMPTY message, which the
     // render reads as "we don't know why" and answers with the general
-    // Report-bug/Diagnose card. tests/status-strip-authority.test.tsx guards
-    // this line; don't put a hardcoded fallback cause back.
+    // Report-bug/Diagnose card. The workspace ast-grep rule
+    // no-hardcoded-error-fallback guards this line; don't put a hardcoded
+    // fallback cause back.
     if (!res?.ok) throw new Error(res?.error);
     // An answer with no event list is not a page. Treat it as an unexplained
     // failure (the general card) rather than letting the reducer throw on it.

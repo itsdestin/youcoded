@@ -19,6 +19,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { ScreenBand } from '../ScreenBand';
+import { workbenchScreenFrame } from '../../workbench-mode';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
 import type { PastSession } from '../../../shared/types';
@@ -80,7 +82,7 @@ function readStoredFileView(): FileViewMode {
     return localStorage.getItem(FILE_VIEW_KEY) === 'list' ? 'list' : 'grid';
   } catch { return 'grid'; } // storage blocked (some Android WebView configs)
 }
-import { Button, Checkbox, CloseButton, SearchFilterPill } from '../ui';
+import { Button, Checkbox, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
 import { isRemoteMode } from '../../platform';
 
@@ -97,6 +99,12 @@ interface ProjectViewProps {
   // The Settings defaults the preview's resume controls start from.
   defaultModel?: string;
   defaultSkipPermissions?: boolean;
+  // The band across the top (ScreenBand, shared with the page view) carries
+  // the app's own Settings gear, so the same props HeaderBar takes.
+  settingsOpen: boolean;
+  onToggleSettings: () => void;
+  settingsBadge?: boolean;
+  settingsDangerBadge?: boolean;
 }
 
 // Basename of a picked path, for naming the file a failure is ABOUT.
@@ -715,31 +723,23 @@ export function ProjectView(props: ProjectViewProps) {
     : null;
 
   return (
-    <div className="fixed inset-0 bg-canvas z-40 flex flex-col">
-      {/* Header: title + global search + the shared screen exit (change 27) */}
-      <header className="flex items-center gap-3 px-4 py-2.5 border-b border-edge shrink-0">
-        <h2 className="text-base font-semibold text-fg shrink-0">Projects</h2>
-        <div className="flex-1" />
-        {/* One exit per surface type (change 27) — identical on all three screens.
-            Wide: ghost Button, so it keeps the hover pill the old "Esc / Close"
-            control had (review feedback 2026-07-23). Narrow: bordered ✕, because
-            touch has no Esc key. */}
-        <Button
-          variant="ghost"
-          onClick={() => dispatch({ type: 'PROJECT_VIEW_CLOSED' })}
-          className="hidden sm:inline-flex shrink-0 text-sm px-2.5 py-1"
-          aria-label="Exit projects"
-        >
-          Esc · Back to chat
-        </Button>
-        <CloseButton
-          onClick={() => dispatch({ type: 'PROJECT_VIEW_CLOSED' })}
-          label="Exit projects"
-          className="sm:hidden shrink-0 panel-glass bg-inset rounded-md border border-edge-dim hover:border-edge"
-        />
-      </header>
+    // bg-panel behind a framed bg-canvas pane, under the same band the page
+    // view has (Destin, 2026-09-17: "add the same styled frame/header in
+    // projects view. we will unify these separate page/menu styles").
+    <div className="screen-view fixed inset-0 bg-panel z-40 flex flex-col" data-screen-frame={workbenchScreenFrame()}>
+      <ScreenBand
+        settingsOpen={props.settingsOpen}
+        onToggleSettings={props.onToggleSettings}
+        settingsBadge={props.settingsBadge}
+        settingsDangerBadge={props.settingsDangerBadge}
+        active="projects"
+        title="Projects"
+        onBack={() => dispatch({ type: 'PROJECT_VIEW_CLOSED' })}
+      />
 
-      <div className="flex-1 flex overflow-hidden">
+      {/* The framed pane: rounded, canvas-coloured, inset by the frame edge
+          like the page view's panel and frame. */}
+      <div className="screen-body flex-1 flex overflow-hidden">
         {/* Main column — hero + segmented control + active tab. There is no
             project rail anymore; switching projects goes through the palette
             (ProjectSwitcher) opened from the hero name, and project removal
@@ -749,7 +749,7 @@ export function ProjectView(props: ProjectViewProps) {
             ~200px slot under a hero that never moves. sm+ keeps the fixed-chrome
             layout (hero pinned, body scrolls independently) — there's vertical
             room for it there, and it's the design the view was built around. */}
-        <main className="flex-1 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden min-w-0">
+        <main className="screen-pane screen-pane--frame flex-1 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden min-w-0 rounded-xl bg-canvas">
           {/* No projects at all (first-run guide, spec §1 item 5): the
               explainer card replaces BOTH the hero and the seg-row + tab body —
               three tabs with "0" badges over nothing is a dashboard for nothing.

@@ -1,6 +1,9 @@
 import { describe, test, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+// WHY: readSourceFile aliases guard-scope's readSource (CRLF-normalising) — the
+// local `readSource` name below is this file's own long-standing wrapper.
+import { readSource as readSourceFile } from './helpers/guard-scope';
 
 // This test verifies that IPC channel constants in preload.ts match shared/types.ts.
 // Preload can't import from shared/types due to Electron sandbox restrictions,
@@ -18,7 +21,7 @@ import path from 'path';
 // drift that already existed on the day the check was tightened. Adding to that
 // baseline is not the way to make a new failure go away: add the constant to the
 // other map.
-const readSource = (...parts: string[]) => fs.readFileSync(path.join(__dirname, '..', ...parts), 'utf8');
+const readSource = (...parts: string[]) => readSourceFile(path.join(__dirname, '..', ...parts));
 
 /**
  * NAME → channel string for one map.
@@ -178,12 +181,12 @@ describe('dev:* channel parity', () => {
   });
 
   it('all dev:* types are declared in preload.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
 
   it('all dev:* types are referenced in remote-shim.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
 
@@ -192,7 +195,7 @@ describe('dev:* channel parity', () => {
       __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
       'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
     );
-    const src = fs.readFileSync(ktPath, 'utf8');
+    const src = readSourceFile(ktPath);
     for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
 });
@@ -208,7 +211,7 @@ describe('dev:* channel parity', () => {
 // React runs under file:// there, so the shim's window.open fallback silently
 // does nothing and the tile would be a dead button.
 describe('shell:open-external channel parity', () => {
-  const readFrom = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const readFrom = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('is declared in preload.ts and invoked by remote-shim.ts', () => {
     expect(readFrom('src', 'main', 'preload.ts')).toContain("'shell:open-external'");
@@ -216,7 +219,7 @@ describe('shell:open-external channel parity', () => {
   });
 
   it('is handled by SessionService.kt (Android)', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     expect(src).toContain('"shell:open-external" ->');
   });
 
@@ -225,7 +228,7 @@ describe('shell:open-external channel parity', () => {
     // chose — the tile is only ever opened by a user click, but file:,
     // intent: and javascript: must never reach an opener on any platform.
     expect(readFrom('src', 'main', 'ipc-handlers.ts')).toMatch(/\^https\?:\\\/\\\//);
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     expect(kt).toContain('url.startsWith("http://") || url.startsWith("https://")');
   });
 });
@@ -237,7 +240,7 @@ describe('account:* channel parity', () => {
     // Accounts Phase 2 — data export lives in the account group across all four surfaces.
     'account:export',
   ];
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('all account:* types are declared in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
@@ -252,7 +255,7 @@ describe('account:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
   it('all account:* types are handled by SessionService.kt (Android)', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
   it('no marketplace:auth:* strings remain anywhere', () => {
@@ -280,7 +283,7 @@ describe('social:* channel parity', () => {
     'social:presence-connect', 'social:presence-disconnect', 'social:presence-send',
     'social:presence-event',
   ];
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('all social:* types are declared in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
@@ -295,7 +298,7 @@ describe('social:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
   it('all social:* types are handled by SessionService.kt (Android)', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
 });
@@ -309,17 +312,33 @@ describe('terminal:get-screen-text channel parity', () => {
   const CHANNEL = 'terminal:get-screen-text';
 
   it('terminal:get-screen-text is declared in preload.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
     expect(src).toContain(`'${CHANNEL}'`);
   });
 
   it('terminal:get-screen-text is referenced in remote-shim.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     expect(src).toContain(`'${CHANNEL}'`);
   });
 
+  // Audit W24: the classifier asks for a 40-row tail through the second
+  // argument. A bridge that drops it silently reverts to the handler's default
+  // tail (desktop) or the whole screen (Android) with nothing failing.
+  // WHY readSourceFile (Plan B merge, 2026-09-17): master added these two parity
+  // cases with a raw readFileSync; this file routes every read through the
+  // CRLF-normalising reader so a Windows checkout matches the same regex.
+  it('preload.ts forwards the tailRows argument', () => {
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
+    expect(src).toMatch(/ipcRenderer\.invoke\('terminal:get-screen-text',\s*sessionId,\s*tailRows\)/);
+  });
+
+  it('remote-shim.ts forwards the tailRows argument', () => {
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
+    expect(src).toMatch(/invoke\('terminal:get-screen-text',\s*\{\s*sessionId,\s*tailRows\s*\}\)/);
+  });
+
   it('terminal:get-screen-text is referenced in ipc-handlers.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'));
     expect(src).toContain(`'${CHANNEL}'`);
   });
 
@@ -328,7 +347,7 @@ describe('terminal:get-screen-text channel parity', () => {
       __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
       'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
     );
-    const src = fs.readFileSync(ktPath, 'utf8');
+    const src = readSourceFile(ktPath);
     expect(src).toContain(`"${CHANNEL}"`);
   });
 });
@@ -339,7 +358,7 @@ describe('terminal:get-screen-text channel parity', () => {
 // worse than no card at all.
 describe('native:retry channel parity', () => {
   const CHANNEL = 'native:retry';
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('is declared in shared/types.ts', () => {
     expect(read('src', 'shared', 'types.ts')).toContain(`'${CHANNEL}'`);
@@ -357,10 +376,10 @@ describe('native:retry channel parity', () => {
     expect(read('src', 'main', 'remote-server.ts')).toContain(`'${CHANNEL}'`);
   });
   it('is answered not-implemented by SessionService.kt (Android)', () => {
-    const src = fs.readFileSync(path.join(
+    const src = readSourceFile(path.join(
       __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
       'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    ), 'utf8');
+    ));
     expect(src).toContain(`"${CHANNEL}"`);
   });
 });
@@ -376,12 +395,12 @@ describe('pty:raw-bytes channel parity', () => {
   const CHANNEL = 'pty:raw-bytes';
 
   it('pty:raw-bytes is declared in preload.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
     expect(src).toContain(`'${CHANNEL}'`);
   });
 
   it('pty:raw-bytes is referenced in remote-shim.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     expect(src).toContain(`'${CHANNEL}'`);
   });
 
@@ -390,7 +409,7 @@ describe('pty:raw-bytes channel parity', () => {
       __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
       'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
     );
-    const src = fs.readFileSync(ktPath, 'utf8');
+    const src = readSourceFile(ktPath);
     expect(src).toContain(`"${CHANNEL}"`);
   });
 });
@@ -404,12 +423,12 @@ describe('update:changelog channel parity', () => {
   ];
 
   it('update:changelog type is declared in preload.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
 
   it('update:changelog type is referenced in remote-shim.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
 
@@ -418,7 +437,7 @@ describe('update:changelog channel parity', () => {
       __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
       'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
     );
-    const src = fs.readFileSync(ktPath, 'utf8');
+    const src = readSourceFile(ktPath);
     for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
 });
@@ -436,12 +455,12 @@ describe('analytics:* channel parity', () => {
   ];
 
   it('both analytics:* types are declared in preload.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
 
   it('both analytics:* types are referenced in remote-shim.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
 
@@ -454,7 +473,7 @@ describe('analytics:* channel parity', () => {
       __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
       'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
     );
-    const src = fs.readFileSync(ktPath, 'utf8');
+    const src = readSourceFile(ktPath);
     for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
 });
@@ -468,13 +487,11 @@ describe('analytics:* channel parity', () => {
 describe('system:back and system:notify-stack-state parity', () => {
   test('system:notify-stack-state appears in preload.ts, types.ts, remote-shim.ts, SessionService.kt', () => {
     const stackStateSites = {
-      'preload.ts': fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8'),
-      'types.ts': fs.readFileSync(path.join(__dirname, '../src/shared/types.ts'), 'utf8'),
-      'remote-shim.ts': fs.readFileSync(path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8'),
-      'SessionService.kt': fs.readFileSync(
-        path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt'),
-        'utf8',
-      ),
+      'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
+      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/types.ts')),
+      'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
+      'SessionService.kt': readSourceFile(
+        path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt')),
     };
 
     const channel = 'system:notify-stack-state';
@@ -485,13 +502,11 @@ describe('system:back and system:notify-stack-state parity', () => {
 
   test('system:back appears in preload.ts, types.ts, remote-shim.ts, MainActivity.kt', () => {
     const backSites = {
-      'preload.ts': fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8'),
-      'types.ts': fs.readFileSync(path.join(__dirname, '../src/shared/types.ts'), 'utf8'),
-      'remote-shim.ts': fs.readFileSync(path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8'),
-      'MainActivity.kt': fs.readFileSync(
-        path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/MainActivity.kt'),
-        'utf8',
-      ),
+      'preload.ts': readSourceFile(path.join(__dirname, '../src/main/preload.ts')),
+      'types.ts': readSourceFile(path.join(__dirname, '../src/shared/types.ts')),
+      'remote-shim.ts': readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts')),
+      'MainActivity.kt': readSourceFile(
+        path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/MainActivity.kt')),
     };
 
     const channel = 'system:back';
@@ -505,28 +520,24 @@ describe('performance:* and app:restart parity', () => {
   const channels = ['performance:get-config', 'performance:set-config', 'app:restart'];
 
   it('all three types are declared in preload.ts', () => {
-    const preload = fs.readFileSync(
-      path.join(__dirname, '../src/main/preload.ts'), 'utf8'
-    );
+    const preload = readSourceFile(
+      path.join(__dirname, '../src/main/preload.ts'));
     for (const ch of channels) {
       expect(preload, `${ch} missing from preload.ts`).toContain(`'${ch}'`);
     }
   });
 
   it('all three types are referenced in remote-shim.ts', () => {
-    const shim = fs.readFileSync(
-      path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8'
-    );
+    const shim = readSourceFile(
+      path.join(__dirname, '../src/renderer/remote-shim.ts'));
     for (const ch of channels) {
       expect(shim, `${ch} missing from remote-shim.ts`).toContain(`'${ch}'`);
     }
   });
 
   it('all three types are handled by SessionService.kt (Android)', () => {
-    const kt = fs.readFileSync(
-      path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt'),
-      'utf8'
-    );
+    const kt = readSourceFile(
+      path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt'));
     for (const ch of channels) {
       expect(kt, `${ch} missing from SessionService.kt`).toContain(`"${ch}"`);
     }
@@ -542,9 +553,8 @@ describe('performance:* and app:restart parity', () => {
 // fail as a tracker for when Android parity lands.
 describe('artifact IPC parity', () => {
   // Dynamically read the ipc-channels.ts file and extract the channel values
-  const ipcChannelsSource = fs.readFileSync(
-    path.join(__dirname, '../src/main/artifacts/ipc-channels.ts'), 'utf8'
-  );
+  const ipcChannelsSource = readSourceFile(
+    path.join(__dirname, '../src/main/artifacts/ipc-channels.ts'));
   // Extract all string values from ARTIFACT_IPC object (pattern: : 'channel-name')
   const channelMatches = [...ipcChannelsSource.matchAll(/'([^']+)'/g)];
   const channels = channelMatches
@@ -591,14 +601,14 @@ describe('artifact IPC parity', () => {
   }, {});
 
   // Resolve paths relative to the desktop directory (where vitest is invoked from)
-  const preload = fs.readFileSync('src/main/preload.ts', 'utf8');
-  const shim = fs.readFileSync('src/renderer/remote-shim.ts', 'utf8');
-  const handlers = fs.readFileSync('src/main/ipc-handlers.ts', 'utf8');
+  const preload = readSourceFile('src/main/preload.ts');
+  const shim = readSourceFile('src/renderer/remote-shim.ts');
+  const handlers = readSourceFile('src/main/ipc-handlers.ts');
 
   // Kotlin file lives in the sibling app/ directory of the youcoded sub-repo
   const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
   const kotlinExists = fs.existsSync(kotlinPath);
-  const kotlin = kotlinExists ? fs.readFileSync(kotlinPath, 'utf8') : '';
+  const kotlin = kotlinExists ? readSourceFile(kotlinPath) : '';
 
   for (const channel of channels) {
     it(`channel ${channel} is referenced in preload.ts`, () => {
@@ -656,15 +666,15 @@ describe('project:* channel parity', () => {
   const NEW_TYPES = Object.keys(CHANNEL_TO_CONST);
 
   it('declared in preload.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
   it('referenced in remote-shim.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
   it('registered in ipc-handlers.ts (literal or PROJECT_IPC constant)', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'));
     for (const t of NEW_TYPES) {
       const literal = src.includes(`'${t}'`);
       const constRef = src.includes(CHANNEL_TO_CONST[t]);
@@ -672,7 +682,7 @@ describe('project:* channel parity', () => {
     }
   });
   it('stubbed in SessionService.kt (Android)', () => {
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt).toContain(`"${t}"`);
   });
 });
@@ -689,15 +699,15 @@ describe('chatsearch:* channel parity', () => {
   const NEW_TYPES = Object.keys(CHANNEL_TO_CONST);
 
   it('declared in preload.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
   it('referenced in remote-shim.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
   });
   it('registered in ipc-handlers.ts (literal or CHATSEARCH_IPC constant)', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'));
     for (const t of NEW_TYPES) {
       const literal = src.includes(`'${t}'`);
       const constRef = src.includes(CHANNEL_TO_CONST[t]);
@@ -705,11 +715,11 @@ describe('chatsearch:* channel parity', () => {
     }
   });
   it('handled in remote-server.ts (the remote browser and the phone both ride this)', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'remote-server.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'remote-server.ts'));
     for (const t of NEW_TYPES) expect(src).toContain(`case '${t}'`);
   });
   it('stubbed in SessionService.kt (Android)', () => {
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt).toContain(`"${t}"`);
   });
 });
@@ -740,10 +750,10 @@ describe('syncspaces:* channel parity (desktop surfaces)', () => {
     ['syncspaces:rename-device', 'IPC.SYNC_SPACES_RENAME_DEVICE'],
     ['syncspaces:remove-device', 'IPC.SYNC_SPACES_REMOVE_DEVICE'],
   ];
-  const preload = fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8');
-  const shim = fs.readFileSync(path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8');
-  const handlers = fs.readFileSync(path.join(__dirname, '../src/main/ipc-handlers.ts'), 'utf8');
-  const remoteServer = fs.readFileSync(path.join(__dirname, '../src/main/remote-server.ts'), 'utf8');
+  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
+  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
+  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
+  const remoteServer = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
   for (const [ch, constant] of channels) {
     it(`${ch} present in preload, remote-shim, ipc-handlers, remote-server`, () => {
       expect(preload).toContain(ch);
@@ -776,7 +786,7 @@ describe('syncspaces:* channel parity (desktop surfaces)', () => {
     'syncspaces:set-project-description',
   ];
   if (fs.existsSync(kotlinPath)) {
-    const kotlin = fs.readFileSync(kotlinPath, 'utf8');
+    const kotlin = readSourceFile(kotlinPath);
     for (const ch of leaseDeviceRequestChannels) {
       it(`${ch} has an Android not-implemented-on-mobile stub in SessionService.kt`, () => {
         expect(kotlin).toContain(`"${ch}"`);
@@ -806,10 +816,10 @@ describe('folders:set-description channel parity (desktop surfaces)', () => {
   const channels: Array<[string, string]> = [
     ['folders:set-description', 'IPC.FOLDERS_SET_DESCRIPTION'],
   ];
-  const preload = fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8');
-  const shim = fs.readFileSync(path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8');
-  const handlers = fs.readFileSync(path.join(__dirname, '../src/main/ipc-handlers.ts'), 'utf8');
-  const remoteServer = fs.readFileSync(path.join(__dirname, '../src/main/remote-server.ts'), 'utf8');
+  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
+  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
+  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
+  const remoteServer = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
   for (const [ch, constant] of channels) {
     it(`${ch} present in preload, remote-shim, ipc-handlers, remote-server`, () => {
       expect(preload).toContain(ch);
@@ -827,7 +837,7 @@ describe('folders:set-description channel parity (desktop surfaces)', () => {
   // than exploding, same as the syncspaces stub block above.
   const kotlinFolderPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
   if (fs.existsSync(kotlinFolderPath)) {
-    const kotlin = fs.readFileSync(kotlinFolderPath, 'utf8');
+    const kotlin = readSourceFile(kotlinFolderPath);
     it('folders:set-description has a real Android handler arm in SessionService.kt', () => {
       expect(kotlin).toContain('"folders:set-description" ->');
     });
@@ -851,10 +861,10 @@ describe('github:* channel parity (desktop surfaces)', () => {
     // Connected accounts (Phase 3, 2026-07-22): deletes the app's stored token.
     ['github:disconnect', 'IPC.GITHUB_DISCONNECT'],
   ];
-  const preload = fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8');
-  const shim = fs.readFileSync(path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8');
-  const handlers = fs.readFileSync(path.join(__dirname, '../src/main/ipc-handlers.ts'), 'utf8');
-  const remoteServer = fs.readFileSync(path.join(__dirname, '../src/main/remote-server.ts'), 'utf8');
+  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
+  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
+  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
+  const remoteServer = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
   for (const [ch, constant] of channels) {
     it(`${ch} present in preload, remote-shim, ipc-handlers, remote-server`, () => {
       expect(preload).toContain(ch);
@@ -868,7 +878,7 @@ describe('github:* channel parity (desktop surfaces)', () => {
   // returns not-implemented-on-mobile) so a mobile invoke rejects fast.
   const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
   if (fs.existsSync(kotlinPath)) {
-    const kotlin = fs.readFileSync(kotlinPath, 'utf8');
+    const kotlin = readSourceFile(kotlinPath);
     for (const [ch] of channels) {
       it(`${ch} has an Android not-implemented-on-mobile stub in SessionService.kt`, () => {
         expect(kotlin).toContain(`"${ch}"`);
@@ -894,12 +904,12 @@ describe('github:* channel parity (desktop surfaces)', () => {
 // SessionService.kt row — this describe pins shape parity only.
 describe('native runtime capability parity', () => {
   it('preload.ts exposes native.supported', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
     expect(src).toMatch(/native:\s*\{/);
     expect(src).toMatch(/supported:/);
   });
   it('remote-shim.ts exposes native.supported: false', () => {
-    const src = fs.readFileSync(path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
     expect(src).toMatch(/native:\s*\{/);
     expect(src).toMatch(/supported:\s*false/);
   });
@@ -933,7 +943,7 @@ describe('native:*/provider:* channel parity', () => {
     'provider:remove': 'IPC.PROVIDER_REMOVE', 'provider:test': 'IPC.PROVIDER_TEST',
     'provider:set-key': 'IPC.PROVIDER_SET_KEY', 'provider:catalog': 'IPC.PROVIDER_CATALOG',
   };
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   it('exposed in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
     for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from preload.ts`).toBe(true);
@@ -947,7 +957,7 @@ describe('native:*/provider:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src.includes(`'${t}'`) || src.includes(CHANNEL_TO_CONST[t]), `${t} missing from ipc-handlers.ts`).toBe(true);
   });
   it('stubbed in SessionService.kt (Android)', () => {
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
   // native:get-permission-mode is the one native channel with a remote-server WS
@@ -1003,7 +1013,7 @@ describe('search:* channel parity', () => {
     'search:remove-key': 'IPC.SEARCH_REMOVE_KEY',
     'search:test': 'IPC.SEARCH_TEST',
   };
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   it('exposed in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
@@ -1021,7 +1031,7 @@ describe('search:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
   });
   it('stubbed in SessionService.kt (Android)', () => {
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
 });
@@ -1031,7 +1041,7 @@ describe('search:* channel parity', () => {
 // React UI works identically on desktop (preload/Electron IPC), remote
 // browsers (remote-shim/WebSocket), and Android (SessionService.kt).
 describe('custom tags + notes channel parity', () => {
-  const read = (rel: string) => fs.readFileSync(path.join(__dirname, rel), 'utf8');
+  const read = (rel: string) => readSourceFile(path.join(__dirname, rel));
   const preload = read('../src/main/preload.ts');
   const remoteShim = read('../src/renderer/remote-shim.ts');
   const sessionService = read('../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
@@ -1056,7 +1066,7 @@ describe('custom tags + notes channel parity', () => {
 describe('engine:* channel parity (Plan B)', () => {
   const channels = ['engine:status', 'engine:install', 'engine:restart'];
   const pushChannels = ['engine:install-progress', 'engine:status-changed'];
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('preload exposes every engine channel (request + push)', () => {
     const src = read('src', 'main', 'preload.ts');
@@ -1071,7 +1081,7 @@ describe('engine:* channel parity (Plan B)', () => {
     for (const c of ['ENGINE_STATUS', 'ENGINE_INSTALL', 'ENGINE_RESTART']) expect(src).toContain(`IPC.${c}`);
   });
   it('SessionService.kt stubs every request-response engine channel', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const ch of channels) expect(src).toContain(`"${ch}"`);
   });
 });
@@ -1082,7 +1092,7 @@ describe('engine:* channel parity (Plan B)', () => {
 // never appears there and would always fail. Task 9 EXTENDS this `channels`
 // array with ['engine:set-context','ENGINE_SET_CONTEXT'] when it wires the knob.
 describe('models:* + engine:set-* channel parity (Plan C)', () => {
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   const channels: Array<[string, string]> = [
     ['engine:set-backend', 'ENGINE_SET_BACKEND'],
     ['engine:set-context', 'ENGINE_SET_CONTEXT'],
@@ -1153,7 +1163,7 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
   // Kotlin string leaves it in the file, so a bare text scan stays green while
   // the phone falls through to "Unknown message" and the shared UI waits.
   it('SessionService.kt stubs every request-response channel', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     const live = src.split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
     for (const [ch] of channels) expect(live).toContain(`"${ch}"`);
   });
@@ -1183,7 +1193,7 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
   // "provider:list isn't available via remote access yet." A presence-only
   // check called that green, because the six were all still present.
   it('SessionService.kt marks exactly the six local-engine channels unsupported', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
 
     // Walk the `when` the way Kotlin does: labels accumulate until a line
     // carries `->`, and everything accumulated belongs to THAT branch.
@@ -1240,7 +1250,7 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
 // Model memory lifecycle (2026-07-14): per-model residency push + memory guard
 // + [Reload Model]. Same self-contained parity shape as the Plan B/C describes.
 describe('model memory lifecycle channel parity (2026-07-14)', () => {
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   const invokeChannels: Array<[string, string]> = [
     ['engine:models', 'ENGINE_MODELS'],
     ['models:memory-check', 'MODELS_MEMORY_CHECK'],
@@ -1263,17 +1273,17 @@ describe('model memory lifecycle channel parity (2026-07-14)', () => {
     for (const [, konst] of invokeChannels) expect(src).toContain(`IPC.${konst}`);
   });
   it('SessionService.kt stubs every request-response channel', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const [ch] of invokeChannels) expect(src).toContain(`"${ch}"`);
   });
 });
 
 describe('git:* IPC parity (git surface, spec 2026-07-22)', () => {
-  const preload = fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8');
-  const shim = fs.readFileSync(path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8');
-  const handlers = fs.readFileSync(path.join(__dirname, '../src/main/ipc-handlers.ts'), 'utf8');
+  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
+  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
+  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
   const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
-  const kotlin = fs.existsSync(kotlinPath) ? fs.readFileSync(kotlinPath, 'utf8') : null;
+  const kotlin = fs.existsSync(kotlinPath) ? readSourceFile(kotlinPath) : null;
 
   const channels: Array<[string, string]> = [
     ['git:file-status', 'GIT_IPC.FILE_STATUS'],
@@ -1338,13 +1348,13 @@ describe('native:* channel parity', () => {
   ];
 
   it('every native:* channel is declared in preload.ts', () => {
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'main', 'preload.ts'));
     for (const t of NATIVE_CHANNELS) expect(src, t).toContain(`'${t}'`);
   });
 
   it('every native:* channel is referenced in remote-shim.ts', () => {
     // The remote web client is in scope for every milestone (program §9 (c)).
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    const src = readSourceFile(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'));
     for (const t of NATIVE_CHANNELS) expect(src, t).toContain(`'${t}'`);
   });
 
@@ -1352,10 +1362,10 @@ describe('native:* channel parity', () => {
     // Android's native runtime is M8, so these are honest not-implemented
     // replies rather than implementations — but a channel absent from the list
     // gets NO reply at all, which hangs the shared React UI instead of degrading it.
-    const src = fs.readFileSync(path.join(
+    const src = readSourceFile(path.join(
       __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
       'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
-    ), 'utf8');
+    ));
     for (const t of NATIVE_CHANNELS) expect(src, t).toContain(`"${t}"`);
   });
 });
@@ -1370,7 +1380,7 @@ describe('permissions:* channel parity', () => {
     'permissions:remove': 'IPC.PERMISSIONS_REMOVE',
     'permissions:remove-project': 'IPC.PERMISSIONS_REMOVE_PROJECT',
   };
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   it('exposed in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
@@ -1388,7 +1398,7 @@ describe('permissions:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
   });
   it('stubbed in SessionService.kt (Android)', () => {
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
 });
@@ -1413,7 +1423,7 @@ describe('specialists:* channel parity', () => {
     'specialists:steer': 'IPC.SPECIALISTS_STEER',
     'specialists:interrupt': 'IPC.SPECIALISTS_INTERRUPT',
   };
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   it('exposed in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
@@ -1431,7 +1441,7 @@ describe('specialists:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
   });
   it('stubbed in SessionService.kt (Android)', () => {
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
   // specialists:event is a PUSH, not a request — it is exempt from the
@@ -1443,7 +1453,7 @@ describe('specialists:* channel parity', () => {
   it('specialists:event push channel present in preload + remote-shim only', () => {
     const preload = read('src', 'main', 'preload.ts');
     const shim = read('src', 'renderer', 'remote-shim.ts');
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     expect(preload).toContain(`'specialists:event'`);
     expect(shim).toContain(`'specialists:event'`);
     // Never a request stub: unlike the five channels above, this is push-only
@@ -1532,7 +1542,7 @@ describe('plans:* channel parity (eight requests + plans:event)', () => {
 describe('fs:* channel parity', () => {
   const NEW_TYPES = ['fs:read-head'];
   const CHANNEL_TO_CONST: Record<string, string> = { 'fs:read-head': 'IPC.FS_READ_HEAD' };
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   it('exposed in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
     for (const t of NEW_TYPES) expect(src, `${t} missing from preload.ts`).toContain(`'${t}'`);
@@ -1550,12 +1560,12 @@ describe('fs:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src, `${t} missing from remote-server.ts`).toContain(`'${t}'`);
   });
   it('handled by SessionService.kt (Android)', () => {
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
   it('the Android cap mirrors READ_HEAD_MAX_BYTES', async () => {
     const { READ_HEAD_MAX_BYTES } = await import('../src/shared/read-head');
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     expect(kt).toContain(`coerceIn(1, ${READ_HEAD_MAX_BYTES})`);
   });
 });
@@ -1570,7 +1580,7 @@ describe('marketplace feedback channel parity', () => {
   // cannot be a direct renderer fetch the way the public comment list is —
   // the sign-in token lives in the main process.
   const NEW_TYPES = ['marketplace:thumb', 'marketplace:thumb:get', 'marketplace:comment'];
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('exposed in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
@@ -1585,7 +1595,7 @@ describe('marketplace feedback channel parity', () => {
     for (const t of NEW_TYPES) expect(src, `${t} missing from marketplace-api-handlers.ts`).toContain(`"${t}"`);
   });
   it('handled by SessionService.kt (Android)', () => {
-    const kt = fs.readFileSync(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'), 'utf8');
+    const kt = readSourceFile(path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of NEW_TYPES) expect(kt, `${t} missing from SessionService.kt`).toContain(`"${t}"`);
   });
   it('the thumb handlers forward the TOTALS, not just the vote', () => {
@@ -1634,17 +1644,13 @@ describe('marketplace feedback channel parity', () => {
 // forever, with no error anywhere.
 describe('marketplace Worker host parity (desktop ↔ Android)', () => {
   it('MarketplaceFetcher.kt names the same host as MARKETPLACE_API_HOST', () => {
-    const tsSrc = fs.readFileSync(
-      path.join(__dirname, '..', 'src', 'renderer', 'state', 'marketplace-api-client.ts'),
-      'utf8',
-    );
-    const ktSrc = fs.readFileSync(
+    const tsSrc = readSourceFile(
+      path.join(__dirname, '..', 'src', 'renderer', 'state', 'marketplace-api-client.ts'));
+    const ktSrc = readSourceFile(
       path.join(
         __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
         'com', 'youcoded', 'app', 'skills', 'MarketplaceFetcher.kt',
-      ),
-      'utf8',
-    );
+      ));
 
     const ts = tsSrc.match(/export const MARKETPLACE_API_HOST = "([^"]+)"/);
     expect(ts, 'MARKETPLACE_API_HOST not found in marketplace-api-client.ts').toBeTruthy();
@@ -1666,7 +1672,7 @@ describe('marketplace Worker host parity (desktop ↔ Android)', () => {
 // account bearer token, so it sits beside the other token-bound namespaces.
 describe('arcade:* channel parity', () => {
   const TYPES = ['arcade:status', 'arcade:leaderboard', 'arcade:submit-score', 'arcade:records'];
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('exposed in preload.ts', () => {
     const src = read('src', 'main', 'preload.ts');
@@ -1689,11 +1695,9 @@ describe('arcade:* channel parity', () => {
   });
 
   it('has a REAL Android handler arm, not a not-implemented stub', () => {
-    const kt = fs.readFileSync(
+    const kt = readSourceFile(
       path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'),
-      'utf8',
-    );
+        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     // `"channel" ->` is the arm marker. A channel listed in the shared
     // not-implemented fall-through would appear WITHOUT the arrow, which is
     // what this distinguishes — Android has a real HTTP client for this API,
@@ -1728,7 +1732,7 @@ describe('arcade:* channel parity', () => {
 // a decision rather than an oversight.
 describe('buddy:* helper channel parity', () => {
   const TYPES = ['buddy:helper-status', 'buddy:install-helper', 'buddy:remove-helper'];
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('declared in the shared/types.ts channel map', () => {
     const src = read('src', 'shared', 'types.ts');
@@ -1800,7 +1804,7 @@ describe('buddy:* helper channel parity', () => {
 // namespace is deleted at install time) and is pinned by
 // remote-shim-voice-gate.test.ts, not by a string search.
 describe('voice:* channel parity', () => {
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   const preload = read('src', 'main', 'preload.ts');
   const shim = read('src', 'renderer', 'remote-shim.ts');
   const handlers = read('src', 'main', 'voice', 'voice-handlers.ts');
@@ -1853,7 +1857,7 @@ describe('voice:* channel parity', () => {
   });
 
   if (fs.existsSync(kotlinPath)) {
-    const kotlin = fs.readFileSync(kotlinPath, 'utf8');
+    const kotlin = readSourceFile(kotlinPath);
     it('SessionService.kt has a real arm for the four calls the phone answers', () => {
       // voice:download is NOT here — a phone downloads no speech model — so it
       // rides the not-implemented stub asserted below.
@@ -1925,7 +1929,7 @@ describe('voice:* channel parity', () => {
 // ~30 s instead of rejecting fast.
 describe('chatgpt:* channel parity', () => {
   const TYPES = ['chatgpt:status', 'chatgpt:sign-in', 'chatgpt:cancel-sign-in', 'chatgpt:sign-out'];
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   // Review T4 F2: a bare `toContain("'chatgpt:status'")` was satisfied by the
   // IPC constants table alone, because this namespace invokes through IPC.*
@@ -1976,11 +1980,9 @@ describe('chatgpt:* channel parity', () => {
   });
 
   it('is listed in the Android not-implemented fall-through, NOT a real arm', () => {
-    const kt = fs.readFileSync(
+    const kt = readSourceFile(
       path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'),
-      'utf8',
-    );
+        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     for (const t of TYPES) {
       expect(kt, `${t} not listed in SessionService.kt`).toContain(`"${t}"`);
       // `"channel" ->` is the real-arm marker (see the arcade block). Android
@@ -2018,7 +2020,7 @@ describe('chatgpt:* channel parity', () => {
 // channel was added to remove.
 describe('claude-code:status channel parity', () => {
   const T = 'claude-code:status';
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('exposed in preload.ts, through the constant (not just the constants table)', () => {
     const src = read('src', 'main', 'preload.ts');
@@ -2041,11 +2043,9 @@ describe('claude-code:status channel parity', () => {
   });
 
   it('has a REAL Android arm — the phone runs Claude Code too', () => {
-    const kt = fs.readFileSync(
+    const kt = readSourceFile(
       path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
-        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'),
-      'utf8',
-    );
+        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     expect(kt, `${T} has no arm in SessionService.kt`).toContain(`"${T}" ->`);
   });
 
@@ -2092,7 +2092,7 @@ describe('claude-code:status channel parity', () => {
 // action a phone must REFUSE (not resolve), and a remote desktop must run.
 describe('claude-code:install channel parity', () => {
   const T = 'claude-code:install';
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('exposed in preload.ts through the constant, and in remote-shim.ts', () => {
     expect(read('src', 'main', 'preload.ts')).toContain('ipcRenderer.invoke(IPC.CLAUDE_CODE_INSTALL');
@@ -2106,17 +2106,15 @@ describe('claude-code:install channel parity', () => {
   });
 
   it('refused on Android, and the refusal reaches the caller as an error', () => {
-    const kt = fs.readFileSync(
-      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'),
-      'utf8',
-    );
+    const kt = readSourceFile(
+      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'));
     expect(kt).toContain(`"${T}",`);
     expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/REJECT_ON_NOT_OK[\s\S]*'claude-code:install'/);
   });
 });
 
 describe('first-run local channels', () => {
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('every one is invoked by preload and answered by the remote shim', () => {
     const preload = read('src', 'main', 'preload.ts');
@@ -2151,7 +2149,7 @@ describe('first-run local channels', () => {
 // Reviews T4 F1/F3 and T5 F1/F2 measured that each could be dropped with the
 // whole suite still green.
 describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
-  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
 
   it('the kill switch reaches the handlers, the background poll and the first-run arm', () => {
     const handlers = read('src', 'main', 'ipc-handlers.ts');

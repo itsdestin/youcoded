@@ -4,7 +4,7 @@
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
-import TerminalView from './components/TerminalView';
+import { SessionTerminal } from './components/SessionTerminal';
 import ChatView from './components/ChatView';
 import HeaderBar, { BareHeaderBar } from './components/HeaderBar';
 import InputBar, { type InputBarHandle } from './components/InputBar';
@@ -25,7 +25,7 @@ import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
-import { ChatProvider, useChatDispatch, useChatStore, useChatState } from './state/chat-context';
+import { ChatProvider, useChatDispatch, useChatStore, useSessionIsThinking } from './state/chat-context';
 import type { ChatAction } from './state/chat-types';
 import { installTranscriptBatcher, applyChatHydrate } from './state/transcript-batch';
 import {
@@ -41,7 +41,8 @@ import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
 import { showFirstRunWelcome } from './first-run-screen';
 // Central slash-command router — also used by the drawer so drawer-initiated
 // slash commands behave the same as typed ones (otherwise drawer bypasses InputBar's intercept).
-import { dispatchSlashCommand, type DispatcherResult } from './state/slash-command-dispatcher';
+import { dispatchSlashCommand, type DispatcherCallbacks, type DispatcherResult } from './state/slash-command-dispatcher';
+import { useStatusBarData, useStatusBarDispatch } from './hooks/useStatusBarProps';
 import { runNativeSlashAction, routeSlashResult } from './state/native-slash-actions';
 import { GameProvider, useGameState, useGameDispatch } from './state/game-context';
 import { hookEventToAction } from './state/hook-dispatcher';
@@ -89,6 +90,10 @@ import ThemeShareSheet from './components/ThemeShareSheet';
 import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
 import { ProjectView } from './components/project-view/ProjectView';
+import { PagesView } from './components/pages/PagesView';
+import { PageHost } from './components/pages/PageHost';
+import { PageCreateDialog, type PageCreateRequest } from './components/pages/PageCreateDialog';
+import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
@@ -119,7 +124,6 @@ import { ContextMenuHost } from './components/context-menu/ContextMenuHost';
 import { BuddyMascotApp } from './components/buddy/BuddyMascotApp';
 import { BuddyChatApp } from './components/buddy/BuddyChatApp';
 import { BuddyBarApp } from './components/buddy/BuddyBarApp';
-import { BuddyOverlayApp } from './components/buddy/BuddyOverlayApp';
 
 // ESC-passthrough: provider owns capture-phase ESC routing for overlays.
 // Mounted at app root so every overlay component is a descendant.
@@ -673,6 +677,9 @@ function AppInner() {
   const chatStore = useChatStore();
   // Artifact tracker — global reducer for session/project artifact state.
   const [artifactState, dispatchArtifact] = useReducer(artifactReducer, initialArtifactState);
+  // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
+  // and model (Destin, 2026-09-17). Null while closed.
+  const [pageCreate, setPageCreate] = useState<PageCreateRequest | null>(null);
   // Ref mirror of artifact state so the (once-registered) tool-use handler can
   // dedup Read-tracking against the session's already-known artifacts without
   // re-subscribing on every reducer tick.
@@ -1358,7 +1365,8 @@ function AppInner() {
     // The batcher lives in state/transcript-batch.ts (with its hidden-window
     // timer fallback) so the remote snapshot exporter and the chat:hydrate
     // handler can flush it on demand — see that module's WHY.
-    const transcriptBatcher = installTranscriptBatcher(dispatch);
+    // dispatchMany, not dispatch: the frame's actions notify subscribers once (A4).
+    const transcriptBatcher = installTranscriptBatcher(chatStore.dispatchMany);
     const batchTranscriptDispatch = (action: ChatAction) => transcriptBatcher.push(action);
 
     // Specialists plans (Task 5a): a plan card's record changed (plans:event —
@@ -2418,17 +2426,17 @@ function AppInner() {
   // Check if remote setup banner is active (show badge on gear icon)
   // Badge shows whenever the blue "Set Up Remote Access" banner would be visible
   // in the settings panel — i.e., no remote clients are connected
+  // WHY no poll (audit W18): the count rides the remote status push now — one read seeds the badge, onStatus keeps it current; a remote browser or phone gets a no-op onStatus and keeps the seed, being a client itself.
   useEffect(() => {
     const claude = (window as any).claude;
     if (!claude?.remote) return;
-    const check = () => {
-      claude.remote.getClientCount().then((count: number) => {
-        setSettingsBadge(count === 0);
-      }).catch(() => {});
-    };
-    check();
-    const interval = setInterval(check, 10000);
-    return () => clearInterval(interval);
+    claude.remote.getClientCount().then((count: number) => {
+      setSettingsBadge(count === 0);
+    }).catch(() => {});
+    const off = claude.remote.onStatus?.((status: { clientCount?: number } | null) => {
+      if (typeof status?.clientCount === 'number') setSettingsBadge(status.clientCount === 0);
+    });
+    return () => { off?.(); };
   }, []);
 
   // Seed syncWarnings once at mount so a danger badge shows instantly at
@@ -2845,7 +2853,15 @@ function AppInner() {
     setSessionId(info.id);
   }, [dispatch]);
 
-  const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string) => {
+  // The page view blocks the chat's global shortcuts (Destin, 2026-09-17) —
+  // except while Settings, the library or the create dialog is over it, when
+  // those own the keyboard as they would over the chat. utils/shortcut-gate.ts.
+  useEffect(() => {
+    setGlobalShortcutsBlocked(artifactState.pageViewOpen && !settingsOpen && !artifactState.pagesViewOpen && pageCreate === null);
+    return () => setGlobalShortcutsBlocked(false);
+  }, [artifactState.pageViewOpen, artifactState.pagesViewOpen, settingsOpen, pageCreate]);
+
+  const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string, initialInput?: string) => {
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
     const m = sessionModel || realModelAlias(currentModel);
@@ -2871,6 +2887,7 @@ function AppInner() {
         skipPermissions: dangerous,
         binding,
         preset,
+        initialInput,
       }));
     } catch (err: any) {
       // Never a silent return to the empty screen — that is the "it just reset" Destin saw.
@@ -3190,7 +3207,7 @@ function AppInner() {
   const onChatGptPlan = activeProviderType === 'chatgpt';
   // What the StatusBar model chip renders — see model-chip.ts for why native
   // sessions bypass the Claude Code alias matcher entirely.
-  const modelChip = modelChipFor(currentSession, currentModel);
+  const modelChip = useMemo(() => modelChipFor(currentSession, currentModel), [currentSession, currentModel]);
   // Native StatusBar chips (Plan C Task 12): the active native session's
   // most-recent completed-turn usage. MERGE RECONCILIATION — this was originally
   // a useMemo over `chatStateMap`, but AppInner perf tranche 1 replaced that
@@ -3430,6 +3447,7 @@ function AppInner() {
     const closeAll = () => {
       setSettingsOpen(false); setProvidersAutoOpen(false); setResumeRequested(false);
       dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+      dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
       setActiveView('chat');
       // The drawer's own dialogs (Assistant settings, Appearance, Help) keep
       // their open state across the drawer closing; tell them to close too.
@@ -3472,10 +3490,12 @@ function AppInner() {
     if (done !== null && Date.now() - done >= 24 * 60 * 60 * 1000) triggerTip('themes');
   }, [settingsOpen, tourOpen]);
 
-  // A tip waits while the assistant is answering (GuideTipHost). One session's
-  // state through the cached per-session selector, never the whole map.
-  const guideChatState = useChatState(sessionId ?? '');
-  const guideBusy = !!sessionId && !!guideChatState?.isThinking;
+  // A tip waits while the assistant is answering (GuideTipHost). One boolean
+  // through a cached selector — NOT useChatState: that subscribed this root
+  // component to the whole session, so every streamed word re-rendered the
+  // entire shell (2026-09-16 A1).
+  const guideThinking = useSessionIsThinking(sessionId ?? '');
+  const guideBusy = !!sessionId && guideThinking;
   const exitTour = useCallback(() => {
     markGuideDone();
     setTourOpen(false);
@@ -3484,6 +3504,7 @@ function AppInner() {
     // a settings page the tour opened for its own reasons.
     setSettingsOpen(false); setProvidersAutoOpen(false);
     dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+    dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' });
     requestGuideReset();
   }, []);
 
@@ -3494,6 +3515,62 @@ function AppInner() {
   // report). Extracted to useChromeMeasurements in tranche 1 — logic unchanged.
   // Called here (before the early returns below) so hook order stays stable.
   useChromeMeasurements(headerRef, bottomBarRef, sessionId, currentViewMode);
+
+  // WHY this block (2026-09-16 audit W21): HeaderBar and StatusBar are memo'd,
+  // which only helps if what they are handed is stable — so their handlers are
+  // callbacks here and the bar's statusData is a memoised projection
+  // (hooks/useStatusBarProps.ts). onDispatch reads chatStateMapRef at call
+  // time; chat state is never one of its dependencies.
+  const slashCallbacks = useMemo<DispatcherCallbacks>(() => ({
+    onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true), onModelSwitchCommand: handleModelSwitchCommand,
+  }), [getUsageSnapshot, handleModelSwitchCommand]);
+  const statusBarData = useStatusBarData(statusData, sessionId, onChatGptPlan);
+  const handleStatusDispatch = useStatusBarDispatch({ sessionId, view: currentViewMode, provider: currentSession?.provider, dispatch, chatStateMapRef, runSlashResult, callbacks: slashCallbacks });
+  // Open settings panel with sync popup auto-opened
+  const handleOpenSync = useCallback(() => { setSyncAutoOpen(true); setSettingsOpen(true); }, []);
+  // Send first, guarded — a refused send must not leave a stale pending "/sync"
+  // bubble in the timeline. Hidden for native sessions — no PTY to send to.
+  const handleRunSync = useMemo(() => (!trustGateActive && sessionId && !isNativeSession) ? () => {
+    if (!guardedPtySend(sessionId, '/sync\r')) return;
+    dispatch({ type: 'USER_PROMPT', sessionId, content: '/sync', timestamp: Date.now() });
+  } : undefined, [trustGateActive, sessionId, isNativeSession, guardedPtySend, dispatch]);
+  const openModelPicker = useCallback(() => setModelPickerOpen(true), []);
+  const openOpenTasksPopup = useCallback(() => setOpenTasksPopupOpen(true), []);
+  const openTasksCounts = useMemo(() => sessionId ? { running: openTasks.counts.running, pending: openTasks.counts.pending } : undefined, [sessionId, openTasks.counts.running, openTasks.counts.pending]);
+  const handleSelectSession = useCallback((id: string) => {
+    // Switching sessions REMOUNTS the artifact drawer, which would silently
+    // discard a dirty editor draft — route the user-initiated switch through
+    // the D3 guard. Programmatic switches (session died/closed) stay unguarded.
+    guardDirtyEditor(() => {
+      setSessionId(id);
+      // Notify Android/remote bridge so the native terminal view switches too
+      (window as any).claude?.session?.switch?.(id);
+    });
+  }, []);
+  const handleCloseSession = useCallback((id: string, name?: string) => {
+    // Skip prompt if the user has checked "Don't show again". In that case
+    // destroy immediately without any flags — the user can still tag sessions
+    // from the resume menu later. WHY: session:destroy is a global main-process
+    // command keyed only by session id — it works the same for a peer window's
+    // session as it does for a local one, no ownership check.
+    if (localStorage.getItem(CLOSE_PROMPT_SUPPRESS_KEY) === '1') {
+      try { window.claude.session.destroy(id); } catch {}
+    } else {
+      setClosePromptName(name);
+      setClosePromptFor(id);
+    }
+  }, []);
+  const handleReorderSessions = useCallback((fromIndex: number, toIndex: number) => {
+    setSessions(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }, []);
+  const toggleGamePanel = useCallback(() => gameDispatch({ type: 'TOGGLE_PANEL' }), [gameDispatch]);
+  const toggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
+  const openResumeBrowser = useCallback(() => setResumeRequested(true), []);
 
   // Still loading first-run check
   if (isFirstRun === null) {
@@ -3548,6 +3625,13 @@ function AppInner() {
       <div
         className="flex-1 flex flex-col overflow-hidden relative"
         hidden={activeView === 'marketplace' || activeView === 'library'}
+        // A screen (Project View, the page view) sits over this column at
+        // z-40. In floating chrome the screen's sheet is transparent so the
+        // wallpaper shows around its glass panes — and what is under a
+        // transparent sheet is THIS column, not the wallpaper. globals.css
+        // hides it (visibility, so layout, observers and the terminal keep
+        // their state) while a screen is open, in floating chrome only.
+        data-screen-open={artifactState.projectViewOpen || artifactState.pageViewOpen ? 'true' : undefined}
         // --right-pane-width drives BOTH the framed-shell drawer-pane width and
         // the chrome-glass cutout offset (both descend from here). BOTH right
         // panes are user-resizable and each remembers its OWN width — the games
@@ -3584,52 +3668,22 @@ function AppInner() {
               <HeaderBar
                 sessions={sessions}
                 activeSessionId={sessionId}
-                onSelectSession={(id: string) => {
-                  // Switching sessions REMOUNTS the artifact drawer, which
-                  // would silently discard a dirty editor draft — route the
-                  // user-initiated switch through the D3 guard. Programmatic
-                  // switches (session died/closed) stay unguarded on purpose.
-                  guardDirtyEditor(() => {
-                    setSessionId(id);
-                    // Notify Android/remote bridge so the native terminal view switches too
-                    (window as any).claude?.session?.switch?.(id);
-                  });
-                }}
+                onSelectSession={handleSelectSession}
                 onCreateSession={createSession}
-                onCloseSession={(id, name) => {
-                  // Skip prompt if the user has checked "Don't show again".
-                  // In that case destroy immediately without any flags — the
-                  // user can still tag sessions from the resume menu later.
-                  // WHY: session:destroy is a global main-process command keyed
-                  // only by session id — it works the same for a peer window's
-                  // session as it does for a local one, no ownership check.
-                  if (localStorage.getItem(CLOSE_PROMPT_SUPPRESS_KEY) === '1') {
-                    try { window.claude.session.destroy(id); } catch {}
-                  } else {
-                    setClosePromptName(name);
-                    setClosePromptFor(id);
-                  }
-                }}
-                onReorderSessions={(fromIndex: number, toIndex: number) => {
-                  setSessions(prev => {
-                    const next = [...prev];
-                    const [moved] = next.splice(fromIndex, 1);
-                    next.splice(toIndex, 0, moved);
-                    return next;
-                  });
-                }}
+                onCloseSession={handleCloseSession}
+                onReorderSessions={handleReorderSessions}
                 viewMode={currentViewMode}
                 onToggleView={handleToggleView}
                 gamePanelOpen={gameState.panelOpen}
-                onToggleGamePanel={() => gameDispatch({ type: 'TOGGLE_PANEL' })}
+                onToggleGamePanel={toggleGamePanel}
                 gameConnected={gameState.connected}
                 challengePending={gameState.challengeFrom !== null}
                 settingsOpen={settingsOpen}
-                onToggleSettings={() => setSettingsOpen(prev => !prev)}
+                onToggleSettings={toggleSettings}
                 settingsBadge={settingsBadge}
                 settingsDangerBadge={settingsDangerBadge}
                 sessionStatuses={sessionStatuses}
-                onOpenResumeBrowser={() => setResumeRequested(true)}
+                onOpenResumeBrowser={openResumeBrowser}
                 defaultModel={sessionDefaults.model}
                 defaultStartModel={sessionDefaults.startModel}
                 defaultSkipPermissions={sessionDefaults.skipPermissions}
@@ -3696,8 +3750,8 @@ function AppInner() {
                     />
                   </ErrorBoundary>
                   <ErrorBoundary name="Terminal">
-                    <TerminalView
-                      sessionId={s.id}
+                    {/* A native session's terminal mounts on its first switch to terminal view (audit W15). */}
+                    <SessionTerminal sessionId={s.id} provider={s.provider}
                       visible={s.id === sessionId && currentViewMode === 'terminal'}
                     />
                   </ErrorBoundary>
@@ -3809,27 +3863,9 @@ function AppInner() {
                 {!isShellSession && (<>
                 <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Your assistant is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
                 <StatusBar
-                  statusData={{
-                    usage: onChatGptPlan ? statusData.chatgptUsage : statusData.usage,
-                    updateStatus: statusData.updateStatus,
-                    announcement: statusData.announcement,
-                    contextPercent: sessionId ? (statusData.contextMap[sessionId] ?? null) : null,
-                    gitBranch: sessionId ? (statusData.gitBranchMap[sessionId] ?? null) : null,
-                    sessionStats: sessionId ? (statusData.sessionStatsMap[sessionId] ?? null) : null,
-                    syncWarnings: statusData.syncWarnings,
-                  }}
-                  onOpenSync={() => {
-                    // Open settings panel with sync popup auto-opened
-                    setSyncAutoOpen(true);
-                    setSettingsOpen(true);
-                  }}
-                  onRunSync={!trustGateActive && sessionId && !isNativeSession ? () => {
-                    // Send first, guarded — a refused send must not leave a
-                    // stale pending "/sync" bubble in the timeline. Hide /sync for
-                    // native sessions — they have no PTY send capability.
-                    if (!guardedPtySend(sessionId, '/sync\r')) return;
-                    dispatch({ type: 'USER_PROMPT', sessionId, content: '/sync', timestamp: Date.now() });
-                  } : undefined}
+                  statusData={statusBarData}
+                  onOpenSync={handleOpenSync}
+                  onRunSync={handleRunSync}
                   model={modelChip}
                   modelProviderType={activeProviderType}
                   usagePlan={onChatGptPlan ? 'chatgpt' : 'claude'}
@@ -3838,39 +3874,11 @@ function AppInner() {
                   onCyclePermission={isNativeSession ? cycleNativePermission : cyclePermission}
                   fast={fastMode}
                   effort={effortLevel}
-                  onOpenModelPicker={() => setModelPickerOpen(true)}
+                  onOpenModelPicker={openModelPicker}
                   sessionId={sessionId}
-                  onDispatch={(input: string) => {
-                    if (!sessionId) return;
-                    // Pass live timeline (drawer paths pass []) so future popup-dispatched commands
-                    // that inspect history can read it without rewiring this wrapper.
-                    const timeline = chatStateMapRef.current.get(sessionId)?.timeline ?? [];
-                    const result = dispatchSlashCommand({
-                      raw: input,
-                      sessionId,
-                      view: currentViewMode,
-                      files: [],
-                      dispatch,
-                      timeline,
-                      callbacks: {
-                        onResumeCommand: () => setResumeRequested(true),
-                        getUsageSnapshot,
-                        onOpenPreferences: () => setPreferencesOpen(true),
-                        onToast: (msg: string) => setToast(msg),
-                        getSessionState: (sid: string) => chatStateMapRef.current.get(sid),
-                        onOpenModelPicker: () => setModelPickerOpen(true),
-                        onModelSwitchCommand: handleModelSwitchCommand,
-                      },
-                      deferUiEffectsToRuntime: currentSession?.provider === 'native',
-                    });
-                    // Forward alsoSendToPty so Claude Code itself runs the command. We deliberately skip the
-                    // USER_PROMPT optimistic bubble that InputBar dispatches — for /compact and /clear, the
-                    // COMPACTION_PENDING / CLEAR_TIMELINE reducer actions already update the timeline, so a
-                    // USER_PROMPT bubble would render redundantly alongside them.
-                    runSlashResult(sessionId, result);
-                  }}
-                  openTasksCounts={sessionId ? { running: openTasks.counts.running, pending: openTasks.counts.pending } : undefined}
-                  onOpenOpenTasks={() => setOpenTasksPopupOpen(true)}
+                  onDispatch={handleStatusDispatch}
+                  openTasksCounts={openTasksCounts}
+                  onOpenOpenTasks={openOpenTasksPopup}
                   nativeUsage={nativeStatusUsage}
                   nativeContextLength={nativeStatusUsage?.contextLength ?? null}
                   nativeContextOverride={nativeContextOverride}
@@ -4134,6 +4142,65 @@ function AppInner() {
         )}
       </div>
 
+      {/* THE SCREENS (Project View, the page view, the library) render BEFORE
+          SettingsPanel on purpose. They are z-40, the same number as the L1
+          scrim under the Settings drawer; with equal z-index the LATER element
+          paints on top, so mounted after Settings the page view sat over the
+          scrim and a click beside the drawer landed on the page instead of
+          closing it (Destin, 2026-09-17: "cant exit the settings panel
+          sometimes"). Earlier in the DOM, the scrim wins. */}
+      {/* ProjectView — full-screen artifact browser across all projects.
+          Renders null when projectViewOpen === false so no DOM overhead when closed.
+          z-40, the SCREEN layer: BELOW every L1–L4 overlay, so a dialog opened
+          from inside it (rename, a first-time warning) shows on top. This said
+          z-[8000] long after ProjectView.tsx moved it down (see its header). */}
+      <ProjectView
+        // Project view homes to the focused conversation's folder on every open.
+        activeSessionCwd={currentSession?.cwd}
+        onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
+        // Project View closes first, as it always has, so whatever the resume
+        // shows (the chat, a take-over prompt) is not under it.
+        onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}
+        defaultModel={sessionDefaults.model}
+        defaultSkipPermissions={sessionDefaults.skipPermissions}
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen((v) => !v)}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
+      />
+      {/* YouCoded Pages (Phase 1 shell): the library and, above it, an open
+          page. Both render null while closed, like ProjectView. "Make a page"
+          and "Edit in chat" start a conversation in the current folder — the
+          creator skill that turns that conversation into a page is Phase 1's
+          next task, not part of this shell. */}
+      <PagesView
+        // Make a page / Edit open the new-session dialog (folder, model, the
+        // rest) with the creator skill waiting in the composer — not sent, so
+        // the person adds what the page should do and presses Enter. Edit
+        // names the page; a project page starts in its project so the skill
+        // finds the folder. The dialog leaves pages once the session exists.
+        onMakePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
+        onEditPage={(page) => setPageCreate({
+          title: `Edit ${page.name}`,
+          initialInput: `/page-builder edit "${page.name}" `,
+          cwd: page.home.kind === 'project' ? page.home.path : undefined,
+        })}
+      />
+      <PageHost
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen(prev => !prev)}
+        settingsBadge={settingsBadge}
+        settingsDangerBadge={settingsDangerBadge}
+        onCreatePage={() => setPageCreate({ title: 'Create a page', initialInput: '/page-builder ' })}
+      />
+      <PageCreateDialog
+        request={pageCreate}
+        onCancel={() => setPageCreate(null)}
+        // The form created the session; adopt it the way createSession does
+        // (list entry, view mode, focus) and leave pages so the chat shows.
+        onCreated={(info) => { setPageCreate(null); adoptCreatedSession(info); dispatchArtifact({ type: 'PAGE_VIEW_CLOSED' }); }}
+        onManageProjects={() => { setPageCreate(null); dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }); }}
+      />
       {/* The game panel now renders inside the active session's framed-shell
           right slot (passed as ChatView's gamePane prop above), so it shares the
           artifact drawer's framed chrome instead of being a separate slide-out. */}
@@ -4508,21 +4575,6 @@ function AppInner() {
         onZoomOut={handleZoomOut}
         onZoomReset={handleZoomReset}
       />
-      {/* ProjectView — full-screen artifact browser across all projects.
-          Renders null when projectViewOpen === false so no DOM overhead when closed.
-          z-40, the SCREEN layer: BELOW every L1–L4 overlay, so a dialog opened
-          from inside it (rename, a first-time warning) shows on top. This said
-          z-[8000] long after ProjectView.tsx moved it down (see its header). */}
-      <ProjectView
-        // Project view homes to the focused conversation's folder on every open.
-        activeSessionCwd={currentSession?.cwd}
-        onNewConversation={(cwd) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); createSession(cwd, false); }}
-        // Project View closes first, as it always has, so whatever the resume
-        // shows (the chat, a take-over prompt) is not under it.
-        onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}
-        defaultModel={sessionDefaults.model}
-        defaultSkipPermissions={sessionDefaults.skipPermissions}
-      />
     </div>
     </ArtifactProvider>
   );
@@ -4694,17 +4746,10 @@ export default function App() {
   if (buddyMode === 'buddy-mascot') return <BuddyMascotApp />;
   if (buddyMode === 'buddy-chat') return <BuddyChatApp />;
   if (buddyMode === 'buddy-bar') return <BuddyBarApp />;
-  // The overlay strategy: the whole floater (mascot + chat + bar) mounted as DOM
-  // inside one screen-sized window instead of the three separate windows above.
-  //
-  // Correction 2026-09-04 (design §7): this comment used to say Linux Wayland
-  // takes this route. It does not, and has not — chooseBuddyStrategy
-  // (buddy-manager.ts) returns 'windows' on every path except an explicit
-  // YOUCODED_BUDDY_STRATEGY env override, so NO platform reaches
-  // ?mode=buddy-overlay on its own. The overlay code is dormant, kept behind that
-  // override; on Linux Wayland the buddy is three real windows moved by the KWin
-  // helper. Believing the old sentence sends a session to the wrong file.
-  if (buddyMode === 'buddy-overlay') return <BuddyOverlayApp />;
+  // There is no fourth buddy mode. A `buddy-overlay` mode (the whole floater as
+  // DOM inside one screen-sized window) existed until 2026-09-16 but no
+  // platform ever reached it; on Linux Wayland the buddy is these three real
+  // windows, moved by the KWin helper.
 
   // Main app wrapped in providers
   return (

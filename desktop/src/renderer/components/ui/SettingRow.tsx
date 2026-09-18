@@ -80,7 +80,8 @@ const DENSITY: Record<SettingRowVariant, { title: string; desc: string }> = {
 // folder headers are DISCLOSURE buttons — `SettingRow` has no `aria-expanded`
 // pass-through, and its `<button>` branch appends a static right-chevron that
 // cannot express open/closed. Taking the string by reference keeps one
-// definition; copying it is what setting-row-authority exists to stop.
+// definition; copying it is what the setting-row guards (the
+// no-hand-rolled-setting-row ast-grep rules) exist to stop.
 export const SETTING_ROW_BASE = 'w-full flex items-center gap-3 px-3 py-2 rounded-lg bg-inset/50 text-left transition-colors stepped-hover';
 
 /**

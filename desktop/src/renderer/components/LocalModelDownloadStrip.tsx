@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useSecondsTick } from '../hooks/useSecondsTick';
 import { Button } from './ui';
 import { ProgressBar } from './ui/ProgressBar';
 import { StatusStrip } from './ui/StatusStrip';
@@ -28,21 +29,22 @@ export interface SetupDownloadStatus {
 export function LocalModelDownloadStrip({ sessionId }: { sessionId: string | null }) {
   const [status, setStatus] = useState<SetupDownloadStatus | null>(null);
 
+  // One read per second while mounted, as before — but on the shared seconds
+  // clock (audit W19), so the reads stop while the window is hidden and resume
+  // the moment it is back. Every tick re-runs the effect; a read that lands
+  // after the next tick began is dropped in favour of the newer one.
+  const tick = useSecondsTick(true);
   useEffect(() => {
     const read = (window as any).claude?.firstRun?.localDownload;
     // WHY a missing channel renders nothing: until the backend exists, no install
     // has a setup download to report, and a strip must never claim one.
     if (typeof read !== 'function') return;
     let alive = true;
-    const tick = () => {
-      Promise.resolve(read(sessionId))
-        .then((s: SetupDownloadStatus | null) => { if (alive) setStatus(s ?? null); })
-        .catch(() => { /* a failed read keeps the last answer rather than flashing */ });
-    };
-    tick();
-    const timer = setInterval(tick, 1000);
-    return () => { alive = false; clearInterval(timer); };
-  }, [sessionId]);
+    Promise.resolve(read(sessionId))
+      .then((s: SetupDownloadStatus | null) => { if (alive) setStatus(s ?? null); })
+      .catch(() => { /* a failed read keeps the last answer rather than flashing */ });
+    return () => { alive = false; };
+  }, [sessionId, tick]);
 
   const resume = useCallback(() => {
     void (window as any).claude?.firstRun?.resumeLocalDownload?.(sessionId);

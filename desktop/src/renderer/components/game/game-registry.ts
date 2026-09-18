@@ -19,7 +19,8 @@ export type GameKind = 'solo' | 'versus';
  *  §7 RULE, and this is why the props are this short: a game is NOT told when
  *  the assistant finishes, and must not go looking. The chime and the status
  *  light are the only signals; nothing here pauses, blurs, or interrupts a run.
- *  `arcade-authority.test.ts` fails the build if a game file reaches for that. */
+ *  The ast-grep rule arcade-no-forbidden-attention-apis fails the build if a
+ *  game file reaches for that. */
 export interface SoloGameProps {
   /** Called once when a run ends, with the run's score. The shell owns what
    *  happens next — saving it, publishing it, showing the board again. */

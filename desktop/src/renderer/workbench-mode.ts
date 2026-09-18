@@ -107,3 +107,29 @@ export const TERMINAL_BACKING_STYLE: Record<Exclude<TerminalBacking, 'today'>, {
   solid90: { xtermOpacity: 0.9, xtermBackground: 'panel' },
   solid100: { xtermOpacity: 1, xtermBackground: 'panel' },
 };
+
+/** Screen frame variants for the Pages shell's floating-chrome round
+ *  (2026-09-17, Destin: "i want to see a few different ways of
+ *  positioning/framing/integrating these panels in floating themes"). How the
+ *  page view's panel and frame — and Project View's pane — sit on a wallpaper
+ *  under a floating header pill:
+ *
+ *  - `cards`  two glass cards side by side in the pill's gutters (ships today)
+ *  - `sheet`  one glass card holding both, a divider between panel and page
+ *  - `rail`   the panel loses its card and sits on the wallpaper; the page
+ *             is the only card
+ *  - `bleed`  the page runs edge to edge with no gutters; the panel is a
+ *             glass card floating inside it
+ *
+ *  The CSS lives in globals.css → "Screens in floating chrome". */
+export type ScreenFrame = 'cards' | 'sheet' | 'rail' | 'bleed';
+
+const SCREEN_FRAMES: ReadonlyArray<ScreenFrame> = ['cards', 'sheet', 'rail', 'bleed'];
+
+/** Reads `?screenFrame=`; anything unrecognised (or not in workbench mode) is
+ *  `cards`, the shipped answer. */
+export function workbenchScreenFrame(): ScreenFrame {
+  if (!isWorkbenchMode()) return 'cards';
+  const raw = new URLSearchParams(location.search).get('screenFrame') ?? 'cards';
+  return (SCREEN_FRAMES as readonly string[]).includes(raw) ? (raw as ScreenFrame) : 'cards';
+}

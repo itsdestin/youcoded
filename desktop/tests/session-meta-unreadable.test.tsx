@@ -8,13 +8,15 @@
  * usePreviewMeta (the drawer's preview sheet) still loaded a failed read as an empty note,
  * and both save the WHOLE note text on edit — so typing replaced the stored note nobody was
  * shown.
+ *
+ * WHY the drawer half is not here (Plan B, 2026-09-16): "SessionDrawer renders its note editor
+ * only behind previewMeta.unreadable" is the ast-grep rule note-editor-guarded-on-unreadable in
+ * the workspace's scripts/ast-grep/rules/.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { renderHook, waitFor, cleanup } from '@testing-library/react';
-import { join } from 'node:path';
 import { useSessionMeta } from '../src/renderer/hooks/useSessionMeta';
 import { usePreviewMeta } from '../src/renderer/hooks/usePreviewMeta';
-import { readStripped } from './helpers/guard-scope';
 
 afterEach(() => { cleanup(); delete (window as any).claude; });
 
@@ -56,12 +58,5 @@ describe('usePreviewMeta (the drawer preview sheet) — an unreadable note is re
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect((result.current as any).unreadable).toMatch(/store unavailable/);
-  });
-
-  it('the drawer does not open a note editor for an unreadable note', () => {
-    const src = readStripped(join(__dirname, '..', 'src', 'renderer', 'components', 'SessionDrawer.tsx'));
-    const at = src.indexOf('onNote={previewMeta.saveNote}');
-    expect(at, 'preview note editor not found').toBeGreaterThanOrEqual(0);
-    expect(src.slice(Math.max(0, at - 1500), at)).toMatch(/previewMeta\.unreadable/);
   });
 });

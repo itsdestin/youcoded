@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, memo } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import { createPortal } from 'react-dom';
 import { useTheme, type ContextDisplay } from '../state/theme-context';
@@ -958,7 +958,7 @@ const formatCostUsd = (usd: number) => (usd < 0.01 ? '<$0.01' : `$${usd.toFixed(
 
 const INPUT_NOTE = 'Input is counted per request — a long turn re-sends its history each step, and that is what you are billed for.';
 
-export default function StatusBar({
+export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App hands this bar a memoised projection + stable handlers (hooks/useStatusBarProps.ts), so unrelated shell state no longer re-renders it
   statusData, onRunSync, onOpenSync, model, modelProviderType, provider, usagePlan,
   permissionMode, onCyclePermission, fast, effort, onOpenModelPicker,
   sessionId, onDispatch,
@@ -1715,7 +1715,7 @@ export default function StatusBar({
         toggle={toggle}
         // anyUnpriced rides along because the bar draws a "Cost: not listed"
         // chip for it — the menu has to offer the row whenever the chip is up.
-        relevance={{ runtime, hasPricedWork: nativeTotals?.anyPriced ?? true, anyUnpriced: nativeTotals?.anyUnpriced ?? false, runsLocally: nativeTotals?.anyFree ?? false }}
+        relevance={{ runtime, hasPricedWork: nativeTotals?.anyPriced ?? true, anyUnpriced: nativeTotals?.anyUnpriced ?? false, runsLocally: nativeTotals?.anyFree ?? false, chatgptWindows }}
       />
 
       {/* Update panel — opened from the version pill. Guard on updateStatus
@@ -1743,6 +1743,6 @@ export default function StatusBar({
       />
     </div>
   );
-}
+});
 
 export { MODELS, type ModelAlias };

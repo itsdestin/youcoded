@@ -5,6 +5,8 @@ import { defineTool } from './registry';
 import { canonicalize, resolveP } from './guards';
 import { toHunks, preserveFormat } from './edit';
 import { fingerprintOf } from './file-fingerprint';
+import { withPathLock } from './path-lock';
+import type { ToolContext, ToolResultPayload } from './types';
 
 // G-10 (2026-08-26 tools investigation): the single most common small-model
 // failure in a full-file Write is a placeholder comment standing in for code
@@ -47,6 +49,10 @@ export function detectOmissionPlaceholder(content: string): { line: number; text
   return null;
 }
 
+// .strict(): an unknown parameter is an error the model can fix, never silently
+// dropped (ledger D-2). Hoisted so writeLocked (below) can be typed from it.
+const WRITE_INPUT = z.object({ file_path: z.string(), content: z.string() }).strict();
+
 export const WriteTool = defineTool({
   name: 'Write',
   // Pause handoff §1 (WHY): changes this computer only, so a plan restart checks first.
@@ -62,12 +68,19 @@ export const WriteTool = defineTool({
     + 'use Edit to change part of an existing file.',
   // Compact form for small local models (simplified presentation, spec §4.2).
   shortDescription: 'Create a new file or completely overwrite an existing one with new content.',
-  inputSchema: z.object({ file_path: z.string(), content: z.string() }).strict(), // .strict(): an unknown parameter is an error the model can fix, never silently dropped (ledger D-2)
+  inputSchema: WRITE_INPUT,
   permissionSubject: (a) => a.file_path,
   async execute(args, ctx) {
+    // Per-file lock (2026-09-16 C4): the body reads, checks and writes with
+    // fs.promises, so two parallel Writes of ONE file must queue — see path-lock.ts.
+    return withPathLock(canonicalize(args.file_path, ctx.cwd), () => writeLocked(args, ctx));
+  },
+});
+
+async function writeLocked(args: z.infer<typeof WRITE_INPUT>, ctx: ToolContext): Promise<ToolResultPayload> {
     const abs = resolveP(args.file_path, ctx.cwd);
     const canonical = canonicalize(args.file_path, ctx.cwd);
-    const exists = fs.existsSync(abs);
+    const exists = await fs.promises.access(abs).then(() => true, () => false);
     const readFingerprint = ctx.readRegistry.get(canonical);
     if (exists && readFingerprint === undefined) {
       // D-4: mirrors Edit — the registry resets on resume, so name resume as a
@@ -96,7 +109,7 @@ export const WriteTool = defineTool({
     // comment promised) — see tools/file-fingerprint.ts for the two ways mtime
     // lied. The existing bytes are read once here and reused below for the
     // format-preserving rewrite, so the check costs no extra I/O.
-    const oldBuf = exists ? fs.readFileSync(abs) : null;
+    const oldBuf = exists ? await fs.promises.readFile(abs) : null;
     if (oldBuf && fingerprintOf(oldBuf) !== readFingerprint) {
       return {
         text: `Write rejected: ${args.file_path} changed on disk since you last Read or Wrote it `
@@ -124,8 +137,8 @@ export const WriteTool = defineTool({
     // this; Write silently converted CRLF → LF). A brand-new file is written
     // exactly as given — there is no existing format to preserve.
     const final = exists ? preserveFormat(old, args.content) : args.content;
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, final);
+    await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+    await fs.promises.writeFile(abs, final);
     ctx.readRegistry.set(canonical, fingerprintOf(final));
     // Diff in LF/no-BOM space, as Edit does, so the card shows the real change
     // rather than a whole-file \r\n churn on a CRLF file.
@@ -140,5 +153,4 @@ export const WriteTool = defineTool({
         + 'This counts as having Read it — you can Edit it now without reading it first.',
       structuredPatch: toHunks(lf(old), lf(args.content), args.file_path),
     };
-  },
-});
+}

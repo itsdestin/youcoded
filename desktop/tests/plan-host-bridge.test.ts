@@ -49,7 +49,7 @@ function port(): PlanHostPort {
     queuePlanNotice: () => false,
     withdrawPlanNotice: () => false,
     startChild: async () => { throw new Error('not in this test'); },
-    probeSession: () => ({
+    probeSession: async () => ({
       session: {
         planSetupRequest: async () => ({ system: 'x'.repeat(500), tools: [] }),
         planNextRequestBound: async () => ({ ok: true, tokens: nextBound }),
@@ -172,7 +172,7 @@ describe('Task 12 follow-up 1: warm and cold minimums', () => {
   type PlanAttemptRecordLike = PlanRecord['steps'][number]['attempts'][number];
   /** A probe whose warm answer (given a mark) is smaller than its full one. */
   const twoBounds = (p: ReturnType<typeof port>, full: number, warmTokens: number, seen: Array<{ text: string; warm: unknown }>) => {
-    p.probeSession = () => ({
+    p.probeSession = async () => ({
       session: { planNextRequestBound: async (_a: unknown, text: string, warm?: unknown) => { seen.push({ text, warm }); return { ok: true, tokens: warm ? warmTokens : full }; } } as any,
       dispose: () => {},
     });
@@ -264,7 +264,7 @@ describe('review fix 2: the report-only request is measured on the specialist\'s
   it('measures `message` as the next turn of that session, and reads its newest user message', async () => {
     const probes: Array<{ historyFromChildId?: string; text?: string }> = [];
     const p = port();
-    p.probeSession = (input) => {
+    p.probeSession = async (input) => {
       const rec: { historyFromChildId?: string; text?: string } = { historyFromChildId: input.historyFromChildId };
       probes.push(rec);
       return {

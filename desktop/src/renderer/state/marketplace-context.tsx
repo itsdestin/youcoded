@@ -1,12 +1,19 @@
 /**
- * MarketplaceContext — unified data layer for the marketplace modal.
+ * MarketplaceContext — unified data layer for the marketplace and library screens.
  *
- * Fetches both skills/index.json and themes/index.json on mount,
- * loads package state from youcoded-skills.json, and exposes
- * install/uninstall methods that work for any content type.
+ * Mounted at the app root (so ThemeScreen's favourites star can read it), but
+ * it fetches NOTHING until the first consumer calls useMarketplace() — the
+ * marketplace screen, the library, the appearance screen or the / drawer.
+ * That first demand loads skills/index.json, themes/index.json, the featured
+ * curation and the packages map; install/uninstall/update work for any
+ * content type. WHY (2026-09-16 audit W16): the chat screen used to pay for
+ * seven marketplace calls at every launch for screens that were not open.
+ *
+ * Installed skills and favourites are NOT fetched here (audit W17): they are
+ * read from SkillContext, which the command drawer already loads at boot,
+ * so there is one copy instead of two kept in step by hand.
  *
  * Does NOT replace SkillContext (command drawer) or ThemeContext (DOM theming).
- * This context is only mounted when the marketplace modal is open.
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -85,6 +92,10 @@ interface MarketplaceActions {
   refresh: () => Promise<void>;
   // Phase 4a: publish a user-created skill to the community marketplace via PR
   publishSkill: (id: string) => Promise<{ prUrl: string }>;
+  /** Start the first fetch if it has not run yet. useMarketplace() calls this
+   *  on mount, so any consumer is a demand; exposed for callers that want the
+   *  data warm before a consumer mounts. */
+  ensureLoaded: () => void;
 }
 
 type MarketplaceContextValue = MarketplaceState & MarketplaceActions;
@@ -93,9 +104,18 @@ type MarketplaceContextValue = MarketplaceState & MarketplaceActions;
 
 const MarketplaceContext = createContext<MarketplaceContextValue | null>(null);
 
-export function useMarketplace(): MarketplaceContextValue {
+/**
+ * @param demand Whether this consumer counts as a reason to load. The first
+ *   demanding consumer starts the fetch; later ones find it running or done.
+ *   A component that is MOUNTED while hidden (the / drawer lives under every
+ *   session, open or not) passes its `open` flag, so mounting it is not a
+ *   demand but opening it is — otherwise the seven calls fire at boot anyway.
+ */
+export function useMarketplace(demand: boolean = true): MarketplaceContextValue {
   const ctx = useContext(MarketplaceContext);
   if (!ctx) throw new Error('useMarketplace must be used within MarketplaceProvider');
+  const { ensureLoaded } = ctx;
+  useEffect(() => { if (demand) ensureLoaded(); }, [demand, ensureLoaded]);
   return ctx;
 }
 
@@ -136,8 +156,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [themeEntries, setThemeEntries] = useState<ThemeRegistryEntryWithStatus[]>([]);
   const [featured, setFeatured] = useState<FeaturedData>({ hero: [], rails: [] });
   const [packages, setPackages] = useState<Record<string, PackageInfo>>({});
-  const [installedSkills, setInstalledSkills] = useState<SkillEntry[]>([]);
-  const [favorites, setFavoritesState] = useState<string[]>([]);
   const [themeFavorites, setThemeFavoritesState] = useState<string[]>([]);
   const [installingIds, setInstallingIds] = useState<Set<string>>(() => new Set());
   const [installOps, setInstallOps] = useState<Map<string, InstallOp>>(() => new Map());
@@ -155,11 +173,22 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // producing a "briefly applies then unapplies" flicker. Force a reload
   // synchronously after install/uninstall/update so the lookup always succeeds.
   const { reloadUserThemes } = useTheme();
-  // SkillContext.installed feeds the CommandDrawer. It's loaded once on
-  // mount and never refreshes — so without this hook, marketplace installs
-  // wouldn't appear in the drawer until app restart. Refresh after each
-  // mutator below.
-  const { refreshInstalled: refreshDrawerSkills } = useSkills();
+  // SkillContext owns the installed list and the favourites (audit W17):
+  // this context READS them and exposes them under its old names, and every
+  // mutator below awaits refreshInstalled() before clearing its progress key
+  // — that refresh is now what flips a card from Installing to Installed, so
+  // clearing first would flash Install → Installed.
+  const {
+    installed: installedSkills,
+    favorites,
+    setFavorite: setSkillFavorite,
+    refreshInstalled: refreshDrawerSkills,
+    loading: skillsLoading,
+    loadError: skillsLoadError,
+    retryLoad: retrySkillsLoad,
+  } = useSkills();
+  // First-demand gate (audit W16): fetchAll runs once, on the first consumer.
+  const demanded = useRef(false);
 
   // Why the theme list alone failed to load, or null. WHY separate from `error` (code review
   // 2026-09-11, F4): the theme list is deliberately non-blocking — a failure must not blank
@@ -167,7 +196,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // installed yet." to someone with themes. Kept apart so only the Themes tab reports it.
   const [themesError, setThemesError] = useState<string | null>(null);
 
-  // Fetch all marketplace data in parallel on mount
+  // Fetch all marketplace data in parallel — on first demand, and after every mutation.
   const fetchAll = useCallback(async () => {
     const gen = ++fetchGeneration.current;
     setLoading(true);
@@ -184,8 +213,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       const [
         marketplaceSkills,
         themes,
-        installed,
-        favs,
         themeFavs,
         pkgs,
         feat,
@@ -197,8 +224,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
             if (gen === fetchGeneration.current) setThemesError(err?.message || 'the theme list could not be read');
             return [];
           }),
-        window.claude.skills.list(),
-        window.claude.skills.getFavorites(),
         claude().appearance.getFavoriteThemes().catch(() => []),
         marketplaceApi?.getPackages?.().catch(() => ({})) ?? Promise.resolve({}),
         featuredCall,
@@ -225,8 +250,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         arr<any>(marketplaceSkills).filter((e: any) => !e.deprecated && !e.integrationOnly),
       );
       setThemeEntries(arr(themes));
-      setInstalledSkills(arr(installed));
-      setFavoritesState(arr(favs));
       setThemeFavoritesState(arr(themeFavs));
       setPackages((pkgs as Record<string, PackageInfo>) || {});
       setFeatured((feat && typeof feat === 'object') ? feat : { hero: [], rails: [] });
@@ -238,7 +261,18 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     }
   }, []);
 
-  useEffect(() => { fetchAll(); }, [fetchAll]);
+  const ensureLoaded = useCallback(() => {
+    if (demanded.current) return;
+    demanded.current = true;
+    void fetchAll();
+  }, [fetchAll]);
+
+  // A Retry from the Library covers BOTH lists: the marketplace's own and the
+  // installed one SkillContext failed to load.
+  const refresh = useCallback(async () => {
+    if (skillsLoadError) retrySkillsLoad();
+    await fetchAll();
+  }, [fetchAll, skillsLoadError, retrySkillsLoad]);
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
@@ -442,13 +476,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     return result;
   }, [fetchAll, reloadUserThemes, refreshDrawerSkills, markInstalling, clearInstalling, recordInstallError]);
 
-  const setFavorite = useCallback(async (id: string, favorited: boolean) => {
-    await window.claude.skills.setFavorite(id, favorited);
-    // Optimistic update
-    setFavoritesState(prev =>
-      favorited ? [...prev, id] : prev.filter(f => f !== id)
-    );
-  }, []);
+  // SkillContext's setFavorite already writes through and updates the one
+  // favourites list both contexts now read (audit W17).
+  const setFavorite = setSkillFavorite;
 
   const favoriteTheme = useCallback(async (slug: string, favorited: boolean) => {
     await claude().appearance.favoriteTheme(slug, favorited);
@@ -516,7 +546,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     const onSync = (window as any).claude?.appearance?.onSync;
     if (typeof onSync !== 'function') return;
     const unsub = onSync(async (prefs: any) => {
-      if (prefs?.themeFavoritesChanged) {
+      // Before the first demand there is no copy to keep in sync — the first
+      // fetch reads the current list anyway.
+      if (prefs?.themeFavoritesChanged && demanded.current) {
         try {
           const favs = await (window as any).claude.appearance.getFavoriteThemes();
           setThemeFavoritesState(favs || []);
@@ -535,7 +567,8 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     const onReload = (window as any).claude?.theme?.onReload;
     if (typeof onReload !== 'function') return;
     const unsub = onReload(() => {
-      fetchAll();
+      // Same gate: nothing to refresh until a consumer has asked once.
+      if (demanded.current) fetchAll();
     });
     return () => { try { unsub?.(); } catch {} };
   }, [fetchAll]);
@@ -554,8 +587,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     installingIds,
     installOps,
     installError,
-    loading,
-    error,
+    // The installed list rides SkillContext (W17), so its load state folds in
+    // here: the Library's installed tab keeps saying "loading" / "couldn't
+    // load" exactly as it did when this context fetched that list itself.
+    loading: loading || skillsLoading,
+    error: error ?? skillsLoadError,
     themesError,
     installSkill,
     uninstallSkill,
@@ -564,13 +600,15 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     update,
     setFavorite,
     favoriteTheme,
-    refresh: fetchAll,
+    refresh,
     publishSkill,
+    ensureLoaded,
   }), [
     skillEntries, themeEntries, featured, packages, updateAvailable, installedSkills,
-    favorites, themeFavorites, installingIds, installError, loading, error, themesError,
+    favorites, themeFavorites, installingIds, installOps, installError, loading, skillsLoading,
+    error, skillsLoadError, themesError,
     installSkill, uninstallSkill, installTheme, uninstallTheme, update,
-    setFavorite, favoriteTheme, fetchAll, publishSkill,
+    setFavorite, favoriteTheme, refresh, publishSkill, ensureLoaded,
   ]);
 
   return (

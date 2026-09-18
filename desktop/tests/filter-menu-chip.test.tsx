@@ -13,17 +13,15 @@
 //   2. CheckboxMark shares the Checkbox control's paints and its literal 4px
 //      radius, so a menu row's box and a real Checkbox can never look different.
 //   3. ResumeBrowser uses them: no local pill, no text-glyph chevrons or
-//      arrows, no hand-drawn check boxes.
+//      arrows, no hand-drawn check boxes. (Since Plan B, 2026-09-16, point 3 is
+//      two ast-grep rules — see the note at the bottom of this file.)
 import { describe, it, expect, afterEach } from 'vitest';
 import React from 'react';
 import { render, cleanup, screen } from '@testing-library/react';
-import { readFileSync } from 'fs';
-import { join } from 'path';
 import { FilterMenuChip } from '../src/renderer/components/ui/FilterMenuChip';
 import { FilterChip, FILTER_CHIP_BASE, FILTER_CHIP_ACTIVE, FILTER_CHIP_INACTIVE } from '../src/renderer/components/ui/FilterChip';
 import { Checkbox, CheckboxMark } from '../src/renderer/components/ui/Checkbox';
 import { pickLabel } from '../src/renderer/components/resume-browser-filters';
-import { stripComments, RENDERER } from './helpers/guard-scope';
 
 afterEach(cleanup);
 
@@ -107,28 +105,12 @@ describe('chip labels (pickLabel — contract R4)', () => {
     expect(pickLabel('Tags', ['work', 'bug'])).toEqual({ text: 'Tags', count: 2 });
     expect(pickLabel('Projects', ['a', 'b', 'c', 'd'])).toEqual({ text: 'Projects', count: 4 });
   });
-
-  it('is what the Resume browser renders on both chips', () => {
-    const src = stripComments(readFileSync(join(RENDERER, 'components/ResumeBrowser.tsx'), 'utf8'));
-    expect(src.match(/pickLabel\('(Projects|Tags)'/g)).toEqual(["pickLabel('Projects'", "pickLabel('Tags'"]);
-    expect(src).not.toMatch(/join\(', '\)/); // the old comma-joined names
-    expect(src).not.toMatch(/Projects \(\$\{/); // the old "Projects (N)"
-  });
 });
 
-describe('ResumeBrowser filter row', () => {
-  const src = stripComments(readFileSync(join(RENDERER, 'components/ResumeBrowser.tsx'), 'utf8'));
-
-  it('uses the shared chips, the shared search pill and the checkbox mark', () => {
-    expect(src).toMatch(/<FilterMenuChip\b/);
-    expect(src).toMatch(/<FilterChip\b[^>]*kind="toggle"/);
-    expect(src).toMatch(/<SearchFilterPill\b/);
-    expect(src).toMatch(/<CheckboxMark\b/);
-    expect(src).not.toMatch(/function FilterPill\b/);
-  });
-
-  it('draws no text-glyph chevrons or arrows and no hand-made check box', () => {
-    expect(src).not.toMatch(/[▾▴▼▲↓↑]/);
-    expect(src).not.toMatch(/rounded-sm border \$\{checked/);
-  });
-});
+// WHY no ResumeBrowser source-text cases any more (Plan B, 2026-09-16): "is what
+// the Resume browser renders on both chips", "uses the shared chips, the shared
+// search pill and the checkbox mark" and "draws no text-glyph chevrons or arrows
+// and no hand-made check box" are now the ast-grep rules
+// resume-browser-uses-shared-filter-chips (presence, and pickLabel('Projects')
+// then pickLabel('Tags'), once each) and resume-browser-no-local-filter-chip-parts
+// (absence) in youcoded-dev scripts/ast-grep/rules/.

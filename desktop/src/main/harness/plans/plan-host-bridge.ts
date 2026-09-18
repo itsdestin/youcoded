@@ -138,11 +138,13 @@ export interface PlanHostPort {
   withdrawPlanNotice(sessionId: string, handoffId: string): boolean;
   /** Mint (or rebuild) a plan specialist, holding a specialist slot. */
   startChild(input: PlanChildStart): Promise<PlanChildHandle>;
-  /** An unwired plan-child session, for measurement only. */
+  /** An unwired plan-child session, for measurement only. Async because the
+   *  probe's system prompt must be byte-identical to the real child's, and that
+   *  prompt's <env> git line is now read off the main thread (2026-09-16 C3). */
   probeSession(input: {
     parentId: string; specialist: SpecialistDefinition; binding: ModelBinding; route: PlanRoute;
     gate: PlanChildRequestGate; historyFromChildId?: string;
-  }): { session: HarnessSession; dispose(): void };
+  }): Promise<{ session: HarnessSession; dispose(): void }>;
 }
 
 export interface PlanHostBridgeOptions {
@@ -673,7 +675,7 @@ export class PlanHostBridge {
       if (!lookup.ok) throw new PlanProposalError(lookup.reason);
       // Decision 4: the exact child system prompt and tool schemas, measured
       // by the same adapter its request gate will use.
-      const probe = this.port.probeSession({ parentId: input.sessionId, specialist: def, binding, route, gate: measurementGate(lookup.adapter) });
+      const probe = await this.port.probeSession({ parentId: input.sessionId, specialist: def, binding, route, gate: measurementGate(lookup.adapter) });
       let setup: Awaited<ReturnType<HarnessSession['planSetupRequest']>>;
       try { setup = await probe.session.planSetupRequest(); } finally { probe.dispose(); }
       const bound = setupBound(lookup.adapter, setup);
@@ -804,7 +806,7 @@ export class PlanHostBridge {
     const route = await this.port.resolveRoute(frozen.binding);
     const lookup = budgetAdapterFor(route.providerType);
     if (!lookup.ok) return undefined;
-    const probe = this.port.probeSession({
+    const probe = await this.port.probeSession({
       parentId: ref.sessionId, specialist: def, binding: frozen.binding, route,
       gate: measurementGate(lookup.adapter), historyFromChildId: attempt.childId,
     });
@@ -879,7 +881,7 @@ export class PlanHostBridge {
     const cwd = this.port.rootCwd(ref.sessionId);
     const def = cwd !== undefined ? this.port.roster(cwd).resolve(step.specialist) : undefined;
     if (!def) return gapOnly();
-    const probe = this.port.probeSession({
+    const probe = await this.port.probeSession({
       parentId: ref.sessionId, specialist: def, binding: frozen.binding, route,
       gate: measurementGate(lookup.adapter), historyFromChildId: attempt.childId,
     });

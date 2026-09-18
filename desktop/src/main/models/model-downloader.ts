@@ -253,11 +253,20 @@ export class ModelDownloader {
     if (start > 0 && res.status !== 206) { fs.rmSync(partialPath, { force: true }); start = 0; } // Range ignored → restart
     if (!res.body) throw new Error('Empty download response.');
     const ws = fs.createWriteStream(partialPath, { flags: start > 0 ? 'a' : 'w' });
+    // A write-stream 'error' emitted OUTSIDE a pending write callback (disk
+    // full, EACCES, an async flush during end()) is otherwise unhandled — and
+    // an unhandled stream 'error' crashes the Electron main process. Capture it
+    // and surface it as a normal failed download instead. Model files are the
+    // largest downloads in the app, so disk-full mid-download is a real path.
+    // (Same guard as voice-assets.ts / engine-acquisition.ts — audit B2.)
+    let streamError: Error | null = null;
+    ws.on('error', (e: Error) => { streamError = e; });
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();
     let received = start;
     let lastEmit = 0;
     try {
       for (;;) {
+        if (streamError) throw streamError;
         // K3: don't rely SOLELY on fetch honoring the signal — check each turn
         // so a cancel always breaks the loop (and reject the in-flight read).
         if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -269,10 +278,12 @@ export class ModelDownloader {
         if (now - lastEmit >= PROGRESS_INTERVAL_MS) { lastEmit = now; emit(received); }
       }
       emit(received);
-      return received;
     } finally {
       await new Promise<void>((resolve) => ws.end(() => resolve()));
     }
+    // A flush error surfacing only at end() must fail the download, not pass silently.
+    if (streamError) throw streamError;
+    return received;
   }
 }
 

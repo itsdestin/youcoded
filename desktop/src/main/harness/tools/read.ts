@@ -111,7 +111,7 @@ export const ReadTool = defineTool({
     const abs = resolveP(args.file_path, ctx.cwd);
     let st: fs.Stats;
     try {
-      st = fs.statSync(abs);
+      st = await fs.promises.stat(abs); // off the main thread (2026-09-16 C4 review)
     } catch (err: any) {
       // Fix (two independent 2026-08 harness reviews, Grok 4.5 + Qwen 3.8 Max —
       // see guards.ts's WHY block above shellCwdMissHint): Read always resolves
@@ -141,7 +141,7 @@ export const ReadTool = defineTool({
     if (st.isDirectory()) {
       let names: string[] = [];
       try {
-        names = fs.readdirSync(abs, { withFileTypes: true })
+        names = (await fs.promises.readdir(abs, { withFileTypes: true }))
           .map((d) => (d.isDirectory() ? `${d.name}/` : d.name))
           .sort((a, b) => a.localeCompare(b));
       } catch {
@@ -184,7 +184,7 @@ export const ReadTool = defineTool({
       if (st.size > MAX_ATTACHMENT_BYTES) {
         return { text: `Read rejected: ${args.file_path} is a ${(st.size / (1024 * 1024)).toFixed(1)} MB image (limit ${MAX_ATTACHMENT_BYTES / (1024 * 1024)} MB).`, isError: true };
       }
-      ctx.readRegistry.set(canonicalize(args.file_path, ctx.cwd), fingerprintFile(abs));
+      ctx.readRegistry.set(canonicalize(args.file_path, ctx.cwd), await fingerprintFile(abs));
       return { text: `Read image ${args.file_path} (${Math.max(1, Math.round(st.size / 1024))} KB, ${imageMediaType}).`, images: [abs] };
     }
     if (undeliverableExt) {
@@ -198,7 +198,7 @@ export const ReadTool = defineTool({
     // for PDFs — `pages` is the paging vocabulary — and the description says so.
     if (path.extname(args.file_path).toLowerCase() === '.pdf') {
       const r = await readPdfAsToolResult(abs, { displayPath: args.file_path, pages: args.pages, supportsVision: !!ctx.supportsVision });
-      if (!r.isError) ctx.readRegistry.set(canonicalize(args.file_path, ctx.cwd), fingerprintFile(abs));
+      if (!r.isError) ctx.readRegistry.set(canonicalize(args.file_path, ctx.cwd), await fingerprintFile(abs));
       return r;
     }
     const offset = args.offset ?? 1;
@@ -226,7 +226,9 @@ export const ReadTool = defineTool({
           + 'Use a different offset/limit to see another part of the file.',
       };
     }
-    const buf = fs.readFileSync(abs);
+    // fs.promises (2026-09-16 C4): up to MAX_READ_BYTES used to be read
+    // synchronously on the main thread, several times per turn.
+    const buf = await fs.promises.readFile(abs);
     if (looksBinary(buf)) return { text: `Read rejected: ${args.file_path}: it is a binary file.`, isError: true };
     const raw = buf.toString('utf8');
     const all = raw.split('\n');
