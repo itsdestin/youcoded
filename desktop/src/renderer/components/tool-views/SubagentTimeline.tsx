@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback, memo } from 'react';
 import type { SubagentSegment } from '../../../shared/types';
 import MarkdownContent from '../MarkdownContent';
 import ToolBody from './ToolBody';
@@ -155,14 +155,21 @@ function SubagentToolGroup({ tools, sessionId, specialistName, suppressAsk }: { 
   const [expanded, setExpanded] = useState<Set<string>>(() =>
     getInitialExpanded() ? new Set(tools.map(t => t.id)) : new Set()
   );
-  const toggle = (id: string) => {
+  // WHY: useCallback (empty deps — the functional setExpanded form closes over
+  // nothing) keeps `toggle` REFERENTIALLY STABLE across renders, so it can be
+  // passed straight through as a memoized row's prop instead of baked into a
+  // fresh per-row closure. A streaming subagent re-renders this group on every
+  // new tool event; older segment objects keep their identity (chat-reducer.ts
+  // appends rather than cloning), so SubagentToolRow's memo only pays off if
+  // `toggle` (and the row's own primitive `id`) don't also churn every time.
+  const toggle = useCallback((id: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  };
+  }, []);
   // Ctrl+O: expand opens every row in this group; collapse empties the set.
   useExpandAllToggle(
     () => setExpanded(new Set(tools.map(t => t.id))),
@@ -175,7 +182,8 @@ function SubagentToolGroup({ tools, sessionId, specialistName, suppressAsk }: { 
           key={t.id}
           segment={t}
           expanded={expanded.has(t.id)}
-          onToggle={() => toggle(t.id)}
+          id={t.id}
+          toggle={toggle}
           separatorAbove={i > 0}
           sessionId={sessionId}
           specialistName={specialistName}
@@ -186,12 +194,21 @@ function SubagentToolGroup({ tools, sessionId, specialistName, suppressAsk }: { 
   );
 }
 
-function SubagentToolRow({
-  segment, expanded, onToggle, separatorAbove, sessionId, specialistName, suppressAsk,
+// WHY (perf, Task 10): memoised so a click that toggles ONE row's `expanded`
+// doesn't re-render every other row in a dense (20+ tool call) subagent — the
+// bug the surrounding contentVisibility:auto trick doesn't cover (that only
+// cheapens PAINT of off-screen rows; the React re-render still ran). `id` +
+// `toggle` replace a pre-bound `onToggle` closure specifically so default
+// memo comparison sees stable props: `toggle` never changes identity
+// (useCallback, empty deps) and `id` is a primitive, so an untouched row's
+// props are unchanged and React skips it entirely.
+const SubagentToolRow = memo(function SubagentToolRow({
+  segment, expanded, id, toggle, separatorAbove, sessionId, specialistName, suppressAsk,
 }: {
   segment: ToolSegment;
   expanded: boolean;
-  onToggle: () => void;
+  id: string;
+  toggle: (id: string) => void;
   separatorAbove: boolean;
   sessionId?: string;
   specialistName?: string;
@@ -211,7 +228,7 @@ function SubagentToolRow({
     >
       <button
         type="button"
-        onClick={onToggle}
+        onClick={() => toggle(id)}
         aria-expanded={expanded}
         className="w-full flex items-center gap-1.5 px-3 py-1 text-left hover:bg-inset/50 transition-colors"
       >
@@ -231,7 +248,7 @@ function SubagentToolRow({
       {expanded && <ToolBody tool={tool} sessionId={sessionId} />}
     </div>
   );
-}
+});
 
 function StatusIcon({ status }: { status: ToolSegment['status'] }) {
   if (status === 'running') return <BrailleSpinner size="xs" />;
