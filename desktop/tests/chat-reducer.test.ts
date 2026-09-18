@@ -806,6 +806,18 @@ describe('native runtime reducer paths', () => {
     expect(session.errorMessage).toBeNull();
   });
 
+  // Connection trust (2026-09-18): the error's code picks the card's button, so
+  // it is stored with the message, cleared with it, and survives a phone
+  // reconnect (the snapshot) — otherwise a reconnecting phone loses the button.
+  it('an error code is stored, cleared by the next prompt, and survives the snapshot', () => {
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'first', timestamp: 1 });
+    state = dispatch(state, { type: 'NATIVE_SESSION_ERROR', sessionId: SESSION, message: 'm', errorCode: 'openrouter-credit-short' });
+    expect(state.get(SESSION)!.errorCode).toBe('openrouter-credit-short');
+    expect(deserializeChatState(serializeChatState(state)).get(SESSION)!.errorCode).toBe('openrouter-credit-short');
+    state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'again', timestamp: 2 });
+    expect(state.get(SESSION)!.errorCode).toBeNull();
+  });
+
   it('NATIVE_MODEL_STATE_CHANGED sets modelState + modelInfo without touching turn state', () => {
     state = dispatch(state, { type: 'USER_PROMPT', sessionId: SESSION, content: 'hi', timestamp: 1 });
     expect(state.get(SESSION)!.isThinking).toBe(true);

@@ -47,7 +47,7 @@ export interface FirstRunNativeDeps {
     upsert(input: { type: any; label: string; baseUrl?: string; enabled: boolean }): Promise<string>;
     setKey(id: string, key: string): Promise<void>;
     remove(id: string): Promise<void>;
-    testConnection(id: string): Promise<{ ok: boolean; message: string }>;
+    testConnection(id: string, candidateKey?: string): Promise<{ ok: boolean; message: string; verdict?: 'verified' | 'rejected' | 'unchecked' }>;
   };
   engine: { installed(): boolean; install(): Promise<unknown> };
   models: {
@@ -568,11 +568,24 @@ export class FirstRunManager extends EventEmitter {
         const existing = (await deps.providers.list()).find((p) => p.type === service);
         id = existing?.id ?? await deps.providers.upsert({ type: service, label: NATIVE_KEY_LABEL[service], enabled: true });
       }
-      await deps.providers.setKey(id, key.trim());
-      const check = await deps.providers.testConnection(id);
-      if (!check.ok) {
-        this.updateState({ lastError: `Couldn't verify the key: ${check.message}` });
-        return;
+      if (service === 'openrouter') {
+        // Check the key BEFORE saving it (connection-trust §3.2): a key
+        // OpenRouter refuses never lands, and one it can't be reached to check
+        // is saved and setup continues — an offline first run must not strand
+        // the user. Settings then reads "not checked yet" until a check lands.
+        const check = await deps.providers.testConnection(id, key.trim());
+        if (check.verdict === 'rejected' || (!check.ok && check.verdict !== 'unchecked')) {
+          this.updateState({ lastError: check.message });
+          return;
+        }
+        await deps.providers.setKey(id, key.trim());
+      } else {
+        await deps.providers.setKey(id, key.trim());
+        const check = await deps.providers.testConnection(id);
+        if (!check.ok) {
+          this.updateState({ lastError: `Couldn't verify the key: ${check.message}` });
+          return;
+        }
       }
       log('INFO', 'first-run', 'API key setup succeeded', { service });
       this.finishNativeSetup({ setupProvider: id });

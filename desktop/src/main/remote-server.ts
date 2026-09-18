@@ -1944,7 +1944,10 @@ export class RemoteServer {
       case 'provider:test': {
         try {
           const res = this.nativeRuntime
-            ? await this.nativeRuntime.providerRegistry.testConnection(payload.id ?? payload)
+            ? await this.nativeRuntime.providerRegistry.testConnection(
+              payload.id ?? payload,
+              typeof payload?.key === 'string' ? payload.key : undefined,
+            )
             : { ok: false, message: 'Native runtime not available.' };
           this.respond(client.ws, type, id, res);
         } catch (err: any) {

@@ -31,6 +31,7 @@ import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 import { NativeHome } from './native-home';
 import { SecretsStore } from './providers/secrets-store';
 import { ProviderRegistry } from './providers/provider-registry';
+import { OpenRouterHealth } from './providers/openrouter-health';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
 // (it needs the post-dev-profile userData) and passed IN; this file only wires it.
 import type { ChatGptAuth } from './providers/chatgpt-auth';
@@ -2606,8 +2607,17 @@ export function registerIpcHandlers(
   // reader) is untouched. Stored tokens are left alone — the flag is a fast
   // revert, not a sign-out.
   const chatgptForUi: ChatGptAuth | null = process.env.YOUCODED_CHATGPT !== '0' ? (chatgptAuth ?? null) : null;
-  const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi);
+  // Connection trust (§3.1): what OpenRouter last said about THIS profile's
+  // key, stored beside its secrets (userData), never in shared ~/.youcoded.
+  const openRouterHealth = new OpenRouterHealth({ dir: app.getPath('userData') });
+  const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi, openRouterHealth);
   void providerRegistry.init();
+  // Re-check the OpenRouter key shortly after launch and every 5 minutes, so a
+  // key that died while the app sat idle reads as dead before anyone sends a
+  // message. refreshOpenRouter asks nothing unless OpenRouter is on with a key.
+  // (The ChatGPT usage poll's cadence — providers/chatgpt-auth.ts USAGE_POLL_MS.)
+  setTimeout(() => { void providerRegistry.refreshOpenRouter(); }, 5_000).unref?.();
+  setInterval(() => { void providerRegistry.refreshOpenRouter(); }, 5 * 60_000).unref?.();
   const modelCatalog = new ModelCatalog(app.getPath('userData'), undefined, {
     // WHY read defaults at resolution time, never mutate budgets of active sessions.
     contextPreferences: () => contextSettings.read(),
@@ -3380,7 +3390,10 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.PROVIDER_LIST, async () => providerRegistry.list());
   ipcMain.handle(IPC.PROVIDER_UPSERT, async (_e, config: any) => providerRegistry.upsert(config));
   ipcMain.handle(IPC.PROVIDER_REMOVE, async (_e, id: string) => { await providerRegistry.remove(id); return true; });
-  ipcMain.handle(IPC.PROVIDER_TEST, async (_e, id: string) => providerRegistry.testConnection(id));
+  // `key`: an optional candidate checked instead of the saved key (the Connect
+  // dialog refuses a bad key before it can replace a working one).
+  ipcMain.handle(IPC.PROVIDER_TEST, async (_e, id: string, key?: unknown) =>
+    providerRegistry.testConnection(id, typeof key === 'string' ? key : undefined));
   ipcMain.handle(IPC.PROVIDER_SET_KEY, async (_e, id: string, key: string) => { await providerRegistry.setKey(id, key); return true; });
   ipcMain.handle(IPC.PROVIDER_CATALOG, async () => modelCatalog.get(await providerRegistry.list()));
   // Sign in with ChatGPT (backend design 2026-09-05 §3, §5, §6). status is a

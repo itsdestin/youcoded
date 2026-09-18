@@ -5,4 +5,4 @@ export const SECRET_STORAGE_UNAVAILABLE_MESSAGE =
 
 // Never include the underlying crypto exception: it may contain secret data.
 export const SECRET_DECRYPTION_FAILED_MESSAGE =
-  'Saved credentials could not be decrypted. Unlock your system keychain if it is locked, then retry. If this continues, reconnect the affected account or re-enter its API key in Settings → Model Providers.';
+  'Saved credentials could not be decrypted. Unlock your system keychain if it is locked, then retry. If this continues, reconnect the affected account or re-enter its API key in Assistant settings → Cloud providers.';

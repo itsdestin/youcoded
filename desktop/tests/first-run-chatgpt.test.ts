@@ -661,3 +661,50 @@ describe('ModelProvidersPopup — the Claude Code card reads the live sign-in', 
     expect(await screen.findByText("Signed-in state couldn't be read")).toBeTruthy();
   });
 });
+
+// Connection trust (2026-09-18): "Use an API key" with an OpenRouter key checks
+// the key BEFORE saving it. A made-up key used to finish setup, because the old
+// check asked OpenRouter's public model list, which answers any key.
+describe('FirstRunManager.handleNativeApiKey — OpenRouter', () => {
+  function deps(verdict: 'verified' | 'rejected' | 'unchecked') {
+    const setKey = vi.fn(async () => {});
+    const testConnection = vi.fn(async (_id: string, _candidate?: string) => ({
+      ok: verdict === 'verified', verdict,
+      message: verdict === 'rejected' ? "OpenRouter didn't accept this key. Check that you copied all of it." : 'x',
+    }));
+    return {
+      setKey, testConnection,
+      d: {
+        providers: { list: vi.fn(async () => []), upsert: vi.fn(), setKey, remove: vi.fn(), testConnection },
+        engine: { installed: () => false, install: vi.fn() },
+        models: { curatedList: vi.fn(async () => []), on: vi.fn() },
+      } as any,
+    };
+  }
+
+  it('a refused key stays on the key page, says why, and is never saved', async () => {
+    const m = managerAtAuth();
+    const { d, setKey, testConnection } = deps('rejected');
+    await m.handleNativeApiKey('sk-or-v1-fake', 'openrouter', d);
+    expect(testConnection).toHaveBeenCalledWith('openrouter', 'sk-or-v1-fake');
+    expect(setKey).not.toHaveBeenCalled();
+    expect(m.getState().lastError).toMatch(/didn't accept this key/);
+    expect(m.getState().currentStep).not.toBe('COMPLETE');
+  });
+
+  it('a verified key is saved and setup finishes', async () => {
+    const m = managerAtAuth();
+    const { d, setKey } = deps('verified');
+    await m.handleNativeApiKey('sk-or-v1-good', 'openrouter', d);
+    expect(setKey).toHaveBeenCalledWith('openrouter', 'sk-or-v1-good');
+    expect(m.getState().currentStep).toBe('COMPLETE');
+  });
+
+  it('offline (unchecked) still saves the key and finishes — an offline first run is not stranded', async () => {
+    const m = managerAtAuth();
+    const { d, setKey } = deps('unchecked');
+    await m.handleNativeApiKey('sk-or-v1-maybe', 'openrouter', d);
+    expect(setKey).toHaveBeenCalled();
+    expect(m.getState().currentStep).toBe('COMPLETE');
+  });
+});

@@ -427,7 +427,7 @@ function shortDate(iso: string | undefined): string | null {
  *  2026-08-31). Now the status line says what OpenRouter actually answered,
  *  and a refused key says why and what to do — in the destructive tone, since
  *  nothing OpenRouter-backed works until it is fixed. */
-export function openRouterKeyWords(health: ProviderHealth | undefined): {
+function openRouterKeyWords(health: ProviderHealth | undefined): {
   status: string; detail: { text: string; tone?: 'muted' | 'bad' } | null; broken: boolean;
 } {
   if (!health) return { status: 'Checking…', detail: null, broken: false };

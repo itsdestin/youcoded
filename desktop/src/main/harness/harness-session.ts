@@ -12,6 +12,7 @@
 // values; max_steps and doom_loop surface as PERMISSION ASKS (askUser), never as
 // new event types.
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
+import { classifyProviderError } from '../providers/provider-error-code';
 import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
@@ -2910,7 +2911,8 @@ export class HarnessSession extends EventEmitter {
         this.emitEvent('user-interrupt', abandonedTurnUsage());
       } else {
         // An errored turn spent the same real tokens an interrupted one did.
-        this.emitEvent('session-error', { text: describeProviderError(err), ...abandonedTurnUsage() });
+        const errorCode = classifyProviderError(err);
+        this.emitEvent('session-error', { text: describeProviderError(err), ...(errorCode ? { errorCode } : {}), ...abandonedTurnUsage() });
       }
     } finally {
       this.abort = null;
