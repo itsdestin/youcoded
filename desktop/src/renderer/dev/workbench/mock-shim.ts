@@ -24,6 +24,7 @@ import {
 import { resolveFixture, CS_ERR_READ } from './fixtures/chatsearch';
 import { SHEET_BEFORE, SHEET_AFTER } from './fixtures/sheets';
 import type { MockState, MockSessionMeta } from './scenarios';
+import { stressRowCount } from './scenarios';
 import { specialistRoster, delegatedModels as seedDelegatedModels } from './fixtures/specialists';
 import { MARKETPLACE_PLUGINS, MARKETPLACE_THEMES, INSTALLED_SKILLS, INSTALLED_PACKAGES, FEATURED } from './fixtures/marketplace/registry';
 // Scripted replies (site scenario / phase-2 play-through): a typed message
@@ -38,7 +39,7 @@ import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
 // worker uses, so what Destin reviews in the workbench is the shipped grey/solid
 // rule rather than a lookalike (it used to grey the last two words, full stop).
 import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
-import { buildCatalog } from './fixtures/marketplace/catalog';
+import { buildCatalog, buildStressCatalog } from './fixtures/marketplace/catalog';
 // `?guide=tip:<id>` (below): fire one first-run tip on demand for a photograph.
 import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
@@ -1894,6 +1895,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // second past row in that folder would match by projectPath and break the
   // conversations beat's one-result search.
   const conversationsIn = (projectPath: string) => {
+    // WHY (render-cost plan, Task 0 step 2b): in `stress` the FIRST project
+    // (artifactProjects()[0], the youcoded repo) holds every past row, so its
+    // Conversations tab reaches `?stressRows=` — the size of the freeze the plan
+    // fixes. Filtering left it a third of the rows. The rows keep their own
+    // sessionIds, so opening one still previews the same conversation the
+    // Resume browser shows.
+    if (activeScenario === 'stress' && projectPath === artifactProjects()[0].path) {
+      return store.getState().past.map((p) => ({ ...p, projectPath, projectSlug: projectPath.split('/').pop()! }));
+    }
     const past = store.getState().past
       .filter((p) => p.projectPath === projectPath);
     if (!studentSwitch) return past;
@@ -2803,7 +2813,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // (type / origin / scan / capabilities), and the list also carries the
     // member rows (skills, specialists, tools INSIDE bundles) plus a few
     // standalone items — the shape the real catalog will return once built.
-    listMarketplace: async () => (marketplaceEmpty ? [] : buildCatalog(MARKETPLACE_PLUGINS)),
+    // WHY the stress branch (render-cost plan, Task 0 step 2b): `?stressRows=`
+    // must reach the Marketplace too, or the DOM-size sweep measures ~60 cards
+    // and a whole-list render looks cheap.
+    listMarketplace: async () => (marketplaceEmpty ? []
+      : activeScenario === 'stress' ? buildStressCatalog(MARKETPLACE_PLUGINS, stressRowCount())
+      : buildCatalog(MARKETPLACE_PLUGINS)),
     list: async () => (marketplaceEmpty ? [] : installedSkills.map((s) => ({ ...s }))),
     // Promo (marketplace beat): Install STICKS for the page's lifetime. Before
     // this both channels fell to the catch-all, so the detail button flashed
