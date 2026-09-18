@@ -270,6 +270,13 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // push moves the card on, it (and its Retry) no longer applies.
   const [failed, setFailed] = useState<{ text: string; detail?: string; status: PlanView['status'] } | null>(null);
   const error = failed && failed.status === plan.status ? failed.text : null;
+  // Task 14 (decision 27): the host asked once, because the models this plan's
+  // specialists run on changed and the new worst case could cost more. Nothing
+  // failed, so it is NOT an error: it is a line in the card's own tinted strip,
+  // and it belongs to the state it was answered in — once the plan runs (or
+  // moves on), it is gone.
+  const [asked, setAsked] = useState<{ text: string; status: PlanView['status'] } | null>(null);
+  const limitNotice = asked && asked.status === plan.status ? asked.text : null;
   // Task 11: "Ask the assistant" on every paused card, except while a question
   // is pending, when this conversation's model can't use tools, or while the
   // ask error line's Retry already offers the same thing — only while that
@@ -308,7 +315,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     inFlight.current = true;
     // The status the press was made in: the error it may leave belongs there.
     const at = plan.status;
-    setBusy(name); setFailed(null);
+    setBusy(name); setFailed(null); setAsked(null);
     try {
       const res = await planAction(fn);
       if (res.ok) {
@@ -317,7 +324,10 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
         dispatch({ type: 'PLAN_CHANGED', sessionId, plan: res.plan });
         return res.plan;
       }
-      if (res.unsupported) setAnsweredUnsupported(res.error);
+      // Task 14: the one answer that is neither success nor failure — press the
+      // same button again and the plan runs at the new limit.
+      if (res.notice !== undefined) setAsked({ text: res.notice, status: at });
+      else if (res.unsupported) setAnsweredUnsupported(res.error);
       else setFailed({ text: res.error, ...(res.detail ? { detail: res.detail } : {}), status: at });
       return null;
     } finally { inFlight.current = false; setBusy(null); }
@@ -388,6 +398,18 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               <StepRow key={step.id} step={step} index={i} plan={plan} sessionId={sessionId} />
             ))}
           </ol>
+
+          {/* Task 14 (decision 27): a proposal whose specialists now cost more
+              than the card said asks in its own tinted strip, above the Comment ·
+              Approve row. The same Approve, pressed again, runs it at the new
+              limit — so there is no new button and nothing failed (never
+              ErrorState). A paused plan says the same thing as a line inside the
+              pause strip it already has. */}
+          {limitNotice && plan.status === 'proposed' && (
+            <StatusStrip tone="warn" surface="tinted" className="!py-2">
+              <span data-testid="plan-limit-notice">{limitNotice}</span>
+            </StatusStrip>
+          )}
 
           {/* ONE ceiling line (Q-2). While the plan moves it becomes "spent of".
               A running plan's Stop shares this row (Destin, round 2).
@@ -511,6 +533,11 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               )}
             >
               <PausedReason plan={plan} pause={pause} stepNumber={pausedIndex + 1} />
+              {/* Task 14: the new-limit question, in the strip that already
+                  carries Continue — one block, not a second one. */}
+              {limitNotice && (
+                <span className="block mt-0.5 font-medium text-fg" data-testid="plan-limit-notice">{limitNotice}</span>
+              )}
               {handoffPending && (
                 <span className="block mt-0.5 font-medium text-fg" data-testid="plan-handoff-pending">
                   {/* Task 11 (§6, review 4-5): a question behind a reply in
@@ -587,7 +614,9 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
             // Grey dot, not amber: an interrupted plan is waiting, not warning —
             // nothing went wrong and nothing is at risk.
             <StatusStrip
-              tone="idle"
+              // Task 14: amber only while the changed-specialists question is
+              // showing — that one needs an answer; waiting for Continue does not.
+              tone={limitNotice ? 'warn' : 'idle'}
               surface="tinted"
               className="!py-2"
               action={readOnly ? undefined : (
@@ -600,6 +629,11 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               <span data-testid="plan-interrupted-note">
                 The app closed mid-plan. {done === 0 ? 'Nothing had finished yet' : done === 1 ? 'Step 1 is saved' : `Steps 1–${done} are saved`}; Continue runs the rest.
               </span>
+              {/* Task 14: an interrupted card's Continue can meet the same
+                  changed-specialists question; it says so in this same strip. */}
+              {limitNotice && (
+                <span className="block mt-0.5 font-medium text-fg" data-testid="plan-limit-notice">{limitNotice}</span>
+              )}
             </StatusStrip>
           )}
 

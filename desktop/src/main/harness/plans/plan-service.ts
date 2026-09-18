@@ -13,7 +13,7 @@ import type { NativeHome } from '../../native-home';
 import type { PlanView } from '../../../shared/types';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, pausedMinimum, projectPlan } from './plan-journal';
-import { planCeilingTokens, planCeilingUsd } from './plan-budget';
+import { ceilingDidNotRise, planCeilingTokens, planCeilingUsd, type PlanCeilingChange } from './plan-budget';
 import { pausedRouting, resetRecoveriesForContinue, type PlanPauseAction } from './pause-routing';
 import { PLAN_NOTICE_DETAIL_MAX_CHARS, PLAN_RECOMMENDATION_MAX_CHARS, addBudgetCap, addBudgetFloor, normalizePlanQuestion } from './plan-handoff';
 import type {
@@ -122,6 +122,10 @@ export interface PlanProposal {
  *  over well before this many newer turns have auto-started a plan). */
 const AUTO_START_KEYS_KEPT = 256;
 
+/** Task 14: how many plans remember an accepted new limit (one per plan; a
+ *  person never has this many cards waiting on one press). */
+const CONFIRMED_LIMITS_KEPT = 64;
+
 const unsupported = (error: string): PlanUnsupported => ({ ok: false, unsupported: true, error });
 /** A malformed request id comes from a broken caller, never from a person's
  *  choice: the same general line the transport uses (no cause is invented). */
@@ -192,26 +196,112 @@ function canonical(value: unknown): string {
 }
 
 /**
- * What changed between the frozen manifest and now, in plain words. Any
- * difference blocks the action (design §3: drift fails closed and needs a
- * newly proposed plan, never widened consent or a silent reprice).
+ * What changed between the frozen manifest and now — in plain words, and BY
+ * CATEGORY (Task 14, decision 27). The words are unchanged: they still write
+ * the one refusal sentence. The categories are what let Approve/Continue tell
+ * "what the specialist can DO changed" (never a price question — still
+ * refused) from "which model it runs on, and what that model costs" (a tier
+ * change, which re-freezes and runs).
  */
-function manifestDrift(frozen: ExecutionManifest, current: ExecutionManifest): string[] {
+interface ManifestDrift {
+  /** A specialist's instructions or tools, or the set of specialists itself. */
+  definition: boolean;
+  permissions: boolean;
+  /** Only the model binding, its price, or the card's model label. */
+  repricing: boolean;
+  /** The phrases the refusal sentence joins, in the order they were found. */
+  phrases: string[];
+}
+
+function manifestDrift(frozen: ExecutionManifest, current: ExecutionManifest): ManifestDrift {
   const changes = new Set<string>();
+  const drift: ManifestDrift = { definition: false, permissions: false, repricing: false, phrases: [] };
   const ids = new Set([...Object.keys(frozen.specialists), ...Object.keys(current.specialists)]);
   for (const id of ids) {
     const a = frozen.specialists[id];
     const b = current.specialists[id];
     if (!a || !b || a.definitionFingerprint !== b.definitionFingerprint) {
       changes.add("a specialist's instructions or tools");
+      drift.definition = true;
       continue;
     }
-    if (canonical(a.binding) !== canonical(b.binding)) changes.add('the model a specialist would use');
-    if (canonical(a.pricing) !== canonical(b.pricing)) changes.add("the model's price");
+    if (canonical(a.binding) !== canonical(b.binding)) { changes.add('the model a specialist would use'); drift.repricing = true; }
+    if (canonical(a.pricing) !== canonical(b.pricing)) { changes.add("the model's price"); drift.repricing = true; }
+    // Decision 27, condition 2: an approximate limit is a weaker promise even at
+    // the same number, so it is part of the repricing question, not a refusal.
+    if (a.approximateLimit !== b.approximateLimit || a.setupTokens !== b.setupTokens) drift.repricing = true;
   }
-  if (frozen.permissionFingerprint !== current.permissionFingerprint) changes.add('the permission settings');
-  if (frozen.modelLabel !== current.modelLabel && changes.size === 0) changes.add('the model');
-  return [...changes];
+  if (frozen.permissionFingerprint !== current.permissionFingerprint) { changes.add('the permission settings'); drift.permissions = true; }
+  if (frozen.modelLabel !== current.modelLabel && changes.size === 0) { changes.add('the model'); drift.repricing = true; }
+  drift.phrases = [...changes];
+  return drift;
+}
+
+/** Task 14: what one press of Approve/Continue must do about the drift. */
+type PlanReconcile =
+  | { kind: 'unchanged' }
+  /** Re-freeze to these models in the write that starts the run. */
+  | { kind: 'refreshed'; manifest: ExecutionManifest }
+  /** Ask once, in the card's own strip; the same button again runs the plan. */
+  | { kind: 'confirm'; notice: string };
+
+/** "$0.10" / "less than a cent" — the card's own rule (never a false $0.00),
+ *  worded here because this sentence is written in main. */
+function usdText(n: number): string {
+  return n > 0 && n < 0.005 ? 'less than a cent' : `~$${n.toFixed(2)}`;
+}
+const tokenText = (n: number) => `~${n.toLocaleString('en-US')} tokens`;
+
+/**
+ * Task 14 (decision 27): the ONE sentence a card shows when a tier change could
+ * cost more than the user approved. It states only what was actually read from
+ * the two manifests — never a cause, never a number that isn't known — and ends
+ * with the button that is already on the card.
+ */
+function limitChangeNotice(change: Exclude<PlanCeilingChange, { notMore: true }>, verb: 'Approve' | 'Continue'): string {
+  const { newTokens, oldTokens, newUsd, oldUsd } = change;
+  const middle = (() => {
+    switch (change.why) {
+      case 'usd':
+        return `This plan could now cost up to ${usdText(newUsd!)}, more than the ${usdText(oldUsd!)} you approved.`;
+      case 'now-priced':
+        return `These specialists cost money now: up to ${usdText(newUsd!)}, where the plan you approved cost nothing.`;
+      case 'unknown-approved':
+        return `This plan could now cost up to ${usdText(newUsd!)}; the plan you approved had no published price to compare it with.`;
+      case 'unknown-price':
+        return oldUsd === null
+          ? "The models these specialists use now have no published price, so this plan's cost can't be compared with the one you approved."
+          : `The models these specialists use now have no published price, so this plan's cost can't be compared with the ${usdText(oldUsd)} you approved.`;
+      case 'approximate':
+        return `One of these specialists now runs on a model that can't cap its replies, so the ${tokenText(newTokens)} limit is approximate — one reply may go past it.`;
+      default:
+        return `This plan could now use up to ${tokenText(newTokens)}, more than the ${tokenText(oldTokens)} you approved.`;
+    }
+  })();
+  return `Your specialists changed. ${middle} Press ${verb} again to run it at the new limit.`;
+}
+
+/**
+ * Task 14: re-freeze this plan to the models that are configured NOW, in the
+ * caller's own journal write. The limit moves by the DIFFERENCE the new models
+ * make, so every Add budget the user already granted is kept — and a smaller
+ * model really does lower the limit (design: the ordinary budget pause then
+ * handles a step that no longer fits, which is deliberate).
+ */
+function refreeze(plan: PlanRecord, current: ExecutionManifest): void {
+  const tokenDelta = planCeilingTokens(plan.document, current) - planCeilingTokens(plan.document, plan.manifest);
+  plan.ceilingTokens = Math.max(0, plan.ceilingTokens + tokenDelta);
+  const oldBase = planCeilingUsd(plan.document, plan.manifest);
+  const newBase = planCeilingUsd(plan.document, current);
+  // A side with no honest dollar figure can't be moved by a difference: the new
+  // models' own limit stands (null keeps the card on tokens only — never $0.00).
+  plan.ceilingUsd = newBase === null || oldBase === null || plan.ceilingUsd === null
+    ? newBase
+    : Math.max(0, plan.ceilingUsd + (newBase - oldBase));
+  plan.manifest = current;
+  // Decision 5: the tilde on the card follows the models that will actually run.
+  if (Object.values(current.specialists).some((sp) => sp.approximateLimit)) plan.approximateLimit = true;
+  else delete plan.approximateLimit;
 }
 
 function readUnderTokens(raw: unknown): number {
@@ -227,6 +317,9 @@ export class PlanService {
   private readonly newId: () => string;
   /** Final review F3: turn keys that already auto-started a plan (oldest first). */
   private readonly autoStartedKeys = new Set<string>();
+  /** Task 14 (decision 27): plan id → the manifest fingerprint whose higher
+   *  limit the user has already been shown once. Memory only, oldest first. */
+  private readonly confirmedLimits = new Map<string, string>();
 
   constructor(private readonly deps: PlanServiceDeps) {
     this.journal = deps.journal;
@@ -265,14 +358,37 @@ export class PlanService {
     if (!allowed.includes(plan.status)) throw new PlanActionRefused(`This plan is ${STATUS_WORDS[plan.status]}.`);
   }
 
-  private async assertNoDrift(ref: PlanRef, plan: PlanRecord): Promise<void> {
+  /**
+   * Task 14 (decision 27). What one press must do about a manifest that no
+   * longer matches the approved one:
+   *  - instructions/tools or permissions changed → refuse, in today's words.
+   *    What the specialist can DO changed; that is not a price question.
+   *  - only the models and/or their prices changed → re-freeze and run, SILENTLY
+   *    when the new worst case is provably not more than the approved one;
+   *    otherwise ask ONCE (the same button, pressed again, runs it).
+   *  - nothing changed → unchanged.
+   */
+  private async reconcile(ref: PlanRef, plan: PlanRecord, verb: 'Approve' | 'Continue'): Promise<PlanReconcile> {
     const current = await this.deps.resolveManifest({ sessionId: ref.sessionId, cwd: ref.cwd, document: plan.document });
-    const changes = manifestDrift(plan.manifest, current);
-    if (changes.length > 0) {
+    const drift = manifestDrift(plan.manifest, current);
+    if (drift.definition || drift.permissions) {
       throw new PlanActionRefused(
-        `This plan can't run as approved because ${changes.join(', ')} changed since it was proposed. Ask the assistant to propose it again.`,
+        `This plan can't run as approved because ${drift.phrases.join(', ')} changed since it was proposed. Ask the assistant to propose it again.`,
       );
     }
+    if (!drift.repricing) return { kind: 'unchanged' };
+    const change = ceilingDidNotRise(plan.document, plan.manifest, current);
+    if (change.notMore) return { kind: 'refreshed', manifest: current };
+    // WHY the fingerprint and not just the plan id: the user accepts ONE new
+    // limit, the one the notice showed them. A later, different change is a
+    // different limit and asks again with its own numbers. In memory only — an
+    // app restart asking again is the safe direction.
+    const fingerprint = canonical(current);
+    if (this.confirmedLimits.get(plan.planId) === fingerprint) return { kind: 'refreshed', manifest: current };
+    this.confirmedLimits.delete(plan.planId);
+    this.confirmedLimits.set(plan.planId, fingerprint);
+    if (this.confirmedLimits.size > CONFIRMED_LIMITS_KEPT) this.confirmedLimits.delete(this.confirmedLimits.keys().next().value!);
+    return { kind: 'confirm', notice: limitChangeNotice(change, verb) };
   }
 
   private async view(ref: PlanRef, planId: string): Promise<PlanView> {
@@ -422,8 +538,14 @@ export class PlanService {
       if (!this.deps.executor) return unsupported("Running plans isn't available in this version of YouCoded.");
       const { ref, plan } = await this.loadPlan(sessionId, planId);
       this.requireStatus(plan, ['proposed']);
-      await this.assertNoDrift(ref, plan);
-      return { ok: true, plan: await this.startRun(ref, planId, ['proposed'], (p) => { p.startedAt = this.now(); }) };
+      // Task 14 (decision 27): a tier change re-freezes in the SAME write that
+      // starts the run — never a second write that could half-apply.
+      const reconciled = await this.reconcile(ref, plan, 'Approve');
+      if (reconciled.kind === 'confirm') return { ok: false, notice: reconciled.notice };
+      return { ok: true, plan: await this.startRun(ref, planId, ['proposed'], (p) => {
+        p.startedAt = this.now();
+        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest);
+      }) };
     });
   }
 
@@ -439,7 +561,12 @@ export class PlanService {
       if (disabled) {
         throw new PlanActionRefused(`Plan budgets are switched off for this model after a request went over its limit: ${disabled.detail}`);
       }
-      await this.assertNoDrift(ref, plan);
+      // Task 14 (decision 27): Destin's own case — the plan paused because a
+      // specialist's provider couldn't run, he pointed his tiers at another
+      // provider, and Continue is the fix. Only what a specialist can DO still
+      // refuses; new models re-freeze here and run.
+      const reconciled = await this.reconcile(ref, plan, 'Continue');
+      if (reconciled.kind === 'confirm') return { ok: false, notice: reconciled.notice };
       // Review fix 4: the user's Continue resets the automatic-retry allowance
       // of the work it resumes, in the same write that takes the lease.
       // Task 9b: that write also drops the pause, and with it any handoff —
@@ -451,6 +578,7 @@ export class PlanService {
       const view = await this.startRun(ref, planId, ['paused', 'interrupted'], (p, replaced) => {
         handoffId = replaced.paused?.handoff?.id;
         resetRecoveriesForContinue(p);
+        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest);
       });
       this.notifySuperseded(ref, planId, handoffId);
       return { ok: true, plan: view };

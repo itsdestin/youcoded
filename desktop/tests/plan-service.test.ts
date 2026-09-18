@@ -160,9 +160,10 @@ describe('propose', () => {
 });
 
 describe('manifest drift', () => {
+  // Task 14 (decision 27): a change of MODEL or PRICE is no longer a refusal —
+  // it re-freezes and runs, silently or after one ask. Those cases moved to
+  // tests/plan-tier-change.test.ts. What a specialist can DO still refuses here.
   it.each([
-    ['binding', (m: ExecutionManifest) => { m.specialists.reviewer.binding.modelId = 'big'; }, /model a specialist would use/],
-    ['pricing', (m: ExecutionManifest) => { m.specialists.reviewer.pricing = { input: 9, output: 9 }; }, /price/],
     ['definition', (m: ExecutionManifest) => { m.specialists.reviewer.definitionFingerprint = 'def-2'; }, /specialist's instructions/],
     ['permissions', (m: ExecutionManifest) => { m.permissionFingerprint = 'perm-2'; }, /permission settings/],
     ['specialist set', (m: ExecutionManifest) => { delete (m.specialists as any).reviewer; }, /specialist's instructions/],
@@ -178,10 +179,12 @@ describe('manifest drift', () => {
     expect(events).toEqual([]);
   });
 
-  it('drift blocks Continue on a paused or interrupted plan', async () => {
+  it('a price that can no longer be checked stops the first Continue on a paused or interrupted plan', async () => {
     const view = await propose();
     okPlan(await service.approve(SID, view.planId));
     await journal.mutate(REF, (file) => { file.plans[0].status = 'interrupted'; delete file.plans[0].lease; });
+    // Task 14: unpriced now, so the new limit can't be proved no higher — the
+    // first press asks instead of starting (tests/plan-tier-change.test.ts).
     manifest.specialists.reviewer.pricing = null;
     const r = await service.resume(SID, view.planId);
     expect(r).toMatchObject({ ok: false });

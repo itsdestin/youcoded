@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type {
-  PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult, PlanUnsupported, PlanView,
+  PlanActionResult, PlanAutoApproveRead, PlanFailure, PlanSettingsWriteResult, PlanUnsupported, PlanView,
 } from '../../../shared/types';
 import { REMOTE_HOST_CHANGED_EVENT, REMOTE_NOT_SENT } from '../../remote-unsupported';
 
@@ -44,7 +44,10 @@ function bridge(): PlansBridge | undefined {
   return (window as { claude?: { plans?: PlansBridge } }).claude?.plans;
 }
 
-function refusal(raw: unknown, fallback: string): PlanActionResult & { ok: false } | null {
+// Task 14: this helper only ever produces the two REFUSAL forms — the notice is
+// read before it (normalizePlanAction), so the settings calls, whose answers
+// have no notice form, keep type-checking against it.
+function refusal(raw: unknown, fallback: string): PlanFailure | PlanUnsupported | null {
   const r = raw as { ok?: unknown; unsupported?: unknown; error?: unknown; detail?: unknown } | null | undefined;
   if (!r || typeof r !== 'object' || r.ok !== false) return null;
   const error = typeof r.error === 'string' && r.error.trim() ? r.error : fallback;
@@ -63,6 +66,13 @@ function isPlanView(v: unknown): v is PlanView {
 }
 
 function normalizePlanAction(raw: unknown): PlanActionResult {
+  // Task 14 (decision 27): a NOTICE, not a failure — the plan's specialists
+  // changed and the press asks once before running at the new limit. Read
+  // before the refusal forms so the card can show it as a strip, not an error.
+  const n = (raw as { ok?: unknown; notice?: unknown } | null | undefined);
+  if (n && typeof n === 'object' && n.ok === false && typeof n.notice === 'string' && n.notice.trim()) {
+    return { ok: false, notice: n.notice };
+  }
   const refused = refusal(raw, UNREADABLE);
   if (refused) return refused;
   const r = raw as { ok?: unknown; plan?: unknown } | null | undefined;

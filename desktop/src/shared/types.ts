@@ -914,11 +914,17 @@ export interface PlanView {
  * (disable, never retry) from "this attempt failed" (show the real reason).
  * Nothing here ever implies success before the host said so.
  */
-export type PlanUnsupported = { ok: false; unsupported: true; error: string };
+export type PlanUnsupported = { ok: false; unsupported: true; notice?: undefined; error: string };
 /** `detail` (final review F11): the system's own text behind a general
  *  `error`, for the bug report only — never shown on the card. */
-export type PlanFailure = { ok: false; unsupported?: undefined; error: string; detail?: string };
-export type PlanActionResult = { ok: true; plan: PlanView } | PlanFailure | PlanUnsupported;
+export type PlanFailure = { ok: false; unsupported?: undefined; notice?: undefined; error: string; detail?: string };
+/** Specialists plans, Task 14 (decision 27): NOT a failure — nothing went
+ *  wrong. The plan's specialists now run on different models, and the new worst
+ *  case may cost more than the limit the user approved, so the press asks once
+ *  and says by how much. The same button pressed again runs the plan at the new
+ *  limit. The card shows this as a tinted strip, never as an error. */
+type PlanNotice = { ok: false; unsupported?: undefined; error?: undefined; notice: string };
+export type PlanActionResult = { ok: true; plan: PlanView } | PlanNotice | PlanFailure | PlanUnsupported;
 export type PlanAutoApproveRead = { ok: true; underTokens: number } | PlanFailure | PlanUnsupported;
 export type PlanSettingsWriteResult = { ok: true } | PlanFailure | PlanUnsupported;
 

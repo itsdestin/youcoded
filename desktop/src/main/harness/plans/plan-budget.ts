@@ -156,6 +156,74 @@ export function planCeilingUsd(document: PlanDocumentV1, manifest: ExecutionMani
   return anyPriced ? total : null;
 }
 
+// ---- Task 14 (decision 27): is the plan's new worst case provably not more? ----
+
+/**
+ * Why a re-frozen plan could cost MORE than the one the user approved. Every
+ * value is a fact read from the two manifests, so the card's one sentence can
+ * be written from it without guessing.
+ */
+export type PlanCeilingChange =
+  | { notMore: true }
+  | {
+    notMore: false;
+    /** `tokens`/`usd`: the same shape of limit simply got bigger. `now-priced`:
+     *  the approved plan cost nothing. `unknown-approved`: the approved plan had
+     *  no published price to compare with. `unknown-price`: the CURRENT models
+     *  have none, so nothing can be compared. `approximate`: the same numbers,
+     *  but one reply may now go past them. */
+    why: 'tokens' | 'usd' | 'now-priced' | 'unknown-approved' | 'unknown-price' | 'approximate';
+    newTokens: number; oldTokens: number;
+    newUsd: number | null; oldUsd: number | null;
+  };
+
+/** Every distinct specialist the document actually runs. */
+function documentSpecialists(document: PlanDocumentV1): string[] {
+  return [...new Set(leafAllocations(document.steps).map(({ step }) => step.specialist))];
+}
+
+/**
+ * Task 14 (decision 27): changing which model a specialist uses only breaks the
+ * user's consent when it makes the plan cost MORE, so Approve/Continue ask this
+ * question instead of refusing outright.
+ *
+ * WHY "provably": anything that cannot be checked counts as more. A dollar
+ * ceiling of `null` means TWO different things — "no published price" and
+ * "nothing here costs money" — so the snapshots are read directly rather than
+ * the `null` being trusted; and an approximate limit is a weaker promise even at
+ * the very same number, because one reply may go past it.
+ */
+export function ceilingDidNotRise(document: PlanDocumentV1, frozen: ExecutionManifest, current: ExecutionManifest): PlanCeilingChange {
+  const names = documentSpecialists(document);
+  const newTokens = planCeilingTokens(document, current);
+  const oldTokens = planCeilingTokens(document, frozen);
+  const newUsd = planCeilingUsd(document, current);
+  const oldUsd = planCeilingUsd(document, frozen);
+  const kinds = (m: ExecutionManifest) => names.map((n) => snapshotFor(m, n));
+  const currentKinds = kinds(current);
+  const frozenKinds = kinds(frozen);
+  const currentUnknown = currentKinds.some((s) => s === null);
+  const currentAllFree = !currentUnknown && currentKinds.every((s) => s!.kind !== 'priced');
+  const frozenUnknown = frozenKinds.some((s) => s === null);
+  // A specialist whose replies cannot be capped makes the limit approximate; a
+  // plan already approved as approximate has not become weaker.
+  const newlyApproximate = names.some((n) => current.specialists[n]?.approximateLimit === true && frozen.specialists[n]?.approximateLimit !== true);
+  const tokensRose = newTokens > oldTokens;
+  const dollarsOk = currentUnknown ? false
+    : currentAllFree ? true
+      : newUsd !== null && oldUsd !== null && newUsd <= oldUsd + USD_EPSILON;
+  if (!tokensRose && !newlyApproximate && dollarsOk) return { notMore: true };
+  const numbers = { newTokens, oldTokens, newUsd, oldUsd };
+  const why: Exclude<PlanCeilingChange, { notMore: true }>['why'] =
+    currentUnknown ? 'unknown-price'
+      : !dollarsOk && newUsd !== null && oldUsd !== null ? 'usd'
+        : !dollarsOk && frozenUnknown ? 'unknown-approved'
+          : !dollarsOk ? 'now-priced'
+            : tokensRose ? 'tokens'
+              : 'approximate';
+  return { notMore: false, why, ...numbers };
+}
+
 // ---- journal arithmetic ----
 
 /**
