@@ -573,7 +573,9 @@ export default function ModelPicker({
   // 50 while searching, same as it already sat past whatever the user had
   // scrolled to before this change — chunking makes that scroll progressive
   // instead of instant, it does not newly hide anything a plain scroll could
-  // already reach.
+  // already reach. The favourites view is windowed too — only noticeable past
+  // 50 favourites, and where `pinSelectedToTop` is on (the chat's model popup)
+  // the selected model is first there, so it is always in the first chunk.
   const resetKey = useMemo(
     () => JSON.stringify([q, [...sources].sort(), localOnly]),
     [q, sources, localOnly],

@@ -103,10 +103,12 @@ afterEach(() => { cleanup(); vi.clearAllMocks(); });
 // A REAL ArtifactProvider whose value the test controls, the way App's reducer
 // would: `dispatch` is stable (useReducer's is), `state` is replaced wholesale.
 let setArtifactState: (s: any) => void = () => {};
+let harnessDispatch: ReturnType<typeof vi.fn> = vi.fn();
 function Harness() {
   const [state, setState] = useState<any>({ projectViewOpen: true, activeArtifactBySession: {} });
   setArtifactState = setState;
   const [dispatch] = useState(() => vi.fn());
+  harnessDispatch = dispatch;
   const value = React.useMemo(() => ({ state, dispatch }), [state, dispatch]);
   return (
     <ArtifactProvider value={value}>
@@ -174,5 +176,21 @@ describe('Files tab survives a tab switch', () => {
     await waitFor(() => expect(container.firstElementChild?.className).not.toBe('hidden'));
     // The one call from the first mount, and no more.
     expect(listAllFiles).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('opening a file from the Files tab', () => {
+  it('asks the app to open it, and shows it once the app has', async () => {
+    // FilesTab no longer reads the app-wide file state itself: Project View hands
+    // it the open file's id and the dispatch. Both ends of that hand-off, together.
+    const view = render(<Harness />);
+    fireEvent.click(await view.findByTitle('notes.md'));
+    expect(harnessDispatch).toHaveBeenCalledWith({ type: 'ACTIVE_ARTIFACT_SET', sessionId: 'project-view', artifactId: 'f1' });
+    expect(view.queryByTitle('Open with the default app')).toBeNull();
+    // What App's reducer does with that action.
+    act(() => {
+      setArtifactState((st: any) => ({ ...st, activeArtifactBySession: { ...st.activeArtifactBySession, 'project-view': 'f1' } }));
+    });
+    expect(await view.findByTitle('Open with the default app')).toBeTruthy();
   });
 });
