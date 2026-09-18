@@ -75,7 +75,7 @@ function CollapsibleBlock({ children, maxLines = 20, className = '' }: { childre
   // chunked reveal), but uncapped a 5,000-line command output pushed the chat
   // down by 5,000 lines — what D1 (Destin, 2026-09-18) says he doesn't want.
   // Same cap as the expanded file-change / file-read boxes and the git timeline.
-  const cap = open && overflow ? 'max-h-[45vh]' : '';
+  const cap = open && overflow ? 'scroll-box-cap' : '';
   return (
     <div className="relative">
       <pre className={`text-xs text-fg-dim bg-panel rounded-sm p-2 overflow-auto whitespace-pre-wrap font-mono ${cap} ${className}`}>
@@ -660,7 +660,7 @@ function ReadView({ tool, sessionId }: { tool: ToolCallState; sessionId?: string
             // there is nothing to scroll inside THIS box until expanded —
             // only the expanded scroller needs overflow-auto + the cap
             // (review round 1, 2026-09-18).
-            className={expanded ? `${READ_BOX_BASE} overflow-auto max-h-[45vh]` : READ_BOX_BASE}
+            className={expanded ? `${READ_BOX_BASE} overflow-auto scroll-box-cap` : READ_BOX_BASE}
           >
             {drawn.map(r => (
               <div key={r.lineNo} className="flex items-start">

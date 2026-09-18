@@ -44,10 +44,10 @@ describe('Read box draws a slice collapsed and scrolls in chunks expanded', () =
   it('collapsed draws 15 lines; expanded fills a capped scroller 200 at a time; Show less drops back', () => {
     const c = renderBody(tool('Read', { file_path: '/a/big.ts' }, catN(5000)));
     expect(readRows(c)).toBe(15);
-    expect(readBox(c).className).not.toContain('max-h-[45vh]');
+    expect(readBox(c).className).not.toContain('scroll-box-cap');
     fireEvent.click(screen.getByText('Show 4985 more lines'));
     expect(readRows(c)).toBe(200);
-    expect(readBox(c).className).toContain('max-h-[45vh]');
+    expect(readBox(c).className).toContain('scroll-box-cap');
     act(() => io.fireAll());
     expect(readRows(c)).toBe(400);
     fireEvent.click(screen.getByText('Show less'));
@@ -71,8 +71,8 @@ describe('command output block', () => {
     const c = renderBody(tool('Bash', { command: 'seq 5000' }, output));
     // The output <pre> — not the command's own <pre> above it.
     const pre = () => [...c.querySelectorAll('pre')].find((p) => p.textContent!.startsWith('out 0'))!;
-    expect(pre().className).not.toContain('max-h-[45vh]');
+    expect(pre().className).not.toContain('scroll-box-cap');
     fireEvent.click(screen.getByText(/^Show \d+ more lines$/));
-    expect(pre().className).toContain('max-h-[45vh]');
+    expect(pre().className).toContain('scroll-box-cap');
   });
 });

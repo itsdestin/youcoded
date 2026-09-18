@@ -682,6 +682,15 @@ body[data-mode="buddy-chat"] #theme-bg {
   background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
 
+/* WHY one named class (render-cost consolidation 2026-09-18): the height cap
+   every in-chat box scrolls inside once opened — file changes, file reads,
+   command output — and the git timeline's diff host. It was the same arbitrary
+   `max-h-[45vh]` in five places; one name keeps them equal and keeps the
+   design lint's arbitrary-value count from growing. */
+.scroll-box-cap {
+  max-height: 45vh;
+}
+
 /* Chat scroll area extends behind header and bottom chrome —
    extra padding so content starts below the header / above the
    input bar, but scrolls behind frosted glass in both directions.
