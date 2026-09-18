@@ -23,7 +23,9 @@ beforeEach(async () => {
   await updateEngineConfig(home, { cacheDir });
   urls = [];
 });
-afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+afterEach(() => { const t0 = performance.now(); fs.rmSync(root, { recursive: true, force: true }); DIAG('afterEach rmSync', t0); });
+const DIAG = (label: string, t0: number) => { const ms = performance.now() - t0; process.stdout.write(`DIAG ${label} ${ms.toFixed(1)}ms\n`); };
+async function timed<T>(label: string, fn: () => T | Promise<T>): Promise<T> { const t0 = performance.now(); try { return await fn(); } finally { DIAG(label, t0); } }
 
 // Records every URL the downloader asks for, then fails — the test only needs
 // to see WHERE resume went, not to move bytes.
@@ -338,8 +340,11 @@ describe('a foldered model is found by the header reader and by the loaded-memor
  *  it turns on has to be a real reading of this file. Sparse: no bytes written. */
 function plantModel(id: string, bytes: number): void {
   const file = path.join(cacheDir, `${id}.gguf`);
+  let t0 = performance.now();
   fs.writeFileSync(file, miniGguf());
+  DIAG('plantModel write', t0); t0 = performance.now();
   fs.truncateSync(file, bytes);
+  DIAG('plantModel truncate', t0);
 }
 
 /** A manager for a machine with plenty of memory in total but little free right
@@ -348,20 +353,31 @@ function plantModel(id: string, bytes: number): void {
  *  check, and a stale instance would answer from the file as it was. */
 function warnMachine(ids: string[], sizeBytes = 8 * GB): ModelManager {
   const userData = path.join(root, 'userData');
+  let t0 = performance.now();
   plantEngine(userData);
+  DIAG('plantEngine', t0); t0 = performance.now();
   const engine = new EngineManager(home, userData, 9999);
+  DIAG('EngineManager ctor', t0);
+  const acq = (engine as any).acquisition;
+  const origBf = acq.backfillDevices.bind(acq);
+  acq.backfillDevices = (...a: any[]) => { const b0 = performance.now(); const p = origBf(...a); p.then(() => DIAG('backfillDevices settled', b0)); return p; };
   engine.liveModels = async () => ids.map((id) => ({
     id, sizeBytes, loaded: false, state: 'unloaded' as const,
   }));
-  return new ModelManager(home, engine, userData, {
+  const mm = new ModelManager(home, engine, userData, {
     fetchImpl: recordingFetch, totalVramBytes: null,
     totalMemBytes: 64 * GB, availableMemBytes: 4 * GB,
   });
+  for (const k of ['localHeader', 'pool', 'loadedBytes', 'visionBytesByModel', 'modelSettings', 'cacheTypes', 'memoryCheck']) {
+    const orig = (mm as any)[k].bind(mm);
+    (mm as any)[k] = (...a: any[]) => { const t = performance.now(); const r = orig(...a); if (r && typeof r.then === 'function') { r.then(() => DIAG(`mm.${k}`, t)); } else DIAG(`mm.${k}`, t); return r; };
+  }
+  return mm;
 }
 
 /** Write one model's `engine.models` entry, as the settings save will. */
 async function writeModelSettings(modelId: string, entry: unknown): Promise<void> {
-  await updateEngineConfig(home, { models: { [modelId]: entry } } as any);
+  await timed('writeModelSettings', () => updateEngineConfig(home, { models: { [modelId]: entry } } as any));
 }
 
 const dismissedAt = (contextLength: number) => ({ at: 1_757_000_000_000, contextLength });
@@ -458,6 +474,7 @@ describe('ModelManager.memoryCheck — the remembered warning (§D4)', () => {
       null,
     ];
     for (const record of broken) {
+      process.stdout.write(`DIAG --- record ${JSON.stringify(record)}\n`);
       await writeModelSettings('M-Q4_K_M', { memoryWarningDismissed: record });
       expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('tight');
     }
