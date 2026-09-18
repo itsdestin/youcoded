@@ -15,22 +15,39 @@ import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-libra
 import SessionPreviewPane from '../src/renderer/components/SessionPreviewPane';
 import { COPY, previewSessionKey } from '../src/shared/chatsearch-refs';
 import type { TranscriptEvent } from '../src/shared/types';
+import { FOLD_IDLE_MS } from '../src/renderer/hooks/use-entry-folding';
 
 // jsdom has no IntersectionObserver, and scrolling up to the top is what loads
 // an older page. This stand-in records what is observed so a test can say
 // "the reader reached the top" — the one signal the pane pages on.
-let observers: { cb: IntersectionObserverCallback; disconnected: boolean }[] = [];
+//
+// WHY it tracks `observed` elements (2026-09-18, task 6): the pane now always
+// builds a SECOND IntersectionObserver too — the fold hook's, unconditionally
+// enabled since no find bar ever reaches a preview pane. It shares this same
+// global stub. `reachTop()` used to fire its synthetic, target-less
+// `isIntersecting: true` entry at every live observer; fed to the fold hook's
+// callback (which reads `entry.target`) that throws. Track what each fake
+// observer is actually watching so callers can single out the one instance
+// that observed the history sentinel — the one signal this file means.
+let observers: { cb: IntersectionObserverCallback; disconnected: boolean; observed: Element[] }[] = [];
 class FakeIO {
-  private rec: { cb: IntersectionObserverCallback; disconnected: boolean };
-  constructor(cb: IntersectionObserverCallback) { this.rec = { cb, disconnected: false }; observers.push(this.rec); }
-  observe() {}
+  private rec: { cb: IntersectionObserverCallback; disconnected: boolean; observed: Element[] };
+  constructor(cb: IntersectionObserverCallback) { this.rec = { cb, disconnected: false, observed: [] }; observers.push(this.rec); }
+  observe(el: Element) { this.rec.observed.push(el); }
+  unobserve(el: Element) { this.rec.observed = this.rec.observed.filter((o) => o !== el); }
   disconnect() { this.rec.disconnected = true; }
+  takeRecords() { return []; }
+}
+function sentinelObservers() {
+  const sentinel = document.querySelector('[data-history-sentinel]');
+  if (!sentinel) return [];
+  return observers.filter((o) => !o.disconnected && o.observed.includes(sentinel));
 }
 async function reachTop() {
-  // Wait for the pane to start watching (an effect after the render the
-  // caller already saw), rather than assuming it has.
-  await waitFor(() => expect(observers.filter((o) => !o.disconnected).length).toBeGreaterThan(0));
-  const live = observers.filter((o) => !o.disconnected);
+  // Wait for the pane to start watching the sentinel (an effect after the
+  // render the caller already saw), rather than assuming it has.
+  await waitFor(() => expect(sentinelObservers().length).toBeGreaterThan(0));
+  const live = sentinelObservers();
   act(() => { for (const o of live) o.cb([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver); });
 }
 
@@ -60,6 +77,10 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   delete (globalThis as any).IntersectionObserver;
+  // WHY: the folding tests below flip to fake timers to drive the fold-idle
+  // debounce; restore real ones unconditionally so later tests in this file
+  // (and later files, since vitest's timer mock is global) never inherit them.
+  vi.useRealTimers();
 });
 
 describe('SessionPreviewPane', () => {
@@ -148,8 +169,9 @@ describe('SessionPreviewPane', () => {
     expect(await screen.findByText(/ETIMEDOUT reading older page/)).toBeTruthy();
     expect(screen.getByText('ask58')).toBeTruthy();
     // No paging while the error shows — the top is still in view, and
-    // re-arming would retry in a loop.
-    expect(observers.filter((o) => !o.disconnected)).toHaveLength(0);
+    // re-arming would retry in a loop. (The fold hook's own, unrelated
+    // observer stays live regardless — this checks the SENTINEL specifically.)
+    expect(sentinelObservers()).toHaveLength(0);
 
     (window as any).claude.chatsearch.read.mockResolvedValueOnce(page('abc', [56, 57], null));
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -183,5 +205,87 @@ describe('SessionPreviewPane', () => {
     const { container } = render(<SessionPreviewPane provider="claude" id="abc" title="" />);
     await screen.findByText('ask1');
     expect(container.querySelector('[data-conversation-id]')?.getAttribute('data-conversation-title')).toBe('');
+  });
+});
+
+// A single-page, single-observer fixture: `hasMore: false` (cursor `null`)
+// means the history-sentinel effect never observes anything, so the only
+// IntersectionObserver constructed for these tests is the fold hook's — a
+// test can grab it by construction order without disambiguating two.
+// 30 turns * (1 user bubble + 1 assistant-turn bubble) = 60 timeline entries,
+// matching the task brief's "first page has 60 entries" fixture.
+const bigPage = (id: string, turns: number) =>
+  page(id, Array.from({ length: turns }, (_, i) => i + 1), null);
+
+// A minimal IntersectionObserver stub that (unlike the module-level FakeIO
+// above, shared with the history-sentinel tests) exposes its callback and
+// observed elements directly — the same shape use-entry-folding.test.ts uses
+// to drive the hook itself, needed here to fire a REAL fold rather than only
+// asserting the attribute that lets folding find an entry.
+class FoldIO {
+  static instances: FoldIO[] = [];
+  cb: (entries: Array<{ target: Element; isIntersecting: boolean }>) => void;
+  observed: Element[] = [];
+  constructor(cb: FoldIO['cb']) { this.cb = cb; FoldIO.instances.push(this); }
+  observe(el: Element) { this.observed.push(el); }
+  unobserve(el: Element) { this.observed = this.observed.filter((o) => o !== el); }
+  disconnect() { this.observed = []; }
+  takeRecords() { return []; }
+}
+
+describe('PreviewTimeline folding', () => {
+  beforeEach(() => { FoldIO.instances = []; });
+
+  // (a) alone is a lookalike — it passes with the attribute wired up and
+  // nothing ever folded. Kept anyway because it pins the registration key
+  // every entry must carry for folding to be able to find it at all.
+  it('gives every timeline entry a data-entry-key, the fold hook\'s registration key', async () => {
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(bigPage('fold-a', 30));
+    const { container } = render(<SessionPreviewPane provider="claude" id="fold-a" title={TITLE} />);
+    await screen.findByText('ask30');
+
+    const entries = container.querySelectorAll('.timeline-entry');
+    expect(entries.length).toBe(60);
+    for (const el of entries) {
+      expect(el.getAttribute('data-entry-key')).toBeTruthy();
+    }
+  });
+
+  it('folds an entry the observer reports out of view into a same-height, contentless spacer, while an intersecting entry keeps its content', async () => {
+    (globalThis as any).IntersectionObserver = FoldIO;
+    (window as any).claude.chatsearch.read.mockResolvedValueOnce(bigPage('fold-b', 30));
+    const { container } = render(<SessionPreviewPane provider="claude" id="fold-b" title={TITLE} />);
+    await screen.findByText('ask30');
+
+    // hasMore is false for this page, so the fold hook's observer is the only
+    // one built — see the comment on bigPage above.
+    expect(FoldIO.instances).toHaveLength(1);
+    const io = FoldIO.instances[0];
+
+    const entryEls = [...container.querySelectorAll<HTMLElement>('.timeline-entry[data-entry-key]')];
+    const target = entryEls[0];
+    const kept = entryEls[1];
+    const targetText = target.textContent;
+    // jsdom measures every element at 0; the hook REFUSES to fold a 0-height
+    // entry (a 0px spacer would collapse the scroll height under the reader
+    // mid-read), so a real fold needs a stubbed, non-zero offsetHeight —
+    // exactly as use-entry-folding.test.ts's own `entry()` helper does.
+    Object.defineProperty(target, 'offsetHeight', { get: () => 240, configurable: true });
+
+    vi.useFakeTimers();
+    // Reports `target` out of view; `kept` is never reported, so it stays
+    // intersecting (the hook's default) and must never fold.
+    act(() => { io.cb([{ target, isIntersecting: false }]); });
+    // Folding waits for scrolling to go IDLE before it commits (FOLD_IDLE_MS) —
+    // advance past exactly that settle delay.
+    await act(async () => { await vi.advanceTimersByTimeAsync(FOLD_IDLE_MS); });
+
+    expect(target.style.height).toBe('240px');
+    expect(target.children.length).toBe(0);
+    expect(target.textContent).toBe('');
+    expect(targetText).not.toBe('');
+
+    expect(kept.style.height).toBe('');
+    expect(kept.children.length).toBeGreaterThan(0);
   });
 });

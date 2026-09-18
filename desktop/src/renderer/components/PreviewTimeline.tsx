@@ -23,13 +23,18 @@ import { shouldRenderAssistantTurn, type SessionChatState } from '../state/chat-
 import { findArchiveBoundary } from '../state/archive-boundary';
 import { useTheme } from '../state/theme-context';
 import type { SessionProvider } from '../../shared/types';
+import type { EntryFolding } from '../hooks/use-entry-folding';
 
-export default function PreviewTimeline({ state, sessionId, provider }: {
+export default function PreviewTimeline({ state, sessionId, provider, folding }: {
   state: SessionChatState;
   /** The preview's reducer key (previewSessionKey) — never a live session's id,
    *  so file chips and helper cards look nothing up against a running chat. */
   sessionId: string;
   provider: SessionProvider;
+  /** Perf cycle 3's fold controller (use-entry-folding.ts) — optional so this
+   *  component still renders standalone (e.g. a future caller with no scroll
+   *  container to fold against) without every entry needing a null check. */
+  folding?: EntryFolding;
 }) {
   const { showTimestamps } = useTheme();
   const { index: lastArchiveIdx } = React.useMemo(() => findArchiveBoundary(state.timeline), [state.timeline]);
@@ -81,12 +86,22 @@ export default function PreviewTimeline({ state, sessionId, provider }: {
         }
         // Same fade ChatView gives everything above the last /clear or /compact.
         const archived = lastArchiveIdx >= 0 && idx < lastArchiveIdx;
+        // WHY: same fold as ChatView.tsx (its `state.timeline.map` wrapper) —
+        // this timeline MUST mirror it, since the preview is read far enough
+        // back that it hits the same far-off-DOM-node cost the chat does, and
+        // it has no virtualization of its own. `registerEntry` is stable (the
+        // hook's contract), so passing it directly as `ref` never causes a
+        // per-render detach/reattach.
+        const folded = folding?.isFolded(key) ?? false;
+        const foldHeight = folded ? folding!.heightOf(key) : undefined;
         return (
           // timeline-entry + in-view: the chat's own wrapper classes. `in-view`
           // is what theme glass keys on (`[data-wallpaper] .in-view .bg-inset`),
           // so a bubble here is frosted exactly like one in the chat.
-          <div key={key} className={`timeline-entry in-view${archived ? ' opacity-60' : ''}`}>
-            {content}
+          <div key={key} ref={folding?.registerEntry} data-entry-key={key}
+            className={`timeline-entry in-view${archived ? ' opacity-60' : ''}`}
+            style={folded && foldHeight ? { height: foldHeight } : undefined}>
+            {folded && foldHeight ? null : content}
           </div>
         );
       })}
