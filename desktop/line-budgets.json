@@ -16,7 +16,7 @@
     "renderer/remote-shim.ts": 3109,
     "renderer/state/chat-reducer.ts": 2987,
     "renderer/styles/globals.css": 2918,
-    "renderer/components/SessionStrip.tsx": 2776,
+    "renderer/components/SessionStrip.tsx": 2774,
     "main/main.ts": 2536,
     "shared/types.ts": 2187,
     "renderer/components/SyncPanel.tsx": 2033,

@@ -143,3 +143,34 @@
   .ring-state:hover:not(:disabled) { outline-color: color-mix(in srgb, var(--fg) 28%, transparent); }
 }
 .ring-state:active:not(:disabled) { outline-color: color-mix(in srgb, var(--fg) 50%, transparent); }
+
+/* ── Primary buttons on GLASS: a hover you can see, and the press they never had ──
+   Destin, 2026-09-18: "one place missing hover: the new session button on the no
+   active session screen" (on Meadow Mist, a wallpaper theme).
+
+   globals.css restates the primary button's hover as UNLAYERED rules in three
+   places (`.panel-glass`, `.layer-surface`, `.glass-overlay` — its long comment
+   there says why: unlayered beats Tailwind's layered utilities, which had left
+   every popup's primary button with a dead hover). Two things were still wrong:
+
+   1. `.panel-glass`'s hover only scaled the fill's ALPHA to 90%. Over a blurred
+      wallpaper that is a button becoming 10% more see-through — nothing a person
+      can see. A control that IS the glass cannot fade "toward the surface"; the
+      surface is a photograph. It moves toward its own LABEL colour instead, the
+      same idea as Button's `on-accent` variant, at the alpha it already had.
+   2. None of the three had a press companion, and being unlayered `:hover` rules
+      they out-rank Button's `active:bg-accent/80` — a pressed button is a hovered
+      one. So on glass, and inside every popup, primary buttons had no press state.
+
+   Each selector adds `:not(:disabled)` to out-rank its globals.css counterpart on
+   SPECIFICITY (this sheet is imported first, so it cannot win on order). */
+[data-wallpaper] .panel-glass.bg-accent:hover:not(:disabled) {
+  background-color: color-mix(in srgb, color-mix(in oklab, var(--accent) 86%, var(--on-accent)) calc(var(--panels-opacity, 1) * 100%), transparent);
+}
+[data-wallpaper] .panel-glass.bg-accent:active:not(:disabled) {
+  background-color: color-mix(in srgb, color-mix(in oklab, var(--accent) 74%, var(--on-accent)) calc(var(--panels-opacity, 1) * 100%), transparent);
+}
+.layer-surface .bg-accent:active:not(:disabled),
+.glass-overlay .bg-accent:active:not(:disabled) {
+  background-color: color-mix(in oklab, var(--accent) 80%, var(--panel));
+}

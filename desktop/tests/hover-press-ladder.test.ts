@@ -11,7 +11,7 @@ import { join } from 'path';
 import { describe, it, expect } from 'vitest';
 import { RENDERER, readSource } from './helpers/guard-scope';
 import { buttonClasses, type ButtonVariant } from '../src/renderer/components/ui/Button';
-import { ON_INSET_CONTROL, HEADER_ICON_BUTTON } from '../src/renderer/components/header/control-states';
+import { ON_INSET_CONTROL, HEADER_ICON_BUTTON, pillSurfaceClass } from '../src/renderer/components/header/control-states';
 
 const css = readSource(join(RENDERER, 'styles', 'motion.css')).replace(/\r/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -145,5 +145,52 @@ describe('a frosted control answers with a ring, because its fill IS the glass',
     }
     expect(insideHoverMedia(css.indexOf('.ring-state:hover:not(:disabled) {'))).toBe(true);
     expect(insideHoverMedia(css.indexOf('.ring-state:active:not(:disabled) {'))).toBe(false);
+  });
+});
+
+describe('primary buttons on glass: a visible hover, and the press the unlayered rules were eating', () => {
+  const globals = readSource(join(RENDERER, 'styles', 'globals.css')).replace(/\r/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('the welcome screen\'s New Session moves toward its label colour, not just 10% more see-through', () => {
+    const hover = rule('[data-wallpaper] .panel-glass.bg-accent:hover:not(:disabled)');
+    expect(hover).toContain('var(--on-accent)');
+    expect(hover).toContain('var(--panels-opacity, 1) * 100%');   // keeps the alpha it had
+    const pct = (sel: string) => Number(/var\(--accent\) (\d+)%/.exec(rule(sel))?.[1]);
+    // Press is the same move, further.
+    expect(pct('[data-wallpaper] .panel-glass.bg-accent:active:not(:disabled)'))
+      .toBeLessThan(pct('[data-wallpaper] .panel-glass.bg-accent:hover:not(:disabled)'));
+  });
+
+  it('every unlayered primary-hover carve-out in globals.css has a press companion here', () => {
+    // The carve-outs are `:hover` rules outside any cascade layer, so they beat
+    // Button's `active:bg-accent/80`. A NEW carve-out there with no partner here
+    // silently removes the press state from every button it covers.
+    const carveOuts = [...globals.matchAll(/^([^\n{}]*\.bg-accent:hover)\s*\{/gm)].map((m) => m[1].trim());
+    expect(carveOuts.length).toBeGreaterThanOrEqual(3);
+    for (const sel of carveOuts) {
+      const press = `${sel.replace(/:hover$/, '')}:active:not(:disabled)`;
+      expect(css, `no press companion for "${sel}"`).toContain(press);
+    }
+  });
+});
+
+describe('a session pill answers the pointer in all three of its states', () => {
+  it('an expanded, unselected name gains a hover and a press — colour only, so no width changes', () => {
+    const cls = pillSurfaceClass(false, false);
+    expect(cls).toContain('hover:bg-inset');
+    expect(cls).toContain('active:bg-edge');
+    // The border is always present (transparent at rest): hover may recolour it,
+    // never add one. A border appearing would widen the pill under the packer.
+    expect(cls).toContain('border-transparent');
+    expect(cls).not.toMatch(/(^|\s)(hover:)?(border(-[0-9]|$|\s)|p[xy]?-|m[xy]?-|w-|scale-)/);
+  });
+
+  it('is silent while a pill is being dragged — the drag\'s visuals are not ours to touch', () => {
+    expect(pillSurfaceClass(false, true)).not.toMatch(/hover:|active:/);
+  });
+
+  it('the active pill and a peeked dot keep the chip look they had', () => {
+    expect(pillSurfaceClass(true, false)).toBe('border-edge bg-panel');
+    expect(pillSurfaceClass(true, true)).toBe('border-edge bg-panel');
   });
 });
