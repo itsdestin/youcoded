@@ -79,7 +79,7 @@ const WORKBENCH_TEXT_HEADS: Record<string, string> = {
 
 /** Dotted paths this shim implements by hand (`'session.list'`), plus dotless
  *  top-level bridge members (`'getPlatform'`). The contract test
- *  (tests/workbench-mock-contract.test.ts) checks each against preload.ts. */
+ *  (tests/mock-shim-window.test.ts) checks each against preload.ts. */
 export const HAND_WRITTEN: ReadonlyArray<string> = [
   'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename',
   'devLabel', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
@@ -374,7 +374,7 @@ function withCatchAll(namespace: string, impl: Record<string, unknown>): Record<
         // A nested hand-written namespace (`theme.marketplace = { list }`) gets
         // the same catch-all as a top-level one, so the members it does NOT
         // implement still resolve `[]` rather than being undefined — the
-        // synchronous-throw-inside-Promise.all bug workbench-shim-semantics pins.
+        // synchronous-throw-inside-Promise.all bug mock-shim.test.ts pins.
         if (value && typeof value === 'object' && !Array.isArray(value)) {
           if (!cache.has(key)) cache.set(key, withCatchAll(`${namespace}.${key}`, value as Record<string, unknown>));
           return cache.get(key);
@@ -1984,7 +1984,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // returns since 2026-09-16, so the preview replays them through the chat
       // reducer exactly as it does a real page. A turn with a third line gets a
       // short sentence, a few tool calls, then the answer, so the preview shows
-      // a real tool group (tests/workbench-transcript-fixture.test.ts).
+      // a real tool group (tests/mock-shim.test.ts, transcript fixture).
       //
       // The turns cycle through CHAT_TURNS rather than printing filler. WHY
       // (2026-09-10): a human reads this text to judge whether the preview
