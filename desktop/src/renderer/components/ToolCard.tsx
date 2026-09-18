@@ -758,7 +758,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
                 type="button"
                 disabled={responding}
                 onClick={() => setGrantPick(o.scope)}
-                className="flex items-start gap-2 text-left disabled:opacity-50"
+                className="flex items-start gap-2 text-left disabled:opacity-50 rounded-md px-1 -mx-1 state-layer"
               >
                 <Radio checked={chosenScope === o.scope} onChange={() => setGrantPick(o.scope)} className="mt-0.5" />
                 <span className="text-2xs text-fg-2 break-all">

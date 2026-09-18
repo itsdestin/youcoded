@@ -139,7 +139,8 @@ function ManagedTagRow({ tag, registry }: { tag: TagRecord; registry: TagRegistr
         <button
           type="button"
           onClick={() => setPaletteOpen((o) => !o)}
-          className="w-4 h-4 shrink-0 rounded-full border"
+          // A swatch has no fill to change — it IS the colour — so a ring answers instead.
+          className="w-4 h-4 shrink-0 rounded-full border transition-shadow hover:ring-2 hover:ring-edge active:ring-fg-muted"
           style={{ backgroundColor: `var(--${tag.color})`, borderColor: `var(--${tag.color})` }}
           aria-label={`Change color (currently ${tag.color.replace('tag-', '')})`}
           aria-expanded={paletteOpen}

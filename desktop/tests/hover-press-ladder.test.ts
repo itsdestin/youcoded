@@ -96,3 +96,54 @@ describe('the Button primitive presses', () => {
     expect(buttonClasses('ghost', 'md', 'bg-panel')).toContain('active:bg-edge');
   });
 });
+
+describe('the state layer — hover and press on a surface the control cannot know', () => {
+  it('a translucent wash of the theme text colour: hover behind (hover: hover), press not', () => {
+    const hover = css.indexOf('.state-layer:hover:not(:disabled) {');
+    const press = css.indexOf('.state-layer:active:not(:disabled) {');
+    expect(hover).toBeGreaterThan(-1);
+    expect(press).toBeGreaterThan(-1);
+    expect(insideHoverMedia(hover)).toBe(true);
+    expect(insideHoverMedia(press)).toBe(false);
+    const pct = (sel: string) => Number(/var\(--fg\) (\d+)%, transparent/.exec(rule(sel))?.[1]);
+    expect(pct('.state-layer:hover:not(:disabled)')).toBeGreaterThan(0);
+    // Press is the same wash, deeper — never a different colour.
+    expect(pct('.state-layer:active:not(:disabled)')).toBeGreaterThan(pct('.state-layer:hover:not(:disabled)'));
+  });
+
+  it('uses transition LONGHANDS, so a dense list can still quantise it with stepped-hover', () => {
+    // The `transition` shorthand would reset the timing function and silently undo
+    // `.stepped-hover` on every swept row — the frame-budget defect
+    // tests/animation-css-budget.test.ts exists for.
+    const base = rule('.state-layer');
+    expect(base).toContain('transition-duration: var(--dur-hover)');
+    expect(base).not.toMatch(/(^|[;{\s])transition:/);
+    expect(rule('.state-layer.stepped-hover')).toContain('steps(');
+  });
+
+  it('a text-only control takes the text step instead of a fill', () => {
+    const at = css.indexOf('.link-control:hover:not(:disabled) {');
+    expect(insideHoverMedia(at)).toBe(true);
+    expect(rule('.link-control:hover:not(:disabled)')).toContain('var(--link-hover');
+  });
+});
+
+describe('a field that is a button answers with its border', () => {
+  it('keeps the resting border and gains hover + press steps', async () => {
+    const { fieldClasses, FIELD_TRIGGER_STATES } = await import('../src/renderer/components/ui/field');
+    const cls = fieldClasses('sm', FIELD_TRIGGER_STATES);
+    expect(cls).toContain('border-edge-dim');
+    expect(cls).toContain('hover:border-fg-muted');
+    expect(cls).toContain('active:border-fg-dim');
+  });
+});
+
+describe('a frosted control answers with a ring, because its fill IS the glass', () => {
+  it('never touches background-color or box-shadow; hover behind (hover: hover), press not', () => {
+    for (const sel of ['.ring-state', '.ring-state:hover:not(:disabled)', '.ring-state:active:not(:disabled)']) {
+      expect(rule(sel)).not.toMatch(/background|box-shadow/);
+    }
+    expect(insideHoverMedia(css.indexOf('.ring-state:hover:not(:disabled) {'))).toBe(true);
+    expect(insideHoverMedia(css.indexOf('.ring-state:active:not(:disabled) {'))).toBe(false);
+  });
+});

@@ -5,9 +5,6 @@ import './platform-bootstrap';
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/globals.css';
-// AFTER globals.css on purpose: motion.css refines rules declared there, and
-// wins a specificity tie only by coming later. See the file's header.
-import './styles/motion.css';
 import App from './App';
 import { RemoteGate } from './remote-gate';
 

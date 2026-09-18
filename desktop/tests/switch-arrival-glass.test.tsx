@@ -90,8 +90,9 @@ describe('the frosted arrival never fades an ancestor of the glass', () => {
     expect(css.slice(media)).toContain('[data-bubble-glass] .switch-arrival {');
   });
 
-  it('is actually loaded, after globals.css', () => {
-    const index = readSource(join(RENDERER, 'index.tsx'));
-    expect(index.indexOf("import './styles/motion.css'")).toBeGreaterThan(index.indexOf("import './styles/globals.css'"));
+  it('is actually loaded: globals.css imports it', () => {
+    // Imported rather than loaded from index.tsx so the design lint, which learns
+    // class names through globals.css, knows the classes declared here.
+    expect(readSource(join(RENDERER, 'styles', 'globals.css'))).toContain('@import "./motion.css";');
   });
 });

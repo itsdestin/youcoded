@@ -296,7 +296,9 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
                     // editor brings its own (TagNoteEditor), and both states
                     // draw the same border/fill/padding so the dialog body
                     // still doesn't change shape when you click in.
-                    className="group relative w-full text-left rounded-lg border border-edge-dim bg-inset px-3 py-2.5"
+                    // Hover brightens the BORDER, the way a field does — it becomes one on
+                    // click, and a fill change here would shift under the text.
+                    className="group relative w-full text-left rounded-lg border border-edge-dim hover:border-edge active:border-fg-muted transition-colors bg-inset px-3 py-2.5"
                   >
                     {/* Fixed 16px glyph column so the chips and the note text
                         start on the SAME left edge — letting each row set its

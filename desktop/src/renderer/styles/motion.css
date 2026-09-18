@@ -1,5 +1,9 @@
 /* motion.css — the app's gesture-triggered motion that does not fit in globals.css.
-   Loaded by index.tsx right AFTER globals.css, so a rule here wins a tie.
+   @imported by globals.css (one line there), which is also how the design lint
+   learns the class names declared here. Imports are hoisted, so this sheet
+   comes BEFORE the rest of globals.css: a rule here that refines one there must
+   out-rank it on SPECIFICITY, never on order — every such rule below does, and
+   says so.
 
    WHY a separate file (2026-09-18): globals.css sits at its line budget
    (desktop/line-budgets.json), and the premium-motion work adds arrivals, hover
@@ -29,7 +33,7 @@
    iteration; the elements faded are the screenful already marked `.in-view`.
 
    Inside no-preference so the OS setting still wins: these selectors out-rank
-   globals.css's plain `.switch-arrival { animation: none }`. Reduce Visual
+   (on specificity) globals.css's plain `.switch-arrival { animation: none }`. Reduce Visual
    Effects needs no rule — it removes the glass, and with it this attribute.
    Guard: tests/switch-arrival-glass.test.tsx. */
 @keyframes switch-arrival-rise { from { transform: translateY(14px); } to { transform: none; } }
@@ -92,5 +96,50 @@
    sites, hand-written and primitive alike — presses one step deeper. One rule
    rather than an `active:` class at each site, so a new `hover:bg-inset` gets
    its press state without anyone remembering to add it. Same specificity as
-   Tailwind's own `.hover\:bg-inset:hover`; it wins by loading later. */
+   Out-ranks Tailwind's own `.hover\:bg-inset:hover` on specificity (the :not),
+   and Tailwind's utilities sit in a cascade layer this sheet is outside of. */
 .hover\:bg-inset:active:not(:disabled) { background-color: var(--edge); }
+
+/* ── The state layer: hover and press for a control on ANY surface ──────────
+   The ladder above needs to know what a control sits on. A row inside a tool
+   card, a swatch in a popup, a link in a wizard, a control on a glass panel or
+   on a community theme's tinted surface does not know — and guessing the "next
+   step" wrong paints an invisible or a foreign-looking patch (both shipped: see
+   Button's `on-accent` variant). A translucent wash of the theme's own text
+   colour reads on every surface in every theme, because it is relative to
+   whatever is already there. 7% / 13% are the lightest pair that stayed visible
+   on Light's #F2F2F2 and Midnight's #0D1117 alike.
+
+   Longhands, not the `transition` shorthand, so `.stepped-hover` (globals.css)
+   can still quantise a DENSE list — rows a pointer sweeps across present a
+   frame per row per refresh, which is the one place a smooth fade is not free
+   (tests/animation-css-budget.test.ts). A one-off control fades smoothly. */
+.state-layer {
+  transition-property: background-color, color, border-color;
+  transition-duration: var(--dur-hover);
+  transition-timing-function: var(--ease-reveal);
+}
+.state-layer.stepped-hover { transition-timing-function: steps(4); }
+@media (hover: hover) {
+  .state-layer:hover:not(:disabled) { background-color: color-mix(in srgb, var(--fg) 7%, transparent); }
+}
+.state-layer:active:not(:disabled) { background-color: color-mix(in srgb, var(--fg) 13%, transparent); }
+
+/* A text-only control (an inline "link" button). No fill to change, so the
+   label takes the full text step and underlines — `--link-hover` exists per
+   theme and nothing in the sweep's seven wizard links was using it. */
+.link-control { transition: color var(--dur-hover) var(--ease-reveal); text-underline-offset: 2px; }
+@media (hover: hover) {
+  .link-control:hover:not(:disabled) { color: var(--link-hover, var(--fg)); text-decoration: underline; }
+}
+.link-control:active:not(:disabled) { color: var(--fg); }
+
+/* A control whose FILL must not change: frosted `.layer-surface` pills (the
+   buddy windows), where swapping background-color would replace the glass, and
+   whose box-shadow is already its drop shadow. An outline is independent of
+   both, and follows the border radius. Same wash, as a 1px ring. */
+.ring-state { outline: 1px solid transparent; outline-offset: -1px; transition: outline-color var(--dur-hover) var(--ease-reveal); }
+@media (hover: hover) {
+  .ring-state:hover:not(:disabled) { outline-color: color-mix(in srgb, var(--fg) 28%, transparent); }
+}
+.ring-state:active:not(:disabled) { outline-color: color-mix(in srgb, var(--fg) 50%, transparent); }
