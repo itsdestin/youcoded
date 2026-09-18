@@ -1078,6 +1078,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     removeKey: async (id: string) => { if (store.refuseWrites) throw new Error('refused'); searchKeys.delete(id); return true; },
   };
 
+  // A key saved through the fake Connect dialog, so the card re-reads as
+  // having one — the real registry does the same after setKey.
+  let openrouterKeySaved = false;
   const providers: Ns<'providers'> = {
     // The ChatGPT row is keyless: `ready` IS "signed in", derived here so the
     // picker, the Settings row and the runtime selector never disagree.
@@ -1085,14 +1088,17 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // `&&` so a scenario that turns every provider off (no-providers) still wins.
       if (p.type === 'chatgpt') return { ...p, ready: p.ready && chatgptStatus.state === 'signed-in' };
       const pin = openrouterPin();
-      if (p.type === 'openrouter' && pin) return { ...p, hasKey: pin !== 'none', ready: p.ready && pin !== 'none' };
+      if (p.type === 'openrouter' && (pin || openrouterKeySaved)) {
+        const hasKey = openrouterKeySaved || pin !== 'none';
+        return { ...p, hasKey, ready: p.ready && hasKey };
+      }
       return p;
     }),
     catalog: async () => store.getState().catalog,
     // Today's OpenRouter Test probes a public list that answers for any key,
     // so the fake answers the way the real one does: always "Connected."
     test: async () => ({ ok: true, message: 'Connected.' }),
-    setKey: async () => { if (store.refuseWrites) throw new Error('refused'); return true; },
+    setKey: async () => { if (store.refuseWrites) throw new Error('refused'); openrouterKeySaved = true; return true; },
   };
 
   // M5 2a. Real backend since (permissions:* on preload + remote-shim); the fake
