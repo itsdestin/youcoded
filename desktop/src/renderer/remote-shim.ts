@@ -436,7 +436,7 @@ function getWsUrl(): string {
  *                   false, since a resize does change the host and is still safe to repeat.
  *   'transport'   — the connection talking about itself.
  *
- * An unclassified channel fails remote-message-kinds.test.ts. That is deliberate: the way
+ * An unclassified channel fails remote-shim.test.ts. That is deliberate: the way
  * this goes wrong again is a new channel quietly defaulting to the queue.
  */
 export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'transport'>> = {
@@ -692,7 +692,7 @@ export function markConnectedForNotices(): void {
  *  would be thrown away as an error.
  *
  *  Exported and hoisted to module scope on purpose: pinned by
- *  tests/remote-shim-reject.test.ts, because deleting an entry restores a bug
+ *  tests/remote-shim-refusals.test.ts, because deleting an entry restores a bug
  *  no other test in the suite can see.
  *
  *  KNOWN GAP, filed rather than fixed here: `models:installed` answers the same
@@ -747,7 +747,7 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
  *  needs a live socket and a pending request before it will run a line, so the
  *  rule that decides whether a user sees their error or a silent success had no
  *  reachable test. Anything that stops consulting REJECT_ON_NOT_OK now fails
- *  tests/remote-shim-reject.test.ts.
+ *  tests/remote-shim-refusals.test.ts.
  *
  *   'unsupported' — the host does not implement this channel at all.
  *   'failure'     — the host's handler threw; re-throw it to the caller.
@@ -1903,7 +1903,7 @@ export function installShim(): void {
       // `count || 10` / `all || false` mirror preload so the wire always carries
       // real number/boolean types (Android's optInt/optBoolean and the server's
       // slice(-count) both need them). Guard: SessionBridge.loadHistory (shared/bridge-types.ts,
-      // parameter types) + remote-shim-loadhistory-args.test.ts (the order on the wire).
+      // parameter types) + remote-shim.test.ts (the order on the wire).
       loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) =>
         invoke('session:history', { sessionId, projectSlug, count: count || 10, all: all || false }),
       switch: (sessionId: string) => invoke('session:switch', { sessionId }),
@@ -2298,7 +2298,7 @@ export function installShim(): void {
       // WHY these are real now (Destin, 2026-09-11: the phone kept an old theme until it was
       // reloaded): a phone is one more window on the computer's appearance. A change here
       // goes to the computer to pass on; a change there arrives as appearance:sync.
-      // tests/remote-appearance-sync.test.ts.
+      // tests/remote-shim.test.ts.
       broadcast: (prefs: Record<string, any>) => { fire('appearance:broadcast', prefs); },
       onSync: (cb: (prefs: Record<string, any>) => void) => {
         const handler = addListener('appearance:sync', cb);

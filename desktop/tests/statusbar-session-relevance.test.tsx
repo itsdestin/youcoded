@@ -58,7 +58,7 @@ afterEach(cleanup);
 beforeEach(() => {
   // This repo's jsdom ships no localStorage (Node's experimental global
   // storage needs --localstorage-file, which isn't passed) — stub it the same
-  // way tests/remote-shim-unsupported.test.ts does.
+  // way tests/remote-shim-refusals.test.ts does.
   (window as any).localStorage = {
     _s: {} as Record<string, string>,
     getItem(k: string) { return this._s[k] ?? null; },
