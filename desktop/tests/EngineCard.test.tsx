@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// engine-card-update.test.tsx
+// EngineCard — the engine update route, the hardware fact line, a rejected switch.
 // Pins the ONLY route an already-installed engine has to a newer pinned build.
 //
-// WHY this test exists (2026-08-27): bumping ENGINE_VERSION upgrades nobody on
+// WHY this test exists: bumping ENGINE_VERSION upgrades nobody on
 // its own. EngineAcquisition.installed() falls back to any complete install it
 // finds, so an existing b-number keeps serving forever, and the "Install" button
 // is hidden the moment ANY engine is present. A user whose model needs a newer
