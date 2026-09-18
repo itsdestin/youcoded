@@ -13,7 +13,7 @@
  * instead render "[object Object]".
  *
  * Exposure is on card expand, so these tests drive the real ToolCard the way
- * permission-confirm-card.test.tsx does: mount inside ChatProvider, click the
+ * ToolCard.test.tsx's Always-allow section does: mount inside ChatProvider, click the
  * header to expand, and assert the body rendered without crashing or leaking
  * "[object Object]".
  */

@@ -543,7 +543,7 @@ export default function TerminalView({ sessionId, visible }: Props) {
   // and jump to the bottom so the redraw lands on a blank screen.
   // ORDER MATTERS: registered before the output listener, because the shim
   // drains its pre-mount backlog on the first output listener and a reset in
-  // that backlog must find this handler already there (terminal-view-reset test).
+  // that backlog must find this handler already there (TerminalView-pty-reset test).
   usePtyReset(sessionId, () => {
     terminalRef.current?.reset();
     terminalRef.current?.scrollToBottom();

@@ -65,13 +65,15 @@ describe('private request diagnostics', () => {
     expect(d.stats().writeFailures).toBe(1001);
   });
 
-  it('evicts inactive fingerprints within 8 MiB and drops an oversized observation', async () => {
-    const d = new ChatGptRequestDiagnostics({ directory: '/unused', write: async () => {} });
-    const large = body(Array(10000).fill('x'));
-    for (let i = 0; i < 30; i++) d.finish(d.dispatch({ ...scope, sessionId: String(i) }, large), 'success');
+  it('evicts inactive fingerprints within the memory budget and drops an oversized observation', async () => {
+    // A lane costs 32 bytes per input item + 1024; 200 items ≈ 7.4 KiB, so 12 lanes overflow 64 KiB.
+    const memoryBytes = 64 * 1024;
+    const d = new ChatGptRequestDiagnostics({ directory: '/unused', write: async () => {}, memoryBytes });
+    const large = body(Array(200).fill('x'));
+    for (let i = 0; i < 12; i++) d.finish(d.dispatch({ ...scope, sessionId: String(i) }, large), 'success');
     expect(d.stats().evicted).toBeGreaterThan(0);
-    expect(d.stats().fingerprintBytes).toBeLessThanOrEqual(8 * 1024 * 1024);
-    expect(d.dispatch(scope, body(Array(270000).fill('x')))).toBeUndefined();
+    expect(d.stats().fingerprintBytes).toBeLessThanOrEqual(memoryBytes);
+    expect(d.dispatch(scope, body(Array(2100).fill('x')))).toBeUndefined();
     expect(d.stats().dropped).toBe(1);
     await d.flush();
   });

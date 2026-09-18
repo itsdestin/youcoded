@@ -213,7 +213,7 @@ export class SyncService extends EventEmitter {
     this.backupLogPath = path.join(this.claudeDir, 'backup.log');
     this.appSyncMarkerPath = path.join(this.claudeDir, 'toolkit-state', '.app-sync-active');
     // Owned by SpaceManager (sync-spaces/space-manager.ts) — read-only here.
-    // Pinned to SpaceManager's default path by sync-health-primary-system.test.ts.
+    // Pinned to SpaceManager's default path by sync-service.test.ts (primary-vs-additional section).
     this.syncSpacesStatePath = path.join(this.claudeDir, 'toolkit-state', 'sync-spaces.json');
     this.conversationIndexPath = path.join(this.claudeDir, 'conversation-index.json');
   }
@@ -1299,7 +1299,7 @@ export class SyncService extends EventEmitter {
    * `sync-spaces/service.ts`: that module pulls in the sync engine, chokidar and
    * electron's BrowserWindow, none of which belong in a startup health check
    * (and SyncService's tests run under plain node against a tmp home). The path
-   * agreement is pinned by `sync-health-primary-system.test.ts`, which drives a
+   * agreement is pinned by `sync-service.test.ts` (primary-vs-additional section), which drives a
    * real SpaceManager and asserts this reader sees what it wrote.
    */
   private isPrimarySyncEnabled(): boolean {

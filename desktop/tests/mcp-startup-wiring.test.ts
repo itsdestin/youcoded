@@ -151,7 +151,7 @@ function makeMockSkillProvider() {
   };
 }
 
-describe('McpManager startup wiring (Task 7b)', () => {
+describe('McpManager startup wiring', () => {
   beforeEach(() => {
     // Deliberately NOT cleaned up in afterEach: ipc-handlers.ts also fires
     // ProviderRegistry.init() fire-and-forget (unrelated to MCP, pre-existing
@@ -316,7 +316,7 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
   // vision model has to be read out of the SAME catalog field an OpenRouter
   // vision model is, through the SAME closure. Before T18 this returned null
   // for every local binding without ever looking.
-  it('reads a LOCAL model\'s supportsVision straight out of the catalog (T18)', async () => {
+  it('reads a LOCAL model\'s supportsVision straight out of the catalog', async () => {
     // 'local' is a BUILT_IN id (provider-registry.ts) — write providers.json
     // directly rather than waiting on ProviderRegistry.init().
     catalogRowsOverride = [{ id: 'SmolVLM-256M-Instruct-Q8_0', providerId: 'local', label: 'SmolVLM', supportsVision: true }];
@@ -332,7 +332,7 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
   // fetches (15 s apiece on a hanging network, never memoized on failure) in
   // front of every local session create, resume and model swap. The closure
   // must hand over the BINDING'S provider and nothing else.
-  it('asks the catalog about the BINDING\'S provider only — an enabled OpenRouter is not dragged in (T18)', async () => {
+  it('asks the catalog about the BINDING\'S provider only — an enabled OpenRouter is not dragged in', async () => {
     catalogRowsOverride = [{ id: 'some-gguf', providerId: 'local', label: 'g', supportsVision: true }];
     const visionSupportFor = await wiredVisionResolver(LOCAL_PROVIDER, {
       id: 'openrouter', type: 'openrouter', label: 'OpenRouter', enabled: true,
@@ -345,13 +345,13 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
     expect(passed.map((x) => x.id)).toEqual(['local']);
   });
 
-  it('a LOCAL text-only row resolves to false, not to "don\'t know" (T18)', async () => {
+  it('a LOCAL text-only row resolves to false, not to "don\'t know"', async () => {
     catalogRowsOverride = [{ id: 'text-only-Q8_0', providerId: 'local', label: 'Text only', supportsVision: false }];
     const visionSupportFor = await wiredVisionResolver(LOCAL_PROVIDER);
     expect(await visionSupportFor({ providerId: 'local', modelId: 'text-only-Q8_0' })).toBe(false);
   });
 
-  it('a LOCAL row the catalog cannot answer for degrades to null, and does not throw (T18)', async () => {
+  it('a LOCAL row the catalog cannot answer for degrades to null, and does not throw', async () => {
     // The engine was stopped when the catalog was built (so the row carries no
     // modality data), or the model is not in the catalog at all. null is the
     // closure's "no source could answer" — resolveProfile then falls back to
@@ -368,7 +368,7 @@ describe('visionSupportFor: which bindings consult the catalog (Fix 2, T18)', ()
 // running on this machine costs nothing to run, so a local-engine binding must
 // never pay for a catalog read to learn a price that doesn't exist. The host
 // stamps those turns `free` instead of pricing them.
-describe('pricingFor (Task 11)', () => {
+describe('pricingFor', () => {
   beforeEach(() => {
     testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-pricing-wiring-'));
     capturedCtorArgs = undefined;
@@ -474,7 +474,7 @@ vi.mock('../src/main/engine/engine-manager', async (importOriginal) => {
   return { ...actual, EngineManager: SpyEngineManager };
 });
 
-describe('contextAndSlotsFor wiring (Task 13, collapsed by fix pass 2)', () => {
+describe('contextAndSlotsFor wiring', () => {
   beforeEach(() => {
     testHome = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-slotcount-wiring-'));
     capturedCtorArgs = undefined;

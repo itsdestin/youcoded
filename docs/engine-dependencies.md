@@ -88,7 +88,7 @@ only prunes the older installs after a replacement has booted. It never discards
 an install that already existed before the call — a re-install of the running
 version reaches `verifyBoot` too, and a transient failure there must not delete a
 build that has been working.
-Guard: `desktop/tests/engine-auto-update.test.ts`.
+Guard: `desktop/tests/engine-manager.test.ts` → "launch auto-update".
 
 ## Touchpoints
 

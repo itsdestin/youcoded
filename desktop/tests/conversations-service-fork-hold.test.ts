@@ -6,7 +6,7 @@
 // (local -> space) — until a human resolves the fork. A non-held session in
 // the SAME run must still mirror/materialize normally, proving the hold is
 // per-id, not global. Mirrors the mocking setup in
-// conversations-service-sweep-pause.test.ts (same collaborators faked via
+// conversations-service.test.ts (same collaborators faked via
 // vi.hoisted), plus a mock of the new slug-repair-state leaf module.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';

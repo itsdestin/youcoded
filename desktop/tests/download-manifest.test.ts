@@ -145,7 +145,7 @@ describe('a manifest that outlives its download', () => {
     expect(got?.visionFile).toBeUndefined();
   });
 
-  it('round-trips repo: null — §E3 records a failed repo lookup that way', () => {
+  it('round-trips repo: null, the way a failed repo lookup is recorded', () => {
     fs.writeFileSync(manifestPathFor(dir, FIRST), JSON.stringify({
       v: 1, repo: null, quant: 'Q4_K_M', files: [FIRST],
       totalSizeBytes: 10, sha256ByFile: {}, startedAt: 1, completedAt: 2,

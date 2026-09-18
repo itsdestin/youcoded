@@ -5,7 +5,7 @@
  * with "Permission request expired — socket closed before a response was sent". "Socket"
  * is transport machinery, and "before a response was sent" claimed to know no answer was
  * ever sent — which was also dispatched when an answer merely got no reply. Rejections no
- * longer reach this action (permission-answer-unconfirmed.test.tsx); what does reach it —
+ * longer reach this action (ToolCard.test.tsx); what does reach it —
  * the host saying the request is closed, or the hook relay's own expiry — is a request
  * that closed before any answer reached it.
  */

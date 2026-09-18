@@ -329,7 +329,7 @@ describe('EngineAcquisition — scratch and in-progress directories', () => {
   });
 });
 
-describe('EngineAcquisition — the runtime archive (design §A2)', () => {
+describe('EngineAcquisition — the runtime archive', () => {
   it('downloads the runtime, verifies it, and unpacks it into the SAME directory as the engine', async () => {
     const runtime = makeRuntimeArchive(tmp);
     const acq = new EngineAcquisition(
@@ -427,7 +427,7 @@ describe('EngineAcquisition — the runtime archive (design §A2)', () => {
   });
 });
 
-describe.skipIf(!posix)('EngineAcquisition — devices in the marker (design §A2)', () => {
+describe.skipIf(!posix)('EngineAcquisition — devices in the marker', () => {
   it('runs --list-devices on the unpacked binary and writes the devices BEFORE the rename', async () => {
     const finalDir = path.join(engineRoot, `${ENGINE_VERSION}-cpu`);
     const sawFinalDir = path.join(tmp, 'saw-final-dir');
@@ -533,7 +533,7 @@ describe.skipIf(!posix)('EngineAcquisition — a probe that will not stop', () =
   });
 });
 
-describe.skipIf(!posix)('EngineAcquisition — the lazy backfill (design §A2)', () => {
+describe.skipIf(!posix)('EngineAcquisition — the lazy backfill', () => {
   /** Plant an install the way the app looked BEFORE this feature: a valid
    *  marker with no `devices` key at all. */
   function plantOldInstall(counter?: string): string {

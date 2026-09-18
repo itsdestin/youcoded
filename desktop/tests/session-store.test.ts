@@ -402,7 +402,7 @@ describe('SessionStore', () => {
     });
   });
 
-  describe('specialist child headers (plan 1a)', () => {
+  describe('specialist child headers', () => {
     const CHILD: NativeSessionHeader = {
       ...HEADER, sessionId: 'child-1',
       parentSessionId: 'root-1', sessionKind: 'specialist', agentType: 'explorer',

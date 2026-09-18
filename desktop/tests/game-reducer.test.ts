@@ -219,7 +219,7 @@ describe('gameReducer — the state split', () => {
 // Connect 4 record against Mira, captioned "You lead 5-1", under a chess win
 // over Jake. Wrong about ANOTHER PERSON is the failure this feature must not
 // have, so anything that does not match is dropped rather than guessed at.
-describe('gameReducer — MATCH_RECORDED (games §6.2)', () => {
+describe('gameReducer — MATCH_RECORDED', () => {
   // Mid-match: chess against Jake, second game in room AAAA.
   const playing: GameState = {
     ...createInitialGameState(),

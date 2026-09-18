@@ -3,7 +3,7 @@
 // usePreviewMeta backs the preview header's tag/note sheet (spec
 // 2026-08-26-conversation-preview-header-design.md, A1). Component-level
 // coverage of the sheet itself lives in
-// tests/session-drawer-preview-header.test.tsx; this file pins the hook's own
+// tests/SessionDrawer.test.tsx; this file pins the hook's own
 // contract in isolation — load, optimistic apply, and rollback on a refused
 // write, mirroring ResumeBrowser.tsx's toggleTag/saveNote.
 import { describe, it, expect, vi, afterEach } from 'vitest';

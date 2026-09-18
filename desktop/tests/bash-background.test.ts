@@ -35,7 +35,7 @@ function ctx(over: Partial<ToolContext> = {}): ToolContext {
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-bg-')); reg = new ShellRegistry(TEST_SESSION_ID); });
 afterEach(async () => { await reg.killAll('app-quit', { graceMs: 0 }); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); });
 
-describe.skipIf(!posix)('Task 2: foreground interrupt kills the grandchild and still resolves immediately', () => {
+describe.skipIf(!posix)('foreground interrupt kills the grandchild and still resolves immediately', () => {
   it('sleep 30 & wait — abort resolves at once, the grandchild is gone within the grace period', async () => {
     const ac = new AbortController();
     const pidFile = path.join(dir, 'pid');
@@ -54,8 +54,8 @@ describe.skipIf(!posix)('Task 2: foreground interrupt kills the grandchild and s
   }, 15_000);
 });
 
-describe.skipIf(!posix)('Task 3: run_in_background', () => {
-  it('returns at once with the §4.1 text and a running registry entry; the tool result is not an error', async () => {
+describe.skipIf(!posix)('run_in_background', () => {
+  it('returns at once with the started-in-background text and a running registry entry; the tool result is not an error', async () => {
     const t0 = Date.now();
     const r = await BashTool.execute({ command: 'sleep 3', run_in_background: true }, ctx());
     expect(Date.now() - t0).toBeLessThan(1_000);
@@ -106,7 +106,7 @@ describe.skipIf(!posix)('Task 3: run_in_background', () => {
   });
 });
 
-describe.skipIf(!posix)('Task 4: hand-off at the time limit', () => {
+describe.skipIf(!posix)('hand-off at the time limit', () => {
   it('a foreground command at its limit is adopted — no SIGKILL, no exit 124, text names the id', async () => {
     const r: any = await BashTool.execute({ command: 'echo early; node -e "setTimeout(()=>{}, 4000)"', timeout: 400 }, ctx());
     expect(r.isError).toBeFalsy();

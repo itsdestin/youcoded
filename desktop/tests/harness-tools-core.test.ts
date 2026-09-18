@@ -220,7 +220,7 @@ describe('Read', () => {
   });
 });
 
-describe('Read: image delivery (2026-08-11 spec)', () => {
+describe('Read: image delivery', () => {
   it('returns the image path in payload.images for a vision model', async () => {
     const p = path.join(dir, 'shot.png');
     fs.writeFileSync(p, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -516,7 +516,7 @@ describe('Write', () => {
 // invisible: nothing tells a model which paths are registered or with what
 // stamp. These pin the in-band signals that make it predictable. They assert on
 // message CONTENT deliberately — the content IS the fix here, not incidental.
-describe('the read gate explains itself (2026-08-11 review round 8)', () => {
+describe('the read gate explains itself', () => {
   it('the refusal names both tools that satisfy the gate, and says a shell view does not', async () => {
     fs.writeFileSync(path.join(dir, 'ungated.txt'), 'hello\n');
     const r = await EditTool.execute({ file_path: 'ungated.txt', old_string: 'hello', new_string: 'bye' }, ctx);
@@ -1036,7 +1036,7 @@ describe('Bash', () => {
   // else combined"). New contract: ~4,000-char head+tail sandwich, line-aware
   // cut, full output always spilled to disk on overflow, path named in the
   // notice. See docs/active/investigations/2026-08-10-harness-output-truncation-prior-art.md.
-  describe('output cap tightening (2026-08-10 review)', () => {
+  describe('output cap tightening', () => {
     const seqCmd = `node -e "for(let i=1;i<=20000;i++)console.log(i)"`;
     const visibleBody = (text: string) => text.split('\n[cwd:')[0];
 
@@ -1177,7 +1177,7 @@ describe('Bash', () => {
     }, 30_000);
   });
 
-  describe('timeout representation (2026-08-10 review)', () => {
+  describe('timeout representation', () => {
     it('reports a sentinel exit code (124), a typed timedOut flag, and SIGKILL-aware prose', async () => {
       const r: any = await BashTool.execute({ command: 'sleep 5', timeout: 500 }, ctx);
       expect(r.isError).toBe(true);

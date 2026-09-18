@@ -1367,7 +1367,7 @@ export type SetupStatus = 'idle' | 'confirm' | 'installing' | 'authenticating' |
  * everyone to the same place — or, when the state was simply unknown, tell them to go
  * open an app that may not be the problem.
  *
- * Exported for `remote-setup-flow.test.tsx`: these two are the whole of what the user
+ * Exported for `SettingsPanel.test.tsx`: these two are the whole of what the user
  * reads during setup, and reaching them through the full Settings tree would test the
  * tree instead of the copy.
  */

@@ -228,7 +228,7 @@ describe('appendVersion', () => {
   // session) and every call used to parse + hold + rewrite the whole sidecar
   // concurrently until the main process OOM'd. Callers inside one process now
   // coalesce into a per-project batch: one read and one write per drain.
-  describe('burst coalescing (2026-08-15 OOM fix)', () => {
+  describe('burst coalescing', () => {
     afterEach(() => { vi.restoreAllMocks(); });
 
     it('applies a burst of concurrent appends in a handful of read/write cycles, all committed', async () => {
@@ -590,7 +590,7 @@ describe('runSidecarMigration', () => {
   });
 });
 
-describe('renameArtifact — guards against a relative absolutePath (finding 2)', () => {
+describe('renameArtifact — guards against a relative absolutePath', () => {
   let projectRoot: string;
   beforeEach(() => {
     projectRoot = mkdtempSync(join(tmpdir(), 'as-rename-guard-'));
