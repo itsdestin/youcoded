@@ -96,7 +96,7 @@ describe('SubagentTimeline', () => {
   });
 });
 
-describe('SubagentTimeline — row memo (Task 10)', () => {
+describe('SubagentTimeline — row memo', () => {
   it('expanding one row does not re-render its untouched sibling', () => {
     const segments: SubagentSegment[] = [
       { type: 'tool', id: 't1', toolUseId: 'toolu_1', toolName: 'Read', input: { file_path: '/a' }, status: 'complete', response: 'ok' },

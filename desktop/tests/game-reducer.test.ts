@@ -274,7 +274,7 @@ describe('gameReducer — MATCH_RECORDED (games §6.2)', () => {
   });
 });
 
-describe('gameReducer — CHAT_MESSAGE (Task 10 cap)', () => {
+describe('gameReducer — CHAT_MESSAGE cap', () => {
   it('keeps the last 200 of 250 messages, dropping the oldest', () => {
     let s = createInitialGameState();
     for (let i = 0; i < 250; i++) {

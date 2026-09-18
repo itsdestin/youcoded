@@ -28,7 +28,7 @@ function makeCsv(cols: number): string {
   return `${header}\n${row}`;
 }
 
-describe('CsvView — column cap (Task 10)', () => {
+describe('CsvView — column cap', () => {
   it('renders at most 100 columns for a 300-column CSV', () => {
     const { container } = render(<CsvView {...baseProps(makeCsv(300))} />);
     // <colgroup> has one gutter <col> (row-number column) plus one per

@@ -121,7 +121,7 @@ async function renderSettledDrawer() {
   return utils;
 }
 
-describe('row memoisation (Task 12)', () => {
+describe('row memoisation', () => {
   beforeEach(() => {
     mocks.state.sessionArtifacts[SESSION] = [
       mkArtifact('a1', 'perf-small.ts', 5),
@@ -183,5 +183,67 @@ describe('row memoisation (Task 12)', () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'ACTIVE_ARTIFACT_SET', sessionId: SESSION2, artifactId: 'b1' })
     );
+  });
+
+  // Mirrors the select-freshness test above, but for onRemoveId /
+  // handleRemoveRecord: the exact same "stable callback must read through
+  // rowActions.current, not close over a render-scoped value" risk applies
+  // here — and handleRemoveRecord ALSO depends on activeArtifactId (not just
+  // sessionId), so this additionally proves "removing the currently active
+  // artifact clears it" reads the CURRENT activeArtifactId, not one frozen
+  // at handleRemoveRecord's very first identity.
+  it('a shared row handler still removes using the CURRENT sessionId and active-artifact state, not values frozen at the first render', async () => {
+    const SESSION2 = 's2';
+    mocks.state.drawerOpenBySession[SESSION2] = true;
+    mocks.state.sessionArtifacts[SESSION2] = [mkArtifact('b1', 'other.ts', 1)];
+    // Selecting b1 mounts the content pane, which reads the file through
+    // this handler — unrelated to what this test pins, so it just needs an
+    // answer.
+    (window as any).claude.artifacts.get = vi.fn().mockResolvedValue({ ok: true, content: '' });
+
+    const { rerender } = await renderSettledDrawer();
+
+    // Same trick as the select test: rerendering the SAME <SessionDrawer>
+    // instance with a different sessionId PROP guarantees the component body
+    // reruns fresh (React.memo only wraps the ROW, not the drawer), while
+    // onSelectId/onRemoveId's identities — both useCallback(fn, []) — stay
+    // the SAME functions across that change.
+    rerender(
+      <SessionDrawer sessionId={SESSION2} cwd={ROOT} projectRoot={ROOT} projectId="p1" projectName="alpha" />
+    );
+    await waitFor(() => expect(screen.getByText('other.ts')).toBeTruthy());
+
+    // Select b1 so it becomes s2's active artifact — a non-narrow select
+    // keeps the list open (keepListOpen = !narrowViewport), so the row stays
+    // reachable for the remove click below.
+    fireEvent.click(screen.getByText('other.ts').closest('button')!);
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'ACTIVE_ARTIFACT_SET', sessionId: SESSION2, artifactId: 'b1' })
+    );
+    mocks.dispatch.mockClear();
+
+    // Apply what the real reducer would do with that action. SessionDrawer
+    // itself is ALSO React.memo'd (half 1 above), so a rerender with the SAME
+    // sessionId prop would bail out without picking this up — a keystroke in
+    // the (already-open) search box is a genuine internal state change that
+    // forces a fresh render instead, the same way it would in the real app
+    // once the reducer's state updates flowed back down as a new snapshot.
+    mocks.state.activeArtifactBySession[SESSION2] = 'b1';
+    fireEvent.change(screen.getByLabelText('Search files'), { target: { value: 'other' } });
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole('button', { name: /^Remove other\.ts from this list/ }));
+
+    // A stale onRemoveId would still call removeRecord — its projectRoot
+    // never changes in this fixture — but the ACTIVE_ARTIFACT_CLEARED
+    // dispatch is where the freeze shows: it would either never fire (frozen
+    // activeArtifactId=null != 'b1') or fire with sessionId 's1'. The fresh
+    // handler reads both current values through rowActions.current.
+    await waitFor(() =>
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'ACTIVE_ARTIFACT_CLEARED', sessionId: SESSION2 })
+      )
+    );
+    expect((window as any).claude.artifacts.removeRecord).toHaveBeenCalledWith(ROOT, 'b1');
   });
 });
