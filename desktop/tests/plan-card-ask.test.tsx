@@ -95,8 +95,10 @@ describe('every paused card offers Ask, as the light button on the far left (§6
 
   // Final review F27 (R37): "never hands itself to the assistant" — the card
   // asks nothing when a pause arrives or changes; only the user's press does.
-  // (The host half — no notice is queued on a pause — is pinned in
-  // native-session-host.test.ts, "a pause is not handed over by itself".)
+  // The engine half is pinned twice: native-session-host.test.ts, "a pause is
+  // not handed over by itself" (a real executor run reaching a budget pause
+  // never reaches the notice seam), and plan-host-bridge.test.ts, "no pause
+  // kind hands itself over" (every pause kind, read and recovered).
   it('a pause arriving, or changing, never asks the assistant by itself', async () => {
     show(paused());
     await waitFor(() => expect(api.getAutoApprove).toHaveBeenCalled());

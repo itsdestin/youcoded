@@ -13,6 +13,7 @@ import { PLAN_CACHE_WINDOW_MS, disableAdapterForPlans, resetDisabledAdaptersForT
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
 import { PLAN_REPORT_ONLY_RESEND, PlanLaunchDriftError, PlanLaunchRefusedError } from '../src/main/harness/plans/plan-executor';
 import type { PlanRecord } from '../src/main/harness/plans/types';
+import { PLAN_PAUSE_KINDS } from '../src/shared/types';
 import type { TranscriptEvent } from '../src/shared/types';
 
 const SID = 'root';
@@ -313,6 +314,35 @@ describe('Ask the assistant', () => {
     const handoff = async () => (await bridge.journal.get(REF, 'p-h'))!.paused?.handoff;
     return { bridge, queued, withdrawn, emitted, handoff };
   }
+
+  // Final review F27 (R37): "a paused plan never hands itself to the
+  // assistant". The card half is tests/plan-card-ask.test.tsx; this is the
+  // engine half, for EVERY pause kind — reading the paused card, and the
+  // recovery pass a restart runs over it, must queue nothing. The same test
+  // then asks once, so a seam that stopped being wired cannot make the
+  // negative vacuous.
+  it('no pause kind hands itself over: nothing is queued until the user asks', async () => {
+    for (const kind of PLAN_PAUSE_KINDS) {
+      const t = await setup();
+      await t.bridge.journal.mutate(REF, (file) => {
+        file.plans[0].paused = { stepId: 's1', reason: `paused: ${kind}`, kind };
+      });
+      // What a paused plan really goes through with no user press: the card's
+      // read, and the restart recovery pass.
+      const views = await t.bridge.views(SID);
+      expect(views[0], kind).toMatchObject({ status: 'paused' });
+      await t.bridge.recover(SID, '/proj');
+      expect(t.queued, `${kind} queued a notice by itself`).toEqual([]);
+      expect(await t.handoff(), `${kind} recorded a handoff by itself`).toBeUndefined();
+      expect((t.bridge as any).handoffs.size, kind).toBe(0);
+      // The user presses Ask: this same wiring does queue exactly one notice.
+      expect(await t.bridge.askAssistant(SID, 'p-h'), kind).toMatchObject({ ok: true });
+      expect(t.queued, kind).toHaveLength(1);
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+      root = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-bridge-'));
+      home = new NativeHome(root);
+    }
+  });
 
   it('registers the handoff first, records it pending in the write, then queues the notice (§6, review 4-4)', async () => {
     const order: string[] = [];

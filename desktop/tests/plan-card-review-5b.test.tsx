@@ -337,11 +337,22 @@ describe('10. a plan specialist waiting on the user lights the specialists chip'
     const card = screen.getByTestId('helper-card-kid-a');
     expect(within(card).getByTestId('helper-card-ask')).toHaveTextContent('Wren wants to:');
     // Final review F27 (R30): the whole row — its question, Yes and No, and
-    // the specialist's own Note and Stop.
-    expect(within(card).getByTestId('helper-card-ask')).toHaveTextContent('npm test');
-    for (const name of ['Yes', 'No', 'Note', 'Stop']) {
-      expect(within(card).getByRole('button', { name }), name).toBeEnabled();
+    // the specialist's own Note and Stop. Each control is checked where it
+    // belongs: Yes/No answer THIS ask (inside its block), Note/Stop are the
+    // specialist's own actions, so a button rendered anywhere on the popup no
+    // longer satisfies the row.
+    const askBlock = within(card).getByTestId('helper-card-ask');
+    expect(askBlock).toHaveTextContent('npm test');
+    for (const name of ['Yes', 'No']) {
+      expect(within(askBlock).getByRole('button', { name }), name).toBeEnabled();
     }
+    const actions = within(card).getByTestId('specialist-actions');
+    for (const name of ['Note', 'Stop']) {
+      expect(within(actions).getByRole('button', { name }), name).toBeEnabled();
+    }
+    // The note box is a real control, not a label: pressing Note opens it.
+    fireEvent.click(within(actions).getByRole('button', { name: 'Note' }));
+    expect(within(actions).getByRole('textbox')).toBeInTheDocument();
     // Task 8 (review 6, Q6-2): the working sibling is now listed too, under
     // the same plan (tests/plan-card-review-r7.test.tsx pins the grouping).
     expect(screen.getByTestId('helper-card-kid-b')).toBeInTheDocument();

@@ -142,49 +142,109 @@ describe('A. an approximate limit wears a tilde, and no extra sentence', () => {
 /** Final review F27 (R22): a filled button is a solid fill (accent or
  *  destructive); a light one is an outline or ghost. */
 const isFilled = (b: HTMLElement) => /(^|\s)bg-(accent|destructive)(\s|$)/.test(b.className);
-/** Every filled button in `row` comes after every light one, and the row sits
- *  on the right. */
-function expectLightThenFilled(row: HTMLElement, label: string) {
-  const btns = within(row).queryAllByRole('button');
-  const kinds = btns.map((b) => (isFilled(b) ? 'filled' : 'light'));
-  expect(kinds.join(' '), `${label}: ${btns.map((b) => b.textContent).join(' | ')}`).toMatch(/^(light ?)*(filled ?)*$/);
-  expect(kinds, `${label} has no filled button`).toContain('filled');
-  expect(row, `${label} is not right-aligned`).toHaveClass('justify-end');
+// --- R22 "wherever": the sweep -------------------------------------------
+// WHY a sweep rather than a list of rows: the row says "WHEREVER a filled and
+// a light button sit together". A named list only proves the rows someone
+// remembered, so a NEW row (an error block's Report bug · Diagnose, a pause
+// that gained a button) would ship unchecked. This walks the rendered DOM of
+// every card state, finds each innermost element holding two or more buttons,
+// and checks the real fill class of each — then asserts the exact set of mixed
+// rows it found, so a row that stops rendering cannot quietly shrink the sweep.
+
+/** Every innermost element holding two or more buttons: the card's real button
+ *  rows, whatever wrappers sit above them. */
+function buttonRows(root: HTMLElement): HTMLElement[] {
+  const holders = Array.from(root.querySelectorAll<HTMLElement>('*'))
+    .filter((el) => el.querySelectorAll('button').length >= 2);
+  return holders.filter((el) => !holders.some((other) => other !== el && el.contains(other)));
+}
+/** Right-aligned the way G-28 allows: the row (or the slot holding it) pushes
+ *  its content right, or a flex-1 element sits to its left and does. Checked up
+ *  to the card itself, because StatusStrip right-aligns its action slot rather
+ *  than the button row inside it. */
+const classesOf = (el: Element) => el.getAttribute('class') ?? '';
+function pushedRight(row: HTMLElement, firstBtn: HTMLElement): boolean {
+  // An inline error row: the message itself is the flex-1 spacer that puts the
+  // buttons at the right-hand end.
+  for (let sib = firstBtn.previousElementSibling; sib; sib = sib.previousElementSibling) {
+    if (/(^|\s)flex-1(\s|$)/.test(classesOf(sib))) return true;
+  }
+  for (let el: HTMLElement | null = row; el && el.dataset.testid !== 'plan-block'; el = el.parentElement) {
+    if (/(^|\s)(justify-end|ml-auto)(\s|$)/.test(classesOf(el))) return true;
+    for (let sib = el.previousElementSibling; sib; sib = sib.previousElementSibling) {
+      if (/(^|\s)flex-1(\s|$)/.test(classesOf(sib))) return true;
+    }
+  }
+  return false;
+}
+/** Check every mixed row in what is on screen; return their labels. */
+function sweepMixedRows(where: string): string[] {
+  const found: string[] = [];
+  for (const row of buttonRows(document.body)) {
+    const btns = within(row).queryAllByRole('button').filter((b) => !b.hasAttribute('aria-expanded'));
+    if (btns.length < 2) continue;
+    const kinds = btns.map((b) => (isFilled(b) ? 'filled' : 'light'));
+    const label = btns.map((b) => (b.textContent ?? '').trim()).join(' | ');
+    if (!kinds.includes('filled') || !kinds.includes('light')) continue;   // not a mixed row
+    expect(kinds.join(' '), `${where} — ${label}: a filled button is left of a light one`).toMatch(/^(light )*(filled ?)*$/);
+    expect(pushedRight(row, btns[0]), `${where} — ${label}: the row is not on the right`).toBe(true);
+    found.push(label);
+  }
+  return found;
 }
 
 describe('B. filled buttons sit on the right, the light one to their left', () => {
   // Final review F27 (R22, "wherever"): every row of the plan card where a
   // filled and a light button sit together, checked by their real fill.
   it('every button row on the card: light first, filled rightmost', () => {
-    const rowOf = (name: string) => screen.getByRole('button', { name }).parentElement!;
-    const { unmount: u1 } = render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
-    expect(isFilled(screen.getByRole('button', { name: 'Approve' }))).toBe(true);
-    expect(isFilled(screen.getByRole('button', { name: 'Comment' }))).toBe(false);
-    expectLightThenFilled(rowOf('Approve'), 'proposal');
-    fireEvent.click(screen.getByRole('button', { name: 'Comment' }));
-    expectLightThenFilled(rowOf('Send'), 'comment box');
-    u1();
     const pausedPlan = plan({
       status: 'paused', steps: [{ ...plan().steps[0], status: 'paused' }, plan().steps[1]],
       paused: { stepId: 's1', reason: 'step 1 hit its limit.', kind: 'budget', actions: ['add_budget', 'stop'] },
     });
-    const { unmount: u2 } = render(<ChatProvider><Card initial={pausedPlan} /></ChatProvider>);
-    expectLightThenFilled(screen.getByTestId('plan-pause-actions'), 'pause actions');
-    expect(isFilled(screen.getByRole('button', { name: 'Ask the assistant' }))).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: 'Add budget' }));
-    expectLightThenFilled(screen.getByTestId('plan-add-budget'), 'add budget');
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Ask the assistant' }));
-    expectLightThenFilled(rowOf('Send'), 'ask box');
-    u2();
-    const recommendedStop = plan({ ...pausedPlan, paused: { ...pausedPlan.paused!, handoff: { state: 'answered', recommendation: { action: 'stop', message: 'Stop here.' } } } });
-    const { unmount: u3 } = render(<ChatProvider><Card initial={recommendedStop} /></ChatProvider>);
-    expectLightThenFilled(screen.getByTestId('plan-pause-actions'), 'recommended stop');
-    u3();
-    render(<ChatProvider><Card initial={plan({ status: 'interrupted' })} /></ChatProvider>);
-    const interrupted = screen.getByRole('button', { name: 'Continue' }).parentElement!;
-    const kinds = within(interrupted).getAllByRole('button').map((b) => (isFilled(b) ? 'filled' : 'light'));
-    expect(kinds).toEqual(['light', 'filled']);
+    const pausedWith = (over: Partial<NonNullable<PlanView['paused']>>) =>
+      plan({ ...pausedPlan, paused: { ...pausedPlan.paused!, ...over } });
+    const seen: string[] = [];
+    /** Render one state, run the extra clicks it needs, sweep it, unmount. */
+    const state = (label: string, initial: PlanView, open?: () => void) => {
+      const { unmount } = render(<ChatProvider><Card initial={initial} /></ChatProvider>);
+      open?.();
+      seen.push(...sweepMixedRows(label));
+      unmount();
+    };
+    const press = (name: string) => fireEvent.click(screen.getByRole('button', { name }));
+
+    state('a proposal', plan());
+    // The two named buttons of R6-4 by their real fill, not only their order.
+    const { unmount } = render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
+    expect(isFilled(screen.getByRole('button', { name: 'Approve' }))).toBe(true);
+    expect(isFilled(screen.getByRole('button', { name: 'Comment' }))).toBe(false);
+    unmount();
+    state('the comment box', plan(), () => press('Comment'));
+    state('a budget pause', pausedPlan);
+    state('the Add budget row', pausedPlan, () => press('Add budget'));
+    state('the Ask box', pausedPlan, () => press('Ask the assistant'));
+    state('a recommended Stop', pausedWith({ handoff: { state: 'answered', recommendation: { action: 'stop', message: 'Stop here.' } } }));
+    state('a recommended Continue', pausedWith({ actions: ['continue', 'stop'], handoff: { state: 'answered', recommendation: { action: 'continue', message: 'Carry on.' } } }));
+    // Decision 24: a pause with the system's own text behind it adds Report bug.
+    state('a pause with Report bug', pausedWith({ report: 'EIO writing the journal', actions: ['continue', 'stop'] }));
+    state('an interrupted plan', plan({ status: 'interrupted' }));
+    state('a failed plan', plan({ status: 'failed' }));
+    state('a running plan', running());
+
+    // The sweep found every row it should have: a row that stops rendering
+    // (or a state that stops reaching its buttons) fails here rather than
+    // silently checking less.
+    expect(new Set(seen)).toEqual(new Set([
+      'Comment | Approve',
+      'Cancel | Send',
+      'Cancel | Continue',
+      'Ask the assistant | Stop | Add budget',
+      'Ask the assistant | Stop',
+      'Ask the assistant | Stop | Continue',
+      'Report bug | Ask the assistant | Stop | Continue',
+      'Stop | Continue',
+      'Report bug | Diagnose with the assistant',
+    ]));
   });
 
   it('a proposal reads Comment, then Approve, in a right-aligned row', () => {

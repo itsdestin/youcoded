@@ -6091,9 +6091,15 @@ describe('specialists plans in the native host (Task 4)', () => {
       const message = 'The reviewer ran out of room; adding the minimum lets it finish.';
       let noticeTurnId: string | undefined;
       let revisionTurnId: string | undefined;
+      // Final review F27 (R37): the notice seam itself, watched from before the
+      // run starts — a pause reached by the real executor must never reach it.
+      const queueNotice = vi.spyOn(host as any, 'queuePlanNotice');
       const planId = await pauseOnBudget();
-      // §6: nothing happens until the user asks.
+      // §6: nothing happens until the user asks. The pause (a positive signal
+      // pauseOnBudget already waited for) has landed and the lease is gone, so
+      // this settles the negatives.
       await new Promise((r) => setTimeout(r, 40));
+      expect(queueNotice).not.toHaveBeenCalled();
       expect(handoff()).toBeUndefined();
       expect(notices()).toHaveLength(0);
       expect(parentPrompts.some((p) => p.includes('[Plan paused]'))).toBe(false);
@@ -6110,6 +6116,9 @@ describe('specialists plans in the native host (Task 4)', () => {
         textStep('I recommend adding the minimum.'),
       );
       const res = await ask(planId);
+      // The same seam the pause never touched: the user's press does reach it,
+      // exactly once — so the check above is a real negative, not a dead spy.
+      expect(queueNotice).toHaveBeenCalledTimes(1);
       expect(res).toMatchObject({ ok: true, plan: { status: 'paused', paused: { handoff: { state: 'pending' } } } });
       expect((res as any).plan.paused.handoff.waiting).toBeUndefined();
       // WHY also the revision: the recommendation marks the question answered
