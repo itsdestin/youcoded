@@ -14,7 +14,7 @@ import { modelChipFor, supportsAliasCycling } from './components/model-chip';
 import FolderSwitcher from './components/FolderSwitcher';
 import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
-import { CHATGPT_UPGRADE_URL } from '../shared/chatgpt-types';
+import { useChatViewHandlers } from './hooks/use-chatview-handlers';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
@@ -3504,6 +3504,8 @@ function AppInner() {
   const openModelPicker = useCallback(() => setModelPickerOpen(true), []);
   const openOpenTasksPopup = useCallback(() => setOpenTasksPopupOpen(true), []);
   const openTasksCounts = useMemo(() => sessionId ? { running: openTasks.counts.running, pending: openTasks.counts.pending } : undefined, [sessionId, openTasks.counts.running, openTasks.counts.pending]);
+  // Stable references on purpose — see the hook for what an inline arrow costs.
+  const chatViewHandlers = useChatViewHandlers({ setProvidersAutoOpen, setSettingsOpen, setModelPickerOpen });
   const handleSelectSession = useCallback((id: string) => {
     // Switching sessions REMOUNTS the artifact drawer, which would silently
     // discard a dirty editor draft — route the user-initiated switch through
@@ -3700,16 +3702,9 @@ function AppInner() {
                       // ChatView only actually mounts it in chat view; in
                       // terminal view TerminalRightSlot (below) places it.
                       gamePane={s.id === sessionId ? activeGamePane : null}
-                      // Provider-config error bubble → open Settings straight to
-                      // the Model Providers section so the key can be fixed.
-                      onOpenProviderSettings={() => { setProvidersAutoOpen(true); setSettingsOpen(true); }}
-                      // Plan-limit card (review round 2, P-9): Switch Providers
-                      // opens the same picker the status-bar chip opens.
-                      onSwitchProviders={() => setModelPickerOpen(true)}
-                      // Plan-limit card: the Upgrade plan button opens OpenAI's
-                      // own upgrade page (the URL the Codex CLI's limit error
-                      // names) in the system browser, like My Account does.
-                      onUpgradePlan={() => void window.claude.shell.openExternal(CHATGPT_UPGRADE_URL)}
+                      onOpenProviderSettings={chatViewHandlers.openProviderSettings}
+                      onSwitchProviders={chatViewHandlers.switchProviders}
+                      onUpgradePlan={chatViewHandlers.upgradePlan}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
                       conversationStatus={conversationStatus}

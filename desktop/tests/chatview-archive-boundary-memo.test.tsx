@@ -48,7 +48,9 @@ if (typeof (globalThis as any).IntersectionObserver === 'undefined') {
   };
 }
 
-import ChatView from '../src/renderer/components/ChatView';
+// The unmemoised view: this harness delivers new state by re-rendering with the
+// SAME props, which the memoised default export skips by design (see ChatView.tsx).
+import { UnmemoizedChatView as ChatView } from '../src/renderer/components/ChatView';
 import { findArchiveBoundary } from '../src/renderer/state/archive-boundary';
 
 const scan = findArchiveBoundary as unknown as ReturnType<typeof vi.fn>;

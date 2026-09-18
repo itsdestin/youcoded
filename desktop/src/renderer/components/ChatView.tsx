@@ -101,7 +101,8 @@ interface Props {
   onRefreshConversation?: () => void;
 }
 
-export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
+// Memoised at the bottom of the file — see the WHY there.
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
 
@@ -1478,3 +1479,19 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
     </CardKeysLiveContext.Provider>
   );
 }
+
+// WHY memo (2026-09-18): App renders a ChatView for EVERY open session and
+// re-renders on every session switch. Unmemoised, each of them re-walked its
+// whole timeline inside the click — work that grew with the number of open tabs
+// and the length of each, all of it ahead of the switch's first frame. Now only
+// the two conversations whose `visible` / `sessionActive` actually change do.
+// Chat state still arrives through useChatState, which memo does not block.
+// App must hand this STABLE props for it to mean anything — see the three
+// handle* callbacks there. Guard: tests/chatview-skips-uninvolved-sessions.test.tsx.
+export default React.memo(ChatView);
+
+// For tests of the view's OWN render logic (scan counts, scroll pinning). Their
+// harness mocks useChatState as a plain getter and delivers "new state" by
+// re-rendering with identical props — exactly what memo exists to skip. In the
+// app, state arrives through the store's subscription, which memo never blocks.
+export { ChatView as UnmemoizedChatView };

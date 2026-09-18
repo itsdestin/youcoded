@@ -289,6 +289,8 @@ describe('useEntryFolding', () => {
     const far = entry('far', 100);
     near.getBoundingClientRect = () => ({ top: 700, bottom: 800 } as DOMRect);
     far.getBoundingClientRect = () => ({ top: -9000, bottom: -8900 } as DOMRect);
+    // Document order: far (older) first, near (newer) last — it is walked from the end.
+    rootRef.current!.append(far, near);
     act(() => { result.current.registerEntry(near); result.current.registerEntry(far); });
     act(() => {
       fire([{ target: near, isIntersecting: false }, { target: far, isIntersecting: false }]);
@@ -299,6 +301,33 @@ describe('useEntryFolding', () => {
     act(() => { result.current.unfoldNearViewport(); });
     expect(result.current.isFolded('near')).toBe(false);
     expect(result.current.isFolded('far')).toBe(true);
+  });
+
+  it('unfoldNearViewport stops measuring at the first entry above the band', () => {
+    // It runs inside the click, ahead of the switch's first frame. A conversation
+    // read to its top holds thousands of folded entries far above; measuring all
+    // of them on every switch was a visible delay (Destin, 2026-09-18).
+    const { result } = renderHook(() => useEntryFolding(true, rootRef));
+    rootRef.current!.getBoundingClientRect = () => ({ top: 0, bottom: 800 } as DOMRect);
+    let reads = 0;
+    const els: HTMLElement[] = [];
+    for (let i = 0; i < 3000; i++) {
+      const el = entry(`old-${i}`, 100);
+      el.getBoundingClientRect = () => { reads++; return { top: -500000 + i, bottom: -499900 + i } as DOMRect; };
+      els.push(el);
+    }
+    const near = entry('near', 100);
+    near.getBoundingClientRect = () => { reads++; return { top: 700, bottom: 800 } as DOMRect; };
+    els.push(near);
+    rootRef.current!.append(...els);
+    act(() => { for (const el of els) result.current.registerEntry(el); });
+    act(() => { fire(els.map((target) => ({ target, isIntersecting: false }))); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(result.current.isFolded('near')).toBe(true);
+
+    reads = 0;
+    act(() => { result.current.unfoldNearViewport(); });
+    expect(result.current.isFolded('near')).toBe(false);
+    expect(reads).toBe(2);   // the one near the screen, and the first one above the band
   });
 
   it('returns a cleanup even with no element or no observer', () => {

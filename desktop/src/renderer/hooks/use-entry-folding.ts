@@ -260,13 +260,22 @@ export function useEntryFolding(
     const top = r.top - FOLD_MARGIN_PX;
     const bottom = r.bottom + FOLD_MARGIN_PX;
     let changed = false;
-    // Only the FOLDED entries are read, and nothing is written between reads, so
-    // this is one layout however long the conversation is.
-    for (const key of folded.current) {
-      const el = elements.current.get(key);
-      if (!el) continue;
+    // Walked in DOCUMENT order from the END, and abandoned at the first entry
+    // above the band. WHY not `for (key of folded)`: a long conversation read to
+    // its top has thousands of folded entries, nearly all of them far above, and
+    // the first version measured every one of them on every switch — inside the
+    // click, ahead of the first frame (Destin, 2026-09-18: "the switch still lags
+    // a second behind me clicking"). A switch lands at the bottom, so this reads
+    // a band's worth however long the conversation is. Nothing is written between
+    // reads, so it is still one layout.
+    const entries = root.querySelectorAll<HTMLElement>('[data-entry-key]');
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const el = entries[i];
       const b = el.getBoundingClientRect();
-      if (b.bottom < top || b.top > bottom) continue;
+      if (b.top > bottom) continue;
+      if (b.bottom < top) break;
+      const key = el.dataset.entryKey;
+      if (!key || !folded.current.has(key)) continue;
       folded.current.delete(key);
       // Also out of `outOfView`, or the next fold flush would fold it straight
       // back. The observer still believes it is out of view, so its own
