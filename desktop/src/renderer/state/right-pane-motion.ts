@@ -34,23 +34,16 @@ export interface PaneMotion {
   /** The kind being switched AWAY from, until the view reports the glide
    *  finished. The layout reserves max(width(from), width(shown)) meanwhile. */
   from: PaneKind | null;
-  /** True from an OPEN (nothing → a pane) until the view reports it finished.
-   *  WHY this lives here and not in the view: the pane's element is re-created on
-   *  every session switch and every chat/terminal toggle, so "I just mounted"
-   *  means nothing — the first cut replayed the arrival on each of those. Only
-   *  this table knows whether the pane is genuinely opening. */
-  opening: boolean;
 }
 
-export const PANE_IDLE: PaneMotion = { shown: null, closing: false, from: null, opening: false };
+export const PANE_IDLE: PaneMotion = { shown: null, closing: false, from: null };
 
 export type PaneMotionEvent =
   /** The app's real state changed: which pane is wanted now, if any. */
   | { type: 'want'; kind: PaneKind | null }
   /** The view finished animating the pane out (or a safety timer stood in). */
   | { type: 'exited' }
-  /** The view finished opening, or gliding between two widths (or a safety
-   *  timer stood in for it). */
+  /** The view finished gliding between two widths (or a safety timer did). */
   | { type: 'settled' };
 
 export function paneMotionReducer(m: PaneMotion, e: PaneMotionEvent): PaneMotion {
@@ -61,25 +54,25 @@ export function paneMotionReducer(m: PaneMotion, e: PaneMotionEvent): PaneMotion
         // Nothing shown, or already leaving: nothing new to do.
         if (m.shown === null || m.closing) return m;
         // A close mid-switch abandons the switch: it leaves from where it is.
-        return { shown: m.shown, closing: true, from: null, opening: false };
+        return { shown: m.shown, closing: true, from: null };
       }
       // Nothing on screen: it simply opens.
-      if (m.shown === null) return { shown: kind, closing: false, from: null, opening: true };
+      if (m.shown === null) return { shown: kind, closing: false, from: null };
       if (m.shown === kind) {
         // REOPENED MID-CLOSE — the interruption case. Same pane, still mounted,
         // so the view reverses the glide from wherever it is.
-        return m.closing ? { ...m, closing: false } : m;
+        return m.closing ? { shown: kind, closing: false, from: m.from } : m;
       }
       // A different pane. `from` is what is on screen NOW — also when this
       // interrupts an earlier switch, because that is the width being left.
-      return { shown: kind, closing: false, from: m.shown, opening: false };
+      return { shown: kind, closing: false, from: m.shown };
     }
     case 'exited':
       // Only a pane that is still closing may be removed: a late 'exited' from a
       // close that was since interrupted must not take a reopened pane away.
       return m.closing ? PANE_IDLE : m;
     case 'settled':
-      return m.from === null && !m.opening ? m : { ...m, from: null, opening: false };
+      return m.from === null ? m : { ...m, from: null };
   }
 }
 

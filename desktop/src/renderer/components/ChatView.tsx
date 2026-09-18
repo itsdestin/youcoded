@@ -25,8 +25,6 @@ import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import { useSwitchFirstFrame } from '../hooks/use-switch-first-frame';
-import { RightPaneSlot } from './RightPaneSlot';
-import type { RightPane } from '../hooks/use-right-pane-motion';
 import { useArtifact } from '../state/ArtifactContext';
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
@@ -72,8 +70,6 @@ interface Props {
    *  active session's ChatView receives this — App passes null otherwise. When
    *  present it takes precedence over the artifact drawer in the right slot. */
   gamePane?: React.ReactNode;
-  /** App's right-pane motion table — the ACTIVE session's ChatView only. */
-  pane?: RightPane;
   /** Runtime backend — forwarded to useAttentionClassifier so it
    *  short-circuits for sessions without a PTY (native harness). */
   provider?: 'claude' | 'native';
@@ -106,7 +102,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, pane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
 
@@ -158,15 +154,16 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, pane, prov
   // exclusivity, so this is just a render-time safety net).
   const gameOpen = !!gamePane;
   // Either occupant means the right slot is in use → frame the chat accordingly.
-  // `pane` (App's motion table) when this is the active session: the room stays
-  // framed while a pane glides OUT, which the raw flags cannot say.
-  const rightPaneOpen = pane ? pane.motion.shown !== null : gameOpen || drawerOpen;
+  const rightPaneOpen = gameOpen || drawerOpen;
+  // The pane animates when it OPENS — not when it is merely re-created by a
+  // session switch (`arriving`) or a chat/terminal toggle. WHY: motion.css.
+  const paneArriving = useOneShotWindow(rightPaneOpen) && rightPaneOpen && !arriving;
 
   // Resolve the active project when the artifact drawer opens — SessionDrawer's
   // in-place `save` IPC needs projectRoot/id/name. Lazy + non-blocking (renders
   // with empty strings until it resolves). Shared with TerminalRightSlot via
   // the useActiveProject hook so both resolve the same target.
-  const activeProject = useActiveProject(cwd, drawerOpen || pane?.motion.shown === 'drawer');
+  const activeProject = useActiveProject(cwd, drawerOpen);
 
   // Backfill this session's artifact list from the on-disk sidecar so the chat
   // artifact drawer AND inline filepath pills work immediately after an app
@@ -1423,12 +1420,25 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, pane, prov
             ChatView is hidden and TerminalRightSlot renders the panel instead.
             Without this gate the drawer/game would mount in BOTH places at
             once (double SessionDrawer / GamePanel). */}
-        {visible && pane && (
-          <RightPaneSlot pane={pane} sessionId={sessionId} gamePane={gamePane} renderDrawer={() => (
-            <SessionDrawer sessionId={sessionId} cwd={cwd ?? ''} projectRoot={activeProject?.path ?? ''}
-              projectId={activeProject?.id ?? ''} projectName={activeProject?.name ?? 'project'} />
-          )} />
-        )}
+        {visible && (gameOpen ? (
+          <>
+            <div className="frame-divider" />
+            <div className={`drawer-pane game-pane${paneArriving ? ' pane-arriving' : ''}`}>{gamePane}</div>
+          </>
+        ) : drawerOpen && (
+          <>
+            <div className="frame-divider" />
+            <div className={`drawer-pane${paneArriving ? ' pane-arriving' : ''}`}>
+              <SessionDrawer
+                sessionId={sessionId}
+                cwd={cwd ?? ''}
+                projectRoot={activeProject?.path ?? ''}
+                projectId={activeProject?.id ?? ''}
+                projectName={activeProject?.name ?? 'project'}
+              />
+            </div>
+          </>
+        ))}
         <div className="frame-edge" />
       </div>
 
