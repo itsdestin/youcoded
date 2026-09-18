@@ -52,6 +52,27 @@ function rmHostRoot(dir: string): void {
   fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
 }
 
+/** destroyAll(), then wait for the ledger writes it starts without waiting.
+ *  WHY: tearing down a parent marks each still-running helper 'interrupted' in
+ *  the ledger FIRE-AND-FORGET (native-session-host.ts destroyChildrenOf — by
+ *  design, so a slow ledger lock never hangs a teardown). A test that recorded
+ *  a running helper and then let afterEach delete the folder raced that write:
+ *  rmdir hit ENOTEMPTY on '.youcoded/sessions' in CI (youcoded#533, Linux),
+ *  even with rmHostRoot's retries. Waiting on the row itself is the signal. */
+async function destroyAllAndSettle(h: any, cwd: string, parentId = 'root-1'): Promise<void> {
+  const ledger = h.ledger;
+  const running = (ledger?.listFor(cwd, parentId) ?? [])
+    // Only a helper that is actually live gets the teardown write; a row a
+    // test wrote as 'running' with no live child is never touched.
+    .filter((r: any) => r.status === 'running' && h.live?.has(r.childId)).map((r: any) => r.childId);
+  await h.destroyAll();
+  if (running.length === 0) return;
+  await vi.waitFor(() => {
+    const rows = ledger.listFor(cwd, parentId);
+    expect(running.every((id: string) => rows.find((r: any) => r.childId === id)?.status !== 'running')).toBe(true);
+  });
+}
+
 
 // One turn, two steps: step 1 calls the (gated) Write tool; step 2 — after the
 // tool result — stops with text. A FRESH instance per factory call so the
@@ -3663,7 +3684,7 @@ describe('NativeSessionHost', () => {
       const bookkeepingFields = ['delivered', 'injectionAttempted', 'claimedBy', 'claimedAt', 'owner', 'missedSteers', 'rawReport', 'reportPath'];
       for (const f of bookkeepingFields) expect(first.run).not.toHaveProperty(f);
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('steerSpecialist appends the note to the record for a LIVE delivery (one write) and for a PARKED steer (the same write as the parked steer) — the run event carries it either way', async () => {
@@ -3742,7 +3763,7 @@ describe('NativeSessionHost', () => {
       expect(parkedEvents).toHaveLength(1);
       expect(parkedEvents[0].run.notes).toEqual([{ text: 'check config.ts instead', from: 'assistant', at: expect.any(Number) }]);
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('steerFromUser: empty → error, 2001 chars → error naming the limit and the length, foreign childId → error, ok → {ok:true}', async () => {
@@ -3771,7 +3792,7 @@ describe('NativeSessionHost', () => {
 
       expect(h.steerFromUser('root-1', childId, 'a real note')).toEqual({ ok: true });
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     // Review finding fix (plan 1c, Task 5): SPECIALIST_NOTE_MAX_CHARS was only
@@ -3835,7 +3856,7 @@ describe('NativeSessionHost', () => {
       expect(rec.missedSteers).toEqual([]);
 
       await turn;
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('an under-cap ASSISTANT steer is recorded byte-for-byte unchanged', async () => {
@@ -3870,7 +3891,7 @@ describe('NativeSessionHost', () => {
       expect(rec.notes).toEqual([{ text: shortText, from: 'assistant', at: expect.any(Number) }]);
 
       await turn;
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('steerFromUser still REJECTS an over-cap note rather than clamping it — the assistant-path clamp does not leak into the user-facing surface', async () => {
@@ -3896,7 +3917,7 @@ describe('NativeSessionHost', () => {
       const rec = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
       expect(rec.notes ?? []).toEqual([]);
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('interruptFromUser mirrors the outcome mapping', async () => {
@@ -3924,7 +3945,7 @@ describe('NativeSessionHost', () => {
         ok: false, error: 'This helper has already finished.',
       });
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('the spawn-time model lands on the record and in the run view', async () => {
@@ -3948,7 +3969,7 @@ describe('NativeSessionHost', () => {
       const runEvent = events.find((e) => e.run.childId === childId);
       expect(runEvent.run.model).toEqual({ label: 'anthropic/claude-opus-5', via: 'named', fallback: false });
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
   });
 
@@ -4081,7 +4102,7 @@ describe('NativeSessionHost', () => {
       // Delivered specialist never appears.
       expect(status).not.toContain('Priya');
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     it('returns null (and wires nothing to inject) when the session has no delegations at all', async () => {
@@ -4094,7 +4115,7 @@ describe('NativeSessionHost', () => {
 
       expect((h as any).buildSpecialistStatus('root-1', root)).toBeNull();
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     // Fix pass, Finding 1: DelegationRecord.steps is only ever written AT
@@ -4123,7 +4144,7 @@ describe('NativeSessionHost', () => {
       expect(status).not.toContain('step 0');
       expect(status).not.toMatch(/step \d/);
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     // Fix pass, Finding 2: `stale` only ever means "at least SPECIALIST_IDLE_
@@ -4149,7 +4170,7 @@ describe('NativeSessionHost', () => {
 
       expect(status).toContain('no activity for at least 2m');
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
 
     // Fix pass, Finding 3 (original): 'interrupted' records never get
@@ -4200,7 +4221,7 @@ describe('NativeSessionHost', () => {
       expect(interruptedLine).toBe('Greg (writer): interrupted — no report will arrive');
       expect(interruptedLine).not.toContain('delivery pending');
 
-      await h.destroyAll();
+      await destroyAllAndSettle(h, root);
     });
   });
 

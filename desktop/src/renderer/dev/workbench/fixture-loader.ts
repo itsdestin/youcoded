@@ -66,6 +66,10 @@ export interface LoadOptions {
    *  `?planLimit=1` turns it on. A session_error line with no `optIn` always
    *  replays. */
   includePlanLimit?: boolean;
+  /** Replay the ONE `{"type":"session_error", "optIn":"providerError",
+   *  "case": <name>}` line whose case matches — the OpenRouter failure cards
+   *  (connection-trust review, 2026-09-18). `?providerError=<case>`. */
+  providerError?: string | null;
 }
 
 // Fixed base timestamp, not Date.now(): fixtures must replay identically on
@@ -207,7 +211,11 @@ export function loadFixture(
         // 'session-error' transcript event, replayed through the real reducer
         // so the error banner (and its plan-limit variant) is reviewable.
         if (parsed.optIn === 'planLimit' && !opts.includePlanLimit) continue;
-        const action: ChatAction = { type: 'NATIVE_SESSION_ERROR', sessionId, message: parsed.text };
+        if (parsed.optIn === 'providerError' && parsed.case !== opts.providerError) continue;
+        const action: ChatAction = {
+          type: 'NATIVE_SESSION_ERROR', sessionId, message: parsed.text,
+          ...(typeof parsed.errorCode === 'string' ? { errorCode: parsed.errorCode } : {}),
+        };
         state = chatReducer(state, action);
         actions.push(action);
       } else if (parsed.type === 'session_context') {

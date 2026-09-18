@@ -97,6 +97,10 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // Sign in with OpenRouter (2026-09-18): `openrouter.status/signIn/cancelSignIn` were
+  // designed here ahead of the backend and came off the same day when openrouter:* landed
+  // on all five surfaces. The fake in mock-shim.ts stays so `?openrouterSignIn=` can pin
+  // the waiting and failed cards without a browser round-trip.
   // YouCoded Pages (2026-09-17): `pages.list/get/setPinned/setData/onChanged` were designed
   // here ahead of the backend and came off when main/pages/pages-service.ts landed on all
   // five surfaces. The fake in mock-shim.ts stays so the library, the pinned buttons and the

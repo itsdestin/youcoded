@@ -79,7 +79,7 @@ import PreferencesPopup from './components/PreferencesPopup';
 import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './components/RuntimeBinding';
 import ModelPicker, { type ModelChoice } from './components/model/ModelPicker';
 import ModelPickerPopup from './components/ModelPickerPopup';
-import type { ModelBinding } from '../shared/provider-types';
+import { OPENROUTER_CREDITS_URL, type ModelBinding } from '../shared/provider-types';
 import OpenTasksPopup from './components/OpenTasksPopup';
 import { SPECIALIST_SETTINGS_EVENT } from './components/SpecialistModelUnavailable';
 import { useSessionTasks } from './hooks/useSessionTasks';
@@ -1576,6 +1576,7 @@ function AppInner() {
             type: 'NATIVE_SESSION_ERROR',
             sessionId: event.sessionId,
             message: event.data.text ?? 'The model request failed.',
+            errorCode: event.data.errorCode,
             // Same reasoning as the interrupt above: a turn that died mid-flight
             // still spent what its completed steps spent.
             uuid: event.uuid,
@@ -3710,6 +3711,9 @@ function AppInner() {
                       // own upgrade page (the URL the Codex CLI's limit error
                       // names) in the system browser, like My Account does.
                       onUpgradePlan={() => void window.claude.shell.openExternal(CHATGPT_UPGRADE_URL)}
+                      // OpenRouter's "not enough credit" card: there is no
+                      // purchase API, so the fix is OpenRouter's own page.
+                      onAddCredit={() => void window.claude.shell.openExternal(OPENROUTER_CREDITS_URL)}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
                       conversationStatus={conversationStatus}

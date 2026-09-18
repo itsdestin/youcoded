@@ -2949,7 +2949,7 @@ export function installShim(): void {
       list: () => invoke('provider:list'),
       upsert: (config: unknown) => invoke('provider:upsert', config),
       remove: (id: string) => invoke('provider:remove', { id }),
-      test: (id: string) => invoke('provider:test', { id }),
+      test: (id: string, key?: string) => invoke('provider:test', key === undefined ? { id } : { id, key }),
       setKey: (id: string, key: string) => invoke('provider:set-key', { id, key }),
       catalog: () => invoke('provider:catalog'),
     },
@@ -2967,6 +2967,15 @@ export function installShim(): void {
       signIn: () => invoke('chatgpt:sign-in'),
       cancelSignIn: () => invoke('chatgpt:cancel-sign-in'),
       signOut: () => invoke('chatgpt:sign-out'),
+    },
+    // Sign in with OpenRouter: the browser round-trip and its listener live on
+    // the desktop, so a phone can't run it — supported:false hides the button
+    // and the card keeps its paste-a-key route. The invokes exist for parity.
+    openrouter: {
+      supported: false,
+      status: () => invoke('openrouter:sign-in-status'),
+      signIn: () => invoke('openrouter:sign-in'),
+      cancelSignIn: () => invoke('openrouter:cancel-sign-in'),
     },
     // Claude Code's live sign-in (2026-09-09). Real over the wire: remote-server
     // answers from the DESKTOP's probe, which is the machine the session

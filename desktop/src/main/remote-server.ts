@@ -57,6 +57,7 @@ import type { ContextSettingsStore } from './harness/context-settings-store';
 import type { PermissionRule } from '../shared/permission-types';
 import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
+import type { OpenRouterSignIn } from './providers/openrouter-oauth';
 import type { ClaudeAccount } from './providers/claude-account';
 import { installClaude } from './prerequisite-installer';
 import { toListResult } from './harness/specialists/catalog';
@@ -341,7 +342,7 @@ export class RemoteServer {
   // field (Plan 2b) — both were added independently on master and this branch.
   // permissionStore (M5 2a) is carried for the READ side only — permissions:list.
   // The two revokes go through nativeHost, which also clears live in-memory state.
-  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null } | null = null;
+  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null } | null = null;
   // Plan 2b Task 11: conversation-lease + device wiring, injected by ipc-handlers
   // via setLeaseWiring() AFTER main.ts builds the lease client/requester (they
   // live in the whenReady scope, not reachable at RemoteServer construction).
@@ -424,7 +425,7 @@ export class RemoteServer {
   /** Injected by ipc-handlers after it constructs the native stack, so remote
    *  WS clients reach the SAME nativeHost / providerRegistry / modelCatalog the
    *  Electron IPC handlers use (mirrors setLastTopic / broadcastStatusData). */
-  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null }): void {
+  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null }): void {
     this.nativeRuntime = rt;
   }
 
@@ -1944,7 +1945,10 @@ export class RemoteServer {
       case 'provider:test': {
         try {
           const res = this.nativeRuntime
-            ? await this.nativeRuntime.providerRegistry.testConnection(payload.id ?? payload)
+            ? await this.nativeRuntime.providerRegistry.testConnection(
+              payload.id ?? payload,
+              typeof payload?.key === 'string' ? payload.key : undefined,
+            )
             : { ok: false, message: 'Native runtime not available.' };
           this.respond(client.ws, type, id, res);
         } catch (err: any) {
@@ -2000,6 +2004,25 @@ export class RemoteServer {
         try {
           const auth = this.nativeRuntime?.chatgptAuth ?? null;
           this.respond(client.ws, type, id, auth ? await auth.cancelSignIn() : false);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      // Sign in with OpenRouter: status and cancel are the desktop's; sign-in
+      // answers false for the same reason as chatgpt:sign-in above.
+      case 'openrouter:sign-in-status': {
+        this.respond(client.ws, type, id, this.nativeRuntime?.openRouterSignIn?.status() ?? { state: 'idle' });
+        break;
+      }
+      case 'openrouter:sign-in': {
+        this.respond(client.ws, type, id, false);
+        break;
+      }
+      case 'openrouter:cancel-sign-in': {
+        try {
+          const s = this.nativeRuntime?.openRouterSignIn ?? null;
+          this.respond(client.ws, type, id, s ? await s.cancelSignIn() : false);
         } catch (err: any) {
           this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
         }
