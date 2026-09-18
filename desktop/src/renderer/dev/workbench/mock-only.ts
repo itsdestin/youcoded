@@ -31,7 +31,7 @@
 // a fake, the fake told us what to build, and the fakes in mock-shim.ts stay so
 // the workbench can still show the you-alone, empty and stale-board states
 // without a live leaderboard. `no MOCK_ONLY entry has since gained a real
-// channel` in workbench-mock-contract.test.ts is what forces this cleanup.
+// channel` in mock-shim-window.test.ts is what forces this cleanup.
 //
 // `engine.prereqs` came off this list on 2026-09-05 when the real check landed
 // (main/engine/rocm-prereqs.ts on all five surfaces). Its fake in mock-shim.ts
@@ -57,7 +57,7 @@
 // fakes in mock-shim.ts stay, so the workbench can still show the not-added,
 // added and not-supported states without a KDE desktop; only the "no real
 // backend" claim goes. `no MOCK_ONLY entry has since gained a real channel` in
-// workbench-mock-contract.test.ts is what forces this deletion.
+// mock-shim-window.test.ts is what forces this deletion.
 // The eight voice-prompting rows (`voice.status`, `.download`, `.start`,
 // `.stop`, `.cancel`, `.onEvent`, `.sendAudio`, `.micAccess`) came off the same
 // way on 2026-09-05, the moment preload.ts gained the real `voice` namespace and

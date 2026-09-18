@@ -2567,7 +2567,7 @@ export function installShim(): void {
     //
     // Written as a plain, unconditional `voice: {` rather than a conditional
     // spread on purpose: the workbench's contract scan
-    // (tests/workbench-mock-contract.test.ts) finds a namespace by looking for
+    // (tests/mock-shim-window.test.ts, mock contract) finds a namespace by looking for
     // its name at exactly this indentation, and `...(androidLocal ? {voice} : {})`
     // would be invisible to it. The namespace is instead DELETED after this
     // object is built, whenever this client is not the Android app on its own
