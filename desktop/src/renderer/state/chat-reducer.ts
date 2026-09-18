@@ -439,6 +439,7 @@ function endTurn(
     // endTurn() so they override these resets.
     attentionState: 'ok' as const,
     errorMessage: null,
+    errorCode: null,
     // Any turn end also dismisses a pending stall countdown (the give-up path
     // ends the turn via NATIVE_SESSION_ERROR, which spreads endTurn()).
     stallWarning: null,
@@ -989,6 +990,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // (attentionState + errorMessage) so a fresh turn starts clean.
         attentionState: 'ok',
         errorMessage: null,
+        errorCode: null,
         stallWarning: null,
         // A new turn cannot start already parked.
         stalledSince: null,
@@ -1129,6 +1131,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...endTurn(session, action.message),
         attentionState: 'error',
         errorMessage: action.message,
+        errorCode: action.errorCode ?? null,
       });
       return next;
     }
@@ -1992,6 +1995,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // A skill has no optimistic path, so without this a stale error banner or
         // stall warning would sit on top of a healthy new turn.
         errorMessage: null,
+        errorCode: null,
         stallWarning: null,
         // A skill invocation is a new turn start — same reasoning as above.
         stalledSince: null,

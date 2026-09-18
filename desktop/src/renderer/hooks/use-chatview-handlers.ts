@@ -1,4 +1,4 @@
-// The three callbacks App hands every <ChatView>, as STABLE references.
+// The callbacks App hands every <ChatView>, as STABLE references.
 //
 // WHY this file exists (2026-09-18): they were inline arrows on the element, so
 // every ChatView got "new" props on every App render and none could ever skip
@@ -14,6 +14,7 @@
 // <ChatView> in App.tsx); tests/chatview-skips-uninvolved-sessions.test.tsx.
 import { useMemo } from 'react';
 import { CHATGPT_UPGRADE_URL } from '../../shared/chatgpt-types';
+import { OPENROUTER_CREDITS_URL } from '../../shared/provider-types';
 
 interface Setters {
   setProvidersAutoOpen: (open: boolean) => void;
@@ -32,6 +33,11 @@ export interface ChatViewHandlers {
    *  (the URL the Codex CLI's limit error names) in the system browser, like
    *  My Account does. */
   upgradePlan: () => void;
+  /** OpenRouter's "not enough credit" card: there is no purchase API, so the
+   *  fix is OpenRouter's own page. (Arrived on master as an inline arrow on
+   *  <ChatView> the same day this file was written — the regression it exists
+   *  to stop, and what ast-grep `app-chatview-props-are-stable` now refuses.) */
+  addCredit: () => void;
 }
 
 export function useChatViewHandlers({ setProvidersAutoOpen, setSettingsOpen, setModelPickerOpen }: Setters): ChatViewHandlers {
@@ -40,5 +46,6 @@ export function useChatViewHandlers({ setProvidersAutoOpen, setSettingsOpen, set
     openProviderSettings: () => { setProvidersAutoOpen(true); setSettingsOpen(true); },
     switchProviders: () => setModelPickerOpen(true),
     upgradePlan: () => { void window.claude.shell.openExternal(CHATGPT_UPGRADE_URL); },
+    addCredit: () => { void window.claude.shell.openExternal(OPENROUTER_CREDITS_URL); },
   }), [setProvidersAutoOpen, setSettingsOpen, setModelPickerOpen]);
 }

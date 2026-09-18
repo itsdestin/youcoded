@@ -375,7 +375,9 @@ declare global {
         list: () => Promise<any[]>;
         upsert: (config: any) => Promise<string>;
         remove: (id: string) => Promise<boolean>;
-        test: (id: string) => Promise<{ ok: boolean; message: string }>;
+        /** `key` checks a candidate instead of the saved key. `verdict` is set
+         *  where the provider can tell a refused key from an unreachable one. */
+        test: (id: string, key?: string) => Promise<{ ok: boolean; message: string; verdict?: 'verified' | 'rejected' | 'unchecked' }>;
         setKey: (id: string, key: string) => Promise<boolean>;
         catalog: () => Promise<any[]>;
       };

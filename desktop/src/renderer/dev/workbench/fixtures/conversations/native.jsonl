@@ -7,3 +7,7 @@
 {"type": "tool_use", "id": "n2", "name": "SendUserFile", "input": {"files": ["previews/halftone-dimension.html"], "caption": "Rendered from the current theme.json — bubbles use the corrected fg-dim.", "status": "normal", "display": "render"}}
 {"type": "tool_result", "tool_use_id": "n2", "content": "Sent 1 file to the user (displayed)."}
 {"type": "stalled"}
+{"type": "session_error", "optIn": "providerError", "case": "key-rejected", "text": "OpenRouter didn't accept your API key.", "errorCode": "openrouter-key-rejected"}
+{"type": "session_error", "optIn": "providerError", "case": "key-expired", "text": "Your OpenRouter key has expired.", "errorCode": "openrouter-key-expired"}
+{"type": "session_error", "optIn": "providerError", "case": "credit-short", "text": "There isn't enough OpenRouter credit left for this reply.", "errorCode": "openrouter-credit-short"}
+{"type": "session_error", "optIn": "providerError", "case": "request-refused", "text": "OpenRouter refused this request. OpenRouter said: “Your input was flagged for \"violence\". No credits were charged.”", "errorCode": "openrouter-request-refused"}

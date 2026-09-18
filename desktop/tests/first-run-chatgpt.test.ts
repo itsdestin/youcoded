@@ -9,8 +9,8 @@
 //     one accurate line; a THROW from signIn() (port 1455 held, no keychain) is
 //     folded into lastError verbatim (review R3-3 — both IPC handlers swallow
 //     throws, so without this the button would silently do nothing).
-//   - handleOpenRouterNotBuilt: the approved card's OpenRouter button must not
-//     be silent (review R1-6).
+//   - handleOpenRouterLogin: the OpenRouter button signs in through the browser
+//     and finishes setup on OpenRouter; every other outcome puts the buttons back.
 //   - FirstRunView's completion path: a ChatGPT-only install remembers 'native'
 //     as its runtime default and seeds the model picker with the plan's first
 //     model only when the catalog already has one (review R2-12) — and never
@@ -128,8 +128,8 @@ describe('FirstRunManager.handleChatGptLogin', () => {
     const auth = fakeAuth('signed-in');
     // A failed first attempt leaves a red line on screen; the sign-in that
     // then works must take it away with it (fix 7).
-    m.handleOpenRouterNotBuilt();
-    expect(m.getState().lastError).toBe('OpenRouter sign-in is coming in a later update.');
+    await m.handleOpenRouterLogin({ signIn: async () => true, waitForSignIn: async () => 'timed-out' });
+    expect(m.getState().lastError).toBe('Sign-in timed out. Try again?');
 
     await m.handleChatGptLogin(auth);
 
@@ -197,14 +197,43 @@ describe('FirstRunManager.handleChatGptLogin', () => {
   });
 });
 
-describe('FirstRunManager.handleOpenRouterNotBuilt', () => {
-  it("answers the approved card's OpenRouter button with its one line", () => {
+// Sign in with OpenRouter (2026-09-18) — replaced the "coming in a later
+// update" line the button used to answer with.
+describe('FirstRunManager.handleOpenRouterLogin', () => {
+  const auth = (outcome: Awaited<ReturnType<Parameters<FirstRunManager['handleOpenRouterLogin']>[0]['waitForSignIn']>>, throwOnSignIn?: string) => ({
+    signIn: vi.fn(async (_o?: { timeoutMs?: number }) => { if (throwOnSignIn) throw new Error(throwOnSignIn); return true; }),
+    waitForSignIn: vi.fn(async () => outcome),
+  });
+
+  it('signed-in finishes setup on OpenRouter, with the 5-minute window', async () => {
     const m = managerAtAuth();
-    m.handleOpenRouterNotBuilt();
+    const a = auth('signed-in');
+    await m.handleOpenRouterLogin(a);
+    expect(a.signIn).toHaveBeenCalledWith({ timeoutMs: 300_000 });
     const s = m.getState();
-    expect(s.lastError).toBe('OpenRouter sign-in is coming in a later update.');
+    expect(s.currentStep).toBe('COMPLETE');
+    expect(s.authMode).toBe('openrouter');
+    expect(s.setupProvider).toBe('openrouter');
+  });
+
+  it.each([
+    ['timed-out', 'Sign-in timed out. Try again?'],
+    ['cancelled', 'Sign-in was cancelled.'],
+    [{ error: "OpenRouter didn't accept the sign-in. Try again." }, "OpenRouter didn't accept the sign-in. Try again."],
+  ] as const)('%s puts the buttons back with one line and no failed row', async (outcome, line) => {
+    const m = managerAtAuth();
+    await m.handleOpenRouterLogin(auth(outcome as any));
+    const s = m.getState();
+    expect(s.lastError).toBe(line);
     expect(s.authMode).toBe('none');
     expect(s.currentStep).toBe('AUTHENTICATE');
+    expect(authPrereq(m).status).not.toBe('failed');
+  });
+
+  it("a sign-in that can't start shows its own sentence", async () => {
+    const m = managerAtAuth();
+    await m.handleOpenRouterLogin(auth('cancelled', "YouCoded couldn't open your browser for the sign-in."));
+    expect(m.getState().lastError).toBe("YouCoded couldn't open your browser for the sign-in.");
   });
 });
 
@@ -491,16 +520,16 @@ describe('FirstRunView — the ChatGPT button and the kill switch', () => {
 describe('FirstRunView — Try Again is offered only when something actually failed', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
-  it('the OpenRouter "not built yet" line shows the message with no Try Again button', async () => {
+  it('a refused OpenRouter key shows the message with no Try Again button', async () => {
     // One click reaches this state and nothing broke. "Try Again" here would
     // re-run the whole Node/Git/Claude install pass against a working machine.
     stubClaude({ state: viewState({
       currentStep: 'AUTHENTICATE',
-      lastError: 'OpenRouter sign-in is coming in a later update.',
+      lastError: "OpenRouter didn't accept this key. Check that you copied all of it.",
     }) });
     render(React.createElement(FirstRunView, { onComplete: vi.fn() }));
 
-    await waitFor(() => expect(screen.getByText('OpenRouter sign-in is coming in a later update.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("OpenRouter didn't accept this key. Check that you copied all of it.")).toBeTruthy());
     expect(screen.queryByText('Try Again')).toBeNull();
     // …and the headline stays the step's own line, not "Something went wrong".
     expect(screen.queryByText(/Something went wrong/)).toBeNull();
@@ -659,5 +688,52 @@ describe('ModelProvidersPopup — the Claude Code card reads the live sign-in', 
     stubSettings({ ok: false });
     render(React.createElement(ClaudeCodeBlock, { onCloseParent: vi.fn() }));
     expect(await screen.findByText("Signed-in state couldn't be read")).toBeTruthy();
+  });
+});
+
+// Connection trust (2026-09-18): "Use an API key" with an OpenRouter key checks
+// the key BEFORE saving it. A made-up key used to finish setup, because the old
+// check asked OpenRouter's public model list, which answers any key.
+describe('FirstRunManager.handleNativeApiKey — OpenRouter', () => {
+  function deps(verdict: 'verified' | 'rejected' | 'unchecked') {
+    const setKey = vi.fn(async () => {});
+    const testConnection = vi.fn(async (_id: string, _candidate?: string) => ({
+      ok: verdict === 'verified', verdict,
+      message: verdict === 'rejected' ? "OpenRouter didn't accept this key. Check that you copied all of it." : 'x',
+    }));
+    return {
+      setKey, testConnection,
+      d: {
+        providers: { list: vi.fn(async () => []), upsert: vi.fn(), setKey, remove: vi.fn(), testConnection },
+        engine: { installed: () => false, install: vi.fn() },
+        models: { curatedList: vi.fn(async () => []), on: vi.fn() },
+      } as any,
+    };
+  }
+
+  it('a refused key stays on the key page, says why, and is never saved', async () => {
+    const m = managerAtAuth();
+    const { d, setKey, testConnection } = deps('rejected');
+    await m.handleNativeApiKey('sk-or-v1-fake', 'openrouter', d);
+    expect(testConnection).toHaveBeenCalledWith('openrouter', 'sk-or-v1-fake');
+    expect(setKey).not.toHaveBeenCalled();
+    expect(m.getState().lastError).toMatch(/didn't accept this key/);
+    expect(m.getState().currentStep).not.toBe('COMPLETE');
+  });
+
+  it('a verified key is saved and setup finishes', async () => {
+    const m = managerAtAuth();
+    const { d, setKey } = deps('verified');
+    await m.handleNativeApiKey('sk-or-v1-good', 'openrouter', d);
+    expect(setKey).toHaveBeenCalledWith('openrouter', 'sk-or-v1-good');
+    expect(m.getState().currentStep).toBe('COMPLETE');
+  });
+
+  it('offline (unchecked) still saves the key and finishes — an offline first run is not stranded', async () => {
+    const m = managerAtAuth();
+    const { d, setKey } = deps('unchecked');
+    await m.handleNativeApiKey('sk-or-v1-maybe', 'openrouter', d);
+    expect(setKey).toHaveBeenCalled();
+    expect(m.getState().currentStep).toBe('COMPLETE');
   });
 });

@@ -82,6 +82,8 @@ interface Props {
   onSwitchProviders?: () => void;
   /** Plan-limit card's Upgrade plan button: opens OpenAI's upgrade page. */
   onUpgradePlan?: () => void;
+  /** OpenRouter "not enough credit" card: opens OpenRouter's add-credit page. */
+  onAddCredit?: () => void;
   // Task 12 (docked strip, replaces Task 11's UserMessage-bubble affordances):
   // App owns the native:queue-remove invoke, the QUEUED_MESSAGE_REMOVED
   // dispatch, the toast state, and the input-bar ref the Edit flow refills —
@@ -102,7 +104,7 @@ interface Props {
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
 
@@ -1354,6 +1356,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     state={state.attentionState}
                     anthropicRequestId={lastTurnRequestId}
                     errorMessage={state.errorMessage}
+                    errorCode={state.errorCode}
                     stalledSince={state.stalledSince}
                     // Native sessions get the stuck line without the
                     // "check Terminal view" pointer — they have no Terminal.
@@ -1363,6 +1366,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                     onOpenProviderSettings={onOpenProviderSettings}
                     onSwitchProviders={onSwitchProviders}
                     onUpgradePlan={onUpgradePlan}
+                    onAddCredit={onAddCredit}
                     // Stalled card only. Retry re-runs the PARKED STEP — it is
                     // deliberately NOT the native-send helper the old TODO here
                     // pointed at, which sends a new user message and would fork
@@ -1481,13 +1485,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
 }
 
 // WHY memo (2026-09-18): App renders a ChatView for EVERY open session and
-// re-renders on every session switch. Unmemoised, each of them re-walked its
-// whole timeline inside the click — work that grew with the number of open tabs
-// and the length of each, all of it ahead of the switch's first frame. Now only
-// the two conversations whose `visible` / `sessionActive` actually change do.
-// Chat state still arrives through useChatState, which memo does not block.
-// App must hand this STABLE props for it to mean anything — see the three
-// handle* callbacks there. Guard: tests/chatview-skips-uninvolved-sessions.test.tsx.
+// re-renders on every session switch; unmemoised, each re-walked its whole
+// timeline inside the click, ahead of the switch's first frame. Chat state still
+// arrives through useChatState, which memo does not block. App must hand this
+// STABLE props — hooks/use-chatview-handlers.ts says what one inline arrow costs.
+// Guard: tests/chatview-skips-uninvolved-sessions.test.tsx.
 export default React.memo(ChatView);
 
 // For tests of the view's OWN render logic (scan counts, scroll pinning). Their

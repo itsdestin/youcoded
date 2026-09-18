@@ -1576,6 +1576,7 @@ function AppInner() {
             type: 'NATIVE_SESSION_ERROR',
             sessionId: event.sessionId,
             message: event.data.text ?? 'The model request failed.',
+            errorCode: event.data.errorCode,
             // Same reasoning as the interrupt above: a turn that died mid-flight
             // still spent what its completed steps spent.
             uuid: event.uuid,
@@ -3705,6 +3706,7 @@ function AppInner() {
                       onOpenProviderSettings={chatViewHandlers.openProviderSettings}
                       onSwitchProviders={chatViewHandlers.switchProviders}
                       onUpgradePlan={chatViewHandlers.upgradePlan}
+                      onAddCredit={chatViewHandlers.addCredit}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
                       conversationStatus={conversationStatus}
