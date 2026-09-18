@@ -14,11 +14,38 @@
 // WHY half 2 is not in this file (Plan B, 2026-09-16): it read ProjectView.tsx as
 // text; it is the ast-grep rule filestab-mounted-with-hidden-prop now
 // (youcoded-dev scripts/ast-grep/rules/). Half 1 is the case below.
-import React from 'react';
+//
+// The redraw cases below (render-cost consolidation, 2026-09-18) pin the other
+// half of keeping it mounted: a HIDDEN tab must not redraw. It holds up to
+// 2,000 cards, and two things used to redraw all of them — every Project View
+// render (each tab click) handing it fresh inline callbacks, and its own read
+// of the app-wide file state, which changes on every file any session writes.
+import React, { useState } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, waitFor } from '@testing-library/react';
+import { render, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
 import { FilesTab } from '../src/renderer/components/project-view/tabs/FilesTab';
+import { ProjectView } from '../src/renderer/components/project-view/ProjectView';
 import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+
+// WHY the counter lives on useProjectWatch: FilesTab calls it unconditionally
+// at the top of its body, so every call is one render of the REAL component.
+// A counter wrapped around FilesTab from outside would sit outside its memo
+// boundary and never see a render driven by a context FilesTab reads itself —
+// the exact regression the second case guards. Nothing else Project View
+// renders calls this hook.
+const probe = vi.hoisted(() => ({ filesTabRenders: 0 }));
+vi.mock('../src/renderer/hooks/useProjectWatch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/renderer/hooks/useProjectWatch')>();
+  return {
+    useProjectWatch: (...args: Parameters<typeof actual.useProjectWatch>) => {
+      probe.filesTabRenders++;
+      return actual.useProjectWatch(...args);
+    },
+  };
+});
+// The band across the top is the app's shared header (settings gear, pinned
+// pages); it has nothing to do with the Files tab and needs app-level state.
+vi.mock('../src/renderer/components/ScreenBand', () => ({ ScreenBand: () => null }));
 
 const listAllFiles = vi.fn();
 
@@ -29,22 +56,23 @@ const project = { id: 'p1', path: '/proj', name: 'Proj' } as any;
 
 function renderTab(hidden: boolean) {
   return render(
-    <ArtifactProvider value={{ state: { activeArtifactBySession: {} } as any, dispatch: vi.fn() }}>
-      <FilesTab
-        project={project}
-        search=""
-        types={new Set()}
-        sortBy="name"
-        view="list"
-        onViewChange={vi.fn()}
-        refreshKey={0}
-        hidden={hidden}
-      />
-    </ArtifactProvider>,
+    <FilesTab
+      project={project}
+      search=""
+      types={new Set()}
+      sortBy="name"
+      view="list"
+      onViewChange={vi.fn()}
+      refreshKey={0}
+      hidden={hidden}
+      pvActiveId={null}
+      artifactDispatch={vi.fn()}
+    />,
   );
 }
 
 beforeEach(() => {
+  probe.filesTabRenders = 0;
   (globalThis as any).IntersectionObserver = class {
     observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
   };
@@ -52,15 +80,75 @@ beforeEach(() => {
   (window as any).claude = {
     artifacts: {
       listAllFiles,
+      listProjectsIndex: () => Promise.resolve({ ok: true, projects: [project] }),
       onChanged: () => () => {},
       watchProject: () => Promise.reject(new Error('no watcher in tests')),
       get: () => Promise.resolve({ ok: false }),
       readBinary: () => Promise.resolve({ ok: false }),
       searchContent: () => Promise.resolve({ ok: true, hits: [] }),
     },
+    project: {
+      listConversations: () => Promise.resolve({ ok: true, conversations: [] }),
+      listContext: () => Promise.resolve({ ok: true, groups: [] }),
+      repoInfo: () => Promise.resolve(null),
+    },
+    syncSpaces: {
+      status: () => Promise.reject(new Error('no sync in tests')),
+      onEvent: () => () => {},
+    },
   };
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
+
+// A REAL ArtifactProvider whose value the test controls, the way App's reducer
+// would: `dispatch` is stable (useReducer's is), `state` is replaced wholesale.
+let setArtifactState: (s: any) => void = () => {};
+function Harness() {
+  const [state, setState] = useState<any>({ projectViewOpen: true, activeArtifactBySession: {} });
+  setArtifactState = setState;
+  const [dispatch] = useState(() => vi.fn());
+  const value = React.useMemo(() => ({ state, dispatch }), [state, dispatch]);
+  return (
+    <ArtifactProvider value={value}>
+      <ProjectView
+        onNewConversation={vi.fn()}
+        onResumeConversation={vi.fn() as any}
+        settingsOpen={false}
+        onToggleSettings={vi.fn()}
+      />
+    </ArtifactProvider>
+  );
+}
+
+describe('hidden FilesTab does not re-render', () => {
+  it('stays still while other tabs are clicked', async () => {
+    const view = render(<Harness />);
+    await view.findByTitle('notes.md');
+    fireEvent.click(view.getByRole('button', { name: 'Conversations' }));
+    // Switching away flips `hidden`, which is a real prop change — one render
+    // is expected there. Measure from after that commit.
+    const afterSwitch = probe.filesTabRenders;
+    fireEvent.click(view.getByRole('button', { name: 'Instructions & Memories' }));
+    fireEvent.click(view.getByRole('button', { name: 'Conversations' }));
+    expect(probe.filesTabRenders).toBe(afterSwitch);
+  });
+
+  it('stays still when another session writes a file', async () => {
+    const view = render(<Harness />);
+    await view.findByTitle('notes.md');
+    fireEvent.click(view.getByRole('button', { name: 'Conversations' }));
+    const before = probe.filesTabRenders;
+    // What another session's file write looks like from here: a new state
+    // object, a new per-session map, and Project View's own entry unchanged.
+    act(() => {
+      setArtifactState((s: any) => ({
+        ...s,
+        activeArtifactBySession: { ...s.activeArtifactBySession, 'some-other-session': 'x1' },
+      }));
+    });
+    expect(probe.filesTabRenders).toBe(before);
+  });
+});
 
 describe('Files tab survives a tab switch', () => {
   it('hides on `hidden` without refetching the file list', async () => {
@@ -68,11 +156,13 @@ describe('Files tab survives a tab switch', () => {
     await findByTitle('notes.md');
     expect(listAllFiles).toHaveBeenCalledTimes(1);
 
+    // Stable callbacks, as ProjectView passes them.
+    const onViewChange = vi.fn();
+    const artifactDispatch = vi.fn();
     const shown = (h: boolean) => (
-      <ArtifactProvider value={{ state: { activeArtifactBySession: {} } as any, dispatch: vi.fn() }}>
-        <FilesTab project={project} search="" types={new Set()} sortBy="name" view="list"
-          onViewChange={vi.fn()} refreshKey={0} hidden={h} />
-      </ArtifactProvider>
+      <FilesTab project={project} search="" types={new Set()} sortBy="name" view="list"
+        onViewChange={onViewChange} refreshKey={0} hidden={h}
+        pvActiveId={null} artifactDispatch={artifactDispatch} />
     );
     rerender(shown(true));    // → Conversations
     // Hidden means display:none, NOT gone: the rows are still in the DOM, so the
