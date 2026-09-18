@@ -2,7 +2,7 @@
 // config switches, the slot count and the vision flag, all read off a faked
 // llama-server. Every section here needs child_process.spawn replaced, which is
 // why this file is separate from tests/engine-manager.test.ts (real spawn).
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from 'vitest';
 import { EventEmitter } from 'events';
 import type { ChildProcess } from 'child_process';
 import * as fs from 'fs';
@@ -1022,6 +1022,14 @@ describe('per-model settings', () => {
       // and would land its write if stopAll had not cancelled it.
       mgr = makeManager(fetchImpl, { configApplyMaxWaitMs: 150 });
       await startStreamingReply(mgr, fetchImpl, 'alpha');      // alpha is busy: both saves wait
+      // WHY the clock is frozen (Date only — timers stay real, so the waiters'
+      // polls keep running): both deadlines are read off Date.now(). On the real
+      // clock, a runner that took over 150ms between setConfig() and the pending
+      // check saw the engine-wide waiter hit its deadline and apply BEFORE stopAll,
+      // so `configApplyPending` read false (ubuntu CI run 35326015829; a 200ms
+      // pause there reproduces it). Frozen, no deadline passes until we move it.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      onTestFinished(() => { vi.useRealTimers(); });
       // Both waiters: an engine-wide change (requestApply) and a per-model one
       // (noteModelApply) — they are separate loops and each must stop.
       await mgr.setConfig({ contextSize: 65_536 });
@@ -1030,6 +1038,8 @@ describe('per-model settings', () => {
       expect(storedFor('alpha').pendingApply).toBe(true);
 
       await mgr.stopAll();
+      // Past both deadlines at once, and only now that stop has returned.
+      vi.setSystemTime(Date.now() + 60 * 60_000);
       const presetAfterStop = readPreset();
       const spawnsAfterStop = mockSpawn.mock.calls.length;
       const urlsAfterStop = urls.length;
