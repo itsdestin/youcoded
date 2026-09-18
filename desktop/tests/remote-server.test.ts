@@ -671,7 +671,7 @@ describe('RemoteServer unhandled channels', () => {
 // sessionMetaWiring.canWrite and only answer once the service write settles;
 // browse feeds nativeHost.list() into listPastSessions. None of that had a
 // single pinning test before this suite.
-describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
+describe('RemoteServer session meta + browse', () => {
   let mockSessionManager: any;
   let mockHookRelay: any;
   let mockConfig: any;
@@ -1177,7 +1177,7 @@ describe('RemoteServer account bridge', () => {
 // through TRANSCRIPT_REPLAY, so it needs its own connect-time catch-up for
 // (a) a specialist's run status and (b) an open native permission ask. Both
 // mirror the pre-existing hookBuffers/replayBuffers late-join mechanism.
-describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
+describe('RemoteServer specialist run + native hook replay', () => {
   let mockSessionManager: any;
   let mockHookRelay: any;
   let mockConfig: any;

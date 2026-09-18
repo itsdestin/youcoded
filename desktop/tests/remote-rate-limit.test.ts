@@ -39,7 +39,7 @@ describe('a single connection cannot be used as an unlimited guessing channel', 
     expect(socket.listenerCount('message')).toBe(0);
   });
 
-  it('refuses new sockets once too many sit unauthenticated (2026-09-10 security review, #5)', async () => {
+  it('refuses new sockets once too many sit unauthenticated', async () => {
     const { EventEmitter } = await import('node:events');
     const { RemoteServer } = await import('../src/main/remote-server');
     const sessionManager: any = new EventEmitter();

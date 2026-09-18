@@ -223,7 +223,7 @@ describe('assembleSystemPrompt — tool-less models (hasTools:false)', () => {
   });
 });
 
-describe('assembleSystemPrompt — shared doctrine (2026-09-04)', () => {
+describe('assembleSystemPrompt — shared doctrine', () => {
   const base = { presetBody: PRESET, cwd: '/tmp', appVersion: '1.0.0' };
   it('doctrine sits AFTER the project instructions and before the variant overlay', () => {
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'PROJECT_INSTR_MARKER');

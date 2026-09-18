@@ -542,7 +542,7 @@ describe('listPastSessions — Conversation Store union (Phase 2a)', () => {
     expect(row.missingProject).toBeUndefined();
   });
 
-  it('resolves a CROSS-OS store-only record by saved-folder basename (two-device dogfood fix 2026-07-12)', async () => {
+  it('resolves a CROSS-OS store-only record by saved-folder basename', async () => {
     const store = seedStore();
     // THIS device's copy of the project. Its basename ('youcoded-dev') matches
     // the record's projectName; the record's originalPath is the OTHER device's
@@ -611,7 +611,7 @@ describe('listPastSessions — Conversation Store union (Phase 2a)', () => {
   });
 });
 
-describe('listPastSessions — native rows join the SAME overlay (Task 5)', () => {
+describe('listPastSessions — native rows join the SAME overlay', () => {
   function seedStore(): ReturnType<typeof createConversationStore> {
     const root = path.join(tmpHome, 'YouCoded', 'Personal', 'Conversations');
     const store = createConversationStore(root);
