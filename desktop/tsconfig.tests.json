@@ -53,7 +53,6 @@
     "tests/chatsearch-meta-builder.test.ts",
     "tests/chatview-prepend-scroll-anchor.test.tsx",
     "tests/conversation-store.test.ts",
-    "tests/conversations-service.test.ts",
     "tests/harness-eval-judge.test.ts",
     "tests/harness-eval-orchestrator.test.ts",
     "tests/harness-review-runner.test.ts",
