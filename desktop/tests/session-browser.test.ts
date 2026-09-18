@@ -4,6 +4,9 @@ import os from 'os';
 import path from 'path';
 import { createConversationStore } from '../src/main/conversations/conversation-store';
 import { nativeStoreSlug } from '../src/main/slug-encoding';
+// Static on purpose: the transcript-meta cache reads no home-derived path, so it
+// needs none of the reset-and-reimport the listPastSessions cases use.
+import { readSessionTranscriptMetaCached, __clearTranscriptMetaCacheForTests } from '../src/main/session-browser';
 
 // Task 7 (store union): session-browser reads the Conversation Store via a
 // dynamic import of './conversations/service' inside listPastSessions. The real
@@ -805,5 +808,65 @@ describe('extractStoreMeta', () => {
     expect(meta.flags).toEqual({ priority: true });        // helpful dropped
     expect(meta.tags).toEqual(['tag_1']);
     expect(meta.note).toBe('left off mid-refactor');
+  });
+});
+
+const metaLine = (o: object) => JSON.stringify(o) + '\n';
+function writeFirstMessage(p: string, text: string) {
+  fs.writeFileSync(p, metaLine({ type: 'user', timestamp: '2026-09-18T00:00:00Z', message: { role: 'user', content: text } }) + 'x'.repeat(600));
+}
+
+describe('readSessionTranscriptMetaCached', () => {
+  let dir: string;
+  beforeEach(() => { __clearTranscriptMetaCacheForTests(); dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tmc-')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); });
+
+  // WHY: root can still read a chmod-000 file, and Windows ignores POSIX mode
+  // bits entirely — CI runs both, so this variant is skipped there. The
+  // open-spy test below proves the same "no second read" behavior everywhere.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'returns the same object for an unchanged file without re-reading it',
+    async () => {
+      const p = path.join(dir, 'a.jsonl'); writeFirstMessage(p, 'hello');
+      const st = fs.statSync(p);
+      const a = await readSessionTranscriptMetaCached(p, st, true);
+      fs.chmodSync(p, 0o000); // a second READ would now fail and return nulls
+      try {
+        const b = await readSessionTranscriptMetaCached(p, st, true);
+        expect(b).toBe(a);
+      } finally { fs.chmodSync(p, 0o644); }
+    },
+  );
+
+  it('re-reads when size or mtime change', async () => {
+    const p = path.join(dir, 'a.jsonl'); writeFirstMessage(p, 'hello');
+    const a = await readSessionTranscriptMetaCached(p, fs.statSync(p), true);
+    writeFirstMessage(p, 'a different and longer first message');
+    const b = await readSessionTranscriptMetaCached(p, fs.statSync(p), true);
+    expect(b).not.toBe(a);
+  });
+
+  it('two scans asking at the same moment share one read', async () => {
+    const p = path.join(dir, 'a.jsonl'); writeFirstMessage(p, 'hello');
+    const st = fs.statSync(p);
+    const open = vi.spyOn(fs.promises, 'open');
+    try {
+      const [a, b] = await Promise.all([
+        readSessionTranscriptMetaCached(p, st, true),
+        readSessionTranscriptMetaCached(p, st, true),
+      ]);
+      expect(b).toBe(a);
+      expect(open.mock.calls.filter((c) => c[0] === p).length).toBe(1);
+    } finally { open.mockRestore(); }
+  });
+
+  it('does not remember a failed read', async () => {
+    const p = path.join(dir, 'gone.jsonl');
+    const st = { size: 900, mtimeMs: 1 };
+    const a = await readSessionTranscriptMetaCached(p, st, true);   // file absent → all nulls
+    expect(a.lastTimestampMs).toBeNull();
+    writeFirstMessage(p, 'now it exists');
+    const b = await readSessionTranscriptMetaCached(p, st, true);   // SAME stat on purpose
+    expect(b.lastTimestampMs).not.toBeNull();
   });
 });
