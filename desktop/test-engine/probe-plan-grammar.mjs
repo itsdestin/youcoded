@@ -37,48 +37,65 @@ let base;
 let model;
 let TRIALS;
 
-// Exported so the production schema can be pinned byte-for-byte (as data) to
-// the exact constrained-decoding grammar that the live model probe exercised.
-// 2026-09-18: the recursion is BOUNDED (`steps` now points at `$defs/leafStep`,
-// which has no `steps` and cannot be a `repeat`). This REMOVES a production
-// rather than adding one, so every grammar the probe proved still parses; the
-// probe was NOT re-run. Why it had to change: in two of Destin's real sessions
-// a model rode the old unbounded recursion 343, 353 and 206 levels deep with
-// filler steps until the output-token cap cut the arguments mid-string. See
-// plans/schema.ts and tests/plan-schema.test.ts.
+// Exported so the production schema can be pinned (as data) to the exact
+// constrained-decoding grammar that the live model probe exercised.
+//
+// 2026-09-18, TWO changes, both driven by three of Destin's real sessions:
+//  1. BOUNDED recursion — a repeat body is `$defs/leafStep`, which cannot be a
+//     `repeat`. A model rode the old unbounded `steps` 343, 353 and 206 levels
+//     deep with filler steps until the output-token cap cut the arguments
+//     mid-string.
+//  2. A REAL PER-KIND UNION — `$defs/step` was one flat object with every
+//     kind's fields optional, so a model following it emitted `of`,
+//     `max_iterations`, `until` AND `steps` on a `map` step, which the strict
+//     runtime validator then rejected. Each kind is now its own branch listing
+//     only its own fields, all of them required, so the two cannot disagree.
+// Both changes NARROW the grammar, so every document the probe proved still
+// parses; the probe was NOT re-run. See plans/schema.ts and plan-schema.test.ts.
+const FIELD = {
+  id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
+  specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
+  task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
+  budget_tokens: { type: 'integer', minimum: 500, maximum: 30000 }, // raised from 20000 on 2026-09-16 (numeric bound only; grammar evidence unchanged, not re-run)
+  items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
+  of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
+  max_iterations: { type: 'integer', minimum: 1, maximum: 5, description: 'repeat only: hard cap.' },
+  until: { type: 'string', minLength: 1, maxLength: 2000, description: 'repeat only: plain-words stop condition.' },
+  steps: { type: 'array', items: { $ref: '#/$defs/leafStep' }, minItems: 1, maxItems: 4, description: 'repeat only: the steps to repeat. These may not repeat again.' },
+};
+const KIND_FIELDS = {
+  map: ['items'],
+  verify: ['of'],
+  combine: ['of'],
+  repeat: ['max_iterations', 'until', 'steps'],
+};
+const KIND_DESCRIPTION = {
+  map: 'Run one child per item.',
+  verify: "Check an earlier step's results.",
+  combine: "Merge an earlier step's results.",
+  repeat: 'Run a short body up to max_iterations times.',
+};
+function stepBranch(kind) {
+  const properties = {
+    id: FIELD.id,
+    kind: { type: 'string', enum: [kind], description: KIND_DESCRIPTION[kind] },
+    specialist: FIELD.specialist,
+    task: FIELD.task,
+    budget_tokens: FIELD.budget_tokens,
+  };
+  for (const field of KIND_FIELDS[kind]) properties[field] = FIELD[field];
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['id', 'kind', 'specialist', 'task', 'budget_tokens', ...KIND_FIELDS[kind]],
+    properties,
+  };
+}
+
 export const STEP_SCHEMA = {
   $defs: {
-    leafStep: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['id', 'kind', 'specialist', 'task', 'budget_tokens'],
-      properties: {
-        id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
-        specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
-        task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
-        budget_tokens: { type: 'integer', minimum: 500, maximum: 30000 },
-        items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
-        of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
-        kind: { type: 'string', enum: ['map', 'verify', 'combine'] },
-      },
-    },
-    step: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['id', 'kind', 'specialist', 'task', 'budget_tokens'],
-      properties: {
-        id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
-        specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
-        task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
-        budget_tokens: { type: 'integer', minimum: 500, maximum: 30000 }, // raised from 20000 on 2026-09-16 (numeric bound only; grammar evidence unchanged, not re-run)
-        items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
-        of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
-        kind: { type: 'string', enum: ['map', 'verify', 'combine', 'repeat'] },
-        max_iterations: { type: 'integer', minimum: 1, maximum: 5, description: 'repeat only: hard cap.' },
-        until: { type: 'string', minLength: 1, maxLength: 2000, description: 'repeat only: plain-words stop condition.' },
-        steps: { type: 'array', items: { $ref: '#/$defs/leafStep' }, minItems: 1, maxItems: 4, description: 'repeat only: the steps to repeat. These may not repeat again.' },
-      },
-    },
+    leafStep: { anyOf: ['map', 'verify', 'combine'].map(stepBranch) },
+    step: { anyOf: ['map', 'verify', 'combine', 'repeat'].map(stepBranch) },
   },
   type: 'object',
   additionalProperties: false,

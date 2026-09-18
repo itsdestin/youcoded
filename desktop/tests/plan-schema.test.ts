@@ -10,6 +10,26 @@ import { STEP_SCHEMA as PROBE_PLAN_DOCUMENT_JSON_SCHEMA } from '../test-engine/p
 // rejects them; the typed PlanDocumentV1 would refuse to even compile those.
 type LooseDocument = { goal: string; steps: Array<Record<string, any>> };
 
+/** The advertised branch for one step kind. `$defs/step` is an `anyOf` of four
+ *  mutually exclusive branches (2026-09-18), so there is no single `properties`
+ *  bag to read a field off any more. */
+const branch = (kind: string): any =>
+  (PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.anyOf as any[]).find((b) => b.properties.kind.enum[0] === kind);
+
+const COMMON_FIELDS = ['id', 'kind', 'specialist', 'task', 'budget_tokens'];
+/** The fields each kind owns, as the ADVERTISED schema states them. The
+ *  drift pin below proves the runtime validator agrees with exactly this. */
+const ADVERTISED_KIND_FIELDS: Record<string, string[]> = {
+  map: ['items'], verify: ['of'], combine: ['of'], repeat: ['max_iterations', 'until', 'steps'],
+};
+/** A minimal, valid step of each kind — only the fields that kind owns. */
+const minimalStep = (kind: string, id = kind): Record<string, any> => ({
+  id, kind, specialist: 'worker', task: 'Do the thing.', budget_tokens: 500,
+  ...(kind === 'map' ? { items: ['x'] } : {}),
+  ...(kind === 'verify' || kind === 'combine' ? { of: 'earlier' } : {}),
+  ...(kind === 'repeat' ? { max_iterations: 2, until: 'Done.', steps: [minimalStep('map', 'body')] } : {}),
+});
+
 const mapVerifyCombine: LooseDocument = {
   goal: 'Review each source and produce one report.',
   steps: [
@@ -35,13 +55,13 @@ describe('plan schema and semantic validator', () => {
     const doc = (budget: number) => ({ goal: 'g', steps: [{ id: 's', kind: 'map', specialist: 'worker', task: 't', budget_tokens: budget, items: ['x'] }] });
     expect(PlanDocumentSchema.safeParse(doc(30_000)).success).toBe(true);
     expect(PlanDocumentSchema.safeParse(doc(30_001)).success).toBe(false);
-    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.budget_tokens.maximum).toBe(30_000);
+    expect(branch('map').properties.budget_tokens.maximum).toBe(30_000);
   });
 
   it('pins the complete model-facing schema to the schema proven by the live probe', () => {
     expect(PLAN_DOCUMENT_JSON_SCHEMA).toEqual(PROBE_PLAN_DOCUMENT_JSON_SCHEMA);
-    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.specialist.enum).toEqual(['explorer', 'researcher', 'reviewer', 'worker']);
-    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.steps.items.$ref).toBe('#/$defs/leafStep');
+    expect(branch('map').properties.specialist.enum).toEqual(['explorer', 'researcher', 'reviewer', 'worker']);
+    expect(branch('repeat').properties.steps.items.$ref).toBe('#/$defs/leafStep');
     expect(PlanDocumentSchema.safeParse(mapVerifyCombine).success).toBe(true);
     expect(PlanDocumentSchema.safeParse(nestedRepeat).success).toBe(true);
   });
@@ -57,8 +77,11 @@ describe('plan schema and semantic validator', () => {
   // semantics would refuse. A repeat body is now a LEAF step: one level, and
   // the runaway is not expressible.
   it('the model-facing grammar cannot nest steps without bound', () => {
-    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.leafStep.properties).not.toHaveProperty('steps');
-    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.leafStep.properties.kind.enum).toEqual(['map', 'verify', 'combine']);
+    const leafKinds = (PLAN_DOCUMENT_JSON_SCHEMA.$defs.leafStep.anyOf as any[]).map((b) => b.properties.kind.enum[0]);
+    expect(leafKinds).toEqual(['map', 'verify', 'combine']);
+    for (const b of PLAN_DOCUMENT_JSON_SCHEMA.$defs.leafStep.anyOf as any[]) {
+      expect(b.properties).not.toHaveProperty('steps');
+    }
 
     const validate = new Ajv({ strict: false }).compile(PLAN_DOCUMENT_JSON_SCHEMA);
     // One level of repeat body is still expressible…
@@ -72,16 +95,98 @@ describe('plan schema and semantic validator', () => {
     expect(validate(twoLevels)).toBe(false);
 
     // The exact shape the runaway rode: `map` steps chained through their own
-    // `steps`, the way all three real calls descended. One level is still
-    // grammatical; the third link — where the old grammar happily went to 343 —
-    // is not, so the descent can no longer run away.
+    // `steps`, the way all three real calls descended. Now that each kind is its
+    // own branch, a `map` cannot carry `steps` at ALL, so the chain is
+    // ungrammatical from its very first link rather than merely bounded.
     const mapChain = (depth: number): any => ({
       id: `m${depth}`, kind: 'map', specialist: 'explorer', task: 'Do not run.', budget_tokens: 500, items: ['none'],
       ...(depth > 0 ? { steps: [mapChain(depth - 1)] } : {}),
     });
-    expect(validate({ goal: 'g', steps: [mapChain(1)] })).toBe(true);
-    expect(validate({ goal: 'g', steps: [mapChain(2)] })).toBe(false);
+    expect(validate({ goal: 'g', steps: [mapChain(0)] })).toBe(true);
+    expect(validate({ goal: 'g', steps: [mapChain(1)] })).toBe(false);
     expect(validate({ goal: 'g', steps: [mapChain(50)] })).toBe(false);
+  });
+
+  // The regression the owner hit on the rebuilt dev instance: the advertised
+  // schema was a flat object with every kind's fields optional, so the model
+  // emitted `of`, `max_iterations`, `until` AND `steps` on all three of its
+  // `map` steps, and Zod answered with twelve unknown-key names that said
+  // nothing about which step was wrong or what a map may carry.
+  describe('each kind advertises, and accepts, only its own fields', () => {
+    it.each(['map', 'verify', 'combine', 'repeat'])('%s: a minimal document of this kind is valid both sides', (kind) => {
+      const validate = new Ajv({ strict: false }).compile(PLAN_DOCUMENT_JSON_SCHEMA);
+      const document = kind === 'verify' || kind === 'combine'
+        ? { goal: 'g', steps: [minimalStep('map', 'earlier'), minimalStep(kind)] }
+        : { goal: 'g', steps: [minimalStep(kind)] };
+      expect(validate(document)).toBe(true);
+      expect(PlanDocumentSchema.safeParse(document).success).toBe(true);
+      expect(validatePlanDocument(document, BUILTIN_ROSTER).ok).toBe(true);
+    });
+
+    it.each([
+      ['map', 'of'], ['map', 'max_iterations'], ['map', 'until'], ['map', 'steps'],
+      ['verify', 'items'], ['verify', 'steps'], ['combine', 'items'], ['repeat', 'items'], ['repeat', 'of'],
+    ])('%s carrying a %s is refused, and the message names the kind and what it allows', (kind, foreign) => {
+      const foreignValue: Record<string, unknown> = {
+        of: 'earlier', items: ['x'], max_iterations: 2, until: 'Done.', steps: [minimalStep('map', 'body')],
+      };
+      const step = { ...minimalStep(kind), [foreign]: foreignValue[foreign] };
+      const document = { goal: 'g', steps: [minimalStep('map', 'earlier'), step] };
+      const result = validatePlanDocument(document, BUILTIN_ROSTER);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const message = result.issues.join('\n');
+        expect(message).toContain(`a "${kind}" step accepts only`);
+        // It names the allowed fields, and the offending one to drop.
+        for (const allowed of [...COMMON_FIELDS, ...ADVERTISED_KIND_FIELDS[kind]]) expect(message).toContain(allowed);
+        expect(message).toContain(`remove ${foreign}`);
+        // Never the bare unknown-key list the owner actually saw.
+        expect(message).not.toContain('unknown parameter');
+      }
+    });
+
+    it.each(['map', 'verify', 'combine', 'repeat'])('%s missing its own field is refused by name', (kind) => {
+      for (const own of ADVERTISED_KIND_FIELDS[kind]) {
+        const step = { ...minimalStep(kind) };
+        delete step[own];
+        const document = { goal: 'g', steps: [minimalStep('map', 'earlier'), step] };
+        const result = validatePlanDocument(document, BUILTIN_ROSTER);
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.issues.join('\n')).toContain(`a "${kind}" step needs ${own}`);
+      }
+    });
+
+    // THE ANTI-DRIFT PIN. Everything above tests one side or the other; this
+    // walks the advertised branches and proves the runtime validator accepts
+    // exactly the same field set for each kind — no more, no less. The flat
+    // schema / strict union split that broke plans twice cannot come back
+    // without this failing.
+    it('every advertised branch matches the shape the validator accepts', () => {
+      const branches = PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.anyOf as any[];
+      expect(branches.map((b) => b.properties.kind.enum[0])).toEqual(['map', 'verify', 'combine', 'repeat']);
+
+      for (const b of branches) {
+        const kind = b.properties.kind.enum[0];
+        const advertised = Object.keys(b.properties).sort();
+        // Advertised: common + this kind's own fields, every one of them required.
+        expect(advertised).toEqual([...COMMON_FIELDS, ...ADVERTISED_KIND_FIELDS[kind]].sort());
+        expect([...b.required].sort()).toEqual(advertised);
+        expect(b.additionalProperties).toBe(false);
+
+        // Accepted by the validator: exactly the advertised set. Present → ok…
+        const ok = { goal: 'g', steps: [minimalStep('map', 'earlier'), minimalStep(kind)] };
+        expect(PlanDocumentSchema.safeParse(ok).success).toBe(true);
+        // …and ANY field this branch does not advertise → refused.
+        for (const other of ['items', 'of', 'max_iterations', 'until', 'steps']) {
+          if (advertised.includes(other)) continue;
+          const value: Record<string, unknown> = {
+            of: 'earlier', items: ['x'], max_iterations: 2, until: 'Done.', steps: [minimalStep('map', 'body')],
+          };
+          const bad = { goal: 'g', steps: [minimalStep('map', 'earlier'), { ...minimalStep(kind), [other]: value[other] }] };
+          expect(PlanDocumentSchema.safeParse(bad).success).toBe(false);
+        }
+      }
+    });
   });
 
   it('keeps the live semantic specialist field open to custom roster ids', () => {
@@ -156,14 +261,24 @@ describe('plan schema and semantic validator', () => {
     expect(validatePlanDocument({ ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], of: 'x' }] }, BUILTIN_ROSTER).ok).toBe(false);
   });
 
-  it('rejects nested repeats even though the recursive grammar accepts them', () => {
+  // A repeat inside a repeat used to parse and be caught only by the semantic
+  // pass. Since 2026-09-18 the repeat body is a leaf union, so it is refused
+  // structurally — and the message says which kinds a body step may be, rather
+  // than leaving the model to infer it.
+  it('refuses a repeat nested inside a repeat body', () => {
     const document = structuredClone(nestedRepeat);
     document.steps[0].steps = [{
       id: 'again', kind: 'repeat', specialist: 'reviewer', task: 'Repeat again.', budget_tokens: 500,
       max_iterations: 2, until: 'Done.', steps: [{ id: 'leaf', kind: 'map', specialist: 'worker', task: 'Do {item}.', budget_tokens: 500, items: ['x'] }],
     }];
-    expect(PlanDocumentSchema.safeParse(document).success).toBe(true);
-    expect(validatePlanDocument(document, BUILTIN_ROSTER)).toMatchObject({ ok: false, issues: expect.arrayContaining([expect.stringMatching(/nested repeat/i)]) });
+    expect(PlanDocumentSchema.safeParse(document).success).toBe(false);
+    const result = validatePlanDocument(document, BUILTIN_ROSTER);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.issues.join('\n')).toMatch(/map|verify|combine/);
+
+    // The advertised grammar refuses it too, so a decoder never emits one.
+    const validate = new Ajv({ strict: false }).compile(PLAN_DOCUMENT_JSON_SCHEMA);
+    expect(validate(document)).toBe(false);
   });
 
   it('rejects duplicate or forward ids, unknown specialists, and invalid bounds', () => {

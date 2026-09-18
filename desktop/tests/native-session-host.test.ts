@@ -5668,7 +5668,15 @@ describe('specialists plans in the native host (Task 4)', () => {
     // Nothing is left running, and the 30-per-conversation spawn budget is untouched.
     expect(liveChildren()).toHaveLength(0);
     for (let i = 0; i < SPECIALIST_SPAWN_BUDGET_PER_SESSION; i++) expect(host.trySpendSpecialistSpawnBudget(SID)).toBe(true);
-    const done = planEvents.filter((e) => e.plan.planId === planId).map((e) => e.plan.status);
+    // WHY a second wait rather than reading straight off the array: the journal
+    // reaching 'completed' (waited on above) and the plan EVENT carrying that
+    // status are two different signals, and under a loaded run the event is
+    // still in flight when the journal is already written. Waiting on one and
+    // asserting on the other is what made this fail intermittently in a full
+    // suite run while passing every time on its own.
+    const statuses = () => planEvents.filter((e) => e.plan.planId === planId).map((e) => e.plan.status);
+    await waitFor(() => statuses()[statuses().length - 1] === 'completed', 'the completed plan event');
+    const done = statuses();
     expect(done[done.length - 1]).toBe('completed');
   });
 
