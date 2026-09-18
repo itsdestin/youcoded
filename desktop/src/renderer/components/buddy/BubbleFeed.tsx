@@ -15,6 +15,7 @@ import SystemMarker from '../SystemMarker';
 import CompactingCard from '../CompactingCard';
 import ThinkingIndicator from '../ThinkingIndicator';
 import { useTheme } from '../../state/theme-context';
+import { useEntryFolding } from '../../hooks/use-entry-folding';
 
 interface Props {
   sessionId: string | null;
@@ -50,6 +51,17 @@ export function BubbleFeed({ sessionId }: Props) {
   // content GROW (the scroll container itself is height:100% and never resizes).
   // Mirrors ChatView.tsx's contentRef — see the observer effect below.
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // Perf cycle 3, extended to the buddy floater (Task 7): a distant entry
+  // renders as a same-height spacer instead of its full body
+  // (use-entry-folding.ts) — the buddy feed renders the SAME long-running
+  // conversation the main chat does, so it pays the identical per-node cost
+  // as a session grows without this.
+  // WHY always enabled (unlike ChatView's `!findOpen`): nothing opens a find
+  // bar over the buddy feed — `ContentFindBar` only hosts in ChatView and the
+  // drawer's own artifact branch, and BubbleFeed has neither — so there is no
+  // DOM-walking search this could ever need to suspend for.
+  const folding = useEntryFolding(true, scrollContainerRef);
 
   // Mirror state in a ref so async event handlers see fresh values
   // without needing to list state in useEffect deps (which would cause
@@ -575,13 +587,21 @@ export function BubbleFeed({ sessionId }: Props) {
                   return null;
               }
 
+              // Folded: render the wrapper at exactly the height its body last
+              // occupied and omit the body — same shape as ChatView.tsx's
+              // fold wrapper (this feed MUST mirror it).
+              const folded = folding.isFolded(key!);
+              const foldHeight = folded ? folding.heightOf(key!) : undefined;
               return (
                 <div
                   key={key!}
+                  ref={folding.registerEntry}
+                  data-entry-key={key!}
                   className={`timeline-entry${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
                   title={isPreCompaction ? "Archived by compaction — not in Claude's active context" : undefined}
+                  style={folded && foldHeight ? { height: foldHeight } : undefined}
                 >
-                  {content}
+                  {folded && foldHeight ? null : content}
                 </div>
               );
             });
