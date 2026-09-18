@@ -1,5 +1,8 @@
 // Mirror of desktop/src/main/analytics-service.ts. Posts /app/heartbeat once
 // per UTC day with a HMAC of (machine_id || platform), computed locally.
+// WHY once per day is a CONTRACT, not a tuning knob: the About → Privacy screen
+// promises users "anonymous usage data … once per day". Sending more often
+// rewrites that copy — a product decision, not an implementation detail.
 // Fire-and-forget — network failures do not throw and do not mutate state.
 //
 // Privacy: the raw machine_id never leaves the device. See the design
@@ -126,9 +129,23 @@ class AnalyticsService(
     }
 
     companion object {
+        // WHY a cap: a sleeping phone pauses the countdown, so one wait until
+        // midnight could run hours late. Each wake-up only looks at the clock;
+        // runOnLaunch() sends at most once per UTC day. Mirrors desktop's
+        // msUntilNextCheck in analytics-service.ts.
+        private const val MAX_WAIT_MS = 3L * 60 * 60 * 1000
+        private const val DAY_MS = 24L * 60 * 60 * 1000
+
         fun todayUtc(): String {
             val fmt = SimpleDateFormat("yyyy-MM-dd").apply { timeZone = TimeZone.getTimeZone("UTC") }
             return fmt.format(Date())
+        }
+
+        // Milliseconds until one second past the next UTC midnight, capped at 3 hours.
+        // Epoch milliseconds count UTC days exactly, so no calendar is needed.
+        fun msUntilNextCheck(nowMs: Long): Long {
+            val nextMidnight = (nowMs / DAY_MS + 1) * DAY_MS + 1000
+            return minOf(nextMidnight - nowMs, MAX_WAIT_MS)
         }
     }
 }

@@ -1,4 +1,8 @@
 // Sends one /app/heartbeat per UTC day, gated by an opt-out toggle.
+// WHY once per day is a CONTRACT, not a tuning knob: AboutPopup.tsx promises
+// users "anonymous usage data … once per day". Sending more often (to fix a
+// counting gap, say) rewrites that copy — a product decision. The day boundary
+// is UTC on every device; the owner dashboard chooses which clock it counts by.
 // Identity is HMAC_SHA256(SALT, machine_id || platform), computed
 // client-side. Fire-and-forget — any failure is swallowed and retried
 // next launch. Zero behavioral impact if the network is unreachable.
@@ -126,4 +130,38 @@ export async function runAnalyticsOnLaunch(): Promise<void> {
     state.lastPingedDate = today;
     writeState(state);
   }
+}
+
+// WHY a cap: a sleeping computer pauses this countdown, so a single wait until
+// midnight could run hours late after the lid opens. Each wake-up only looks at
+// the clock; the network is used at most once per UTC day (runAnalyticsOnLaunch
+// is gated on lastPingedDate).
+const MAX_WAIT_MS = 3 * 60 * 60 * 1000;
+
+// Milliseconds until the next UTC midnight (plus one second of margin so the
+// check lands safely inside the new day), capped at MAX_WAIT_MS.
+export function msUntilNextCheck(now: number = Date.now()): number {
+  const d = new Date(now);
+  const nextMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) + 1000;
+  return Math.min(nextMidnight - now, MAX_WAIT_MS);
+}
+
+let dailyTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Sends today's heartbeat now (if not yet sent), then keeps sending one per
+// UTC day for as long as the app stays open.
+// WHY: the heartbeat used to fire only at launch, so an app left open for days
+// was counted on its first day only.
+export function startDailyHeartbeat(): void {
+  if (dailyTimer) clearTimeout(dailyTimer);
+  const tick = (): void => {
+    // .catch first: a failed state-file write must neither surface as an
+    // unhandled rejection nor stop the next day's check from being scheduled.
+    void runAnalyticsOnLaunch().catch(() => {}).finally(() => {
+      dailyTimer = setTimeout(tick, msUntilNextCheck());
+      // Never keep the process alive just for analytics.
+      dailyTimer.unref?.();
+    });
+  };
+  tick();
 }

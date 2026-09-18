@@ -121,3 +121,63 @@ describe("analytics-service.runAnalyticsOnLaunch", () => {
     expect(state.optIn).toBe(true);
   });
 });
+
+describe("analytics-service daily heartbeat while open", () => {
+  const origFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    machineIdImpl = () => "test-machine-id-stable";
+    try { fs.unlinkSync(STATE_FILE); } catch {}
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ ok: true }), { status: 200 })
+    ) as any;
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    globalThis.fetch = origFetch;
+    try { fs.unlinkSync(STATE_FILE); } catch {}
+  });
+
+  async function importFresh() {
+    vi.resetModules();
+    return (await import("./analytics-service")) as typeof import("./analytics-service");
+  }
+
+  it("msUntilNextCheck: waits until just after UTC midnight when that is under 3h away", async () => {
+    const svc = await importFresh();
+    const now = Date.UTC(2026, 8, 16, 23, 0, 0);
+    expect(svc.msUntilNextCheck(now)).toBe(60 * 60 * 1000 + 1000);
+  });
+
+  it("msUntilNextCheck: never waits longer than 3 hours", async () => {
+    const svc = await importFresh();
+    const now = Date.UTC(2026, 8, 16, 1, 0, 0);
+    expect(svc.msUntilNextCheck(now)).toBe(3 * 60 * 60 * 1000);
+  });
+
+  it("an app left open sends exactly one heartbeat per UTC day", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date(Date.UTC(2026, 8, 16, 20, 0, 0)));
+    const svc = await importFresh();
+    const fetchMock = globalThis.fetch as any;
+
+    svc.startDailyHeartbeat();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    // Same day: the next wake-up only looks at the clock.
+    await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Past UTC midnight: the new day's heartbeat goes out.
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    // A further full day of wake-ups adds exactly one more.
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+});
