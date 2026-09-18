@@ -759,7 +759,7 @@ export function registerIpcHandlers(
   // This only holds because assignSession runs SYNCHRONOUSLY in that handler,
   // before its first await — nextTick outranks the microtask queue, so an
   // assignSession sitting after any await would drain too late. See the WHY on
-  // the assignSession block itself; pinned by tests/session-create-ownership-order.test.ts.
+  // the assignSession block itself; pinned by tests/ipc-handlers-create-ownership.test.ts.
   sessionManager.on('session-created', (info) => {
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
@@ -822,7 +822,7 @@ export function registerIpcHandlers(
     // native session created or resumed from a SECOND main window was forwarded with
     // no owner registered, took sendForSession's ownerless mainWindow fallback, and
     // appeared in window 1 instead. Claude Code never hit it: that path runs straight
-    // through with no intervening await. Pinned by tests/session-create-ownership-order.test.ts.
+    // through with no intervening await. Pinned by tests/ipc-handlers-create-ownership.test.ts.
     //
     // Exception: if the sender is a buddy window (the floater's compact chat),
     // assign to the leader main window instead. Buddies don't appear in the

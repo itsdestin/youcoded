@@ -238,7 +238,7 @@ async function runSessionCreate(opts: any, senderWindowId = 2) {
     mockSessionManager as any,
     mainWindow as any,
     mockSkillProvider as any,
-    undefined, // commandProvider
+    undefined as any, // commandProvider (required by the signature; this test passes none)
     undefined, // hookRelay
     undefined, // remoteConfig
     undefined, // remoteServer
