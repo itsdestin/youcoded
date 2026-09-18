@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+// WHY its own file: it mocks use-narrow-viewport file-wide, while
+// ResumeBrowser.test.tsx drives the real hook through window.matchMedia.
 // Resume browser filter row — the behaviours the decks and reviews promised
 // (feature resume-filter-chips, 2026-09-10) that only a mounted browser can show:
 //
