@@ -403,7 +403,7 @@ describe('EngineSupervisor', () => {
   /** Boots a supervisor whose router answers `GET /models` with `payload`.
    *  The URL test is `includes('/models')`, NOT `endsWith` — refreshModels asks
    *  `/models?reload=1`, and an endsWith stub silently stops matching the day a
-   *  query string is added (the exact trap engine-manager-slot-count.test.ts
+   *  query string is added (the exact trap engine-manager-router.test.ts
    *  documents for /props). */
   async function supervisorServing(payload: unknown) {
     mockSpawn.mockReturnValue(makeFakeChild());
