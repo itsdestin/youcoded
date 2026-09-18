@@ -212,7 +212,10 @@ export function loadFixture(
         // so the error banner (and its plan-limit variant) is reviewable.
         if (parsed.optIn === 'planLimit' && !opts.includePlanLimit) continue;
         if (parsed.optIn === 'providerError' && parsed.case !== opts.providerError) continue;
-        const action: ChatAction = { type: 'NATIVE_SESSION_ERROR', sessionId, message: parsed.text };
+        const action: ChatAction = {
+          type: 'NATIVE_SESSION_ERROR', sessionId, message: parsed.text,
+          ...(typeof parsed.errorCode === 'string' ? { errorCode: parsed.errorCode } : {}),
+        };
         state = chatReducer(state, action);
         actions.push(action);
       } else if (parsed.type === 'session_context') {

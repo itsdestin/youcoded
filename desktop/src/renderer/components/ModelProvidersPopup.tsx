@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
 import ProvidersSection from './ProvidersSection';
 import LocalModelsSection from './LocalModelsSection';
-import type { ProviderStatus } from '../../shared/provider-types';
+import { OPENROUTER_CREDITS_URL, type ProviderHealth, type ProviderStatus } from '../../shared/provider-types';
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
@@ -414,6 +414,61 @@ export function ChatGptBlock() {
 
 // ── 2. OpenRouter ────────────────────────────────────────────────────────────
 
+/** "Sep 19" — the day a key's expiry passed, in the reader's own locale. */
+function shortDate(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/** The card's words for what the app last learned about the saved key.
+ *  WHY this exists: the card used to say "Connected" whenever a key was SAVED,
+ *  so a dead key read as working until every message failed (Destin,
+ *  2026-08-31). Now the status line says what OpenRouter actually answered,
+ *  and a refused key says why and what to do — in the destructive tone, since
+ *  nothing OpenRouter-backed works until it is fixed. */
+export function openRouterKeyWords(health: ProviderHealth | undefined): {
+  status: string; detail: { text: string; tone?: 'muted' | 'bad' } | null; broken: boolean;
+} {
+  if (!health) return { status: 'Checking…', detail: null, broken: false };
+  if (health.verdict === 'verified') return { status: 'Connected', detail: null, broken: false };
+  if (health.verdict === 'unchecked') {
+    return {
+      status: 'Key saved — not checked yet',
+      detail: { text: "OpenRouter couldn't be reached to check it. The app tries again on its own, or press Test." },
+      broken: false,
+    };
+  }
+  switch (health.reason) {
+    case 'openrouter-key-expired': {
+      const day = shortDate(health.expiresAt);
+      return {
+        status: 'Key expired',
+        detail: { text: `This key stopped working${day ? ` on ${day}` : ''}. Create a new key on OpenRouter, then replace it here.`, tone: 'bad' },
+        broken: true,
+      };
+    }
+    case 'openrouter-wrong-key-type':
+      return {
+        status: 'Wrong kind of key',
+        detail: { text: "This is an account-management key, which can't run models. Create a regular API key on OpenRouter, then replace it here.", tone: 'bad' },
+        broken: true,
+      };
+    case 'openrouter-forbidden':
+      return {
+        status: 'Key refused',
+        detail: { text: 'OpenRouter refused this key. Check it on OpenRouter, then replace it here.', tone: 'bad' },
+        broken: true,
+      };
+    default:
+      return {
+        status: 'Key not accepted',
+        detail: { text: "OpenRouter didn't accept this key. Replace it to keep using OpenRouter models.", tone: 'bad' },
+        broken: true,
+      };
+  }
+}
+
 export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) {
   // The OpenRouter builtin provider (stable id 'openrouter'). undefined = still
   // loading; null = not found (shouldn't happen — it's builtin).
@@ -432,6 +487,7 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
   useEffect(() => { void refresh(); }, [refresh]);
 
   const connected = openrouter?.hasKey === true;
+  const words = openRouterKeyWords(openrouter?.health);
 
   const runTest = async () => {
     if (!openrouter) return;
@@ -439,6 +495,9 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
     try {
       const res: any = await window.claude.providers.test(openrouter.id);
       setTestNote({ tone: res?.ok ? 'ok' : 'bad', text: res?.message ?? (res?.ok ? 'Connected.' : 'Could not verify the key.') });
+      // A Test writes the stored verdict (§3.1), so re-read it: the status
+      // line must agree with the note under it.
+      await refresh();
     } catch (e) {
       setTestNote({ tone: 'bad', text: e instanceof Error ? e.message : 'Could not test the connection.' });
     }
@@ -469,11 +528,15 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
               </>
             ),
           }}
-          status={openrouter === undefined ? 'Checking…' : connected ? 'Connected' : 'Not connected'}
-          account={connected ? 'https://openrouter.ai/settings/credits' : undefined}
-          detail={testNote ? { text: testNote.text, tone: testNote.tone === 'ok' ? 'muted' : 'bad' } : null}
+          status={openrouter === undefined ? 'Checking…' : connected ? words.status : 'Not connected'}
+          account={connected ? OPENROUTER_CREDITS_URL : undefined}
+          detail={testNote
+            ? { text: testNote.text, tone: testNote.tone === 'ok' ? 'muted' : 'bad' }
+            : connected ? words.detail : null}
           action={connected ? (
-            <Button variant="secondary" size="sm" onClick={() => { setTestNote(null); setConnectOpen(true); }}>
+            // A refused key makes Replace key the one thing to do, so it takes
+            // the primary style; on a working key it stays an outline peer.
+            <Button variant={words.broken ? 'primary' : 'secondary'} size="sm" onClick={() => { setTestNote(null); setConnectOpen(true); }}>
               Replace key
             </Button>
           ) : (
@@ -533,13 +596,25 @@ function ConnectOpenRouterModal({
     setBusy(true);
     setNote(null);
     try {
+      // Check the NEW key before saving it. WHY: saving first meant a typo in
+      // "Replace key" overwrote a working key with a dead one; now a key
+      // OpenRouter refuses is never saved and the old one keeps working.
+      const res: any = await window.claude.providers.test(providerId, value);
+      if (res?.verdict === 'rejected') {
+        setNote({ tone: 'bad', text: res?.message ?? "OpenRouter didn't accept this key." });
+        return;
+      }
       await window.claude.providers.setKey(providerId, value);
-      // Verify immediately so the user gets a real Connected/failed signal.
-      const res: any = await window.claude.providers.test(providerId);
-      const ok = !!res?.ok;
-      setNote({ tone: ok ? 'ok' : 'bad', text: res?.message ?? (ok ? 'Connected.' : 'Saved, but the key could not be verified.') });
       await onSaved();
-      if (ok) { setKeyDraft(''); setTimeout(onClose, 700); } // brief success flash, then close
+      if (res?.ok) {
+        setNote({ tone: 'ok', text: res?.message ?? 'Connected.' });
+        setKeyDraft('');
+        setTimeout(onClose, 700); // brief success flash, then close
+      } else {
+        // Unreachable (offline): the key is saved, not proven. Say so and stay
+        // open, so the user sees why the card will read "not checked yet".
+        setNote({ tone: 'bad', text: res?.message ?? "Saved, but OpenRouter couldn't be reached to check it." });
+      }
     } catch (e) {
       setNote({ tone: 'bad', text: e instanceof Error ? e.message : 'Could not save the key.' });
     } finally {

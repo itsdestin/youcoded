@@ -247,6 +247,10 @@ export interface TranscriptEvent {
   timestamp: number;
   data: {
     text?: string;
+    /** session-error only: which known failure `text` is (e.g.
+     *  'openrouter-key-rejected'), so the chat's error card can offer the one
+     *  action that fixes it. Optional — absent means "show the text as is". */
+    errorCode?: string;
     /** user-message only: a slash command read from its command tags. The chat starts no turn for
      *  it, because many commands get no reply (2026-09-11). */
     slashCommand?: boolean;

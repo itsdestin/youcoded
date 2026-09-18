@@ -18,6 +18,9 @@ interface Props {
   /** Provider error text (native runtime). When state==='error' this takes
    *  precedence over the generic COPY line. */
   errorMessage?: string | null;
+  /** Which known failure errorMessage is, when main could tell — picks the
+   *  card's action button (see OPEN_SETTINGS_CODES / the Add credit case). */
+  errorCode?: string | null;
   /** Stalled card only: re-run the parked step. NOT a re-send of the user's
    *  message — every completed tool call earlier in the turn stays put. */
   onRetry?: () => void;
@@ -37,21 +40,34 @@ interface Props {
    *  the user can raise the exhausted window, side by side with switching
    *  providers. Shown only for a plan-limit error, like Switch Providers. */
   onUpgradePlan?: () => void;
+  /** OpenRouter "not enough credit" card: opens OpenRouter's add-credit page. */
+  onAddCredit?: () => void;
   /** Which runtime the session runs. Only 'native' changes anything: the
    *  'stuck' line drops its "check Terminal view" pointer, because a native
    *  session has no Terminal view. Anything else keeps the pointer. */
   provider?: 'claude' | 'native';
 }
 
-// Provider-CONFIGURATION errors (missing API key, disabled provider, no endpoint)
-// all originate in main/providers/provider-registry.ts and deterministically end
-// with "Settings → Providers." — the one place that phrase is emitted. We match
-// that phrase rather than threading a structured `action` field through the event
-// data → NATIVE_SESSION_ERROR → SessionChatState → serialization → here (~8 files),
-// because the message has a single origin and is stable. Runtime/stream failures
-// ("502…", "The model request failed.") don't contain it, so they won't match.
+// Which failures get which button. Since 2026-09-18 the session-error event
+// can carry an `errorCode`, and the banner reads THAT — the earlier choice was
+// to pattern-match the sentence rather than thread a field through ~8 files,
+// on the reasoning that the sentence had one stable origin. It stopped being
+// true: a key OpenRouter refuses, an expired ChatGPT sign-in and a key that
+// can't be decrypted all needed the same button and none carried the phrase,
+// so each ended as raw text with no way out. The field is optional, so a
+// message without a code falls back to the phrase match below exactly as before.
+const OPEN_SETTINGS_CODES = new Set([
+  'openrouter-key-rejected', 'openrouter-key-expired',
+  'chatgpt-signin-expired', 'chatgpt-signin-required',
+]);
+
+// The fallback: provider-CONFIGURATION errors (missing key, disabled provider,
+// no endpoint) from main/providers/provider-registry.ts name where to fix them.
+// The screen was renamed twice, so every name it has had still matches — an
+// older main process must still get its button. Runtime/stream failures
+// ("502…", "The model request failed.") name no screen, so they never match.
 function isProviderConfigError(message: string | null | undefined): boolean {
-  return !!message && /Settings → Providers/.test(message);
+  return !!message && /Settings → (Providers|Model Providers)|Assistant settings → Cloud providers/.test(message);
 }
 
 const COPY: Record<Props['state'], string> = {
@@ -90,7 +106,7 @@ function elapsedLabel(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-export default function AttentionBanner({ state, anthropicRequestId, errorMessage, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan, provider }: Props) {
+export default function AttentionBanner({ state, anthropicRequestId, errorMessage, errorCode, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan, onAddCredit, provider }: Props) {
   // Rides the shared seconds clock while parked. `stalledSince` IS serialized
   // to the host (chat-types.ts) so a reconnecting phone can still see the card
   // — see that field's own comment for why the elapsed number is only
@@ -132,9 +148,15 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
   const showRetry = state === 'error' && !!onRetry;
   const showStalledRetry = state === 'stalled' && !!onRetry;
   const showStop = state === 'stalled' && !!onStop;
-  // Provider-CONFIG errors get a direct "Open Settings" jump to Model Providers.
+  // A fixable key/sign-in problem gets a direct jump to Cloud providers. With a
+  // code, the code decides — an OpenRouter moderation refusal names no screen
+  // and must NOT offer Settings (the key is fine). Without one, the phrase does.
   const showOpenSettings =
-    state === 'error' && !!onOpenProviderSettings && isProviderConfigError(errorMessage);
+    state === 'error' && !!onOpenProviderSettings
+    && (errorCode ? OPEN_SETTINGS_CODES.has(errorCode) : isProviderConfigError(errorMessage));
+  // Not enough OpenRouter credit for THIS request: the fix is on OpenRouter's
+  // site, not in Settings — so this card's one action is Add credit.
+  const showAddCredit = state === 'error' && errorCode === 'openrouter-credit-short' && !!onAddCredit;
   // A used-up ChatGPT plan window is not a failure to retry — the message
   // already names when it resets — so Try again is withheld and the one useful
   // action is offered instead: carry on with another connected provider.
@@ -193,6 +215,11 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
           // Stays the green (primary) action, right of Upgrade plan.
           <Button size="sm" onClick={onSwitchProviders} className="shrink-0">
             Switch Providers
+          </Button>
+        )}
+        {showAddCredit && (
+          <Button size="sm" onClick={onAddCredit} className="ml-auto shrink-0">
+            Add credit
           </Button>
         )}
         {showOpenSettings && (

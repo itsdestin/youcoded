@@ -1508,7 +1508,9 @@ contextBridge.exposeInMainWorld('claude', {
     list: () => ipcRenderer.invoke(IPC.PROVIDER_LIST),
     upsert: (config: unknown) => ipcRenderer.invoke(IPC.PROVIDER_UPSERT, config),
     remove: (id: string) => ipcRenderer.invoke(IPC.PROVIDER_REMOVE, id),
-    test: (id: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, id),
+    // `key`: an optional CANDIDATE key checked instead of the saved one, so the
+    // Connect dialog can refuse a bad key before it replaces a working one.
+    test: (id: string, key?: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, id, key),
     setKey: (id: string, key: string) => ipcRenderer.invoke(IPC.PROVIDER_SET_KEY, id, key),
     catalog: () => ipcRenderer.invoke(IPC.PROVIDER_CATALOG),
   },

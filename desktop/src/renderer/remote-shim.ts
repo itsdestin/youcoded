@@ -2949,7 +2949,7 @@ export function installShim(): void {
       list: () => invoke('provider:list'),
       upsert: (config: unknown) => invoke('provider:upsert', config),
       remove: (id: string) => invoke('provider:remove', { id }),
-      test: (id: string) => invoke('provider:test', { id }),
+      test: (id: string, key?: string) => invoke('provider:test', key === undefined ? { id } : { id, key }),
       setKey: (id: string, key: string) => invoke('provider:set-key', { id, key }),
       catalog: () => invoke('provider:catalog'),
     },

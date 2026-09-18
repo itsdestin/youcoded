@@ -717,6 +717,20 @@ function openrouterPin(): string | null {
   return (typeof location !== 'undefined' && new URLSearchParams(location.search).get('openrouter')) || null;
 }
 
+/** The verdict a `?openrouter=` pin stands for, shaped as the real registry
+ *  reports it. `none` has no key, so no verdict. */
+function openrouterHealth(pin: string): import('../../../shared/provider-types').ProviderHealth | undefined {
+  const checkedAt = Date.now() - 60_000;
+  switch (pin) {
+    case 'verified': return { verdict: 'verified', checkedAt };
+    case 'unchecked': return { verdict: 'unchecked', checkedAt };
+    case 'rejected': return { verdict: 'rejected', reason: 'openrouter-key-rejected', checkedAt };
+    case 'expired': return { verdict: 'rejected', reason: 'openrouter-key-expired', expiresAt: new Date(Date.now() - 86_400_000).toISOString(), checkedAt };
+    case 'wrong-type': return { verdict: 'rejected', reason: 'openrouter-wrong-key-type', checkedAt };
+    default: return undefined;
+  }
+}
+
 /** The `?chatgpt=` pin, read fresh so both the account state and the status:data
  *  usage fixture answer from the same URL. */
 function chatgptPlanPin(): string | null {
@@ -1090,14 +1104,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       const pin = openrouterPin();
       if (p.type === 'openrouter' && (pin || openrouterKeySaved)) {
         const hasKey = openrouterKeySaved || pin !== 'none';
-        return { ...p, hasKey, ready: p.ready && hasKey };
+        // The stored verdict (connection-trust §3.1) the real registry merges
+        // into this row. A key saved through the fake Connect dialog passed
+        // the fake check, so it reads verified.
+        const health = openrouterKeySaved ? openrouterHealth('verified') : pin ? openrouterHealth(pin) : undefined;
+        return { ...p, hasKey, ready: p.ready && hasKey, ...(health ? { health } : {}) };
       }
       return p;
     }),
     catalog: async () => store.getState().catalog,
-    // Today's OpenRouter Test probes a public list that answers for any key,
-    // so the fake answers the way the real one does: always "Connected."
-    test: async () => ({ ok: true, message: 'Connected.' }),
+    // The real Test asks OpenRouter about the key (§3.2). The fake: a candidate
+    // key containing "fake" is refused; the saved key answers per `?openrouter=`.
+    test: async (_id: string, key?: string) => {
+      const verdict = key !== undefined ? (key.includes('fake') ? 'rejected' : 'verified')
+        : openrouterKeySaved ? 'verified' : openrouterHealth(openrouterPin() ?? 'verified')?.verdict ?? 'verified';
+      if (verdict === 'rejected') return { ok: false, verdict, message: "OpenRouter didn't accept this key. Check that you copied all of it." };
+      if (verdict === 'unchecked') return { ok: false, verdict, message: "OpenRouter couldn't be reached to check the key." };
+      return { ok: true, verdict, message: 'Connected.' };
+    },
     setKey: async () => { if (store.refuseWrites) throw new Error('refused'); openrouterKeySaved = true; return true; },
   };
 

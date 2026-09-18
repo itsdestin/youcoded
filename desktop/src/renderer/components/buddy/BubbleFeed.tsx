@@ -276,6 +276,7 @@ export function BubbleFeed({ sessionId }: Props) {
             type: 'NATIVE_SESSION_ERROR',
             sessionId: event.sessionId,
             message: event.data.text ?? 'The model request failed.',
+            errorCode: event.data.errorCode,
           });
           break;
         // compact-summary: buddy doesn't drive compaction UI (no /compact command),

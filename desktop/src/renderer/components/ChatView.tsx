@@ -81,6 +81,8 @@ interface Props {
   onSwitchProviders?: () => void;
   /** Plan-limit card's Upgrade plan button: opens OpenAI's upgrade page. */
   onUpgradePlan?: () => void;
+  /** OpenRouter "not enough credit" card: opens OpenRouter's add-credit page. */
+  onAddCredit?: () => void;
   // Task 12 (docked strip, replaces Task 11's UserMessage-bubble affordances):
   // App owns the native:queue-remove invoke, the QUEUED_MESSAGE_REMOVED
   // dispatch, the toast state, and the input-bar ref the Edit flow refills —
@@ -100,7 +102,7 @@ interface Props {
   onRefreshConversation?: () => void;
 }
 
-export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
+export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
 
@@ -1343,6 +1345,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     state={state.attentionState}
                     anthropicRequestId={lastTurnRequestId}
                     errorMessage={state.errorMessage}
+                    errorCode={state.errorCode}
                     stalledSince={state.stalledSince}
                     // Native sessions get the stuck line without the
                     // "check Terminal view" pointer — they have no Terminal.
@@ -1352,6 +1355,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     onOpenProviderSettings={onOpenProviderSettings}
                     onSwitchProviders={onSwitchProviders}
                     onUpgradePlan={onUpgradePlan}
+                    onAddCredit={onAddCredit}
                     // Stalled card only. Retry re-runs the PARKED STEP — it is
                     // deliberately NOT the native-send helper the old TODO here
                     // pointed at, which sends a new user message and would fork
