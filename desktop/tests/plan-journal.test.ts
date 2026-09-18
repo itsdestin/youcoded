@@ -93,6 +93,29 @@ describe('strict read and quarantine', () => {
     expect(events).toEqual([]);
   });
 
+  it('a pause launch value this build has never heard of is ignored, never a reason to quarantine every plan in the file', async () => {
+    // Review finding 5: `launch` has been widened twice ('drift', then
+    // 'not-ready') without a journal version bump. A strict enum means a
+    // journal written by a NEWER build fails the whole-file parse on an older
+    // one, which quarantines every plan for that folder — and ~/.youcoded/ is
+    // synced between machines, so a rollback or a second machine reaches it.
+    fs.mkdirSync(path.dirname(filePath()), { recursive: true });
+    const plan = record('p1', {
+      status: 'paused',
+      paused: { stepId: 's1', kind: 'launch-failed', reason: 'it stopped' },
+    });
+    fs.writeFileSync(filePath(), JSON.stringify({
+      v: 1,
+      plans: [{ ...plan, paused: { ...plan.paused, launch: 'something-a-later-build-added' } }],
+    }));
+    const read = await journal.read(REF);
+    expect(read.kind).toBe('valid');
+    const kept = (await journal.get(REF, 'p1'))!;
+    // The plan survives whole; only the value nobody here understands is gone.
+    expect(kept.paused).toEqual({ stepId: 's1', kind: 'launch-failed', reason: 'it stopped' });
+    expect(fs.readdirSync(path.dirname(filePath())).filter((f) => f.includes('.quarantine-'))).toEqual([]);
+  });
+
   it('an unreadable journal projects each recoverable card as failed rather than disappearing', async () => {
     fs.mkdirSync(path.dirname(filePath()), { recursive: true });
     fs.writeFileSync(filePath(), '{"v":1,"plans":[{"planId":"p9","toolUseId":"tool-9","status":"running","seq":7,"x":1},{"planId":"p8","toolUseId":"tool\\"8", oops');

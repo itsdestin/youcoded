@@ -2325,22 +2325,30 @@ export class NativeSessionHost extends EventEmitter {
     // private AcceptedHistoryStore (Electron userData, never NativeHome) and
     // the registry's single continuation-identity method, which THROWS when
     // ChatGPT is signed out; the host treats that throw as one more fallback.
-    private continuation: {
-      acceptedHistory?: AcceptedHistoryStore;
-      continuationIdentityFor?: (binding: ModelBinding) => string;
-    } = {},
+    // Review finding 1 (Task 13): `providerReadinessFor` used to be a 17th
+    // OPTIONAL positional parameter defaulting to "every provider is always
+    // ready". Deleting its one wiring line in ipc-handlers.ts left the
+    // typecheck clean and all 11,905 tests green while the app silently went
+    // back to proposing plans that cannot run. It lives HERE instead, in the
+    // object that already carries the registry's OTHER answer, and the union
+    // below makes the pair all-or-nothing: a host wired to the real provider
+    // registry for continuation identity CANNOT compile without readiness, and
+    // a bare test host (`{}`) is untouched. Positional slots no longer matter.
+    private continuation: { acceptedHistory?: AcceptedHistoryStore } & (
+      | {
+        continuationIdentityFor: (binding: ModelBinding) => string;
+        /** "Could a model on this provider run right now?" — signed in, key
+         *  saved, endpoint configured, local engine installed and the model
+         *  file still there — answered from this machine, with NO network call
+         *  and nothing spent (decisions 25 + 26). */
+        providerReadinessFor: (binding: ModelBinding) => Promise<ProviderReadiness>;
+      }
+      | { continuationIdentityFor?: undefined; providerReadinessFor?: undefined }
+    ) = {},
     // Specialists plans (Task 4): test hooks for the executor's timings and
     // the wait for a free specialist slot. Optional + LAST like the others;
     // production uses the executor's defaults.
     private planOptions: PlanHostBridgeOptions & { slotPollMs?: number } = {},
-    // Specialists plans, Task 13 (decisions 25 + 26): "could a model on this
-    // provider run right now?" — signed in, key saved, endpoint configured,
-    // local engine installed — answered from what is already on this machine,
-    // with NO network call and nothing spent. ipc-handlers injects the
-    // registry's credentialReadiness. Optional + LAST like the others; the
-    // default says "ready", which is exactly how every construction behaved
-    // before this parameter existed, so no test has to learn about it.
-    private providerReadinessFor: (binding: ModelBinding) => Promise<ProviderReadiness> = async () => ({ ok: true }),
   ) {
     super();
     // Re-emit broker asks/expirations so ipc-handlers can forward them to the
@@ -4929,8 +4937,10 @@ export class NativeSessionHost extends EventEmitter {
       catalog: async () => (await this.toolServices?.modelCatalog?.()) ?? null,
       resolveRoute: (binding) => this.resolveContextAndProfile(binding),
       // Task 13: a plan is never proposed — nor retried — with a specialist
-      // whose provider can't run. Local check only; never a probe.
-      credentialReadiness: (binding) => this.providerReadinessFor(binding),
+      // whose provider can't run. Local check only; never a probe. A host
+      // built without the registry (unit tests) has nothing to ask, and
+      // answers "ready" exactly as it did before this check existed.
+      credentialReadiness: async (binding) => (await this.continuation.providerReadinessFor?.(binding)) ?? { ok: true },
       maxConcurrent: (sessionId) => this.maxSpecialistsFor(sessionId),
       readChildEvents: (childId, cwd) => this.store.readEvents(childId, cwd),
       queueTurn: (sessionId, text, turnId, historyNote) => {

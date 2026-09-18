@@ -396,6 +396,17 @@ function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/**
+ * Review finding 7: join two sentences on a card without running them together
+ * or doubling a full stop. A provider's raw error detail ("socket hang up")
+ * usually has no terminal punctuation, so `${base} ${next}` read as one garbled
+ * line; a detail that DOES end in one must not gain a second.
+ */
+function joinSentences(base: string, next: string): string {
+  const head = base.trimEnd();
+  return /[.!?]$/.test(head) ? `${head} ${next}` : `${head}. ${next}`;
+}
+
 /** Why a finished report can't be used, or undefined when it can. Shared by
  *  the commit and by a Continue that asks for the report again (F4), so the
  *  specialist is told the same problem both times. */
@@ -724,6 +735,12 @@ export class PlanExecutor implements PlanExecutorHooks {
       const dangling = verdict.kind === 'dangling-effect' ? verdict : undefined;
       const cause: PlanRecoveryCause = dangling ? 'unknown-outcome' : 'unknown-request';
       const key = { stepId, iteration: original.iteration, itemIndex: original.itemIndex };
+      // Review finding 10 (decision 26): the restart-time self-recovery is the
+      // other route to an automatic relaunch. Its relaunch would be stopped by
+      // launch()'s own check a moment later, but asking here means the person
+      // is never shown a pause that claims the plan picked itself up when it
+      // could not. Local and free — the same hook restartAfter uses.
+      const notReady = await this.runner.providerNotReady?.(run.ref, await this.load(run), def.specialist);
       // Task 9a (pause handoff §1): a cut-off request, or a cut-off call that
       // could only read or change this computer, is picked up again by itself
       // — once. The recovery is journalled (fenced) in the same write that
@@ -732,6 +749,7 @@ export class PlanExecutor implements PlanExecutorHooks {
         const routing = routePlanPause(cause, {
           ...(dangling ? { toolEffect: dangling.effect, unansweredExternal: dangling.effect === 'external' } : {}),
           alreadyRecovered: hasRecovery(plan, key, cause),
+          ...(notReady !== undefined ? { notReady: true } : {}),
         });
         const a = this.findAttempt(plan, stepId, attemptId);
         if (routing.route === 'auto') {
@@ -1060,7 +1078,7 @@ export class PlanExecutor implements PlanExecutorHooks {
               kind: 'pause', why: 'launch-failed', stepId: step.id, attemptId,
               // The provider's own sentence is what tells the person what to
               // fix. When the start failed WITH it, it is already here.
-              reason: notReady && !base.includes(notReady) ? `${base} ${notReady}` : base,
+              reason: notReady && !base.includes(notReady) ? joinSentences(base, notReady) : base,
               ...(drift ? { launch: 'drift' as const } : refused ? { launch: 'refused' as const }
                 : notReady ? { launch: 'not-ready' as const } : {}),
               ...(again?.retried ? { retried: true as const } : {}),
@@ -1159,7 +1177,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       // WITH that sentence, so nothing is added; when the error said something
       // else, the provider's words follow it rather than replace them.
       const notReady = again.notReady;
-      const reason = notReady && !base.includes(notReady) ? `${base} ${notReady}` : base;
+      const reason = notReady && !base.includes(notReady) ? joinSentences(base, notReady) : base;
       if (again.unanswered) {
         // The error left an outside action with no result: this pause
         // shows it, so Continue restarts with the check-first turn instead
@@ -1169,7 +1187,9 @@ export class PlanExecutor implements PlanExecutorHooks {
           kind: 'pause', why: 'unknown-outcome', stepId: step.id, attemptId, tool, toolEffect: 'external', acknowledge: attemptId,
           ...(again.retried ? { retried: true as const } : {}),
           ...(notReady ? { launch: 'not-ready' as const } : {}),
-          reason: `${reason}. Its last action (${tool}) has no recorded result, so it isn't known whether it finished. `
+          // joinSentences, not `${reason}.`: when the provider's own sentence
+          // was appended above it already ends in a full stop (finding 7).
+          reason: `${joinSentences(reason, `Its last action (${tool}) has no recorded result, so it isn't known whether it finished.`)} `
             + 'Press Continue to let it check and pick up from what it recorded.',
         });
         return 'done';
@@ -1270,6 +1290,11 @@ export class PlanExecutor implements PlanExecutorHooks {
     // share must cover that measured input AND the 2,000-token reply. An
     // unmeasurable request is not attempted.
     const plan = await this.load(run);
+    // Review finding 10 (decision 26): the report-only re-send is a second
+    // route to an automatic retry. A provider that cannot run cannot answer a
+    // report turn either, so it is asked here too rather than only in
+    // restartAfter.
+    const notReady = await this.runner.providerNotReady?.(run.ref, plan, step.specialist);
     const inputBound = failed.childId ? await this.runner.reportOnlyInputBound?.(run.ref, plan, failed.attemptId, message) : undefined;
     const unspent = failed.baseTokens + failed.addedTokens - failed.spentTokens;
     const fundable = inputBound !== undefined && unspent >= inputBound + PLAN_REPORT_ONLY_REPLY_TOKENS;
@@ -1279,6 +1304,7 @@ export class PlanExecutor implements PlanExecutorHooks {
         reportOnlyFundable: fundable,
         unansweredExternal: verdict.kind === 'dangling-effect' && verdict.effect === 'external',
         alreadyRecovered: hasRecovery(plan, key, 'invalid-report'),
+        ...(notReady !== undefined ? { notReady: true } : {}),
       };
       if (routePlanPause('invalid-report', ctx).route !== 'auto') return { auto: false as const, retried: ctx.alreadyRecovered === true };
       recordRecovery(plan, key, 'invalid-report');

@@ -40,7 +40,7 @@ import type {
   ExecutionManifest, PlanActionResult, PlanAutoApproveRead, PlanEvent, PlanRecord, PlanRef, PlanSettingsWriteResult,
 } from './types';
 // Final review F6: refusals worded for people (the failed card shows them).
-import { PlanProposalError } from './types';
+import { PlanProposalError, PlanSpecialistsNotReadyError, type PlanNotReadySpecialist } from './types';
 
 /** Task 11 (§6): the "Ask the assistant" refusals main words itself. */
 const NOT_HERE = "This conversation isn't running here right now, so the assistant can't be asked.";
@@ -671,20 +671,25 @@ export class PlanHostBridge {
     const roster = this.port.roster(input.cwd);
     let catalog: Promise<CatalogModel[] | null> | undefined;
     const specialists: ExecutionManifest['specialists'] = {};
+    // Task 13 (decision 25): a plan is never PROPOSED with a specialist that
+    // cannot run. Resolved FIRST, for every specialist, before anything is
+    // measured — so nothing is probed (no slot, prompt or money) for a plan
+    // that cannot run, and review finding 9's "one trip to Settings" holds:
+    // the refusal below names every specialist that is not ready, not just the
+    // first. The provider's own sentence is repeated verbatim: never a new cause.
+    const resolved: Array<{ id: string; def: SpecialistDefinition; binding: ModelBinding; route: PlanRoute }> = [];
+    const notReady: PlanNotReadySpecialist[] = [];
     for (const id of [...new Set(leafSteps(input.document.steps).map((s) => s.specialist))]) {
       const def = roster.resolve(id);
       if (!def) throw new PlanProposalError(`The plan names a specialist ("${id}") that isn't available in this project.`);
       const binding = await this.bindingFor(def, parent, () => (catalog ??= this.port.catalog()));
       const route = await this.port.resolveRoute(binding);
-      // Task 13 (decision 25): a plan is never PROPOSED with a specialist that
-      // cannot run. Checked here — after the model is resolved, before the
-      // probe session is built — so nothing is measured (and no slot, prompt
-      // or money is spent) for a specialist that would die on its first send.
-      // The provider's own sentence is repeated verbatim: never a new cause.
       const ready = await this.port.credentialReadiness(binding);
-      if (!ready.ok) {
-        throw new PlanProposalError(`The "${id}" specialist would run on ${ready.label}, which isn't ready: ${ready.message} The plan wasn't created.`);
-      }
+      if (ready.ok) resolved.push({ id, def, binding, route });
+      else notReady.push({ id, label: ready.label, message: ready.message });
+    }
+    if (notReady.length > 0) throw new PlanSpecialistsNotReadyError(notReady);
+    for (const { id, def, binding, route } of resolved) {
       const lookup = budgetAdapterFor(route.providerType);
       if (!lookup.ok) throw new PlanProposalError(lookup.reason);
       // Decision 4: the exact child system prompt and tool schemas, measured

@@ -24,6 +24,50 @@ export const PLAN_JOURNAL_VERSION = 1 as const;
  */
 export class PlanProposalError extends Error {}
 
+/** One specialist whose provider cannot run as things stand, with the
+ *  provider's OWN sentence about what to fix. */
+export interface PlanNotReadySpecialist {
+  id: string;
+  /** How Settings → Providers names that provider. Kept for any surface that
+   *  wants it; the sentence below deliberately does not repeat it (see WHY). */
+  label: string;
+  message: string;
+}
+
+/**
+ * Review findings 2, 9 and 11 (decisions 25 + 26). Thrown by
+ * `resolveManifest`, which the PROPOSAL, Approve and Continue all reach — so
+ * the sentence carries NO ending about what happened to the plan. Each caller
+ * adds its own: a proposal was never created, but an Approve or a Continue is
+ * pressed on a plan that is plainly on screen, and telling that person "the
+ * plan wasn't created" reads as "my plan is gone".
+ *
+ * WHY every specialist, grouped by sentence (finding 9): throwing at the first
+ * one meant the person fixed that provider, asked again, and was refused for
+ * the second. One trip to Settings should fix them all.
+ *
+ * WHY the provider's label is not in the sentence (finding 11): the ChatGPT
+ * row is labelled "ChatGPT Plan", so "would run on ChatGPT Plan" put two
+ * meanings of "plan" in one sentence about a plan. Every sentence the registry
+ * returns already names what to fix ("Sign in with ChatGPT…", "<label> needs
+ * an API key…"), so the label adds nothing the reader needs.
+ */
+export class PlanSpecialistsNotReadyError extends Error {
+  constructor(readonly specialists: readonly PlanNotReadySpecialist[]) {
+    super(notReadySentence(specialists));
+  }
+}
+
+function notReadySentence(list: readonly PlanNotReadySpecialist[]): string {
+  const byMessage = new Map<string, string[]>();
+  for (const s of list) byMessage.set(s.message, [...(byMessage.get(s.message) ?? []), s.id]);
+  return [...byMessage].map(([message, ids]) => {
+    const quoted = ids.map((id) => `"${id}"`);
+    const names = quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+    return `The ${names} ${ids.length === 1 ? 'specialist' : 'specialists'} can't run right now: ${message}`;
+  }).join(' ');
+}
+
 const TOOL_EFFECTS = ['read', 'local', 'external'] as const satisfies readonly ToolEffect[];
 const PLAN_RECOVERY_CAUSES = ['launch-failed', 'specialist-error', 'invalid-report', 'unknown-request', 'unknown-outcome'] as const satisfies readonly PlanRecoveryCause[];
 const PLAN_PAUSE_ACTIONS = ['add_budget', 'continue', 'stop'] as const satisfies readonly PlanPauseAction[];
@@ -237,8 +281,17 @@ const PlanRecordSchema = z.object({
      *  `toolEffect`: what the unanswered `tool` could change. */
     /** Task 13 (decision 26): `not-ready` = the specialist's provider could
      *  not run (signed out, no key, endpoint or engine missing). Also never
-     *  retried, but Continue is offered — signing in is the fix. */
-    launch: z.enum(['refused', 'drift', 'not-ready']).optional(),
+     *  retried, but Continue is offered — signing in is the fix.
+     *  WHY `.catch` (review finding 5): this list has been widened twice
+     *  without a journal version bump, and a strict enum makes a value a LATER
+     *  build writes fail the WHOLE-file parse on this one — which quarantines
+     *  every plan for that folder, not just the one. `~/.youcoded/` is synced
+     *  between machines, so that is reachable by a rollback or by a second
+     *  machine on the previous build. An unknown value now reads as absent,
+     *  which is the same as a journal written before the field existed: the
+     *  pause falls back to Continue · Stop (PlanCard's default case). This is
+     *  the tolerance every future widening of this field relies on. */
+    launch: z.enum(['refused', 'drift', 'not-ready']).optional().catch(() => undefined),
     retried: z.literal(true).optional(),
     toolEffect: z.enum(TOOL_EFFECTS).optional(),
     /** Final review F1: the request ids of the Add budget presses THIS pause

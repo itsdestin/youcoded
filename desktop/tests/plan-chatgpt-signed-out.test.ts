@@ -18,6 +18,7 @@ import { SecretsStore } from '../src/main/providers/secrets-store';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import type { ChatGptAuth } from '../src/main/providers/chatgpt-auth';
 import { PlanHostBridge, definitionFingerprint, type PlanHostPort } from '../src/main/harness/plans/plan-host-bridge';
+import { PlanService, type PlanExecutorHooks } from '../src/main/harness/plans/plan-service';
 import { BUILTIN_ROSTER, resolveSpecialist } from '../src/main/harness/specialists/registry';
 import { DelegatedModels } from '../src/main/harness/specialists/delegated-models';
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
@@ -38,9 +39,14 @@ const DOC: PlanDocumentV1 = { goal: 'summarise the repo', steps: [
 
 let root: string; let home: NativeHome; let registry: ProviderRegistry;
 let startChildCalls = 0;
+/** Signed out is the state Destin was in; the Approve/Continue cases below
+ *  need a plan proposed while signed IN and pressed after signing out. */
+let signedIn = false;
 
-/** Signed out — the state Destin was in. No network in this file at all. */
-const signedOut = { isSignedIn: () => false, status: () => ({ state: 'signed-out' }) } as unknown as ChatGptAuth;
+const auth = {
+  isSignedIn: () => signedIn,
+  status: () => (signedIn ? { state: 'signed-in', email: 'x@y', plan: 'pro', usage: null } : { state: 'signed-out' }),
+} as unknown as ChatGptAuth;
 
 function port(): PlanHostPort {
   return {
@@ -65,8 +71,31 @@ function port(): PlanHostPort {
     queuePlanNotice: () => false,
     withdrawPlanNotice: () => false,
     startChild: async () => { startChildCalls += 1; throw new Error('a specialist must never be minted for a provider that cannot run'); },
-    probeSession: async () => { throw new Error('nothing may be measured for a specialist that cannot run'); },
+    probeSession: async () => {
+      if (!signedIn) throw new Error('nothing may be measured for a specialist that cannot run');
+      return {
+        session: {
+          planSetupRequest: async () => ({ system: 'x'.repeat(500), tools: [] }),
+          planNextRequestBound: async () => ({ ok: true, tokens: 500 }),
+        } as any,
+        dispose: () => {},
+      };
+    },
   };
+}
+
+/** The real PlanService over this bridge — the two real buttons go through it,
+ *  which is exactly what the first regression test did not do. */
+function service(bridge: PlanHostBridge): PlanService {
+  let n = 0;
+  return new PlanService({
+    journal: bridge.journal, home, now: () => 5000,
+    sessionCwd: (id) => (id === SID ? '/proj' : undefined),
+    resolveManifest: (input) => bridge.resolveManifest(input),
+    queueCommentTurn: async () => {},
+    executor: { start: () => {}, stop: async () => {} } as unknown as PlanExecutorHooks,
+    newId: () => `id${++n}`,
+  });
 }
 
 const MANIFEST: ExecutionManifest = {
@@ -84,8 +113,9 @@ const MANIFEST: ExecutionManifest = {
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-signed-out-'));
   home = new NativeHome(root);
-  registry = new ProviderRegistry(home, new SecretsStore(root), null, signedOut);
+  registry = new ProviderRegistry(home, new SecretsStore(root), null, auth);
   startChildCalls = 0;
+  signedIn = false;
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }));
 
@@ -94,10 +124,49 @@ describe('a ChatGPT-bound plan while signed out (decisions 25 + 26)', () => {
     // No network is touched proving it: the whole check is local.
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('the proposal check must not use the network'); }));
     try {
-      await expect(new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC }))
-        .rejects.toThrow(`The "reviewer" specialist would run on ChatGPT Plan, which isn't ready: ${SIGN_IN} The plan wasn't created.`);
+      await expect(service(new PlanHostBridge(port())).propose({
+        sessionId: SID, toolUseId: 'tool-1', document: DOC, maximumAttempts: 2,
+        ceilingTokens: 1000, maxFanOut: 2, signal: new AbortController().signal, commit: () => true,
+      })).rejects.toThrow(`The "reviewer" specialist can't run right now: ${SIGN_IN} The plan wasn't created.`);
       expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
     } finally { vi.unstubAllGlobals(); }
+  });
+
+  // Review finding 2: the readiness check lives in resolveManifest, which
+  // Approve and Continue also reach (via reconcile). Both used to answer with
+  // the PROPOSAL's ending — "The plan wasn't created." — about a plan the
+  // person is looking at. Decision 26's whole promise is "sign in, then press
+  // Continue", so a Continue pressed a moment early must not say the plan is
+  // gone.
+  it('Approve on a plan whose provider went not-ready says the plan cannot start, not that it was never created', async () => {
+    const svc = service(new PlanHostBridge(port()));
+    signedIn = true;
+    const view = await svc.propose({
+      sessionId: SID, toolUseId: 'tool-2', document: DOC, maximumAttempts: 2,
+      ceilingTokens: 1000, maxFanOut: 2, signal: new AbortController().signal, commit: () => true,
+    });
+    expect(view.status).toBe('proposed');
+    signedIn = false;                                   // he signs out before pressing Approve
+    const res = await svc.approve(SID, view.planId);
+    expect(res).toEqual({ ok: false, error: `The "reviewer" specialist can't run right now: ${SIGN_IN} The plan can't start yet.` });
+  });
+
+  it('Continue on a paused not-ready plan says the same, and never that the plan was not created', async () => {
+    const bridge = new PlanHostBridge(port());
+    const svc = service(bridge);
+    signedIn = true;
+    const view = await svc.propose({
+      sessionId: SID, toolUseId: 'tool-3', document: DOC, maximumAttempts: 2,
+      ceilingTokens: 1000, maxFanOut: 2, signal: new AbortController().signal, commit: () => true,
+    });
+    await bridge.journal.mutate(REF, (file) => {
+      const p = file.plans.find((x) => x.planId === view.planId)!;
+      p.status = 'paused';
+      p.paused = { stepId: 's1', kind: 'launch-failed', launch: 'not-ready', reason: `A specialist in step "s1" couldn't start: ${SIGN_IN}` };
+    });
+    signedIn = false;
+    const res = await svc.resume(SID, view.planId);
+    expect(res).toEqual({ ok: false, error: `The "reviewer" specialist can't run right now: ${SIGN_IN} The plan can't start yet.` });
   });
 
   it('if an already-approved plan reaches launch signed out: exactly one pause, zero retries, and Continue is offered', async () => {

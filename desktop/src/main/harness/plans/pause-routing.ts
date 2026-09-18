@@ -134,6 +134,14 @@ export function pausedRouting(paused: RecordedPauseFacts): PlanPauseRouting {
   const routed = routePlanPause(paused.kind ?? 'unexpected-error', {
     ...(paused.launch === 'refused' ? { launchRefused: true } : {}),
     ...(paused.launch === 'drift' ? { drift: true } : {}),
+    // Review finding 3, honestly: this translation changes NOTHING today. A
+    // lost `notReady` falls through to `auto`, and the line below rewrites
+    // `auto` to the same Continue · Stop. It is here so the rehydrated route
+    // cannot drift from the live one if that rule ever changes — the promise
+    // in this file's header — not because a button depends on it. What DOES
+    // depend on the stored value is the card: PlanCard.fallbackActions reads
+    // 'refused'/'drift' as Stop-only and anything else, including
+    // 'not-ready', as Continue · Stop (pinned by plan-card-final-review).
     ...(paused.launch === 'not-ready' ? { notReady: true } : {}),
     ...(paused.retried ? { alreadyRecovered: true } : {}),
     ...(paused.toolEffect ? { toolEffect: paused.toolEffect } : {}),

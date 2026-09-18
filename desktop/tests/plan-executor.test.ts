@@ -1481,9 +1481,20 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       expect(calls).toBe(1);                       // exactly one launch, zero retries
       expect(p.recoveries).toBeUndefined();        // no recovery was journalled
       expect(p.paused).toMatchObject({ kind: 'launch-failed', launch: 'not-ready' });
-      expect(p.paused!.reason).toContain(SIGN_IN); // the provider's own sentence
+      // Review finding 7: the provider's sentence FOLLOWS the failure text as
+      // its own sentence. The start error rarely ends in a full stop, and
+      // running the two together read as one garbled line on the card.
+      expect(p.paused!.reason).toBe(
+        `A specialist in step "s1" couldn't start: the model service refused the connection. ${SIGN_IN}`,
+      );
       expect(runner.notReadyAsked).toContain('reviewer');
-      expect(pausedRouting(p.paused!)).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+      // Review finding 3: the guarded fact is `launch: 'not-ready'` above — it
+      // is what reaches PlanView and what PlanCard's fallback reads. These two
+      // buttons are NOT proof of it: an unrecognised pause falls back to the
+      // same pair (pause-routing.ts). The live routing rule is guarded in
+      // plan-pause-routing.test.ts, the card's reading of the value in
+      // plan-card-final-review.test.tsx.
+      expect(pausedRouting(p.paused!).actions).toEqual(['continue', 'stop']);
     });
 
     it('takes NO automatic retry after a specialist error, and the card keeps Continue', async () => {
@@ -1500,7 +1511,8 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       // The sentence the specialist died with is already the provider's own —
       // it is not repeated twice.
       expect(p.paused!.reason).toBe(`A specialist in step "s1" stopped with an error: ${SIGN_IN}`);
-      expect(pausedRouting(p.paused!)).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+      // See finding 3 above: the buttons are not what this proves.
+      expect(pausedRouting(p.paused!).actions).toEqual(['continue', 'stop']);
     });
 
     it('a launch refused by the readiness check itself is a pause, never a retry and never Stop-only', async () => {
@@ -1520,7 +1532,28 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       expect(p.recoveries).toBeUndefined();
       expect(p.paused).toMatchObject({ kind: 'launch-failed', launch: 'not-ready' });
       expect(p.paused!.reason).toBe(`A specialist in step "s1" couldn't start: ${SIGN_IN}`);
-      expect(pausedRouting(p.paused!)).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+      // See finding 3 above: the buttons are not what this proves.
+      expect(pausedRouting(p.paused!).actions).toEqual(['continue', 'stop']);
+    });
+
+    it('does not spend the report-only turn on a specialist whose provider cannot answer', async () => {
+      // Review finding 10: the report-only re-send is a second route to an
+      // automatic retry, and it did not ask. A provider that is signed out
+      // cannot answer the report turn either.
+      const BIG: PlanDocumentV1 = { goal: 'big', steps: [
+        { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Write it up {item}', budget_tokens: 6000, items: ['x'] },
+      ] };
+      const runner = new FakeRunner(() => completes('   ', 1000, 500));
+      runner.notReady = SIGN_IN;
+      const fence = await seed(record(BIG));
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      const p = await plan();
+      expect(runner.launches.filter((l) => l.stepId === 's1')).toHaveLength(1); // no report-only re-send
+      expect(p.recoveries).toBeUndefined();
+      expect(p.paused).toMatchObject({ kind: 'invalid-report' });
+      expect(runner.notReadyAsked).toContain('reviewer');
     });
 
     it('still takes its one retry when the provider IS ready', async () => {

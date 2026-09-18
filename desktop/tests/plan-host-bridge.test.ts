@@ -12,7 +12,7 @@ import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
 import { PLAN_CACHE_WINDOW_MS, disableAdapterForPlans, resetDisabledAdaptersForTests } from '../src/main/harness/plans/budget-adapter';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
 import { PLAN_REPORT_ONLY_RESEND, PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError } from '../src/main/harness/plans/plan-executor';
-import type { PlanRecord } from '../src/main/harness/plans/types';
+import { PlanSpecialistsNotReadyError, type PlanRecord } from '../src/main/harness/plans/types';
 import { PLAN_PAUSE_KINDS } from '../src/shared/types';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { ProviderReadiness } from '../src/shared/provider-types';
@@ -113,12 +113,46 @@ describe('the frozen manifest', () => {
     parentBinding = { providerId: 'chatgpt', modelId: 'gpt-parent' };
     routeType = 'chatgpt';
     readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
-    await expect(new PlanHostBridge(p).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC }))
-      .rejects.toThrow(`The "reviewer" specialist would run on ChatGPT Plan, which isn't ready: ${SIGN_IN} The plan wasn't created.`);
+    // Review finding 2: the sentence carries NO ending about what happened to
+    // the plan — each caller adds its own, because Approve and Continue act on
+    // a plan that plainly exists.
+    const err = await new PlanHostBridge(p).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC }).catch((e) => e);
+    expect(err).toBeInstanceOf(PlanSpecialistsNotReadyError);
+    expect((err as Error).message).toBe(`The "reviewer" specialist can't run right now: ${SIGN_IN}`);
+    expect((err as PlanSpecialistsNotReadyError).specialists).toEqual([{ id: 'reviewer', label: 'ChatGPT Plan', message: SIGN_IN }]);
     // Nothing was measured: no probe session for a specialist that can't run.
     expect(probed).toEqual([]);
     // The check ran on the RESOLVED specialist model, not the parent's.
     expect(readinessAsked).toEqual(['gpt-5.6-terra']);
+  });
+
+  it('names every specialist that cannot run, so one trip to Settings fixes them all', async () => {
+    // Review finding 9: throwing inside the loop named only the first one, so
+    // the person fixed it, asked again and was refused for the second.
+    const two: PlanDocumentV1 = { goal: 'g', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a'] },
+      { id: 's2', kind: 'map', specialist: 'worker', task: 'Fix {item}', budget_tokens: 1000, items: ['a'] },
+    ] };
+    const p = port();
+    p.probeSession = async () => { throw new Error('the probe must not run for a specialist that cannot run'); };
+    readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
+    await expect(new PlanHostBridge(p).resolveManifest({ sessionId: SID, cwd: '/proj', document: two }))
+      .rejects.toThrow(`The "reviewer" and "worker" specialists can't run right now: ${SIGN_IN}`);
+  });
+
+  it('gives each different provider problem its own sentence', () => {
+    const key = 'My OpenAI needs an API key — add one in Settings → Providers.';
+    expect(new PlanSpecialistsNotReadyError([
+      { id: 'reviewer', label: 'ChatGPT Plan', message: SIGN_IN },
+      { id: 'worker', label: 'My OpenAI', message: key },
+      { id: 'explorer', label: 'ChatGPT Plan', message: SIGN_IN },
+    ]).message).toBe(
+      `The "reviewer" and "explorer" specialists can't run right now: ${SIGN_IN}`
+      + ` The "worker" specialist can't run right now: ${key}`,
+    );
+    expect(new PlanSpecialistsNotReadyError([
+      { id: 'a', label: 'L', message: 'M' }, { id: 'b', label: 'L', message: 'M' }, { id: 'c', label: 'L', message: 'M' },
+    ]).message).toBe('The "a", "b" and "c" specialists can\'t run right now: M');
   });
 
   it('the permission fingerprint follows the conversation\'s mode; the definition fingerprint follows its tools', async () => {

@@ -20,7 +20,7 @@ import type {
   ExecutionManifest, JournalPlanStatus, PlanActionResult, PlanAutoApproveRead, PlanRecord, PlanRef,
   PlanSettingsWriteResult, PlanUnsupported,
 } from './types';
-import { PLAN_BUDGET_REQUEST_ID_MAX_CHARS, PlanProposalError } from './types';
+import { PLAN_BUDGET_REQUEST_ID_MAX_CHARS, PlanProposalError, PlanSpecialistsNotReadyError } from './types';
 
 /** ~/.youcoded/plans.json — the auto-approve limit lives here (design §5). */
 const PLAN_SETTINGS_FILE = 'plans.json';
@@ -369,7 +369,17 @@ export class PlanService {
    *  - nothing changed → unchanged.
    */
   private async reconcile(ref: PlanRef, plan: PlanRecord, verb: 'Approve' | 'Continue'): Promise<PlanReconcile> {
-    const current = await this.deps.resolveManifest({ sessionId: ref.sessionId, cwd: ref.cwd, document: plan.document });
+    // Review finding 2: this is Approve and Continue, on a plan the person is
+    // looking at. A specialist whose provider went not-ready since the plan was
+    // proposed must not answer with the PROPOSAL's ending ("The plan wasn't
+    // created.") about a card that is plainly on screen — decision 26's promise
+    // is "sign in, then press Continue". The provider's own sentence is
+    // unchanged; only this ending is ours.
+    const current = await this.deps.resolveManifest({ sessionId: ref.sessionId, cwd: ref.cwd, document: plan.document })
+      .catch((e) => {
+        if (e instanceof PlanSpecialistsNotReadyError) throw new PlanActionRefused(`${e.message} The plan can't start yet.`);
+        throw e;
+      });
     const drift = manifestDrift(plan.manifest, current);
     if (drift.definition || drift.permissions) {
       throw new PlanActionRefused(
@@ -427,7 +437,12 @@ export class PlanService {
   async propose(proposal: PlanProposal): Promise<PlanView> {
     const ref = this.refFor(proposal.sessionId);
     if (!ref) throw new PlanProposalError("Plans aren't available for this conversation.");
-    const manifest = await this.deps.resolveManifest({ sessionId: ref.sessionId, cwd: ref.cwd, document: proposal.document });
+    // The proposal's own ending: here the plan really was not created.
+    const manifest = await this.deps.resolveManifest({ sessionId: ref.sessionId, cwd: ref.cwd, document: proposal.document })
+      .catch((e) => {
+        if (e instanceof PlanSpecialistsNotReadyError) throw new PlanProposalError(`${e.message} The plan wasn't created.`);
+        throw e;
+      });
     if (proposal.signal.aborted) throw new Error('The plan proposal was interrupted.');
 
     const planId = `plan_${this.newId()}`;

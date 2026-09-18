@@ -532,3 +532,53 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
     expect(sends()).toBe(2);
   });
 });
+
+// Review finding 1 (Task 13): the readiness check that keeps a plan from being
+// proposed with a specialist that cannot run reaches NativeSessionHost from one
+// line in this file. Deleting that line left the typecheck clean and all 11,905
+// tests green while the app silently went back to the bug. This asks the host
+// the application actually builds what it was handed, so the wire cannot be
+// lost without something going red.
+describe('what registerIpcHandlers hands the native session host', () => {
+  it('wires the plan readiness check to the real provider registry', async () => {
+    const built: any[][] = [];
+    vi.resetModules();
+    vi.doMock('../src/main/harness/native-session-host', async () => {
+      const { EventEmitter } = await import('node:events');
+      class FakeHost extends EventEmitter {
+        constructor(...args: any[]) {
+          super();
+          built.push(args);
+          // Everything registerIpcHandlers calls on the host is a no-op here:
+          // only the constructor arguments are under test.
+          return new Proxy(this, {
+            get: (target, prop, receiver) => (prop in target
+              ? Reflect.get(target, prop, receiver)
+              : () => undefined),
+          });
+        }
+      }
+      return { NativeSessionHost: FakeHost };
+    });
+    try {
+      const { registerIpcHandlers: register } = await import('../src/main/ipc-handlers');
+      register(
+        { handle: vi.fn(), on: vi.fn() } as any,
+        { createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []), sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn() } as any,
+        { webContents: { send: vi.fn() }, isDestroyed: () => false } as any,
+        { configStore: { getPackages: vi.fn(() => ({})) }, getInstalled: vi.fn(() => []) } as any,
+      );
+      expect(built).toHaveLength(1);
+      const wiring = built[0].find((a: any) => a && typeof a === 'object' && 'providerReadinessFor' in a);
+      expect(wiring, 'the host was built without the provider-readiness wiring').toBeDefined();
+      // The answer comes from the real ProviderRegistry, not a stub: a provider
+      // that is not in providers.json is not ready, in the registry's words.
+      await expect(wiring.providerReadinessFor({ providerId: 'not-a-provider', modelId: 'm' })).resolves.toEqual({
+        ok: false, label: 'not-a-provider', message: "Provider 'not-a-provider' is not configured.",
+      });
+    } finally {
+      vi.doUnmock('../src/main/harness/native-session-host');
+      vi.resetModules();
+    }
+  });
+});

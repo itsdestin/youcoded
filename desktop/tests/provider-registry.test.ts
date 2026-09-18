@@ -672,16 +672,13 @@ describe('ProviderRegistry', () => {
         expect(await reg.credentialReadiness({ providerId: id, modelId: 'm' })).toEqual({ ok: true });
       }
 
-      // openai-compatible: an endpoint is enough; a saved key that can no
-      // longer be read back is NOT (the user thinks one is set).
+      // openai-compatible: an endpoint is enough — the send path takes the key
+      // as optional (Ollama / LM Studio run keyless), so readiness must too.
       const keyless = await reg.upsert({ type: 'openai-compatible', label: 'LM Studio', baseUrl: 'http://localhost:1234/v1', enabled: true });
       expect(await reg.credentialReadiness({ providerId: keyless, modelId: 'm' })).toEqual({ ok: true });
       const hosted = await reg.upsert({ type: 'openai-compatible', label: 'Hosted', baseUrl: 'https://example.test/v1', enabled: true });
       await reg.setKey(hosted, 'sk-hosted');
       expect(await reg.credentialReadiness({ providerId: hosted, modelId: 'm' })).toEqual({ ok: true });
-      await secrets.delete((await reg.list()).find((p) => p.id === hosted)!.secretRef!);
-      expect(await reg.credentialReadiness({ providerId: hosted, modelId: 'm' }))
-        .toEqual({ ok: false, message: NEEDS_KEY('Hosted'), label: 'Hosted' });
 
       // Not configured, and disabled.
       expect(await reg.credentialReadiness({ providerId: 'ghost', modelId: 'm' }))
@@ -689,6 +686,50 @@ describe('ProviderRegistry', () => {
       await reg.upsert({ id: keyless, type: 'openai-compatible', label: 'LM Studio', enabled: false });
       expect(await reg.credentialReadiness({ providerId: keyless, modelId: 'm' }))
         .toEqual({ ok: false, message: 'LM Studio is disabled in Settings → Providers.', label: 'LM Studio' });
+    });
+
+    it('an openai-compatible endpoint whose saved key cannot be read is still ready, because the send would still work', async () => {
+      // Review finding 6: languageModel()'s openai-compatible branch passes
+      // apiKey: undefined straight through, so refusing here would be the one
+      // place readiness is stricter than sending — a plan refused for a
+      // provider that works (a keyless Ollama with a stale secretRef after an
+      // OS reinstall).
+      const hosted = await reg.upsert({ type: 'openai-compatible', label: 'Hosted', baseUrl: 'https://example.test/v1', enabled: true });
+      await reg.setKey(hosted, 'sk-hosted');
+      await secrets.delete((await reg.list()).find((p) => p.id === hosted)!.secretRef!);
+      expect(await reg.credentialReadiness({ providerId: hosted, modelId: 'm' })).toEqual({ ok: true });
+    });
+
+    it('a local model the engine can no longer serve is not ready, in the words the send already uses', async () => {
+      // Review finding 4: "could not find the model file" is as permanent as
+      // being signed out, so it must block the plan's one automatic retry too.
+      const hook = (servable: boolean): LocalEngineHook => ({
+        installed: () => true,
+        ensureRunning: async () => { throw new Error('the readiness check must not boot the engine'); },
+        fetchImpl: () => fetch,
+        ensureServable: async () => servable,
+        recordReply: () => {},
+      });
+      const gone = new ProviderRegistry(new NativeHome(root), secrets, hook(false));
+      expect(await gone.credentialReadiness({ providerId: 'local', modelId: 'tiny' })).toEqual({
+        ok: false, label: 'Local models (llama.cpp)',
+        message: "The local engine could not find the model file for 'tiny'. "
+          + 'It may have been deleted, moved, or renamed — re-download it in Settings → Providers → Local models.',
+      });
+      const there = new ProviderRegistry(new NativeHome(root), secrets, hook(true));
+      expect(await there.credentialReadiness({ providerId: 'local', modelId: 'tiny' })).toEqual({ ok: true });
+      // Asked about the provider alone (no model id) there is no file to check.
+      expect(await gone.credentialReadiness('local')).toEqual({ ok: true });
+    });
+
+    it('resolves rather than rejecting when reading the provider settings throws', async () => {
+      // Review finding 8: the check's first promise is "it never throws", so a
+      // caller mid-proposal does not have to guard it.
+      const broken = new ProviderRegistry(new NativeHome(root), secrets);
+      vi.spyOn(broken as any, 'readAll').mockImplementation(() => { throw new Error('EIO: i/o error, read'); });
+      await expect(broken.credentialReadiness({ providerId: 'openrouter', modelId: 'm' })).resolves.toEqual({
+        ok: false, label: 'openrouter', message: "YouCoded couldn't check openrouter: EIO: i/o error, read",
+      });
     });
 
     it('an openai-compatible endpoint with no URL says so', async () => {
@@ -707,7 +748,10 @@ describe('ProviderRegistry', () => {
         installed: () => installed,
         ensureRunning: async () => { throw new Error('the readiness check must not boot the engine'); },
         fetchImpl: () => fetch,
-        ensureServable: async () => { throw new Error('the readiness check must not ask the router'); },
+        // ensureServable is a localhost question that fails OPEN while the
+        // engine is stopped, so it never boots anything — see the model-file
+        // case below.
+        ensureServable: async () => true,
         recordReply: () => {},
       });
       const off = new ProviderRegistry(new NativeHome(root), secrets, hook(false));

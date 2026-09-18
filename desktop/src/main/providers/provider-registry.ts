@@ -494,16 +494,20 @@ export class ProviderRegistry {
 
   /**
    * Task 13 (decision 25): "could a model on this provider run right now?",
-   * answered WITHOUT a network call, without spending anything, and without
-   * constructing a model client.
+   * answered WITHOUT an outside network call, without spending anything, and
+   * without constructing a model client. The ONE exception is the local
+   * engine's own localhost question (see that branch), which the send path
+   * already asks on every request and which costs nothing.
    *
    * WHY this exists beside testConnection(): specialists plans must refuse to
    * PROPOSE a plan whose specialists cannot run, and that check happens while
    * the assistant is mid-turn. testConnection() fetches a models list on every
    * type but ChatGPT — one probe per specialist, per proposal, on the user's
-   * own keys. This mirrors exactly the credential guards languageModel()
-   * applies just before it builds a client, and returns the SAME sentences, so
-   * a plan refusal and a failed send can never explain one state two ways.
+   * own keys. This mirrors the guards languageModel() applies just before it
+   * builds a client — NEVER testConnection's stricter ones (review finding 6:
+   * refusing a plan for a provider that would have sent fine is the one
+   * mistake this check must not make) — and returns the SAME sentences, so a
+   * plan refusal and a failed send can never explain one state two ways.
    * NEVER throws — a caller mid-proposal must not have to guard it.
    */
   async credentialReadiness(target: ModelBinding | string): Promise<ProviderReadiness> {
@@ -520,22 +524,40 @@ export class ProviderRegistry {
       if (!p.enabled) return no(`${label} is disabled in Settings → Providers.`);
       const needsKey = () => no(`${label} needs an API key — add one in Settings → Providers.`);
       switch (p.type) {
-        case 'local-engine':
+        case 'local-engine': {
           if (!this.localEngine) return no('Local models are not available yet — the local engine ships in a later update.');
           // installed(), never ensureRunning(): booting llama-server is not a
           // free question. Same sentence testConnection() gives.
-          return this.localEngine.installed() ? { ok: true } : no('The local engine is not installed yet.');
+          if (!this.localEngine.installed()) return no('The local engine is not installed yet.');
+          // Review finding 4: an installed engine is not the whole question —
+          // languageModel() ALSO requires ensureServable(modelId), and "the
+          // model file is gone" is exactly as permanent as being signed out.
+          // Without this the plan spends its one automatic retry re-running a
+          // launch that cannot succeed (decision 26, on the local path).
+          // ensureServable is a localhost GET that fails OPEN while the engine
+          // is stopped, so this boots nothing and spends nothing; a false is a
+          // positive "the router listed its models and yours was not there".
+          const modelId = typeof target === 'string' ? undefined : target.modelId;
+          if (modelId && !(await this.localEngine.ensureServable(modelId))) {
+            return no(
+              `The local engine could not find the model file for '${modelId}'. `
+              + 'It may have been deleted, moved, or renamed — re-download it in Settings → Providers → Local models.',
+            );
+          }
+          return { ok: true };
+        }
         case 'openrouter':
           // languageModel()'s branch names OpenRouter itself, not p.label.
           return (await this.keyFor(p)) ? { ok: true } : no('OpenRouter needs an API key — add one in Settings → Providers.');
-        case 'openai-compatible': {
-          if (!p.baseUrl) return no(`${label} has no endpoint URL configured.`);
-          // Ollama / LM Studio run keyless. A SAVED key that can't be read back
-          // (deleted store, keychain mismatch) means the user thinks one is
-          // set — say so, exactly as testConnection() does.
-          if (p.secretRef && !(await this.keyFor(p))) return needsKey();
-          return { ok: true };
-        }
+        case 'openai-compatible':
+          // Review finding 6: the endpoint URL is the ONLY requirement, because
+          // that is all languageModel() requires — its branch passes
+          // `apiKey: undefined` straight through (Ollama / LM Studio run
+          // keyless). testConnection() is stricter, but a readiness check that
+          // is stricter than the send path refuses a plan for a provider that
+          // would have worked, which is the one mistake this check must not
+          // make.
+          return p.baseUrl ? { ok: true } : no(`${label} has no endpoint URL configured.`);
         case 'anthropic':
         case 'openai':
         case 'google':
@@ -556,6 +578,13 @@ export class ProviderRegistry {
     } catch (e: any) {
       // Store I/O or a decrypt failure. Report what actually happened — never
       // a guessed cause, and never a throw into a proposal.
+      // Review finding 8 asked for an existing sentence instead of this one.
+      // There isn't one that fits: testConnection's "Could not reach <label>"
+      // names a NETWORK cause, and nothing here touched the network — using it
+      // would assert a cause that is false, which is the whole point of
+      // docs/error-message-standards.md. This framing states no cause at all
+      // and carries the real error text, which is that standard's shape 2.
+      // Guarded by provider-registry.test.ts ("resolves rather than rejecting").
       return { ok: false, message: `YouCoded couldn't check ${p?.label ?? providerId}: ${e?.message ?? String(e)}`, label: p?.label ?? providerId };
     }
   }

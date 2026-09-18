@@ -470,7 +470,11 @@ describe('follow-up: the minimum Add budget switches when the cache window close
 // Decision 24: the card's fallback for a record without `actions` is main's
 // own table, kind by kind (so no non-budget pause can show Add budget again).
 describe('the fallback buttons match main\'s pause routing', () => {
-  it.each(PLAN_PAUSE_KINDS.flatMap((kind) => [undefined, 'refused', 'drift'].map((launch) => [kind, launch] as const)))('%s (launch: %s)', (kind, launch) => {
+  // Review finding 3: 'not-ready' (Task 13) rides here too. This is where the
+  // journal value is actually OBSERVABLE — a pause recorded as 'refused' shows
+  // Stop only, one recorded as 'not-ready' keeps Continue, which is the whole
+  // point of decision 26 ("sign in, then press Continue").
+  it.each(PLAN_PAUSE_KINDS.flatMap((kind) => [undefined, 'refused', 'drift', 'not-ready'].map((launch) => [kind, launch] as const)))('%s (launch: %s)', (kind, launch) => {
     const paused = { stepId: 's1', reason: 'x', kind, ...(launch ? { launch } : {}) } as NonNullable<PlanView['paused']>;
     expect(fallbackActions(paused)).toEqual([...pausedRouting(paused as any).actions]);
   });
