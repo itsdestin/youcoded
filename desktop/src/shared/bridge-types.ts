@@ -17,7 +17,7 @@
 //     a remote client receives).
 // Parameter TYPES are checked, names are not: the 2026-08-12 loadHistory bug
 // (the shim took (sessionId, count, all, projectSlug)) is a type error, but a
-// swap of two same-typed parameters is not — remote-shim-loadhistory-args.test.ts
+// swap of two same-typed parameters is not — remote-shim.test.ts
 // drives that order onto the wire, but for the SHIM only: preload.ts's
 // loadHistory takes the same-typed (sessionId, projectSlug) pair, and nothing
 // checks that preload keeps them in that order. Signatures follow preload.ts.

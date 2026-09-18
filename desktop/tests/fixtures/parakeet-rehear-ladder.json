@@ -38,7 +38,7 @@
     "process.stdout.write(JSON.stringify({ audioSeconds: total, sampleRate: sr, passes }, null, 2));",
     ""
   ],
-  "_theRewrite": "Look at 2 s -> 3 s. \"And so my fellow American\" becomes \"And so, my fellow Americans.\" — a comma appears three words back, in text the engine had already said. Look again at 3 s -> 4 s and 9 s -> 10 s: the full stop the engine had written DISAPPEARS, so text that had turned solid goes back to grey. This is measured, it is the reason voice-types.ts refuses to promise that solid text never changes, and it is what voice-rehear.test.ts pins.",
+  "_theRewrite": "Look at 2 s -> 3 s. \"And so my fellow American\" becomes \"And so, my fellow Americans.\" — a comma appears three words back, in text the engine had already said. Look again at 3 s -> 4 s and 9 s -> 10 s: the full stop the engine had written DISAPPEARS, so text that had turned solid goes back to grey. This is measured, it is the reason voice-types.ts refuses to promise that solid text never changes, and it is what voice-worker.test.ts pins.",
   "audioSeconds": 11,
   "sampleRate": 16000,
   "passes": [

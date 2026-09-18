@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// The buddy window's twin of tests/chatview-scroll-pin-deps.test.tsx.
+// The buddy window's twin of the auto-scroll section of tests/ChatView-render-cost.test.tsx.
 //
 // BubbleFeed's auto-scroll effect calls scrollToBottom(), which READS
 // scrollHeight and WRITES scrollTop on the feed's scroll container. Reading
