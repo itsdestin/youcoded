@@ -187,7 +187,11 @@ describe('manifest drift', () => {
     // first press asks instead of starting (tests/plan-tier-change.test.ts).
     manifest.specialists.reviewer.pricing = null;
     const r = await service.resume(SID, view.planId);
-    expect(r).toMatchObject({ ok: false });
+    // Review finding 7: it asks — a NOTICE, with no error anywhere in it. Under
+    // the old rule this press refused, and `{ ok: false }` alone said nothing
+    // about which of the two happened.
+    expect(r).toMatchObject({ ok: false, notice: expect.stringContaining('no published price') });
+    expect('error' in r).toBe(false);
     expect((await journal.get(REF, view.planId))!.status).toBe('interrupted');
     expect(executor.start).toHaveBeenCalledTimes(1); // only the original approve
   });

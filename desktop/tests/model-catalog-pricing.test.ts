@@ -27,6 +27,26 @@ describe('catalog pricing', () => {
     expect(rows[0].pricing).toEqual({ in: 3, out: 15 });
   });
 
+  // A plan freezes a `free` price snapshot from all-zero token rates and then
+  // runs with no dollar limit at all. A model that charges per REQUEST (or per
+  // image, or per web search) and publishes 0/0 for tokens is not free — it is
+  // billed in a unit this app does not model, which is "not published", never
+  // "$0". Same never-guess rule as the padded-field gate below.
+  it('a model with zero token rates but a positive per-request fee is not published as free', () => {
+    const map = (pricing: Record<string, string>) => (ModelCatalog as any).prototype.openrouterModels.call({}, {
+      data: [{ id: 'vendor/model', pricing }],
+    }, 'openrouter')[0].pricing;
+    expect(map({ prompt: '0', completion: '0', request: '0.01' })).toBeUndefined();
+    expect(map({ prompt: '0', completion: '0', image: '0.004' })).toBeUndefined();
+    expect(map({ prompt: '0', completion: '0', web_search: '0.008' })).toBeUndefined();
+    // A genuinely free model still reads free: every fee published as zero.
+    expect(map({ prompt: '0', completion: '0', request: '0' })).toEqual({ in: 0, out: 0 });
+    expect(map({ prompt: '0', completion: '0' })).toEqual({ in: 0, out: 0 });
+    // A per-request fee alongside REAL token rates changes nothing: the token
+    // rates are published and the app prices what it can.
+    expect(map({ prompt: '0.000003', completion: '0.000015', request: '0.01' })).toEqual({ in: 3, out: 15 });
+  });
+
   it('maps models.dev cost fields, which are already per-1M', () => {
     const rows = (ModelCatalog as any).prototype.modelsdevModels.call({}, {
       anthropic: { models: { 'x': { id: 'x', cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 } } } },

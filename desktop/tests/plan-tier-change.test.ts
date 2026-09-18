@@ -12,9 +12,9 @@ import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vite
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
-import { PlanService, type PlanExecutorHooks, type PlanServiceDeps } from '../src/main/harness/plans/plan-service';
-import { PlanBudget, ceilingDidNotRise } from '../src/main/harness/plans/plan-budget';
-import type { ExecutionManifest, PlanActionResult, PlanEvent, PlanRef } from '../src/main/harness/plans/types';
+import { PLAN_LIMIT_ASK_MS, PlanService, type PlanExecutorHooks, type PlanServiceDeps } from '../src/main/harness/plans/plan-service';
+import { PlanBudget, ceilingDidNotRise, planApproximateLimit, usdText } from '../src/main/harness/plans/plan-budget';
+import { PlanSpecialistsNotReadyError, type ExecutionManifest, type PlanActionResult, type PlanEvent, type PlanRef } from '../src/main/harness/plans/types';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
 
 const SID = 'parent-1';
@@ -51,12 +51,14 @@ const priced = (inRate: number, out: number) => ({ kind: 'priced' as const, rate
 
 let root: string; let home: NativeHome; let journal: PlanJournal; let events: PlanEvent[];
 let manifest: ExecutionManifest; let ids: number;
+/** The service's clock, so a test can let an armed ask time out. */
+let clock: number;
 let executor: { start: Mock<PlanExecutorHooks['start']>; stop: Mock<PlanExecutorHooks['stop']> };
 let service: PlanService;
 
 function makeService(overrides: Partial<PlanServiceDeps> = {}): PlanService {
   return new PlanService({
-    journal, home, now: () => 5000,
+    journal, home, now: () => clock,
     sessionCwd: (sessionId) => (sessionId === SID ? '/proj' : undefined),
     resolveManifest: async () => structuredClone(manifest),
     queueCommentTurn: async () => {},
@@ -68,7 +70,7 @@ function makeService(overrides: Partial<PlanServiceDeps> = {}): PlanService {
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-tier-'));
-  home = new NativeHome(root); events = [];
+  home = new NativeHome(root); events = []; clock = 5000;
   journal = new PlanJournal({ home, now: () => 5000, onEvent: (e) => events.push(e) });
   manifest = approved(); ids = 0;
   executor = {
@@ -89,12 +91,9 @@ async function propose() {
   });
 }
 
-/** Approve, then park the plan where a real pause leaves it: no lease, waiting
- *  for Continue — the state Destin was in when he changed his tiers. */
-async function proposeAndPause(): Promise<string> {
-  const view = await propose();
-  const r = await service.approve(SID, view.planId);
-  if (!r.ok) throw new Error(`approve failed: ${JSON.stringify(r)}`);
+/** Park the plan where a real pause leaves it: no lease, waiting for Continue —
+ *  the state Destin was in when he changed his tiers. */
+async function park(): Promise<void> {
   await journal.mutate(REF, (file) => {
     const p = file.plans[0];
     p.status = 'paused';
@@ -103,6 +102,14 @@ async function proposeAndPause(): Promise<string> {
   });
   executor.start.mockClear();
   events = [];
+}
+
+/** Approve, then park it. */
+async function proposeAndPause(): Promise<string> {
+  const view = await propose();
+  const r = await service.approve(SID, view.planId);
+  if (!r.ok) throw new Error(`approve failed: ${JSON.stringify(r)}`);
+  await park();
   return view.planId;
 }
 
@@ -165,6 +172,63 @@ describe('ceilingDidNotRise (decision 27, "provably not more")', () => {
   it('a priced model where the approved one had no published price is MORE (nothing to compare)', () => {
     const unpriced = withReviewer({ pricing: null });
     expect(cmp(unpriced, approved())).toMatchObject({ notMore: false, why: 'unknown-approved' });
+  });
+
+  // Review finding 3: the card prints both figures rounded to the cent, so a
+  // difference that disappears at that precision cannot be stated as "more
+  // than" without contradicting itself — and is not worth an ask.
+  it('a rise too small to print at the cent it is shown in is not worth an ask', () => {
+    // $0.0375 → $0.0376: both print "~$0.04".
+    expect(cmp(approved(), withReviewer({ pricing: priced(3, 15.04) })).notMore).toBe(true);
+    // Sub-cent both sides: both print "less than a cent".
+    const tiny = withReviewer({ pricing: priced(0.3, 1.2) });
+    expect(cmp(tiny, withReviewer({ pricing: priced(0.3, 1.25) })).notMore).toBe(true);
+    // A rise that IS visible at that precision still asks.
+    expect(cmp(approved(), withReviewer({ pricing: priced(3, 20) })).notMore).toBe(false);
+  });
+
+  // Review finding 9: an approximate limit is the disclosure that matters most,
+  // so a bigger number must never hide it.
+  it('a change that raises the tokens AND makes the limit uncappable reports both', () => {
+    const r = cmp(approved(), withReviewer({ setupTokens: 900, approximateLimit: true, pricing: priced(1, 2) }));
+    expect(r).toMatchObject({ notMore: false, why: 'tokens', newlyApproximate: true, newTokens: 3800, oldTokens: 2500 });
+  });
+
+  // Review finding 5: an Add budget already granted is part of the limit, so
+  // both sides of the comparison must count it.
+  it('an Add budget already granted counts on both sides of the comparison', () => {
+    const tranches = [{ stepId: 's1', tokens: 5000 }];
+    const r = ceilingDidNotRise(doc(), approved(), withReviewer({ pricing: priced(10, 40) }), tranches);
+    expect(r).toMatchObject({ notMore: false, why: 'usd', newTokens: 7500, oldTokens: 7500 });
+    if (r.notMore) throw new Error('unreachable');
+    expect(r.newUsd).toBeCloseTo(7500 * 40 / 1e6, 12);
+    expect(r.oldUsd).toBeCloseTo(7500 * 15 / 1e6, 12);
+  });
+});
+
+// Review finding 3: the function's own comment forbids a false $0.00, and it
+// was printing one.
+describe('usdText', () => {
+  it('never prints a $0.00 the plan does not have', () => {
+    expect(usdText(0)).toBe('nothing');
+    expect(usdText(-1)).toBe('nothing');
+    expect(usdText(0.001)).toBe('less than a cent');
+    expect(usdText(0.0375)).toBe('~$0.04');
+    expect(usdText(0.1)).toBe('~$0.10');
+  });
+});
+
+// Review finding 10: the tilde on the card and the comparison must read the
+// same specialists — the ones the document actually runs.
+describe('planApproximateLimit', () => {
+  it('reads only the specialists the document runs, not every entry in the roster', () => {
+    const roster = withReviewer({});
+    roster.specialists.unused = {
+      definitionFingerprint: 'def-x', binding: { providerId: 'openrouter', modelId: 'other' },
+      pricing: priced(1, 2), setupTokens: 0, approximateLimit: true,
+    };
+    expect(planApproximateLimit(doc(), roster)).toBe(false);
+    expect(planApproximateLimit(doc(), withReviewer({ approximateLimit: true }))).toBe(true);
   });
 });
 
@@ -271,6 +335,31 @@ describe('a specialist tier change is a clean resume', () => {
     expect(JSON.stringify(r)).not.toMatch(/propose it again/i);
   });
 
+  // Review finding 6 / decision 26: the owner's exact starting state. The plan
+  // paused because ChatGPT was signed out; Continue while it still is must keep
+  // the provider's own sentence and never claim a plan was being created.
+  it('a plan paused on a provider that is not signed in says so, then continues once the tiers move', async () => {
+    const planId = await proposeAndPause();
+    const signedOut = makeService({
+      resolveManifest: async () => {
+        throw new PlanSpecialistsNotReadyError([
+          { id: 'reviewer', label: 'ChatGPT', message: 'Sign in with ChatGPT in Settings → Model Providers to use this model.' },
+        ]);
+      },
+    });
+    expect(await signedOut.resume(SID, planId)).toEqual({
+      ok: false,
+      error: 'The "reviewer" specialist can\'t run right now: Sign in with ChatGPT in Settings → Model Providers to use this model. The plan can\'t start yet.',
+    });
+    expect(executor.start).not.toHaveBeenCalled();
+    // He re-points his tiers at OpenRouter; the same Continue is the fix.
+    manifest = withReviewer({ binding: { providerId: 'openrouter', modelId: 'qwen3-coder' }, pricing: priced(0.3, 1.2) }, 'Qwen3 Coder');
+    const r = await service.resume(SID, planId);
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('unreachable');
+    expect(r.plan.status).toBe('running');
+  });
+
   // Deliberately allowed: a cheaper model leaves less room, and the ORDINARY
   // budget pause handles it — nothing new is built for this case.
   it('re-freezing to a smaller model can leave too little room, and that is the ordinary budget pause', async () => {
@@ -284,5 +373,119 @@ describe('a specialist tier change is a clean resume', () => {
     const budget = new PlanBudget({ journal, now: () => 5000, newId: () => 'att-1' });
     const res = await budget.reserveAttempts(REF, planId, fence, [{ stepId: 's1' }]);
     expect(res).toMatchObject({ ok: false, reason: 'ceiling-tokens', shortfallTokens: 950 });
+  });
+});
+
+// The ask is a QUESTION, not a grant. Review finding 1 found the opposite: the
+// fingerprint was written by the press that SHOWED the notice, and nothing ever
+// removed it, so a question nobody answered authorised that limit forever.
+describe('the new-limit question arms exactly one press', () => {
+  const dearer = () => withReviewer({ binding: { providerId: 'openrouter', modelId: 'big' }, pricing: priced(10, 40) }, 'Big model');
+
+  it('a question the user walked away from never counts as an answer', async () => {
+    const planId = await proposeAndPause();
+    manifest = dearer();
+    expect(notice(await service.resume(SID, planId))).toContain('~$0.10');
+    // He does not press again — he puts his tiers back, and it runs.
+    manifest = approved();
+    expect((await service.resume(SID, planId)).ok).toBe(true);
+    expect((await journal.get(REF, planId))!.ceilingUsd).toBeCloseTo(2500 * 15 / 1e6, 12);
+    // The plan pauses again and he moves to the dear model once more. This must
+    // ASK — the question from before was never answered.
+    await park();
+    manifest = dearer();
+    expect(notice(await service.resume(SID, planId))).toContain('~$0.10');
+    expect(executor.start).not.toHaveBeenCalled();
+    expect((await journal.get(REF, planId))!.ceilingUsd).toBeCloseTo(2500 * 15 / 1e6, 12);
+  });
+
+  it('a press that refuses in between clears the question', async () => {
+    const planId = await proposeAndPause();
+    manifest = dearer();
+    expect(notice(await service.resume(SID, planId))).toContain('~$0.10');
+    // A refusal is not an answer to the money question.
+    manifest = withReviewer({ definitionFingerprint: 'def-2', pricing: priced(10, 40) });
+    expect(await service.resume(SID, planId)).toMatchObject({ ok: false, error: expect.stringContaining('propose it again') });
+    manifest = dearer();
+    expect(notice(await service.resume(SID, planId))).toContain('~$0.10');
+    expect(executor.start).not.toHaveBeenCalled();
+  });
+
+  // Review finding 2: the notice lives in the card, which dies on a conversation
+  // switch, a reload or a second device's refresh, while main's memory does not.
+  it('a question goes stale, so a press that could not have read it asks again', async () => {
+    const planId = await proposeAndPause();
+    manifest = dearer();
+    expect(notice(await service.resume(SID, planId))).toContain('~$0.10');
+    clock += PLAN_LIMIT_ASK_MS + 1;
+    expect(notice(await service.resume(SID, planId))).toContain('~$0.10');
+    expect(executor.start).not.toHaveBeenCalled();
+    // Answered inside the window, it still runs on the very next press.
+    expect((await service.resume(SID, planId)).ok).toBe(true);
+    expect((await journal.get(REF, planId))!.ceilingUsd).toBeCloseTo(2500 * 40 / 1e6, 12);
+  });
+});
+
+// The money stop is the promise behind the question. Review findings 4 and 5.
+describe('what the plan is really limited to afterwards', () => {
+  it('models with no published price say the dollar limit is going away, and name what is left', async () => {
+    const planId = await proposeAndPause();
+    manifest = withReviewer({ binding: { providerId: 'openrouter', modelId: 'mystery' }, pricing: null }, 'Mystery');
+    const text = notice(await service.resume(SID, planId));
+    expect(text).toContain('no published price');
+    expect(text).toContain("the plan's ~$0.04 dollar limit no longer applies");
+    expect(text).toContain('~2,500 tokens');
+    // Never a figure the app does not have.
+    expect(text).not.toMatch(/\$0\.00/);
+    expect((await service.resume(SID, planId)).ok).toBe(true);
+    const rec = (await journal.get(REF, planId))!;
+    expect(rec.ceilingUsd).toBeNull();
+    expect(rec.ceilingTokens).toBe(2500);
+  });
+
+  it('an Add budget the user granted survives a round trip through a free tier, in both currencies', async () => {
+    const planId = await proposeAndPause();
+    const budget = new PlanBudget({ journal, now: () => 5000, newId: () => 'tranche-1' });
+    await budget.addTokens({ ref: REF, planId, stepId: 's1', tokens: 5000 });
+    let rec = (await journal.get(REF, planId))!;
+    expect(rec.ceilingTokens).toBe(7500);
+    expect(rec.ceilingUsd).toBeCloseTo(7500 * 15 / 1e6, 12);
+
+    // To the user's own local engine: nothing costs money, so tokens alone.
+    manifest = withReviewer({ binding: { providerId: 'local', modelId: 'qwen' }, pricing: { kind: 'local' } }, 'Local');
+    expect((await service.resume(SID, planId)).ok).toBe(true);
+    rec = (await journal.get(REF, planId))!;
+    expect(rec.ceilingTokens).toBe(7500);
+    expect(rec.ceilingUsd).toBeNull();
+
+    // Back to the very model the plan was approved on: the top-up comes back
+    // in dollars too, or the plan trips its dollar stop at a third of what he
+    // authorised.
+    await park();
+    manifest = approved();
+    expect(notice(await service.resume(SID, planId))).toContain('cost money now');
+    expect((await service.resume(SID, planId)).ok).toBe(true);
+    rec = (await journal.get(REF, planId))!;
+    expect(rec.ceilingTokens).toBe(7500);
+    expect(rec.ceilingUsd).toBeCloseTo(7500 * 15 / 1e6, 12);
+  });
+
+  it('the question quotes the limit the plan really has, top-up included', async () => {
+    const planId = await proposeAndPause();
+    const budget = new PlanBudget({ journal, now: () => 5000, newId: () => 'tranche-1' });
+    await budget.addTokens({ ref: REF, planId, stepId: 's1', tokens: 5000 });
+    manifest = withReviewer({ pricing: priced(10, 40) });
+    const text = notice(await service.resume(SID, planId));
+    // 7,500 tokens at $40 and at $15 per million — not the 2,500-token base.
+    expect(text).toContain('~$0.30');
+    expect(text).toContain('~$0.11');
+  });
+
+  it('a limit that becomes uncappable says so even when the token count also rose', async () => {
+    const planId = await proposeAndPause();
+    manifest = withReviewer({ setupTokens: 900, approximateLimit: true, pricing: priced(1, 2) });
+    const text = notice(await service.resume(SID, planId));
+    expect(text).toContain('~3,800 tokens');
+    expect(text).toContain("can't cap its replies");
   });
 });

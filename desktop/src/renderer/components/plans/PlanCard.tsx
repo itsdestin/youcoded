@@ -619,8 +619,14 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               tone={limitNotice ? 'warn' : 'idle'}
               surface="tinted"
               className="!py-2"
+              // Review finding 14: the changed-specialists question adds ~130
+              // characters to this strip's one line, which at 390 px would
+              // squeeze Stop · Continue against a column of single words. Only
+              // then does the row wrap, so the plain waiting card that was
+              // signed off keeps its exact one-row shape.
+              wrapAction={limitNotice != null}
               action={readOnly ? undefined : (
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 ml-auto" data-testid="plan-interrupted-actions">
                   <Button size="sm" variant="danger-outline" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
                   <Button size="sm" variant="primary" onClick={cont} disabled={blocked}>{busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
                 </div>

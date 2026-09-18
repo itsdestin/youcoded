@@ -156,6 +156,57 @@ export function planCeilingUsd(document: PlanDocumentV1, manifest: ExecutionMani
   return anyPriced ? total : null;
 }
 
+/**
+ * Decision 5 / review finding 10: the card's tilde follows the specialists the
+ * DOCUMENT actually runs — the same set the comparison below reads. A roster
+ * entry no step uses must never put a tilde on a limit it cannot move.
+ */
+export function planApproximateLimit(document: PlanDocumentV1, manifest: ExecutionManifest): boolean {
+  return documentSpecialists(document).some((id) => manifest.specialists[id]?.approximateLimit === true);
+}
+
+/** One Add budget authorization, as far as the limit arithmetic cares. */
+type LimitTranche = { stepId: string; tokens: number };
+
+/**
+ * What this plan's limits REALLY are under `manifest`: the document's base
+ * ceiling plus every Add budget tranche already granted, each priced at the
+ * model that would now run its step.
+ *
+ * WHY absolute rather than "move it by the difference" (review finding 5): a
+ * difference cannot be taken across a side that has no honest dollar figure, so
+ * a round trip through a free or local tier used to hand the plan its BASE
+ * dollar ceiling back and silently erase a top-up the user had granted — the
+ * plan then tripped its dollar stop at a third of what he authorised. Computing
+ * the whole limit from the manifest and the tranches is exactly reversible, and
+ * it removes the clamp that could swallow a tranche (finding 11).
+ */
+export function planLimits(
+  document: PlanDocumentV1, manifest: ExecutionManifest, tranches: readonly LimitTranche[] = [],
+): { tokens: number; usd: number | null } {
+  const tokens = planCeilingTokens(document, manifest) + tranches.reduce((n, t) => n + t.tokens, 0);
+  const base = planCeilingUsd(document, manifest);
+  if (base === null) return { tokens, usd: null };
+  const usd = tranches.reduce((n, t) => {
+    const specialist = executableStep(document, t.stepId)?.specialist;
+    // A free/local specialist's tranche adds tokens but no dollars — the same
+    // rule planCeilingUsd uses, so the two agree.
+    return n + (specialist === undefined ? 0 : worstCaseUsd(snapshotFor(manifest, specialist), t.tokens) ?? 0);
+  }, base);
+  return { tokens, usd };
+}
+
+/**
+ * "$0.10" / "less than a cent" — the card's own rule, and never a false $0.00
+ * (docs/error-message-standards.md). Lives here, beside the arithmetic, because
+ * the comparison below has to know what the sentence will actually print.
+ */
+export function usdText(n: number): string {
+  // Review finding 3: 0 is not "$0.00" — the plan has no dollar figure at all.
+  if (n <= 0) return 'nothing';
+  return n < 0.005 ? 'less than a cent' : `~$${n.toFixed(2)}`;
+}
+
 // ---- Task 14 (decision 27): is the plan's new worst case provably not more? ----
 
 /**
@@ -173,6 +224,10 @@ export type PlanCeilingChange =
      *  have none, so nothing can be compared. `approximate`: the same numbers,
      *  but one reply may now go past them. */
     why: 'tokens' | 'usd' | 'now-priced' | 'unknown-approved' | 'unknown-price' | 'approximate';
+    /** Review finding 9: a specialist that cannot cap its replies is the
+     *  disclosure that matters most, so it travels alongside every other `why`
+     *  rather than losing the ladder to a bigger number. */
+    newlyApproximate: boolean;
     newTokens: number; oldTokens: number;
     newUsd: number | null; oldUsd: number | null;
   };
@@ -193,12 +248,15 @@ function documentSpecialists(document: PlanDocumentV1): string[] {
  * the `null` being trusted; and an approximate limit is a weaker promise even at
  * the very same number, because one reply may go past it.
  */
-export function ceilingDidNotRise(document: PlanDocumentV1, frozen: ExecutionManifest, current: ExecutionManifest): PlanCeilingChange {
+export function ceilingDidNotRise(
+  document: PlanDocumentV1, frozen: ExecutionManifest, current: ExecutionManifest, tranches: readonly LimitTranche[] = [],
+): PlanCeilingChange {
   const names = documentSpecialists(document);
-  const newTokens = planCeilingTokens(document, current);
-  const oldTokens = planCeilingTokens(document, frozen);
-  const newUsd = planCeilingUsd(document, current);
-  const oldUsd = planCeilingUsd(document, frozen);
+  // Review finding 5: an Add budget the user already granted is part of the
+  // limit he approved, so it counts on BOTH sides — otherwise the question
+  // quotes a base ceiling he never saw on the card.
+  const { tokens: newTokens, usd: newUsd } = planLimits(document, current, tranches);
+  const { tokens: oldTokens, usd: oldUsd } = planLimits(document, frozen, tranches);
   const kinds = (m: ExecutionManifest) => names.map((n) => snapshotFor(m, n));
   const currentKinds = kinds(current);
   const frozenKinds = kinds(frozen);
@@ -209,14 +267,20 @@ export function ceilingDidNotRise(document: PlanDocumentV1, frozen: ExecutionMan
   // plan already approved as approximate has not become weaker.
   const newlyApproximate = names.some((n) => current.specialists[n]?.approximateLimit === true && frozen.specialists[n]?.approximateLimit !== true);
   const tokensRose = newTokens > oldTokens;
+  // Review finding 3: the two figures are compared at the precision the card
+  // prints them in, so "more than" is always VISIBLY true. A rise that vanishes
+  // at that precision (under half a cent, or sub-cent on both sides) was
+  // producing "up to ~$0.04, more than the ~$0.04 you approved" — a sentence
+  // that contradicts itself and is not worth a question.
   const dollarsOk = currentUnknown ? false
     : currentAllFree ? true
-      : newUsd !== null && oldUsd !== null && newUsd <= oldUsd + USD_EPSILON;
+      : newUsd !== null && oldUsd !== null && (newUsd <= oldUsd + USD_EPSILON || usdText(newUsd) === usdText(oldUsd));
   if (!tokensRose && !newlyApproximate && dollarsOk) return { notMore: true };
-  const numbers = { newTokens, oldTokens, newUsd, oldUsd };
+  const numbers = { newTokens, oldTokens, newUsd, oldUsd, newlyApproximate };
   const why: Exclude<PlanCeilingChange, { notMore: true }>['why'] =
     currentUnknown ? 'unknown-price'
-      : !dollarsOk && newUsd !== null && oldUsd !== null ? 'usd'
+      // "nothing you approved" is the free case's sentence, not a comparison.
+      : !dollarsOk && newUsd !== null && oldUsd !== null && oldUsd > 0 ? 'usd'
         : !dollarsOk && frozenUnknown ? 'unknown-approved'
           : !dollarsOk ? 'now-priced'
             : tokensRose ? 'tokens'

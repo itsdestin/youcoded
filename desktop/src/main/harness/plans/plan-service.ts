@@ -13,7 +13,7 @@ import type { NativeHome } from '../../native-home';
 import type { PlanView } from '../../../shared/types';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, pausedMinimum, projectPlan } from './plan-journal';
-import { ceilingDidNotRise, planCeilingTokens, planCeilingUsd, type PlanCeilingChange } from './plan-budget';
+import { ceilingDidNotRise, planApproximateLimit, planCeilingTokens, planCeilingUsd, planLimits, usdText, type PlanCeilingChange } from './plan-budget';
 import { pausedRouting, resetRecoveriesForContinue, type PlanPauseAction } from './pause-routing';
 import { PLAN_NOTICE_DETAIL_MAX_CHARS, PLAN_RECOMMENDATION_MAX_CHARS, addBudgetCap, addBudgetFloor, normalizePlanQuestion } from './plan-handoff';
 import type {
@@ -122,9 +122,21 @@ export interface PlanProposal {
  *  over well before this many newer turns have auto-started a plan). */
 const AUTO_START_KEYS_KEPT = 256;
 
-/** Task 14: how many plans remember an accepted new limit (one per plan; a
- *  person never has this many cards waiting on one press). */
-const CONFIRMED_LIMITS_KEPT = 64;
+/** Task 14: how many plans can have a new-limit question waiting at once (one
+ *  per plan; a person never has this many cards waiting on one press). */
+const PENDING_ASKS_KEPT = 64;
+
+/**
+ * Review findings 1 and 2: how long a shown new-limit question stays answerable.
+ *
+ * The question is drawn by the card, which dies on a conversation switch, a
+ * renderer reload or a second device's refresh — while this memory does not. An
+ * ask that never went stale could therefore be "answered" by a press on a
+ * surface that never displayed it. Two minutes is long enough to read one
+ * sentence and press the same button, and short enough that a press made
+ * anywhere else is a fresh question with its own numbers on screen.
+ */
+export const PLAN_LIMIT_ASK_MS = 2 * 60_000;
 
 const unsupported = (error: string): PlanUnsupported => ({ ok: false, unsupported: true, error });
 /** A malformed request id comes from a broken caller, never from a person's
@@ -245,11 +257,6 @@ type PlanReconcile =
   /** Ask once, in the card's own strip; the same button again runs the plan. */
   | { kind: 'confirm'; notice: string };
 
-/** "$0.10" / "less than a cent" — the card's own rule (never a false $0.00),
- *  worded here because this sentence is written in main. */
-function usdText(n: number): string {
-  return n > 0 && n < 0.005 ? 'less than a cent' : `~$${n.toFixed(2)}`;
-}
 const tokenText = (n: number) => `~${n.toLocaleString('en-US')} tokens`;
 
 /**
@@ -269,16 +276,28 @@ function limitChangeNotice(change: Exclude<PlanCeilingChange, { notMore: true }>
       case 'unknown-approved':
         return `This plan could now cost up to ${usdText(newUsd!)}; the plan you approved had no published price to compare it with.`;
       case 'unknown-price':
-        return oldUsd === null
-          ? "The models these specialists use now have no published price, so this plan's cost can't be compared with the one you approved."
-          : `The models these specialists use now have no published price, so this plan's cost can't be compared with the ${usdText(oldUsd)} you approved.`;
+        // Review finding 4: accepting an unpriced model does not re-price the
+        // plan — it REMOVES the dollar stop, because there is no rate to hold
+        // it to. The token limit is still a hard stop, so the switch is allowed
+        // (a local or unpublished model must stay reachable), but the sentence
+        // says exactly that and never prints a dollar figure the app lacks.
+        // No dollar limit to lose (nothing in the approved plan cost money, or
+        // it had no published price either) — so nothing is "no longer" true.
+        return oldUsd === null || oldUsd <= 0
+          ? `The models these specialists use now have no published price, so this plan will run on its limit of ${tokenText(newTokens)}, with no dollar limit.`
+          : `The models these specialists use now have no published price, so the plan's ${usdText(oldUsd)} dollar limit no longer applies — it will run on its limit of ${tokenText(newTokens)} only.`;
       case 'approximate':
         return `One of these specialists now runs on a model that can't cap its replies, so the ${tokenText(newTokens)} limit is approximate — one reply may go past it.`;
       default:
         return `This plan could now use up to ${tokenText(newTokens)}, more than the ${tokenText(oldTokens)} you approved.`;
     }
   })();
-  return `Your specialists changed. ${middle} Press ${verb} again to run it at the new limit.`;
+  // Review finding 9: the uncappable-reply warning is the disclosure that
+  // matters most, so a bigger number never hides it.
+  const alsoApproximate = change.newlyApproximate && change.why !== 'approximate'
+    ? " One of them also runs on a model that can't cap its replies, so that limit is approximate — one reply may go past it."
+    : '';
+  return `Your specialists changed. ${middle}${alsoApproximate} Press ${verb} again to run it at the new limit.`;
 }
 
 /**
@@ -289,18 +308,19 @@ function limitChangeNotice(change: Exclude<PlanCeilingChange, { notMore: true }>
  * handles a step that no longer fits, which is deliberate).
  */
 function refreeze(plan: PlanRecord, current: ExecutionManifest): void {
-  const tokenDelta = planCeilingTokens(plan.document, current) - planCeilingTokens(plan.document, plan.manifest);
-  plan.ceilingTokens = Math.max(0, plan.ceilingTokens + tokenDelta);
-  const oldBase = planCeilingUsd(plan.document, plan.manifest);
-  const newBase = planCeilingUsd(plan.document, current);
-  // A side with no honest dollar figure can't be moved by a difference: the new
-  // models' own limit stands (null keeps the card on tokens only — never $0.00).
-  plan.ceilingUsd = newBase === null || oldBase === null || plan.ceilingUsd === null
-    ? newBase
-    : Math.max(0, plan.ceilingUsd + (newBase - oldBase));
+  // Review findings 5 and 11: the limit is RECOMPUTED from the new models plus
+  // every tranche the user was already granted, never moved by a difference.
+  // A difference can't cross a side with no honest dollar figure, so a trip
+  // through a free or local tier and back used to hand the plan its base dollar
+  // ceiling and quietly drop a top-up he had paid for; and the clamp that kept
+  // the difference non-negative could swallow one outright.
+  const limits = planLimits(plan.document, current, plan.tranches ?? []);
+  plan.ceilingTokens = limits.tokens;
+  plan.ceilingUsd = limits.usd;
   plan.manifest = current;
-  // Decision 5: the tilde on the card follows the models that will actually run.
-  if (Object.values(current.specialists).some((sp) => sp.approximateLimit)) plan.approximateLimit = true;
+  // Decision 5: the tilde on the card follows the models that will actually
+  // run — finding 10: the document's specialists, the set the comparison reads.
+  if (planApproximateLimit(plan.document, current)) plan.approximateLimit = true;
   else delete plan.approximateLimit;
 }
 
@@ -317,9 +337,15 @@ export class PlanService {
   private readonly newId: () => string;
   /** Final review F3: turn keys that already auto-started a plan (oldest first). */
   private readonly autoStartedKeys = new Set<string>();
-  /** Task 14 (decision 27): plan id → the manifest fingerprint whose higher
-   *  limit the user has already been shown once. Memory only, oldest first. */
-  private readonly confirmedLimits = new Map<string, string>();
+  /**
+   * Task 14 (decision 27), corrected by review finding 1: plan id → the ONE
+   * press a shown new-limit question has armed. It is a pending question, never
+   * a standing grant: the matching press consumes it, and every other outcome
+   * — a different change, a refusal, a run, a Stop, a failure, or simply time
+   * passing — throws it away. Memory only, oldest first; a restart asks again,
+   * which is the safe direction.
+   */
+  private readonly pendingAsk = new Map<string, { fingerprint: string; expiresAt: number }>();
 
   constructor(private readonly deps: PlanServiceDeps) {
     this.journal = deps.journal;
@@ -369,6 +395,12 @@ export class PlanService {
    *  - nothing changed → unchanged.
    */
   private async reconcile(ref: PlanRef, plan: PlanRecord, verb: 'Approve' | 'Continue'): Promise<PlanReconcile> {
+    // Review finding 1: the question is consumed by THIS press, whatever this
+    // press turns out to be. Read and cleared before anything can throw, so a
+    // refusal, a resolver failure, an unrelated change or a plain run all leave
+    // no armed ask behind — only the matching press below re-uses it.
+    const armed = this.pendingAsk.get(plan.planId);
+    this.pendingAsk.delete(plan.planId);
     // Review finding 2: this is Approve and Continue, on a plan the person is
     // looking at. A specialist whose provider went not-ready since the plan was
     // proposed must not answer with the PROPOSAL's ending ("The plan wasn't
@@ -387,17 +419,17 @@ export class PlanService {
       );
     }
     if (!drift.repricing) return { kind: 'unchanged' };
-    const change = ceilingDidNotRise(plan.document, plan.manifest, current);
+    // Review finding 5: the tranches count, so the question quotes the limit
+    // the card is really showing rather than the plan's untopped-up base.
+    const change = ceilingDidNotRise(plan.document, plan.manifest, current, plan.tranches ?? []);
     if (change.notMore) return { kind: 'refreshed', manifest: current };
-    // WHY the fingerprint and not just the plan id: the user accepts ONE new
-    // limit, the one the notice showed them. A later, different change is a
-    // different limit and asks again with its own numbers. In memory only — an
-    // app restart asking again is the safe direction.
+    // WHY the fingerprint and not just the plan id: the user answers ONE
+    // question, the one whose numbers were on screen. A different change is a
+    // different question and asks again with its own numbers.
     const fingerprint = canonical(current);
-    if (this.confirmedLimits.get(plan.planId) === fingerprint) return { kind: 'refreshed', manifest: current };
-    this.confirmedLimits.delete(plan.planId);
-    this.confirmedLimits.set(plan.planId, fingerprint);
-    if (this.confirmedLimits.size > CONFIRMED_LIMITS_KEPT) this.confirmedLimits.delete(this.confirmedLimits.keys().next().value!);
+    if (armed && armed.fingerprint === fingerprint && armed.expiresAt > this.now()) return { kind: 'refreshed', manifest: current };
+    this.pendingAsk.set(plan.planId, { fingerprint, expiresAt: this.now() + PLAN_LIMIT_ASK_MS });
+    if (this.pendingAsk.size > PENDING_ASKS_KEPT) this.pendingAsk.delete(this.pendingAsk.keys().next().value!);
     return { kind: 'confirm', notice: limitChangeNotice(change, verb) };
   }
 
@@ -604,6 +636,9 @@ export class PlanService {
     return this.act('stop', async () => {
       const { ref, plan } = await this.loadPlan(sessionId, planId);
       this.requireStatus(plan, ['proposed', 'running', 'paused', 'interrupted']);
+      // Review finding 1: Stop is an answer to the question too — "no". Nothing
+      // may stay armed on a plan the user has just ended.
+      this.pendingAsk.delete(planId);
       const owner = this.journal.leaseOwner(plan);
       if (owner === 'live') throw new PlanActionRefused('This plan is running in another YouCoded window. Stop it there.');
       // Bounded settle-before-visible (design §3): the executor disposes every

@@ -198,7 +198,15 @@ export class ModelCatalog {
           && typeof pricing.completion === 'string' && pricing.completion.trim() !== '') {
         const prompt = Number(pricing.prompt);
         const completion = Number(pricing.completion);
-        if (Number.isFinite(prompt) && Number.isFinite(completion)) {
+        // Zero TOKEN rates are only "free" when nothing else is charged either.
+        // OpenRouter also publishes per-request, per-image and per-search fees;
+        // a model billed that way and 0/0 per token is billed in a unit this
+        // app does not model, which is "not published", never "$0". It matters
+        // beyond the cost chip: a specialists plan freezes an all-zero price
+        // list as `free` and then runs with NO dollar limit at all.
+        const billedOtherwise = ['request', 'image', 'web_search', 'internal_reasoning']
+          .some((k) => Number(typeof pricing[k] === 'string' ? pricing[k] : 0) > 0);
+        if (Number.isFinite(prompt) && Number.isFinite(completion) && !(prompt === 0 && completion === 0 && billedOtherwise)) {
           m.pricing = { in: prompt * 1e6, out: completion * 1e6 };
           // Cache rates ride the same payload and the same never-guess rule:
           // a model that doesn't publish them leaves them UNSET, so the cost

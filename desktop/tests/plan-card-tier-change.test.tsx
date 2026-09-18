@@ -15,6 +15,7 @@ import ToolCard from '../src/renderer/components/ToolCard';
 import { ChatProvider, useChatDispatch, useChatState } from '../src/renderer/state/chat-context';
 import type { PlanView } from '../src/shared/types';
 import { resetPlanSupportForTests } from '../src/renderer/components/plans/plan-bridge';
+import { NARROW_VIEWPORT_QUERY } from '../src/renderer/hooks/use-narrow-viewport';
 
 const S = 's1';
 const CARD = 'call-plan';
@@ -57,10 +58,14 @@ function bridge(over: Record<string, unknown> = {}) {
   return plans;
 }
 
+const interrupted = (): PlanView => plan({ status: 'interrupted', seq: 2 });
+
 const status = () => screen.getByTestId('plan-block').getAttribute('data-plan-status');
+/** The tinted strip a line belongs to. */
+const stripOf = (testId: string) => screen.getByTestId(testId).closest('div.rounded-lg')!;
 
 beforeEach(() => resetPlanSupportForTests());
-afterEach(() => { cleanup(); delete (window as any).claude; });
+afterEach(() => { cleanup(); delete (window as any).claude; delete (window as any).matchMedia; });
 
 describe('the new-limit notice is a notice, not an error', () => {
   it('a proposed card shows it as a tinted strip above the buttons, and Approve keeps its label', async () => {
@@ -111,5 +116,83 @@ describe('the new-limit notice is a notice, not an error', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect(status()).toBe('running'));
     expect(screen.queryByTestId('plan-limit-notice')).toBeNull();
+  });
+
+  // Review finding 8: the amber flip had no test, so `tone="idle"` could come
+  // back with the whole suite green.
+  it('an interrupted card is grey while it waits and amber only while the question is showing', async () => {
+    bridge({ resume: vi.fn().mockResolvedValueOnce({ ok: false, notice: NOTICE }) });
+    render(<ChatProvider><Card initial={interrupted()} /></ChatProvider>);
+    // Waiting for Continue is not a warning: grey.
+    expect(stripOf('plan-interrupted-note').className).toContain('bg-inset');
+    expect(stripOf('plan-interrupted-note').className).not.toContain('bg-amber-500/10');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByTestId('plan-limit-notice');
+    // A question that needs an answer: amber, and in the same one strip.
+    expect(stripOf('plan-interrupted-note').className).toContain('bg-amber-500/10');
+    expect(stripOf('plan-limit-notice')).toBe(stripOf('plan-interrupted-note'));
+    expect(screen.queryAllByRole('alert')).toHaveLength(0);
+  });
+});
+
+/**
+ * Review finding 14. jsdom has NO layout engine, so none of this proves a pixel
+ * — it proves that nothing in the card forbids the text from wrapping and the
+ * buttons from moving below it, which is what 390 px needs. The card's other
+ * suites judge narrow width the same way.
+ */
+describe('narrow widths (390 px): the question wraps instead of crushing the buttons', () => {
+  // narrow-viewport rule: a test of a viewport-branching component declares the
+  // viewport (jsdom has no matchMedia, which reads as wide).
+  const narrow = () => {
+    window.matchMedia = ((q: string) => ({
+      matches: q === NARROW_VIEWPORT_QUERY, media: q, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    })) as any;
+  };
+  const wrappable = (el: Element) => {
+    const cls = el.className.split(/\s+/);
+    expect(cls).not.toContain('truncate');
+    expect(cls).not.toContain('whitespace-nowrap');
+  };
+
+  it('a proposed card gives the question a strip of its own, with no button on its row', async () => {
+    narrow();
+    bridge({ approve: vi.fn().mockResolvedValueOnce({ ok: false, notice: NOTICE.replace('Continue', 'Approve') }) });
+    render(<ChatProvider><Card initial={plan()} /></ChatProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    const line = await screen.findByTestId('plan-limit-notice');
+    wrappable(line);
+    // Its own strip: the Approve row is a different block entirely.
+    expect(stripOf('plan-limit-notice').querySelector('button')).toBeNull();
+  });
+
+  it('a paused card lets its buttons drop below the reason and the question', async () => {
+    narrow();
+    bridge({ resume: vi.fn().mockResolvedValueOnce({ ok: false, notice: NOTICE }) });
+    render(<ChatProvider><Card initial={paused()} /></ChatProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    const line = await screen.findByTestId('plan-limit-notice');
+    wrappable(line);
+    expect(stripOf('plan-limit-notice').className.split(/\s+/)).toContain('flex-wrap');
+    expect(screen.getByTestId('plan-pause-actions').className.split(/\s+/)).toEqual(expect.arrayContaining(['flex-wrap', 'ml-auto']));
+  });
+
+  it('an interrupted card lets its buttons drop below the question too', async () => {
+    narrow();
+    bridge({ resume: vi.fn().mockResolvedValueOnce({ ok: false, notice: NOTICE }) });
+    render(<ChatProvider><Card initial={interrupted()} /></ChatProvider>);
+    const before = stripOf('plan-interrupted-note').className.split(/\s+/);
+    // Unchanged while it is only waiting: one row, exactly as signed off.
+    expect(before).not.toContain('flex-wrap');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    const line = await screen.findByTestId('plan-limit-notice');
+    wrappable(line);
+    // With ~130 characters of question added, Stop and Continue must be able to
+    // move below it rather than squeeze it into a column of single words.
+    expect(stripOf('plan-limit-notice').className.split(/\s+/)).toContain('flex-wrap');
+    expect(screen.getByTestId('plan-interrupted-actions').className.split(/\s+/)).toContain('ml-auto');
   });
 });
