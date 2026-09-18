@@ -566,7 +566,55 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // Suspended while the find bar is open: ContentFindBar finds text by walking
   // the DOM, so a folded entry would be unfindable and the user would be told
   // "0 results" for text that is in their conversation.
-  const folding = useEntryFolding(!findOpen, scrollContainerRef);
+  //
+  // `sessionActive` (2026-09-18): a background pane is content-visibility:hidden,
+  // which reads to the folding observer as "everything scrolled away". Telling
+  // it the pane is merely in the background is what stops a tab you left a
+  // moment ago from being blank when you come back — see INACTIVE_FOLD_MS.
+  const folding = useEntryFolding(!findOpen, scrollContainerRef, sessionActive);
+
+  // A SESSION SWITCH SHOWS MESSAGES ON ITS FIRST FRAME (2026-09-18).
+  //
+  // Destin: "when i switch tabs, messages often appear to pop-in instead of
+  // animating in smoothly". The arrival animation was fine; it was playing on a
+  // pane whose content turned up afterwards, three ways, all fixed HERE because
+  // a layout effect is the last moment before the browser paints:
+  //  1. the scroll-to-bottom ran in a requestAnimationFrame, i.e. one painted
+  //     frame AFTER the pane appeared at its old position — a visible jump;
+  //  2. entries folded while the pane was away were unfolded by an observer
+  //     report (a frame late) plus a 100ms debounce, so the animation rose on
+  //     blank spacers and the messages landed once it was over;
+  //  3. `.in-view` — which the blur observer strips from every entry of a hidden
+  //     pane, and which React never puts back because the className string it
+  //     renders has not changed — returned a frame late, so on glass themes the
+  //     bubbles painted flat and frosted over afterwards.
+  // Order matters: scroll first, so 2 and 3 measure where the reader will be.
+  // The work this moves in front of the first paint is the same work that used
+  // to happen just behind it; the previous conversation stays on screen for
+  // that moment instead of a blank one.
+  const unfoldNearViewport = folding.unfoldNearViewport;
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const scroller = scrollContainerRef.current;
+    if (!scroller) return;
+    stickToBottom();
+    unfoldNearViewport();
+    const box = scroller.getBoundingClientRect();
+    // Same 200px band as the blur observer above, which takes over from here.
+    // Walked from the END and abandoned at the first entry above the band: the
+    // pane was just scrolled to its bottom, so this touches a screenful however
+    // long the conversation is.
+    // Read everything, THEN write: a class change between two rect reads makes
+    // the browser redo its layout for each one.
+    const entries = scroller.querySelectorAll<HTMLElement>('.timeline-entry');
+    const nowInView: HTMLElement[] = [];
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const b = entries[i].getBoundingClientRect();
+      if (b.bottom < box.top - 200) break;
+      if (b.top <= box.bottom + 200) nowInView.push(entries[i]);
+    }
+    for (const el of nowInView) el.classList.add('in-view');
+  }, [visible, stickToBottom, unfoldNearViewport]);
 
   // One ref for both observers — the blur-gating one and the folding one — so a
   // timeline entry still carries a single callback ref.
