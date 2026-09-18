@@ -93,7 +93,6 @@
     "tests/theme-build-button.test.tsx",
     "tests/tool-card-grant-width.test.tsx",
     "tests/tool-registry-manifest.test.ts",
-    "tests/transcript-watcher.test.ts",
     "tests/use-any-attention-needed.test.ts",
     "tests/workbench-shim-semantics.test.ts"
   ]
