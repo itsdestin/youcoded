@@ -372,7 +372,7 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     await engine.stop();
   });
 
-  it('emits error events instead of throwing (never-block, spec §13)', async () => {
+  it('emits error events instead of throwing, so sync never blocks', async () => {
     const t = fakeTransport();
     (t.push as any).mockImplementation(async () => { throw new Error('boom'); });
     const events: SpaceSyncEvent[] = [];

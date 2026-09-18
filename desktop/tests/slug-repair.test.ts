@@ -13,7 +13,7 @@ const write = (name: string, content: string) => {
   const p = path.join(tmp, name); fs.writeFileSync(p, content); return p;
 };
 
-describe('classifyPair — the merge-safety contract (spec §6.0)', () => {
+describe('classifyPair — the merge-safety contract', () => {
   it('identical bytes → identical', () => {
     const a = write('a.jsonl', L('u1') + L('u2'));
     const b = write('b.jsonl', L('u1') + L('u2'));
@@ -61,7 +61,7 @@ describe('classifyPair — the merge-safety contract (spec §6.0)', () => {
   });
 });
 
-describe('Quarantine (spec §6.0)', () => {
+describe('Quarantine', () => {
   it('moves preserving home-relative path and writes the decision log', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'qhome-'));
     const victim = path.join(home, '.claude', 'projects', 'slug', 's.jsonl');
@@ -80,7 +80,7 @@ describe('Quarantine (spec §6.0)', () => {
   });
 });
 
-describe('repairHomeForks (spec §6.1)', () => {
+describe('repairHomeForks', () => {
   const F = (uuid: string, cwd: string) => JSON.stringify({ type: 'user', uuid, cwd }) + '\n';
   const old = new Date(Date.now() - 60 * 60 * 1000);            // 1h ago — not live
   const age = (p: string) => fs.utimesSync(p, old, old);
@@ -122,7 +122,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     expect(fs.existsSync(path.join(h.quarantine.dir, path.relative(h.home, wrong)))).toBe(true);
   });
 
-  it('fork: NOTHING moves — both copies snapshotted, disk byte-identical (§7 merge-safety)', async () => {
+  it('fork: NOTHING moves — both copies snapshotted, disk byte-identical', async () => {
     const h = makeHome();
     const correctDir = path.join(h.projectsDir, ccProjectSlug(h.P));
     fs.mkdirSync(correctDir, { recursive: true });
@@ -142,7 +142,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     expect(fs.readFileSync(path.join(h.quarantine.dir, path.relative(h.home, correct)), 'utf8')).toBe(before[1]);
   });
 
-  it('correct-dir copy is a strict subset of the $HOME copy: quarantine it, promote the superset (review fix, IMPORTANT 2a)', async () => {
+  it('correct-dir copy is a strict subset of the $HOME copy: quarantine it, promote the superset', async () => {
     const h = makeHome();
     const correctDir = path.join(h.projectsDir, ccProjectSlug(h.P));
     fs.mkdirSync(correctDir, { recursive: true });
@@ -161,7 +161,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     expect(fs.readFileSync(quarantinedCorrect, 'utf8')).toBe(subsetBytes);
   });
 
-  it('correct-dir copy is superset-eligible but currently live: pair is deferred, nothing moves (review fix, IMPORTANT 2b)', async () => {
+  it('correct-dir copy is superset-eligible but currently live: pair is deferred, nothing moves', async () => {
     const h = makeHome();
     const correctDir = path.join(h.projectsDir, ccProjectSlug(h.P));
     fs.mkdirSync(correctDir, { recursive: true });
@@ -180,7 +180,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     expect(fs.existsSync(h.quarantine.dir)).toBe(false);
   });
 
-  it('top-level only: a subagent jsonl below the dir is never touched (§6.1 scoping)', async () => {
+  it('top-level only: a subagent jsonl below the dir is never touched', async () => {
     const h = makeHome();
     const agent = path.join(h.homeSlugDir, 'sess-id', 'subagents', 'agent-x.jsonl');
     fs.mkdirSync(path.dirname(agent), { recursive: true });
@@ -189,7 +189,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     expect(fs.existsSync(agent)).toBe(true);
   });
 
-  it('live file (fresh mtime) is deferred, not touched (§6.5)', async () => {
+  it('live file (fresh mtime) is deferred, not touched', async () => {
     const h = makeHome();
     const f = path.join(h.homeSlugDir, 's4.jsonl');
     fs.writeFileSync(f, F('u1', h.P));                          // fresh mtime = live
@@ -229,7 +229,7 @@ function makeWorld() {
   return { home, P, correctDir, lane, store, quarantine, opts, bucket: path.basename(P) };
 }
 
-describe('repairRecordsAndSpace (spec §6.2)', () => {
+describe('repairRecordsAndSpace', () => {
   const F = F62;
   const age = age62;
 
@@ -399,7 +399,7 @@ describe('repairRecordsAndSpace (spec §6.2)', () => {
     expect(out2).toEqual([]);
   });
 
-  it('record already correct + one stray space copy elsewhere: stray is quarantined, but NO RECORD-REPAIR log line and NO record-repaired finding (2026-08-15 real-data fix)', async () => {
+  it('record already correct + one stray space copy elsewhere: stray is quarantined, but NO RECORD-REPAIR log line and NO record-repaired finding', async () => {
     const w = makeWorld();
     const t = path.join(w.correctDir, 's12.jsonl');
     fs.writeFileSync(t, F('u1', w.P) + F('u2', w.P)); age(t);
@@ -471,7 +471,7 @@ describe('repairRecordsAndSpace (spec §6.2)', () => {
   });
 });
 
-describe('repairOrphanDirs (spec §6.3)', () => {
+describe('repairOrphanDirs', () => {
   const F = (uuid: string, cwd: string) => JSON.stringify({ type: 'user', uuid, cwd }) + '\n';
   const old = new Date(Date.now() - 60 * 60 * 1000);            // 1h ago — not live
   const age = (p: string) => fs.utimesSync(p, old, old);
@@ -627,7 +627,7 @@ describe('repairOrphanDirs (spec §6.3)', () => {
   });
 });
 
-describe('runSlugRepair — ordering, deferral, surfacing (spec §6.0/§6.5)', () => {
+describe('runSlugRepair — ordering, deferral, surfacing', () => {
   const F = (uuid: string, cwd: string) => JSON.stringify({ type: 'user', uuid, cwd }) + '\n';
   const old = new Date(Date.now() - 60 * 60 * 1000);
   const age = (p: string) => fs.utimesSync(p, old, old);
@@ -713,7 +713,7 @@ describe('runSlugRepair — ordering, deferral, surfacing (spec §6.0/§6.5)', (
   // (writeState) that was already computed, or main.ts's
   // .finally(resumeSweeps) unpauses the mirror sweeps over an unrecorded
   // hold (the exact run-3 clobber this branch exists to prevent).
-  describe('store-write failures never lose the fork hold (review fix, IMPORTANT 1)', () => {
+  describe('store-write failures never lose the fork hold', () => {
     it('a rejecting setNote does not reject runSlugRepair, and the state file still lists the fork id', async () => {
       const w = makeWorld();
       const homeSlugDir = path.join(w.opts.projectsDir, ccProjectSlug(w.home));
@@ -894,7 +894,7 @@ describe('runSlugRepair — ordering, deferral, surfacing (spec §6.0/§6.5)', (
       expect(state.surfacedForks).toEqual([]);
     });
 
-    it('a fork held from a prior run is NOT released when a run silently fails to reach it (both copies still on disk, no finding at all) — review fix, IMPORTANT 2', async () => {
+    it('a fork held from a prior run is NOT released when a run silently fails to reach it (both copies still on disk, no finding at all)', async () => {
       const w = makeWorld();
       const homeSlugDir = path.join(w.opts.projectsDir, ccProjectSlug(w.home));
       fs.mkdirSync(homeSlugDir, { recursive: true });
@@ -925,7 +925,7 @@ describe('runSlugRepair — ordering, deferral, surfacing (spec §6.0/§6.5)', (
       expect(fs.existsSync(correct)).toBe(true);
     });
 
-    it('a fork held from a prior run IS released once the pair converges into a clean subset relation — review fix, IMPORTANT 2', async () => {
+    it('a fork held from a prior run IS released once the pair converges into a clean subset relation', async () => {
       const w = makeWorld();
       const homeSlugDir = path.join(w.opts.projectsDir, ccProjectSlug(w.home));
       fs.mkdirSync(homeSlugDir, { recursive: true });

@@ -56,7 +56,7 @@ describe('DelegatedModels — storage', () => {
   });
 });
 
-describe('delegatedModelsView — Task 8', () => {
+describe('delegatedModelsView', () => {
   it('delegatedModelsView resolves labels from the catalog and falls back to the model id', async () => {
     await designated.set('budget', BUDGET_BINDING); // { providerId: 'openrouter', modelId: 'cheap-model' } — no catalog row for it
     await designated.set('frontier', FRONTIER_BINDING); // { providerId: 'anthropic', modelId: 'claude-opus-5' }
