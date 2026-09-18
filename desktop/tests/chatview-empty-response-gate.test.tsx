@@ -9,7 +9,7 @@
 // the shape the empty_response footer exists for. This test crosses the
 // ChatView boundary: state in, rendered footer out.
 //
-// Scaffolding mirrors chat-pane-layout-containment.test.tsx (the established
+// Scaffolding mirrors ChatView.test.tsx (the established
 // ChatView mounting pattern): chat-context and app-wide contexts are mocked,
 // jsdom gets an IntersectionObserver stub.
 import React from 'react';

@@ -60,7 +60,7 @@ function rootsFor(real: string): { posixRoot?: string; winRoot?: string } {
     : { posixRoot: '/' };
 }
 
-describe('inversion chain (spec §5.4a)', () => {
+describe('inversion chain', () => {
   it('forward walk recovers a punctuated folder the split walk cannot', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'inv-')));
     const real = path.join(root, 'PAF 574 - Diversity, Ethics, & Public Change');

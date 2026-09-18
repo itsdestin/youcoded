@@ -137,7 +137,7 @@ describe('ruleMatches — safety rule 2: a middle wildcard never swallows a dest
   });
 });
 
-describe("ruleMatches — holes found by the fix's own review (2026-09-10)", () => {
+describe('ruleMatches — chains, wildcard boundaries and code-running grants stay closed', () => {
   const grant = (pattern: string): PermissionRule =>
     ({ tool: 'Bash', pattern, action: 'allow', match: 'glob' });
 

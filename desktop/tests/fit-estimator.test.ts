@@ -35,7 +35,7 @@ const F16 = { k: 'f16', v: 'f16' } as const;
 const Q8K = { k: 'q8_0', v: 'f16' } as const;   // what the engine is spawned with today
 const BLOCK = 34 / 32;                          // q8_0's 34-byte, 32-value block
 
-describe('kvCacheBytes — the per-layer formula (§D2)', () => {
+describe('kvCacheBytes — the per-layer formula', () => {
   it('plain full-attention model: layers × kvHeads × (dK×kBytes + dV×vBytes) × tokens, +block overhead', () => {
     const h = header({ blockCount: 32, headCountKv: 8, keyLength: 128, valueLength: 128 });
     const kv = kvCacheBytes(h, 4096, F16);
@@ -212,7 +212,7 @@ function inputs(over: Partial<MemoryCheckInputs> = {}): MemoryCheckInputs {
   };
 }
 
-describe('estimateFit — the four tiers (§D2)', () => {
+describe('estimateFit — the four tiers', () => {
   it('need = model + vision + KV + 512 MB working headroom', () => {
     expect(WORKING_HEADROOM_BYTES).toBe(512 * MIB);
     // 6 GB model + 1 GB vision + 0.5 GB KV + 0.5 GB headroom = 8 GB = exactly the
@@ -262,7 +262,7 @@ describe('estimateFit — the four tiers (§D2)', () => {
       .toBe('too-large');
   });
 
-  it('the KV term may raise a verdict to tight, NEVER to too-large (R1-10)', () => {
+  it('the KV term may raise a verdict to tight, NEVER to too-large', () => {
     // A model that fits on its own but whose 128k cache would blow past
     // everything: it is a warning, not a hard block, because lowering the
     // context length is exactly what the advice line tells the user to do.
@@ -304,7 +304,7 @@ describe('estimateFit — the four tiers (§D2)', () => {
   });
 });
 
-describe('estimateFit — the breakdown the size bubble reads (R8, R1-25, R32)', () => {
+describe('estimateFit — the breakdown the size bubble reads', () => {
   it('carries the model, the vision file, the context share and its length', () => {
     const r = estimateFit(inputs({ modelBytes: 6 * GB, visionBytes: GB, kvBytes: 0.25 * GB, contextLength: 32768 }));
     expect(r.breakdown).toMatchObject({
@@ -329,7 +329,7 @@ describe('estimateFit — the breakdown the size bubble reads (R8, R1-25, R32)',
   });
 });
 
-describe('the pool a model is scored against (§D2)', () => {
+describe('the pool a model is scored against', () => {
   it('is the first GPU device the engine reported', () => {
     // The real line on this machine:
     //   Vulkan0: AMD Radeon 8060S Graphics (RADV STRIX_HALO) (86016 MiB, 83660 MiB free)
@@ -385,7 +385,7 @@ describe('the pool a model is scored against (§D2)', () => {
   });
 });
 
-describe('memory available right now — one reader per platform (§D2)', () => {
+describe('memory available right now — one reader per platform', () => {
   it('Linux reads MemAvailable out of /proc/meminfo', () => {
     const meminfo = 'MemTotal:       131299568 kB\nMemFree:         6690268 kB\nMemAvailable:    81691368 kB\n';
     expect(availableMemoryBytes({
@@ -419,7 +419,7 @@ describe('memory available right now — one reader per platform (§D2)', () => 
   });
 });
 
-describe('what counts as resident (R1-14)', () => {
+describe('what counts as resident', () => {
   it('loaded and loading are resident; sleeping and unloaded are not', () => {
     expect(isResident('loaded')).toBe(true);
     // Mid-load memory is being taken this second — leaving it out is the
@@ -431,7 +431,7 @@ describe('what counts as resident (R1-14)', () => {
   });
 });
 
-describe('contextLengthFor (§D3)', () => {
+describe('contextLengthFor', () => {
   const models = { 'gemma-4-E2B-it-Q8_0': { contextLength: 131072 }, 'Qwen3.5-9B-Q8_0': { contextLength: null } };
   it("uses the model's own setting when it has one, else the engine-wide default", () => {
     expect(contextLengthFor('gemma-4-E2B-it-Q8_0', models, 32768)).toBe(131072);
@@ -495,7 +495,7 @@ describe('checkMemoryForLoad (create-time guard)', () => {
     expect(v.detail).toContain('8.0 GB this computer has free');
   });
 
-  it('a dismissal silences the warning only at the SAME context length (§D4)', () => {
+  it('a dismissal silences the warning only at the SAME context length', () => {
     const tight = inputs({
       modelBytes: 9 * GB, kvBytes: 0.5 * GB, contextLength: 32768, availableBytes: 8 * GB, poolBytes: 80 * GB,
     });

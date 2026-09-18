@@ -107,7 +107,7 @@ describe('RemoteConfig', () => {
     expect(result).toBe(false);
   });
 
-  it('flags a short password as weak, and a long one as not (2026-09-10 security review)', async () => {
+  it('flags a short password as weak, and a long one as not', async () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.writeFileSync).mockImplementation(() => {});
     vi.mocked(fs.mkdirSync).mockImplementation(() => undefined as any);

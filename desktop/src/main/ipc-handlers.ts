@@ -31,6 +31,8 @@ import { nativeStoreSlug, ccProjectSlug } from './slug-encoding';
 import { NativeHome } from './native-home';
 import { SecretsStore } from './providers/secrets-store';
 import { ProviderRegistry } from './providers/provider-registry';
+import { OpenRouterHealth } from './providers/openrouter-health';
+import { OpenRouterSignIn } from './providers/openrouter-oauth';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
 // (it needs the post-dev-profile userData) and passed IN; this file only wires it.
 import type { ChatGptAuth } from './providers/chatgpt-auth';
@@ -759,7 +761,7 @@ export function registerIpcHandlers(
   // This only holds because assignSession runs SYNCHRONOUSLY in that handler,
   // before its first await — nextTick outranks the microtask queue, so an
   // assignSession sitting after any await would drain too late. See the WHY on
-  // the assignSession block itself; pinned by tests/session-create-ownership-order.test.ts.
+  // the assignSession block itself; pinned by tests/ipc-handlers-create-ownership.test.ts.
   sessionManager.on('session-created', (info) => {
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
@@ -822,7 +824,7 @@ export function registerIpcHandlers(
     // native session created or resumed from a SECOND main window was forwarded with
     // no owner registered, took sendForSession's ownerless mainWindow fallback, and
     // appeared in window 1 instead. Claude Code never hit it: that path runs straight
-    // through with no intervening await. Pinned by tests/session-create-ownership-order.test.ts.
+    // through with no intervening await. Pinned by tests/ipc-handlers-create-ownership.test.ts.
     //
     // Exception: if the sender is a buddy window (the floater's compact chat),
     // assign to the leader main window instead. Buddies don't appear in the
@@ -2606,8 +2608,27 @@ export function registerIpcHandlers(
   // reader) is untouched. Stored tokens are left alone — the flag is a fast
   // revert, not a sign-out.
   const chatgptForUi: ChatGptAuth | null = process.env.YOUCODED_CHATGPT !== '0' ? (chatgptAuth ?? null) : null;
-  const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi);
+  // Connection trust (§3.1): what OpenRouter last said about THIS profile's
+  // key, stored beside its secrets (userData), never in shared ~/.youcoded.
+  const openRouterHealth = new OpenRouterHealth({ dir: app.getPath('userData') });
+  const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi, openRouterHealth);
   void providerRegistry.init();
+  // Re-check the OpenRouter key shortly after launch and every 5 minutes, so a
+  // key that died while the app sat idle reads as dead before anyone sends a
+  // message. refreshOpenRouter asks nothing unless OpenRouter is on with a key.
+  // (The ChatGPT usage poll's cadence — providers/chatgpt-auth.ts USAGE_POLL_MS.)
+  setTimeout(() => { void providerRegistry.refreshOpenRouter(); }, 5_000).unref?.();
+  setInterval(() => { void providerRegistry.refreshOpenRouter(); }, 5 * 60_000).unref?.();
+  // Sign in with OpenRouter (§3.5). The key it brings back takes the paste
+  // path: checked first, and saved only if OpenRouter didn't refuse it.
+  const openRouterSignIn = new OpenRouterSignIn({
+    openExternal: (url) => shell.openExternal(url),
+    acceptKey: async (key) => {
+      const check = await providerRegistry.testConnection('openrouter', key);
+      if (check.verdict !== 'rejected') await providerRegistry.setKey('openrouter', key);
+      return check;
+    },
+  });
   const modelCatalog = new ModelCatalog(app.getPath('userData'), undefined, {
     // WHY read defaults at resolution time, never mutate budgets of active sessions.
     contextPreferences: () => contextSettings.read(),
@@ -3074,7 +3095,7 @@ export function registerIpcHandlers(
   // stale data relative to whichever surface wrote last.
   // chatgptAuth (Sign in with ChatGPT §5): the remote chatgpt:* WS cases read
   // the SAME account object, already kill-switched (null → signed-out/false).
-  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount });
+  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount, openRouterSignIn });
 
   // Plan 2b Task 11: give the remote server the SAME lease client/requester +
   // deviceId so its WS clients reach the identical lease/device state the
@@ -3380,7 +3401,10 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.PROVIDER_LIST, async () => providerRegistry.list());
   ipcMain.handle(IPC.PROVIDER_UPSERT, async (_e, config: any) => providerRegistry.upsert(config));
   ipcMain.handle(IPC.PROVIDER_REMOVE, async (_e, id: string) => { await providerRegistry.remove(id); return true; });
-  ipcMain.handle(IPC.PROVIDER_TEST, async (_e, id: string) => providerRegistry.testConnection(id));
+  // `key`: an optional candidate checked instead of the saved key (the Connect
+  // dialog refuses a bad key before it can replace a working one).
+  ipcMain.handle(IPC.PROVIDER_TEST, async (_e, id: string, key?: unknown) =>
+    providerRegistry.testConnection(id, typeof key === 'string' ? key : undefined));
   ipcMain.handle(IPC.PROVIDER_SET_KEY, async (_e, id: string, key: string) => { await providerRegistry.setKey(id, key); return true; });
   ipcMain.handle(IPC.PROVIDER_CATALOG, async () => modelCatalog.get(await providerRegistry.list()));
   // Sign in with ChatGPT (backend design 2026-09-05 §3, §5, §6). status is a
@@ -3390,6 +3414,9 @@ export function registerIpcHandlers(
   // catches them, so Electron rejects the renderer's promise and preload's
   // unwrapInvokeError strips the transport prefix before the card shows
   // e.message. Under the kill switch chatgptForUi is null: signed-out / false.
+  ipcMain.handle(IPC.OPENROUTER_SIGN_IN_STATUS, async () => openRouterSignIn.status());
+  ipcMain.handle(IPC.OPENROUTER_SIGN_IN, async () => openRouterSignIn.signIn());
+  ipcMain.handle(IPC.OPENROUTER_CANCEL_SIGN_IN, async () => openRouterSignIn.cancelSignIn());
   ipcMain.handle(IPC.CHATGPT_STATUS, async () => chatgptForUi ? chatgptForUi.status() : { state: 'signed-out' as const });
   ipcMain.handle(IPC.CHATGPT_SIGN_IN, async () => chatgptForUi ? chatgptForUi.signIn() : false);
   ipcMain.handle(IPC.CHATGPT_CANCEL_SIGN_IN, async () => chatgptForUi ? chatgptForUi.cancelSignIn() : false);
@@ -5245,6 +5272,7 @@ export function registerIpcHandlers(
   };
   const cleanup = function cleanup(): Promise<void> {
     stopThemeWatcher();
+    openRouterSignIn.dispose();
     statusPush.stop();
     transcriptWatcher.stopAll();
     // Flush + tear down every live native session on quit (best-effort, bounded
@@ -5277,5 +5305,5 @@ export function registerIpcHandlers(
     engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
     models: modelManager,
   };
-  return { cleanup, hasUsableProvider, firstRunDeps };
+  return { cleanup, hasUsableProvider, firstRunDeps, openRouterSignIn };
 }

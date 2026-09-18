@@ -406,6 +406,10 @@ const IPC = {
   CHATGPT_SIGN_IN: 'chatgpt:sign-in',
   CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
   CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
+  // Sign in with OpenRouter — mirrors shared/types.ts.
+  OPENROUTER_SIGN_IN_STATUS: 'openrouter:sign-in-status',
+  OPENROUTER_SIGN_IN: 'openrouter:sign-in',
+  OPENROUTER_CANCEL_SIGN_IN: 'openrouter:cancel-sign-in',
   // YouCoded Pages (Phase 1) — mirrors shared/types.ts; pinned equal by ipc-channels.test.ts.
   PAGES_LIST: 'pages:list',
   PAGES_GET: 'pages:get',
@@ -1508,7 +1512,9 @@ contextBridge.exposeInMainWorld('claude', {
     list: () => ipcRenderer.invoke(IPC.PROVIDER_LIST),
     upsert: (config: unknown) => ipcRenderer.invoke(IPC.PROVIDER_UPSERT, config),
     remove: (id: string) => ipcRenderer.invoke(IPC.PROVIDER_REMOVE, id),
-    test: (id: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, id),
+    // `key`: an optional CANDIDATE key checked instead of the saved one, so the
+    // Connect dialog can refuse a bad key before it replaces a working one.
+    test: (id: string, key?: string) => ipcRenderer.invoke(IPC.PROVIDER_TEST, id, key),
     setKey: (id: string, key: string) => ipcRenderer.invoke(IPC.PROVIDER_SET_KEY, id, key),
     catalog: () => ipcRenderer.invoke(IPC.PROVIDER_CATALOG),
   },
@@ -1532,6 +1538,16 @@ contextBridge.exposeInMainWorld('claude', {
     signIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_SIGN_IN)),
     cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_CANCEL_SIGN_IN)),
     signOut: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_SIGN_OUT)),
+  },
+  // Sign in with OpenRouter (connection-trust §3.5). Same shape and the same
+  // unwrapInvokeError reason as `chatgpt` above: signIn() can THROW a sentence
+  // the card shows as-is. `supported` follows the native runtime, which owns
+  // the OpenRouter provider; the key never crosses to the renderer.
+  openrouter: {
+    supported: process.env.YOUCODED_NATIVE !== '0',
+    status: () => unwrapInvokeError(ipcRenderer.invoke(IPC.OPENROUTER_SIGN_IN_STATUS)),
+    signIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.OPENROUTER_SIGN_IN)),
+    cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.OPENROUTER_CANCEL_SIGN_IN)),
   },
   // Claude Code's own sign-in, read live from `claude auth status` (2026-09-09).
   // Read-only on purpose — the other three verbs have no equivalent here,

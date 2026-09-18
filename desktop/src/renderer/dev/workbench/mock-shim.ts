@@ -81,7 +81,7 @@ const WORKBENCH_TEXT_HEADS: Record<string, string> = {
 
 /** Dotted paths this shim implements by hand (`'session.list'`), plus dotless
  *  top-level bridge members (`'getPlatform'`). The contract test
- *  (tests/workbench-mock-contract.test.ts) checks each against preload.ts. */
+ *  (tests/mock-shim-window.test.ts) checks each against preload.ts. */
 export const HAND_WRITTEN: ReadonlyArray<string> = [
   'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename',
   'devLabel', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
@@ -92,7 +92,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'session.setFlag', 'session.setTag', 'session.setNote', 'session.getMeta',
   'session.sendInput', 'session.respondToPermission', 'on.transcriptEvent', 'on.hookEvent',
   'native.send', 'native.setBinding',
-  'providers.list', 'providers.catalog', 'models.memoryCheck',
+  'providers.list', 'providers.catalog', 'providers.test', 'providers.setKey', 'models.memoryCheck',
   // Local Models rows + Resume (2026-08-26). WHY these must be listed: the
   // contract test only checks members named here, so a hand-written mock left
   // off this list escapes the real-or-registered check entirely.
@@ -376,7 +376,7 @@ function withCatchAll(namespace: string, impl: Record<string, unknown>): Record<
         // A nested hand-written namespace (`theme.marketplace = { list }`) gets
         // the same catch-all as a top-level one, so the members it does NOT
         // implement still resolve `[]` rather than being undefined — the
-        // synchronous-throw-inside-Promise.all bug workbench-shim-semantics pins.
+        // synchronous-throw-inside-Promise.all bug mock-shim.test.ts pins.
         if (value && typeof value === 'object' && !Array.isArray(value)) {
           if (!cache.has(key)) cache.set(key, withCatchAll(`${namespace}.${key}`, value as Record<string, unknown>));
           return cache.get(key);
@@ -710,6 +710,29 @@ function chatgptUsageFixture() {
   };
 }
 
+/** `?openrouter=<state>` — what the OpenRouter key looks like to the card:
+ *  verified | rejected | expired | wrong-type | unchecked | none. Absent = the
+ *  fixture as it always was (no key reported), so no other deck's baseline
+ *  moves. WHY a pin: the connection-trust review (2026-09-18) needs the same
+ *  card shot with a live key, a dead key and an unreachable service. */
+function openrouterPin(): string | null {
+  return (typeof location !== 'undefined' && new URLSearchParams(location.search).get('openrouter')) || null;
+}
+
+/** The verdict a `?openrouter=` pin stands for, shaped as the real registry
+ *  reports it. `none` has no key, so no verdict. */
+function openrouterHealth(pin: string): import('../../../shared/provider-types').ProviderHealth | undefined {
+  const checkedAt = Date.now() - 60_000;
+  switch (pin) {
+    case 'verified': return { verdict: 'verified', checkedAt };
+    case 'unchecked': return { verdict: 'unchecked', checkedAt };
+    case 'rejected': return { verdict: 'rejected', reason: 'openrouter-key-rejected', checkedAt };
+    case 'expired': return { verdict: 'rejected', reason: 'openrouter-key-expired', expiresAt: new Date(Date.now() - 86_400_000).toISOString(), checkedAt };
+    case 'wrong-type': return { verdict: 'rejected', reason: 'openrouter-wrong-key-type', checkedAt };
+    default: return undefined;
+  }
+}
+
 /** The `?chatgpt=` pin, read fresh so both the account state and the status:data
  *  usage fixture answer from the same URL. */
 function chatgptPlanPin(): string | null {
@@ -1032,6 +1055,36 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
 
+  // ── Sign in with OpenRouter ───────────────────────────────────────────────
+  // `?openrouterSignIn=waiting|failed` pins the card mid-round-trip. Unpinned,
+  // a sign-in "finishes" after 2.5 s and saves a key that verifies, like the
+  // real one (design §3.5).
+  const openrouterSignInPin = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('openrouterSignIn') : null;
+  let openrouterSignIn: { state: 'idle' | 'waiting' | 'failed'; message?: string } =
+    openrouterSignInPin === 'waiting' ? { state: 'waiting' }
+    : openrouterSignInPin === 'failed' ? { state: 'failed', message: 'Sign-in timed out. Try again when you are ready.' }
+    : { state: 'idle' };
+  let openrouterSignInTimer: ReturnType<typeof setTimeout> | null = null;
+  const openrouter = {
+    supported: true,
+    status: async () => openrouterSignIn,
+    signIn: async () => {
+      if (store.refuseWrites) return false;
+      openrouterSignIn = { state: 'waiting' };
+      if (openrouterSignInTimer) clearTimeout(openrouterSignInTimer);
+      if (!openrouterSignInPin) {
+        openrouterSignInTimer = setTimeout(() => { openrouterKeySaved = true; openrouterSignIn = { state: 'idle' }; }, 2500);
+      }
+      return true;
+    },
+    cancelSignIn: async () => {
+      if (openrouterSignInTimer) clearTimeout(openrouterSignInTimer);
+      openrouterSignInTimer = null;
+      openrouterSignIn = { state: 'idle' };
+      return true;
+    },
+  };
+
   // ── Claude Code's own sign-in ──────────────────────────────────────────────
   // Pinned by `?claudeCode=` (signed-in | signed-out | apikey | not-installed |
   // unknown). Default signed-in on a Max plan, because that is the ordinary
@@ -1071,13 +1124,37 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     removeKey: async (id: string) => { if (store.refuseWrites) throw new Error('refused'); searchKeys.delete(id); return true; },
   };
 
+  // A key saved through the fake Connect dialog, so the card re-reads as
+  // having one — the real registry does the same after setKey.
+  let openrouterKeySaved = false;
   const providers: Ns<'providers'> = {
     // The ChatGPT row is keyless: `ready` IS "signed in", derived here so the
     // picker, the Settings row and the runtime selector never disagree.
-    list: async () => store.getState().providers.map((p) =>
+    list: async () => store.getState().providers.map((p) => {
       // `&&` so a scenario that turns every provider off (no-providers) still wins.
-      p.type === 'chatgpt' ? { ...p, ready: p.ready && chatgptStatus.state === 'signed-in' } : p),
+      if (p.type === 'chatgpt') return { ...p, ready: p.ready && chatgptStatus.state === 'signed-in' };
+      const pin = openrouterPin();
+      if (p.type === 'openrouter' && (pin || openrouterKeySaved)) {
+        const hasKey = openrouterKeySaved || pin !== 'none';
+        // The stored verdict (connection-trust §3.1) the real registry merges
+        // into this row. A key saved through the fake Connect dialog passed
+        // the fake check, so it reads verified.
+        const health = openrouterKeySaved ? openrouterHealth('verified') : pin ? openrouterHealth(pin) : undefined;
+        return { ...p, hasKey, ready: p.ready && hasKey, ...(health ? { health } : {}) };
+      }
+      return p;
+    }),
     catalog: async () => store.getState().catalog,
+    // The real Test asks OpenRouter about the key (§3.2). The fake: a candidate
+    // key containing "fake" is refused; the saved key answers per `?openrouter=`.
+    test: async (_id: string, key?: string) => {
+      const verdict = key !== undefined ? (key.includes('fake') ? 'rejected' : 'verified')
+        : openrouterKeySaved ? 'verified' : openrouterHealth(openrouterPin() ?? 'verified')?.verdict ?? 'verified';
+      if (verdict === 'rejected') return { ok: false, verdict, message: "OpenRouter didn't accept this key. Check that you copied all of it." };
+      if (verdict === 'unchecked') return { ok: false, verdict, message: "OpenRouter couldn't be reached to check the key." };
+      return { ok: true, verdict, message: 'Connected.' };
+    },
+    setKey: async () => { if (store.refuseWrites) throw new Error('refused'); openrouterKeySaved = true; return true; },
   };
 
   // M5 2a. Real backend since (permissions:* on preload + remote-shim); the fake
@@ -2023,7 +2100,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // returns since 2026-09-16, so the preview replays them through the chat
       // reducer exactly as it does a real page. A turn with a third line gets a
       // short sentence, a few tool calls, then the answer, so the preview shows
-      // a real tool group (tests/workbench-transcript-fixture.test.ts).
+      // a real tool group (tests/mock-shim.test.ts, transcript fixture).
       //
       // The turns cycle through CHAT_TURNS rather than printing filler. WHY
       // (2026-09-10): a human reads this text to judge whether the preview
@@ -3075,7 +3152,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search,
+    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;

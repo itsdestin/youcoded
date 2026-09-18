@@ -28,7 +28,7 @@ describe('validateSyncName', () => {
 });
 
 describe('DEFAULT_IGNORES', () => {
-  it('covers the spec §8 credential + junk set', () => {
+  it('covers the credential + junk set', () => {
     for (const p of ['node_modules/', '.youcoded/', '.git/', '.env', '*.pem', '.DS_Store']) {
       expect(DEFAULT_IGNORES).toContain(p);
     }
@@ -103,7 +103,7 @@ describe('isIgnoredPath', () => {
 });
 
 describe('MAX_SYNC_FILE_BYTES', () => {
-  it('is 50MB per spec §7', () => expect(MAX_SYNC_FILE_BYTES).toBe(50 * 1024 * 1024));
+  it('is 50MB', () => expect(MAX_SYNC_FILE_BYTES).toBe(50 * 1024 * 1024));
 });
 
 describe('conflictCopyName', () => {

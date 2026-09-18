@@ -235,7 +235,7 @@ describe('the status is still unknown', () => {
   });
 });
 
-describe('the app refuses to show the buddy (design §5)', () => {
+describe('the app refuses to show the buddy', () => {
   it('does not leave the switch sitting in the on position', async () => {
     // A switch that reads "on" with nothing on the desktop is a switch that
     // lies, and there is no way for the user to tell which is true.

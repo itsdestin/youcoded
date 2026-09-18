@@ -57,6 +57,7 @@ import type { ContextSettingsStore } from './harness/context-settings-store';
 import type { PermissionRule } from '../shared/permission-types';
 import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
+import type { OpenRouterSignIn } from './providers/openrouter-oauth';
 import type { ClaudeAccount } from './providers/claude-account';
 import { installClaude } from './prerequisite-installer';
 import { toListResult } from './harness/specialists/catalog';
@@ -260,7 +261,7 @@ interface SessionNamingWiring {
  * server served a built copy whenever one existed on disk, and a dev window found one left by an
  * Android test build the night before, so a whole day of phone-side fixes never reached the phone.
  * The installed app serves its built copy; a dev window serves live code unless a fresh copy was
- * built for the phone (run-dev.sh --phone-build). Pinned by tests/remote-page-source.test.ts.
+ * built for the phone (run-dev.sh --phone-build). Pinned by tests/remote-server-connections.test.ts.
  */
 export function choosePhonePageSource(opts: { serveBuiltPage: boolean; hasBuild: boolean }): 'built' | 'dev-server' {
   return opts.serveBuiltPage && opts.hasBuild ? 'built' : 'dev-server';
@@ -341,7 +342,7 @@ export class RemoteServer {
   // field (Plan 2b) — both were added independently on master and this branch.
   // permissionStore (M5 2a) is carried for the READ side only — permissions:list.
   // The two revokes go through nativeHost, which also clears live in-memory state.
-  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null } | null = null;
+  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null } | null = null;
   // Plan 2b Task 11: conversation-lease + device wiring, injected by ipc-handlers
   // via setLeaseWiring() AFTER main.ts builds the lease client/requester (they
   // live in the whenReady scope, not reachable at RemoteServer construction).
@@ -424,7 +425,7 @@ export class RemoteServer {
   /** Injected by ipc-handlers after it constructs the native stack, so remote
    *  WS clients reach the SAME nativeHost / providerRegistry / modelCatalog the
    *  Electron IPC handlers use (mirrors setLastTopic / broadcastStatusData). */
-  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null }): void {
+  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; contextSettings: ContextSettingsStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null; openRouterSignIn?: OpenRouterSignIn | null }): void {
     this.nativeRuntime = rt;
   }
 
@@ -1246,7 +1247,7 @@ export class RemoteServer {
     // This used to carry a five-attempt counter. The counter was unreachable — the
     // detach happens before a second message could ever be counted — so the code
     // claimed five and delivered one. One is the stronger of the two, so it is what
-    // the code now says. Found by writing the behaviour test in remote-rate-limit.test.ts;
+    // the code now says. Found by writing the behaviour test in remote-server-connections.test.ts;
     // the source-scan version passed happily, because the words were all present.
     const slowStart = this.shouldSlowConnection() ? HOST_SLOWDOWN_MS : 0;
 
@@ -1944,7 +1945,10 @@ export class RemoteServer {
       case 'provider:test': {
         try {
           const res = this.nativeRuntime
-            ? await this.nativeRuntime.providerRegistry.testConnection(payload.id ?? payload)
+            ? await this.nativeRuntime.providerRegistry.testConnection(
+              payload.id ?? payload,
+              typeof payload?.key === 'string' ? payload.key : undefined,
+            )
             : { ok: false, message: 'Native runtime not available.' };
           this.respond(client.ws, type, id, res);
         } catch (err: any) {
@@ -2000,6 +2004,25 @@ export class RemoteServer {
         try {
           const auth = this.nativeRuntime?.chatgptAuth ?? null;
           this.respond(client.ws, type, id, auth ? await auth.cancelSignIn() : false);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      // Sign in with OpenRouter: status and cancel are the desktop's; sign-in
+      // answers false for the same reason as chatgpt:sign-in above.
+      case 'openrouter:sign-in-status': {
+        this.respond(client.ws, type, id, this.nativeRuntime?.openRouterSignIn?.status() ?? { state: 'idle' });
+        break;
+      }
+      case 'openrouter:sign-in': {
+        this.respond(client.ws, type, id, false);
+        break;
+      }
+      case 'openrouter:cancel-sign-in': {
+        try {
+          const s = this.nativeRuntime?.openRouterSignIn ?? null;
+          this.respond(client.ws, type, id, s ? await s.cancelSignIn() : false);
         } catch (err: any) {
           this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
         }
@@ -2994,7 +3017,7 @@ export class RemoteServer {
         }
         break;
       }
-      // A theme or display change made on a phone (remote-appearance-relay.test.ts). WHY: a
+      // A theme or display change made on a phone (remote-server-connections.test.ts). WHY: a
       // phone used to read the computer's theme once, at page load, and never hear a change
       // after that in either direction (Destin, 2026-09-11: "dev is on meadow mist and remote
       // chose golden daybreak"). The phone has already saved it with appearance:set; this

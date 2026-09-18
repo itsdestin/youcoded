@@ -134,6 +134,10 @@ describe('shipped fixtures replay', () => {
         .map((l) => l.trim()).filter(Boolean)
         .map((l) => JSON.parse(l))
         .filter((p) => p.type !== 'text')
+        // WHY: providerError lines are alternatives — only the ONE case named
+        // by `?providerError=` replays (a session shows one failure card at a
+        // time), so they are counted by the dedicated case below, not here.
+        .filter((p) => p.optIn !== 'providerError')
         .length;
       // includeStalled here so the count means what it says: EVERY dispatchable
       // line really was dispatched. The parked-turn line is opt-in at the
@@ -166,6 +170,24 @@ describe('shipped fixtures replay', () => {
     expect(r.actions.map((a) => a.type)).toEqual([
       'USER_PROMPT', 'TRANSCRIPT_ASSISTANT_TEXT', 'TRANSCRIPT_THINKING_HEARTBEAT',
     ]);
+  });
+
+  // `?providerError=<case>` (connection-trust review, 2026-09-18): the failure
+  // lines are alternatives, so none replays by default and exactly the named
+  // one replays when asked — two cards stacked would be a state no user sees.
+  const ERROR_FIXTURE = [
+    '{"type":"user_message","text":"go"}',
+    '{"type":"session_error","optIn":"providerError","case":"a","text":"A"}',
+    '{"type":"session_error","optIn":"providerError","case":"b","text":"B"}',
+  ].join('\n');
+
+  it('skips every providerError line by default', () => {
+    expect(loadFixture('err', ERROR_FIXTURE).actions.map((a) => a.type)).toEqual(['USER_PROMPT']);
+  });
+
+  it('replays only the providerError case asked for', () => {
+    const acts = loadFixture('err', ERROR_FIXTURE, undefined, { providerError: 'b' }).actions;
+    expect(acts.map((a) => (a.type === 'NATIVE_SESSION_ERROR' ? a.message : a.type))).toEqual(['USER_PROMPT', 'B']);
   });
 });
 

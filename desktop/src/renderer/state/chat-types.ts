@@ -278,6 +278,14 @@ export interface SessionChatState {
    */
   errorMessage: string | null;
   /**
+   * Which known failure `errorMessage` is, when main could tell (e.g.
+   * 'openrouter-key-rejected', 'openrouter-credit-short'). WHY: the banner picks
+   * its action button from this instead of pattern-matching the sentence —
+   * optional and additive like sync's `errorCode`, so a message without one
+   * still renders as it always did. Set and cleared alongside errorMessage.
+   */
+  errorCode: string | null;
+  /**
    * Native sessions only. Set when the streaming watchdog detects the provider
    * has gone silent (no chunk for ~60s). Drives ThinkingIndicator's "This is
    * taking a while… Retrying in Ns" countdown. `willRetry` is true when the
@@ -433,6 +441,7 @@ export function createSessionChatState(): SessionChatState {
     activeTurnToolIds: new Set(),
     attentionState: 'ok',
     errorMessage: null,
+    errorCode: null,
     stallWarning: null,
     stalledSince: null,
     promptProcessing: null,
@@ -543,6 +552,8 @@ export type ChatAction =
       type: 'NATIVE_SESSION_ERROR';
       sessionId: string;
       message: string;
+      /** The session-error event's optional `errorCode` (see SessionChatState). */
+      errorCode?: string;
       /** The failing event's uuid, for the totals dedup in the reducer. Optional
        *  because the two non-App dispatchers — the workbench fixture loader and
        *  a renderer test — raise this condition without an event to name. */
@@ -966,6 +977,8 @@ export interface SerializedSessionChatState {
   attentionState: AttentionState;
   errorMessage: string | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
+  errorCode?: string | null;
+  // Optional so a pre-field snapshot from an older host still deserializes.
   stallWarning?: { retryInMs: number; willRetry: boolean } | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
   // Serialized (unlike promptProcessing) because a parked turn is a condition
@@ -1036,6 +1049,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         activeTurnToolIds: Array.from(s.activeTurnToolIds),
         attentionState: s.attentionState,
         errorMessage: s.errorMessage,
+        errorCode: s.errorCode,
         stallWarning: s.stallWarning,
         stalledSince: s.stalledSince,
         lastBufferActivityAt: s.lastBufferActivityAt,
@@ -1077,6 +1091,8 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       // Older remote hosts predate errorMessage — default null so a
       // pre-field snapshot hydrates without an undefined leaking into state.
       errorMessage: ser.errorMessage ?? null,
+      // WHY carried: a phone that reconnects must get the same action button.
+      errorCode: ser.errorCode ?? null,
       // Older hosts predate stallWarning — default null so a pre-field snapshot hydrates.
       stallWarning: ser.stallWarning ?? null,
       // Older hosts predate stalledSince — default null so a pre-field snapshot hydrates.

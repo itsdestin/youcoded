@@ -28,7 +28,7 @@ function gameFiles(): string[] {
   return files;
 }
 
-describe('the game slot (§3)', () => {
+describe('the game slot', () => {
   it('every registered game satisfies the definition', () => {
     expect(GAMES.length).toBe(4);
     for (const g of GAMES) {
@@ -106,7 +106,7 @@ describe('a focused game owns its keys', () => {
   });
 });
 
-describe('theming (§5.5)', () => {
+describe('theming', () => {
   // The app DOES sanction four Tailwind palette names — the status colours,
   // which are theme-independent by standing rule (desktop/CLAUDE.md). Rather
   // than hardcode them here (where they would drift the moment globals.css
@@ -139,7 +139,7 @@ describe('theming (§5.5)', () => {
   });
 });
 
-describe('the score boundary (§6.1)', () => {
+describe('the score boundary', () => {
   // Scores cross every boundary as raw NUMBERS. "31 pipes" and "12,480" are a
   // particular GAME's words and live in game-registry.ts. If main or the wire
   // ever learned them, adding a game would mean touching the main process, the
@@ -183,7 +183,7 @@ describe('the score boundary (§6.1)', () => {
 // rule named in the case below, plus its count). The
 // root-cause half (the callback's identity is now stable) is pinned by
 // tests/game-pane-width.test.tsx.
-describe('a resize cannot end a run (§4.3)', () => {
+describe('a resize cannot end a run', () => {
   const shell = () => readStripped(join(GAME_DIR, 'ArcadeShell.tsx'));
 
   it('setPlaying(false) lives in an effect that depends on openGame alone', () => {

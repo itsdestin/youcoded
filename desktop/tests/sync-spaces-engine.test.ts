@@ -1,10 +1,12 @@
-// desktop/tests/sync-spaces-engine.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { execFileSync } from 'child_process';
 import { SpaceSyncEngine } from '../src/main/sync-spaces/engine';
-import type { SyncSpace, SyncTransport, SpaceSyncEvent } from '../src/main/sync-spaces/types';
+import { ManagedRoots } from '../src/main/sync-spaces/managed-roots';
+import { GitTransport } from '../src/main/sync-spaces/git-transport';
+import type { PullResult, PushResult, SpaceVersion, SyncSpace, SyncTransport, SpaceSyncEvent } from '../src/main/sync-spaces/types';
 import { REPO_REPAIR_FAILED_ERROR_CODE } from '../src/main/sync-error-classifier';
 
 function fakeTransport(): SyncTransport & { pushes: string[]; pulls: string[] } {
@@ -22,7 +24,11 @@ function fakeTransport(): SyncTransport & { pushes: string[]; pulls: string[] } 
 
 let tmp: string;
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-eng-')); });
-afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+afterEach(() => {
+  // Windows releases chokidar/git handles asynchronously after close() —
+  // retry the temp-dir removal instead of flaking on EPERM/ENOTEMPTY.
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+});
 
 // These are fs.watch INTEGRATION tests — they wait on real filesystem events,
 // so their wall-clock scales with machine load and vitest's parallel pool
@@ -372,7 +378,7 @@ async function drainStartupSync(t: { pushes: unknown[] }): Promise<void> {
     await engine.stop();
   });
 
-  it('emits error events instead of throwing (never-block, spec §13)', async () => {
+  it('emits error events instead of throwing, so sync never blocks', async () => {
     const t = fakeTransport();
     (t.push as any).mockImplementation(async () => { throw new Error('boom'); });
     const events: SpaceSyncEvent[] = [];
@@ -525,4 +531,85 @@ describe('corruption self-heal', () => {
     await vi.waitFor(() => expect(events.some(e => e.type === 'error' && e.errorCode === 'repo-corrupt')).toBe(true), { timeout: WAIT_MS });
     await engine.stop();
   });
+});
+
+describe('SpaceSyncEngine.removeSpace', () => {
+  // Minimal no-op transport — addSpace calls init(); sync calls pull()+push().
+  const transport: SyncTransport = {
+    async init() {}, async hasRemote() { return false; }, async setRemote() {},
+    async pull(): Promise<PullResult> { return { updated: false, conflictCopies: [] }; },
+    async push(): Promise<PushResult> { return { pushed: false, oversize: [] }; },
+    async history(): Promise<SpaceVersion[]> { return []; },
+  };
+
+  const mkSpace = (id: string): SyncSpace => {
+    const root = path.join(tmp, id.replace(/:/g, '_'));
+    fs.mkdirSync(root, { recursive: true });
+    return { id, kind: id === 'personal' ? 'personal' : 'project', root };
+  };
+
+  it('removes one live space, leaving others live', async () => {
+    const engine = new SpaceSyncEngine(transport, { pollMs: 0, debounceMs: 50, onEvent: () => {} });
+    const a = mkSpace('project:a'); const b = mkSpace('project:b');
+    await engine.addSpace(a); await engine.addSpace(b);
+    expect(engine.liveSpaceIds().sort()).toEqual(['project:a', 'project:b']);
+    await engine.removeSpace('project:a');
+    expect(engine.liveSpaceIds()).toEqual(['project:b']);
+    // Removing an unknown id is a no-op.
+    await engine.removeSpace('project:missing');
+    expect(engine.liveSpaceIds()).toEqual(['project:b']);
+    await engine.stop();
+  });
+
+  it('#3: addSpace after stop() does not register a space or leak a watcher (stop latch)', async () => {
+    const engine = new SpaceSyncEngine(transport, { pollMs: 0, debounceMs: 50, onEvent: () => {} });
+    await engine.addSpace(mkSpace('project:a'));
+    await engine.stop(); // sets the stop latch
+    // Exercises the SAME guard the real disable-during-materialize race hits: an
+    // addSpace that completes after teardown must bail after its ready await
+    // instead of inserting a watcher nothing will ever close.
+    await engine.addSpace(mkSpace('project:b'));
+    expect(engine.liveSpaceIds()).toEqual([]); // not registered → no orphaned watcher
+  });
+});
+
+// Spec §15 two-instance matrix, transport+engine layers only (no Electron):
+// two ManagedRoots + engines sharing one bare remote must converge.
+describe('two devices sharing one bare remote (real git)', () => {
+  it('laptop → desktop file propagation via engines', async () => {
+    const bare = path.join(tmp, 'remote.git');
+    fs.mkdirSync(bare);
+    execFileSync('git', ['init', '--bare', '--initial-branch=main', bare]);
+
+    const laptop = new ManagedRoots(path.join(tmp, 'laptop'));
+    const desktop = new ManagedRoots(path.join(tmp, 'desktop'));
+    laptop.ensure(); desktop.ensure();
+    laptop.createProject('app'); desktop.createProject('app');
+    const [lSpace] = laptop.spaces().filter(s => s.kind === 'project');
+    const [dSpace] = desktop.spaces().filter(s => s.kind === 'project');
+
+    const lT = new GitTransport({ deviceName: 'Laptop' });
+    const dT = new GitTransport({ deviceName: 'Desktop' });
+    const events: SpaceSyncEvent[] = [];
+    const lEngine = new SpaceSyncEngine(lT, { debounceMs: 200, pollMs: 0, onEvent: e => events.push(e) });
+    const dEngine = new SpaceSyncEngine(dT, { debounceMs: 200, pollMs: 300, onEvent: e => events.push(e) });
+
+    await lEngine.addSpace(lSpace); await lT.setRemote(lSpace, bare);
+    await dEngine.addSpace(dSpace); await dT.setRemote(dSpace, bare);
+
+    fs.writeFileSync(path.join(lSpace.root, 'CLAUDE.md'), '# project instructions\n');
+    // Laptop watcher debounces → pushes; desktop poll loop pulls.
+    await waitFor(() => fs.existsSync(path.join(dSpace.root, 'CLAUDE.md')), 20_000);
+    expect(fs.readFileSync(path.join(dSpace.root, 'CLAUDE.md'), 'utf8')).toBe('# project instructions\n');
+
+    await lEngine.stop(); await dEngine.stop();
+  }, 30_000);
+
+  async function waitFor(cond: () => boolean, timeoutMs: number): Promise<void> {
+    const start = Date.now();
+    while (!cond()) {
+      if (Date.now() - start > timeoutMs) throw new Error('timeout waiting for condition');
+      await new Promise(r => setTimeout(r, 250));
+    }
+  }
 });

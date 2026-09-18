@@ -58,7 +58,7 @@ afterEach(cleanup);
 beforeEach(() => {
   // This repo's jsdom ships no localStorage (Node's experimental global
   // storage needs --localstorage-file, which isn't passed) — stub it the same
-  // way tests/remote-shim-unsupported.test.ts does.
+  // way tests/remote-shim-refusals.test.ts does.
   (window as any).localStorage = {
     _s: {} as Record<string, string>,
     getItem(k: string) { return this._s[k] ?? null; },
@@ -201,7 +201,7 @@ describe('StatusBar session totals', () => {
   });
 });
 
-describe('StatusBar — a brand-new native session has measured nothing (Finding 1)', () => {
+describe('StatusBar — a brand-new native session has measured nothing', () => {
   // createSessionChatState() seeds a fresh native session's totals with
   // emptyTotals() — all-zero, NOT null — the instant the session enters the
   // store, before any turn has completed. The token chips used to gate on
@@ -242,7 +242,7 @@ describe('StatusBar — a brand-new native session has measured nothing (Finding
     expect(screen.getByText('40%')).toBeInTheDocument();
   });
 
-  it('uses friendlier zero-reuse tooltip copy for a native session with real prompt tokens but no cache hits (Finding 4)', () => {
+  it('uses friendlier zero-reuse tooltip copy for a native session with real prompt tokens but no cache hits', () => {
     withWidgets(['cache-hit-rate']);
     const totals = { ...emptyTotals(), inputTokens: 1000, cacheReadTokens: 0 };
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={totals} turnsWithUsage={2} sessionId="s1" />);
@@ -458,7 +458,7 @@ describe('Session Cost chip', () => {
 // (a local model has no rate card), the accumulator read the null alone as
 // "unpriced", and the bar drew "Cost: not listed" with a tooltip claiming the
 // provider bills the user for a model running on their own machine.
-describe('Session Cost — a purely local session, end to end (Task 21)', () => {
+describe('Session Cost — a purely local session, end to end', () => {
   // Built through the real accumulator, never by hand: hand-built flags are
   // what let this through the first time.
   const localSessionTotals = () => {

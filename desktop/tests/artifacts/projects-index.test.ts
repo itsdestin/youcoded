@@ -35,7 +35,7 @@ vi.mock('../../src/main/artifacts/visible-artifacts', () => ({
 
 import { countArtifacts } from '../../src/main/artifacts/projects-index';
 
-describe('countArtifacts — null absolutePath guard (finding 4)', () => {
+describe('countArtifacts — null absolutePath guard', () => {
   let projectRoot: string;
   beforeEach(() => {
     projectRoot = mkdtempSync(join(tmpdir(), 'pi-count-'));

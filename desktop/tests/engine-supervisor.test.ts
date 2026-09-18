@@ -403,7 +403,7 @@ describe('EngineSupervisor', () => {
   /** Boots a supervisor whose router answers `GET /models` with `payload`.
    *  The URL test is `includes('/models')`, NOT `endsWith` — refreshModels asks
    *  `/models?reload=1`, and an endsWith stub silently stops matching the day a
-   *  query string is added (the exact trap engine-manager-slot-count.test.ts
+   *  query string is added (the exact trap engine-manager-router.test.ts
    *  documents for /props). */
   async function supervisorServing(payload: unknown) {
     mockSpawn.mockReturnValue(makeFakeChild());
@@ -417,7 +417,7 @@ describe('EngineSupervisor', () => {
     return s;
   }
 
-  it('listModels keeps architecture.input_modalities off a REAL /models response (design §E5)', async () => {
+  it('listModels keeps architecture.input_modalities off a REAL /models response', async () => {
     sup = await supervisorServing(REAL_MODELS_RESPONSE);
     const byId = Object.fromEntries((await sup.listModels()).map((m) => [m.id, m.inputModalities]));
     // Exact arrays, not "contains image": the whole list is what the app keeps,

@@ -15,7 +15,7 @@ describe('validateDownloadUrl', () => {
     expect(() => validateDownloadUrl('https://objects.githubusercontent.com/github-production-release-asset-xyz/YouCoded-1.2.3.dmg')).not.toThrow();
   });
 
-  it('accepts release-assets.githubusercontent.com URLs (GitHub moved downloads here 2026-09-10)', () => {
+  it('accepts release-assets.githubusercontent.com URLs (GitHub\'s current download host)', () => {
     // The regression that broke the Update button for everyone: this host was
     // rejected, so every download failed url-rejected.
     expect(() => validateDownloadUrl('https://release-assets.githubusercontent.com/github-production-release-asset-xyz/YouCoded-Setup-1.3.0.exe')).not.toThrow();

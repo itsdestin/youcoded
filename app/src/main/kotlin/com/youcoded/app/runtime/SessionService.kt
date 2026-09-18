@@ -4208,6 +4208,11 @@ class SessionService : Service() {
             "chatgpt:sign-in",
             "chatgpt:cancel-sign-in",
             "chatgpt:sign-out",
+            // Sign in with OpenRouter (2026-09-18): the browser round-trip and the
+            // provider it saves a key into are desktop-only, like chatgpt:* above.
+            "openrouter:sign-in-status",
+            "openrouter:sign-in",
+            "openrouter:cancel-sign-in",
             // WebSearch providers (Phase 2 Plan B) — keyed Tavily/Exa upgrades.
             // Desktop-only; no Android runtime yet. Reply not-implemented so the
             // shared React UI degrades to a "desktop only" state instead of timing out.

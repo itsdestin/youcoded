@@ -51,7 +51,7 @@ describe('motion vocabulary', () => {
     }
   });
 
-  it('defines three durations — Soft (2026-09-02), with the Spring arrival\'s length', () => {
+  it('defines three durations — Soft, with the Spring arrival\'s length', () => {
     expect(globals).toMatch(/--dur-hover:\s*180ms/);
     expect(globals).toMatch(/--dur-reveal:\s*260ms/);
     expect(globals).toMatch(/--dur-switch:\s*380ms/);
@@ -95,7 +95,7 @@ describe('motion vocabulary', () => {
     expect(root).toMatch(/--frame-edge:/);
   });
 
-  it('has no review scaffolds left — every round was picked on 2026-09-02', () => {
+  it('has no review scaffolds left — only the picked values remain', () => {
     // The speed presets ([data-motion]), the select-on modes ([data-select]),
     // the arrival alternatives ([data-arrival], plus the `?arrival=` param in
     // index.tsx) and the yield scaffold ([data-yield]) were each picked and

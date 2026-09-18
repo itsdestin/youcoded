@@ -22,7 +22,7 @@ function activePrerequisite(prereqs: PrerequisiteState[]): PrerequisiteState | u
  *
  * WHY it exists: `lastError` is the only channel the wizard has for saying
  * anything to the user, and one CLICK reaches it without anything breaking —
- * "Log in with OpenRouter" answers "coming in a later update". Try Again there
+ * a refused OpenRouter key, or a sign-in that timed out. Try Again there
  * re-runs the whole Node/Git/Claude install pass on a machine where nothing is
  * wrong, and "Something went wrong. You can retry the last step." would be two
  * false statements in one sentence.

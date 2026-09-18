@@ -169,3 +169,49 @@ describe('AttentionBanner — the stalled card', () => {
     expect(container.querySelector('.ring-\\[var\\(--destructive\\)\\]')).not.toBeNull();
   });
 });
+
+// Connection trust (2026-09-18): a session-error can carry an errorCode, and
+// the code — not the sentence — picks the card's button.
+describe('AttentionBanner — errorCode picks the action', () => {
+  afterEach(() => cleanup());
+  const button = (c: HTMLElement, label: string) =>
+    Array.from(c.querySelectorAll('button')).find((b) => b.textContent?.trim() === label) ?? null;
+
+  it.each(['openrouter-key-rejected', 'openrouter-key-expired', 'chatgpt-signin-expired', 'chatgpt-signin-required'])(
+    '%s offers Open Settings', (code) => {
+      const { container } = render(
+        <AttentionBanner state="error" errorMessage="x" errorCode={code} onOpenProviderSettings={vi.fn()} />,
+      );
+      expect(openSettingsButton(container)).not.toBeNull();
+    });
+
+  it('not enough credit offers Add credit, and not Settings', () => {
+    const onAddCredit = vi.fn();
+    const { container } = render(
+      <AttentionBanner state="error" errorMessage="x" errorCode="openrouter-credit-short"
+        onOpenProviderSettings={vi.fn()} onAddCredit={onAddCredit} />,
+    );
+    expect(openSettingsButton(container)).toBeNull();
+    fireEvent.click(button(container, 'Add credit')!);
+    expect(onAddCredit).toHaveBeenCalledOnce();
+  });
+
+  it('a refused request never offers Settings, even if its text names the screen', () => {
+    const { container } = render(
+      <AttentionBanner state="error" errorMessage="flagged — see Assistant settings → Cloud providers"
+        errorCode="openrouter-request-refused" onOpenProviderSettings={vi.fn()} onAddCredit={vi.fn()} />,
+    );
+    expect(openSettingsButton(container)).toBeNull();
+    expect(button(container, 'Add credit')).toBeNull();
+  });
+
+  it.each([
+    'OpenRouter needs an API key — add one in Assistant settings → Cloud providers.',
+    'Sign in with ChatGPT in Settings → Model Providers to use this model.',
+  ])('with no code, the screen name still earns the button: %s', (msg) => {
+    const { container } = render(
+      <AttentionBanner state="error" errorMessage={msg} onOpenProviderSettings={vi.fn()} />,
+    );
+    expect(openSettingsButton(container)).not.toBeNull();
+  });
+});

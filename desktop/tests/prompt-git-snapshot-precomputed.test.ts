@@ -31,7 +31,7 @@ function assemblerCalls(src: string): Array<{ at: number; args: string }> {
   return out;
 }
 
-describe('the host precomputes the git snapshot (2026-09-16 C3)', () => {
+describe('the host precomputes the git snapshot', () => {
   it('every prompt assembly in native-session-host.ts passes gitSnapshot', () => {
     const src = readStripped(join(MAIN, 'harness', 'native-session-host.ts'));
     const calls = assemblerCalls(src);

@@ -436,7 +436,7 @@ function getWsUrl(): string {
  *                   false, since a resize does change the host and is still safe to repeat.
  *   'transport'   — the connection talking about itself.
  *
- * An unclassified channel fails remote-message-kinds.test.ts. That is deliberate: the way
+ * An unclassified channel fails remote-shim.test.ts. That is deliberate: the way
  * this goes wrong again is a new channel quietly defaulting to the queue.
  */
 export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'transport'>> = {
@@ -692,7 +692,7 @@ export function markConnectedForNotices(): void {
  *  would be thrown away as an error.
  *
  *  Exported and hoisted to module scope on purpose: pinned by
- *  tests/remote-shim-reject.test.ts, because deleting an entry restores a bug
+ *  tests/remote-shim-refusals.test.ts, because deleting an entry restores a bug
  *  no other test in the suite can see.
  *
  *  KNOWN GAP, filed rather than fixed here: `models:installed` answers the same
@@ -747,7 +747,7 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
  *  needs a live socket and a pending request before it will run a line, so the
  *  rule that decides whether a user sees their error or a silent success had no
  *  reachable test. Anything that stops consulting REJECT_ON_NOT_OK now fails
- *  tests/remote-shim-reject.test.ts.
+ *  tests/remote-shim-refusals.test.ts.
  *
  *   'unsupported' — the host does not implement this channel at all.
  *   'failure'     — the host's handler threw; re-throw it to the caller.
@@ -1903,7 +1903,7 @@ export function installShim(): void {
       // `count || 10` / `all || false` mirror preload so the wire always carries
       // real number/boolean types (Android's optInt/optBoolean and the server's
       // slice(-count) both need them). Guard: SessionBridge.loadHistory (shared/bridge-types.ts,
-      // parameter types) + remote-shim-loadhistory-args.test.ts (the order on the wire).
+      // parameter types) + remote-shim.test.ts (the order on the wire).
       loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) =>
         invoke('session:history', { sessionId, projectSlug, count: count || 10, all: all || false }),
       switch: (sessionId: string) => invoke('session:switch', { sessionId }),
@@ -2298,7 +2298,7 @@ export function installShim(): void {
       // WHY these are real now (Destin, 2026-09-11: the phone kept an old theme until it was
       // reloaded): a phone is one more window on the computer's appearance. A change here
       // goes to the computer to pass on; a change there arrives as appearance:sync.
-      // tests/remote-appearance-sync.test.ts.
+      // tests/remote-shim.test.ts.
       broadcast: (prefs: Record<string, any>) => { fire('appearance:broadcast', prefs); },
       onSync: (cb: (prefs: Record<string, any>) => void) => {
         const handler = addListener('appearance:sync', cb);
@@ -2567,7 +2567,7 @@ export function installShim(): void {
     //
     // Written as a plain, unconditional `voice: {` rather than a conditional
     // spread on purpose: the workbench's contract scan
-    // (tests/workbench-mock-contract.test.ts) finds a namespace by looking for
+    // (tests/mock-shim-window.test.ts, mock contract) finds a namespace by looking for
     // its name at exactly this indentation, and `...(androidLocal ? {voice} : {})`
     // would be invisible to it. The namespace is instead DELETED after this
     // object is built, whenever this client is not the Android app on its own
@@ -2949,7 +2949,7 @@ export function installShim(): void {
       list: () => invoke('provider:list'),
       upsert: (config: unknown) => invoke('provider:upsert', config),
       remove: (id: string) => invoke('provider:remove', { id }),
-      test: (id: string) => invoke('provider:test', { id }),
+      test: (id: string, key?: string) => invoke('provider:test', key === undefined ? { id } : { id, key }),
       setKey: (id: string, key: string) => invoke('provider:set-key', { id, key }),
       catalog: () => invoke('provider:catalog'),
     },
@@ -2967,6 +2967,15 @@ export function installShim(): void {
       signIn: () => invoke('chatgpt:sign-in'),
       cancelSignIn: () => invoke('chatgpt:cancel-sign-in'),
       signOut: () => invoke('chatgpt:sign-out'),
+    },
+    // Sign in with OpenRouter: the browser round-trip and its listener live on
+    // the desktop, so a phone can't run it — supported:false hides the button
+    // and the card keeps its paste-a-key route. The invokes exist for parity.
+    openrouter: {
+      supported: false,
+      status: () => invoke('openrouter:sign-in-status'),
+      signIn: () => invoke('openrouter:sign-in'),
+      cancelSignIn: () => invoke('openrouter:cancel-sign-in'),
     },
     // Claude Code's live sign-in (2026-09-09). Real over the wire: remote-server
     // answers from the DESKTOP's probe, which is the machine the session

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { getJsonPath, setJsonPath } from '../src/main/safe-json-path';
 
-describe('setJsonPath — prototype pollution guard (2026-09-10 security review)', () => {
+describe('setJsonPath — prototype pollution guard', () => {
   it('writes a nested field without clobbering siblings', () => {
     const obj: Record<string, unknown> = { permissions: { defaultMode: 'ask', other: 1 } };
     setJsonPath(obj, 'permissions.defaultMode', 'plan');
@@ -37,7 +37,7 @@ describe('setJsonPath — prototype pollution guard (2026-09-10 security review)
     expect(({}) as Record<string, unknown>).not.toHaveProperty('polluted');
   });
 
-  it('walks into an existing array instead of clobbering it (2026-09-11 review)', () => {
+  it('walks into an existing array instead of clobbering it', () => {
     const obj: Record<string, unknown> = { permissions: { allow: ['Bash(npm:*)', 'Read(*)'] } };
     setJsonPath(obj, 'permissions.allow.0', 'Bash(rm:*)');
     // the array survives as an array with the one element replaced

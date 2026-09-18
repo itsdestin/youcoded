@@ -258,7 +258,7 @@ Use the right level for the question:
 ## When NOT to use these harnesses
 
 Anything that doesn't depend on actual CC behavior should NOT use a real-CC harness. Use:
-- **Fixture-based unit tests** in `desktop/tests/` for pure functions (classifiers, parsers). See `attention-classifier-parity.test.ts` + `shared-fixtures/attention-classifier/` for the pattern.
+- **Fixture-based unit tests** in `desktop/tests/` for pure functions (classifiers, parsers). See the parity-fixtures section of `attention-classifier.test.ts` + `shared-fixtures/attention-classifier/` for the pattern.
 - **Mocked node-pty** when you need to test how the worker reacts to controlled byte streams without spinning up CC. (No example yet; would be useful for testing edge cases like echo arriving in pieces.)
 - **Direct integration tests** without CC for things like the renderer's reducer, transcript watcher, hook relay — none of those need CC running.
 

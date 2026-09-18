@@ -81,6 +81,8 @@ interface Props {
   onSwitchProviders?: () => void;
   /** Plan-limit card's Upgrade plan button: opens OpenAI's upgrade page. */
   onUpgradePlan?: () => void;
+  /** OpenRouter "not enough credit" card: opens OpenRouter's add-credit page. */
+  onAddCredit?: () => void;
   // Task 12 (docked strip, replaces Task 11's UserMessage-bubble affordances):
   // App owns the native:queue-remove invoke, the QUEUED_MESSAGE_REMOVED
   // dispatch, the toast state, and the input-bar ref the Edit flow refills —
@@ -100,7 +102,7 @@ interface Props {
   onRefreshConversation?: () => void;
 }
 
-export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
+export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
 
@@ -256,7 +258,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // streaming session renders once per delta. The timeline array's identity
   // only changes when an entry is appended (a delta updates assistantTurns,
   // not timeline), so memoising on it turns a once-per-token scan into a
-  // once-per-entry scan. Pinned by tests/chatview-archive-boundary-memo.test.tsx.
+  // once-per-entry scan. Pinned by tests/ChatView-render-cost.test.tsx.
   const archiveBoundary = useMemo(() => findArchiveBoundary(state.timeline), [state.timeline]);
 
   // PTY-buffer classifier drives the attention banner. Replaces the old
@@ -315,7 +317,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // cause is ALREADY re-pinned by the ResizeObserver on contentRef below, which
   // runs after layout, where the same read is free. Dropping the timestamp
   // loses nothing and removes the per-token reflow. Pinned by
-  // tests/chatview-scroll-pin-deps.test.tsx.
+  // tests/ChatView-render-cost.test.tsx.
   useEffect(() => {
     if (stickRef.current) scrollToBottom();
   }, [state.timeline.length, state.isThinking, scrollToBottom, stickRef]);
@@ -1343,6 +1345,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     state={state.attentionState}
                     anthropicRequestId={lastTurnRequestId}
                     errorMessage={state.errorMessage}
+                    errorCode={state.errorCode}
                     stalledSince={state.stalledSince}
                     // Native sessions get the stuck line without the
                     // "check Terminal view" pointer — they have no Terminal.
@@ -1352,6 +1355,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     onOpenProviderSettings={onOpenProviderSettings}
                     onSwitchProviders={onSwitchProviders}
                     onUpgradePlan={onUpgradePlan}
+                    onAddCredit={onAddCredit}
                     // Stalled card only. Retry re-runs the PARKED STEP — it is
                     // deliberately NOT the native-send helper the old TODO here
                     // pointed at, which sends a new user message and would fork

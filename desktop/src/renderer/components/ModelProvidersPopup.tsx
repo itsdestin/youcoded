@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
 import ProvidersSection from './ProvidersSection';
 import LocalModelsSection from './LocalModelsSection';
-import type { ProviderStatus } from '../../shared/provider-types';
+import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealth, type ProviderStatus } from '../../shared/provider-types';
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
@@ -65,9 +65,6 @@ function ProviderRow({ title, info, status, detail, action, account, children }:
             {info && <AnchorTip label={info.label} title={title}>{info.body}</AnchorTip>}
           </p>
           <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>
-          {detail && (
-            <p className={`text-2xs mt-0.5 ${detail.tone === 'bad' ? 'text-destructive-fg' : 'text-fg-muted'}`}>{detail.text}</p>
-          )}
         </div>
         {(account || action) && (
           <div className="shrink-0 flex items-center gap-1.5">
@@ -81,6 +78,13 @@ function ProviderRow({ title, info, status, detail, action, account, children }:
           </div>
         )}
       </div>
+      {/* The detail line spans the whole card, under the buttons — not the
+          column beside them. WHY: two buttons on the right squeezed a refused
+          key's one-sentence warning into three short lines (review
+          2026-09-18, R2-2: "could fit on a single line"). */}
+      {detail && (
+        <p className={`text-2xs mt-0.5 ${detail.tone === 'bad' ? 'text-destructive-fg' : 'text-fg-muted'}`}>{detail.text}</p>
+      )}
       {children && <div className="mt-2.5">{children}</div>}
     </div>
   );
@@ -414,12 +418,84 @@ export function ChatGptBlock() {
 
 // ── 2. OpenRouter ────────────────────────────────────────────────────────────
 
+/** "Sep 19" — the day a key's expiry passed, in the reader's own locale. */
+function shortDate(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+/** The card's words for what the app last learned about the saved key.
+ *  WHY this exists: the card used to say "Connected" whenever a key was SAVED,
+ *  so a dead key read as working until every message failed (Destin,
+ *  2026-08-31). Now the status line says what OpenRouter actually answered,
+ *  and a refused key says why and what to do — in the destructive tone, since
+ *  nothing OpenRouter-backed works until it is fixed. */
+function openRouterKeyWords(health: ProviderHealth | undefined, canSignIn = false): {
+  status: string; detail: { text: string; tone?: 'muted' | 'bad' } | null; broken: boolean;
+} {
+  if (!health) return { status: 'Checking…', detail: null, broken: false };
+  if (health.verdict === 'verified') return { status: 'Connected', detail: null, broken: false };
+  if (health.verdict === 'unchecked') {
+    return {
+      status: 'Key saved — not checked yet',
+      detail: { text: "OpenRouter couldn't be reached to check it. The app tries again on its own, or press Test." },
+      broken: false,
+    };
+  }
+  // The fix sentence names the card's own main button: "Sign in again" where
+  // sign-in works, "Replace key" where it doesn't (remote access).
+  const fix = canSignIn ? 'Sign in again, or paste a new API key.' : null;
+  switch (health.reason) {
+    case 'openrouter-key-expired': {
+      const day = shortDate(health.expiresAt);
+      return {
+        status: 'Key expired',
+        detail: { text: `This key stopped working${day ? ` on ${day}` : ''}. ${fix ?? 'Create a new key on OpenRouter, then replace it here.'}`, tone: 'bad' },
+        broken: true,
+      };
+    }
+    case 'openrouter-wrong-key-type':
+      return {
+        status: 'Wrong kind of key',
+        detail: { text: `This is an account-management key, which can't run models. ${fix ?? 'Create a regular API key on OpenRouter, then replace it here.'}`, tone: 'bad' },
+        broken: true,
+      };
+    case 'openrouter-forbidden':
+      return {
+        status: 'Key refused',
+        detail: { text: `OpenRouter refused this key. ${fix ?? 'Check it on OpenRouter, then replace it here.'}`, tone: 'bad' },
+        broken: true,
+      };
+    default:
+      return {
+        status: 'Key not accepted',
+        detail: { text: `OpenRouter didn't accept this key. ${fix ?? 'Replace it to keep using OpenRouter models.'}`, tone: 'bad' },
+        broken: true,
+      };
+  }
+}
+
+/** Sign in with OpenRouter, reached with a cast like `chatgpt` above. */
+function openRouterSignInApi(): {
+  supported?: boolean;
+  status: () => Promise<OpenRouterSignInStatus>;
+  signIn: () => Promise<boolean>;
+  cancelSignIn: () => Promise<boolean>;
+} | undefined {
+  return (window as any).claude?.openrouter;
+}
+
 export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) {
   // The OpenRouter builtin provider (stable id 'openrouter'). undefined = still
   // loading; null = not found (shouldn't happen — it's builtin).
   const [openrouter, setOpenrouter] = useState<ProviderStatus | null | undefined>(undefined);
   const [connectOpen, setConnectOpen] = useState(false);
-  const [testNote, setTestNote] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null);
+  // Sign in with OpenRouter (design §3.5). Gated on `supported === true` like
+  // the ChatGPT card: over remote access there is no browser on this computer
+  // for the phone to use, so the card keeps only the paste-a-key route there.
+  const signInSupported = openRouterSignInApi()?.supported === true;
+  const [signIn, setSignIn] = useState<OpenRouterSignInStatus>({ state: 'idle' });
 
   const refresh = useCallback(async () => {
     try {
@@ -429,20 +505,60 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
       setOpenrouter(null);
     }
   }, []);
-  useEffect(() => { void refresh(); }, [refresh]);
+  // Opening the page checks the saved key with OpenRouter, then re-reads the
+  // row. WHY: this replaced the Test button (review 2026-09-18, SI-4: "no
+  // buttons at bottom left") — the card is checked every time you look at it,
+  // so there is nothing left to press. One small request, no credit spent.
+  useEffect(() => {
+    void (async () => {
+      await refresh();
+      try {
+        const list = await window.claude.providers.list() as ProviderStatus[];
+        const row = list.find((p) => p.id === 'openrouter' || p.type === 'openrouter');
+        if (row?.hasKey) { await window.claude.providers.test(row.id); await refresh(); }
+      } catch { /* the stored verdict stays on screen */ }
+    })();
+  }, [refresh]);
+
+  const readSignIn = useCallback(async () => {
+    try { setSignIn(await openRouterSignInApi()!.status()); } catch { /* keep the last state */ }
+  }, []);
+  useEffect(() => { if (signInSupported) void readSignIn(); }, [signInSupported, readSignIn]);
+  // While the browser is open, poll — the sign-in finishes in a tab this app
+  // does not own. When it stops waiting, re-read the row (a new key, and its
+  // check) and drop the cached provider types so a new session sees the models.
+  const wasWaiting = useRef(false);
+  useEffect(() => {
+    if (signIn.state === 'waiting') {
+      wasWaiting.current = true;
+      const t = setInterval(() => { void readSignIn(); }, 1000);
+      return () => clearInterval(t);
+    }
+    if (wasWaiting.current) {
+      wasWaiting.current = false;
+      void refresh();
+      invalidateProviderTypeCache();
+    }
+  }, [signIn.state, readSignIn, refresh]);
+
+  const startSignIn = async () => {
+    try {
+      await openRouterSignInApi()!.signIn();
+    } catch (e) {
+      setSignIn({ state: 'failed', message: e instanceof Error ? e.message : 'Could not open the sign-in page.' });
+      return;
+    }
+    await readSignIn();
+  };
+  const cancelSignIn = async () => {
+    try { await openRouterSignInApi()!.cancelSignIn(); } catch { /* the poll shows the truth */ }
+    await readSignIn();
+  };
 
   const connected = openrouter?.hasKey === true;
+  const words = openRouterKeyWords(openrouter?.health, signInSupported);
+  const waiting = signIn.state === 'waiting';
 
-  const runTest = async () => {
-    if (!openrouter) return;
-    setTestNote(null);
-    try {
-      const res: any = await window.claude.providers.test(openrouter.id);
-      setTestNote({ tone: res?.ok ? 'ok' : 'bad', text: res?.message ?? (res?.ok ? 'Connected.' : 'Could not verify the key.') });
-    } catch (e) {
-      setTestNote({ tone: 'bad', text: e instanceof Error ? e.message : 'Could not test the connection.' });
-    }
-  };
 
   return (
     <>
@@ -466,28 +582,53 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
                   your sessions through it. You pay OpenRouter directly for what you use. You can also add your
                   own direct provider keys or a custom endpoint below.
                 </p>
+                <p>
+                  Signing in makes a key named YouCoded in your OpenRouter account. Signing in again makes a
+                  new one; old ones stay on OpenRouter's Keys page until you delete them there.
+                </p>
               </>
             ),
           }}
-          status={openrouter === undefined ? 'Checking…' : connected ? 'Connected' : 'Not connected'}
-          account={connected ? 'https://openrouter.ai/settings/credits' : undefined}
-          detail={testNote ? { text: testNote.text, tone: testNote.tone === 'ok' ? 'muted' : 'bad' } : null}
-          action={connected ? (
-            <Button variant="secondary" size="sm" onClick={() => { setTestNote(null); setConnectOpen(true); }}>
+          status={waiting ? (
+            <span className="inline-flex items-center gap-1.5">
+              <BrailleSpinner size="sm" />
+              Waiting for the browser…
+            </span>
+          ) : openrouter === undefined ? 'Checking…' : connected ? words.status : 'Not connected'}
+          // My Account only for a key that works: with a refused key there is
+          // no account connection to visit (review SI-4).
+          account={connected && !waiting && !words.broken ? OPENROUTER_CREDITS_URL : undefined}
+          detail={waiting ? null
+            : signIn.state === 'failed' && signIn.message ? { text: signIn.message, tone: 'bad' }
+            : connected ? words.detail : null}
+          action={waiting ? (
+            <Button variant="secondary" size="sm" onClick={() => void cancelSignIn()}>
+              Cancel
+            </Button>
+          ) : signInSupported && (!connected || words.broken) ? (
+            // Two separate ways in, side by side (review SI-1/SI-5): API Key
+            // opens the paste window, Sign in goes straight to the browser.
+            // A refused key gets the same pair — it is "not connected" again.
+            <>
+              <Button variant="secondary" size="sm" onClick={() => setConnectOpen(true)}>
+                API Key
+              </Button>
+              <Button size="sm" onClick={() => void startSignIn()}>
+                Sign in with OpenRouter
+              </Button>
+            </>
+          ) : connected ? (
+            // A refused key makes Replace key the one thing to do, so it takes
+            // the primary style; on a working key it stays an outline peer.
+            <Button variant={words.broken ? 'primary' : 'secondary'} size="sm" onClick={() => setConnectOpen(true)}>
               Replace key
             </Button>
           ) : (
-            <Button size="sm" onClick={() => { setTestNote(null); setConnectOpen(true); }}>
+            <Button size="sm" onClick={() => setConnectOpen(true)}>
               Connect to OpenRouter
             </Button>
           )}
-        >
-          {connected && (
-            <Button variant="secondary" size="sm" onClick={() => void runTest()}>
-              Test
-            </Button>
-          )}
-        </ProviderRow>
+        />
       </div>
 
       {/* Other API providers — direct keys (Anthropic/OpenAI/Google) + custom
@@ -533,13 +674,25 @@ function ConnectOpenRouterModal({
     setBusy(true);
     setNote(null);
     try {
+      // Check the NEW key before saving it. WHY: saving first meant a typo in
+      // "Replace key" overwrote a working key with a dead one; now a key
+      // OpenRouter refuses is never saved and the old one keeps working.
+      const res: any = await window.claude.providers.test(providerId, value);
+      if (res?.verdict === 'rejected') {
+        setNote({ tone: 'bad', text: res?.message ?? "OpenRouter didn't accept this key." });
+        return;
+      }
       await window.claude.providers.setKey(providerId, value);
-      // Verify immediately so the user gets a real Connected/failed signal.
-      const res: any = await window.claude.providers.test(providerId);
-      const ok = !!res?.ok;
-      setNote({ tone: ok ? 'ok' : 'bad', text: res?.message ?? (ok ? 'Connected.' : 'Saved, but the key could not be verified.') });
       await onSaved();
-      if (ok) { setKeyDraft(''); setTimeout(onClose, 700); } // brief success flash, then close
+      if (res?.ok) {
+        setNote({ tone: 'ok', text: res?.message ?? 'Connected.' });
+        setKeyDraft('');
+        setTimeout(onClose, 700); // brief success flash, then close
+      } else {
+        // Unreachable (offline): the key is saved, not proven. Say so and stay
+        // open, so the user sees why the card will read "not checked yet".
+        setNote({ tone: 'bad', text: res?.message ?? "Saved, but OpenRouter couldn't be reached to check it." });
+      }
     } catch (e) {
       setNote({ tone: 'bad', text: e instanceof Error ? e.message : 'Could not save the key.' });
     } finally {

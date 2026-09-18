@@ -7,7 +7,7 @@
 // bar with a close button, and the pane drew a second one directly beneath
 // it). It no longer takes `onClose` props or renders a close control — the
 // drawer's top bar owns both now, same slot a file's name/close use. Those
-// assertions live at the drawer level: tests/session-drawer-preview-header.test.tsx.
+// assertions live at the drawer level: tests/SessionDrawer.test.tsx.
 // This suite covers what's still the pane's own job: loading/paging/error
 // states and the read-only/lane caption line.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';

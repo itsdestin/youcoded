@@ -1,3 +1,5 @@
+// artifactReducer — the renderer's per-session file-pane state: loaded artifacts,
+// the drawer, conversation previews and the git review view.
 import { describe, expect, it } from 'vitest';
 import {
   initialArtifactState,
@@ -106,5 +108,73 @@ describe('artifactReducer', () => {
     s = artifactReducer(s, { type: 'ACTIVE_ARTIFACT_CLEARED', sessionId: 'sess_a' });
     expect(s.activeArtifactBySession['sess_a']).toBeNull();
     expect(s.activeArtifactBySession['sess_b']).toBe('art_2');
+  });
+});
+
+describe('conversation preview', () => {
+  const S = 'sess';
+  const ref = { provider: 'claude' as const, id: 'abc', title: 'T', lastActive: '2026-07-26T00:00:00Z' };
+
+  describe('session preview exclusivity', () => {
+    it('SESSION_PREVIEW_SET clears the active artifact and opens the drawer', () => {
+      let s = artifactReducer(initialArtifactState, { type: 'ACTIVE_ARTIFACT_SET', sessionId: S, artifactId: 'art1' });
+      s = artifactReducer(s, { type: 'SESSION_PREVIEW_SET', sessionId: S, provider: 'claude', id: 'abc', title: 'T' });
+      expect(s.activeArtifactBySession[S]).toBeNull();
+      expect(s.activeSessionPreviewBySession[S]).toEqual({ provider: 'claude', id: 'abc', title: 'T' });
+      expect(s.drawerOpenBySession[S]).toBe(true);
+    });
+    it('ACTIVE_ARTIFACT_SET clears the preview', () => {
+      let s = artifactReducer(initialArtifactState, { type: 'SESSION_PREVIEW_SET', sessionId: S, provider: 'claude', id: 'abc', title: 'T' });
+      s = artifactReducer(s, { type: 'ACTIVE_ARTIFACT_SET', sessionId: S, artifactId: 'art1' });
+      expect(s.activeSessionPreviewBySession[S]).toBeNull();
+      expect(s.activeArtifactBySession[S]).toBe('art1');
+    });
+    it('DRAWER_CLOSED clears both', () => {
+      let s = artifactReducer(initialArtifactState, { type: 'SESSION_PREVIEW_SET', sessionId: S, provider: 'claude', id: 'abc', title: 'T' });
+      s = artifactReducer(s, { type: 'DRAWER_CLOSED', sessionId: S });
+      expect(s.activeSessionPreviewBySession[S]).toBeNull();
+      expect(s.activeArtifactBySession[S]).toBeNull();
+    });
+    it('SESSION_REFERENCED dedupes by provider+id, newest first', () => {
+      let s = artifactReducer(initialArtifactState, { type: 'SESSION_REFERENCED', sessionId: S, ref });
+      s = artifactReducer(s, { type: 'SESSION_REFERENCED', sessionId: S, ref: { ...ref, id: 'def' } });
+      s = artifactReducer(s, { type: 'SESSION_REFERENCED', sessionId: S, ref });
+      expect(s.referencedSessionsBySession[S].map((r) => r.id)).toEqual(['abc', 'def']);
+    });
+  });
+});
+
+describe('git review', () => {
+  const open = (s = initialArtifactState) =>
+    artifactReducer(s, { type: 'GIT_REVIEW_OPENED', sessionId: 's1' } as any);
+
+  describe('git review view state', () => {
+    it('defaults closed', () => {
+      expect(initialArtifactState.gitReviewBySession).toEqual({});
+    });
+
+    it('GIT_REVIEW_OPENED / GIT_REVIEW_CLOSED flip the per-session flag', () => {
+      let s = open();
+      expect(s.gitReviewBySession['s1']).toBe(true);
+      s = artifactReducer(s, { type: 'GIT_REVIEW_CLOSED', sessionId: 's1' } as any);
+      expect(s.gitReviewBySession['s1']).toBe(false);
+    });
+
+    it('DRAWER_CLOSED clears the flag for that session', () => {
+      let s = open();
+      s = artifactReducer(s, { type: 'DRAWER_CLOSED', sessionId: 's1' } as any);
+      expect(s.gitReviewBySession['s1']).toBeFalsy();
+    });
+
+    it('selecting a different artifact exits review (view follows the file)', () => {
+      let s = open();
+      s = artifactReducer(s, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: 'a2' } as any);
+      expect(s.gitReviewBySession['s1']).toBe(false);
+    });
+
+    it('is per-session', () => {
+      const s = open();
+      expect(s.gitReviewBySession['s2']).toBeUndefined();
+    });
   });
 });

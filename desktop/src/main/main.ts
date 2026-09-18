@@ -38,7 +38,7 @@ import { log, rotateLog } from './logger';
 import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
 import { isAppPageUrl } from './app-navigation';
-import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService } from './first-run';
+import { FirstRunManager, markSetupCompleted, setupIsUsable, type FirstRunNativeDeps, type NativeKeyService, type OpenRouterSignInAuth } from './first-run';
 import { pickSuggestedModel } from './first-run-local';
 import type { FirstRunState } from '../shared/first-run-types';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): the account object is
@@ -309,7 +309,7 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   }),
   getFocusSessionId: () => windowRegistry.getFocusSessionId(),
   // A theme change made on a phone reaches every window here, the same message a peer
-  // window sends (tests/remote-appearance-relay.test.ts). This callback's presence is
+  // window sends (tests/remote-server-connections.test.ts). This callback's presence is
   // guarded by the ast-grep rule appearance-broadcast-relays-to-remote (workspace
   // scripts/ast-grep/rules/).
   onAppearanceBroadcast: (prefs) => {
@@ -482,6 +482,8 @@ function registerFirstRunIpc(
   chatgptAuth: ChatGptAuth,
   // First-run local models: what "Use an API key" reaches for a named service.
   nativeDeps: FirstRunNativeDeps,
+  // Sign in with OpenRouter: the SAME object the Settings card drives.
+  openRouterSignIn: OpenRouterSignInAuth,
 ) {
   // Push state updates to renderer
   firstRunManager.on('state-changed', (state) => {
@@ -522,9 +524,9 @@ function registerFirstRunIpc(
         // button silently doing nothing.
         await firstRunManager.handleChatGptLogin(chatgptAuth);
       } else if (mode === 'openrouter') {
-        // The approved card has the button; the sign-in is not built yet, and
-        // a button that does nothing was review R1-6.
-        firstRunManager.handleOpenRouterNotBuilt();
+        // Opens the browser and waits; handleOpenRouterLogin writes its own
+        // lastError, so the catch below is the last resort only.
+        await firstRunManager.handleOpenRouterLogin(openRouterSignIn);
       }
     } catch (e) { log('ERROR', 'FirstRun', 'Auth failed', { error: String(e) }); }
   });
@@ -1093,7 +1095,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
   const hasUsableProvider = ipcWiring.hasUsableProvider;
 
   if (firstRunManager) {
-    registerFirstRunIpc(mainWindow, firstRunManager, chatgptAuth, ipcWiring.firstRunDeps);
+    registerFirstRunIpc(mainWindow, firstRunManager, chatgptAuth, ipcWiring.firstRunDeps, ipcWiring.openRouterSignIn);
     registerFirstRunLocalIpc(() => firstRunManager, ipcWiring.firstRunDeps);
   } else {
     // Not a first-run — but verify Claude Code can actually run.
@@ -1169,7 +1171,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
                 // an ungated arm would still open a browser tab and bind port
                 // 1455 with the feature turned off (review T4 F3).
                 else if (mode === 'chatgpt' && chatgptEnabled) await lateFirstRunManager!.handleChatGptLogin(chatgptAuth!);
-                else if (mode === 'openrouter') lateFirstRunManager!.handleOpenRouterNotBuilt();
+                else if (mode === 'openrouter') await lateFirstRunManager!.handleOpenRouterLogin(ipcWiring.openRouterSignIn);
               } catch {} });
             ipcMain.handle(IPC.FIRST_RUN_SUBMIT_API_KEY, async (_event, key: string, service?: NativeKeyService) => {
               try {

@@ -1369,7 +1369,7 @@ describe('turn-complete tokensPerSecond', () => {
 // same text the model and transcript both see, so promise and delivery can
 // never disagree.
 // ---------------------------------------------------------------------------
-describe('image tool-results (2026-08-11 spec)', () => {
+describe('image tool-results', () => {
   // Real files on disk: resolveToolImages calls fs.statSync/readFileSync
   // directly (no injection seam like history-rebuild's fakeReader), so the
   // dedupe/vanish contracts need a real mtime and a real disappearance.
@@ -1594,7 +1594,7 @@ describe('image tool-results (2026-08-11 spec)', () => {
 // discard part or all of model history — an un-cleared cache then answers
 // "already visible earlier in this conversation" for an image that is no
 // longer there, which is both a permanent non-delivery AND a false claim.
-describe('shown-image cache reset on history-discarding events (Fixes 1 & 2, 2026-08-11 review)', () => {
+describe('shown-image cache resets on history-discarding events', () => {
   function tmpImage(dir: string, name: string): string {
     const p = path.join(dir, name);
     fs.writeFileSync(p, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]));
@@ -1762,7 +1762,7 @@ describe('HarnessSession — postSteer', () => {
 // alone — a session that cannot delegate has nothing for it to name a model
 // FOR. Mirrors skill-tool-gating.test.ts's Task ON/OFF pattern.
 // ---------------------------------------------------------------------------
-describe('ModelSearch attachment mirrors Task\'s gate (Task 14)', () => {
+describe('ModelSearch attachment mirrors Task\'s gate', () => {
   const toolNames = (s: HarnessSession) => Object.keys((s as any).buildAiTools());
 
   it('canDelegate: true attaches BOTH Task and ModelSearch', () => {
@@ -1982,7 +1982,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(events.find((e) => e.type === 'turn-complete')!.data.stopReason).toBe('empty_response');
   });
 
-  it('whitespace-only step: classified empty AND kept out of history (review fix)', async () => {
+  it('whitespace-only step: classified empty AND kept out of history', async () => {
     // The history push and the retry gate MUST share one emptiness predicate.
     // If the push used truthiness ('\n\n' is truthy) while the retry used
     // trim(), the whitespace step would be pushed to history AND retried — the
@@ -2005,7 +2005,7 @@ describe('HarnessSession — empty final step recovery', () => {
     expect(JSON.stringify(history[1])).toContain('recovered');
   });
 
-  it("finishReason 'tool-calls' with ZERO parsed calls: orderly → retried, preparing card withdrawn (review fix)", async () => {
+  it("finishReason 'tool-calls' with ZERO parsed calls: orderly → retried, preparing card withdrawn", async () => {
     // A stream that announces tool use but whose every call was dropped as
     // malformed/truncated leaves toolCalls empty with finishReason
     // 'tool-calls' — the likeliest empty-step shape on small local models.
