@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
+// WHY a separate file from ThemeProvider.test.tsx: it mocks both stylesheets and
+// counts their FIRST evaluation, which needs a module graph no other ThemeProvider
+// test has already loaded them into.
 // The code-block colour sheet for the theme polarity NOT in use is never
-// loaded (2026-09-16 audit W25). Both highlight.js stylesheets used to be
+// loaded. Both highlight.js stylesheets used to be
 // static imports in the entry bundle; a module mock records when each one is
 // actually evaluated.
 import React from 'react';
