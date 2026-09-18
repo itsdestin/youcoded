@@ -1053,6 +1053,36 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
 
+  // ── Sign in with OpenRouter ───────────────────────────────────────────────
+  // `?openrouterSignIn=waiting|failed` pins the card mid-round-trip. Unpinned,
+  // a sign-in "finishes" after 2.5 s and saves a key that verifies, like the
+  // real one (design §3.5).
+  const openrouterSignInPin = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('openrouterSignIn') : null;
+  let openrouterSignIn: { state: 'idle' | 'waiting' | 'failed'; message?: string } =
+    openrouterSignInPin === 'waiting' ? { state: 'waiting' }
+    : openrouterSignInPin === 'failed' ? { state: 'failed', message: 'Sign-in timed out. Try again when you are ready.' }
+    : { state: 'idle' };
+  let openrouterSignInTimer: ReturnType<typeof setTimeout> | null = null;
+  const openrouter = {
+    supported: true,
+    status: async () => openrouterSignIn,
+    signIn: async () => {
+      if (store.refuseWrites) return false;
+      openrouterSignIn = { state: 'waiting' };
+      if (openrouterSignInTimer) clearTimeout(openrouterSignInTimer);
+      if (!openrouterSignInPin) {
+        openrouterSignInTimer = setTimeout(() => { openrouterKeySaved = true; openrouterSignIn = { state: 'idle' }; }, 2500);
+      }
+      return true;
+    },
+    cancelSignIn: async () => {
+      if (openrouterSignInTimer) clearTimeout(openrouterSignInTimer);
+      openrouterSignInTimer = null;
+      openrouterSignIn = { state: 'idle' };
+      return true;
+    },
+  };
+
   // ── Claude Code's own sign-in ──────────────────────────────────────────────
   // Pinned by `?claudeCode=` (signed-in | signed-out | apikey | not-installed |
   // unknown). Default signed-in on a Max plan, because that is the ordinary
@@ -3071,7 +3101,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search,
+    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search,
     update, dev: devMock, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
 import ProvidersSection from './ProvidersSection';
 import LocalModelsSection from './LocalModelsSection';
-import { OPENROUTER_CREDITS_URL, type ProviderHealth, type ProviderStatus } from '../../shared/provider-types';
+import { OPENROUTER_CREDITS_URL, type OpenRouterSignInStatus, type ProviderHealth, type ProviderStatus } from '../../shared/provider-types';
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
 import { claudePlanLabel } from '../../shared/claude-account-types';
 import { useClaudeStatus } from './model/availability';
@@ -427,7 +427,7 @@ function shortDate(iso: string | undefined): string | null {
  *  2026-08-31). Now the status line says what OpenRouter actually answered,
  *  and a refused key says why and what to do — in the destructive tone, since
  *  nothing OpenRouter-backed works until it is fixed. */
-function openRouterKeyWords(health: ProviderHealth | undefined): {
+function openRouterKeyWords(health: ProviderHealth | undefined, canSignIn = false): {
   status: string; detail: { text: string; tone?: 'muted' | 'bad' } | null; broken: boolean;
 } {
   if (!health) return { status: 'Checking…', detail: null, broken: false };
@@ -439,34 +439,47 @@ function openRouterKeyWords(health: ProviderHealth | undefined): {
       broken: false,
     };
   }
+  // The fix sentence names the card's own main button: "Sign in again" where
+  // sign-in works, "Replace key" where it doesn't (remote access).
+  const fix = canSignIn ? 'Sign in again, or use a different key.' : null;
   switch (health.reason) {
     case 'openrouter-key-expired': {
       const day = shortDate(health.expiresAt);
       return {
         status: 'Key expired',
-        detail: { text: `This key stopped working${day ? ` on ${day}` : ''}. Create a new key on OpenRouter, then replace it here.`, tone: 'bad' },
+        detail: { text: `This key stopped working${day ? ` on ${day}` : ''}. ${fix ?? 'Create a new key on OpenRouter, then replace it here.'}`, tone: 'bad' },
         broken: true,
       };
     }
     case 'openrouter-wrong-key-type':
       return {
         status: 'Wrong kind of key',
-        detail: { text: "This is an account-management key, which can't run models. Create a regular API key on OpenRouter, then replace it here.", tone: 'bad' },
+        detail: { text: `This is an account-management key, which can't run models. ${fix ?? 'Create a regular API key on OpenRouter, then replace it here.'}`, tone: 'bad' },
         broken: true,
       };
     case 'openrouter-forbidden':
       return {
         status: 'Key refused',
-        detail: { text: 'OpenRouter refused this key. Check it on OpenRouter, then replace it here.', tone: 'bad' },
+        detail: { text: `OpenRouter refused this key. ${fix ?? 'Check it on OpenRouter, then replace it here.'}`, tone: 'bad' },
         broken: true,
       };
     default:
       return {
         status: 'Key not accepted',
-        detail: { text: "OpenRouter didn't accept this key. Replace it to keep using OpenRouter models.", tone: 'bad' },
+        detail: { text: `OpenRouter didn't accept this key. ${fix ?? 'Replace it to keep using OpenRouter models.'}`, tone: 'bad' },
         broken: true,
       };
   }
+}
+
+/** Sign in with OpenRouter, reached with a cast like `chatgpt` above. */
+function openRouterSignInApi(): {
+  supported?: boolean;
+  status: () => Promise<OpenRouterSignInStatus>;
+  signIn: () => Promise<boolean>;
+  cancelSignIn: () => Promise<boolean>;
+} | undefined {
+  return (window as any).claude?.openrouter;
 }
 
 export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) {
@@ -475,6 +488,11 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
   const [openrouter, setOpenrouter] = useState<ProviderStatus | null | undefined>(undefined);
   const [connectOpen, setConnectOpen] = useState(false);
   const [testNote, setTestNote] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null);
+  // Sign in with OpenRouter (design §3.5). Gated on `supported === true` like
+  // the ChatGPT card: over remote access there is no browser on this computer
+  // for the phone to use, so the card keeps only the paste-a-key route there.
+  const signInSupported = openRouterSignInApi()?.supported === true;
+  const [signIn, setSignIn] = useState<OpenRouterSignInStatus>({ state: 'idle' });
 
   const refresh = useCallback(async () => {
     try {
@@ -486,8 +504,45 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
 
+  const readSignIn = useCallback(async () => {
+    try { setSignIn(await openRouterSignInApi()!.status()); } catch { /* keep the last state */ }
+  }, []);
+  useEffect(() => { if (signInSupported) void readSignIn(); }, [signInSupported, readSignIn]);
+  // While the browser is open, poll — the sign-in finishes in a tab this app
+  // does not own. When it stops waiting, re-read the row (a new key, and its
+  // check) and drop the cached provider types so a new session sees the models.
+  const wasWaiting = useRef(false);
+  useEffect(() => {
+    if (signIn.state === 'waiting') {
+      wasWaiting.current = true;
+      const t = setInterval(() => { void readSignIn(); }, 1000);
+      return () => clearInterval(t);
+    }
+    if (wasWaiting.current) {
+      wasWaiting.current = false;
+      void refresh();
+      invalidateProviderTypeCache();
+    }
+  }, [signIn.state, readSignIn, refresh]);
+
+  const startSignIn = async () => {
+    setTestNote(null);
+    try {
+      await openRouterSignInApi()!.signIn();
+    } catch (e) {
+      setSignIn({ state: 'failed', message: e instanceof Error ? e.message : 'Could not open the sign-in page.' });
+      return;
+    }
+    await readSignIn();
+  };
+  const cancelSignIn = async () => {
+    try { await openRouterSignInApi()!.cancelSignIn(); } catch { /* the poll shows the truth */ }
+    await readSignIn();
+  };
+
   const connected = openrouter?.hasKey === true;
-  const words = openRouterKeyWords(openrouter?.health);
+  const words = openRouterKeyWords(openrouter?.health, signInSupported);
+  const waiting = signIn.state === 'waiting';
 
   const runTest = async () => {
     if (!openrouter) return;
@@ -525,15 +580,36 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
                   your sessions through it. You pay OpenRouter directly for what you use. You can also add your
                   own direct provider keys or a custom endpoint below.
                 </p>
+                <p>
+                  Signing in makes a key named YouCoded in your OpenRouter account. Signing in again makes a
+                  new one; old ones stay on OpenRouter's Keys page until you delete them there.
+                </p>
               </>
             ),
           }}
-          status={openrouter === undefined ? 'Checking…' : connected ? words.status : 'Not connected'}
-          account={connected ? OPENROUTER_CREDITS_URL : undefined}
-          detail={testNote
-            ? { text: testNote.text, tone: testNote.tone === 'ok' ? 'muted' : 'bad' }
+          status={waiting ? (
+            <span className="inline-flex items-center gap-1.5">
+              <BrailleSpinner size="sm" />
+              Waiting for the browser…
+            </span>
+          ) : openrouter === undefined ? 'Checking…' : connected ? words.status : 'Not connected'}
+          account={connected && !waiting ? OPENROUTER_CREDITS_URL : undefined}
+          detail={waiting ? null
+            : signIn.state === 'failed' && signIn.message ? { text: signIn.message, tone: 'bad' }
+            : testNote ? { text: testNote.text, tone: testNote.tone === 'ok' ? 'muted' : 'bad' }
             : connected ? words.detail : null}
-          action={connected ? (
+          action={waiting ? (
+            <Button variant="secondary" size="sm" onClick={() => void cancelSignIn()}>
+              Cancel
+            </Button>
+          ) : signInSupported && (!connected || words.broken) ? (
+            // Signing in is the main way in (design §3.5): one click, approve in
+            // the browser, done — no key to copy. A refused key gets the same
+            // button, worded as a retry.
+            <Button size="sm" onClick={() => void startSignIn()}>
+              {connected ? 'Sign in again' : 'Sign in with OpenRouter'}
+            </Button>
+          ) : connected ? (
             // A refused key makes Replace key the one thing to do, so it takes
             // the primary style; on a working key it stays an outline peer.
             <Button variant={words.broken ? 'primary' : 'secondary'} size="sm" onClick={() => { setTestNote(null); setConnectOpen(true); }}>
@@ -545,10 +621,21 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
             </Button>
           )}
         >
-          {connected && (
-            <Button variant="secondary" size="sm" onClick={() => void runTest()}>
-              Test
-            </Button>
+          {!waiting && (connected || signInSupported) && (
+            <div className="flex items-center gap-1.5">
+              {connected && (
+                <Button variant="secondary" size="sm" onClick={() => void runTest()}>
+                  Test
+                </Button>
+              )}
+              {/* The paste route stays one click away whenever sign-in holds
+                  the main button (design §3.5: manual key entry is never removed). */}
+              {signInSupported && (!connected || words.broken) && (
+                <Button variant="secondary" size="sm" onClick={() => { setTestNote(null); setConnectOpen(true); }}>
+                  {connected ? 'Use a different key' : 'Use an API key instead'}
+                </Button>
+              )}
+            </div>
           )}
         </ProviderRow>
       </div>
@@ -568,6 +655,7 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
           hasKey={connected}
           onClose={() => setConnectOpen(false)}
           onSaved={refresh}
+          onSignIn={signInSupported ? () => { setConnectOpen(false); void startSignIn(); } : undefined}
         />
       )}
     </>
@@ -578,12 +666,15 @@ export function OpenRouterBlock({ keysHeading }: { keysHeading?: string } = {}) 
 // Connect-to-OpenRouter button. Layer 3 so it stacks above the L2 Model
 // Providers popup. Saving sets the key and verifies it before closing.
 function ConnectOpenRouterModal({
-  providerId, hasKey, onClose, onSaved,
+  providerId, hasKey, onClose, onSaved, onSignIn,
 }: {
   providerId: string;
   hasKey: boolean;
   onClose: () => void;
   onSaved: () => Promise<void>;
+  /** Present where sign-in works: the dialog leads with it, so a user who
+   *  opened "Replace key" is offered the no-copying route first. */
+  onSignIn?: () => void;
 }) {
   useEscClose(true, onClose);
   const [keyDraft, setKeyDraft] = useState('');
@@ -633,6 +724,14 @@ function ConnectOpenRouterModal({
         scrollBody={false}
       >
         <div className="p-4 space-y-3">
+          {onSignIn && (
+            <>
+              <Button onClick={onSignIn} className="w-full py-2">
+                Sign in with OpenRouter
+              </Button>
+              <p className="text-3xs text-fg-muted text-center">or paste an API key</p>
+            </>
+          )}
           <ol className="text-2xs text-fg-2 leading-relaxed space-y-1 list-decimal pl-4">
             <li>
               Create a free account at{' '}

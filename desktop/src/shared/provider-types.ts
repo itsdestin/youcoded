@@ -31,6 +31,16 @@ export interface ProviderHealth {
   checkedAt: number;
 }
 
+/** Sign in with OpenRouter (connection-trust design §3.5): a browser
+ *  round-trip that ends with OpenRouter handing the app a key. What the card
+ *  polls while the browser is open. The key itself never crosses to the screen.
+ *  WHY `failed` carries a message: the card says what went wrong in plain
+ *  words, then offers the button again. */
+export interface OpenRouterSignInStatus {
+  state: 'idle' | 'waiting' | 'failed';
+  message?: string;
+}
+
 export interface ProviderConfig {
   id: string;             // 'local' | 'openrouter' | ulid for user-created entries
   type: ProviderType;
