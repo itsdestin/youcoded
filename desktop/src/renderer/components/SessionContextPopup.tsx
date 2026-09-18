@@ -176,7 +176,11 @@ function CutBlock({ fullText, supplied, what }: { fullText?: string | null; supp
       </div>
       <div className="border-t border-edge-dim">
         {view === 'cut'
-          ? <div className="max-h-64 overflow-y-auto bg-well"><UnifiedDiff oldStr={fullText} newStr={supplied} /></div>
+          // fill: this wrapper is already the scroll surface (max-h-64
+          // overflow-y-auto) — without fill, UnifiedDiff stacked its own
+          // 15-line cap + button inside it, a second scrollbar hiding the
+          // rest of the cut text (review round 1, 2026-09-18).
+          ? <div className="max-h-64 overflow-y-auto bg-well"><UnifiedDiff oldStr={fullText} newStr={supplied} fill /></div>
           : <Md text={supplied} flush />}
       </div>
     </>

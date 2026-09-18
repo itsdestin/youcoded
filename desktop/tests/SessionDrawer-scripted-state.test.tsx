@@ -5,10 +5,10 @@
 // ArtifactContext for the whole file, and those cases need the real one.
 import React, { useState } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, screen, waitFor, act } from '@testing-library/react';
+import { render, cleanup, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { NARROW_VIEWPORT_QUERY } from '../src/renderer/hooks/use-narrow-viewport';
 
-const mocks = vi.hoisted(() => ({ state: {} as any, dispatch: vi.fn(), listeners: new Set<() => void>(), bodyRuns: 0 }));
+const mocks = vi.hoisted(() => ({ state: {} as any, dispatch: vi.fn(), listeners: new Set<() => void>(), bodyRuns: 0, rowRenders: 0 }));
 
 // WHY a subscribing fake and not a plain `() => ({ state })`: SessionDrawer is
 // React.memo'd, so re-rendering it with the same props is skipped — a changed
@@ -35,6 +35,17 @@ vi.mock('../src/renderer/state/ArtifactContext', async () => {
       return { state: mocks.state, dispatch: mocks.dispatch };
     },
   };
+});
+
+// WHY: ArtifactListItem (a file row) calls formatRelativeTime once in its own
+// body on every render (and nowhere else while the list is the only thing on
+// screen — the active-file footer that also calls it only mounts once a file is
+// open). Counting calls to it counts ROW renders the same way `bodyRuns` above
+// counts the drawer's own — a memo bail-out never reaches this call. The real
+// function still runs, so every other case here sees unchanged output.
+vi.mock('../src/renderer/utils/format-time', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/renderer/utils/format-time')>();
+  return { ...real, formatRelativeTime: (w: number | string) => { mocks.rowRenders++; return real.formatRelativeTime(w); } };
 });
 
 import { SessionDrawer } from '../src/renderer/components/SessionDrawer';
@@ -300,5 +311,158 @@ describe('the file pane and a streaming reply', () => {
     for (let i = 0; i < 40; i++) await act(async () => { bump(); });
 
     expect(mocks.bodyRuns).toBe(0);
+  });
+
+  // WHY: the file ROWS (ArtifactListItem) — half 1 above pins the whole
+  // drawer skipping a PARENT re-render; this pins each row skipping the
+  // DRAWER'S OWN re-renders (typing in its search box, toggling a filter…),
+  // which is a different failure mode: `listedArtifacts.map()` used to hand
+  // every row a freshly-built `onSelect`/`onRemove` closure on every one of
+  // those renders, so a keystroke redrew every row in the list whether or not
+  // that row's own file had changed.
+  function mkArtifact(id: string, name: string, minutesAgo: number): any {
+    const ts = new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    return {
+      id, path: `${ROOT}/${name}`, kind: 'internal', absolutePath: null,
+      lastModified: ts, status: 'active',
+      versions: [{ id: `v-${id}`, ts, sessionId: SESSION, type: 'create', author: 'agent' }],
+      comments: [], tags: [],
+    };
+  }
+
+  async function renderSettledDrawer() {
+    const utils = render(
+      <SessionDrawer sessionId={SESSION} cwd={ROOT} projectRoot={ROOT} projectId="p1" projectName="alpha" />
+    );
+    await waitFor(() => expect((window as any).claude.artifacts.checkExistence).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
+    return utils;
+  }
+
+  describe('file rows skip the drawer\'s own re-renders', () => {
+    beforeEach(() => {
+      mocks.state.sessionArtifacts[SESSION] = [
+        mkArtifact('a1', 'perf-small.ts', 5),
+        mkArtifact('a2', 'perf-big.ts', 10),
+      ];
+      (window as any).claude.artifacts.removeRecord = vi.fn().mockResolvedValue({ ok: true });
+    });
+
+    it('typing in the drawer search re-renders only rows whose visibility changed', async () => {
+      await renderSettledDrawer();
+      // Sanity: the probe is actually wired up (both rows painted once at mount)
+      // — an assertion that stayed green with a broken counter would prove nothing.
+      expect(mocks.rowRenders).toBeGreaterThan(0);
+      mocks.rowRenders = 0;
+
+      // Both fixtures survive every query used below ("perf" matches both file
+      // names), so their VISIBILITY never changes — the nearest testable form
+      // of the title's claim is therefore the zero-changed-rows case: neither
+      // row should redraw at all.
+      const search = screen.getByLabelText('Search files');
+      fireEvent.change(search, { target: { value: 'perf' } });
+      await act(async () => {});
+
+      expect(mocks.rowRenders).toBe(0);
+    });
+
+    it('a shared row handler still uses the CURRENT sessionId, not one frozen at the first render', async () => {
+      // Every row is handed the SAME onSelectId/onRemoveId for the
+      // drawer's whole lifetime — unlike SkillCard's per-render-swapped
+      // handler, staleness here would come from the STABLE callback closing
+      // over a render-scoped value directly instead of reading it through
+      // `rowActions.current`. sessionId is the cleanest value to prove this
+      // with: it is a genuine SessionDrawer PROP, so re-rendering with a
+      // DIFFERENT one is guaranteed to run the component body fresh (its own
+      // React.memo cannot bail when a prop differs), while the component
+      // instance — and so onSelectId's identity — stays the SAME across that
+      // prop change, exactly the shape a "skipped render, stale value" bug
+      // would hide in.
+      const SESSION2 = 's2';
+      mocks.state.drawerOpenBySession[SESSION2] = true;
+      mocks.state.sessionArtifacts[SESSION2] = [mkArtifact('b1', 'other.ts', 1)];
+
+      const { rerender } = await renderSettledDrawer();
+      fireEvent.click(screen.getByText('perf-small.ts').closest('button')!);
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'ACTIVE_ARTIFACT_SET', sessionId: SESSION, artifactId: 'a1' })
+      );
+      mocks.dispatch.mockClear();
+
+      rerender(
+        <SessionDrawer sessionId={SESSION2} cwd={ROOT} projectRoot={ROOT} projectId="p1" projectName="alpha" />
+      );
+      await waitFor(() => expect(screen.getByText('other.ts')).toBeTruthy());
+
+      fireEvent.click(screen.getByText('other.ts').closest('button')!);
+      // A stale callback (closed over SESSION='s1' from the very first render)
+      // would dispatch with sessionId 's1' here. The fresh one reads the
+      // CURRENT sessionId through rowActions.current.
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'ACTIVE_ARTIFACT_SET', sessionId: SESSION2, artifactId: 'b1' })
+      );
+    });
+
+    // Mirrors the select-freshness test above, but for onRemoveId /
+    // handleRemoveRecord: the exact same "stable callback must read through
+    // rowActions.current, not close over a render-scoped value" risk applies
+    // here — and handleRemoveRecord ALSO depends on activeArtifactId (not just
+    // sessionId), so this additionally proves "removing the currently active
+    // artifact clears it" reads the CURRENT activeArtifactId, not one frozen
+    // at handleRemoveRecord's very first identity.
+    it('a shared row handler still removes using the CURRENT sessionId and active-artifact state, not values frozen at the first render', async () => {
+      const SESSION2 = 's2';
+      mocks.state.drawerOpenBySession[SESSION2] = true;
+      mocks.state.sessionArtifacts[SESSION2] = [mkArtifact('b1', 'other.ts', 1)];
+      // Selecting b1 mounts the content pane, which reads the file through
+      // this handler — unrelated to what this test pins, so it just needs an
+      // answer.
+      (window as any).claude.artifacts.get = vi.fn().mockResolvedValue({ ok: true, content: '' });
+
+      const { rerender } = await renderSettledDrawer();
+
+      // Same trick as the select test: rerendering the SAME <SessionDrawer>
+      // instance with a different sessionId PROP guarantees the component body
+      // reruns fresh (React.memo only wraps the ROW, not the drawer), while
+      // onSelectId/onRemoveId's identities — both useCallback(fn, []) — stay
+      // the SAME functions across that change.
+      rerender(
+        <SessionDrawer sessionId={SESSION2} cwd={ROOT} projectRoot={ROOT} projectId="p1" projectName="alpha" />
+      );
+      await waitFor(() => expect(screen.getByText('other.ts')).toBeTruthy());
+
+      // Select b1 so it becomes s2's active artifact — a non-narrow select
+      // keeps the list open (keepListOpen = !narrowViewport), so the row stays
+      // reachable for the remove click below.
+      fireEvent.click(screen.getByText('other.ts').closest('button')!);
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'ACTIVE_ARTIFACT_SET', sessionId: SESSION2, artifactId: 'b1' })
+      );
+      mocks.dispatch.mockClear();
+
+      // Apply what the real reducer would do with that action. SessionDrawer
+      // itself is ALSO React.memo'd (half 1 above), so a rerender with the SAME
+      // sessionId prop would bail out without picking this up — a keystroke in
+      // the (already-open) search box is a genuine internal state change that
+      // forces a fresh render instead, the same way it would in the real app
+      // once the reducer's state updates flowed back down as a new snapshot.
+      mocks.state.activeArtifactBySession[SESSION2] = 'b1';
+      fireEvent.change(screen.getByLabelText('Search files'), { target: { value: 'other' } });
+      await act(async () => {});
+
+      fireEvent.click(screen.getByRole('button', { name: /^Remove other\.ts from this list/ }));
+
+      // A stale onRemoveId would still call removeRecord — its projectRoot
+      // never changes in this fixture — but the ACTIVE_ARTIFACT_CLEARED
+      // dispatch is where the freeze shows: it would either never fire (frozen
+      // activeArtifactId=null != 'b1') or fire with sessionId 's1'. The fresh
+      // handler reads both current values through rowActions.current.
+      await waitFor(() =>
+        expect(mocks.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'ACTIVE_ARTIFACT_CLEARED', sessionId: SESSION2 })
+        )
+      );
+      expect((window as any).claude.artifacts.removeRecord).toHaveBeenCalledWith(ROOT, 'b1');
+    });
   });
 });

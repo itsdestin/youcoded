@@ -145,7 +145,7 @@ function defaultPast(): PastSession[] {
 // to require a temporary source edit that had to be remembered and reverted;
 // the default stays 220 on purpose, because that is the size at which the
 // stress scenario is still usable for design work.
-function stressRowCount(): number {
+export function stressRowCount(): number {
   // The fixture factories are unit-tested under vitest's `node` environment,
   // where there is no `location` — reading it unguarded fails workbench-store.test.ts.
   if (typeof location === 'undefined') return 220;
@@ -174,6 +174,21 @@ function stressPast(): PastSession[] {
       extra,
     );
   });
+}
+
+// Render-cost plan (docs/archive/investigations/2026-09-18-list-render-cost-sweep.md,
+// Task 0 step 2b): generated model rows so the model picker's search results
+// reach the same size as the other stress lists. Every label contains "a" on
+// purpose — the DOM-size sweep types "a", and a sample the search filters down
+// to a handful would prove nothing. Same CatalogRow shape as fixtures/providers.ts;
+// they sit on the ready OpenRouter provider so the picker lists them.
+function stressCatalog(): CatalogRow[] {
+  const families = ['Atlas', 'Aurora', 'Nova Alpha', 'Galaxy', 'Panda', 'Llama Variant'];
+  return Array.from({ length: stressRowCount() }, (_, i) => ({
+    id: `stress/${families[i % families.length].toLowerCase().replace(/ /g, '-')}-${i}`,
+    providerId: 'pv-openrouter',
+    label: `${families[i % families.length]} ${i}`,
+  }));
 }
 
 // Landing-page embed (scenario=site): two short past rows so the Resume list
@@ -259,7 +274,11 @@ export function seed(scenario: ScenarioId): MockState {
       // absent, which is the state the empty-provider guidance renders for.
       return { ...base, providers: base.providers.map((p) => ({ ...p, ready: false })), catalog: [] };
     case 'stress':
-      return { ...base, past: stressPast(), permissions: stressPermissions() };
+      // WHY catalog too (render-cost plan, Task 0 step 2b, 2026-09-18): the model
+      // picker's search list is one of the unbounded surfaces that plan fixes, and
+      // with the default ~11 models it could never show the cost — so `stress`
+      // grows the catalog to `?stressRows=` rows like the Resume list.
+      return { ...base, past: stressPast(), permissions: stressPermissions(), catalog: [...base.catalog, ...stressCatalog()] };
     case 'site':
       // Landing-page embed: providers/catalog/tags/defaults as default, one
       // native session, two past rows, no pre-set meta.

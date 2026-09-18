@@ -17,6 +17,7 @@ import { ErrorState } from './ui/states';
 import { BugReportPopup } from './development/BugReportPopup';
 import type { ReportContext } from './development/ReportDesign';
 import { chatReducer } from '../state/chat-reducer';
+import { useEntryFolding } from '../hooks/use-entry-folding';
 import type { ChatAction, ChatState } from '../state/chat-types';
 import { COPY, previewSessionKey, type ChatsearchProvider } from '../../shared/chatsearch-refs';
 import type { TranscriptPageResult } from '../../shared/types';
@@ -65,6 +66,14 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
   const [olderError, setOlderError] = useState<{ message: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  // Perf cycle 3, extended to previews: a distant entry renders as a same-
+  // height spacer instead of its full body (use-entry-folding.ts) — this pane
+  // gets slower the further back a read scrolls otherwise, same as the chat.
+  // WHY always enabled (unlike ChatView's `!findOpen`): no find bar reaches a
+  // preview pane — `ContentFindBar` only hosts in ChatView and the drawer's
+  // own artifact branch, never here — so there is no DOM-walking search this
+  // could ever need to suspend for.
+  const folding = useEntryFolding(true, scrollRef);
   // Set when the first page lands: jump to the newest message once it is laid out.
   const jumpToEnd = useRef(false);
   // Distance from the BOTTOM, captured just before an older page is prepended,
@@ -239,7 +248,7 @@ export default function SessionPreviewPane({ provider, id, title, onSettled, pro
               </div>
             )}
             {hasMore && !olderError && <div ref={sentinelRef} data-history-sentinel className="h-px" aria-hidden="true" />}
-            <PreviewTimeline state={session} sessionId={key} provider={provider} />
+            <PreviewTimeline state={session} sessionId={key} provider={provider} folding={folding} />
           </div>
         )}
       </div>

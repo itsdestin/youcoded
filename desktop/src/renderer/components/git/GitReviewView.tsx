@@ -245,7 +245,7 @@ export function GitReviewView({
               // adds only the height cap, no second border. The action row
               // below stays a sibling of this div, not a child, so it's always
               // visible.
-              <div className="max-h-[45vh] overflow-y-auto">
+              <div className="scroll-box-cap overflow-y-auto">
                 <UnifiedDiff oldStr="" newStr="" structuredPatch={uncommitted.hunks} fill />
               </div>
             )}
@@ -335,7 +335,7 @@ export function GitReviewView({
               {/* Same single-scroll-surface wrapper as the uncommitted card
                   above — see the WHY comment there. */}
               {Array.isArray(body) && (
-                <div className="max-h-[45vh] overflow-y-auto">
+                <div className="scroll-box-cap overflow-y-auto">
                   <UnifiedDiff oldStr="" newStr="" structuredPatch={body} fill />
                 </div>
               )}

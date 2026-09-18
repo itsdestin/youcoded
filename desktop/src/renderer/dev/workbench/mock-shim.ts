@@ -21,9 +21,11 @@ import {
   CONTENT as ARTIFACT_CONTENT, SAMPLE_PNG_BASE64, SAMPLE_SVG, makeDetailPngBase64, makeSamplePdfBase64, contextGroups,
   studentProjects, studentProjectsWithCounts, studentAllFiles, studentSessionFiles, studentContextGroups,
 } from './fixtures/artifacts';
+import type { ArtifactRecord } from '../../../shared/artifacts/types';
 import { resolveFixture, CS_ERR_READ } from './fixtures/chatsearch';
 import { SHEET_BEFORE, SHEET_AFTER } from './fixtures/sheets';
 import type { MockState, MockSessionMeta } from './scenarios';
+import { stressRowCount } from './scenarios';
 import { specialistRoster, delegatedModels as seedDelegatedModels } from './fixtures/specialists';
 import { MARKETPLACE_PLUGINS, MARKETPLACE_THEMES, INSTALLED_SKILLS, INSTALLED_PACKAGES, FEATURED } from './fixtures/marketplace/registry';
 // Scripted replies (site scenario / phase-2 play-through): a typed message
@@ -38,7 +40,7 @@ import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
 // worker uses, so what Destin reviews in the workbench is the shipped grey/solid
 // rule rather than a lookalike (it used to grey the last two words, full stop).
 import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
-import { buildCatalog } from './fixtures/marketplace/catalog';
+import { buildCatalog, buildStressCatalog } from './fixtures/marketplace/catalog';
 // `?guide=tip:<id>` (below): fire one first-run tip on demand for a photograph.
 import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
@@ -1971,6 +1973,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // second past row in that folder would match by projectPath and break the
   // conversations beat's one-result search.
   const conversationsIn = (projectPath: string) => {
+    // WHY (render-cost plan, Task 0 step 2b): in `stress` the FIRST project
+    // (artifactProjects()[0], the youcoded repo) holds every past row, so its
+    // Conversations tab reaches `?stressRows=` — the size of the freeze the plan
+    // fixes. Filtering left it a third of the rows. The rows keep their own
+    // sessionIds, so opening one still previews the same conversation the
+    // Resume browser shows.
+    // WHY this branch skips the `studentSwitch` live-session merge below (fix
+    // round 1, review): `&scenario=stress&student=1` is not a combination any
+    // scene or sweep uses — stress drives the render-cost sweep, student drives
+    // the promo persona — so the two are not meant to combine and this early
+    // return never needs to.
+    if (activeScenario === 'stress' && projectPath === artifactProjects()[0].path) {
+      return store.getState().past.map((p) => ({ ...p, projectPath, projectSlug: projectPath.split('/').pop()! }));
+    }
     const past = store.getState().past
       .filter((p) => p.projectPath === projectPath);
     if (!studentSwitch) return past;
@@ -1981,6 +1997,29 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         lastModified: Date.now() - 30 * 60_000, size: 2048, provider: x.provider,
       }));
     return [...live, ...past];
+  };
+  // Files tab (fix round 1, render-cost plan Task 0, implementer concern 3):
+  // in `stress` the FIRST project's file listing also reaches `stressRowCount()`
+  // rows, same as its Conversations tab above — otherwise Files, search "e"
+  // sweeps ~12 fixture files and proves nothing about the flat-results render
+  // path at scale (Task 5 of the plan). Every generated name contains "e"
+  // ("stress-file-e-N.md") so the one-letter search the sweep types matches
+  // every row, not a filtered subset. `discovered: true` (no sidecar versions)
+  // matches how `allFiles()`'s DISCOVERED half is shaped — same fixture shape,
+  // just generated instead of hand-written.
+  const stressFiles = (): ArtifactRecord[] => Array.from({ length: stressRowCount() }, (_, i) => {
+    const path = `stress-files/stress-file-e-${i}.md`;
+    return {
+      id: path, path, kind: 'internal' as const, absolutePath: null,
+      lastModified: new Date(SYNC_NOW - i * 60_000).toISOString(),
+      status: 'active' as const, versions: [], comments: [], tags: [], discovered: true,
+    };
+  });
+  const filesIn = (projectId: string): ArtifactRecord[] => {
+    if (activeScenario === 'stress' && projectId === artifactProjects()[0].path) {
+      return [...allFiles(projectId), ...stressFiles()];
+    }
+    return studentSwitch ? studentAllFiles(projectId) : allFiles(projectId);
   };
   const project = {
     listConversations: async (projectPath: string) => ({
@@ -2068,7 +2107,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // tells them which conversation it is. The words are invented; nothing
       // here is read off disk.
       const sessionId = `preview:${req.id}`;
-      const TOTAL = 24;
+      // WHY stress scales TOTAL (fix round 1, render-cost plan Task 0 concern 3):
+      // a long conversation needs to exist for the preview's paging to have
+      // something real to page through. PAGE stays fixed — SessionPreviewPane.tsx
+      // reads one page per `chatsearch:read` call and pages backwards only as
+      // the reader scrolls (never "load everything"), so a bigger TOTAL alone
+      // does NOT grow the DOM-size sweep's first-load count; it grows `hasMore`
+      // depth instead. Recorded honestly in the sweep table, not raised here.
+      const TOTAL = activeScenario === 'stress' ? stressRowCount() : 24;
       const PAGE = 10;
       const turnsFor = studentSwitch ? STUDENT_TURNS : CHAT_TURNS;
       const eventsFor = (i: number) => {
@@ -2424,11 +2470,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return { ok: true, artifacts: withRemoteRows(studentSwitch ? studentSessionFiles() : sessionArtifacts(sessionId)) };
     },
     listProject: async (projectId: string) => ({
-      ok: true, artifacts: studentSwitch ? studentAllFiles(projectId) : allFiles(projectId),
+      ok: true, artifacts: filesIn(projectId),
     }),
     listAllFiles: async (projectId: string) => {
       if (filesRefused()) return refuseAsToday('artifacts:list-all-files');
-      return { ok: true, files: withRemoteRows(studentSwitch ? studentAllFiles(projectId) : allFiles(projectId)), truncated: false };
+      return { ok: true, files: withRemoteRows(filesIn(projectId)), truncated: false };
     },
     // artifacts:resolve-path — one tapped chat path. Same answer shapes as the
     // real lookup (read-service.ts resolveArtifactPath): the fixture row whose
@@ -2438,7 +2484,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       if (filesRefused()) return refuseAsToday('artifacts:resolve-path');
       const root = projectRoot.replace(/\/+$/, '');
       const abs = filePath.startsWith('/') ? filePath : `${root}/${filePath.replace(/^\.\//, '')}`;
-      const rows = studentSwitch ? studentAllFiles(projectRoot) : allFiles(projectRoot);
+      const rows = filesIn(projectRoot);
       const hit = rows.find((r) => (r.kind === 'internal' ? `${root}/${r.path}` : r.absolutePath) === abs);
       if (hit) return { ok: true, artifact: hit };
       return { ok: false, error: abs.startsWith(`${root}/`) ? 'not-found' : 'outside-project' };
@@ -2880,7 +2926,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // (type / origin / scan / capabilities), and the list also carries the
     // member rows (skills, specialists, tools INSIDE bundles) plus a few
     // standalone items — the shape the real catalog will return once built.
-    listMarketplace: async () => (marketplaceEmpty ? [] : buildCatalog(MARKETPLACE_PLUGINS)),
+    // WHY the stress branch (render-cost plan, Task 0 step 2b): `?stressRows=`
+    // must reach the Marketplace too, or the DOM-size sweep measures ~60 cards
+    // and a whole-list render looks cheap.
+    listMarketplace: async () => (marketplaceEmpty ? []
+      : activeScenario === 'stress' ? buildStressCatalog(MARKETPLACE_PLUGINS, stressRowCount())
+      : buildCatalog(MARKETPLACE_PLUGINS)),
     list: async () => (marketplaceEmpty ? [] : installedSkills.map((s) => ({ ...s }))),
     // Promo (marketplace beat): Install STICKS for the page's lifetime. Before
     // this both channels fell to the catch-all, so the detail button flashed

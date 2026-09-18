@@ -11,6 +11,12 @@ import { detectDelimiter, parseDelimited } from './csv-parse';
 import { PAPER, GUTTER_BG, GRID, GUTTER_FG, SEL, NOTE_FG, NOTE_BG } from './sheet-theme';
 
 const MAX_ROWS = 2000;
+// Safety cap — matches XlsxView (XlsxView.tsx:14-15). CSV rows have no upper
+// bound on column count (a stray delimiter in one bad row inflates every
+// row's max), so an agent-produced or malformed file could otherwise render
+// a million-cell DOM. CsvView has no edit/save path, so clipping the display
+// never loses data — the file on disk is untouched.
+const MAX_COLS = 100;
 const MIN_ROWS = 50;
 const MIN_COLS = 26; // A … Z
 
@@ -21,15 +27,22 @@ export function CsvView({ path, content }: ArtifactViewProps) {
     if (content == null) return null;
     const ext = path.split('.').pop()?.toLowerCase();
     const rows = parseDelimited(content, detectDelimiter(content, ext));
-    const truncated = rows.length > MAX_ROWS;
-    const used = truncated ? rows.slice(0, MAX_ROWS) : rows;
-    const usedCols = used.reduce((m, r) => Math.max(m, r.length), 0);
+    const rowsTruncated = rows.length > MAX_ROWS;
+    const usedRows = rowsTruncated ? rows.slice(0, MAX_ROWS) : rows;
+    const rawCols = usedRows.reduce((m, r) => Math.max(m, r.length), 0);
+    const colsTruncated = rawCols > MAX_COLS;
+    const usedCols = Math.min(rawCols, MAX_COLS);
+    // Clip each row too, not just colCount — a 300-column row otherwise stays
+    // in memory in full even though only 100 columns ever render.
+    const used = colsTruncated ? usedRows.map((r) => r.slice(0, MAX_COLS)) : usedRows;
     return {
       rows: used,
       usedCols,
       rowCount: Math.min(Math.max(used.length, MIN_ROWS), MAX_ROWS),
       colCount: Math.max(usedCols, MIN_COLS),
-      truncated,
+      truncated: rowsTruncated || colsTruncated,
+      rowsTruncated,
+      colsTruncated,
     };
   }, [content, path]);
 
@@ -86,8 +99,14 @@ export function CsvView({ path, content }: ArtifactViewProps) {
           </tbody>
         </table>
         {grid.truncated && (
+          // Same wording XlsxView shows for its own row/column cap, so the two
+          // spreadsheet-style viewers read as one consistent behavior. WHY name
+          // only the limit hit: a 5,000-row, 4-column file is not missing any
+          // columns, and saying "× 100 columns" told the reader it was.
           <div style={{ padding: '8px 12px', fontSize: 12, color: NOTE_FG, background: NOTE_BG }}>
-            Large file — showing the first {MAX_ROWS.toLocaleString()} rows. Use “Open externally” for the full file.
+            Large sheet — showing the first {grid.rowsTruncated && grid.colsTruncated
+              ? `${MAX_ROWS.toLocaleString()} rows × ${MAX_COLS} columns`
+              : grid.rowsTruncated ? `${MAX_ROWS.toLocaleString()} rows` : `${MAX_COLS} columns`}. Use “Open externally” for the full file.
           </div>
         )}
       </div>

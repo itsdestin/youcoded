@@ -35,6 +35,8 @@ interface SheetVM {
   rows: { rowNum: number; cells: CellVM[] }[];
   byKey: Map<string, CellVM>;
   truncated: boolean;
+  rowsTruncated: boolean;
+  colsTruncated: boolean;
 }
 
 function buildSheet(ws: any): SheetVM {
@@ -44,7 +46,9 @@ function buildSheet(ws: any): SheetVM {
   const usedCols = Math.min(ws.columnCount || 0, MAX_COLS);
   const rowCount = Math.min(Math.max(usedRows, MIN_ROWS), MAX_ROWS);
   const colCount = Math.min(Math.max(usedCols, MIN_COLS), MAX_COLS);
-  const truncated = (ws.rowCount || 0) > MAX_ROWS || (ws.columnCount || 0) > MAX_COLS;
+  const rowsTruncated = (ws.rowCount || 0) > MAX_ROWS;
+  const colsTruncated = (ws.columnCount || 0) > MAX_COLS;
+  const truncated = rowsTruncated || colsTruncated;
   const merges = parseMerges(ws.model?.merges);
 
   const colWidths: number[] = [0];
@@ -126,7 +130,7 @@ function buildSheet(ws: any): SheetVM {
     }
     rows.push({ rowNum: r, cells });
   }
-  return { name: ws.name || 'Sheet', colCount, colWidths, rows, byKey, truncated };
+  return { name: ws.name || 'Sheet', colCount, colWidths, rows, byKey, truncated, rowsTruncated, colsTruncated };
 }
 
 export function XlsxView({ absolutePath }: ArtifactViewProps) {
@@ -244,8 +248,12 @@ function XlsxSheets({ bytes }: { bytes: Uint8Array }) {
           </tbody>
         </table>
         {sheet.truncated && (
+          // WHY name only the limit hit (matches CsvView): a tall, narrow sheet
+          // is not missing any columns, so the note must not say it is.
           <div style={{ padding: '8px 12px', fontSize: 12, color: NOTE_FG, background: NOTE_BG }}>
-            Large sheet — showing the first {MAX_ROWS.toLocaleString()} rows × {MAX_COLS} columns. Use “Open externally” for the full file.
+            Large sheet — showing the first {sheet.rowsTruncated && sheet.colsTruncated
+              ? `${MAX_ROWS.toLocaleString()} rows × ${MAX_COLS} columns`
+              : sheet.rowsTruncated ? `${MAX_ROWS.toLocaleString()} rows` : `${MAX_COLS} columns`}. Use “Open externally” for the full file.
           </div>
         )}
       </div>

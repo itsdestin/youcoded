@@ -15,7 +15,7 @@
 // tabs are filled by later tasks. The project-deletion modal + project list stay
 // here (project-scoped). The "+ Add external file" affordance moved into
 // FilesTab (artifact-scoped) since it operates on the active project's artifacts.
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
@@ -30,7 +30,7 @@ import type { FileSortKey, FileViewMode } from './tabs/FilesTab';
 
 // One project:list-conversations row — a plain past session.
 type ConversationSummary = PastSession;
-import { FilesTab } from './tabs/FilesTab';
+import { FilesTab, PV_SESSION } from './tabs/FilesTab';
 import { ConversationsTab } from './tabs/ConversationsTab';
 import { ContextTab } from './tabs/ContextTab';
 import { ConversationPreview } from './ConversationPreview';
@@ -235,6 +235,14 @@ export function ProjectView(props: ProjectViewProps) {
   // FilesTab resets its currentDir to '' on every project switch, and that
   // reset flows through the same callback, so this needs no separate reset.
   const [currentRelDir, setCurrentRelDir] = useState('');
+  // WHY: FilesTab is memoised; inline closures here would defeat it on every render.
+  const onFilesMutated = useCallback(() => setCountsKey((k) => k + 1), []);
+  const onFilesClearSearch = useCallback(() => setArtifactSearch(''), []);
+  // WHY: ProjectView is the ONE reader of the app-wide file state for this screen.
+  // It re-renders on every file any session writes; FilesTab is handed only the
+  // single value it shows, so that render stops here instead of redrawing up to
+  // 2,000 hidden cards. `dispatch` from useReducer is stable.
+  const pvActiveId = state.activeArtifactBySession[PV_SESSION] ?? null;
   // Files picked from the native dialog, staged for the Move/Copy confirm
   // dialog. collisions = basenames among sources that already exist in the
   // destination folder, computed BEFORE the dialog opens (see importFiles).
@@ -947,10 +955,12 @@ export function ProjectView(props: ProjectViewProps) {
                 conditional. Side benefit: the folder you were browsing and the
                 file you had open are still there when you come back. */}
             {activeProject && (
-              <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={() => setCountsKey((k) => k + 1)} onClearSearch={() => setArtifactSearch('')} onCurrentDirChange={setCurrentRelDir} />
+              <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={onFilesMutated} onClearSearch={onFilesClearSearch} onCurrentDirChange={setCurrentRelDir} pvActiveId={pvActiveId} artifactDispatch={dispatch} />
             )}
+            {/* Keyed by project so a switch starts a fresh 50-card window at the
+                top, instead of keeping the last project's scroll depth. */}
             {activeProject && tab === 'conversations' && (
-              <ConversationsTab conversations={conversations} onOpenPreview={setPreviewSession} />
+              <ConversationsTab key={activeProject.id} conversations={conversations} onOpenPreview={setPreviewSession} />
             )}
             {previewSession && activeProject && (
               <ConversationPreview

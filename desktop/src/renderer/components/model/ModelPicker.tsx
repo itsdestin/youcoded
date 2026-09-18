@@ -34,6 +34,11 @@ import type { PortableModelRef } from '../../../shared/types';
 
 import { CLAUDE_ALIASES, type ClaudeAlias } from '../../../shared/model-ids';
 import { matchesQuery } from '../../../shared/text-match';
+// WHY: search draws every matching row at once — ~24,000 page elements at
+// stress scale (300+ catalog models) for a query as short as "a". Same
+// shared window every other long list in the app uses (render-cost
+// consolidation 2026-09-18).
+import { useChunkedReveal } from '../../hooks/use-chunked-reveal';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
 import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
@@ -269,6 +274,9 @@ export default function ModelPicker({
   const panelRef = useRef<HTMLDivElement>(null);
   const pillRef = useRef<HTMLDivElement>(null);
   const filterPopRef = useRef<HTMLDivElement>(null);
+  // The scroll root the reveal window measures against and resets to the top
+  // — the `overflow-y-auto` list div, not the outer panel.
+  const listRef = useRef<HTMLDivElement>(null);
   const [panelPos, setPanelPos] = useState<{ top?: number; bottom?: number; left: number; width: number; maxHeight: number } | null>(null);
   const [filterPos, setFilterPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -554,6 +562,28 @@ export default function ModelPicker({
     ];
   }, [entries, favorites, searching, localOnly, sources, q, pinSelectedToTop, value]);
 
+  // WHY: rows is drawn 50 at a time, same as every other long list
+  // (`hooks/use-chunked-reveal.ts`) — a 300+ model catalog plus provider
+  // sources otherwise puts ~24,000 elements on the page for a one-letter
+  // query. Keyed on the query VALUES (not `rows`' identity) so toggling a
+  // favourite star mid-scroll doesn't collapse the window back to one chunk.
+  //
+  // `pinSelectedToTop` only reorders the FAVOURITES view (searching === false,
+  // see the comment above `ordered` — search results stay in unordered
+  // catalogue order on purpose). That means a selected model CAN sit past row
+  // 50 while searching, same as it already sat past whatever the user had
+  // scrolled to before this change — chunking makes that scroll progressive
+  // instead of instant, it does not newly hide anything a plain scroll could
+  // already reach. The favourites view is windowed too — only noticeable past
+  // 50 favourites, and where `pinSelectedToTop` is on (the chat's model popup)
+  // the selected model is first there, so it is always in the first chunk.
+  const resetKey = useMemo(
+    () => JSON.stringify([q, [...sources].sort(), localOnly]),
+    [q, sources, localOnly],
+  );
+  const { visible: visibleRows, hasMore, sentinelRef } =
+    useChunkedReveal(rows, { resetKey, rootRef: listRef, active: open });
+
   const toggleFavorite = (key: string) => {
     setFavorites((prev) => {
       const next = new Set(prev);
@@ -781,7 +811,7 @@ export default function ModelPicker({
               />
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto py-1.5">
+            <div ref={listRef} className="flex-1 min-h-0 overflow-y-auto py-1.5">
               {!loaded ? (
                 <p className="text-xs text-fg-muted text-center py-4">Loading…</p>
               ) : (
@@ -816,7 +846,12 @@ export default function ModelPicker({
                       </Button>
                     </div>
                   )}
-                  {rows.map(row)}
+                  {visibleRows.map(row)}
+                  {/* Top-up trigger — extends the window as the user scrolls
+                      near the end of what's drawn. Rendered only while rows
+                      remain so the observer effect tears down once the list
+                      is whole. */}
+                  {hasMore && <div ref={sentinelRef} aria-hidden className="h-px" />}
 
                   {/* Freeform providers only surface while searching — they are
                       not favouritable (there is no model id to star yet). */}

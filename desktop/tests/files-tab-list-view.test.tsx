@@ -13,9 +13,11 @@
 //      localStorage so the next project opens the same way.
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, waitFor } from '@testing-library/react';
+import { render, cleanup, waitFor, act } from '@testing-library/react';
 import { FilesTab } from '../src/renderer/components/project-view/tabs/FilesTab';
-import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
+import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
+import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
+import type { FileTypeGroup } from '../src/shared/artifacts/categorization';
 
 const listAllFiles = vi.fn();
 
@@ -32,27 +34,28 @@ const project = { id: 'p1', path: '/proj', name: 'Proj' } as any;
 
 function renderTab(view: 'grid' | 'list', search = '') {
   return render(
-    <ArtifactProvider value={{ state: { activeArtifactBySession: {} } as any, dispatch: vi.fn() }}>
-      <FilesTab
-        project={project}
-        search={search}
-        types={new Set()}
-        sortBy="name"
-        view={view}
-        onViewChange={vi.fn()}
-        refreshKey={0}
-      />
-    </ArtifactProvider>,
+    <FilesTab
+      project={project}
+      search={search}
+      types={new Set()}
+      sortBy="name"
+      view={view}
+      onViewChange={vi.fn()}
+      refreshKey={0}
+      pvActiveId={null}
+      artifactDispatch={vi.fn()}
+    />,
   );
 }
 
+let io: ReturnType<typeof installFiringIntersectionObserver>;
 beforeEach(() => {
   // The grid's thumbnails gate their reads on an IntersectionObserver, which
   // jsdom doesn't implement — without a stub the grid render throws and the
-  // "cards, not rows" assertion fails for the wrong reason.
-  (globalThis as any).IntersectionObserver = class {
-    observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
-  };
+  // "cards, not rows" assertion fails for the wrong reason. A FIRING stub, not
+  // a no-op: flat results now draw in chunks as a sentinel scrolls into view,
+  // and a no-op observer would strand them at the first chunk unnoticed.
+  io = installFiringIntersectionObserver();
   listAllFiles.mockResolvedValue({ ok: true, files: FILES });
   (window as any).claude = {
     artifacts: {
@@ -67,7 +70,7 @@ beforeEach(() => {
     },
   };
 });
-afterEach(() => { cleanup(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); io.restore(); vi.clearAllMocks(); });
 
 describe('FilesTab list view', () => {
   it('gives each file a name, a kind and a relative time', async () => {
@@ -146,6 +149,47 @@ describe('FilesTab list view', () => {
     await findByTitle('notes.md');
     // The thumbnail is the card's defining part and the list has none.
     expect(container.querySelector('.h-44')).not.toBeNull();
+  });
+});
+
+describe('flat search results', () => {
+  // WHY both views: grid and list are separate draw sites over the same window.
+  // Pinned on list alone, the grid (the default view, and what the DOM-size
+  // sweep opens) could draw every match and this test stayed green — proven by
+  // a break-it run in the render-cost consolidation's closing check (2026-09-18).
+  it.each(['list', 'grid'] as const)('draw a chunk at a time and the rest as you scroll (%s view)', async (view) => {
+    // A search over a big project is the 2,000-card case; drawing every match
+    // at once is what made typing in the search box stall.
+    const many = Array.from({ length: REVEAL_CHUNK * 2 + 20 }, (_, i) => ({
+      id: `m${i}`, kind: 'internal', path: `match-${String(i).padStart(3, '0')}.md`,
+      lastModified: new Date().toISOString(),
+    }));
+    listAllFiles.mockResolvedValue({ ok: true, files: many });
+    const { container, findByTitle } = renderTab(view, 'match');
+    await findByTitle('match-000.md');
+    const rows = () => container.querySelectorAll('button[title^="match-"]').length;
+    expect(rows()).toBe(REVEAL_CHUNK);
+    act(() => io.fireAll());
+    await waitFor(() => expect(rows()).toBe(REVEAL_CHUNK * 2));
+    act(() => io.fireAll());
+    await waitFor(() => expect(rows()).toBe(many.length));
+  });
+});
+
+describe('folder browsing', () => {
+  it('keeps its scroll position when the sort changes', async () => {
+    // The folder grid scrolls in the same box the flat results' reveal resets,
+    // so a reset key that held the sort threw the reader back to the top here.
+    const props = {
+      project, search: '', types: new Set<FileTypeGroup>(), view: 'grid' as const, onViewChange: vi.fn(),
+      refreshKey: 0, pvActiveId: null, artifactDispatch: vi.fn(),
+    };
+    const { container, findByTitle, rerender } = render(<FilesTab {...props} sortBy="name" />);
+    await findByTitle('notes.md');
+    const box = container.querySelector('button[title="notes.md"]')!.closest('.grid') as HTMLElement;
+    box.scrollTop = 300;
+    rerender(<FilesTab {...props} sortBy="recent" />);
+    expect(box.scrollTop).toBe(300);
   });
 });
 

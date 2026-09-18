@@ -178,6 +178,22 @@ describe('edit and save guards', () => {
       expect(ok).toBe(false);
       expect(utils.getByText(/changed on disk while you were editing/i)).toBeTruthy();
     });
+
+    // WHY: the conflict banner's "View diff" wraps UnifiedDiff in its own scroll
+    // box (overflow-auto max-h-[40%]) — it must pass `fill` so that box stays the
+    // ONLY scroller. A 20-line draft vs a one-line disk version produces >15 diff
+    // rows, enough for UnifiedDiff's own 15-line cap + "Show … more lines" button
+    // to appear if `fill` regressed away.
+    it('the conflict diff has no "Show more lines" button — the banner box is the only scroller', async () => {
+      save.mockResolvedValue({ ok: false, error: 'conflict' });
+      get.mockResolvedValue({ ok: true, content: 'disk version', orphan: false, mtimeMs: 99 });
+      const longContent = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n');
+      const { ref, utils } = mountView({ content: longContent });
+      await act(async () => { ref.current!.startEdit(); });
+      await act(async () => { await ref.current!.saveEdit(); });
+      await act(async () => { fireEvent.click(utils.getByText('View diff')); });
+      expect(utils.queryByText(/more lines/i)).toBeNull();
+    });
   });
 
   // Content and the FACTS about content must travel together. Every editability

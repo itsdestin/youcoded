@@ -609,7 +609,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           <div className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1">
             What keeping yours changes (disk → your draft)
           </div>
-          <UnifiedDiff oldStr={conflict.disk} newStr={draft} />
+          {/* fill: the wrapper above is already the scroll surface
+              (overflow-auto max-h-[40%]) — without fill, UnifiedDiff's own
+              15-line cap + button stacked a second scrollbar inside it and
+              hid the rest of a long conflict diff behind that inner cap
+              (review round 1, 2026-09-18). */}
+          <UnifiedDiff oldStr={conflict.disk} newStr={draft} fill />
         </div>
       )}
       <div className="flex-1 overflow-hidden">

@@ -12,7 +12,10 @@
 // Cards use .layer-surface; the deleted badge is a plain word "deleted" (the ●◐○ / ✕
 // glyph language is disliked — plain words instead).
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useArtifact } from '../../../state/ArtifactContext';
+// WHY no useArtifact import: this file must not read ArtifactContext — see the
+// memo comment on FilesTab below. The one value it needs arrives as props.
+import type { ArtifactAction } from '../../../state/artifact-actions';
+import { useChunkedReveal } from '../../../hooks/use-chunked-reveal';
 import { useProjectWatch } from '../../../hooks/useProjectWatch';
 import { dedupeContentHits, groupContentHits, capGroups, MAX_CONTENT_ROWS, type RankableHit } from '../../../utils/content-search-ranking';
 import type { CentralIndexProject, ArtifactRecord } from '../../../../shared/artifacts/types';
@@ -50,7 +53,9 @@ function artifactAbsPath(projectPath: string, a: ArtifactRecord): string {
 
 // ProjectView keeps its own artifact selection separate from any chat session's
 // drawer, keyed under this reserved sessionId in activeArtifactBySession.
-const PV_SESSION = 'project-view';
+// Exported so ProjectView — the one reader of ArtifactContext on this screen —
+// can pick this session's open file out of the state and hand it down.
+export const PV_SESSION = 'project-view';
 
 // Human "kind" label for a card (Document / Image / Spreadsheet / Code), from the
 // shared fine-grained type groups — the same groups the type filter uses, so the
@@ -178,7 +183,7 @@ function MiniTypeIcon({ path, size = 12 }: { path: string; size?: number }) {
 // The folder-tree file browser for one project — search, type filter, sort,
 // folder navigation, and the detail overlay all live here (mode collapsed
 // 2026-07-23; see the header comment).
-export function FilesTab({
+function FilesTabImpl({
   project,
   search,
   types,
@@ -190,6 +195,8 @@ export function FilesTab({
   onCurrentDirChange,
   onClearSearch,
   hidden,
+  pvActiveId,
+  artifactDispatch: dispatch,
 }: {
   project: CentralIndexProject;
   search: string;     // lifted to ProjectView — lives on the shared seg-row now
@@ -226,13 +233,17 @@ export function FilesTab({
   // rebuild alone froze the app for ~300 ms per switch (perf-lab 2026-09-09).
   // Staying mounted also returns you to the folder and file you were looking at.
   hidden?: boolean;
+  // The file open in Project View (ArtifactContext's entry for PV_SESSION), and
+  // that context's dispatch. Handed down by ProjectView instead of read here:
+  // the context changes on every file any session writes, and a read here would
+  // redraw the whole grid — hidden or not — each time (see the memo below).
+  pvActiveId: string | null;
+  artifactDispatch: React.Dispatch<ArtifactAction>;
 }) {
   // Root breadcrumb label + empty-state wording — constant now that this tab
   // renders only the one on-disk section.
   const rootLabel = 'Project Files';
   const noun = 'files';
-  const { state, dispatch } = useArtifact();
-  const pvActiveId = state.activeArtifactBySession[PV_SESSION] ?? null;
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([]);
   // True until the first load for the current project resolves — gates the
   // empty-state message so it can't flash before data arrives.
@@ -452,6 +463,31 @@ export function FilesTab({
     () => (flat ? [...filtered].sort(fileComparator(sortBy)) : filtered),
     [filtered, flat, sortBy],
   );
+  // Flat results draw 50 at a time as you scroll (render-cost consolidation
+  // 2026-09-18): a search or type filter over a big project is the 2,000-card
+  // case, and drawing them all at once is what made typing in the box stall.
+  // Folder view is left whole — it shows one folder's contents, tens of items,
+  // not the whole tree. resetKey is the query's VALUES, so a new search starts a
+  // fresh window at the top; resetScrollOnActivate is off because coming back to
+  // the Files tab with the same search must leave the list where it was.
+  // Below 640px the page scrolls instead of this box (max-sm:overflow-visible
+  // on it), so the reveal watches the viewport there — same trade-off as
+  // ConversationsTab.
+  const flatScrollRef = useRef<HTMLDivElement>(null);
+  const noRoot = useRef<HTMLElement | null>(null);
+  const narrowViewport = useNarrowViewport();
+  const { visible: flatVisible, hasMore: flatHasMore, sentinelRef: flatSentinelRef } = useChunkedReveal(flatResults, {
+    // WHY only in flat mode: the reveal's scroll reset acts on the SAME box the
+    // folder grid scrolls in (flatScrollRef), and folder view is never windowed.
+    // A key that held sortBy/view while browsing a folder threw the reader back
+    // to the top on every sort change — a regression from before the reveal.
+    resetKey: flat
+      ? JSON.stringify([search.trim(), [...types].sort(), sortBy, view, project.id])
+      : JSON.stringify(['folder', project.id]),
+    rootRef: narrowViewport ? noRoot : flatScrollRef,
+    active: !hidden,
+    resetScrollOnActivate: false,
+  });
   // Content hits minus anything already shown as a name match. Hoisted out of the
   // render below so the "no results" check and the content section agree on one
   // number instead of deduping twice.
@@ -718,7 +754,7 @@ export function FilesTab({
           columns read correctly on a phone. */}
       {/* List view is a plain column — no card hover-lift, so it needs none of
           the p-2/-m-2 overflow room the grid does. */}
-      <div className={isList
+      <div ref={flatScrollRef} className={isList
         ? `flex-1 min-h-0 flex flex-col gap-2 content-start max-sm:overflow-visible ${
             flat ? 'overflow-auto' : 'overflow-hidden'}`
         : 'flex-1 overflow-auto max-sm:overflow-visible grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-3 content-start p-2 -m-2'}>
@@ -742,8 +778,15 @@ export function FilesTab({
                 </div>
               )}
               {isList
-                ? <div className={fullW}><ListBox>{flatResults.map(renderFileRow)}</ListBox></div>
-                : flatResults.map(renderFileCard)}
+                ? <div className={fullW}><ListBox>{flatVisible.map(renderFileRow)}</ListBox></div>
+                : flatVisible.map(renderFileCard)}
+              {/* The reveal's sentinel. Different keys per view so a grid ↔ list
+                  switch REPLACES the element (the hook re-arms on the new one)
+                  rather than React reusing a node that moved. col-span-full
+                  keeps it from taking a grid cell. */}
+              {flatHasMore && (isList
+                ? <div key="list" ref={flatSentinelRef} className="h-px shrink-0" aria-hidden />
+                : <div key="grid" ref={flatSentinelRef} className="col-span-full h-px" aria-hidden />)}
               {searching && !noSearchResults && (() => {
                 const rows = contentRows;
                 // Group + sort BEFORE capping, so the biggest groups survive the cut.
@@ -910,6 +953,7 @@ export function FilesTab({
         <ArtifactDetail
           artifact={activeArtifact}
           project={project}
+          artifactDispatch={dispatch}
           initialLine={pendingReveal?.id === activeArtifact.id ? pendingReveal.line : undefined}
           onInitialLineConsumed={() => setPendingReveal(null)}
         />
@@ -917,6 +961,14 @@ export function FilesTab({
     </div>
   );
 }
+
+// WHY memo: this tab is kept mounted while hidden for its watcher (09-09);
+// without memo every Project View render — each tab click — redrew the whole
+// hidden grid. And it must not read ArtifactContext itself, because memo cannot
+// stop a context reader and that context changes on every file any session
+// writes (render-cost consolidation 2026-09-18). Guarded by the ast-grep rules
+// filestab-memoized and filestab-no-artifact-context.
+export const FilesTab = React.memo(FilesTabImpl);
 
 // ─── ArtifactDetail ───────────────────────────────────────────────────────────
 // Selected-artifact detail, now hosted in the shared centered ProjectDetailOverlay
@@ -927,6 +979,10 @@ export function FilesTab({
 interface DetailProps {
   artifact: ArtifactRecord;
   project: CentralIndexProject;
+  // ArtifactContext's dispatch, passed down from FilesTab rather than read with
+  // useArtifact(): nothing in this file reads that context (see FilesTab's memo
+  // comment, and the ast-grep rule filestab-no-artifact-context).
+  artifactDispatch: React.Dispatch<ArtifactAction>;
   // WHY: `onRefreshArtifacts` removed — ArtifactDetail accepted it but never
   // called it. The parent (FilesTab) passes `onMutated` directly to the
   // ActiveArtifactView inside; refresh signaling doesn't flow through this
@@ -938,8 +994,7 @@ interface DetailProps {
   onInitialLineConsumed?: () => void;
 }
 
-function ArtifactDetail({ artifact, project, initialLine, onInitialLineConsumed }: DetailProps) {
-  const { dispatch } = useArtifact();
+function ArtifactDetail({ artifact, project, artifactDispatch: dispatch, initialLine, onInitialLineConsumed }: DetailProps) {
   // Read lifecycle (fetch + loading/missing/error phases) — shared hook, same
   // as SessionDrawer, so a slow read shows a placeholder instead of flashing
   // "This file is no longer on disk."

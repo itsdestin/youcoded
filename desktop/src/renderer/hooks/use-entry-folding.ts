@@ -227,6 +227,16 @@ export function useEntryFolding(
       }
     }, { root, rootMargin: FOLD_ROOT_MARGIN });
     observer.current = io;
+    // Ref callbacks run in the commit/layout phase, BEFORE this effect runs —
+    // so every entry present on the FIRST commit already called registerEntry()
+    // while observer.current was still null. Pre-fix those elements sat in
+    // elements.current forever unobserved: entries already on screen when
+    // ChatView / PreviewTimeline / BubbleFeed mounted could never fold. The
+    // same gap reopens whenever this effect's deps change and it builds a new
+    // observer, so sweep elements.current unconditionally rather than only on
+    // first mount. registerEntry's own io.observe() still covers entries
+    // registered AFTER the observer exists.
+    for (const el of elements.current.values()) io.observe(el);
     return () => {
       io.disconnect();
       observer.current = null;

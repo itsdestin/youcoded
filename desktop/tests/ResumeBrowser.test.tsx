@@ -25,6 +25,8 @@ vi.mock('../src/renderer/components/provider-brand', async (importOriginal) => {
 import ResumeBrowser from '../src/renderer/components/ResumeBrowser';
 import { claudeAliasForModelId, isPlaceholderModelId } from '../src/shared/model-ids';
 import { previewPage } from './helpers/preview-page';
+import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
+import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 
 beforeAll(() => {
   if (typeof window.ResizeObserver === 'undefined') {
@@ -354,6 +356,36 @@ describe('speed', () => {
       // re-rendered on every state change the click caused.
       for (let i = 2; i < 20; i++) expect(brandCalls.get(`model-for-row-${i}`) ?? 0).toBe(0);
       expect(brandCalls.get('model-for-row-1') ?? 0).toBeGreaterThan(0);
+    });
+  });
+
+  // WHY: the Resume browser was the first list to draw only what is near the
+  // screen (its reveal window became hooks/use-chunked-reveal.ts). Until the
+  // render-cost consolidation nothing here noticed if it went back to drawing
+  // every conversation: every suite above stayed green with the window removed.
+  // With a firing observer stub, 1,000 conversations must open as one chunk and
+  // grow by a chunk each time the sentinel is reached.
+  describe('Resume browser — a long history draws one chunk at a time', () => {
+    let io: ReturnType<typeof installFiringIntersectionObserver>;
+    beforeEach(() => { io = installFiringIntersectionObserver(); });
+    afterEach(() => io.restore());
+
+    const cardsDrawn = () => screen.queryAllByText(/^Conversation \d+$/).length;
+
+    it('opens 1,000 conversations as one chunk of cards and draws more on scroll', async () => {
+      mockClaude(rows(1000));
+      open();
+      await screen.findByText('Conversation 0');
+      // Date headers share the window with cards, so a chunk holds at most
+      // REVEAL_CHUNK cards, never the whole history.
+      const first = cardsDrawn();
+      expect(first).toBeGreaterThan(0);
+      expect(first).toBeLessThanOrEqual(REVEAL_CHUNK);
+
+      act(() => io.fireAll());
+      const second = cardsDrawn();
+      expect(second).toBeGreaterThan(first);
+      expect(second).toBeLessThanOrEqual(2 * REVEAL_CHUNK);
     });
   });
 });

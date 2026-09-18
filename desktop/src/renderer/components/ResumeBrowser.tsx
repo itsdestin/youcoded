@@ -8,6 +8,7 @@ import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { useChunkedReveal } from '../hooks/use-chunked-reveal';
 import { isAndroid } from '../platform';
 import SessionPreviewPane from './SessionPreviewPane';
 import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
@@ -21,11 +22,11 @@ import {
   type FilterState,
   type FlagName,
 } from './resume-browser-filters';
-import { useTagRegistry } from '../hooks/useTagRegistry';
+import { useTagRegistry, refreshTagRegistry } from '../hooks/useTagRegistry';
 import { TagPicker } from './tags/TagPicker';
 import { TagManagerPopup } from './tags/TagManagerPopup';
 import { TagChip } from './tags/TagChip';
-import { SessionCardTags, SessionCardMeta, CompleteToggle } from './SessionCardDetails';
+import { SessionCardTags, SessionCardMeta, CompleteToggle, SESSION_CARD_SURFACE_BASE } from './SessionCardDetails';
 import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
 import { TagGlyph } from './tags/glyphs';
 import { NoteEditor } from './tags/NoteEditor';
@@ -172,8 +173,13 @@ const ICON_GUTTER = 'pr-14';
 // bookkeeping. The trade: the scrollbar is proportional to what's revealed, not
 // to the whole list, and scrolling through many hundreds of rows re-accumulates
 // DOM. If deep scrolling ever becomes a real usage pattern, a windowed list is
-// the upgrade — see the 2026-07-31 handoff.
-const REVEAL_CHUNK = 50;
+// the upgrade — see docs/archive/handoffs/2026-07-31-resume-browser-load-time-handoff.md.
+//
+// WHY: the reveal window now lives in hooks/use-chunked-reveal.ts (as
+// `useChunkedReveal`, chunk size `REVEAL_CHUNK`) so every long list shares one
+// implementation (render-cost consolidation 2026-09-18). The mechanics below
+// — reveal count, reset-on-query, scroll-to-top, sentinel observer — are
+// imported from there, not defined locally.
 
 // One entry in the flattened list. Grouped mode interleaves project headers
 // with rows, so both modes reduce to a single ordered array — that is what lets
@@ -319,6 +325,12 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
 export default function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions }: Props) {
   // Live tag registry — drives the Tag Picker, chips, and custom-tag filter.
   const registry = useTagRegistry();
+  // WHY on open, not mount: this browser stays mounted while closed, so the
+  // shared store's one first read would be the only read. Each open re-reads in
+  // the background (tags made or renamed on another device arrive by sync pull,
+  // which sends no push); the cached tags draw first and an unchanged answer
+  // redraws nothing.
+  useEffect(() => { if (open) refreshTagRegistry(); }, [open]);
   const [sourceSessions, setSessions] = useState<PastSession[]>([]);
   const sourceNames = useMemo(() => Object.fromEntries(sourceSessions.map((s) => [s.sessionId, s.name])), [sourceSessions]);
   const previewNames = useRenamedSessions(sourceNames);
@@ -780,9 +792,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     return flatSorted.map((s) => ({ kind: 'row' as const, session: s, showPath: true }));
   }, [grouped, flatSorted]);
 
-  // How much of `items` is currently materialized. Grows as the user scrolls.
-  const [revealCount, setRevealCount] = useState(REVEAL_CHUNK);
-
   // Reset the window to the top whenever the user changes WHAT THEY ARE LOOKING
   // FOR — a new search, filter, or sort order is a new list, and it should start
   // at the top and cost one chunk to draw.
@@ -796,52 +805,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     search.trim(), sortDir, showComplete,
     [...selectedProjects].sort(), [...selectedTagIds].sort(),
   ]), [search, sortDir, showComplete, selectedProjects, selectedTagIds]);
-  const [lastQueryKey, setLastQueryKey] = useState(queryKey);
-  if (queryKey !== lastQueryKey) {
-    // Adjusting state during render (the React-documented pattern) rather than
-    // in an effect. An effect would commit one render at the OLD revealCount
-    // first — for a user who had scrolled deep that is exactly the 1,000-row
-    // render this whole change exists to avoid, once per keystroke.
-    setLastQueryKey(queryKey);
-    setRevealCount(REVEAL_CHUNK);
-  }
 
-  // A new query starts at the top of its results. Load-bearing for the reveal
-  // window, not just manners: resetting revealCount while the container stays
-  // scrolled 250 rows down leaves the sentinel already in view, so the observer
-  // below immediately cascades the window back up to cover the scroll offset —
-  // measured doing exactly that (search after scrolling deep re-revealed 250
-  // rows instead of 50). Scrolling to the top is what makes the reset stick.
-  useEffect(() => {
-    if (!open) return;
-    const el = listRef.current;
-    if (el) el.scrollTop = 0;
-  }, [queryKey, open, listRef]);
-
-  const visibleItems = revealCount >= items.length ? items : items.slice(0, revealCount);
-  const hasMore = items.length > visibleItems.length;
-
-  // Top up when the sentinel below the last revealed row comes into view.
-  // Same "don't do the work until it's needed" shape as ArtifactThumbnail's
-  // fetch gating. Re-arming on every revealCount change is what makes it
-  // cascade: if one chunk still doesn't reach past the sentinel (short rows, a
-  // tall window), observing again fires again until it does.
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open || !hasMore) return;
-    // No IntersectionObserver (jsdom under test, any exotic WebView) — reveal
-    // everything rather than stranding the list at 50 rows with no way to grow.
-    if (typeof IntersectionObserver === 'undefined') { setRevealCount(items.length); return; }
-    const el = sentinelRef.current;
-    const root = listRef.current;
-    if (!el || !root) return;
-    const io = new IntersectionObserver(
-      (entries) => { if (entries.some((e) => e.isIntersecting)) setRevealCount((n) => n + REVEAL_CHUNK); },
-      { root, rootMargin: '400px 0px' },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [open, hasMore, revealCount, items.length, listRef]);
+  // WHY: the reveal window now lives in hooks/use-chunked-reveal.ts so every
+  // long list shares one implementation (render-cost consolidation 2026-09-18).
+  const { visible: visibleItems, hasMore, sentinelRef } =
+    useChunkedReveal(items, { resetKey: queryKey, rootRef: listRef, active: open });
 
   // Distinct projects with counts — what the Projects pill dropdown displays.
   // Derived from the unfiltered session list so the dropdown always shows
@@ -1213,7 +1181,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // this card, not the panel. The icon buttons are SIBLINGS of the expand
         // trigger, never nested — a button inside a button is invalid HTML and
         // the inner one would never receive its own click.
-        className={`relative rounded-lg border bg-inset overflow-hidden transition-colors ${
+        // Surface shared with the Projects → Conversations card
+        // (SessionCardDetails.tsx); only the border colour is this card's own.
+        className={`relative overflow-hidden ${SESSION_CARD_SURFACE_BASE} ${
           isSelected ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
         }`}
       >
@@ -1718,8 +1688,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 // ONE list for both modes — grouped (project header + its rows,
                 // only when the Projects filter is active) and flat chronological
                 // (default view + search results, each row showing its own
-                // project label). Bounded to `revealCount`; the sentinel below
-                // extends it as the user scrolls.
+                // project label). Bounded by useChunkedReveal's window; the
+                // sentinel below extends it as the user scrolls.
                 //
                 // The per-group wrapper this replaced carried `mb-2` for the gap
                 // between groups; a flat list has no wrapper to hang that on, so
