@@ -22,7 +22,7 @@ import {
   type FilterState,
   type FlagName,
 } from './resume-browser-filters';
-import { useTagRegistry } from '../hooks/useTagRegistry';
+import { useTagRegistry, refreshTagRegistry } from '../hooks/useTagRegistry';
 import { TagPicker } from './tags/TagPicker';
 import { TagManagerPopup } from './tags/TagManagerPopup';
 import { TagChip } from './tags/TagChip';
@@ -325,6 +325,12 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
 export default function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions }: Props) {
   // Live tag registry — drives the Tag Picker, chips, and custom-tag filter.
   const registry = useTagRegistry();
+  // WHY on open, not mount: this browser stays mounted while closed, so the
+  // shared store's one first read would be the only read. Each open re-reads in
+  // the background (tags made or renamed on another device arrive by sync pull,
+  // which sends no push); the cached tags draw first and an unchanged answer
+  // redraws nothing.
+  useEffect(() => { if (open) refreshTagRegistry(); }, [open]);
   const [sourceSessions, setSessions] = useState<PastSession[]>([]);
   const sourceNames = useMemo(() => Object.fromEntries(sourceSessions.map((s) => [s.sessionId, s.name])), [sourceSessions]);
   const previewNames = useRenamedSessions(sourceNames);

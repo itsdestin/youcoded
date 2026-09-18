@@ -63,8 +63,10 @@ function ConversationsTabImpl({ conversations, onOpenPreview }: ConversationsTab
   const loading = conversations === null;
   const rows = conversations ?? [];
   // Loaded once for the whole list (one shared store); each card only looks
-  // tags up in it.
-  const registry = useTagRegistry();
+  // tags up in it. refreshOnMount: opening the tab re-reads in the background so
+  // a tag made or renamed on another device (a sync pull sends no push) shows up
+  // — the cached list draws first, and an unchanged answer redraws nothing.
+  const registry = useTagRegistry({ refreshOnMount: true });
 
   // WHY two roots: at 640px and up this tab's own box scrolls, so the reveal
   // watches it. Below 640px the page's <main> scrolls instead

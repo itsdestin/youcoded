@@ -21,6 +21,7 @@ vi.mock('../src/renderer/components/SessionCardDetails', async (importOriginal) 
 });
 
 import { ConversationsTab } from '../src/renderer/components/project-view/tabs/ConversationsTab';
+import { useTagRegistry } from '../src/renderer/hooks/useTagRegistry';
 import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
 import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 import { NARROW_VIEWPORT_QUERY } from '../src/renderer/hooks/use-narrow-viewport';
@@ -99,6 +100,26 @@ describe('ConversationsTab', () => {
     await act(async () => { pushed?.(); });
     expect(container.textContent).toContain('Beta');
     expect(container.textContent).not.toContain('Alpha');
+  });
+
+  it('opening the tab again shows a tag renamed elsewhere, with no push', async () => {
+    // A sync pull from another device renames a tag without any tags:changed push.
+    // Something app-wide (the session strip) keeps the shared store alive the whole
+    // time, so only the tab's own open can make it re-read.
+    const list = vi.fn()
+      .mockResolvedValueOnce([{ id: 't1', label: 'Alpha', color: 'blue' }])
+      .mockResolvedValue([{ id: 't1', label: 'Beta', color: 'blue' }]);
+    (window as any).claude = { tags: { list }, on: {} };
+    function AppWide() { useTagRegistry(); return null; }
+    render(<AppWide />);
+    await act(async () => {});
+    const tagged = {
+      sessionId: 'tagged', name: 'Tagged conversation', projectSlug: 'p', projectPath: '/p',
+      lastModified: 1, size: 1, tags: ['t1'],
+    } as any;
+    const { container } = render(<ConversationsTab conversations={[tagged]} onOpenPreview={() => {}} />);
+    await act(async () => {});
+    expect(container.textContent).toContain('Beta');
   });
 
   it('on a narrow screen still draws one chunk and grows on scroll', () => {
