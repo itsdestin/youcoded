@@ -1,0 +1,47 @@
+/* motion.css — the app's gesture-triggered motion that does not fit in globals.css.
+   Loaded by index.tsx right AFTER globals.css, so a rule here wins a tie.
+
+   WHY a separate file (2026-09-18): globals.css sits at its line budget
+   (desktop/line-budgets.json), and the premium-motion work adds arrivals, hover
+   and press states and pane transitions. The vocabulary itself — the --dur-* and
+   --ease-* tokens, and the original `.switch-arrival` — stays in globals.css,
+   pinned by tests/animation-frame-budget.test.ts.
+
+   The house rules apply here exactly as there: tokens only, no new curve, one
+   iteration, never `infinite` without steps(), and every rule answers to BOTH
+   prefers-reduced-motion and the app's own [data-reduced-effects]. This file is
+   swept by tests/infinite-animation-allowlist.test.ts like every sheet in styles/. */
+
+/* ── Session switch, when the bubbles are FROSTED ───────────────────────────
+   `data-bubble-glass` is stamped by theme-engine.ts on exactly the condition that
+   gives bubbles a backdrop-filter.
+
+   WHY it has to differ from globals.css's `.switch-arrival`: an ancestor with
+   opacity < 1 is a backdrop root, and a backdrop-filter cannot sample past one.
+   Fading the wrapper therefore switched every bubble's glass OFF for the length
+   of the fade, and it snapped on when the animation ended — Destin, 2026-09-18:
+   "the blur/glass effect isn't present at the beginning of the animation, then
+   pops-in right as the animation ends".
+
+   So the wrapper only RISES (a transform is not a backdrop root), and the fade
+   moves onto the elements that carry the glass, where an element's own opacity
+   fades its blurred backdrop along with it. Still one gesture, one duration, one
+   iteration; the elements faded are the screenful already marked `.in-view`.
+
+   Inside no-preference so the OS setting still wins: these selectors out-rank
+   globals.css's plain `.switch-arrival { animation: none }`. Reduce Visual
+   Effects needs no rule — it removes the glass, and with it this attribute.
+   Guard: tests/switch-arrival-glass.test.tsx. */
+@keyframes switch-arrival-rise { from { transform: translateY(14px); } to { transform: none; } }
+@keyframes switch-arrival-fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-bubble-glass] .switch-arrival { animation-name: switch-arrival-rise; }
+  [data-bubble-glass] .switch-arrival .in-view .bg-inset,
+  [data-bubble-glass] .switch-arrival .in-view .bg-accent {
+    animation: switch-arrival-fade var(--dur-switch) var(--ease-reveal) 1;
+  }
+  /* A card nested in an assistant bubble has no glass of its own (theme-engine
+     drops it) and already fades with its bubble; fading it again would compound. */
+  [data-bubble-glass] .switch-arrival .in-view .assistant-bubble .bg-inset { animation: none; }
+}
