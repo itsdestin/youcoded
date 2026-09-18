@@ -45,7 +45,7 @@ function makeCtx(cwd: string): ToolContext {
   return { sessionId: 'test', cwd, signal: new AbortController().signal, readRegistry: new Map(), todos: [] };
 }
 
-describe('Task 19: pipeline cap fires with no tool-declared bounds, but advice still arrives', () => {
+describe('pipeline cap fires with no tool-declared bounds, but advice still arrives', () => {
   let dir: string;
   afterEach(() => {
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
@@ -201,7 +201,7 @@ describe('Task 19: pipeline cap fires with no tool-declared bounds, but advice s
 // instances of — so a future tool, or a future edit to an existing one, is
 // checked against the contract itself rather than only against history's three
 // known failures. Each `it` name states the property, not the scenario.
-describe('Task 16: bounds contract conformance', () => {
+describe('bounds contract conformance', () => {
   let dir: string;
   let ctx: ToolContext;
   beforeEach(() => {

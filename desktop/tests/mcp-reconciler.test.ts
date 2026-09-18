@@ -18,7 +18,7 @@ import { readClaudeJsonFrom } from '../src/main/mcp-reconciler';
 // (never `os.homedir()`/`~/.claude.json`, not even the suite-wide sandboxed
 // TEST_HOME) — so this test can never touch a real ~/.claude.json under any
 // circumstance, matching the "pure/injectable path" the fix pass calls for.
-describe('readClaudeJsonFrom (Finding 2)', () => {
+describe('readClaudeJsonFrom', () => {
   let tmpDir: string;
 
   function withTmpDir<T>(fn: (dir: string) => T): T {

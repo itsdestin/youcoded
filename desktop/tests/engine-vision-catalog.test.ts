@@ -130,7 +130,7 @@ async function runningManager(payload: unknown) {
   return m;
 }
 
-describe('EngineManager.catalogModels — supportsVision from the router (T18, design §E5)', () => {
+describe('EngineManager.catalogModels — supportsVision from the router', () => {
   it('a row reporting ["text","image"] is supportsVision TRUE; ["text"] is FALSE', async () => {
     mgr = await runningManager(REAL_MODELS_RESPONSE);
     const rows = await mgr.catalogModels();

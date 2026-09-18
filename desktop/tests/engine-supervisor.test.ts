@@ -417,7 +417,7 @@ describe('EngineSupervisor', () => {
     return s;
   }
 
-  it('listModels keeps architecture.input_modalities off a REAL /models response (design §E5)', async () => {
+  it('listModels keeps architecture.input_modalities off a REAL /models response', async () => {
     sup = await supervisorServing(REAL_MODELS_RESPONSE);
     const byId = Object.fromEntries((await sup.listModels()).map((m) => [m.id, m.inputModalities]));
     // Exact arrays, not "contains image": the whole list is what the app keeps,

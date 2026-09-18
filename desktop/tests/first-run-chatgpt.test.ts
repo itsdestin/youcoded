@@ -177,7 +177,7 @@ describe('FirstRunManager.handleChatGptLogin', () => {
     expect(authPrereq(m).error).toBe(text);
   });
 
-  it('a throw from signIn() (port 1455 held) → lastError is the thrown sentence verbatim and the wait never starts (R3-3)', async () => {
+  it('a throw from signIn() (port 1455 held) → lastError is the thrown sentence verbatim and the wait never starts', async () => {
     const m = managerAtAuth();
     const auth = fakeAuth('signed-in', { throwOnSignIn: PORT_HELD });
     await expect(m.handleChatGptLogin(auth)).resolves.toBeUndefined();
@@ -198,7 +198,7 @@ describe('FirstRunManager.handleChatGptLogin', () => {
 });
 
 describe('FirstRunManager.handleOpenRouterNotBuilt', () => {
-  it("answers the approved card's OpenRouter button with its one line (R1-6)", () => {
+  it("answers the approved card's OpenRouter button with its one line", () => {
     const m = managerAtAuth();
     m.handleOpenRouterNotBuilt();
     const s = m.getState();

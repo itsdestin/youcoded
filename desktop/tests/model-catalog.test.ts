@@ -103,7 +103,7 @@ describe('ModelCatalog', () => {
     expect(fetchMock.mock.calls.length).toBe(callsAfterFirst); // cache hit — no new fetches
   });
 
-  it('serves repeat calls from the in-memory memo — no disk or network after a fresh fetch (ROADMAP 2026-08-11)', async () => {
+  it('serves repeat calls from the in-memory memo — no disk or network after a fresh fetch', async () => {
     // Session start calls contextLengthFor + get back-to-back; before the memo
     // each call re-read and re-parsed the whole cache file synchronously on
     // the main process. Deleting the file between calls proves the second

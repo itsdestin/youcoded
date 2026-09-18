@@ -115,7 +115,7 @@ describe('ai@7 tool-call stream contract (provider-dependencies row)', () => {
 // if raw input is a string that itself JSON.parses to an object, re-validate
 // THAT object before giving up. One attempt only — never a general coercion
 // layer (YAGNI).
-describe('JSON-string tool-arg recovery (Task 12, item 1)', () => {
+describe('JSON-string tool-arg recovery', () => {
   it('recovers when a weak model double-encodes its args as a JSON string', async () => {
     const echo = fakeTool('Echo', { schema: z.object({ prompt: z.string() }) });
     // toolCallChunk() JSON.stringifies whatever `input` we hand it — passing an
