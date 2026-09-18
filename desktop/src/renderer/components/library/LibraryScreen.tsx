@@ -2,7 +2,7 @@
 // Shares MarketplaceProvider with MarketplaceScreen (per design doc — do
 // not fork the context; install/uninstall must mutate one source of truth).
 
-import React, { useMemo, useState, useEffect } from "react";
+import React, { useCallback, useMemo, useState, useEffect } from "react";
 import { useMarketplace } from "../../state/marketplace-context";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { Button, CloseButton, EmptyState, ErrorState, LoadingState, SegmentedTabs, SegmentedTabLabel, PluginIcon, PaletteIcon } from "../ui";
@@ -106,6 +106,17 @@ export default function LibraryScreen({
     return m;
   }, [mp.skillEntries]);
 
+  // Fix round 1 (review finding #2, explicit instruction): MarketplaceCard is
+  // memoized (Task 8) — each render helper below used to pass a fresh
+  // `() => setDetail(...)` closure per row, defeating that memo on every
+  // Your Library re-render (any install/uninstall anywhere touches marketplace
+  // context). One id-taking handler, mirroring MarketplaceScreen's own
+  // `openEntry`, covers all three: MarketplaceCard always reports its OWN id
+  // (bare skill id here, or `theme:<slug>`), which is exactly what routes it.
+  const openLibraryEntry = useCallback((id: string) => {
+    setDetail(id.startsWith("theme:") ? { kind: "theme", slug: id.slice("theme:".length) } : { kind: "skill", id });
+  }, []);
+
   function renderSkillCard(s: SkillEntry) {
     const pluginId = s.pluginName;
     const pluginName = pluginId ? pluginDisplayNames.get(pluginId) : undefined;
@@ -119,7 +130,7 @@ export default function LibraryScreen({
         installed
         updateAvailable={!!mp.updateAvailable[s.id]}
         pluginBadge={pluginBadge}
-        onOpen={() => setDetail({ kind: "skill", id: s.id })}
+        onOpen={openLibraryEntry}
       />
     );
   }
@@ -131,7 +142,7 @@ export default function LibraryScreen({
         item={{ kind: "theme", entry: t }}
         installed
         updateAvailable={!!mp.updateAvailable[t.slug]}
-        onOpen={() => setDetail({ kind: "theme", slug: t.slug })}
+        onOpen={openLibraryEntry}
       />
     );
   }
@@ -150,13 +161,7 @@ export default function LibraryScreen({
         }
         installed
         updateAvailable
-        onOpen={() =>
-          setDetail(
-            kind === "theme"
-              ? { kind: "theme", slug: (item as any).slug }
-              : { kind: "skill", id: (item as SkillEntry).id },
-          )
-        }
+        onOpen={openLibraryEntry}
       />
     );
   }
