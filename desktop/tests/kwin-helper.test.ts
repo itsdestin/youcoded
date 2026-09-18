@@ -532,7 +532,7 @@ describe('install', () => {
   });
 });
 
-describe('half-install rollback (§1)', () => {
+describe('half-install rollback', () => {
   it('removes the files it wrote when kwriteconfig6 fails, and reports the real error', async () => {
     const r = rig();
     r.replies.kwriteconfigError = 'kwriteconfig6: command not found';
@@ -701,7 +701,7 @@ describe('R4-F7 — orphan cleanup', () => {
 });
 
 describe('remove', () => {
-  it('follows §6’s order and targets only this install', async () => {
+  it('unloads, disables, then reconfigures, and targets only this install', async () => {
     const r = rig();
     await r.helper.install();
     plantOrphanDir(r.scriptsDir, 'youcodedbuddyhelper-aaaa1111');

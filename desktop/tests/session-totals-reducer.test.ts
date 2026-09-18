@@ -71,7 +71,7 @@ describe('reducer session totals', () => {
     expect(s.get(SID)!.totals.linesAdded).toBe(3);
   });
 
-  it('counts a SPECIALIST edit exactly once, even on a duplicate emit (Finding 2: mirrors the main-timeline dup test)', () => {
+  it('counts a SPECIALIST edit exactly once, even on a duplicate emit, as the main timeline does', () => {
     let s = start();
     const patch = [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 3, lines: ['+x', '+y', '+z'] }];
     s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SID, uuid: 'p3', timestamp: 1, toolUseId: 'task-3', toolName: 'Task', toolInput: {} } as any);
@@ -82,7 +82,7 @@ describe('reducer session totals', () => {
     expect(s.get(SID)!.totals.linesAdded).toBe(3);
   });
 
-  it('Finding 1 (main-timeline): an orphan tool result — no preceding tool-use for that toolUseId — contributes nothing, even on duplicate delivery', () => {
+  it('main timeline: an orphan tool result — no preceding tool-use for that toolUseId — contributes nothing, even on duplicate delivery', () => {
     let s = start();
     const patch = [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 2, lines: [' ctx', '-a', '+b', '+c'] }];
     // No TRANSCRIPT_TOOL_USE for 'missing-tool' ever dispatched — this simulates
@@ -95,7 +95,7 @@ describe('reducer session totals', () => {
     expect(s.get(SID)!.totals.linesRemoved).toBe(0);
   });
 
-  it('Finding 1 (specialist): an orphan specialist tool result — no preceding tool-use under the parent — contributes nothing, even on duplicate delivery', () => {
+  it('specialist: an orphan specialist tool result — no preceding tool-use under the parent — contributes nothing, even on duplicate delivery', () => {
     let s = start();
     const patch = [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 3, lines: ['+x', '+y', '+z'] }];
     // The parent Agent tool-call DOES exist (otherwise applySubagentEvent bails

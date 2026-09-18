@@ -21,7 +21,7 @@ function picker(statuses: Record<string, any>, signedIn = true) {
 // §4.1: "Each tile carries the one fact that decides whether you click it."
 // These cases ARE that requirement — if any of them regresses to a generic
 // label, the picker stops answering "is there anything to do here?".
-describe('the picker states the deciding fact (§4.1)', () => {
+describe('the picker states the deciding fact', () => {
   it('shows a solo best when there is one', () => {
     picker({ flappy: { bestScore: '31 pipes' } });
     expect(screen.getByText('Your best: 31 pipes')).toBeInTheDocument();
@@ -56,7 +56,7 @@ describe('the picker states the deciding fact (§4.1)', () => {
   });
 });
 
-describe('signed out, solo still plays (§4.2)', () => {
+describe('signed out, solo still plays', () => {
   it('leaves solo tiles enabled and only gates the versus ones', () => {
     picker({ flappy: { bestScore: '31 pipes' }, chess: { friendsOnline: ['Jake'] } }, false);
     const flappy = screen.getByText('Flappy').closest('button')!;
@@ -78,7 +78,7 @@ describe('signed out, solo still plays (§4.2)', () => {
   });
 });
 
-describe('degraded service (§6.6)', () => {
+describe('degraded service', () => {
   it('says why a versus game is unavailable and disables only that tile', () => {
     picker({
       flappy: { bestScore: '31 pipes' },
@@ -92,7 +92,7 @@ describe('degraded service (§6.6)', () => {
   });
 });
 
-describe('the leaderboard (§6.1, §6.5, §6.6)', () => {
+describe('the leaderboard', () => {
   const rows = [
     { accountId: 'mira', name: 'Mira', handle: 'mira', score: '58 pipes', isYou: false },
     { accountId: 'you', name: 'You', handle: 'destin', score: '31 pipes', isYou: true },

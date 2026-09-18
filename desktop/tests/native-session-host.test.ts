@@ -572,7 +572,7 @@ describe('NativeSessionHost', () => {
   // teardown method — invoked by ipc-handlers.ts cleanup() from main.ts's
   // window-all-closed handler). Without this, an MCP server subprocess would
   // outlive the app.
-  describe('MCP teardown (Task 4)', () => {
+  describe('MCP teardown', () => {
     it('destroyAll() also tears down the pooled MCP connections', async () => {
       const mcpDestroyAll = vi.fn(async () => {});
       const h = new NativeSessionHost(
@@ -593,7 +593,7 @@ describe('NativeSessionHost', () => {
   // ---- Task 6: the host is the ONE production caller of McpManager's
   // acquire()/release() — create()/resume() acquire this session's servers
   // and thread them into the HarnessSession; destroy() releases the hold. ----
-  describe('MCP session wiring (Task 6)', () => {
+  describe('MCP session wiring', () => {
     const fakeServer = (id: string) => ({
       id, label: id, tools: [], call: async () => ({ text: 'ok', isError: false }),
     });
@@ -722,7 +722,7 @@ describe('NativeSessionHost', () => {
   // ONE synchronous call, so a throw or an await between "checked" and "set"
   // can no longer let two parallel Task calls both win the same reservation.
   // ----
-  describe('specialist slot + writer-lock bookkeeping (Task 6)', () => {
+  describe('specialist slot + writer-lock bookkeeping', () => {
     it('ceiling: HOSTED_MAX_CONCURRENT_SPECIALISTS reserves succeed for one parent, the next is refused', () => {
       for (let i = 0; i < HOSTED_MAX_CONCURRENT_SPECIALISTS; i++) {
         expect(host.reserveSpecialist('A', { writer: false }).ok).toBe(true);
@@ -815,7 +815,7 @@ describe('NativeSessionHost', () => {
   // session's real ceiling can be smaller than hosted's. The fallback constant
   // above still applies whenever no live session backs the parent id (the
   // 'never created' cases in the describe block above). ----
-  describe('specialist concurrency cap follows the profile (Task 13)', () => {
+  describe('specialist concurrency cap follows the profile', () => {
     const providerTypeFor = async (b: any) => (b.providerId === 'local' ? 'local-engine' : 'openrouter');
     // Fix pass 2: contextLengthFor collapsed into contextAndSlotsFor — this
     // fixture doesn't care about slots (totalSlots: null keeps the Layer 3
@@ -1078,7 +1078,7 @@ describe('NativeSessionHost', () => {
     // (it is a transport — the same engine serves vision and text-only GGUFs),
     // and 'mystery-3b' matches no KNOWN_MODELS entry, so the closure's `true`
     // is the ONLY thing in the system that can make this assertion pass.
-    it('a discovered supportsVision:true reaches the profile of a LOCAL-ENGINE binding too (T18)', async () => {
+    it('a discovered supportsVision:true reaches the profile of a LOCAL-ENGINE binding too', async () => {
       const h = new NativeSessionHost(
         new SessionStore(new NativeHome(root)), factory, contextAndSlotsFor as any, providerTypeFor as any,
         async () => true,
@@ -1091,7 +1091,7 @@ describe('NativeSessionHost', () => {
     // And the text-only half: a local model whose router row said `["text"]`
     // resolves to a hard false, so the harness tells it the picture cannot be
     // delivered rather than sending bytes the model cannot read.
-    it('a discovered supportsVision:false keeps a LOCAL-ENGINE profile text-only (T18)', async () => {
+    it('a discovered supportsVision:false keeps a LOCAL-ENGINE profile text-only', async () => {
       const h = new NativeSessionHost(
         new SessionStore(new NativeHome(root)), factory, contextAndSlotsFor as any, providerTypeFor as any,
         async () => false,
@@ -1953,7 +1953,7 @@ describe('NativeSessionHost', () => {
   // queued message would start a NEW turn AFTER the flush and append past it,
   // corrupting the transcript the requester is about to pull. quiesce guarantees
   // the opposite: after it resolves, NO further appends happen until a new send.
-  describe('quiesce (Task 9 — takeover/teardown)', () => {
+  describe('quiesce (takeover/teardown)', () => {
     it('quiesce clears the queue, aborts mid-stream, and no appends occur after it resolves', async () => {
       const store = new SessionStore(new NativeHome(root));
       const appendSpy = vi.spyOn(store, 'append');
@@ -2001,7 +2001,7 @@ describe('NativeSessionHost', () => {
   // ---- Specialists (plan 1a, Task 5): createChild mints a CHILD session —
   // an ordinary HarnessSession marked by parentage, cold-started, with a
   // charter-capped tool + permission surface and no route to a user ask.
-  describe('specialist children (Task 5)', () => {
+  describe('specialist children', () => {
     const EXPLORER = resolveSpecialist('explorer')!;
     // Boot a host we hold the store handle for (the suite's shared `host`
     // builds its store inline) so a test can read the child's header back.
@@ -2134,7 +2134,7 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
-    it("a child's events persist under its OWN id and never reach the host emitter (display copies are Task 7)", async () => {
+    it("a child's events persist under its OWN id and never reach the host emitter", async () => {
       const { store, h } = await withParent();
       const { childId } = await h.createChild('root-1', {
         specialist: EXPLORER, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
@@ -2173,7 +2173,7 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
-    it("the destructive deny-list cuts through the envelope, but now ROUTES to the parent instead of hard-denying (Task 8)", async () => {
+    it("the destructive deny-list cuts through the envelope, but now ROUTES to the parent instead of hard-denying", async () => {
       // Critical review fix (plan 1a): launch consent (the envelope) is consent
       // for the specialist's CHARTER of work, not for `rm -rf` — spec §5 says no
       // charter or envelope overrides the destructive deny-list. Worker is
@@ -2244,7 +2244,7 @@ describe('NativeSessionHost', () => {
     // through child-ask-router.ts instead, scoped to the specialist's
     // agentType so the grant can never widen the root session's own
     // permissions or leak to a different specialist type.
-    describe('"Always allow" on a routed child ask (Task 11 dropped-decision fix)', () => {
+    describe('"Always allow" on a routed child ask is persisted, not dropped', () => {
       const rmOnce = () => scriptedModel([
         stream(toolCallChunk('c1', 'Bash', { command: 'rm -rf marker.txt' }), finishChunk('tool-calls')),
         stream(...textChunks('t', 'done'), finishChunk('stop')),
@@ -2838,7 +2838,7 @@ describe('NativeSessionHost', () => {
   // dispatch logic (refusal wording, reservation sizing) is exercised through
   // the Task tool instead — task-tool.test.ts — since that's the surface a
   // model actually calls; these two are host-internal invariants.
-  describe('task_id management (Task 6)', () => {
+  describe('task_id management', () => {
     const EXPLORER = resolveSpecialist('explorer')!;
 
     it('resume() refuses a specialist header — children re-enter only through resumeSpecialist', async () => {
@@ -3620,7 +3620,7 @@ describe('NativeSessionHost', () => {
   // management (Task 6) above already covers postSteer's in-flight branch) —
   // these tests are about the NOTE recording and the EVENT feed layered on
   // top of it.
-  describe('user-facing steer/stop + specialists-event feed (Task 5, plan 1c)', () => {
+  describe('user-facing steer/stop + specialists-event feed', () => {
     const EXPLORER = resolveSpecialist('explorer')!;
 
     function bootHostWithLedger(modelFactory: any = factory) {
@@ -4046,7 +4046,7 @@ describe('NativeSessionHost', () => {
   // a per-turn block; this suite pins what it reports given a stamped ledger, reaching the private ledger
   // directly (same pattern the Task 2 tests above use) rather than driving a
   // real specialist run end-to-end.
-  describe('specialist status text (Task 5, plan 1b — on demand since 2026-09-09)', () => {
+  describe('specialist status text (on demand)', () => {
     it('the host status block lists running and undelivered-finished specialists and omits delivered ones', async () => {
       const store = new SessionStore(new NativeHome(root));
       const h = new NativeSessionHost(
@@ -4213,7 +4213,7 @@ describe('NativeSessionHost', () => {
   // own construction site), the session's assembled services.models.catalog()
   // resolves to REAL rows, and ModelSearch reports actual matches instead of
   // the "catalog not loaded" fallback.
-  describe('a real catalog reaches services.models.catalog() (Task 14 fix pass, Finding 1)', () => {
+  describe('a real catalog reaches services.models.catalog()', () => {
     const CATALOG: CatalogModel[] = [
       { id: 'anthropic/claude-opus-5', providerId: 'openrouter', label: 'Claude Opus 5', pricing: { in: 15, out: 75 }, contextLength: 200_000 },
     ];
@@ -4277,7 +4277,7 @@ describe('NativeSessionHost', () => {
   // binding the live catalog doesn't recognize — a stale/unconfirmed model
   // would let a helper spawn on something that no longer exists with nothing
   // on screen explaining why.
-  describe('getDelegatedModels / setDelegatedModel (Task 8)', () => {
+  describe('getDelegatedModels / setDelegatedModel', () => {
     const CATALOG: CatalogModel[] = [
       { id: 'claude-opus-5', providerId: 'anthropic', label: 'Claude Opus 5' },
     ];
@@ -4342,7 +4342,7 @@ describe('NativeSessionHost', () => {
   // "restart recovery + subagent-card replay (Task 9, plan 1b)" describe
   // just below (that comment already flags the reused number; same reason
   // applies here — not renamed to avoid an unrelated diff).
-  describe('specialistRunsFor (Task 9, plan 1c — run replay on attach)', () => {
+  describe('specialistRunsFor (run replay on attach)', () => {
     it('returns toRunView of every ledger record for the live parent, and [] for an unknown session', async () => {
       const store = new SessionStore(new NativeHome(root));
       const h = new NativeSessionHost(
@@ -4411,7 +4411,7 @@ describe('NativeSessionHost', () => {
   // root), same as the Task 4 background-delivery suite in
   // specialist-run.test.ts — the delivery loop and reconcile both read/write
   // it directly, so a fake would just be reimplementing the real thing.
-  describe('restart recovery + subagent-card replay (Task 9, plan 1b)', () => {
+  describe('restart recovery + subagent-card replay', () => {
     const EXPLORER = resolveSpecialist('explorer')!;
 
     function bootHost(home: NativeHome, store: SessionStore, modelFactory: any = factory) {
@@ -4837,7 +4837,7 @@ describe('NativeSessionHost', () => {
   // re-read at the start of every root turn when a file changed, and the
   // Task tool is rebuilt from the in-memory roster every turn (never once).
   // ---------------------------------------------------------------------
-  describe('specialist catalog wiring (Task 4, plan 1c)', () => {
+  describe('specialist catalog wiring', () => {
     let projectDir: string;
 
     function ccFile(name: string): string {

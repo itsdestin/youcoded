@@ -17,7 +17,7 @@ function mount(stage: RemoteAccessView['stage'], prerequisite?: RemoteAccessView
   return onAction;
 }
 
-it('password field offers Generate, the length hint and the disconnect warning (2026-09-10 security review)', () => {
+it('password field offers Generate, the length hint and the disconnect warning', () => {
   mount('ready');
   const password = screen.getByLabelText('Remote access password') as HTMLInputElement;
   // Generate fills a memorable passphrase over the minimum length.

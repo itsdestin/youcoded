@@ -215,7 +215,7 @@ describe('session:create native resume — missing stored header', () => {
 // at build time, into each conversation row) but never told chatsearch to
 // rebuild — so renaming or deleting a tag left the index serving the old label
 // (or a since-deleted one) until an unrelated refresh happened to catch up.
-describe('tags:update / tags:delete signal chatsearch (Task 5 gap)', () => {
+describe('tags:update / tags:delete signal chatsearch', () => {
   let tmp: string;
   let mockIpcMain: { handle: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> };
   let mockSessionManager: any;

@@ -1249,7 +1249,7 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
 
 // Model memory lifecycle (2026-07-14): per-model residency push + memory guard
 // + [Reload Model]. Same self-contained parity shape as the Plan B/C describes.
-describe('model memory lifecycle channel parity (2026-07-14)', () => {
+describe('model memory lifecycle channel parity', () => {
   const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
   const invokeChannels: Array<[string, string]> = [
     ['engine:models', 'ENGINE_MODELS'],
@@ -1278,7 +1278,7 @@ describe('model memory lifecycle channel parity (2026-07-14)', () => {
   });
 });
 
-describe('git:* IPC parity (git surface, spec 2026-07-22)', () => {
+describe('git:* IPC parity (git surface)', () => {
   const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
   const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
   const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));

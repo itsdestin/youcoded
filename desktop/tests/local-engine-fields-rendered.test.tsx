@@ -78,7 +78,7 @@ describe('the size breakdown bubble', () => {
     expect((rows.lastElementChild as HTMLElement).textContent).toBe(ADVICE);
   });
 
-  it('R1-25: hedges the RUNNING-MEMORY total too, not just the small print', () => {
+  it('hedges the RUNNING-MEMORY total too, not just the small print', () => {
     // 2.4 GB of weights + 1.6 GB of context = 4.0 GB. The total contains the
     // estimated term, so stating it exactly is the same fake precision one line
     // lower down — and the total is the number a user actually decides on.
@@ -100,13 +100,13 @@ describe('the size breakdown bubble', () => {
     expect(screen.queryByText(ADVICE)).toBeNull();
   });
 
-  it('R1-25: says "up to" for the context share when it is an upper bound', () => {
+  it('says "up to" for the context share when it is an upper bound', () => {
     render(<SizeLine q={quantWith({ contextBytesIsUpperBound: true })} />);
     openBubble();
     expect(screen.getByText('includes up to 1.6 GB for a 32k context')).toBeTruthy();
   });
 
-  it('R1-25: states the context share exactly when it is a reading', () => {
+  it('states the context share exactly when it is a reading', () => {
     render(<SizeLine q={quantWith({})} />);
     openBubble();
     expect(screen.getByText('includes 1.6 GB for a 32k context')).toBeTruthy();
@@ -221,17 +221,17 @@ describe('a model’s settings dialog', () => {
     expect(screen.queryByText(LOAD_ERROR_TITLE)).toBeNull();
   });
 
-  it('§C2: says a saved change waits for the reply on screen', async () => {
+  it('says a saved change waits for the reply on screen', async () => {
     await openSettings({ ...SETTINGS, keepLoaded: true, pendingApply: true });
     expect(screen.getByText('Applies after the current reply.')).toBeTruthy();
   });
 
-  it('§C2: says nothing about waiting once the change is in force', async () => {
+  it('says nothing about waiting once the change is in force', async () => {
     await openSettings({ ...SETTINGS, keepLoaded: true });
     expect(screen.queryByText('Applies after the current reply.')).toBeNull();
   });
 
-  it('§C2: the waiting line CLEARS once the change lands, without closing the dialog', async () => {
+  it('the waiting line CLEARS once the change lands, without closing the dialog', async () => {
     // There is no push channel for per-model settings, so the dialog re-asks.
     // Fetched once, it would sit there saying "Applies after the current reply"
     // for as long as it is open — the user closes it, reopens it, and concludes
@@ -247,7 +247,7 @@ describe('a model’s settings dialog', () => {
     );
   });
 
-  it('§C2: re-asking main never wipes what the user is halfway through typing', async () => {
+  it('re-asking main never wipes what the user is halfway through typing', async () => {
     // The poll re-reads every field. Seeded into the two text drafts on every
     // pass instead of once, a user typing a context length while a save is
     // pending watches it vanish under them two seconds later.
@@ -258,7 +258,7 @@ describe('a model’s settings dialog', () => {
     expect((screen.getByLabelText('Context length for this model') as HTMLInputElement).value).toBe('4096');
   });
 
-  it('§C2: a read already IN FLIGHT cannot undo the switch the user just flipped', async () => {
+  it('a read already IN FLIGHT cannot undo the switch the user just flipped', async () => {
     // The bug the first version of the poll shipped. Refusing to START a read
     // during a save does nothing about one already in the air: it carries the
     // values main held BEFORE the save and lands after it. What the user saw —
@@ -277,7 +277,7 @@ describe('a model’s settings dialog', () => {
     expect(screen.getByLabelText('Keep loaded').getAttribute('aria-checked')).toBe('true');
   });
 
-  it('§C2: two reads in the air, and the SLOWER one cannot win by finishing last', async () => {
+  it('two reads in the air, and the SLOWER one cannot win by finishing last', async () => {
     // Whenever a read takes longer than the poll interval there are two of them
     // outstanding, and order of arrival is not order of issue.
     const { reads } = deferredModels({ ...SETTINGS, keepLoaded: false });
@@ -291,7 +291,7 @@ describe('a model’s settings dialog', () => {
     expect(screen.getByLabelText('Keep loaded').getAttribute('aria-checked')).toBe('true');
   });
 
-  it('§C2: one failed read does not leave a red line under a working dialog', async () => {
+  it('one failed read does not leave a red line under a working dialog', async () => {
     // Before the poll this could not happen: the read failed and the dialog
     // stayed on the failure. Now the next read succeeds two seconds later and
     // draws the whole working dialog — with a stale "could not read" line under
@@ -321,7 +321,7 @@ describe('a model’s settings dialog', () => {
     expect(screen.getByText('Context length')).toBeTruthy();
   });
 
-  it('§C2: a save that FAILS does not freeze the dialog’s live values', async () => {
+  it('a save that FAILS does not freeze the dialog’s live values', async () => {
     // The suppression is released in a `finally`. Left set, one failed save
     // would stop every poll for as long as the dialog stayed open — and the
     // pending line and the load-error card are exactly what the poll is for.
@@ -345,7 +345,7 @@ describe('a model’s settings dialog', () => {
     expect(screen.getByText('Disk is full.')).toBeTruthy();
   });
 
-  it('§C2: no read is even ASKED FOR while a save is in flight', async () => {
+  it('no read is even ASKED FOR while a save is in flight', async () => {
     // The check inside the answer catches a read that was already in the air.
     // This is the other half: not starting one at all, so an answer that
     // predates the save's write cannot exist in the first place.
@@ -361,7 +361,7 @@ describe('a model’s settings dialog', () => {
     expect(reads.length).toBeGreaterThan(0);
   });
 
-  it('§C2: two saves in flight — the SLOWER one cannot repaint the older value', async () => {
+  it('two saves in flight — the SLOWER one cannot repaint the older value', async () => {
     // Reachable without contriving anything: saving Extra engine flags makes
     // main RUN the engine binary to check them, which takes seconds, while
     // saving a toggle comes back at once. Type a flag, blur, then hit Keep
@@ -384,7 +384,7 @@ describe('a model’s settings dialog', () => {
     expect(screen.getByLabelText('Keep loaded').getAttribute('aria-checked')).toBe('true');
   });
 
-  it('§C2: two saves REFUSED at once — neither message is swallowed by the other', async () => {
+  it('two saves REFUSED at once — neither message is swallowed by the other', async () => {
     // Same reachable shape as the ordering bug, on the failure path: a bad
     // extra flag is checked by RUNNING the engine binary and is refused seconds
     // later, while a bad context length is refused at once. One slot means the
@@ -406,7 +406,7 @@ describe('a model’s settings dialog', () => {
     expect(screen.getByText("error: option '--tempp' not recognized")).toBeTruthy();
   });
 
-  it('§C2: the same refusal twice is one message, not two', async () => {
+  it('the same refusal twice is one message, not two', async () => {
     // Additive must not mean repetitive: the same sentence twice is noise.
     const { saves } = deferredModels({ ...SETTINGS, extraFlags: '' });
     await openDialog();
@@ -419,7 +419,7 @@ describe('a model’s settings dialog', () => {
     expect(screen.getAllByText('Disk is full.')).toHaveLength(1);
   });
 
-  it('§C2: a fresh attempt clears what the last one said', async () => {
+  it('a fresh attempt clears what the last one said', async () => {
     const { saves } = deferredModels(SETTINGS);
     await openDialog();
     await act(async () => { fireEvent.click(screen.getByLabelText('Keep loaded')); });
@@ -429,7 +429,7 @@ describe('a model’s settings dialog', () => {
     expect(screen.queryByText('Disk is full.')).toBeNull();
   });
 
-  it('§C2: two overlapping saves — the first one finishing does not unblock the poll', async () => {
+  it('two overlapping saves — the first one finishing does not unblock the poll', async () => {
     // A flag, rather than a count, would have the first save's cleanup announce
     // that nothing is saving while the second is still in the air.
     const { models, saves } = deferredModels({ ...SETTINGS, keepLoaded: false });
@@ -445,7 +445,7 @@ describe('a model’s settings dialog', () => {
     expect(models.settings.mock.calls.length).toBe(before);
   });
 
-  it('§C2: closing the dialog stops the polling, and a late answer changes nothing', async () => {
+  it('closing the dialog stops the polling, and a late answer changes nothing', async () => {
     const { reads, models } = deferredModels(SETTINGS);
     await openDialog();
     await waitFor(() => expect(reads.length).toBeGreaterThan(0), POLLED);
@@ -458,7 +458,7 @@ describe('a model’s settings dialog', () => {
     expect(screen.queryByText('too late')).toBeNull();
   });
 
-  it('§C2: a load error that arrives while the dialog is open reaches the user', async () => {
+  it('a load error that arrives while the dialog is open reaches the user', async () => {
     // Same staleness, other field: a model fails on its next request, and a
     // dialog that read main once would never say so.
     await openSettings(SETTINGS, { ...SETTINGS, lastLoadError: 'error: out of memory' });
@@ -591,12 +591,12 @@ describe('the engine card', () => {
     expect(screen.queryByText('Diagnose with the assistant')).toBeNull();
   });
 
-  it('§B: says a saved setting waits for the reply on screen', async () => {
+  it('says a saved setting waits for the reply on screen', async () => {
     await renderAdvanced({ ...RUNNING, configApplyPending: true, configApplyWaitingForReply: true });
     expect(screen.getByTestId('engine-apply-pending').textContent).toContain('Applies after the current reply.');
   });
 
-  it('§B: does NOT blame a reply when the machine is idle', async () => {
+  it('does NOT blame a reply when the machine is idle', async () => {
     // `configApplyPending` is true from the moment a change is queued, including
     // a restart on a machine with nothing running — where the change lands a
     // poll interval later and there is no reply anywhere in sight.
@@ -606,17 +606,17 @@ describe('the engine card', () => {
     expect(line).not.toContain('current reply');
   });
 
-  it('§B: says nothing about waiting when nothing is pending', async () => {
+  it('says nothing about waiting when nothing is pending', async () => {
     await renderAdvanced(RUNNING);
     expect(screen.queryByTestId('engine-apply-pending')).toBeNull();
   });
 
-  it('§B: shows the REAL failure when applying a saved setting went wrong', async () => {
+  it('shows the REAL failure when applying a saved setting went wrong', async () => {
     await renderAdvanced({ ...RUNNING, configApplyError: 'EACCES: permission denied, open ’/home/d/.youcoded/engine/models.ini’' });
     expect(screen.getByText(/EACCES: permission denied/)).toBeTruthy();
   });
 
-  it('§B: shows no failure line when applying went fine', async () => {
+  it('shows no failure line when applying went fine', async () => {
     await renderAdvanced({ ...RUNNING, configApplyError: null });
     expect(screen.queryByText(/EACCES/)).toBeNull();
   });

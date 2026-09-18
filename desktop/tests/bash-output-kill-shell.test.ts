@@ -104,7 +104,7 @@ describe.skipIf(!posix)('BashOutput', () => {
 });
 
 describe.skipIf(!posix)('KillShell', () => {
-  it('stops the family, waits for the exit, returns the §4.3 sentence + last lines + log path', async () => {
+  it('stops the family, waits for the exit, returns the Stopped sentence + last lines + log path', async () => {
     const run = start('echo starting; sleep 30 & wait');
     await waitFor(() => reg.tailText(run, 5).includes('starting'));
     const r = await KillShellTool.execute({ shell_id: run.shellId }, ctx());

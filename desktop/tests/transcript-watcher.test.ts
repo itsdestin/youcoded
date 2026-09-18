@@ -917,7 +917,7 @@ describe('TranscriptWatcher read integrity', () => {
 // startWatching path source (spec §5.0): hook-supplied transcript_path wins,
 // slug derivation is fallback-only.
 // ---------------------------------------------------------------------------
-describe('startWatching path source (spec §5.0)', () => {
+describe('startWatching path source', () => {
   let watcher: TranscriptWatcher;
   let tmpDir: string;
 

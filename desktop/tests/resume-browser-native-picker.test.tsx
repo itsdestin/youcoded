@@ -94,7 +94,7 @@ async function openModelPicker() {
   return screen.findByPlaceholderText('Search all models…');
 }
 
-describe('ResumeBrowser — native resume model selector (Task 6)', () => {
+describe('ResumeBrowser — native resume model selector', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

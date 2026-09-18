@@ -84,7 +84,7 @@ describe('effectiveContextForModel', () => {
 // so a new provider type added later must be triaged here, not silently
 // default to whatever object spread happens to produce.
 // ---------------------------------------------------------------------------
-describe('nativeImageToolResults (Task 6b)', () => {
+describe('nativeImageToolResults', () => {
   it('is true only for the direct Anthropic provider', () => {
     expect(resolveProfile({ providerType: 'anthropic', modelId: 'claude-opus-5', contextLength: 200_000 }).nativeImageToolResults).toBe(true);
     for (const providerType of ['openai', 'google', 'openrouter', 'openai-compatible', 'local-engine', 'chatgpt'] as const) {
@@ -106,7 +106,7 @@ describe('nativeImageToolResults (Task 6b)', () => {
 // delegated work rather than parallelizing it, so the gate is on the TOOL,
 // never on NativeSessionHost.createChild directly).
 // ---------------------------------------------------------------------------
-describe('canDelegate (Task 6, spec decision 4)', () => {
+describe('canDelegate', () => {
   it('frontier/cloud providers default to true', () => {
     expect(CLOUD_DEFAULT.canDelegate).toBe(true);
     expect(resolveProfile({ providerType: 'anthropic', modelId: 'claude-opus-5', contextLength: 200_000 }).canDelegate).toBe(true);
@@ -238,7 +238,7 @@ describe('capability gating — a big window does not make a small model capable
 // integers from every tier plus the frontier/null shortcut and the
 // registry-ceiling clamp Finding 1 fixed.
 // ---------------------------------------------------------------------------
-describe('mcpToolBudgetTokens ladder (Task 6 / fix pass 1, Finding 2)', () => {
+describe('mcpToolBudgetTokens ladder', () => {
   it('an unmeasured/null window gets the smallest tier', () => {
     expect(resolveProfile(local('mystery', null)).mcpToolBudgetTokens).toBe(750);
   });
@@ -270,7 +270,7 @@ describe('mcpToolBudgetTokens ladder (Task 6 / fix pass 1, Finding 2)', () => {
     expect(p.mcpToolBudgetTokens).toBe(750);
   });
 
-  it('regression (Finding 1): the registry ceiling clamps the window for EVERY provider, not only local-engine', () => {
+  it('the registry ceiling clamps the window for EVERY provider, not only local-engine', () => {
     // Before the fix, mcpBudgetSizing only ran effectiveContextForModel for
     // providerType === 'local-engine'. An openai-compatible endpoint (the
     // Ollama/LM Studio shape) launched with a large declared window whose
@@ -345,7 +345,7 @@ describe('supportsVision — three-level precedence (registry > discovered > pro
 // conservative floor unconditionally — same posture as canDelegate, which is
 // already false for it, so the Task tool is never even attached.
 // ---------------------------------------------------------------------------
-describe('maxConcurrentSpecialists (Task 13 — local concurrency from the engine, hosted from the profile)', () => {
+describe('maxConcurrentSpecialists — local concurrency from the engine, hosted from the profile', () => {
   it('hosted/cloud providers get the flat spec constant', () => {
     // Final-review fix (Finding 5): `expect(CLOUD_DEFAULT.maxConcurrentSpecialists)
     // .toBe(HOSTED_MAX_CONCURRENT_SPECIALISTS)` alone can never fail from a
@@ -433,7 +433,7 @@ describe('announcePrefill — the prompt-reading notice is local-only', () => {
 // serves GPT-5.x models, and before this the harness had never heard of the
 // 'chatgpt' provider kind: a plan model fell through to the "unmeasured local
 // model" path and silently behaved like a small local model.
-describe("Sign in with ChatGPT — the harness knows the 'chatgpt' provider (design §4.8)", () => {
+describe("Sign in with ChatGPT — the harness knows the 'chatgpt' provider", () => {
   it('a plan GPT-5.6 with no measured window gets frontier sizing, the GPT prompt and vision', () => {
     // contextLength: null is the real production shape — the plan's manifest
     // may not report a window, and null must mean "not measured", never "small".

@@ -366,7 +366,7 @@ async function writeModelSettings(modelId: string, entry: unknown): Promise<void
 
 const dismissedAt = (contextLength: number) => ({ at: 1_757_000_000_000, contextLength });
 
-describe('ModelManager.memoryCheck — the remembered warning (§D4)', () => {
+describe('ModelManager.memoryCheck — the remembered warning', () => {
   it('a dismissal made at 32k silences the warning at 32k', async () => {
     plantModel('M-Q4_K_M', 8 * GB);
     // Before: this machine really does warn about this model. Without this

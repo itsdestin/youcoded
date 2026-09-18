@@ -42,7 +42,7 @@ describe('formatElapsed / stateText / formatFinishedNotice', () => {
     expect(stateText({ ...base, status: 'stopped', stopReason: 'user' })).toBe('stopped (by you) · 3m 02s');
     expect(stateText({ ...base, status: 'stopped', stopReason: 'assistant' })).toBe('stopped (by KillShell) · 3m 02s');
   });
-  it('the finished notice is the §4.4 block: header, $ command, tail, log path', () => {
+  it('the finished notice is one block: header, $ command, tail, log path', () => {
     const run: any = { shellId: 'sh-9c10', command: './gradlew assembleDebug', status: 'exited', exitCode: 0, startedAt: 0, endedAt: 702_000, logPath: '/tmp/x/bash-1.txt' };
     expect(formatFinishedNotice(run, 'BUILD SUCCESSFUL')).toBe(
       '[Background command sh-9c10 finished · exit 0 · 11m 42s]\n$ ./gradlew assembleDebug\nBUILD SUCCESSFUL\nFull log: /tmp/x/bash-1.txt',

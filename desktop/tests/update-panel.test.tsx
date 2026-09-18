@@ -171,7 +171,7 @@ describe('UpdatePanel — error states', () => {
     expect(await screen.findByRole('button', { name: /update now/i })).toBeInTheDocument();
   });
 
-  it('signature-invalid: blocks the update, explains, and offers NO browser fallback (2026-09-10 #7)', async () => {
+  it('signature-invalid: blocks the update, explains, and offers NO browser fallback', async () => {
     (window as any).claude.update.launch.mockResolvedValue({ success: false, error: 'signature-invalid' });
     render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
     fireEvent.click(await screen.findByRole('button', { name: /update now/i }));
@@ -184,7 +184,7 @@ describe('UpdatePanel — error states', () => {
     expect(screen.queryByRole('button', { name: /open in browser instead/i })).not.toBeInTheDocument();
   });
 
-  it('verify-failed: offers a retry but NOT the raw-binary browser fallback (2026-09-10 #7 review)', async () => {
+  it('verify-failed: offers a retry but NOT the raw-binary browser fallback', async () => {
     (window as any).claude.update.launch.mockResolvedValue({ success: false, error: 'verify-failed' });
     render(<UpdatePanel open={true} onClose={() => {}} updateStatus={UPDATE_STATUS_AVAILABLE} />);
     fireEvent.click(await screen.findByRole('button', { name: /update now/i }));

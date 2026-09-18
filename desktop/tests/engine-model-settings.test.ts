@@ -209,7 +209,7 @@ async function bootWithStream(modelId: string | null, extra: Record<string, unkn
   return { fetchImpl, reply, mgr: mgr! };
 }
 
-describe('models:set-settings — the save writes config, and NOTHING else (§C2)', () => {
+describe('models:set-settings — the save writes config, and NOTHING else', () => {
   it('leaves the preset file byte-for-byte as it was, and marks the change pending', async () => {
     const { reply } = await bootWithStream('alpha');
     // The engine wrote this on its way up, before any model had settings.
@@ -371,7 +371,7 @@ describe('models:set-settings — the save writes config, and NOTHING else (§C2
   });
 });
 
-describe('the apply waits on the PER-MODEL count, not the engine-wide one (§C2)', () => {
+describe('the apply waits on the PER-MODEL count, not the engine-wide one', () => {
   it('applies a quiet model\'s change while a DIFFERENT model is streaming', async () => {
     const { reply } = await bootWithStream('beta');
     urls.length = 0;
@@ -463,7 +463,7 @@ describe('the apply waits on the PER-MODEL count, not the engine-wide one (§C2)
   });
 });
 
-describe('a deferred ENGINE-WIDE change cannot ride out on somebody else\'s reload (§B/§C2)', () => {
+describe('a deferred ENGINE-WIDE change cannot ride out on somebody else\'s reload', () => {
   it('a finished download does not apply a context length the user is still waiting on', async () => {
     const { reply } = await bootWithStream('alpha');
     expect(readPreset()).toBe(BARE_PRESET);
@@ -512,7 +512,7 @@ describe('a deferred ENGINE-WIDE change cannot ride out on somebody else\'s relo
   });
 });
 
-describe('each model\'s bound is its OWN, and a fallback boot applies nothing (§C2)', () => {
+describe('each model\'s bound is its OWN, and a fallback boot applies nothing', () => {
   // Long enough that a MISSING per-id deadline is what fails these, not the
   // machine's speed: the two saves are a second apart and the bound is two, so
   // one model landing before the other is an ordering fact, never a clock
@@ -719,7 +719,7 @@ describe('each model\'s bound is its OWN, and a fallback boot applies nothing (�
   });
 });
 
-describe('refreshModels() merges pending changes only for IDLE models (§C2)', () => {
+describe('refreshModels() merges pending changes only for IDLE models', () => {
   it('lands the quiet model\'s change and leaves the busy model\'s alone', async () => {
     plantInstall();
     await plantConfig();
@@ -756,7 +756,7 @@ describe('refreshModels() merges pending changes only for IDLE models (§C2)', (
   });
 });
 
-describe('keep loaded, and deleting a model (§C2, R2-6)', () => {
+describe('keep loaded, and deleting a model', () => {
   it('the last-session release skips a keep-loaded model and frees any other', async () => {
     plantInstall();
     await plantConfig({
@@ -823,7 +823,7 @@ describe('keep loaded, and deleting a model (§C2, R2-6)', () => {
   });
 });
 
-describe('lastLoadError has TWO sources, and both reach the model (§C2)', () => {
+describe('lastLoadError has TWO sources, and both reach the model', () => {
   it('source 1 — the router\'s own message when a load of that model fails', async () => {
     plantInstall();
     await plantConfig();
@@ -895,7 +895,7 @@ describe('lastLoadError has TWO sources, and both reach the model (§C2)', () =>
   });
 });
 
-describe('a fresh engine reads every saved change on its way up (§C2)', () => {
+describe('a fresh engine reads every saved change on its way up', () => {
   it('clears pendingApply once it is running with the preset in force', async () => {
     plantInstall();
     // What an app restart looks like: a change saved during a reply, and the

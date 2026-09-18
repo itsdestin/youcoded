@@ -9,7 +9,7 @@ let tmp: string;
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tcwd-')); });
 afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
 
-describe('R1 vs R2 — the shape that broke the earlier draft (spec §5.4/§7)', () => {
+describe('R1 vs R2 — a transcript whose cwd switches past line 200', () => {
   const PROJ = '/home/u/My Proj, & Stuff';
   const HOME = '/home/u';
 

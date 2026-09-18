@@ -127,7 +127,7 @@ afterEach(() => {
   try { fs.rmSync(tmpConvRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); } catch {}
 });
 
-describe('native session meta — round trip (Task 5 unlock)', () => {
+describe('native session meta — round trip', () => {
   it('tag → persist → get-meta and browse both return it for a native session', async () => {
     const { handler } = setup();
 

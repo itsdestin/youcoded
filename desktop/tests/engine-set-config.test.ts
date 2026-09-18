@@ -150,7 +150,7 @@ async function startStreamingReply(m: EngineManager, fetchImpl: any) {
   };
 }
 
-describe('engine:set-config — a speed switch waits for the reply to finish (§B, R3-5)', () => {
+describe('engine:set-config — a speed switch waits for the reply to finish', () => {
   it('does not kill a streaming reply, and restarts the moment it ends', async () => {
     plantInstall();
     await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
@@ -219,7 +219,7 @@ describe('engine:set-config — a speed switch waits for the reply to finish (§
   });
 });
 
-describe('engine:set-config — a context change reloads, it does not restart (§B, R2-24)', () => {
+describe('engine:set-config — a context change reloads, it does not restart', () => {
   it('rewrites the preset\'s [*] section and asks the router to re-read it, with no new process', async () => {
     plantInstall();
     await home.mutateJson('config.json', () => ({ v: 1, engine: { cacheDir, contextSize: 32_768 } }));
@@ -315,7 +315,7 @@ describe('engine:set-context — the alias every existing caller still goes thro
   });
 });
 
-describe('engine:set-config — one action per wait, however many changes (R3-5 follow-up)', () => {
+describe('engine:set-config — one action per wait, however many changes', () => {
   /** Boot, hold a reply open, and hand back the fixtures the probes need. */
   async function bootWithStream() {
     plantInstall();
@@ -468,7 +468,7 @@ describe('engine:set-config — a refused reload is REPORTED (should-fix 1)', ()
 // ---------------------------------------------------------------------------
 // §C3 — which /props answers the question
 // ---------------------------------------------------------------------------
-describe('effectiveContextWindow asks the MODEL, not the router (§C3)', () => {
+describe('effectiveContextWindow asks the MODEL, not the router', () => {
   /** /props answers `body` only when asked about a named model; the bare /props
    *  answers what the router really answers — a dummy with n_ctx 0. */
   //  `loadedId` matters: the manager only NAMES a model in /props when GET /models

@@ -225,7 +225,7 @@ describe('openFilepath — deferred mode (drawerOpensImmediately: false)', () =>
     expect(dispatched.length).toBe(0);
   });
 
-  it('tracked miss (Finding 1 fix): never selects an ephemeral discovered record — listAllFiles is not consulted and the eventual selection is the persisted sidecar id, not the relative-path discovered id', async () => {
+  it('tracked miss: never selects an ephemeral discovered record — listAllFiles is not consulted and the eventual selection is the persisted sidecar id, not the relative-path discovered id', async () => {
     const state = makeState({ sessionCwd: { s1: '/proj' } });
     // listAllFiles is wired to return a DISCOVERED record whose id is the raw
     // relative path (project-file-discovery.ts shape) — exactly the ephemeral

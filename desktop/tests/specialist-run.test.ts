@@ -48,7 +48,7 @@ const EXPLORER = resolveSpecialist('explorer')!;
 // turn-complete" test below for what that would break.
 const DISPLAY_TYPES = ['tool-use', 'tool-result', 'assistant-text'];
 
-describe('specialist foreground run (Task 7)', () => {
+describe('specialist foreground run', () => {
   let root: string;
   let store: SessionStore;
   let host: NativeSessionHost;
@@ -537,7 +537,7 @@ describe('specialist foreground run (Task 7)', () => {
   // paths) and monkeypatch the ledger's methods to throw, the same fault-
   // injection shape `throwOnceFactory` uses elsewhere in this suite for the
   // model factory.
-  describe('a ledger write failure never corrupts a real run (review round 2)', () => {
+  describe('a ledger write failure never corrupts a real run', () => {
     async function withLedgerParent(scripts: any[][]) {
       const model = scriptedModel(scripts);
       const home = new NativeHome(root);
@@ -549,7 +549,7 @@ describe('specialist foreground run (Task 7)', () => {
       await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
     }
 
-    it('Finding 1: a completion-write failure does not discard the report or relabel a successful run "failed"', async () => {
+    it('a completion-write failure does not discard the report or relabel a successful run "failed"', async () => {
       await withLedgerParent(TWO_TOOLS_THEN_REPORT);
       const ledger = (host as any).ledger;
       const realUpdate = ledger.update.bind(ledger);
@@ -579,7 +579,7 @@ describe('specialist foreground run (Task 7)', () => {
       expect(rec?.status).not.toBe('failed');
     });
 
-    it('Finding 2: a recordStart failure still tears the child down — no leaked live entry, childrenOf, or model ref', async () => {
+    it('a recordStart failure still tears the child down — no leaked live entry, childrenOf, or model ref', async () => {
       await withLedgerParent(TWO_TOOLS_THEN_REPORT);
       const ledger = (host as any).ledger;
       ledger.recordStart = async () => { throw new Error('simulated lock exhaustion'); };
@@ -617,7 +617,7 @@ describe('specialist foreground run (Task 7)', () => {
 // rather than engineering a real tiny-context compaction trigger — the
 // compaction MATH itself is already pinned in harness-compaction.test.ts; this
 // suite is about the LISTENER's count-to-two-then-steer-once behavior.
-describe('compaction-finalize steer (Task 12, item 4)', () => {
+describe('compaction-finalize steer', () => {
   let root: string;
   let store: SessionStore;
   let host: NativeSessionHost;
@@ -770,7 +770,7 @@ describe('compaction-finalize steer (Task 12, item 4)', () => {
 // compaction-finalize suite above uses) at controlled fake-timer offsets,
 // with no live model turn racing the assertions. `release()` always lets that
 // turn finish normally, so every test proves the child actually completes.
-describe('heartbeat staleness (Task 7)', () => {
+describe('heartbeat staleness', () => {
   let root: string;
   let store: SessionStore;
   let host: NativeSessionHost;
@@ -1081,7 +1081,7 @@ describe('heartbeat staleness (Task 7)', () => {
 // need a REAL ledger (a NativeHome pointed at the test's tmp root), since the
 // delivery loop reads/writes it directly — same `home` pattern the "ledger
 // write failure" describe block above uses.
-describe('background execution + idle-boundary delivery (Task 4)', () => {
+describe('background execution + idle-boundary delivery', () => {
   let root: string;
   let store: SessionStore;
   let host: NativeSessionHost;
@@ -1327,7 +1327,7 @@ describe('background execution + idle-boundary delivery (Task 4)', () => {
     expect(spilled.startsWith(huge.slice(0, 200))).toBe(true);
   });
 
-  it('Task 10: a report already spilled at completion time is not spilled a SECOND time by delivery', async () => {
+  it('a report already spilled at completion time is not spilled a SECOND time by delivery', async () => {
     // `huge` blows BOTH thresholds — RAW_REPORT_CAP_CHARS (64,000, the
     // ledger's completion-time spill) and EXPLORER's much smaller report
     // budget (formatSpecialistReport's own truncation-time spill, Task 10) —
@@ -1363,7 +1363,7 @@ describe('background execution + idle-boundary delivery (Task 4)', () => {
     expect(injected.data.text).toContain('Full report saved to:');
   });
 
-  it('Critical fix pass 2 (2026-08-13): delivery never overwrites a spill path it just failed to read, and never claims it as the full report', async () => {
+  it('delivery never overwrites a spill path it just failed to read, and never claims it as the full report', async () => {
     // Simulates the completion-time spill file being unreadable by delivery
     // time (process restart, external cleanup — exactly what
     // readSessionArtifact's own doc comment anticipates). Mocking the READ
@@ -1432,7 +1432,7 @@ describe('background execution + idle-boundary delivery (Task 4)', () => {
 
   // ---- Fix pass (external review, 2026-08-12): three follow-on gaps ----------
 
-  it('Finding 1: delivery of a spilled oversized report reads the FULL body back from disk, not the capped ledger copy', async () => {
+  it('delivery of a spilled oversized report reads the FULL body back from disk, not the capped ledger copy', async () => {
     // The ledger's own rawReport is capped at RAW_REPORT_CAP_CHARS on every
     // write (delegation-ledger.ts's update()) — formatting delivery from
     // THAT copy alone understates the report's true size in
@@ -1466,7 +1466,7 @@ describe('background execution + idle-boundary delivery (Task 4)', () => {
     expect(injected.data.text).not.toContain(`of ${RAW_REPORT_CAP_CHARS} chars`);
   });
 
-  it('Finding 2 (fix pass 2): a background completion whose ledger write ALWAYS fails still reaches the parent via the in-memory fallback lane, exactly once, and the ledger record is left honestly stranded', async () => {
+  it('a background completion whose ledger write ALWAYS fails still reaches the parent via the in-memory fallback lane, exactly once, and the ledger record is left honestly stranded', async () => {
     // Fix pass 1 responded to this finding by firing a SECOND write
     // (ledger.updateIfRunning) synchronously right after the first failed —
     // re-review rejected that: it's the same write against the same store
@@ -1532,7 +1532,7 @@ describe('background execution + idle-boundary delivery (Task 4)', () => {
     expect(events.filter((e) => e.data?.injected === 'specialist-report')).toHaveLength(1);
   });
 
-  it('Finding 3: a destroy() racing the delivery loop leaves the report claimable again, never falsely confirmed', async () => {
+  it('a destroy() racing the delivery loop leaves the report claimable again, never falsely confirmed', async () => {
     // The pre-existing queue-drain loop rechecks `this.live.get(sessionId)
     // !== entry` after every turn because destroy() can land mid-turn. The
     // delivery loop reused the same captured `entry` across three awaits
@@ -1830,7 +1830,7 @@ describe('background execution + idle-boundary delivery (Task 4)', () => {
 // tool set while it is genuinely live, then shows a widened SECOND definition
 // for the same id (what a re-read catalog would hand back on the NEXT
 // Task-tool build) changes nothing about the already-spawned child.
-describe('R12 (Task 4, plan 1c) — a running child keeps its spawn-time definition', () => {
+describe('a running child keeps its spawn-time definition', () => {
   let root: string;
   let store: SessionStore;
   let host: NativeSessionHost;
@@ -1913,7 +1913,7 @@ describe('R12 (Task 4, plan 1c) — a running child keeps its spawn-time definit
 // the root session's turn and never for the child's — using a child cwd
 // distinct from the root's so a call bearing it can only have come from the
 // child's own turn(s).
-describe('Task 4 fix pass — turn-start ensureFresh is root-only for real', () => {
+describe('turn-start ensureFresh is root-only for real', () => {
   let root: string;
   let store: SessionStore;
   let host: NativeSessionHost;

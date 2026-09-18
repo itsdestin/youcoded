@@ -38,7 +38,7 @@ beforeAll(() => {
 });
 afterAll(() => { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 }); });
 
-describe('signature verification (2026-09-10 security review, #7)', () => {
+describe('signature verification', () => {
   it('accepts a genuine signature and rejects a tampered manifest', () => {
     const bytes = bytesOf(manifestFor('1.3.0'));
     const sig = sign(bytes);
