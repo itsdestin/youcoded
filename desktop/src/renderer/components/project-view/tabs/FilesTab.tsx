@@ -23,7 +23,7 @@ import { useChunkedReveal } from '../../../hooks/use-chunked-reveal';
 import { useProjectWatch } from '../../../hooks/useProjectWatch';
 import { dedupeContentHits, groupContentHits, capGroups, MAX_CONTENT_ROWS, type RankableHit } from '../../../utils/content-search-ranking';
 import type { CentralIndexProject, ArtifactRecord } from '../../../../shared/artifacts/types';
-import { FOLDER_PAGE_SIZE, FOLDER_SAMPLE_FILES, type FolderPage, type FolderSummary } from '../../../../shared/artifacts/folder-page';
+import { FOLDER_PAGE_SIZE, type FolderPage, type FolderSummary } from '../../../../shared/artifacts/folder-page';
 import { ActiveArtifactView } from '../../artifact-views/ActiveArtifactView';
 import type { ActiveArtifactHandle } from '../../artifact-views/ActiveArtifactView';
 import { useArtifactContent } from '../../artifact-views/useArtifactContent';
@@ -79,9 +79,6 @@ function fileComparator(sortBy: FileSortKey) {
   };
 }
 
-// Filenames shown on a folder card — the listing sends exactly this many.
-const FOLDER_PREVIEW_FILES = FOLDER_SAMPLE_FILES;
-
 // One row of the folder view: a file or a subfolder, in the order the listing
 // sent them (files first). Built once per page arrival (useMemo), so a row's
 // wrapper keeps its identity across unrelated renders.
@@ -110,8 +107,15 @@ function folderErrorMessage(error: string, detail: string | undefined, atRoot: b
       return 'YouCoded doesn’t open this folder, because it can hold passwords or keys.';
     case 'outside-project':
       return 'This folder leads outside the project, so YouCoded doesn’t show it here.';
+    case 'not-allowed':
+      // The remote host's root gate (remote-server.ts refuseUnknownProject).
+      return 'This computer doesn’t share this folder over remote access.';
+    case 'request-failed':
+      return detail ? `Couldn’t load your files: ${detail}` : 'Couldn’t load your files.';
     default:
-      return detail ? `Couldn’t open this folder: ${detail}` : 'Couldn’t open this folder.';
+      // 'unavailable' and anything newer: the system's own code, labelled as
+      // such (ELOOP, EIO…), rather than a guess at what it means (F6).
+      return detail ? `Couldn’t open this folder. The system reported: ${detail}.` : 'Couldn’t open this folder.';
   }
 }
 
@@ -256,13 +260,13 @@ function FilesTabImpl({
   // True until the list for the current project resolves — gates the flat
   // empty states so they can't flash before data arrives.
   const [allLoading, setAllLoading] = useState(false);
-  // The real message when a request could not be answered at all. WHY this
-  // exists: over remote access the host refused every file channel until
+  // The real message when the search list's request could not be answered at
+  // all (the folder view has its own, below). WHY this exists: over remote access the host refused every file channel until
   // batch 3, the refusal REJECTED, and this component had no catch — so the
   // loading line never cleared and a phone saw "Loading files…" forever (found
   // 2026-09-10). A failure is a state with a Retry, never a spinner that
   // outlives its request.
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [allError, setAllError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
   // True when the whole-project walk hit a cap — surfaced as a note under
   // search results so a partial list never silently reads as complete.
@@ -300,7 +304,7 @@ function FilesTabImpl({
   const loadAll = () => {
     const gen = ++allGen.current;
     setAllLoading(true);
-    setLoadError(null);
+    setAllError(null);
     Promise.resolve((window.claude as any).artifacts.listAllFiles(project.id, { force: true }))
       .then((res: any) => {
         if (gen !== allGen.current) return;
@@ -314,7 +318,7 @@ function FilesTabImpl({
         setArtifacts([]);
         setTruncated(false);
         // The real message when there is one; never a guess about the cause.
-        setLoadError(err?.message ? String(err.message) : '');
+        setAllError(err?.message ? String(err.message) : '');
       });
   };
   // Remembers which project/refresh the list above belongs to, so turning a
@@ -330,7 +334,7 @@ function FilesTabImpl({
   }, [flat, project.id, refreshKey, retryToken]);
   // A project switch drops the old list at once, so a search typed straight
   // after the switch never matches against the previous project's files.
-  useEffect(() => { setArtifacts([]); setTruncated(false); allFor.current = null; }, [project.id]);
+  useEffect(() => { setArtifacts([]); setTruncated(false); setAllError(null); allFor.current = null; }, [project.id]);
 
   // ── Folder view: ONE folder, from disk, a page at a time ─────────────────
   // artifacts:list-folder (main/artifacts/folder-listing.ts). No depth limit,
@@ -340,25 +344,40 @@ function FilesTabImpl({
   const [folderDirs, setFolderDirs] = useState<FolderSummary[]>([]);
   const [folderHasMore, setFolderHasMore] = useState(false);
   const [folderLoading, setFolderLoading] = useState(true);
-  // The listing's own { ok:false } answer — rendered as an ErrorState with the
-  // real reason, never as an empty folder.
+  // Why the folder could not be listed: the listing's own { ok:false } answer,
+  // or 'request-failed' when the request itself was refused (remote access
+  // down…). Rendered as an ErrorState with the real reason, never as an empty
+  // folder. Kept apart from allError (search) so neither clears or shows the
+  // other's failure (code review 2026-09-18, F1).
   const [folderError, setFolderError] = useState<{ error: string; detail?: string } | null>(null);
+  // A LATER page failed. The pages already shown stay; the end of the list
+  // says why it stopped and offers Retry, so a half-read folder never reads as
+  // complete (code review 2026-09-18, F2).
+  const [moreError, setMoreError] = useState<{ error: string; detail?: string } | null>(null);
   const folderGen = useRef(0);
   const folderPaging = useRef(false);
+  // The listing's snapshot id from page 0 — later pages pass it so they read
+  // the SAME listing even when something else re-reads this folder (F3).
+  const folderSnapshot = useRef<string | undefined>(undefined);
   const loadedCount = folderFiles.length + folderDirs.length;
   const loadedCountRef = useRef(0);
   loadedCountRef.current = loadedCount;
 
-  const listFolderPage = (dir: string, offset: number, limit = FOLDER_PAGE_SIZE): Promise<FolderPage | { ok: false; error: 'unsupported' }> =>
-    Promise.resolve((window.claude as any).artifacts.listFolder?.(project.id, dir, { sort: sortBy, offset, limit })
+  const listFolderPage = (dir: string, offset: number, limit: number, snapshot?: string): Promise<FolderPage | { ok: false; error: 'unsupported' }> =>
+    Promise.resolve((window.claude as any).artifacts.listFolder?.(project.id, dir, { sort: sortBy, offset, limit, snapshot })
       ?? { ok: false, error: 'unsupported' });
+  const reasonOf = (res: any) => ({ error: String(res?.error ?? ''), detail: res?.detail });
+  const rejectionOf = (err: any) => ({ error: 'request-failed', detail: err?.message ? String(err.message) : undefined });
 
   // Load the folder from the top. `keep` re-reads at least that many entries,
   // so a refresh (a file added while you read page 3) doesn't cut the list
-  // back to one page under the reader.
+  // back to one page under the reader. Refreshes ask for up to 1,000 at a time
+  // (the listing's cap), so a reader deep in a folder costs one or two round
+  // trips per refresh, not one per 200 (F7).
   const loadFolder = (keep = 0) => {
     const gen = ++folderGen.current;
     folderPaging.current = false;
+    setMoreError(null);
     if (keep === 0) {
       // A different folder: clear the old one at once, so its files never sit
       // under the new folder's breadcrumb while the new listing arrives.
@@ -370,8 +389,11 @@ function FilesTabImpl({
       const files: ArtifactRecord[] = [];
       const dirs: FolderSummary[] = [];
       let more = true;
+      let snapshot: string | undefined;
       while (more && (files.length + dirs.length === 0 || files.length + dirs.length < keep)) {
-        const res: any = await listFolderPage(dir, files.length + dirs.length);
+        const got = files.length + dirs.length;
+        const limit = Math.min(1000, Math.max(FOLDER_PAGE_SIZE, keep - got));
+        const res: any = await listFolderPage(dir, got, limit, snapshot);
         if (gen !== folderGen.current) return;
         if (!res?.ok) {
           setFolderLoading(false);
@@ -379,40 +401,46 @@ function FilesTabImpl({
           // The phone app has no file data yet (SessionService.kt stub): keep
           // showing the same empty folder it showed before this channel existed.
           setFolderError(res?.error === 'not-implemented-on-mobile' || res?.error === 'unsupported'
-            ? null : { error: String(res?.error ?? ''), detail: res?.detail });
+            ? null : reasonOf(res));
           return;
         }
+        snapshot = res.snapshot;
         files.push(...res.files);
         dirs.push(...res.folders);
         more = !!res.hasMore;
       }
+      folderSnapshot.current = snapshot;
       setFolderLoading(false);
       setFolderError(null);
-      setLoadError(null);
       setFolderFiles(files); setFolderDirs(dirs); setFolderHasMore(more);
     })().catch((err: any) => {
       if (gen !== folderGen.current) return;
       setFolderLoading(false);
       setFolderFiles([]); setFolderDirs([]); setFolderHasMore(false);
-      setLoadError(err?.message ? String(err.message) : '');
+      setFolderError(rejectionOf(err));
     });
   };
   // The next page, appended. One at a time; a reload in between wins.
   const loadMoreFolder = () => {
     if (folderPaging.current || !folderHasMore) return;
     folderPaging.current = true;
+    setMoreError(null);
     const gen = folderGen.current;
-    listFolderPage(currentDir, loadedCountRef.current).then((res: any) => {
+    listFolderPage(currentDir, loadedCountRef.current, FOLDER_PAGE_SIZE, folderSnapshot.current).then((res: any) => {
       if (gen !== folderGen.current) return;
       folderPaging.current = false;
-      if (!res?.ok) { setFolderHasMore(false); return; }
+      if (!res?.ok) { setMoreError(reasonOf(res)); return; }
+      // The listing this page belonged to had expired: re-read from the top,
+      // keeping as many entries, rather than splice two listings together.
+      if (res.restarted) { loadFolder(loadedCountRef.current + FOLDER_PAGE_SIZE); return; }
+      folderSnapshot.current = res.snapshot ?? folderSnapshot.current;
       setFolderFiles((prev) => [...prev, ...res.files]);
       setFolderDirs((prev) => [...prev, ...res.folders]);
       setFolderHasMore(!!res.hasMore);
-    }).catch(() => {
+    }).catch((err: any) => {
       if (gen !== folderGen.current) return;
       folderPaging.current = false;
-      setFolderHasMore(false);
+      setMoreError(rejectionOf(err));
     });
   };
   // Opening a folder starts from the top with a loading line; re-reading the
@@ -420,7 +448,6 @@ function FilesTabImpl({
   // many entries as were loaded — no flash, and the reader keeps their place.
   const shownFolder = useRef<string | null>(null);
   useEffect(() => {
-    setLoadError(null);
     const key = `${project.id}\0${currentDir}`;
     const same = shownFolder.current === key;
     shownFolder.current = key;
@@ -616,7 +643,7 @@ function FilesTabImpl({
   // drawn and the folder has more on disk.
   const [pageSentinel, setPageSentinel] = useState<HTMLElement | null>(null);
   const pageSentinelRef = useCallback((el: HTMLElement | null) => setPageSentinel(el), []);
-  const needNextPage = !flat && !hidden && !folderRevealMore && folderHasMore;
+  const needNextPage = !flat && !hidden && !folderRevealMore && folderHasMore && moreError === null;
   const loadMoreRef = useRef(loadMoreFolder);
   loadMoreRef.current = loadMoreFolder;
   useEffect(() => {
@@ -776,7 +803,8 @@ function FilesTabImpl({
   // (It said "N files", counted recursively, while the view was carved out of
   // the capped whole-project walk.)
   const renderFolderCard = (f: FolderSummary) => {
-    const previewFiles = f.samples.slice(0, FOLDER_PREVIEW_FILES);
+    // The listing sends a card's first few files already (FOLDER_SAMPLE_FILES).
+    const previewFiles = f.samples;
     return (
           // Folder cards have a distinct FOLDER SHAPE — a tab on the top-left
           // plus a body that previews the contents as a FILENAME LIST (the
@@ -849,6 +877,14 @@ function FilesTabImpl({
     );
   };
 
+  // The end of a folder whose next page failed: what stopped it, and Retry.
+  const renderMoreError = () => moreError && (
+    <ErrorState
+      mode="recoverable"
+      message={`${folderErrorMessage(moreError.error, moreError.detail, false, project.path)} Some of this folder isn’t shown.`}
+      onRetry={() => loadMoreRef.current()}
+    />
+  );
   const emptyHere = !flat && !folderLoading && folderError === null && loadedCount === 0 && !folderHasMore;
   // Which request the loading line and the load error belong to right now.
   const loading = flat ? allLoading : folderLoading;
@@ -923,11 +959,11 @@ function FilesTabImpl({
       {loading && (
         <p className="text-sm text-fg-muted">Loading {noun}…</p>
       )}
-      {!loading && loadError !== null && (
+      {flat && !allLoading && allError !== null && (
         <div className="max-w-md mt-4 mx-auto">
           <ErrorState
             mode="recoverable"
-            message={loadError ? `Couldn’t load your files: ${loadError}` : 'Couldn’t load your files.'}
+            message={allError ? `Couldn’t load your files: ${allError}` : 'Couldn’t load your files.'}
             onRetry={() => setRetryToken((t) => t + 1)}
           />
         </div>
@@ -935,7 +971,7 @@ function FilesTabImpl({
       {/* A folder the listing could not read: the real reason and a Retry,
           never an empty folder (spec 2026-09-18 §8). The breadcrumb above
           stays, so the way back out is always one click. */}
-      {!flat && !folderLoading && loadError === null && folderError !== null && (
+      {!flat && !folderLoading && folderError !== null && (
         <div className="max-w-md mt-4 mx-auto">
           <ErrorState
             mode="recoverable"
@@ -950,7 +986,7 @@ function FilesTabImpl({
       {!loading && flat && !searching && flatResults.length === 0 && (
         <p className="text-sm text-fg-muted">Nothing matches the current filters.</p>
       )}
-      {loadError === null && emptyHere && (
+      {emptyHere && (
         <p className="text-sm text-fg-muted">
           {currentDir ? 'This folder is empty.' : 'No files found in this project folder.'}
         </p>
@@ -1061,6 +1097,7 @@ function FilesTabImpl({
                   box, because in list view the box is what scrolls. */}
               {folderRevealMore && <div ref={folderSentinelRef} className="h-px shrink-0" aria-hidden />}
               {needNextPage && <div ref={pageSentinelRef} className="h-px shrink-0" aria-hidden />}
+              {moreError && <div className="p-2">{renderMoreError()}</div>}
             </ListBox>
           )
           : (
@@ -1070,6 +1107,7 @@ function FilesTabImpl({
               {folderVisible.map((e) => (e.kind === 'file' ? renderFileCard(e.file) : renderFolderCard(e.dir)))}
               {folderRevealMore && <div key="grid-folder" ref={folderSentinelRef} className="col-span-full h-px" aria-hidden />}
               {needNextPage && <div key="grid-page" ref={pageSentinelRef} className="col-span-full h-px" aria-hidden />}
+              {moreError && <div className="col-span-full">{renderMoreError()}</div>}
             </>
           )}
       </div>

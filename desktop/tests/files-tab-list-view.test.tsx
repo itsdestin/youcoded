@@ -260,6 +260,41 @@ describe('folder browsing at any size', () => {
     expect(queryByText('This folder is empty.')).toBeNull();
   });
 
+  it('says why a huge folder stopped when a later page fails, and Retry carries on', async () => {
+    const files = bigFolder(400);
+    let failNext = true;
+    listFolder.mockImplementation((_id: string, dir: string, opts: any) => {
+      if ((opts?.offset ?? 0) > 0 && failNext) { failNext = false; return Promise.resolve({ ok: false, error: 'permission-denied' }); }
+      return Promise.resolve(folderPageFromRecords(files as any, dir, opts));
+    });
+    const { container, findByTitle, findByText, getByRole } = render(
+      <FilesTab project={project} search="" types={new Set()} sortBy="name" view="list"
+        onViewChange={vi.fn()} refreshKey={0} pvActiveId={null} artifactDispatch={vi.fn()} />,
+    );
+    fireEvent.click(await findByTitle('big'));
+    await findByTitle('big/f-00000.md');
+    for (let i = 0; i < FOLDER_PAGE_SIZE / REVEAL_CHUNK + 1; i++) act(() => io.fireAll());
+    expect(await findByText(/Some of this folder isn’t shown/)).toBeTruthy();
+    fireEvent.click(getByRole('button', { name: /retry/i }));
+    await waitFor(() => expect(listFolder.mock.calls.filter((c: any[]) => c[2]?.offset === FOLDER_PAGE_SIZE)).toHaveLength(2));
+    for (let i = 0; i < 6; i++) act(() => io.fireAll());
+    await waitFor(() => expect(container.querySelectorAll('button[title^="big/f-"]').length).toBeGreaterThan(FOLDER_PAGE_SIZE));
+  });
+
+  it("keeps a failed search's error to search results", async () => {
+    listAllFiles.mockRejectedValue(new Error('host refused'));
+    const props = {
+      project, types: new Set<FileTypeGroup>(), sortBy: 'name' as const, view: 'list' as const, onViewChange: vi.fn(),
+      refreshKey: 0, pvActiveId: null, artifactDispatch: vi.fn(),
+    };
+    const { findByText, queryByText, findByTitle, rerender } = render(<FilesTab {...props} search="notes" />);
+    expect(await findByText(/host refused/)).toBeTruthy();
+    // Clearing the search returns to the folder, which loaded fine.
+    rerender(<FilesTab {...props} search="" />);
+    await findByTitle('notes.md');
+    expect(queryByText(/host refused/)).toBeNull();
+  });
+
   it('keeps the "first batch" note to search results', async () => {
     listAllFiles.mockResolvedValue({ ok: true, files: FILES, truncated: true });
     const browsing = renderTab('list');

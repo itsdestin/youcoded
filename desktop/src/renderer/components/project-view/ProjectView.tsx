@@ -31,6 +31,7 @@ import type { FileSortKey, FileViewMode } from './tabs/FilesTab';
 // One project:list-conversations row — a plain past session.
 type ConversationSummary = PastSession;
 import { FilesTab, PV_SESSION } from './tabs/FilesTab';
+import { folderFileNames } from './folder-file-names';
 import { ConversationsTab } from './tabs/ConversationsTab';
 import { ContextTab } from './tabs/ContextTab';
 import { ConversationPreview } from './ConversationPreview';
@@ -419,10 +420,12 @@ export function ProjectView(props: ProjectViewProps) {
     // persisted stats.artifactCount in the central index — neither is a
     // renderer concern here.
     // ALL FILES count — the project folder's on-disk files (DISTINCT from the
-    // artifact count). Shares main's discovery cache with the Files tab's
-    // Project Files section, so this and the tab don't double-scan. Gated roots
-    // (home dir / drive root)
-    // return { gated } with NO scan → null here → the stat renders "—".
+    // artifact count). Since 2026-09-18 the Files tab browses one folder at a
+    // time (artifacts:list-folder) and no longer shares this walk — it reuses
+    // main's 10 s discovery cache only when a search follows. This count still
+    // walks the project (capped) on open, off the Files tab's path; the Stage 2
+    // background index replaces it (roadmap files.md). Gated roots (home dir /
+    // drive root) return { gated } with NO scan → null here → the stat renders "—".
     const getAllFilesCount = async (): Promise<{ count: number | null; truncated: boolean }> => {
       try {
         const res = await (window.claude as any).artifacts.listAllFiles(id);
@@ -621,22 +624,16 @@ export function ProjectView(props: ProjectViewProps) {
   // overwrite.
   const computeImportCollisions = async (paths: string[]): Promise<string[]> => {
     if (!activeProject) return [];
-    const relDir = currentRelDir.replace(/\\/g, '/');
-    const existing = new Set<string>();
+    const listFolder = (window.claude as any).artifacts.listFolder;
+    if (!listFolder) return [];
+    let existing: Set<string> | null = null;
     try {
-      // Pages of 1,000 until the folder is exhausted: a collision anywhere in
-      // it counts, not only among the first page.
-      for (let offset = 0; ;) {
-        const res = await (window.claude as any).artifacts.listFolder?.(activeProject.id, relDir, { offset, limit: 1000 });
-        if (!res?.ok) return [];
-        for (const a of res.files as ArtifactRecord[]) existing.add(a.path.split('/').pop() ?? a.path);
-        offset += res.files.length + res.folders.length;
-        if (!res.hasMore) break;
-      }
+      existing = await folderFileNames(listFolder, activeProject.id, currentRelDir.replace(/\\/g, '/'));
     } catch { return []; }
+    if (!existing) return [];
     return paths
       .map((p) => p.replace(/\\/g, '/').split('/').pop() ?? p)
-      .filter((name) => existing.has(name));
+      .filter((name) => existing!.has(name));
   };
 
   // + Add file — was a manualIncludes pin (a "fake" tracked entry pointing at a

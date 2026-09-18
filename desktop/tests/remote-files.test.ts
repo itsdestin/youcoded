@@ -215,7 +215,12 @@ describe('the file lists answer the same on both transports', () => {
     const ipc = await overIpc('artifacts:list-folder', root, '', { offset: 0 });
     const remote = await overRemote('artifacts:list-folder', { projectId: root, relDir: '', opts: { offset: 0 } });
     expect(remote?.ok).toBe(true);
-    expect(remote).toEqual(ipc);
+    // Each page-0 read hands back its own snapshot id; everything else matches.
+    const { snapshot: a, ...ipcRest } = ipc;
+    const { snapshot: b, ...remoteRest } = remote;
+    expect(typeof a).toBe('string');
+    expect(typeof b).toBe('string');
+    expect(remoteRest).toEqual(ipcRest);
     expect((remote.files as any[]).map((f) => f.path)).toContain('notes.md');
   });
 

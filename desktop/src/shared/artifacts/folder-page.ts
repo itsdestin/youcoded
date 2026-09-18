@@ -36,6 +36,10 @@ export type FolderPage =
       total: number;
       offset: number;
       hasMore: boolean;
+      /** Pass back with later pages so they read the same listing. */
+      snapshot?: string;
+      /** A later page whose listing had expired: re-read from the top. */
+      restarted?: boolean;
     }
   | { ok: false; error: FolderListError; detail?: string };
 

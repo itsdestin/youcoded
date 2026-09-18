@@ -148,3 +148,29 @@ describe('a folder that cannot be listed says why', () => {
     expect(await listFolderPage(root, 7 as any)).toEqual({ ok: false, error: 'bad-request' });
   });
 });
+
+// Code review 2026-09-18, F3.
+describe('each reader pages its own listing', () => {
+  it('a second reader of the same folder does not disturb the first one mid-scroll', async () => {
+    for (let i = 0; i < 12; i++) write(`shared/f-${String(i).padStart(2, '0')}.txt`);
+    const first: any = await listFolderPage(root, 'shared', { limit: 5 });
+    // Something else reads the folder, which then changes.
+    await listFolderPage(root, 'shared', { limit: 5 });
+    write('shared/a-new-first.txt');
+    const second: any = await listFolderPage(root, 'shared', { offset: 5, limit: 5, snapshot: first.snapshot });
+    expect(second.restarted).toBeUndefined();
+    expect([...first.files, ...second.files].map((f: any) => f.path)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `shared/f-${String(i).padStart(2, '0')}.txt`));
+  });
+
+  it('a later page whose listing is gone says so instead of splicing two listings', async () => {
+    const page: any = await listFolderPage(root, 'docs', { offset: 1, limit: 1, snapshot: 'no-such-snapshot' });
+    expect(page.restarted).toBe(true);
+  });
+
+  it('names only: no times, no subfolder previews', async () => {
+    const page: any = await listFolderPage(root, '', { namesOnly: true });
+    expect(page.files.every((f: any) => f.lastModified === '')).toBe(true);
+    expect(page.folders.every((d: any) => d.itemCount === undefined && d.samples.length === 0)).toBe(true);
+  });
+});

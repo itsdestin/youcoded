@@ -2486,7 +2486,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // (shared/artifacts/folder-page.ts), because the workbench has no disk.
     // `&filesLocked=1` adds a folder the "system" refuses to open, so the
     // permission error can be reached and captured.
-    listFolder: async (projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number }) => {
+    listFolder: async (projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) => {
       if (filesRefused()) return refuseAsToday('artifacts:list-folder');
       const dir = relDir.replace(/^\/+|\/+$/g, '');
       if (lockedSwitch && dir === 'Locked') return { ok: false, error: 'permission-denied' };

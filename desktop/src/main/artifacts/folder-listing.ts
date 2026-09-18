@@ -36,23 +36,28 @@ import {
 import { discoveredFileRecord } from './project-file-discovery';
 import { authorizeArtifactRead } from './write-authorization';
 
-/** Entries per page when the caller names none (shared), and the most one call returns. */
+/** The most entries one call returns (the default is FOLDER_PAGE_SIZE, shared). */
 const MAX_PAGE_SIZE = 1000;
 /** Parallel stats. 100,000 unbounded stats measured 1.2 s and ~500 MB (Stage 0). */
 const STAT_CONCURRENCY = 64;
 
 interface Entry { name: string; isDir: boolean; mtimeMs?: number }
-interface Snapshot { ts: number; realDir: string; files: Entry[]; folders: Entry[] }
+interface Snapshot { ts: number; scope: string; realDir: string; files: Entry[]; folders: Entry[] }
 
-// Later pages of one listing read from the snapshot page 0 took, so paging
+// Later pages of one listing read from the snapshot ITS page 0 took, so paging
 // through a folder that changes under you never repeats or skips an entry.
-// Page 0 always re-reads the disk: opening or refreshing a folder is never
-// served from here. Small and short-lived — it holds names, not records.
+// Page 0 always re-reads the disk and hands back a fresh snapshot id; the
+// caller passes that id with every later page. WHY an id and not the folder
+// (code review 2026-09-18, F3): keyed by folder, a second reader of the same
+// folder — the "+ Add file" check, a phone, a refresh — replaced the snapshot
+// under the first reader mid-scroll. Small and short-lived: names, not records.
 const snapshots = new Map<string, Snapshot>();
-const SNAPSHOT_TTL_MS = 60_000;
-const MAX_SNAPSHOTS = 16;
+// Sliding: each page read renews it, so only an abandoned listing expires.
+const SNAPSHOT_TTL_MS = 5 * 60_000;
+const MAX_SNAPSHOTS = 32;
+let snapshotSeq = 0;
 
-function snapshotKey(root: string, rel: string, sort: FolderSort): string {
+function scopeOf(root: string, rel: string, sort: FolderSort): string {
   return `${canonicalize(root, null)}\0${rel}\0${sort}`;
 }
 
@@ -144,7 +149,14 @@ async function summarize(absDir: string, relDir: string, name: string): Promise<
 export async function listFolderPage(
   projectRoot: unknown,
   relDir: unknown,
-  opts?: { sort?: FolderSort; offset?: number; limit?: number },
+  opts?: {
+    sort?: FolderSort; offset?: number; limit?: number;
+    /** The id page 0 answered with; later pages read from that snapshot. */
+    snapshot?: string;
+    /** Names only: skip file times and subfolder previews (a caller that only
+     *  compares names — the "+ Add file" check — never pays for them). */
+    namesOnly?: boolean;
+  },
 ): Promise<FolderPage> {
   if (typeof projectRoot !== 'string' || projectRoot.length === 0 || typeof relDir !== 'string') {
     return { ok: false, error: 'bad-request' };
@@ -164,11 +176,18 @@ export async function listFolderPage(
     return { ok: false, error: 'outside-project' };
   }
 
-  const key = snapshotKey(projectRoot, rel, sort);
-  let snap = offset > 0 ? snapshots.get(key) : undefined;
-  if (snap && Date.now() - snap.ts > SNAPSHOT_TTL_MS) snap = undefined;
+  const scope = scopeOf(projectRoot, rel, sort);
+  let id = offset > 0 && typeof opts?.snapshot === 'string' ? opts.snapshot : '';
+  let snap = id ? snapshots.get(id) : undefined;
+  if (snap && (snap.scope !== scope || Date.now() - snap.ts > SNAPSHOT_TTL_MS)) snap = undefined;
+  // A later page whose snapshot is gone was read against a listing that no
+  // longer exists: say so, so the caller re-reads from the top rather than
+  // splicing a fresh listing onto an old one at a raw offset.
+  const restarted = offset > 0 && !snap;
 
-  if (!snap) {
+  if (snap) {
+    snap.ts = Date.now();
+  } else {
     // Same realpath + in-folder + protected-path check artifacts:get applies,
     // so a link partway along the path cannot lead the listing out of the
     // project (the entries themselves are never links — see readEntries).
@@ -188,9 +207,9 @@ export async function listFolderPage(
       } else {
         files.sort(byName);
       }
-      snap = { ts: Date.now(), realDir: auth.realPath, files, folders };
-      snapshots.delete(key);
-      snapshots.set(key, snap);
+      snap = { ts: Date.now(), scope, realDir: auth.realPath, files, folders };
+      id = `s${++snapshotSeq}`;
+      snapshots.set(id, snap);
       while (snapshots.size > MAX_SNAPSHOTS) snapshots.delete(snapshots.keys().next().value as string);
     } catch (e) {
       return errorFor(e);
@@ -205,13 +224,18 @@ export async function listFolderPage(
   const pageFolders = snap.folders.slice(folderStart, folderEnd);
 
   // Name order only needs the times of the files actually shown.
-  await statInto(snap.realDir, pageFiles);
+  if (!opts?.namesOnly) await statInto(snap.realDir, pageFiles);
   const files = pageFiles.map((f) => discoveredFileRecord(
     relId(rel, f.name),
     f.mtimeMs !== undefined ? new Date(f.mtimeMs).toISOString() : '',
   ));
-  const folders = await mapLimit(pageFolders, 16, (f) => summarize(snap!.realDir, rel, f.name));
-  return { ok: true, files, folders, total, offset, hasMore: end < total };
+  const folders = opts?.namesOnly
+    ? pageFolders.map((f) => ({ name: f.name, path: relId(rel, f.name), samples: [] }))
+    : await mapLimit(pageFolders, 16, (f) => summarize(snap!.realDir, rel, f.name));
+  return {
+    ok: true, files, folders, total, offset, hasMore: end < total, snapshot: id,
+    ...(restarted ? { restarted: true } : {}),
+  };
 }
 
 /** Test seam: forget every paging snapshot. */

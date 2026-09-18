@@ -4808,7 +4808,7 @@ export function registerIpcHandlers(
 
   // LIST_FOLDER → one folder of Project Files, a page at a time, straight from
   // disk (folder-listing.ts). No depth cap and no home-folder gate.
-  ipcMain.handle(ARTIFACT_IPC.LIST_FOLDER, (_e, projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number }) =>
+  ipcMain.handle(ARTIFACT_IPC.LIST_FOLDER, (_e, projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) =>
     listFolder(projectId, relDir, opts));
 
   // full: the user clicked "Load the whole file" on the partial-view bar. Still

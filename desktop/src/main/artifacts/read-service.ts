@@ -113,7 +113,10 @@ export async function listProjectFiles(projectId: string, opts?: { withCount?: b
  * (stops at nested git repos), cached. NOT pure discovery — projectAllFiles()
  * UNIONS in any tracked INTERNAL artifact that exists on disk but discovery
  * did not reach. Gated roots (home dir / drive root) return { gated: true }
- * with no scan unless opts.force — the tab renders a "Browse anyway?" gate.
+ * with no scan unless opts.force. Since 2026-09-18 the Files tab browses with
+ * artifacts:list-folder and calls this only for search and the type filter,
+ * always with force (the "Browse anyway" screen is gone); the project hero's
+ * count still calls it without force, so a home folder shows no count there.
  */
 export async function listAllFiles(projectId: string, opts?: { force?: boolean }) {
   const projects = await listProjects(CLAUDE_DIR);
@@ -122,8 +125,10 @@ export async function listAllFiles(projectId: string, opts?: { force?: boolean }
   if (isGatedRoot(projectRoot) && !opts?.force) {
     return { ok: true, files: [], truncated: false, gated: true };
   }
-  // The repair runs AFTER the gated-root check so a gated root's sidecar is
-  // never read and rewritten on a listing the user never confirmed.
+  // The repair runs AFTER the gated-root check, so the hero count's unforced
+  // call never reads or rewrites a home folder's sidecar. A search there
+  // (forced) does repair it — as opening that folder's Session Drawer
+  // already did, unconditionally (code review 2026-09-18, F8).
   await repairSidecar(projectRoot);
   const r = await projectAllFiles(projectRoot);
   return { ok: true, files: r.files, truncated: r.truncated };
@@ -140,7 +145,7 @@ export async function listAllFiles(projectId: string, opts?: { force?: boolean }
 export async function listFolder(
   projectId: unknown,
   relDir: unknown,
-  opts?: { sort?: FolderSort; offset?: number; limit?: number },
+  opts?: { sort?: FolderSort; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean },
 ): Promise<FolderPage> {
   if (typeof projectId !== 'string' || projectId.length === 0) return { ok: false, error: 'bad-request' };
   const projects = await listProjects(CLAUDE_DIR);
