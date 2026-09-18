@@ -80,8 +80,6 @@
     "tests/prompt-card.test.tsx",
     "tests/remote-server.test.ts",
     "tests/report-review-button.test.tsx",
-    "tests/session-drawer-lists-on-open.test.tsx",
-    "tests/session-drawer-preview-header.test.tsx",
     "tests/session-title.test.ts",
     "tests/skill-tool-gating.test.ts",
     "tests/skill-tool.test.ts",

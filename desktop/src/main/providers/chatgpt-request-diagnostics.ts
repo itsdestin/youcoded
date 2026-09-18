@@ -104,7 +104,10 @@ export class ChatGptRequestDiagnostics {
    *  provoked with valid JSON, so the only way to pin "a short walk is never a
    *  comparison" is to hand dispatch a scanner that reports one. */
   private readonly scan: Scanner;
-  constructor(private readonly options: { directory: string; now?: () => number; write?: (row: DiagnosticRecord) => Promise<void>; scan?: Scanner }) {
+  // WHY memoryBytes is injectable: the eviction test used to hash ~570k items to overflow the
+  // real 8 MiB budget, which took 5s idle and blew the 30s test budget under load. A small
+  // budget exercises the same eviction and oversize paths with a tiny fraction of the work.
+  constructor(private readonly options: { directory: string; now?: () => number; write?: (row: DiagnosticRecord) => Promise<void>; scan?: Scanner; memoryBytes?: number }) {
     this.now = options.now ?? Date.now;
     this.scan = options.scan ?? serializedValues;
   }
@@ -145,8 +148,9 @@ export class ChatGptRequestDiagnostics {
       if (!scanned.complete) { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
       // Buffer storage makes the fingerprint-byte limit exact rather than guessing JS string overhead.
       const size = scanned.entries.length * 32 + 1024;
-      if (size > MEMORY) { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
-      while (this.bytes + size > MEMORY) {
+      const memory = this.options.memoryBytes ?? MEMORY;
+      if (size > memory) { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
+      while (this.bytes + size > memory) {
         const active = new Set([...this.unfinished.values()].map(row => row.laneId));
         const inactive = [...this.lanes].filter(([id]) => !active.has(id)).sort((a, b) => a[1].touched - b[1].touched)[0];
         if (!inactive) { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
