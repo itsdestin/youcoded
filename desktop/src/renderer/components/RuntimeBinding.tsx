@@ -352,8 +352,9 @@ export function NativeExtras({ nb, preset, onPreset }: {
       {nb.memVerdict && nb.memVerdict.verdict !== 'ok' && (
         // Round-4 (Destin, screenshot): "doesn't look like any other surface in the
         // app". So it IS another surface in the app — the expandable SettingRow every
-        // Settings screen uses (G-22): the sentence is the row title, the chevron on
-        // the right flips down, and what it reveals is one numbers line plus the
+        // Settings screen uses (design guide G-29; it was numbered G-22 until
+        // 2026-09-18, a number the find bar also used): the sentence is the row
+        // title, the chevron on the right flips down, and what it reveals is one numbers line plus the
         // "Warn me about this model" toggle row. No status dot, no Less button.
         // Round-5 note (Destin): the toggle is a SUB-CARD inside the expanded warning card,
         // not a sibling row — so the card is one container that grows, and the toggle row's
