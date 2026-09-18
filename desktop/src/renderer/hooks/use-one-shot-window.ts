@@ -26,13 +26,45 @@
 // IN, because on the way OUT the window opens while `sessionActive` is false.
 import { useEffect, useState } from 'react';
 
-/** 200ms reveal / 240ms switch, plus a frame of slack — one number, because the
- *  strip and the transcript are meant to read as one decision, not two. */
-export const MOTION_WINDOW_MS = 240;
+/** The default window if the stylesheet cannot be read (jsdom, a missing token):
+ *  today's --dur-switch (380ms) plus the slack below. */
+export const MOTION_WINDOW_FALLBACK_MS = 500;
+/** WHY slack: the clock starts when React commits, the animation when the
+ *  browser first PAINTS — and a session switch's first paint is a heavy one.
+ *  Leaving the class on after a one-iteration animation has ended costs nothing;
+ *  taking it off early cancels the animation mid-air. */
+const MOTION_WINDOW_SLACK_MS = 120;
+
+let defaultWindowMs: number | null = null;
+
+/** The default window, read ONCE off the stylesheet's `--dur-switch`.
+ *
+ *  WHY not a number: this was `240`, written for a 240ms switch. The vocabulary
+ *  picked on 2026-09-02 made the switch 380ms, nothing tied the two together,
+ *  and from then on ChatView pulled `.switch-arrival` off at 63% — the curve is
+ *  past its destination at that moment, so the conversation snapped ~1px and the
+ *  settle Destin chose was never seen. SessionStrip had the same defect and
+ *  fixed it the same way (motionWindowMs). Read once because the tokens sit in
+ *  a theme-independent `:root` (pinned by animation-frame-budget.test.ts), and
+ *  ChatView re-renders per streamed word. */
+export function defaultMotionWindowMs(): number {
+  if (defaultWindowMs != null) return defaultWindowMs;
+  let ms = NaN;
+  if (typeof document !== 'undefined') {
+    const v = getComputedStyle(document.documentElement).getPropertyValue('--dur-switch').trim();
+    const n = parseFloat(v);
+    ms = v.endsWith('ms') ? n : v.endsWith('s') ? n * 1000 : NaN;
+  }
+  defaultWindowMs = Number.isFinite(ms) && ms > 0 ? Math.round(ms + MOTION_WINDOW_SLACK_MS) : MOTION_WINDOW_FALLBACK_MS;
+  return defaultWindowMs;
+}
+
+/** Test seam: forget the cached read. */
+export function resetDefaultMotionWindowForTests(): void { defaultWindowMs = null; }
 
 interface Window { key: unknown; open: boolean; gen: number }
 
-export function useOneShotWindow(key: unknown, durationMs = MOTION_WINDOW_MS): boolean {
+export function useOneShotWindow(key: unknown, durationMs = defaultMotionWindowMs()): boolean {
   const [win, setWin] = useState<Window>({ key, open: false, gen: 0 });
 
   // Derived state: the key moved since the last render, so open a fresh window

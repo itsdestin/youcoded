@@ -375,7 +375,7 @@ function RosterRow({ d, folders }: { d: SpecialistDefinitionView; folders?: Spec
       className={`px-3 py-1.5 ${d.offered ? '' : 'opacity-50'}`}
       data-testid={`specialist-row-${d.id}`}
     >
-      <button type="button" onClick={() => setOpen(v => !v)} className="w-full text-left" aria-expanded={open}>
+      <button type="button" onClick={() => setOpen(v => !v)} className="w-full text-left rounded-md px-1 -mx-1 state-layer" aria-expanded={open}>
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-xs font-medium text-fg-2">{d.displayName}</span>
           {/* Destin (workbench pass): the read-write badge was amber. Now the

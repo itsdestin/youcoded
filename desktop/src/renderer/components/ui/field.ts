@@ -37,6 +37,14 @@ export const FIELD =
   // composer, ReportReviewButton) and would otherwise lose their affordance.
   'disabled:opacity-50 disabled:cursor-not-allowed';
 
+/** Hover and press for a field that is a BUTTON — a Select, the model picker, the
+ *  folder switcher. Added 2026-09-18: these opened a menu on click and did nothing
+ *  at all under the pointer. It is the border that answers, as it does on focus —
+ *  a fill change would move under the value's text. Text INPUTS do not take this:
+ *  a caret is their affordance, and changing every text field in the app was not
+ *  what was asked for. */
+export const FIELD_TRIGGER_STATES = 'cursor-pointer transition-colors hover:border-fg-muted active:border-fg-dim';
+
 export type FieldSize = 'sm' | 'md';
 
 export const FIELD_SIZE: Record<FieldSize, string> = {

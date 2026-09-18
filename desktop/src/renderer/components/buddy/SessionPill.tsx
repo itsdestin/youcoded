@@ -71,7 +71,7 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
   return (
     <div style={{ position: 'relative', alignSelf: 'center' }}>
       <button
-        className="layer-surface"
+        className="layer-surface ring-state"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -103,7 +103,7 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
             onClick={() => { setOpen(false); setFormOpen(false); }}
           />
           <div
-            className="layer-surface"
+            className="layer-surface ring-state"
             style={{
               position: 'absolute',
               top: '100%',

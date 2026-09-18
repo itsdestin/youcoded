@@ -14,7 +14,9 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render } from '@testing-library/react';
-import ChatView from '../src/renderer/components/ChatView';
+// The unmemoised view: this harness delivers new state by re-rendering with the
+// SAME props, which the memoised default export skips by design (see ChatView.tsx).
+import { UnmemoizedChatView as ChatView } from '../src/renderer/components/ChatView';
 import { findArchiveBoundary } from '../src/renderer/state/archive-boundary';
 
 const mocks = vi.hoisted(() => ({ state: {} as any }));

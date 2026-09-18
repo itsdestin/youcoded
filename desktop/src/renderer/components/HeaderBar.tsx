@@ -13,6 +13,8 @@ import WideViewToggle from './WideViewToggle';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { Tooltip } from './ui';
+import { ON_INSET_CONTROL, HEADER_ICON_BUTTON } from './header/control-states';
+import { FOCUS_RING } from './ui/Button';
 import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac');
@@ -56,7 +58,7 @@ export function CaptionButtons() {
   // On real Android `__PLATFORM__` is set before any import, so this only narrows.
   if (!claude?.window || isAndroid()) return null;
 
-  const btnClass = "px-2 py-1 rounded-[var(--radius-toggle)] transition-colors text-fg-dim hover:text-fg-2 flex items-center justify-center";
+  const btnClass = `px-2 py-1 rounded-[var(--radius-toggle)] flex items-center justify-center ${ON_INSET_CONTROL}`;
 
   return (
     <div className="flex bg-inset rounded-md p-0.5 gap-0.5">
@@ -73,7 +75,7 @@ export function CaptionButtons() {
         </button>
       </Tooltip>
       <Tooltip text="Close" placement="bottom">
-        <button className={`${btnClass} hover:!bg-red-500 hover:!text-white`} onClick={() => claude.window.close()}>
+        <button className={`${btnClass} hover:!bg-red-500 hover:!text-white active:!bg-red-600 active:!text-white`} onClick={() => claude.window.close()}>
           <svg className="w-3.5 h-3.5" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.4"><line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" /></svg>
         </button>
       </Tooltip>
@@ -258,7 +260,7 @@ export function ProjectsButton({ active = false }: { active?: boolean } = {}) {
     <Tooltip text={active ? 'Back to chat' : 'Projects'} placement="bottom">
     <button
       type="button"
-      className={`relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg ${active ? 'text-fg bg-inset' : ''}`}
+      className={`${HEADER_ICON_BUTTON} ${active ? 'text-fg bg-inset' : ''}`}
       onClick={() => dispatch({ type: active ? 'PROJECT_VIEW_CLOSED' : 'PROJECT_VIEW_OPENED' })}
       aria-label="Open Projects"
       aria-pressed={active}
@@ -308,7 +310,7 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
             dispatch({ type: drawerOpen ? 'DRAWER_CLOSED' : 'DRAWER_OPENED', sessionId: activeSessionId }));
         }}
         className={`px-2 py-1 rounded-[var(--radius-toggle)] transition-colors flex items-center gap-1 ${
-          drawerOpen ? 'bg-accent text-on-accent' : 'text-fg-dim hover:text-fg-2'
+          drawerOpen ? 'bg-accent text-on-accent' : ON_INSET_CONTROL
         }`}
         // WHY an explicit name now that `title` is gone: the only text inside
         // this button is the count badge, so the accessible name was the bare
@@ -353,7 +355,7 @@ export function SettingsGearButton({ settingsOpen, onToggleSettings, settingsBad
     <Tooltip text="Settings" placement="bottom">
     <button
       onClick={onToggleSettings}
-      className={`relative ${isAndroid() ? 'p-2' : 'p-1'} rounded-sm hover:bg-inset transition-colors shrink-0 ${settingsOpen ? 'text-fg' : 'text-fg-muted'}`}
+      className={`relative ${isAndroid() ? 'p-2' : 'p-1'} rounded-sm hover:bg-inset hover:text-fg transition-colors shrink-0 ${FOCUS_RING} ${settingsOpen ? 'text-fg' : 'text-fg-muted'}`}
     >
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -623,7 +625,7 @@ export default React.memo(function HeaderBar({
                 ? 'bg-accent text-on-accent'
                 : challengePending && !gamePanelOpen
                   ? 'text-amber-700'
-                  : 'text-fg-dim hover:text-fg-2'
+                  : ON_INSET_CONTROL
             }`}
             // Perf: steps(8) instead of ease-in-out — this pulses for as long
             // as a challenge is pending, and a smooth animation costs ~29% of

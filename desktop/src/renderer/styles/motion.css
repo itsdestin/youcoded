@@ -1,0 +1,176 @@
+/* motion.css — the app's gesture-triggered motion that does not fit in globals.css.
+   @imported by globals.css (one line there), which is also how the design lint
+   learns the class names declared here. Imports are hoisted, so this sheet
+   comes BEFORE the rest of globals.css: a rule here that refines one there must
+   out-rank it on SPECIFICITY, never on order — every such rule below does, and
+   says so.
+
+   WHY a separate file (2026-09-18): globals.css sits at its line budget
+   (desktop/line-budgets.json), and the premium-motion work adds arrivals, hover
+   and press states and pane transitions. The vocabulary itself — the --dur-* and
+   --ease-* tokens, and the original `.switch-arrival` — stays in globals.css,
+   pinned by tests/animation-frame-budget.test.ts.
+
+   The house rules apply here exactly as there: tokens only, no new curve, one
+   iteration, never `infinite` without steps(), and every rule answers to BOTH
+   prefers-reduced-motion and the app's own [data-reduced-effects]. This file is
+   swept by tests/infinite-animation-allowlist.test.ts like every sheet in styles/. */
+
+/* ── Session switch, when the bubbles are FROSTED ───────────────────────────
+   `data-bubble-glass` is stamped by theme-engine.ts on exactly the condition that
+   gives bubbles a backdrop-filter.
+
+   WHY it has to differ from globals.css's `.switch-arrival`: an ancestor with
+   opacity < 1 is a backdrop root, and a backdrop-filter cannot sample past one.
+   Fading the wrapper therefore switched every bubble's glass OFF for the length
+   of the fade, and it snapped on when the animation ended — Destin, 2026-09-18:
+   "the blur/glass effect isn't present at the beginning of the animation, then
+   pops-in right as the animation ends".
+
+   So the wrapper only RISES (a transform is not a backdrop root), and the fade
+   moves onto the elements that carry the glass, where an element's own opacity
+   fades its blurred backdrop along with it. Still one gesture, one duration, one
+   iteration; the elements faded are the screenful already marked `.in-view`.
+
+   Inside no-preference so the OS setting still wins: these selectors out-rank
+   (on specificity) globals.css's plain `.switch-arrival { animation: none }`. Reduce Visual
+   Effects needs no rule — it removes the glass, and with it this attribute.
+   Guard: tests/switch-arrival-glass.test.tsx. */
+@keyframes switch-arrival-rise { from { transform: translateY(14px); } to { transform: none; } }
+@keyframes switch-arrival-fade { from { opacity: 0; } to { opacity: 1; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  [data-bubble-glass] .switch-arrival { animation-name: switch-arrival-rise; }
+  [data-bubble-glass] .switch-arrival .in-view .bg-inset,
+  [data-bubble-glass] .switch-arrival .in-view .bg-accent {
+    animation: switch-arrival-fade var(--dur-switch) var(--ease-reveal) 1;
+  }
+  /* A card nested in an assistant bubble has no glass of its own (theme-engine
+     drops it) and already fades with its bubble; fading it again would compound. */
+  [data-bubble-glass] .switch-arrival .in-view .assistant-bubble .bg-inset { animation: none; }
+}
+
+/* ── Hover and press: one ladder, everywhere ────────────────────────────────
+   Destin, 2026-09-18: "ensure all clickable surfaces are properly hover
+   sensitive. for example, the minimize/maximize/exit/games/files buttons all
+   lack good hover sensitivity, but projects view and settings look good."
+
+   THE RULE. A control's fill moves ONE step along the theme's depth ladder on
+   hover and one more on press, from wherever it sits:
+
+       sits on canvas / panel   hover → inset    press → edge
+       sits on an inset pill    hover → edge     press → a step past edge
+
+   WHY the second row exists: the app's hover fill IS `inset`, so a control
+   inside a `bg-inset` pill (the caption buttons, Games, Files, the view
+   toggles) had nothing to fill with, and fell back to nudging its glyph from
+   fg-dim to fg-2 — ~10 levels of grey on a 14px icon, invisible in every theme.
+   `edge` is the next step past `inset` in all four built-ins, in the right
+   direction for both light and dark, and every community pack defines it.
+
+   Press had no rule at all: two press states existed in the whole renderer.
+
+   Hover sits behind (hover: hover) so a tap never leaves a control looking
+   hovered; press does not, because a finger deserves the feedback too.
+   Colour fades are state feedback, not motion, so Reduce Visual Effects and
+   prefers-reduced-motion leave them alone (same call as the wide-view toggle
+   in globals.css). One-off controls fade smoothly; only dense rows a pointer
+   SWEEPS across need steps() — see tests/animation-css-budget.test.ts.
+   Guard: tests/hover-press-ladder.test.ts. */
+:root {
+  /* Derived, so it follows every theme and no pack can forget to define it. */
+  --press-on-inset: color-mix(in srgb, var(--edge) 78%, var(--fg));
+}
+
+/* A control that sits INSIDE an inset pill. Put it on the unselected state
+   only — a selected (accent-filled) control keeps its fill under the pointer. */
+.on-inset-control {
+  transition: background-color var(--dur-hover) var(--ease-reveal), color var(--dur-hover) var(--ease-reveal);
+}
+@media (hover: hover) {
+  .on-inset-control:hover { background-color: var(--edge); color: var(--fg); }
+}
+.on-inset-control:active { background-color: var(--press-on-inset); color: var(--fg); }
+
+/* Every control that already fills `inset` on hover — several hundred call
+   sites, hand-written and primitive alike — presses one step deeper. One rule
+   rather than an `active:` class at each site, so a new `hover:bg-inset` gets
+   its press state without anyone remembering to add it. Same specificity as
+   Out-ranks Tailwind's own `.hover\:bg-inset:hover` on specificity (the :not),
+   and Tailwind's utilities sit in a cascade layer this sheet is outside of. */
+.hover\:bg-inset:active:not(:disabled) { background-color: var(--edge); }
+
+/* ── The state layer: hover and press for a control on ANY surface ──────────
+   The ladder above needs to know what a control sits on. A row inside a tool
+   card, a swatch in a popup, a link in a wizard, a control on a glass panel or
+   on a community theme's tinted surface does not know — and guessing the "next
+   step" wrong paints an invisible or a foreign-looking patch (both shipped: see
+   Button's `on-accent` variant). A translucent wash of the theme's own text
+   colour reads on every surface in every theme, because it is relative to
+   whatever is already there. 7% / 13% are the lightest pair that stayed visible
+   on Light's #F2F2F2 and Midnight's #0D1117 alike.
+
+   Longhands, not the `transition` shorthand, so `.stepped-hover` (globals.css)
+   can still quantise a DENSE list — rows a pointer sweeps across present a
+   frame per row per refresh, which is the one place a smooth fade is not free
+   (tests/animation-css-budget.test.ts). A one-off control fades smoothly. */
+.state-layer {
+  transition-property: background-color, color, border-color;
+  transition-duration: var(--dur-hover);
+  transition-timing-function: var(--ease-reveal);
+}
+.state-layer.stepped-hover { transition-timing-function: steps(4); }
+@media (hover: hover) {
+  .state-layer:hover:not(:disabled) { background-color: color-mix(in srgb, var(--fg) 7%, transparent); }
+}
+.state-layer:active:not(:disabled) { background-color: color-mix(in srgb, var(--fg) 13%, transparent); }
+
+/* A text-only control (an inline "link" button). No fill to change, so the
+   label takes the full text step and underlines — `--link-hover` exists per
+   theme and nothing in the sweep's seven wizard links was using it. */
+.link-control { transition: color var(--dur-hover) var(--ease-reveal); text-underline-offset: 2px; }
+@media (hover: hover) {
+  .link-control:hover:not(:disabled) { color: var(--link-hover, var(--fg)); text-decoration: underline; }
+}
+.link-control:active:not(:disabled) { color: var(--fg); }
+
+/* A control whose FILL must not change: frosted `.layer-surface` pills (the
+   buddy windows), where swapping background-color would replace the glass, and
+   whose box-shadow is already its drop shadow. An outline is independent of
+   both, and follows the border radius. Same wash, as a 1px ring. */
+.ring-state { outline: 1px solid transparent; outline-offset: -1px; transition: outline-color var(--dur-hover) var(--ease-reveal); }
+@media (hover: hover) {
+  .ring-state:hover:not(:disabled) { outline-color: color-mix(in srgb, var(--fg) 28%, transparent); }
+}
+.ring-state:active:not(:disabled) { outline-color: color-mix(in srgb, var(--fg) 50%, transparent); }
+
+/* ── Primary buttons on GLASS: a hover you can see, and the press they never had ──
+   Destin, 2026-09-18: "one place missing hover: the new session button on the no
+   active session screen" (on Meadow Mist, a wallpaper theme).
+
+   globals.css restates the primary button's hover as UNLAYERED rules in three
+   places (`.panel-glass`, `.layer-surface`, `.glass-overlay` — its long comment
+   there says why: unlayered beats Tailwind's layered utilities, which had left
+   every popup's primary button with a dead hover). Two things were still wrong:
+
+   1. `.panel-glass`'s hover only scaled the fill's ALPHA to 90%. Over a blurred
+      wallpaper that is a button becoming 10% more see-through — nothing a person
+      can see. A control that IS the glass cannot fade "toward the surface"; the
+      surface is a photograph. It moves toward its own LABEL colour instead, the
+      same idea as Button's `on-accent` variant, at the alpha it already had.
+   2. None of the three had a press companion, and being unlayered `:hover` rules
+      they out-rank Button's `active:bg-accent/80` — a pressed button is a hovered
+      one. So on glass, and inside every popup, primary buttons had no press state.
+
+   Each selector adds `:not(:disabled)` to out-rank its globals.css counterpart on
+   SPECIFICITY (this sheet is imported first, so it cannot win on order). */
+[data-wallpaper] .panel-glass.bg-accent:hover:not(:disabled) {
+  background-color: color-mix(in srgb, color-mix(in oklab, var(--accent) 86%, var(--on-accent)) calc(var(--panels-opacity, 1) * 100%), transparent);
+}
+[data-wallpaper] .panel-glass.bg-accent:active:not(:disabled) {
+  background-color: color-mix(in srgb, color-mix(in oklab, var(--accent) 74%, var(--on-accent)) calc(var(--panels-opacity, 1) * 100%), transparent);
+}
+.layer-surface .bg-accent:active:not(:disabled),
+.glass-overlay .bg-accent:active:not(:disabled) {
+  background-color: color-mix(in oklab, var(--accent) 80%, var(--panel));
+}

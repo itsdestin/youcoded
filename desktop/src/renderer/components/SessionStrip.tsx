@@ -11,6 +11,7 @@ import { packSessions, PILL_GAP, type SessionMeasurement, type PackResult } from
 import { pillLabelStyle } from './header/pill-label-style';
 import { pillMetrics, NAME_FONT, type PillMetrics } from './header/pill-metrics';
 import { sessionRuntimeLabel } from './header/session-runtime-label';
+import { pillSurfaceClass } from './header/control-states';
 import { ProviderIcon } from './ProviderIcon';
 import { nextSlotId, clampFloatLeft, layoutRects, reorderIndices, neighbourOffsets, mapToSettled, DRAG_TUNE, type PillRect } from './header/drag-order';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
@@ -1971,10 +1972,7 @@ export default function SessionStrip({
           const pillClass = `
                   relative flex items-center gap-1 rounded-full px-1.5 py-px
                   border select-none touch-none overflow-hidden
-                  ${showName && (isActive || !displayPack.expanded.has(s.id))
-                    ? 'border-edge bg-panel'
-                    : 'border-transparent'
-                  }`;
+                  ${pillSurfaceClass(showName && (isActive || !displayPack.expanded.has(s.id)), dragging)}`;
           const pillBody = (
             <>
                 <SessionDot color={color} isActive={isActive} />

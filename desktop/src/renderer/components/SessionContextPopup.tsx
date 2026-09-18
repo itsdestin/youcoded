@@ -319,7 +319,8 @@ function WarnCard({ label }: { label: string }) {
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="w-full flex items-center gap-2 text-left cursor-pointer"
+        // state-layer: it said cursor-pointer and never changed under the pointer.
+        className="w-full flex items-center gap-2 text-left cursor-pointer rounded-md px-1 -mx-1 state-layer"
       >
         <span className={`flex-1 min-w-0 font-medium ${open ? '' : 'truncate'}`}>
           {open
