@@ -41,6 +41,8 @@ export function CsvView({ path, content }: ArtifactViewProps) {
       rowCount: Math.min(Math.max(used.length, MIN_ROWS), MAX_ROWS),
       colCount: Math.max(usedCols, MIN_COLS),
       truncated: rowsTruncated || colsTruncated,
+      rowsTruncated,
+      colsTruncated,
     };
   }, [content, path]);
 
@@ -98,9 +100,13 @@ export function CsvView({ path, content }: ArtifactViewProps) {
         </table>
         {grid.truncated && (
           // Same wording XlsxView shows for its own row/column cap, so the two
-          // spreadsheet-style viewers read as one consistent behavior.
+          // spreadsheet-style viewers read as one consistent behavior. WHY name
+          // only the limit hit: a 5,000-row, 4-column file is not missing any
+          // columns, and saying "× 100 columns" told the reader it was.
           <div style={{ padding: '8px 12px', fontSize: 12, color: NOTE_FG, background: NOTE_BG }}>
-            Large sheet — showing the first {MAX_ROWS.toLocaleString()} rows × {MAX_COLS} columns. Use “Open externally” for the full file.
+            Large sheet — showing the first {grid.rowsTruncated && grid.colsTruncated
+              ? `${MAX_ROWS.toLocaleString()} rows × ${MAX_COLS} columns`
+              : grid.rowsTruncated ? `${MAX_ROWS.toLocaleString()} rows` : `${MAX_COLS} columns`}. Use “Open externally” for the full file.
           </div>
         )}
       </div>

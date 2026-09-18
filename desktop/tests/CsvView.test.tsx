@@ -37,9 +37,22 @@ describe('CsvView — column cap', () => {
     expect(dataCols).toBe(100);
   });
 
-  it('shows a truncation note (XlsxView wording) once columns exceed the cap', () => {
-    const { getByText } = render(<CsvView {...baseProps(makeCsv(300))} />);
-    expect(getByText(/showing the first 2,000 rows × 100 columns/)).toBeTruthy();
+  it('a CSV too wide but short says only that columns were cut', () => {
+    const csv = Array.from({ length: 10 }, (_, r) => Array.from({ length: 300 }, (_, c) => `${r}-${c}`).join(',')).join('\n');
+    const { getByText } = render(<CsvView {...baseProps(csv)} />);
+    const note = getByText(/Large sheet/).textContent!;
+    expect(note).toContain('showing the first 100 columns.');
+    expect(note).not.toMatch(/rows/);
+  });
+
+  // WHY no "too tall AND too wide" render case: drawing 2,000 rows × 100 columns
+  // in jsdom took 28s alone — past the suite budget. That wording is unchanged.
+  it('a CSV too tall but narrow says only that rows were cut', () => {
+    const csv = Array.from({ length: 5000 }, (_, r) => `${r},a,b,c`).join('\n');
+    const { getByText } = render(<CsvView {...baseProps(csv)} />);
+    const note = getByText(/Large sheet/).textContent!;
+    expect(note).toContain('showing the first 2,000 rows.');
+    expect(note).not.toMatch(/columns/);
   });
 
   it('renders every column and no truncation note under the cap', () => {
