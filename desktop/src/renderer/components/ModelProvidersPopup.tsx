@@ -65,9 +65,6 @@ function ProviderRow({ title, info, status, detail, action, account, children }:
             {info && <AnchorTip label={info.label} title={title}>{info.body}</AnchorTip>}
           </p>
           <p className="text-2xs mt-0.5 text-fg-muted">{status}</p>
-          {detail && (
-            <p className={`text-2xs mt-0.5 ${detail.tone === 'bad' ? 'text-destructive-fg' : 'text-fg-muted'}`}>{detail.text}</p>
-          )}
         </div>
         {(account || action) && (
           <div className="shrink-0 flex items-center gap-1.5">
@@ -81,6 +78,13 @@ function ProviderRow({ title, info, status, detail, action, account, children }:
           </div>
         )}
       </div>
+      {/* The detail line spans the whole card, under the buttons — not the
+          column beside them. WHY: two buttons on the right squeezed a refused
+          key's one-sentence warning into three short lines (review
+          2026-09-18, R2-2: "could fit on a single line"). */}
+      {detail && (
+        <p className={`text-2xs mt-0.5 ${detail.tone === 'bad' ? 'text-destructive-fg' : 'text-fg-muted'}`}>{detail.text}</p>
+      )}
       {children && <div className="mt-2.5">{children}</div>}
     </div>
   );
