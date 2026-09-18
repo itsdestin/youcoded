@@ -46,7 +46,7 @@ const RAW_SCHEMA = {
   },
 } as const;
 
-export const RECOMMEND_PLAN_ACTION_DESCRIPTION =
+const RECOMMEND_PLAN_ACTION_DESCRIPTION =
   'Only for answering a plan pause notice ("[Plan paused]"). Puts the button you recommend (add_budget, continue or stop) '
   + 'on the paused plan card, with a short message saying why. It does not press the button: the user decides. '
   + 'Use the plan id and handoff id from the notice. If it is refused, give your advice in chat instead.';

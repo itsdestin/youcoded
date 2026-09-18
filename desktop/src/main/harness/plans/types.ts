@@ -80,7 +80,7 @@ export type ExecutionManifest = z.infer<typeof ExecutionManifestSchema>;
 const PrefixLinkSchema = z.object({ messages: nonNegativeInt, hash: z.string().min(1) }).strict();
 
 const ATTEMPT_PHASES = ['prepared', 'request-sent', 'response-persisted', 'committed', 'ambiguous'] as const;
-export type AttemptPhase = (typeof ATTEMPT_PHASES)[number];
+type AttemptPhase = (typeof ATTEMPT_PHASES)[number];
 
 /** One specialist launch (or safe relaunch) inside a step. */
 const PlanAttemptSchema = z.object({
@@ -178,7 +178,7 @@ const PlanTrancheSchema = z.object({
    *  attempt, never by any other specialist. */
   reportOnlyOf: z.string().min(1).optional(),
 }).strict();
-export type PlanTranche = z.infer<typeof PlanTrancheSchema>;
+type PlanTranche = z.infer<typeof PlanTrancheSchema>;
 
 const JOURNAL_PLAN_STATUSES =['proposed', 'running', 'paused', 'interrupted', 'completed', 'stopped', 'failed'] as const;
 export type JournalPlanStatus = (typeof JOURNAL_PLAN_STATUSES)[number];
@@ -340,7 +340,7 @@ const PendingRevisionSchema = z.object({
   oldPlanId: z.string().min(1),
   createdAt: z.number(),
 }).strict();
-export type PendingRevision = z.infer<typeof PendingRevisionSchema>;
+type PendingRevision = z.infer<typeof PendingRevisionSchema>;
 
 export const PlanJournalFileSchema = z.object({
   v: z.literal(PLAN_JOURNAL_VERSION),
@@ -368,5 +368,5 @@ export interface PlanEvent {
 // Task 5a: the forms now live in shared/types.ts (the renderer types its
 // bridge with them); re-exported so main keeps one definition.
 export type {
-  PlanUnsupported, PlanFailure, PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult,
+  PlanUnsupported, PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult,
 } from '../../../shared/types';

@@ -21,7 +21,7 @@ import type { PlanPauseAction, PlanPauseKind } from '../../../shared/types';
 import type { ToolEffect } from '../tools/types';
 import type { PlanRecord } from './types';
 
-export type PlanPauseRoute = 'auto' | 'assistant' | 'user';
+type PlanPauseRoute = 'auto' | 'assistant' | 'user';
 /** What the card may offer / the assistant may recommend (§2 table). Task
  *  9b: declared in shared/types.ts so the card reads the same names. */
 export type { PlanPauseAction };

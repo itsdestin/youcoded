@@ -71,7 +71,7 @@ export function pricingSnapshot(input: { pricing: ModelPricing | null; free: boo
 }
 
 /** Strict read: anything unrecognized is treated as "no published price". */
-export function parsePricingSnapshot(raw: unknown): PlanPricingSnapshot | null {
+function parsePricingSnapshot(raw: unknown): PlanPricingSnapshot | null {
   const parsed = SnapshotSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
 }

@@ -1,5 +1,5 @@
 {
   "//": "Ceilings for knip's warning-level categories, enforced by scripts/knip-ratchet.js (`npm run knip`). A change may not push either count above its number; when a cleanup brings one down, lower the number in the same commit. Never raise one — delete the unused export instead.",
-  "exports": 136,
+  "exports": 135,
   "types": 189
 }

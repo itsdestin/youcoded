@@ -40,18 +40,18 @@ import type { ToolEffect } from '../tools/types';
 import { routePlanPause, type PlanPauseContext, type PlanRecoveryCause } from './pause-routing';
 
 /** Well inside the journal's 60 s lease, so a slow disk never lets it lapse. */
-export const PLAN_HEARTBEAT_MS = 20_000;
+const PLAN_HEARTBEAT_MS = 20_000;
 /** How long stopped specialists get to finish on their own before teardown. */
-export const PLAN_SETTLE_DEADLINE_MS = 10_000;
+const PLAN_SETTLE_DEADLINE_MS = 10_000;
 /** Final review F2: a failed final write is tried again after these waits
  *  (a held lock or a busy disk usually clears within a second). */
-export const PLAN_SETTLE_WRITE_RETRY_DELAYS_MS: readonly number[] = [250, 1_000];
+const PLAN_SETTLE_WRITE_RETRY_DELAYS_MS: readonly number[] = [250, 1_000];
 /** The hard product maximum of simultaneous specialists (global constraints). */
-export const PLAN_MAX_CONCURRENT_SPECIALISTS = 4;
+const PLAN_MAX_CONCURRENT_SPECIALISTS = 4;
 /** One dependency report handed to a verify/combine specialist, at most. */
 export const PLAN_DEPENDENCY_REPORT_MAX_CHARS = 6_000;
 /** All dependency reports in one brief, together, at most. */
-export const PLAN_DEPENDENCY_TOTAL_MAX_CHARS = 24_000;
+const PLAN_DEPENDENCY_TOTAL_MAX_CHARS = 24_000;
 /** The fresh turn a safely restarted specialist receives (its own transcript
  *  already holds the original brief and everything it did). */
 export const PLAN_RESTART_BRIEF =
@@ -200,7 +200,7 @@ export interface PlanOrphan { reason: string; report?: string }
 
 /** Task 12 follow-up 1: both Add budget minimums worked out at pause time. */
 export interface PlanMinimumAdd { tokens?: number; warm?: { tokens: number; until: number } }
-export const PLAN_PROGRESS_NOT_SAVED = "The plan stopped because its progress couldn't be saved.";
+const PLAN_PROGRESS_NOT_SAVED = "The plan stopped because its progress couldn't be saved.";
 
 /**
  * Read a plan specialist's own transcript (design §3 resume): what does it
@@ -273,7 +273,7 @@ const RepeatDecisionSchema = z.object({ report: z.string(), repeatSatisfied: z.b
 
 /** Parse a repeat's final-leaf report. The text may be the bare JSON object or
  *  wrap it in a code fence; anything else is refused with the real reason. */
-export function parseRepeatDecision(text: string): { ok: true; report: string; satisfied: boolean } | { ok: false; detail: string } {
+function parseRepeatDecision(text: string): { ok: true; report: string; satisfied: boolean } | { ok: false; detail: string } {
   const trimmed = text.trim();
   const candidates = [trimmed];
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);

@@ -1,17 +1,17 @@
 import { z } from 'zod';
 
-export const PLAN_MIN_BUDGET_TOKENS = 500;
+const PLAN_MIN_BUDGET_TOKENS = 500;
 // WHY 30,000 (product decision 4, 2026-09-16): a step's budget now pays for
 // work only — each specialist's fixed setup cost is counted separately — and
 // the owner asked for "a bit" more room. Only the numeric maximum changed, so
 // the completed grammar probe's evidence still holds (not re-run).
-export const PLAN_MAX_BUDGET_TOKENS = 30_000;
-export const PLAN_MAX_REPEAT_ITERATIONS = 5;
-export const PLAN_MAX_ID_CHARS = 64;
-export const PLAN_MAX_GOAL_CHARS = 2_000;
-export const PLAN_MAX_TASK_CHARS = 4_000;
-export const PLAN_MAX_ITEM_CHARS = 2_000;
-export const PLAN_MAX_UNTIL_CHARS = 2_000;
+const PLAN_MAX_BUDGET_TOKENS = 30_000;
+const PLAN_MAX_REPEAT_ITERATIONS = 5;
+const PLAN_MAX_ID_CHARS = 64;
+const PLAN_MAX_GOAL_CHARS = 2_000;
+const PLAN_MAX_TASK_CHARS = 4_000;
+const PLAN_MAX_ITEM_CHARS = 2_000;
+const PLAN_MAX_UNTIL_CHARS = 2_000;
 
 /**
  * This intentionally recursive schema mirrors the completed grammar probe.
@@ -65,7 +65,7 @@ type PlanStep = z.infer<typeof BaseStepSchema> & {
   items?: string[]; of?: string; max_iterations?: number; until?: string; steps?: PlanStep[];
 };
 
-export const PlanStepSchema: z.ZodType<PlanStep> = z.lazy(() => z.discriminatedUnion('kind', [
+const PlanStepSchema: z.ZodType<PlanStep> = z.lazy(() => z.discriminatedUnion('kind', [
   BaseStepSchema.extend({ kind: z.literal('map'), items: z.array(nonEmptyBounded(PLAN_MAX_ITEM_CHARS)).min(1).max(8) }),
   BaseStepSchema.extend({ kind: z.literal('verify'), of: nonEmptyBounded(PLAN_MAX_ID_CHARS) }),
   BaseStepSchema.extend({ kind: z.literal('combine'), of: nonEmptyBounded(PLAN_MAX_ID_CHARS) }),

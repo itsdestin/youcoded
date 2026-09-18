@@ -35,7 +35,7 @@ export interface PlanExecutorHooks {
   stop(input: { ref: PlanRef; planId: string; finalize?: (plan: PlanRecord) => void }): Promise<boolean | void>;
 }
 
-export interface PlanBudgetHooks {
+interface PlanBudgetHooks {
   /** Task 3: record an authorization tranche for the paused step. Task 9b:
    *  `edit` is applied to the plan in that SAME write (the handoff it
    *  supersedes is answered by the write that adds the budget). */
@@ -44,7 +44,7 @@ export interface PlanBudgetHooks {
 
 /** Task 9b: told when a user action superseded a pending handoff, so the
  *  host withdraws its undelivered notice and stops its backstop. */
-export interface PlanHandoffHooks {
+interface PlanHandoffHooks {
   superseded(ref: PlanRef, planId: string, handoffId: string): void;
 }
 

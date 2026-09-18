@@ -680,7 +680,7 @@ export type SpecialistsEvent = { kind: 'run'; sessionId: string; run: Specialist
  * for minutes to days (approval, running, a pause for budget, a restart) and
  * its card must keep updating long after the tool call itself returned.
  */
-export type PlanStatus =
+type PlanStatus =
   | 'writing'      // the model is still composing it (40 s – 4 min on a local model)
   | 'proposed'     // waiting for Approve / Comment
   | 'running'
@@ -796,7 +796,7 @@ export const PLAN_QUESTION_MAX_CHARS = 1_000;
 
 /** Where one plan specialist's attempt stands (the journal's attempt phase):
  *  `prepared` means its first request was never sent. */
-export type PlanAttemptPhase = 'prepared' | 'request-sent' | 'response-persisted' | 'committed' | 'ambiguous';
+type PlanAttemptPhase = 'prepared' | 'request-sent' | 'response-persisted' | 'committed' | 'ambiguous';
 
 export interface PlanView {
   planId: string;
