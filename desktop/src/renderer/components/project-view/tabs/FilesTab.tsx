@@ -477,7 +477,13 @@ function FilesTabImpl({
   const noRoot = useRef<HTMLElement | null>(null);
   const narrowViewport = useNarrowViewport();
   const { visible: flatVisible, hasMore: flatHasMore, sentinelRef: flatSentinelRef } = useChunkedReveal(flatResults, {
-    resetKey: JSON.stringify([search.trim(), [...types].sort(), sortBy, view, project.id]),
+    // WHY only in flat mode: the reveal's scroll reset acts on the SAME box the
+    // folder grid scrolls in (flatScrollRef), and folder view is never windowed.
+    // A key that held sortBy/view while browsing a folder threw the reader back
+    // to the top on every sort change — a regression from before the reveal.
+    resetKey: flat
+      ? JSON.stringify([search.trim(), [...types].sort(), sortBy, view, project.id])
+      : JSON.stringify(['folder', project.id]),
     rootRef: narrowViewport ? noRoot : flatScrollRef,
     active: !hidden,
     resetScrollOnActivate: false,

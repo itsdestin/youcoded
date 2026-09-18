@@ -175,6 +175,23 @@ describe('flat search results', () => {
   });
 });
 
+describe('folder browsing', () => {
+  it('keeps its scroll position when the sort changes', async () => {
+    // The folder grid scrolls in the same box the flat results' reveal resets,
+    // so a reset key that held the sort threw the reader back to the top here.
+    const props = {
+      project, search: '', types: new Set<string>(), view: 'grid' as const, onViewChange: vi.fn(),
+      refreshKey: 0, pvActiveId: null, artifactDispatch: vi.fn(),
+    };
+    const { container, findByTitle, rerender } = render(<FilesTab {...props} sortBy="name" />);
+    await findByTitle('notes.md');
+    const box = container.querySelector('button[title="notes.md"]')!.closest('.grid') as HTMLElement;
+    box.scrollTop = 300;
+    rerender(<FilesTab {...props} sortBy="recent" />);
+    expect(box.scrollTop).toBe(300);
+  });
+});
+
 describe('the view preference', () => {
   it('is stored app-wide, not against a project id', async () => {
     const fs = await import('node:fs');
