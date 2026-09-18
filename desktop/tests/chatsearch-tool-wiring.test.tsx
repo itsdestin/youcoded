@@ -18,7 +18,7 @@ import { ChatProvider } from '../src/renderer/state/chat-context';
 import type { ToolCallState } from '../src/shared/types';
 import { COPY, type ResolvedConversation } from '../src/shared/chatsearch-refs';
 
-// Fixtures below are the same shape as chatsearch-refs-parser.test.ts's FIND_OUT
+// Fixtures below are the same shape as chatsearch-refs.test.ts's FIND_OUT
 // / SHOW_OUT — byte-for-byte what chatsearch.js's formatRows()/cmdShow() print
 // (two-space column gaps, uuid-first metadata line) — so the real parser this
 // suite exercises (describeChatsearchCall, via ToolBody/ToolCard) actually
