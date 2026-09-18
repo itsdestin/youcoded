@@ -5,21 +5,26 @@
 // exactly the same data, so a change that only fixes the grid can silently
 // break the list. Pinned here:
 //   1. A file row carries its filename, its kind and a relative modified time.
-//   2. A folder row carries its file COUNT and no date — a folder has no single
-//      modified time of its own, and borrowing one file's would read as the
-//      folder's.
+//   2. A folder row carries its item COUNT (what sits directly inside it —
+//      the listing reads one level, 2026-09-18) and no date — a folder has no
+//      single modified time of its own, and borrowing one file's would read as
+//      the folder's.
 //   3. Loose files come before folders, matching the grid's order.
 //   4. The switch is per-app, not per-project: the chosen view is written to
 //      localStorage so the next project opens the same way.
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, waitFor, act } from '@testing-library/react';
+import { render, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
 import { FilesTab } from '../src/renderer/components/project-view/tabs/FilesTab';
 import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
 import type { FileTypeGroup } from '../src/shared/artifacts/categorization';
+import { folderPageFromRecords, FOLDER_PAGE_SIZE } from '../src/shared/artifacts/folder-page';
 
 const listAllFiles = vi.fn();
+// Folder browsing: one folder from disk, a page at a time. Answered from the
+// same flat fixture by the helper the workbench uses, so both agree on order.
+const listFolder = vi.fn();
 
 // Two loose files and two files nested one folder deep, so listDir has both a
 // file list and a folder to roll up.
@@ -57,9 +62,11 @@ beforeEach(() => {
   // and a no-op observer would strand them at the first chunk unnoticed.
   io = installFiringIntersectionObserver();
   listAllFiles.mockResolvedValue({ ok: true, files: FILES });
+  listFolder.mockImplementation((_id: string, dir: string, opts: any) => Promise.resolve(folderPageFromRecords(FILES as any, dir, opts)));
   (window as any).claude = {
     artifacts: {
       listAllFiles,
+      listFolder,
       // The tab subscribes to file-change events and renders thumbnails; both
       // are irrelevant here, and both tolerate a rejected/absent channel.
       onChanged: () => () => {},
@@ -81,10 +88,10 @@ describe('FilesTab list view', () => {
     expect(row.textContent).toMatch(/ago|just now/);
   });
 
-  it('gives a folder its file count and no date', async () => {
+  it('gives a folder its item count and no date', async () => {
     const { findByTitle } = renderTab('list');
     const row = await findByTitle('docs');
-    expect(row.textContent).toContain('2 files');
+    expect(row.textContent).toContain('2 items');
     expect(row.textContent).not.toMatch(/ago|just now/);
   });
 
@@ -190,6 +197,77 @@ describe('folder browsing', () => {
     box.scrollTop = 300;
     rerender(<FilesTab {...props} sortBy="recent" />);
     expect(box.scrollTop).toBe(300);
+  });
+});
+
+// Project Files at any size, Stage 1 (spec 2026-09-18): folders are read one
+// at a time from disk, paged, with no depth cap and no size gate.
+describe('folder browsing at any size', () => {
+  const bigFolder = (n: number) => Array.from({ length: n }, (_, i) => ({
+    id: `big/f-${String(i).padStart(5, '0')}.md`, kind: 'internal',
+    path: `big/f-${String(i).padStart(5, '0')}.md`, lastModified: new Date().toISOString(),
+  }));
+
+  // WHY both views: grid and list are separate draw sites, and list view
+  // scrolls inside its own box — a bound on one proves nothing about the other.
+  it.each(['list', 'grid'] as const)('draws one chunk of a huge folder and pages the rest from disk (%s view)', async (view) => {
+    const files = bigFolder(1200);
+    listFolder.mockImplementation((_id: string, dir: string, opts: any) => Promise.resolve(folderPageFromRecords(files as any, dir, opts)));
+    const { container, findByTitle } = render(
+      <FilesTab project={project} search="" types={new Set()} sortBy="name" view={view}
+        onViewChange={vi.fn()} refreshKey={0} pvActiveId={null} artifactDispatch={vi.fn()} />,
+    );
+    fireEvent.click(await findByTitle('big'));
+    await findByTitle('big/f-00000.md');
+    const rows = () => container.querySelectorAll('button[title^="big/f-"]').length;
+    // One chunk drawn, one page asked for — not 1,200 of either.
+    expect(rows()).toBe(REVEAL_CHUNK);
+    expect(listFolder).toHaveBeenLastCalledWith('p1', 'big', expect.objectContaining({ offset: 0 }));
+    // Scroll to the end of what arrived: the next page is asked for from disk.
+    for (let i = 0; i < FOLDER_PAGE_SIZE / REVEAL_CHUNK + 1; i++) act(() => io.fireAll());
+    await waitFor(() => expect(listFolder).toHaveBeenCalledWith('p1', 'big', expect.objectContaining({ offset: FOLDER_PAGE_SIZE })));
+    expect(rows()).toBeLessThanOrEqual(FOLDER_PAGE_SIZE + REVEAL_CHUNK);
+  });
+
+  it('opens a folder deeper than the old six-level limit', async () => {
+    const deep = [{ id: 'a/b/c/d/e/f/g/h/deep.md', kind: 'internal', path: 'a/b/c/d/e/f/g/h/deep.md', lastModified: '' }];
+    listFolder.mockImplementation((_id: string, dir: string, opts: any) => Promise.resolve(folderPageFromRecords(deep as any, dir, opts)));
+    const { findByTitle } = renderTab('list');
+    for (const seg of ['a', 'a/b', 'a/b/c', 'a/b/c/d', 'a/b/c/d/e', 'a/b/c/d/e/f', 'a/b/c/d/e/f/g', 'a/b/c/d/e/f/g/h']) {
+      fireEvent.click(await findByTitle(seg));
+    }
+    expect(await findByTitle('a/b/c/d/e/f/g/h/deep.md')).toBeTruthy();
+  });
+
+  it('never fetches the whole-project list just to browse', async () => {
+    const { findByTitle } = renderTab('list');
+    await findByTitle('notes.md');
+    expect(listAllFiles).not.toHaveBeenCalled();
+  });
+
+  it('asks for the whole-project list once a search needs it, with no home-folder gate', async () => {
+    const { findByTitle } = renderTab('list', 'notes');
+    await findByTitle('notes.md');
+    expect(listAllFiles).toHaveBeenCalledWith('p1', { force: true });
+  });
+
+  it('shows the real reason and a Retry when the system refuses a folder — never an empty folder', async () => {
+    listFolder.mockResolvedValue({ ok: false, error: 'permission-denied' });
+    const { findByText, queryByText, getByRole } = renderTab('list');
+    expect(await findByText(/permission denied/)).toBeTruthy();
+    expect(getByRole('button', { name: /retry/i })).toBeTruthy();
+    expect(queryByText('No files found in this project folder.')).toBeNull();
+    expect(queryByText('This folder is empty.')).toBeNull();
+  });
+
+  it('keeps the "first batch" note to search results', async () => {
+    listAllFiles.mockResolvedValue({ ok: true, files: FILES, truncated: true });
+    const browsing = renderTab('list');
+    await browsing.findByTitle('notes.md');
+    expect(browsing.queryByText(/showing the first batch/)).toBeNull();
+    cleanup();
+    const searching = renderTab('list', 'notes');
+    expect(await searching.findByText(/showing the first batch/)).toBeTruthy();
   });
 });
 
