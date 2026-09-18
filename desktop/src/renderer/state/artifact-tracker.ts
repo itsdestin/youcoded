@@ -42,8 +42,8 @@ export interface ArtifactState {
   gitReviewBySession: Record<string, boolean>;
   // Session references (spec 2026-08-10 §D). A previewed past conversation
   // occupies the drawer's content pane INSTEAD of an artifact. Two fields, one
-  // rule: setting either clears the other (pinned by artifact-tracker-preview
-  // test), so the pane never has two things to show.
+  // rule: setting either clears the other (pinned by the "conversation preview"
+  // section of artifact-tracker.test.ts), so the pane never has two things to show.
   activeSessionPreviewBySession: Record<string, { provider: 'claude' | 'native'; id: string; title: string } | null>;
   // Every conversation previewed during this session, newest first — the
   // drawer's "Referenced conversations" list. Not persisted (v1).

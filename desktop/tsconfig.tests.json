@@ -75,7 +75,6 @@
     "tests/native-session-host.test.ts",
     "tests/native-skill-invoke.test.ts",
     "tests/native-tools-polish-skill.test.ts",
-    "tests/permission-confirm-card.test.tsx",
     "tests/project-registry.test.ts",
     "tests/prompt-card.test.tsx",
     "tests/remote-server.test.ts",
