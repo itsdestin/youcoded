@@ -1,4 +1,8 @@
 // Sends one /app/heartbeat per UTC day, gated by an opt-out toggle.
+// WHY once per day is a CONTRACT, not a tuning knob: AboutPopup.tsx promises
+// users "anonymous usage data … once per day". Sending more often (to fix a
+// counting gap, say) rewrites that copy — a product decision. The day boundary
+// is UTC on every device; the owner dashboard chooses which clock it counts by.
 // Identity is HMAC_SHA256(SALT, machine_id || platform), computed
 // client-side. Fire-and-forget — any failure is swallowed and retried
 // next launch. Zero behavioral impact if the network is unreachable.

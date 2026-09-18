@@ -1,5 +1,8 @@
 // Mirror of desktop/src/main/analytics-service.ts. Posts /app/heartbeat once
 // per UTC day with a HMAC of (machine_id || platform), computed locally.
+// WHY once per day is a CONTRACT, not a tuning knob: the About → Privacy screen
+// promises users "anonymous usage data … once per day". Sending more often
+// rewrites that copy — a product decision, not an implementation detail.
 // Fire-and-forget — network failures do not throw and do not mutate state.
 //
 // Privacy: the raw machine_id never leaves the device. See the design
