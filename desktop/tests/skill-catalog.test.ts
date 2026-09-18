@@ -135,3 +135,20 @@ describe('skill catalog', () => {
     expect((err as SkillUnreadable).message).toContain('ENOENT');
   });
 });
+
+// Plugin skills reference their own files through ${CLAUDE_PLUGIN_ROOT}; the
+// catalog substitutes it so a loaded body points at real paths.
+describe('plugin root', () => {
+  // eslint-disable-next-line no-template-curly-in-string -- the literal text `${CLAUDE_PLUGIN_ROOT}` IS the subject of this test.
+  it('substitutes ${CLAUDE_PLUGIN_ROOT} with the plugin root two levels above the skill dir', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-skillroot-'));
+    const skillDir = path.join(root, 'plugins', 'youcoded-chatsearch', 'skills', 'chatsearch');
+    fs.mkdirSync(skillDir, { recursive: true });
+    // eslint-disable-next-line no-template-curly-in-string -- ditto: this writes the un-substituted placeholder the catalog must replace.
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: chatsearch\n---\nrun node "${CLAUDE_PLUGIN_ROOT}/skills/chatsearch/scripts/chatsearch.js"');
+    const cat = createSkillCatalog([{ id: 'chatsearch', displayName: 'x', description: 'y', skillDir } as any]);
+    const body = cat.load('chatsearch').body;
+    expect(body).toContain(`node "${path.join(root, 'plugins', 'youcoded-chatsearch')}/skills/chatsearch/scripts/chatsearch.js"`);
+    expect(body).not.toContain('${');
+  });
+});
