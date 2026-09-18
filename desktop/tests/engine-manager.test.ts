@@ -446,7 +446,7 @@ describe('EngineManager — local downloads', () => {
     expect(healed.repo).toBe('a/b');
   });
 
-  it("keeps §E3's repo: null miss record — sweeping it would make the lookup repeat forever", async () => {
+  it("keeps a repo: null \"not found on Hugging Face\" record — sweeping it would make the lookup repeat forever", async () => {
     // "We searched Hugging Face for this model and found nothing" is a REAL
     // record: it is what stops the search running again on every render.
     fs.writeFileSync(path.join(cacheDir, 'Mystery-Q4_K_M.gguf'), Buffer.alloc(50));

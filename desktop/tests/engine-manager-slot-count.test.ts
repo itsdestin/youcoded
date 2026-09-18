@@ -147,7 +147,7 @@ const propsUrls = (urls: string[]) => urls.filter((u) => new URL(u).pathname ===
 const BARE_PROPS = 'http://127.0.0.1:9999/props';
 const namedProps = (id: string) => `http://127.0.0.1:9999/props?model=${encodeURIComponent(id)}`;
 
-describe('resolveSlotCount — /props total_slots parsing (Task 13 fix pass)', () => {
+describe('resolveSlotCount — /props total_slots parsing', () => {
   it('reads a positive integer straight through', () => {
     expect(resolveSlotCount(4)).toBe(4);
     expect(resolveSlotCount(1)).toBe(1);
@@ -169,7 +169,7 @@ describe('resolveSlotCount — /props total_slots parsing (Task 13 fix pass)', (
   });
 });
 
-describe('EngineManager.effectiveContextWindow — never loads a model to read a number (2026-09-04 review F1/F4)', () => {
+describe('EngineManager.effectiveContextWindow — never loads a model to read a number', () => {
   it('a LOADED model: asks /props?model=<id> once and both numbers come through (the app\'s real spawn shape: full -c, 4 slots)', async () => {
     const cacheDir = path.join(root, 'cache'); fs.mkdirSync(cacheDir, { recursive: true });
     const urls: string[] = [];

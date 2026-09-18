@@ -48,7 +48,7 @@ beforeEach(() => {
 });
 
 describe('ActiveArtifactView save safety', () => {
-  it('NEVER saves while content is null (the §2.2 truncation guard)', async () => {
+  it('NEVER saves while content is null (the truncation guard)', async () => {
     const { ref } = mountView({ content: null });
     let ok: boolean | undefined;
     await act(async () => { ok = await ref.current!.saveEdit(); });

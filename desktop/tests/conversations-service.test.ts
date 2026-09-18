@@ -792,7 +792,7 @@ describe('conversations service composition root', () => {
   // that the native lane upserts provider:'native' with the native transcriptRef
   // shape and folds in a stashed lastUsedModel — exactly like the CC lane, just
   // parameterized by the threaded provider (Task 3), not a separate code path.
-  describe('native transcript events (Task 4)', () => {
+  describe('native transcript events', () => {
     it('native turn-complete upserts a native-lane record carrying lastUsedModel', async () => {
       const svc = await freshService(startOpts());
       svc.noteSessionStarted('nat-1', path.join('/home/d', 'proj'), 'native');
@@ -833,7 +833,7 @@ describe('conversations service composition root', () => {
   // native/ space lane, and the materialize direction respects the SAME lane
   // (D5, never cross-materialize) plus the live-session guard, kept for native
   // for a different reason than CC's (see the WHY comments in service.ts).
-  describe('native flush / materialize (Task 8)', () => {
+  describe('native flush / materialize', () => {
     it('flushes a native session from ~/.youcoded/sessions into the native/ space lane', async () => {
       vi.useFakeTimers();
       vi.resetModules();

@@ -975,7 +975,7 @@ describe('native runtime reducer paths', () => {
 // ~8M copies and the last paragraph lurched. The set is append-only and
 // nothing renders it, so the reducer now appends in place — its one documented
 // purity exception (see markSeen's WHY). Pinned by identity, not timing.
-describe('seen-uuid dedup appends in place (2026-09-16 A3)', () => {
+describe('seen-uuid dedup appends in place', () => {
   const text = (uuid: string, t = 'w'): ChatAction => ({ type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid, text: t, timestamp: 1 });
   const turnText = (s: ChatState) => {
     const sess = s.get(SESSION)!;
