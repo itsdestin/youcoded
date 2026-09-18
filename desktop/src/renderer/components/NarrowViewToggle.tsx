@@ -15,6 +15,7 @@
 
 import { ChatIcon, TerminalIcon } from './Icons';
 import { Tooltip } from './ui';
+import { ON_INSET_CONTROL } from './header/control-states';
 
 export type ViewMode = 'chat' | 'terminal';
 
@@ -34,7 +35,7 @@ export default function NarrowViewToggle({ viewMode, onToggleView }: Props) {
       <Tooltip text={label} placement="bottom">
       <button
         onClick={() => onToggleView(nextView)}
-        className="coarse-hit px-2 py-1 rounded-[var(--radius-toggle)] transition-colors flex items-center text-fg-dim hover:text-fg-2"
+        className={`coarse-hit px-2 py-1 rounded-[var(--radius-toggle)] flex items-center ${ON_INSET_CONTROL}`}
         aria-label={label}
       >
         {nextView === 'terminal'

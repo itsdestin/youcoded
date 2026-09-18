@@ -45,3 +45,52 @@
      drops it) and already fades with its bubble; fading it again would compound. */
   [data-bubble-glass] .switch-arrival .in-view .assistant-bubble .bg-inset { animation: none; }
 }
+
+/* ── Hover and press: one ladder, everywhere ────────────────────────────────
+   Destin, 2026-09-18: "ensure all clickable surfaces are properly hover
+   sensitive. for example, the minimize/maximize/exit/games/files buttons all
+   lack good hover sensitivity, but projects view and settings look good."
+
+   THE RULE. A control's fill moves ONE step along the theme's depth ladder on
+   hover and one more on press, from wherever it sits:
+
+       sits on canvas / panel   hover → inset    press → edge
+       sits on an inset pill    hover → edge     press → a step past edge
+
+   WHY the second row exists: the app's hover fill IS `inset`, so a control
+   inside a `bg-inset` pill (the caption buttons, Games, Files, the view
+   toggles) had nothing to fill with, and fell back to nudging its glyph from
+   fg-dim to fg-2 — ~10 levels of grey on a 14px icon, invisible in every theme.
+   `edge` is the next step past `inset` in all four built-ins, in the right
+   direction for both light and dark, and every community pack defines it.
+
+   Press had no rule at all: two press states existed in the whole renderer.
+
+   Hover sits behind (hover: hover) so a tap never leaves a control looking
+   hovered; press does not, because a finger deserves the feedback too.
+   Colour fades are state feedback, not motion, so Reduce Visual Effects and
+   prefers-reduced-motion leave them alone (same call as the wide-view toggle
+   in globals.css). One-off controls fade smoothly; only dense rows a pointer
+   SWEEPS across need steps() — see tests/animation-css-budget.test.ts.
+   Guard: tests/hover-press-ladder.test.ts. */
+:root {
+  /* Derived, so it follows every theme and no pack can forget to define it. */
+  --press-on-inset: color-mix(in srgb, var(--edge) 78%, var(--fg));
+}
+
+/* A control that sits INSIDE an inset pill. Put it on the unselected state
+   only — a selected (accent-filled) control keeps its fill under the pointer. */
+.on-inset-control {
+  transition: background-color var(--dur-hover) var(--ease-reveal), color var(--dur-hover) var(--ease-reveal);
+}
+@media (hover: hover) {
+  .on-inset-control:hover { background-color: var(--edge); color: var(--fg); }
+}
+.on-inset-control:active { background-color: var(--press-on-inset); color: var(--fg); }
+
+/* Every control that already fills `inset` on hover — several hundred call
+   sites, hand-written and primitive alike — presses one step deeper. One rule
+   rather than an `active:` class at each site, so a new `hover:bg-inset` gets
+   its press state without anyone remembering to add it. Same specificity as
+   Tailwind's own `.hover\:bg-inset:hover`; it wins by loading later. */
+.hover\:bg-inset:active:not(:disabled) { background-color: var(--edge); }

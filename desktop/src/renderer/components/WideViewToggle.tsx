@@ -1,6 +1,7 @@
 import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { ChatIcon, TerminalIcon } from './Icons';
 import { Tooltip } from './ui';
+import { ON_INSET_CONTROL } from './header/control-states';
 
 export type ViewMode = 'chat' | 'terminal';
 
@@ -239,7 +240,7 @@ export default function WideViewToggle({
         aria-pressed={viewMode === 'chat'}
         onClick={() => onToggleView('chat')}
         className={`relative z-10 ${BUTTON_LAYOUT_CLASS} transition-colors duration-300 ${
-          viewMode === 'chat' ? 'text-on-accent' : 'text-fg-dim hover:text-fg-2'
+          viewMode === 'chat' ? 'text-on-accent' : ON_INSET_CONTROL
         }`}
       >
         <ChatIcon className={ICON_CLASS} />
@@ -257,7 +258,7 @@ export default function WideViewToggle({
         aria-pressed={viewMode === 'terminal'}
         onClick={() => onToggleView('terminal')}
         className={`relative z-10 ${BUTTON_LAYOUT_CLASS} transition-colors duration-300 ${
-          viewMode === 'terminal' ? 'text-on-accent' : 'text-fg-dim hover:text-fg-2'
+          viewMode === 'terminal' ? 'text-on-accent' : ON_INSET_CONTROL
         }`}
       >
         <TerminalIcon className={ICON_CLASS} />
