@@ -108,8 +108,9 @@ export default defineConfig({
     // silently ignored, with no deprecation warning — so the promise had been
     // false since the v4 bump while reading as true. Verified 2026-07-26: a new
     // tests/*.tsx file died on `document is not defined` until the docblock was
-    // added, and the two .tsx files that lack one today (Button.test.tsx,
-    // session-drawer-deleted-toggle.test.tsx) pass in the node environment.
+    // added, and the two .tsx files that lacked one then (Button.test.tsx, and a
+    // source-text check since merged into SessionDrawer.test.tsx) passed in the
+    // node environment.
     // Don't reinstate it; use `test.projects` if per-glob environments are ever
     // wanted again.
     environment: 'node',

@@ -62,8 +62,8 @@ describe('SessionDrawer — delivered label', () => {
         <SessionDrawer sessionId="sess" projectRoot="/home/u/proj" cwd="/home/u/proj" projectId="proj-1" projectName="proj" />
       </ArtifactContext.Provider>,
     );
-    // Read the label div directly (same approach as
-    // session-drawer-session-scoped-labels.test.tsx). jsdom's `textContent`
+    // Read the label div directly (same approach as the row-labels section
+    // below). jsdom's `textContent`
     // concatenates sibling elements with NO separator — "chart.png" (the
     // filename span) runs straight into "delivered" (the label div) as one
     // unbroken run of letters, so a container-wide `\bdelivered\b` regex
