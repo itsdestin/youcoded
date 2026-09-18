@@ -29,6 +29,7 @@ const ALLOWLIST: Record<string, string> = {
   'components/guide/GuideTour.tsx': '300ms anchor-presence check while a first-run tour is running',
   'components/LocalModelsSection.tsx': '2s settings re-read while a local-model dialog is open',
   'components/ModelProvidersPopup.tsx': '1s sign-in poll only while a browser sign-in is pending',
+  'components/plans/PlanCard.tsx': '1s elapsed clock that mounts ONLY while a plan is being written (PlanWritingDetail), the same shape as ThinkingIndicator\'s countdown; it unmounts the moment the plan is proposed',
   'components/ThinkingIndicator.tsx': 'word rotation (2.5s), retry countdown (1s) and prefill tick (250ms), each only while a reply is in flight',
   'hooks/useAttentionClassifier.ts': '1s PTY buffer read only while Claude is thinking; stall detection must keep working when the window is hidden',
   'hooks/useVoiceInput.ts': '500ms seconds counter only while the microphone is listening',
