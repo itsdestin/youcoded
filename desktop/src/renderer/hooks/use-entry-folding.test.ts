@@ -8,8 +8,9 @@
 // naive implementation silently produces a WRONG HEIGHT or folds at the wrong
 // moment — not the happy path.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import { useEntryFolding, FOLD_IDLE_MS, UNFOLD_DEBOUNCE_MS, FOLD_ROOT_MARGIN } from './use-entry-folding';
+import * as React from 'react';
+import { renderHook, render, act } from '@testing-library/react';
+import { useEntryFolding, FOLD_IDLE_MS, UNFOLD_DEBOUNCE_MS, FOLD_ROOT_MARGIN, type EntryFolding } from './use-entry-folding';
 
 type Cb = (entries: Array<{ target: Element; isIntersecting: boolean }>) => void;
 let fire: Cb;
@@ -235,5 +236,33 @@ describe('useEntryFolding', () => {
     const { result } = renderHook(() => useEntryFolding(true, rootRef));
     expect(typeof result.current.registerEntry(null)).toBe('function');
     expect(() => (result.current.registerEntry(null))()).not.toThrow();
+  });
+
+  it('folds an entry that was already present when the list mounted', () => {
+    // Ref callbacks run in React's commit phase, BEFORE this hook's own
+    // useEffect creates the IntersectionObserver — so an entry rendered as
+    // part of the very first commit calls registerEntry() while
+    // observer.current is still null. Every other test in this file calls
+    // registerEntry manually via `act()` after renderHook has already flushed
+    // effects, which hides exactly this ordering. Mount through `render` with
+    // a real ref prop so React itself drives the timing, the way ChatView /
+    // PreviewTimeline / BubbleFeed actually mount their first screen of
+    // entries.
+    let api!: EntryFolding;
+    function List() {
+      api = useEntryFolding(true, rootRef);
+      return React.createElement('div', { 'data-entry-key': 'pre', ref: api.registerEntry });
+    }
+    const { container } = render(React.createElement(List));
+    const el = container.querySelector('[data-entry-key="pre"]') as HTMLElement;
+    expect(el).toBeTruthy();
+
+    // The fix: the observer effect must sweep elements.current for anything
+    // already registered before the observer existed.
+    expect(observed).toContain(el);
+
+    Object.defineProperty(el, 'offsetHeight', { get: () => 200, configurable: true });
+    act(() => { fire([{ target: el, isIntersecting: false }]); vi.advanceTimersByTime(FOLD_IDLE_MS); });
+    expect(api.isFolded('pre')).toBe(true);
   });
 });
