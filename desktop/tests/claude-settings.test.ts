@@ -115,11 +115,27 @@ describe('mutateSettings', () => {
 
   it('serialises concurrent mutators under the lock so neither update is lost', async () => {
     write(JSON.stringify({ base: true }));
-    await Promise.all([
-      mutateSettings((s) => { s.first = 1; }),
-      mutateSettings((s) => { s.second = 2; }),
-      mutateSettings((s) => { s.third = 3; }),
-    ]);
+    // WHY freeze Date (and nothing else): the lock gives up after a 3s WALL-CLOCK
+    // wait (LOCK_MAX_WAIT_MS in cas-write.ts) and reports `refused: 'locked'`.
+    // On a loaded Windows CI runner one write took 1–3s (fsync + rename), so the
+    // third queued mutator waited 3171ms, was refused — correctly and loudly — and
+    // this test, which never looked at the results, reported it as a "lost"
+    // update (run 35322390667). Freezing Date.now makes that budget unreachable,
+    // so this test measures what it names — the lock serialises and no read goes
+    // stale — not how fast the disk is. setTimeout and fs stay real, so the
+    // mutators genuinely contend and retry. The timeout itself is not this
+    // test's subject.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const results = await Promise.all([
+        mutateSettings((s) => { s.first = 1; }),
+        mutateSettings((s) => { s.second = 2; }),
+        mutateSettings((s) => { s.third = 3; }),
+      ]);
+      expect(results).toEqual([{ written: true }, { written: true }, { written: true }]);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))).toEqual({ base: true, first: 1, second: 2, third: 3 });
   });
 
