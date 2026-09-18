@@ -15,6 +15,8 @@ import FolderSwitcher from './components/FolderSwitcher';
 import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { useChatViewHandlers } from './hooks/use-chatview-handlers';
+import { useRightPaneMotion } from './hooks/use-right-pane-motion';
+import { paneIsPresent, paneReserveWidth } from './state/right-pane-motion';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
@@ -899,6 +901,8 @@ function AppInner() {
   // drawer opening from a file-pill / tool-card click.
   // Drawer open/closed is per-session; exclusivity acts on the ACTIVE session.
   const activeDrawerOpen = sessionId ? (artifactState.drawerOpenBySession[sessionId] ?? false) : false;
+  // Shown / leaving / room reserved, for the frame, ChatView and TerminalRightSlot alike.
+  const rightPane = useRightPaneMotion(gameState.panelOpen ? 'game' : activeDrawerOpen ? 'drawer' : null);
   useEffect(() => {
     if (gameState.panelOpen && activeDrawerOpen && sessionId) {
       dispatchArtifact({ type: 'DRAWER_CLOSED', sessionId });
@@ -3563,7 +3567,7 @@ function AppInner() {
   // view), so this single element is never mounted twice. The live connection
   // lives in App's usePartyGame hook, so re-placing GamePanel on a view toggle
   // is a cheap view remount, not a reconnect.
-  const activeGamePane = gameState.panelOpen ? (
+  const activeGamePane = rightPane.motion.shown === 'game' ? (
     <ErrorBoundary name="Game">
       <GamePanel connection={gameConnection} chessConnection={chessConnection} incognito={lobby.incognito} onToggleIncognito={lobby.toggleIncognito} />
     </ErrorBoundary>
@@ -3610,7 +3614,7 @@ function AppInner() {
         // never moves the document drawer. Referencing the vars here (instead of
         // a px literal) means mid-drag App re-renders rewrite the SAME string and
         // can't snap the width back while the user is dragging.
-        style={{ ['--right-pane-width' as any]: gameState.panelOpen ? 'var(--game-pane-width, 420px)' : 'var(--drawer-width, 480px)' }}
+        style={{ ['--right-pane-width' as any]: paneReserveWidth(rightPane.motion) }}
       >
         {sessions.length > 0 && sessionId && currentSession ? (
           <>
@@ -3632,7 +3636,7 @@ function AppInner() {
                 clip-path: polygon() has only ONE backdrop-filter sampling the
                 wallpaper directly, so the whole chrome reads as one
                 continuous tone. */}
-            <div className={`chrome-glass${(activeDrawerOpen || gameState.panelOpen) ? ' chrome-glass--drawer-open' : ''}`} />
+            <div className={`chrome-glass${paneIsPresent(rightPane.motion) ? ' chrome-glass--drawer-open' : ''}`} />
             <div ref={headerRef} className="chrome-wrapper bg-canvas">
               <HeaderBar
                 sessions={sessions}
@@ -3702,6 +3706,7 @@ function AppInner() {
                       // ChatView only actually mounts it in chat view; in
                       // terminal view TerminalRightSlot (below) places it.
                       gamePane={s.id === sessionId ? activeGamePane : null}
+                      pane={s.id === sessionId ? rightPane : undefined}
                       onOpenProviderSettings={chatViewHandlers.openProviderSettings}
                       onSwitchProviders={chatViewHandlers.switchProviders}
                       onUpgradePlan={chatViewHandlers.upgradePlan}
@@ -3728,12 +3733,12 @@ function AppInner() {
                  exactly one instance mounts. Electron-only for now (Android's
                  terminal overlay sizing is native — separate follow-up). */}
               {getPlatform() === 'electron' && currentViewMode === 'terminal' && sessionId
-                && (activeDrawerOpen || gameState.panelOpen) && (
+                && paneIsPresent(rightPane.motion) && (
                 <TerminalRightSlot
                   sessionId={sessionId}
                   cwd={currentSession?.cwd}
-                  gamePane={gameState.panelOpen ? activeGamePane : null}
-                  drawerOpen={activeDrawerOpen}
+                  gamePane={activeGamePane}
+                  pane={rightPane}
                   expanded={artifactState.drawerExpanded}
                 />
               )}

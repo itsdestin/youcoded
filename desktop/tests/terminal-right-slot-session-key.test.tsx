@@ -47,13 +47,20 @@ vi.mock('../src/renderer/hooks/useActiveProject', () => ({
 
 import TerminalRightSlot from '../src/renderer/components/TerminalRightSlot';
 
+// The slot takes App's right-pane motion table since 2026-09-18 (it animates the
+// pane's open / close / switch). Here: the Files pane, open and at rest.
+const OPEN_DRAWER = {
+  motion: { shown: 'drawer' as const, closing: false, from: null, opening: false },
+  onExited: () => {}, onSettled: () => {},
+};
+
 function renderSlot(sessionId: string) {
   return render(
     <TerminalRightSlot
       sessionId={sessionId}
       cwd="/home/u/proj"
       gamePane={null}
-      drawerOpen={true}
+      pane={OPEN_DRAWER}
       expanded={false}
     />,
   );
@@ -74,7 +81,7 @@ describe('TerminalRightSlot session keying', () => {
         sessionId="session-b"
         cwd="/home/u/proj"
         gamePane={null}
-        drawerOpen={true}
+        pane={OPEN_DRAWER}
         expanded={false}
       />,
     );
@@ -97,7 +104,7 @@ describe('TerminalRightSlot session keying', () => {
         sessionId="session-a"
         cwd="/home/u/proj"
         gamePane={null}
-        drawerOpen={true}
+        pane={OPEN_DRAWER}
         expanded={false}
       />,
     );
