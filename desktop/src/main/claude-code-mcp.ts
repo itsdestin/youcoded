@@ -21,7 +21,7 @@
 // needs no packaging step and no asar unpacking — the app writes it out, and
 // the plain node process Claude Code spawns reads it from a real directory.
 // Android keeps a byte-identical copy at app/src/main/assets/send-user-link-mcp.js;
-// claude-code-mcp-parity.test.ts fails if the two ever drift.
+// claude-code-mcp.test.ts fails if the two ever drift.
 import fs from 'fs';
 import path from 'path';
 import { CLAUDE_CODE_LINK_TOOL, CLAUDE_CODE_MCP_SERVER_ID } from '../shared/send-user-link';

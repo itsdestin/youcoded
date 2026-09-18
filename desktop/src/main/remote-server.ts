@@ -260,7 +260,7 @@ interface SessionNamingWiring {
  * server served a built copy whenever one existed on disk, and a dev window found one left by an
  * Android test build the night before, so a whole day of phone-side fixes never reached the phone.
  * The installed app serves its built copy; a dev window serves live code unless a fresh copy was
- * built for the phone (run-dev.sh --phone-build). Pinned by tests/remote-page-source.test.ts.
+ * built for the phone (run-dev.sh --phone-build). Pinned by tests/remote-server-connections.test.ts.
  */
 export function choosePhonePageSource(opts: { serveBuiltPage: boolean; hasBuild: boolean }): 'built' | 'dev-server' {
   return opts.serveBuiltPage && opts.hasBuild ? 'built' : 'dev-server';
@@ -1246,7 +1246,7 @@ export class RemoteServer {
     // This used to carry a five-attempt counter. The counter was unreachable — the
     // detach happens before a second message could ever be counted — so the code
     // claimed five and delivered one. One is the stronger of the two, so it is what
-    // the code now says. Found by writing the behaviour test in remote-rate-limit.test.ts;
+    // the code now says. Found by writing the behaviour test in remote-server-connections.test.ts;
     // the source-scan version passed happily, because the words were all present.
     const slowStart = this.shouldSlowConnection() ? HOST_SLOWDOWN_MS : 0;
 
@@ -2994,7 +2994,7 @@ export class RemoteServer {
         }
         break;
       }
-      // A theme or display change made on a phone (remote-appearance-relay.test.ts). WHY: a
+      // A theme or display change made on a phone (remote-server-connections.test.ts). WHY: a
       // phone used to read the computer's theme once, at page load, and never hear a change
       // after that in either direction (Destin, 2026-09-11: "dev is on meadow mist and remote
       // chose golden daybreak"). The phone has already saved it with appearance:set; this

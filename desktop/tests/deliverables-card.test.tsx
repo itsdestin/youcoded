@@ -107,7 +107,7 @@ describe('DeliverablesCard', () => {
     expect(screen.getByText('Sending…')).toBeInTheDocument();
   });
 
-  it('a card whose only call failed mounts OPEN and shows the error text without any click (Finding 2 fix)', () => {
+  it('a card whose only call failed mounts OPEN and shows the error text without any click', () => {
     setViewport(false);
     const err = 'SendUserFile failed — nothing was sent:\n- /tmp/out is a directory';
     render(<DeliverablesCard tools={[call('t1', ['/tmp/out'], { status: 'failed', error: err })]} sessionId="s" />);

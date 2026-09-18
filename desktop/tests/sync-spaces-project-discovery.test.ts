@@ -1,7 +1,7 @@
 // desktop/tests/sync-spaces-project-discovery.test.ts
 // Real-git integration for cross-device project discovery/rename/stop (spec
 // 2026-07-12). Two ManagedRoots + real bare remotes, mirroring
-// sync-spaces-two-device.test.ts. Exercises the registry + planner + transport
+// the two-device case in sync-spaces-engine.test.ts. Exercises the registry + planner + transport
 // directly (no service/Electron layer) so convergence is provable against git.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
@@ -43,7 +43,7 @@ it('device B discovers, materializes, and (after a stop) detaches a project', as
   const dT = new GitTransport({ deviceName: 'Desktop' });
   // debounceMs is deliberately longer than this test's lifetime (the
   // sync-spaces-engine.test.ts:76 idiom), NOT the 200ms copied from
-  // sync-spaces-two-device — that test wants background syncs (pollMs: 300),
+  // the two-device case in sync-spaces-engine — that test wants background syncs (pollMs: 300),
   // this one drives every sync explicitly below (pollMs: 0).
   //
   // WHY it must not fire: addSpace() starts a chokidar watcher on space.root,

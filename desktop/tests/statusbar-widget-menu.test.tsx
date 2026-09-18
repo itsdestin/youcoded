@@ -31,7 +31,7 @@ afterEach(cleanup);
 
 beforeEach(() => {
   // This repo's jsdom ships no localStorage — stub it the same way
-  // statusbar-session-relevance.test.tsx / remote-shim-unsupported.test.ts do.
+  // statusbar-session-relevance.test.tsx / remote-shim-refusals.test.ts do.
   (window as any).localStorage = {
     _s: {} as Record<string, string>,
     getItem(k: string) { return this._s[k] ?? null; },

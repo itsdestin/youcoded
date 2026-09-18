@@ -120,7 +120,7 @@ describe('driver compaction', () => {
     expect(result).toEqual({ ok: false, reason: 'nothing-to-compact' });
   });
 
-  it('Fix 4 (2026-08-11 review): with THREE real user turns among injected rules, the cut lands on the second real turn', async () => {
+  it('with THREE real user turns among injected rules, the cut lands on the second real turn', async () => {
     // { ok: false, reason: 'nothing-to-compact' } is also what an OVER-aggressive
     // detector produces if it wrongly excludes real user messages too (not just
     // injected ones) — so the test above alone can't tell "counts injected rules

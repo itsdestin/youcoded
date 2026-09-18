@@ -258,7 +258,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // streaming session renders once per delta. The timeline array's identity
   // only changes when an entry is appended (a delta updates assistantTurns,
   // not timeline), so memoising on it turns a once-per-token scan into a
-  // once-per-entry scan. Pinned by tests/chatview-archive-boundary-memo.test.tsx.
+  // once-per-entry scan. Pinned by tests/ChatView-render-cost.test.tsx.
   const archiveBoundary = useMemo(() => findArchiveBoundary(state.timeline), [state.timeline]);
 
   // PTY-buffer classifier drives the attention banner. Replaces the old
@@ -317,7 +317,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // cause is ALREADY re-pinned by the ResizeObserver on contentRef below, which
   // runs after layout, where the same read is free. Dropping the timestamp
   // loses nothing and removes the per-token reflow. Pinned by
-  // tests/chatview-scroll-pin-deps.test.tsx.
+  // tests/ChatView-render-cost.test.tsx.
   useEffect(() => {
     if (stickRef.current) scrollToBottom();
   }, [state.timeline.length, state.isThinking, scrollToBottom, stickRef]);

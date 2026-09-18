@@ -24,7 +24,9 @@ const h = vi.hoisted(() => {
     // the service computed, so spaceTranscriptPath resolution is real.
     store: {
       upsert: vi.fn(async (_p: any) => ({ id: 'x' })),
-      get: vi.fn(async () => null),
+      // Typed (provider, id) like the real store so per-test mockImplementation
+      // callbacks that read those arguments type-check.
+      get: vi.fn(async (_provider: string, _id: string): Promise<any> => null),
       list: vi.fn(async (_provider: string): Promise<any[]> => []),
       setFlag: vi.fn(async () => {}),
       setTitle: vi.fn(async () => {}),
@@ -792,7 +794,7 @@ describe('conversations service composition root', () => {
   // that the native lane upserts provider:'native' with the native transcriptRef
   // shape and folds in a stashed lastUsedModel — exactly like the CC lane, just
   // parameterized by the threaded provider (Task 3), not a separate code path.
-  describe('native transcript events (Task 4)', () => {
+  describe('native transcript events', () => {
     it('native turn-complete upserts a native-lane record carrying lastUsedModel', async () => {
       const svc = await freshService(startOpts());
       svc.noteSessionStarted('nat-1', path.join('/home/d', 'proj'), 'native');
@@ -833,7 +835,7 @@ describe('conversations service composition root', () => {
   // native/ space lane, and the materialize direction respects the SAME lane
   // (D5, never cross-materialize) plus the live-session guard, kept for native
   // for a different reason than CC's (see the WHY comments in service.ts).
-  describe('native flush / materialize (Task 8)', () => {
+  describe('native flush / materialize', () => {
     it('flushes a native session from ~/.youcoded/sessions into the native/ space lane', async () => {
       vi.useFakeTimers();
       vi.resetModules();
@@ -1235,6 +1237,128 @@ describe('conversations service composition root', () => {
     const svc = await import('../src/main/conversations/service');
     await svc.startConversationStore(); // no opts, no managed roots
     expect(h.reconcile).not.toHaveBeenCalled();
+    svc.stopConversationStore();
+  });
+});
+
+// Pause/resume gate (service.ts pauseSweeps/resumeSweeps): the startup
+// reconcile + materialize sweeps must NOT run while pauseSweeps() is active —
+// any trigger while paused (startup kick, periodic tick, a Personal 'synced'
+// event) coalesces into ONE deferred run once resumeSweeps() lifts the gate.
+// This is what lets main.ts run the one-shot slug repair without racing the
+// sweeps (see pauseSweeps' WHY comment in service.ts). Unlike the section
+// above, this one WANTS reconcile to resolve (so a resumed run is observable
+// as "completed"), so its beforeEach resets it to an immediately-resolving
+// mock rather than the never-resolving one.
+describe('conversations service — sweep pause/resume gate', () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    h.syncListeners.clear();
+    h.store.upsert.mockReset().mockResolvedValue({ id: 'x' } as any);
+    h.store.get.mockReset().mockResolvedValue(null as any);
+    h.store.list.mockReset().mockResolvedValue([]);
+    h.store.setFlag.mockReset().mockResolvedValue(undefined as any);
+    h.store.setTitle.mockReset().mockResolvedValue(undefined as any);
+    h.store.setNote.mockReset().mockResolvedValue(undefined as any);
+    h.store.remove.mockReset().mockResolvedValue(true as any);
+    h.reconcile.mockReset().mockResolvedValue(0 as any);
+    h.mirrorIn.mockReset().mockReturnValue({ copied: true } as any);
+    h.materializeOut.mockReset().mockReturnValue({ copied: true } as any);
+    h.syncSpacesSyncNow.mockReset().mockResolvedValue({ ok: true } as any);
+    h.syncSpacesSyncNowAwaited.mockReset().mockResolvedValue(undefined as any);
+    h.savedFolders = [];
+    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'conv-svc-pause-'));
+    h.managedRoots = { personalRoot: path.join(tmpRoot, 'Personal'), listProjects: () => [] };
+    // WHY: the same hermetic slug-repair-state override as the composition-root
+    // beforeEach above — without it heldForkIds() reads the developer's real file.
+    process.env.YOUCODED_SLUG_REPAIR_STATE = path.join(tmpRoot, 'slug-repair-state.json');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    delete process.env.YOUCODED_SLUG_REPAIR_STATE;
+    try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* best-effort */ }
+  });
+
+  const startOpts = (extra?: Record<string, unknown>) => ({
+    conversationsRoot: path.join(tmpRoot, 'Conversations'),
+    projectsDir: path.join(tmpRoot, 'projects'),
+    topicsDir: path.join(tmpRoot, 'topics'),
+    device: 'test-device',
+    ...extra,
+  });
+
+  it('startConversationStore({ pauseSweeps: true }) defers the startup reconcile and materialize; resumeSweeps runs each exactly once', async () => {
+    vi.resetModules();
+    const svc = await import('../src/main/conversations/service');
+    await svc.startConversationStore(startOpts({ pauseSweeps: true }));
+    // Neither startup kick ran while paused.
+    expect(h.reconcile).not.toHaveBeenCalled();
+    expect(h.store.list).not.toHaveBeenCalledWith('native');
+
+    svc.resumeSweeps();
+    await vi.waitFor(() => expect(h.reconcile).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(h.store.list).toHaveBeenCalledWith('native'));
+    // Exactly one deferred run each — not one per pending trigger.
+    expect(h.reconcile).toHaveBeenCalledTimes(1);
+    expect(h.store.list.mock.calls.filter((c) => c[0] === 'native')).toHaveLength(1);
+
+    svc.stopConversationStore();
+  });
+
+  it('a trigger while paused is deferred and coalesced: pause, trigger twice, resume — runs once', async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    const svc = await import('../src/main/conversations/service');
+    // Start WITHOUT pauseSweeps so the startup kicks fire and settle first —
+    // isolates this test to triggers that arrive AFTER startup.
+    await svc.startConversationStore(startOpts());
+    await vi.waitFor(() => expect(h.reconcile).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(h.store.list).toHaveBeenCalledWith('native'));
+    h.reconcile.mockClear();
+    h.store.list.mockClear();
+
+    svc.pauseSweeps();
+    // Two materialize-eligible 'synced' events while paused.
+    fireSync({ type: 'synced', spaceId: 'personal', updated: true, pushed: false });
+    fireSync({ type: 'synced', spaceId: 'personal', updated: true, pushed: false });
+    // Two periodic-reconcile ticks while paused.
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    // Nothing ran yet — everything is pending.
+    expect(h.reconcile).not.toHaveBeenCalled();
+    expect(h.store.list).not.toHaveBeenCalledWith('native');
+
+    svc.resumeSweeps();
+    await vi.waitFor(() => expect(h.reconcile).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(h.store.list).toHaveBeenCalledWith('native'));
+    expect(h.reconcile).toHaveBeenCalledTimes(1); // coalesced, not 3 (startup tick excluded + 2 ticks)
+    expect(h.store.list.mock.calls.filter((c) => c[0] === 'native')).toHaveLength(1); // coalesced, not 2
+
+    svc.stopConversationStore();
+    vi.useRealTimers();
+  });
+
+  it('resumeSweeps() with nothing pending is a no-op and resets the flag', async () => {
+    vi.resetModules();
+    const svc = await import('../src/main/conversations/service');
+    await svc.startConversationStore(startOpts());
+    await vi.waitFor(() => expect(h.reconcile).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(h.store.list).toHaveBeenCalledWith('native'));
+    h.reconcile.mockClear();
+    h.store.list.mockClear();
+
+    // Never paused this test — resuming should do nothing.
+    expect(() => svc.resumeSweeps()).not.toThrow();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(h.reconcile).not.toHaveBeenCalled();
+    expect(h.store.list).not.toHaveBeenCalled();
+
+    // The flag really did reset: a trigger AFTER this no-op resume runs
+    // immediately rather than staying stuck "paused".
+    fireSync({ type: 'synced', spaceId: 'personal', updated: true, pushed: false });
+    await vi.waitFor(() => expect(h.store.list).toHaveBeenCalledWith('native'));
+
     svc.stopConversationStore();
   });
 });

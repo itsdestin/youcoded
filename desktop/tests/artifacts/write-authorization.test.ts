@@ -65,7 +65,7 @@ describe('authorizeArtifactWrite', () => {
     expect(asExternal).toMatchObject({ ok: false, error: 'protected-path' });
   });
 
-  it('rejects sidecar paths that escape the root (tracked-internal traversal, spec §12.1)', async () => {
+  it('rejects sidecar paths that escape the root (tracked-internal traversal)', async () => {
     const res = await authorizeArtifactWrite({
       projectRoot: root,
       fullPath: path.join(root, '../escape.txt'),

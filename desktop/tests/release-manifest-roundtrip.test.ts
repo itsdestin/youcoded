@@ -29,7 +29,7 @@ beforeAll(() => {
 });
 afterAll(() => { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); });
 
-describe('release manifest → app verifier round trip (2026-09-10 #7)', () => {
+describe('release manifest → app verifier round trip', () => {
   it('finds only installer files', () => {
     const names = findInstallers(dir).map((f: string) => path.basename(f)).sort();
     expect(names).toEqual([DMG, EXE].sort());

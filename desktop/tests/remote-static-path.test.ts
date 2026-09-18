@@ -4,7 +4,7 @@ import { resolveStaticFile, isWithinDir } from '../src/main/remote-static-path';
 
 const DIR = path.resolve('/opt/app/renderer');
 
-describe('resolveStaticFile — the unauthenticated static handler (2026-09-10 security review)', () => {
+describe('resolveStaticFile — the unauthenticated static handler', () => {
   it('resolves an ordinary asset inside the directory', () => {
     expect(resolveStaticFile('/assets/main.js', DIR)).toBe(path.join(DIR, 'assets/main.js'));
   });

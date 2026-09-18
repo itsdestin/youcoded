@@ -33,7 +33,7 @@ Drift detection beats discovering breakage from a user bug report. Several tools
 | `desktop/test-conpty/test-attention-states.mjs` | End-to-end attention classifier behavior against real CC — drives idle/quick/long thinking scenarios and verifies no false-stuck dispatches. Captures observed glyph + gerund sets per scenario. | When changing `attention-classifier.ts` SPINNER_RE, the staleness threshold, or the hook driver. |
 | `desktop/test-conpty/test-spinner-fullcapture.mjs` | Captures the full raw byte stream from welcome through response and grep-probes for "esc to interrupt" / "esc to cancel" / `(Ns ·` patterns. Confirms whether CC's spinner format has changed. | Each CC version bump. |
 | `desktop/test-conpty/test-attention-false-match.mjs` | Production-accurate false-match probe (uses `@xterm/headless` for buffer rendering) — drives Claude prompts that nudge spinner-shape text into the response, verifies SPINNER_RE doesn't false-match. | When changing the SPINNER_RE shape or the `^` anchor. |
-| `shared-fixtures/attention-classifier/*.json` | Pinned classifier inputs + expected outputs. Drives `attention-classifier-parity.test.ts`. | Whenever the spinner regex or classifier behavior changes. Add a fixture in the same commit. |
+| `shared-fixtures/attention-classifier/*.json` | Pinned classifier inputs + expected outputs. Drives the parity-fixtures section of `attention-classifier.test.ts`. | Whenever the spinner regex or classifier behavior changes. Add a fixture in the same commit. |
 | `shared-fixtures/transcript-parity/` | Pinned transcript JSONL inputs + expected event streams for the parser. Drives `desktop/tests/transcript-parity.test.ts` and gates the Android Node-CLI parity. | Whenever transcript-watcher logic changes. |
 | `shared-fixtures/raw-byte-listener/` | Raw-byte payload contract for the Android terminal-emulator vendor patch. Drives `raw-byte-listener-contract.test.ts`. | Whenever the terminal-emulator vendor patch or `pty:raw-bytes` payload changes. |
 | `desktop/tests/ipc-channels.test.ts` | Cross-platform IPC parity matrix — every `window.claude.*` API present in `preload.ts` must be present in `remote-shim.ts` and reachable via a Kotlin `SessionService.kt` handler. | Auto-runs in `npm test`; fails CI if parity drifts. |
@@ -251,7 +251,7 @@ Update this table when you re-run snapshots after a CC version bump. Anything th
 - **CC-coupled files:**
   - `desktop/src/renderer/state/attention-classifier.ts` (patterns)
   - `desktop/src/renderer/hooks/useAttentionClassifier.ts` (tick logic)
-  - `desktop/tests/attention-classifier-parity.test.ts` + `shared-fixtures/attention-classifier/` (regression coverage)
+  - `desktop/tests/attention-classifier.test.ts` (parity-fixtures section) + `shared-fixtures/attention-classifier/` (regression coverage)
 - **Why coupled:** Patterns must match Claude Code's CLI output. Visual changes to the Ink UI (spinner glyph, prompt copy, error banner color) can break classification silently.
 - **Review trigger:** Any Claude Code CHANGELOG entry mentioning TUI / Ink / prompt / spinner / progress updates.
 

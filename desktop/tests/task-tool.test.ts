@@ -114,7 +114,7 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
   );
 }
 
-describe('Task tool — list: true (2026-09-09, replaces the per-turn status block)', () => {
+describe('Task tool — list: true (replaces the per-turn status block)', () => {
   it('returns the host\'s status text, and never spawns', async () => {
     const spawn = vi.fn();
     const r = await runTaskTool({ list: true, description: undefined, prompt: undefined, work_dir: undefined }, { spawn, listStatus: 'Nadia (explorer): running — 12s' });
@@ -135,7 +135,7 @@ describe('Task tool — list: true (2026-09-09, replaces the per-turn status blo
   });
 });
 
-describe('Task tool — typed refusals (plan 1a)', () => {
+describe('Task tool — typed refusals', () => {
   it('refuses an unknown specialist with the available list', async () => {
     const r = await runTaskTool({ agent: 'wizard' });
     expect(r.isError).toBe(true);
@@ -155,7 +155,7 @@ describe('Task tool — typed refusals (plan 1a)', () => {
   // the floor MISSES: longer placeholder-shaped junk that clears 40 chars
   // while still being nothing but an unexpanded marker (never real content
   // padded around a real marker — that would legitimately not match, by design).
-  describe('placeholder prompt rejection (Task 12, item 2)', () => {
+  describe('placeholder prompt rejection', () => {
     const PLACEHOLDER_PROMPTS = [
       '<placeholder text goes right here please>',      // <[^>]*>
       '{{TASK_DESCRIPTION_GOES_HERE_PLEASE_FILL}}',      // the exact padded example from the brief
@@ -316,7 +316,7 @@ describe('Task tool — typed refusals (plan 1a)', () => {
   // spawn, and the reservation's release ownership moves off this call site
   // (the detached delivery chain releases it once the run settles) — the ONE
   // exception is a THROWN launch, where ownership never transferred anywhere.
-  describe('background: true (Task 4)', () => {
+  describe('background: true', () => {
     it('calls spawnBackground (not spawn) and returns the launch ack without releasing the reservation', async () => {
       const spawn = vi.fn(async () => ({ childId: 'child-1', report: 'done' }));
       const spawnBackground = vi.fn(async () => ({ childId: 'child-9', title: 'Rusty the Explorer' }));
@@ -401,7 +401,7 @@ describe('Task tool — typed refusals (plan 1a)', () => {
 // "read-only" vs "can edit files" — nothing told it the explorer has NO
 // SHELL. The description a model reads must name each specialist's tools,
 // and say plainly which one can run commands.
-describe('Task tool — roster names each specialist\'s tools (2026-08-16)', () => {
+describe('Task tool — roster names each specialist\'s tools', () => {
   it('lists every built-in specialist\'s allowedTools and singles out the shell', () => {
     const tool = createTaskTool();
     const desc = tool.description;
@@ -427,7 +427,7 @@ describe('Task tool — roster names each specialist\'s tools (2026-08-16)', () 
 // exercising BUILTIN_ROSTER unmodified (the default) — these are the only
 // tests that inject a different one.
 // ---------------------------------------------------------------------------
-describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
+describe('Task tool — per-cwd roster', () => {
   const DOCS_WRITER: SpecialistDefinition = {
     id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
     systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
@@ -700,7 +700,7 @@ describe('Task tool — work_dir resolves against the SESSION folder (D2)', () =
   });
 });
 
-describe('Task tool — model resolution (Task 14)', () => {
+describe('Task tool — model resolution', () => {
   const PARENT_BINDING: ModelBinding = { providerId: 'openrouter', modelId: 'parent-model' };
 
   async function designatedWith(entries: Partial<Record<'budget' | 'frontier', ModelBinding>>) {
@@ -853,7 +853,7 @@ describe('Task tool — model resolution (Task 14)', () => {
 // host to prove own-children-only actually holds rather than assuming a fake
 // that always answers 'not-yours' is trustworthy.
 // ---------------------------------------------------------------------------
-describe('Task tool — task_id management surface (Task 6)', () => {
+describe('Task tool — task_id management surface', () => {
   function manageCtx(overrides: Partial<{
     steerSpecialist: any; interruptSpecialist: any; resumeSpecialist: any; reserve: any; release: any;
   }> = {}): ToolContext {

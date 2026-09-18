@@ -671,7 +671,7 @@ describe('GitTransport auth-failure surfacing', () => {
     expect(String(err.message)).not.toContain(TOKEN);
   });
 
-  it('pull(): a NON-auth fetch failure keeps the silent offline contract (spec §13)', async () => {
+  it('pull(): a NON-auth fetch failure keeps the silent offline contract', async () => {
     const t = scripted({
       remote: { code: 0, stdout: 'https://github.com/u/r.git' },
       diff: { code: 0, stdout: '' },

@@ -162,7 +162,7 @@ describe('engine.models — per-model settings', () => {
     expect(readEngineConfig(home).models.bad).toEqual(DEFAULT_MODEL_SETTINGS);
   });
 
-  it('a dismissal WITHOUT the context length it was made at is no dismissal (R3-4)', async () => {
+  it('a dismissal WITHOUT the context length it was made at is no dismissal', async () => {
     await home.writeJson('config.json', {
       v: 1,
       engine: {

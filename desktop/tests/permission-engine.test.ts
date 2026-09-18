@@ -15,7 +15,7 @@ describe('decidePermission', () => {
     expect(decidePermission('Edit', 'src/a.ts', layers('ask')).action).toBe('ask');
     expect(decidePermission('Bash', 'ls', layers('ask')).action).toBe('ask');
   });
-  it('web tools are free in every mode baseline (spec §3.4 reads + web free)', () => {
+  it('web tools are free in every mode baseline', () => {
     for (const mode of ['ask', 'auto-edit', 'full-auto'] as const) {
       const ws = decidePermission('WebSearch', 'anything', layers(mode));
       expect(ws).toMatchObject({ action: 'allow', denyListed: false });
@@ -96,7 +96,7 @@ describe('decidePermission', () => {
   it('Task asks under ask mode (the ask IS the envelope-consent moment)', () => {
     expect(decidePermission('Task', 'src', layers('ask')).action).toBe('ask');
   });
-  it('Task is auto-allowed under auto-edit and full-auto (spec §5 walk-away autonomy)', () => {
+  it('Task is auto-allowed under auto-edit and full-auto', () => {
     expect(decidePermission('Task', 'src', layers('auto-edit')).action).toBe('allow');
     expect(decidePermission('Task', 'src', layers('full-auto')).action).toBe('allow');
   });

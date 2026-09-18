@@ -233,7 +233,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 // (the 60s health check's writeWarnings racing a push-failure warning write, or
 // an in-flight check leaking across tests) both write the same tmp path — the
 // first rename moves it away and the second rename throws ENOENT. This was the
-// cross-OS CI flake in sync-warning-self-clear.test.ts. pid keeps the dev
+// cross-OS CI flake in sync-service.test.ts (self-clear section). pid keeps the dev
 // instance and the built app apart; the counter keeps calls apart.
 let atomicWriteSeq = 0;
 

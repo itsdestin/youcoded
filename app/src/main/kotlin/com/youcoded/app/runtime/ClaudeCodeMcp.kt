@@ -16,7 +16,7 @@ import java.io.File
  * never removed again — see McpReconciler.kt / mcp-reconciler.ts).
  *
  * The server source itself is the shared asset send-user-link-mcp.js, kept
- * byte-identical to the desktop copy by claude-code-mcp-parity.test.ts.
+ * byte-identical to the desktop copy by claude-code-mcp.test.ts.
  */
 object ClaudeCodeMcp {
     /** MCP server id — must match CLAUDE_CODE_MCP_SERVER_ID in shared/send-user-link.ts. */
