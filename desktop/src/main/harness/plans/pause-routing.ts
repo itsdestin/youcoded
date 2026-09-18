@@ -42,6 +42,12 @@ export interface PlanPauseContext {
   /** An automatic recovery already ran for this step, iteration, item and
    *  cause — this is the second failure. */
   alreadyRecovered?: boolean;
+  /** Task 13 (decision 26): this specialist's provider cannot run as things
+   *  stand — signed out, no key, endpoint missing, engine not installed.
+   *  Never retried: repeating the identical launch could not possibly succeed
+   *  (Destin, 2026-09-18: a plan burned its one retry on "Sign in with
+   *  ChatGPT…"). Still Continue · Stop, because signing in IS the fix. */
+  notReady?: boolean;
   /** unknown-outcome: the effect of the call that has no recorded result.
    *  Absent counts as `external` (the safe direction). */
   toolEffect?: ToolEffect;
@@ -94,6 +100,10 @@ export function routePlanPause(kind: PlanPauseSituation, ctx: PlanPauseContext =
   }
   // The recoverable kinds.
   if (ctx.drift || (kind === 'launch-failed' && ctx.launchRefused)) return toAssistant(STOP_ONLY);
+  // Task 13 (decision 26): checked BEFORE the `auto` fall-through. A provider
+  // that is not ready fails identically every time, so the one automatic retry
+  // is never spent on it; the person signs in or adds the key, then Continue.
+  if (ctx.notReady) return toAssistant(CONTINUE_OR_STOP);
   if (kind === 'unknown-outcome' && (ctx.toolEffect ?? 'external') === 'external') return toAssistant(CONTINUE_OR_STOP);
   if (kind === 'invalid-report' && ctx.reportOnlyFundable !== true) return toAssistant(CONTINUE_OR_STOP);
   if (ctx.unansweredExternal || ctx.alreadyRecovered) return toAssistant(CONTINUE_OR_STOP);
@@ -105,7 +115,10 @@ export interface RecordedPauseFacts {
   kind?: PlanPauseKind;
   tool?: string;
   toolEffect?: ToolEffect;
-  launch?: 'refused' | 'drift';
+  /** Task 13: `not-ready` is the third value — the provider itself couldn't
+   *  run (signed out, no key, engine missing) — and travels exactly like the
+   *  other two, so a card rehydrated after a restart offers the same buttons. */
+  launch?: 'refused' | 'drift' | 'not-ready';
   retried?: true;
 }
 
@@ -121,6 +134,7 @@ export function pausedRouting(paused: RecordedPauseFacts): PlanPauseRouting {
   const routed = routePlanPause(paused.kind ?? 'unexpected-error', {
     ...(paused.launch === 'refused' ? { launchRefused: true } : {}),
     ...(paused.launch === 'drift' ? { drift: true } : {}),
+    ...(paused.launch === 'not-ready' ? { notReady: true } : {}),
     ...(paused.retried ? { alreadyRecovered: true } : {}),
     ...(paused.toolEffect ? { toolEffect: paused.toolEffect } : {}),
   });

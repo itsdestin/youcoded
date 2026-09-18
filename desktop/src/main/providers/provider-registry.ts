@@ -18,7 +18,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
-import type { ProviderConfig, ProviderStatus, ModelBinding } from '../../shared/provider-types';
+import type { ProviderConfig, ProviderStatus, ModelBinding, ProviderReadiness } from '../../shared/provider-types';
 import type { LocalEngineHook } from '../engine/engine-manager';
 import { NativeHome } from '../native-home';
 import { SecretsStore } from './secrets-store';
@@ -490,6 +490,74 @@ export class ProviderRegistry {
     const live = this.chatgpt.signedInAccount();
     const accountFingerprint = createHash('sha256').update(live.accountId).digest('hex');
     return `${binding.providerId}\0${binding.modelId}\0${accountFingerprint}\0${live.credentialEpoch}`;
+  }
+
+  /**
+   * Task 13 (decision 25): "could a model on this provider run right now?",
+   * answered WITHOUT a network call, without spending anything, and without
+   * constructing a model client.
+   *
+   * WHY this exists beside testConnection(): specialists plans must refuse to
+   * PROPOSE a plan whose specialists cannot run, and that check happens while
+   * the assistant is mid-turn. testConnection() fetches a models list on every
+   * type but ChatGPT — one probe per specialist, per proposal, on the user's
+   * own keys. This mirrors exactly the credential guards languageModel()
+   * applies just before it builds a client, and returns the SAME sentences, so
+   * a plan refusal and a failed send can never explain one state two ways.
+   * NEVER throws — a caller mid-proposal must not have to guard it.
+   */
+  async credentialReadiness(target: ModelBinding | string): Promise<ProviderReadiness> {
+    const providerId = typeof target === 'string' ? target : target.providerId;
+    let p: ProviderConfig | undefined;
+    try {
+      p = this.readAll().find((x) => x.id === providerId);
+      // Kill switch (§6), the same guard languageModel() and testConnection()
+      // have: with chatgpt null the virtual row is not in readAll().
+      if (!p && VIRTUAL_IDS.has(providerId)) return { ok: false, message: CHATGPT_TURNED_OFF_MESSAGE, label: providerId };
+      if (!p) return { ok: false, message: `Provider '${providerId}' is not configured.`, label: providerId };
+      const label = p.label;
+      const no = (message: string): ProviderReadiness => ({ ok: false, message, label });
+      if (!p.enabled) return no(`${label} is disabled in Settings → Providers.`);
+      const needsKey = () => no(`${label} needs an API key — add one in Settings → Providers.`);
+      switch (p.type) {
+        case 'local-engine':
+          if (!this.localEngine) return no('Local models are not available yet — the local engine ships in a later update.');
+          // installed(), never ensureRunning(): booting llama-server is not a
+          // free question. Same sentence testConnection() gives.
+          return this.localEngine.installed() ? { ok: true } : no('The local engine is not installed yet.');
+        case 'openrouter':
+          // languageModel()'s branch names OpenRouter itself, not p.label.
+          return (await this.keyFor(p)) ? { ok: true } : no('OpenRouter needs an API key — add one in Settings → Providers.');
+        case 'openai-compatible': {
+          if (!p.baseUrl) return no(`${label} has no endpoint URL configured.`);
+          // Ollama / LM Studio run keyless. A SAVED key that can't be read back
+          // (deleted store, keychain mismatch) means the user thinks one is
+          // set — say so, exactly as testConnection() does.
+          if (p.secretRef && !(await this.keyFor(p))) return needsKey();
+          return { ok: true };
+        }
+        case 'anthropic':
+        case 'openai':
+        case 'google':
+          return (await this.keyFor(p)) ? { ok: true } : needsKey();
+        case 'chatgpt': {
+          if (!this.chatgpt) return no(CHATGPT_TURNED_OFF_MESSAGE);
+          // No network on purpose, same as testConnection(): the account file
+          // already knows the answer, and a probe would spend the user's plan.
+          if (this.chatgpt.isSignedIn()) return { ok: true };
+          const st = this.chatgpt.status();
+          return no(st.state === 'blocked' ? st.reason
+            : st.state === 'waiting' ? 'Sign-in is still in progress.'
+              : CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
+        }
+        default:
+          return no(`${label} has an unknown type and cannot be used.`);
+      }
+    } catch (e: any) {
+      // Store I/O or a decrypt failure. Report what actually happened — never
+      // a guessed cause, and never a throw into a proposal.
+      return { ok: false, message: `YouCoded couldn't check ${p?.label ?? providerId}: ${e?.message ?? String(e)}`, label: p?.label ?? providerId };
+    }
   }
 
   /**

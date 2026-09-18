@@ -847,7 +847,10 @@ export interface PlanView {
      *  the start was refused / the specialist changed since approval; this is
      *  the failure after an automatic retry; what the unanswered `tool` could
      *  change. Task 9b words the card from them. */
-    launch?: 'refused' | 'drift';
+    /** Task 13 (decision 26): `not-ready` = the specialist's provider itself
+     *  couldn't run (signed out, no key saved, endpoint or local engine
+     *  missing). Never retried automatically, but Continue is offered. */
+    launch?: 'refused' | 'drift' | 'not-ready';
     retried?: boolean;
     toolEffect?: 'read' | 'local' | 'external';
     /** Task 9b (pause handoff §2 step 7): the buttons this pause allows when

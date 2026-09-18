@@ -18,7 +18,7 @@ import { randomUUID } from 'crypto';
 import * as path from 'path';
 import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText, PlanView } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
-import type { ModelBinding } from '../../shared/provider-types';
+import type { ModelBinding, ProviderReadiness } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
 import type { AcceptedHistoryStore } from './accepted-history-store';
 import { rebuildHistory } from './history-rebuild';
@@ -2333,6 +2333,14 @@ export class NativeSessionHost extends EventEmitter {
     // the wait for a free specialist slot. Optional + LAST like the others;
     // production uses the executor's defaults.
     private planOptions: PlanHostBridgeOptions & { slotPollMs?: number } = {},
+    // Specialists plans, Task 13 (decisions 25 + 26): "could a model on this
+    // provider run right now?" — signed in, key saved, endpoint configured,
+    // local engine installed — answered from what is already on this machine,
+    // with NO network call and nothing spent. ipc-handlers injects the
+    // registry's credentialReadiness. Optional + LAST like the others; the
+    // default says "ready", which is exactly how every construction behaved
+    // before this parameter existed, so no test has to learn about it.
+    private providerReadinessFor: (binding: ModelBinding) => Promise<ProviderReadiness> = async () => ({ ok: true }),
   ) {
     super();
     // Re-emit broker asks/expirations so ipc-handlers can forward them to the
@@ -4920,6 +4928,9 @@ export class NativeSessionHost extends EventEmitter {
       ...(this.delegatedModels ? { designated: this.delegatedModels } : {}),
       catalog: async () => (await this.toolServices?.modelCatalog?.()) ?? null,
       resolveRoute: (binding) => this.resolveContextAndProfile(binding),
+      // Task 13: a plan is never proposed — nor retried — with a specialist
+      // whose provider can't run. Local check only; never a probe.
+      credentialReadiness: (binding) => this.providerReadinessFor(binding),
       maxConcurrent: (sessionId) => this.maxSpecialistsFor(sessionId),
       readChildEvents: (childId, cwd) => this.store.readEvents(childId, cwd),
       queueTurn: (sessionId, text, turnId, historyNote) => {

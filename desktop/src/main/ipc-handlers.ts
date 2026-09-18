@@ -2828,6 +2828,17 @@ export function registerIpcHandlers(
     // up can never disagree. It throws when ChatGPT is signed out; the host
     // treats that as a fallback to ordinary reconstruction.
     { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
+    // planOptions (16th param): production uses the executor's own timings —
+    // passed explicitly only so the readiness closure below lands in the 17th
+    // positional slot instead of silently taking this one's place.
+    {},
+    // Provider readiness (17th param, Task 13 / decisions 25 + 26): the LOCAL,
+    // no-spend credential check a plan asks before it is proposed, and again
+    // before any automatic retry. Deliberately NOT testConnection, which
+    // fetches a models list on every provider type but ChatGPT — one probe per
+    // specialist per proposal, on the user's own keys and plan. The registry
+    // mirrors languageModel()'s own guards here and never throws.
+    (binding) => providerRegistry.credentialReadiness(binding),
   );
 
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref

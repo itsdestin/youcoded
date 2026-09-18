@@ -11,7 +11,7 @@
 // rest of the plan code, where they can be read and tested together.
 import { PLAN_COMMENT_TAG } from '../history-only';
 import { createHash, randomUUID } from 'crypto';
-import type { CatalogModel, ModelBinding } from '../../../shared/provider-types';
+import type { CatalogModel, ModelBinding, ProviderReadiness } from '../../../shared/provider-types';
 import type { PlanView, TranscriptEvent } from '../../../shared/types';
 import type { NativeHome } from '../../native-home';
 import type { ModelPricing } from '../pricing';
@@ -30,7 +30,7 @@ import { PLAN_REPORT_ONLY_REPLY_TOKENS, PlanBudget, lastRequestFor, pricingSnaps
 import { PlanService, type PlanHandoffProblem, type PlanProposal, type PlanRecommendation } from './plan-service';
 import { PLAN_HANDOFF_BACKSTOP_MS, normalizePlanQuestion, planHandoffNotice } from './plan-handoff';
 import {
-  PLAN_REPORT_ONLY_RESEND, PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, classifyChildTranscript, planReportOnlyBrief, planRestartBrief,
+  PLAN_REPORT_ONLY_RESEND, PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError, classifyChildTranscript, planReportOnlyBrief, planRestartBrief,
   type PlanChildHandle, type PlanChildLaunch, type PlanMinimumAdd, type PlanRunner, type TranscriptVerdict,
 } from './plan-executor';
 import {
@@ -112,6 +112,11 @@ export interface PlanHostPort {
   designated?: DelegatedModels;
   catalog(): Promise<CatalogModel[] | null>;
   resolveRoute(binding: ModelBinding): Promise<PlanRoute>;
+  /** Task 13 (decisions 25 + 26): can this binding's provider actually run —
+   *  signed in, key saved, endpoint configured, local engine installed? Asked
+   *  LOCALLY: no network call, no spend, no model client. Never throws, and
+   *  its `message` is the provider's own sentence, repeated verbatim. */
+  credentialReadiness(binding: ModelBinding): Promise<ProviderReadiness>;
   maxConcurrent(sessionId: string): number;
   readChildEvents(childId: string, cwd: string): TranscriptEvent[];
   /** Queue a user turn carrying a host turn id; throws with the real reason. */
@@ -671,6 +676,15 @@ export class PlanHostBridge {
       if (!def) throw new PlanProposalError(`The plan names a specialist ("${id}") that isn't available in this project.`);
       const binding = await this.bindingFor(def, parent, () => (catalog ??= this.port.catalog()));
       const route = await this.port.resolveRoute(binding);
+      // Task 13 (decision 25): a plan is never PROPOSED with a specialist that
+      // cannot run. Checked here — after the model is resolved, before the
+      // probe session is built — so nothing is measured (and no slot, prompt
+      // or money is spent) for a specialist that would die on its first send.
+      // The provider's own sentence is repeated verbatim: never a new cause.
+      const ready = await this.port.credentialReadiness(binding);
+      if (!ready.ok) {
+        throw new PlanProposalError(`The "${id}" specialist would run on ${ready.label}, which isn't ready: ${ready.message} The plan wasn't created.`);
+      }
       const lookup = budgetAdapterFor(route.providerType);
       if (!lookup.ok) throw new PlanProposalError(lookup.reason);
       // Decision 4: the exact child system prompt and tool schemas, measured
@@ -709,6 +723,7 @@ export class PlanHostBridge {
       onOrphaned: (ref, planId) => this.scheduleOrphanRecovery(ref, planId),
       minimumAddTokens: (ref, plan, attemptId) => this.minimumAddTokens(ref, plan, attemptId),
       launchRefusal: (_ref, plan, specialist) => this.launchRefusal(plan, specialist),
+      providerNotReady: (_ref, plan, specialist) => this.providerNotReady(plan, specialist),
       reportOnlyInputBound: (ref, plan, attemptId, message) => this.reportOnlyInputBound(ref, plan, attemptId, message),
       latestUserText: (ref, childId) => {
         const events = this.port.readChildEvents(childId, ref.cwd);
@@ -728,6 +743,20 @@ export class PlanHostBridge {
     const disabled = adapterDisabledReason(lookup.adapter.id)
       ?? plan.disabledAdapters?.find((d) => d.adapterId === lookup.adapter.id)?.detail;
     return disabled ? `Plan budgets are switched off for this model after a request went over its limit: ${disabled}` : undefined;
+  }
+
+  /**
+   * Task 13 (decision 26): the provider's own sentence when this specialist's
+   * frozen model can't run right now, so the executor never spends the plan's
+   * ONE automatic retry on something that cannot heal itself.
+   * A specialist the plan never approved is `launchRefusal`'s business, not
+   * this one's — undefined here means only "no credential problem".
+   */
+  private async providerNotReady(plan: PlanRecord, specialist: string): Promise<string | undefined> {
+    const frozen = plan.manifest.specialists[specialist];
+    if (!frozen) return undefined;
+    const ready = await this.port.credentialReadiness(frozen.binding);
+    return ready.ok ? undefined : ready.message;
   }
 
   private async localPoolTokens(plan: PlanRecord): Promise<number | undefined> {
@@ -754,6 +783,12 @@ export class PlanHostBridge {
       throw new PlanLaunchDriftError(`the "${input.specialist}" specialist's instructions or tools changed since the plan was approved. Ask the assistant to propose the plan again`);
     }
     const route = await this.port.resolveRoute(frozen.binding);
+    // Task 13 (decision 26): the FROZEN binding's provider is checked before
+    // anything is minted. Not a refusal — the person signs in or adds the key
+    // and presses Continue — so it carries the provider's own sentence and its
+    // own error type, which the executor never retries.
+    const ready = await this.port.credentialReadiness(frozen.binding);
+    if (!ready.ok) throw new PlanNotReadyError(ready.message);
     const lookup = budgetAdapterFor(route.providerType);
     if (!lookup.ok) throw new PlanLaunchRefusedError(lookup.reason);
     let stop: PlanChildStop | undefined;

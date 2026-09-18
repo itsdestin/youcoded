@@ -102,3 +102,27 @@ describe('a recorded pause (what 9b reads back)', () => {
     expect(pausedRouting({ kind: 'specialist-stopped' })).toEqual({ route: 'user', actions: ['continue', 'stop'] });
   });
 });
+
+// Task 13 (decision 26): "Sign in with ChatGPT…" cannot heal itself, so it is
+// never retried automatically — but Continue is exactly the right button once
+// the person has signed in or added the key, so it is never Stop-only either.
+describe('a provider that is not ready (decision 26)', () => {
+  it('is never automatic, live: both retryable causes go to the assistant with Continue and Stop', () => {
+    expect(routePlanPause('launch-failed', { notReady: true })).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+    expect(routePlanPause('specialist-error', { notReady: true })).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+    // Without the flag those same two recover by themselves — this is the
+    // difference the flag makes, not a property of the kind.
+    expect(routePlanPause('launch-failed', {}).route).toBe('auto');
+    expect(routePlanPause('specialist-error', {}).route).toBe('auto');
+  });
+
+  it('a specialist that also changed since approval still gets Stop only (a revised plan is the fix)', () => {
+    expect(routePlanPause('launch-failed', { notReady: true, drift: true })).toEqual({ route: 'assistant', actions: ['stop'] });
+  });
+
+  it('rehydrated from the journal after a restart, the card offers the same two buttons', () => {
+    expect(pausedRouting({ kind: 'launch-failed', launch: 'not-ready' })).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+    expect(pausedRouting({ kind: 'specialist-error', launch: 'not-ready' })).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+    expect(pausedRouting({ kind: 'launch-failed', launch: 'not-ready', retried: true })).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+  });
+});

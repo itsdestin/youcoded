@@ -38,6 +38,19 @@ export function isLocalEndpoint(baseUrl: string | undefined | null): boolean {
 /** What a native session is bound to: one model on one provider. */
 export interface ModelBinding { providerId: string; modelId: string; }
 
+/**
+ * Task 13 (decision 25): can this provider actually run right now — signed in,
+ * key saved, endpoint configured, local engine installed — answered from what
+ * is already on this machine. WHY a shape of its own: a plan must be refused
+ * BEFORE it is proposed, and `testConnection()` cannot answer that question
+ * without hitting the network (and, on a plan, spending the user's money).
+ * `message` is the provider's OWN sentence about what to fix — never reworded
+ * by a caller — and `label` is how the Providers panel names that provider.
+ */
+export type ProviderReadiness =
+  | { ok: true }
+  | { ok: false; message: string; label: string };
+
 export interface CatalogModel {
   id: string;             // provider-native model id (what the API expects)
   providerId: string;

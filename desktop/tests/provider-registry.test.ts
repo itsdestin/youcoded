@@ -628,5 +628,106 @@ describe('ProviderRegistry', () => {
       // the user looking for a setting that isn't there.
       expect(await reg.testConnection('chatgpt')).toEqual({ ok: false, message: TURNED_OFF });
     });
+
+    // Task 13 (decision 25): the LOCAL, no-spend readiness check the plans
+    // layer asks before proposing a plan. It must answer with the SAME
+    // sentences languageModel()'s own credential guards throw, and must never
+    // reach the network — the whole point is that it costs nothing.
+    describe('credentialReadiness (ChatGPT cases)', () => {
+      it('signed in → ready; signed out, blocked, waiting and the kill switch each answer with their own existing sentence', async () => {
+        const binding = { providerId: 'chatgpt', modelId: 'gpt-5.5' };
+        expect(await make(fakeChatGpt({ signedIn: true }).auth).credentialReadiness(binding)).toEqual({ ok: true });
+        expect(await make(fakeChatGpt({ signedIn: false }).auth).credentialReadiness(binding))
+          .toEqual({ ok: false, message: SIGN_IN_REQUIRED, label: 'ChatGPT Plan' });
+        expect(await make(fakeChatGpt({ blockedReason: 'Codex is disabled for this workspace.' }).auth).credentialReadiness(binding))
+          .toEqual({ ok: false, message: 'Codex is disabled for this workspace.', label: 'ChatGPT Plan' });
+        // The one state fakeChatGpt has no flag for: the code exchange is on
+        // the wire, so the row is neither signed in nor signed out.
+        const waiting = { isSignedIn: () => false, status: () => ({ state: 'waiting' }) } as unknown as ChatGptAuth;
+        expect(await make(waiting).credentialReadiness(binding))
+          .toEqual({ ok: false, message: 'Sign-in is still in progress.', label: 'ChatGPT Plan' });
+        expect(await make(null).credentialReadiness(binding)).toEqual({ ok: false, message: TURNED_OFF, label: 'chatgpt' });
+      });
+    });
+  });
+
+  // Task 13 (decision 25) — the rest of the readiness table, plus the promise
+  // that it spends nothing: no fetch, no model client, no throw.
+  describe('credentialReadiness (Task 13, decision 25)', () => {
+    const NEEDS_KEY = (label: string) => `${label} needs an API key — add one in Settings → Providers.`;
+
+    it('answers every provider type with the sentence languageModel() already uses', async () => {
+      // openrouter, keyless then keyed.
+      expect(await reg.credentialReadiness({ providerId: 'openrouter', modelId: 'm' }))
+        .toEqual({ ok: false, message: 'OpenRouter needs an API key — add one in Settings → Providers.', label: 'OpenRouter' });
+      await reg.setKey('openrouter', 'sk-or-abc');
+      expect(await reg.credentialReadiness({ providerId: 'openrouter', modelId: 'm' })).toEqual({ ok: true });
+
+      // The three direct-key providers.
+      for (const type of ['anthropic', 'openai', 'google'] as const) {
+        const id = await reg.upsert({ type, label: `My ${type}`, enabled: true });
+        expect(await reg.credentialReadiness({ providerId: id, modelId: 'm' }))
+          .toEqual({ ok: false, message: NEEDS_KEY(`My ${type}`), label: `My ${type}` });
+        await reg.setKey(id, 'sk-live');
+        expect(await reg.credentialReadiness({ providerId: id, modelId: 'm' })).toEqual({ ok: true });
+      }
+
+      // openai-compatible: an endpoint is enough; a saved key that can no
+      // longer be read back is NOT (the user thinks one is set).
+      const keyless = await reg.upsert({ type: 'openai-compatible', label: 'LM Studio', baseUrl: 'http://localhost:1234/v1', enabled: true });
+      expect(await reg.credentialReadiness({ providerId: keyless, modelId: 'm' })).toEqual({ ok: true });
+      const hosted = await reg.upsert({ type: 'openai-compatible', label: 'Hosted', baseUrl: 'https://example.test/v1', enabled: true });
+      await reg.setKey(hosted, 'sk-hosted');
+      expect(await reg.credentialReadiness({ providerId: hosted, modelId: 'm' })).toEqual({ ok: true });
+      await secrets.delete((await reg.list()).find((p) => p.id === hosted)!.secretRef!);
+      expect(await reg.credentialReadiness({ providerId: hosted, modelId: 'm' }))
+        .toEqual({ ok: false, message: NEEDS_KEY('Hosted'), label: 'Hosted' });
+
+      // Not configured, and disabled.
+      expect(await reg.credentialReadiness({ providerId: 'ghost', modelId: 'm' }))
+        .toEqual({ ok: false, message: "Provider 'ghost' is not configured.", label: 'ghost' });
+      await reg.upsert({ id: keyless, type: 'openai-compatible', label: 'LM Studio', enabled: false });
+      expect(await reg.credentialReadiness({ providerId: keyless, modelId: 'm' }))
+        .toEqual({ ok: false, message: 'LM Studio is disabled in Settings → Providers.', label: 'LM Studio' });
+    });
+
+    it('an openai-compatible endpoint with no URL says so', async () => {
+      const id = await reg.upsert({ type: 'openai-compatible', label: 'No URL', enabled: true });
+      expect(await reg.credentialReadiness({ providerId: id, modelId: 'm' }))
+        .toEqual({ ok: false, message: 'No URL has no endpoint URL configured.', label: 'No URL' });
+    });
+
+    it('the local engine is ready only once it is installed', async () => {
+      // No engine hook at all (Plan A, and unit tests without one).
+      expect(await reg.credentialReadiness({ providerId: 'local', modelId: 'tiny' })).toEqual({
+        ok: false, label: 'Local models (llama.cpp)',
+        message: 'Local models are not available yet — the local engine ships in a later update.',
+      });
+      const hook = (installed: boolean): LocalEngineHook => ({
+        installed: () => installed,
+        ensureRunning: async () => { throw new Error('the readiness check must not boot the engine'); },
+        fetchImpl: () => fetch,
+        ensureServable: async () => { throw new Error('the readiness check must not ask the router'); },
+        recordReply: () => {},
+      });
+      const off = new ProviderRegistry(new NativeHome(root), secrets, hook(false));
+      expect(await off.credentialReadiness({ providerId: 'local', modelId: 'tiny' }))
+        .toEqual({ ok: false, message: 'The local engine is not installed yet.', label: 'Local models (llama.cpp)' });
+      const on = new ProviderRegistry(new NativeHome(root), secrets, hook(true));
+      expect(await on.credentialReadiness({ providerId: 'local', modelId: 'tiny' })).toEqual({ ok: true });
+    });
+
+    it('spends nothing: no network call for any provider type, ready or not', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('the readiness check must not use the network'); }));
+      try {
+        const ids = ['openrouter', 'local', 'chatgpt', 'ghost'];
+        for (const type of ['anthropic', 'openai', 'google', 'openai-compatible'] as const) {
+          ids.push(await reg.upsert({ type, label: `probe-${type}`, baseUrl: 'https://example.test/v1', enabled: true }));
+        }
+        await reg.setKey('openrouter', 'sk-or-abc');
+        for (const providerId of ids) await reg.credentialReadiness({ providerId, modelId: 'm' });
+        expect((globalThis.fetch as any).mock.calls).toHaveLength(0);
+      } finally { vi.unstubAllGlobals(); }
+    });
   });
 });

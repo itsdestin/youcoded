@@ -11,12 +11,15 @@ import { DelegatedModels } from '../src/main/harness/specialists/delegated-model
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
 import { PLAN_CACHE_WINDOW_MS, disableAdapterForPlans, resetDisabledAdaptersForTests } from '../src/main/harness/plans/budget-adapter';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
-import { PLAN_REPORT_ONLY_RESEND, PlanLaunchDriftError, PlanLaunchRefusedError } from '../src/main/harness/plans/plan-executor';
+import { PLAN_REPORT_ONLY_RESEND, PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError } from '../src/main/harness/plans/plan-executor';
 import type { PlanRecord } from '../src/main/harness/plans/types';
 import { PLAN_PAUSE_KINDS } from '../src/shared/types';
 import type { TranscriptEvent } from '../src/shared/types';
+import type { ProviderReadiness } from '../src/shared/provider-types';
 
 const SID = 'root';
+// Task 13: the provider registry's own sentence, verbatim — never reworded here.
+const SIGN_IN = 'Sign in with ChatGPT in Settings → Model Providers to use this model.';
 const DOC: PlanDocumentV1 = { goal: 'g', steps: [
   { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a'] },
 ] };
@@ -26,6 +29,10 @@ let parentBinding = { providerId: 'openrouter', modelId: 'parent' };
 let catalog = [{ id: 'deepseek/deepseek-v4-flash-0731', providerId: 'openrouter', label: 'DS' }, { id: 'gpt-5.6-terra', providerId: 'chatgpt', label: 'Terra' }];
 let nextBound = 100;
 let childEvents: TranscriptEvent[] = [];
+// Task 13 (decision 25): what the provider registry says about the binding's
+// credentials. Ready unless a test says otherwise.
+let readiness: ProviderReadiness = { ok: true };
+let readinessAsked: string[] = [];
 
 function port(): PlanHostPort {
   return {
@@ -38,6 +45,7 @@ function port(): PlanHostPort {
     designated: new DelegatedModels(home),
     catalog: async () => catalog,
     resolveRoute: async () => ({ providerType: routeType, profile: CLOUD_DEFAULT, pricing: { in: 1, out: 2 }, free: false, contextLength: 100_000, totalSlots: null }),
+    credentialReadiness: async (binding) => { readinessAsked.push(binding.modelId); return readiness; },
     maxConcurrent: () => 4,
     readChildEvents: () => childEvents,
     queueTurn: () => {},
@@ -63,6 +71,7 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-bridge-'));
   home = new NativeHome(root);
   routeType = 'openrouter'; mode = 'ask'; nextBound = 100; childEvents = [];
+  readiness = { ok: true }; readinessAsked = [];
   parentBinding = { providerId: 'openrouter', modelId: 'parent' };
   resetDisabledAdaptersForTests();
 });
@@ -92,6 +101,24 @@ describe('the frozen manifest', () => {
     await expect(new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC }))
       .rejects.toThrow('couldn\'t confirm a budget model for the "reviewer" specialist');
     catalog = [{ id: 'deepseek/deepseek-v4-flash-0731', providerId: 'openrouter', label: 'DS' }, { id: 'gpt-5.6-terra', providerId: 'chatgpt', label: 'Terra' }];
+  });
+
+  // Task 13 (decision 25), the whole reason for this task: Destin's tiers
+  // resolved to ChatGPT models while he was signed out, the app proposed the
+  // plan anyway, and it only died after he approved it.
+  it('refuses to propose when a specialist\'s provider is not ready, repeating the provider\'s own sentence', async () => {
+    const probed: string[] = [];
+    const p = port();
+    p.probeSession = async (input) => { probed.push(input.specialist.id); throw new Error('the probe must not run for a specialist that cannot run'); };
+    parentBinding = { providerId: 'chatgpt', modelId: 'gpt-parent' };
+    routeType = 'chatgpt';
+    readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
+    await expect(new PlanHostBridge(p).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC }))
+      .rejects.toThrow(`The "reviewer" specialist would run on ChatGPT Plan, which isn't ready: ${SIGN_IN} The plan wasn't created.`);
+    // Nothing was measured: no probe session for a specialist that can't run.
+    expect(probed).toEqual([]);
+    // The check ran on the RESOLVED specialist model, not the parent's.
+    expect(readinessAsked).toEqual(['gpt-5.6-terra']);
   });
 
   it('the permission fingerprint follows the conversation\'s mode; the definition fingerprint follows its tools', async () => {
@@ -249,6 +276,32 @@ describe('review fix 6: starts that can never succeed are refusals', () => {
     const bridge = new PlanHostBridge(port()) as any;
     await seedPlan(bridge, withReviewer());
     await expect(bridge.launch(launchInput())).rejects.toBeInstanceOf(PlanLaunchRefusedError);
+  });
+
+  // Task 13 (decision 26): a provider that cannot run is NOT a refusal —
+  // a refusal routes to Stop-only, and here Continue is exactly the fix.
+  it('a provider that is not ready → PlanNotReadyError carrying its own sentence, never a refusal', async () => {
+    const bridge = new PlanHostBridge(port()) as any;
+    await seedPlan(bridge, withReviewer({ providerId: 'chatgpt', modelId: 'gpt-5.6-terra' }));
+    readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
+    const err = await bridge.launch(launchInput()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PlanNotReadyError);
+    expect(err).not.toBeInstanceOf(PlanLaunchRefusedError);
+    expect(err).not.toBeInstanceOf(PlanLaunchDriftError);
+    expect((err as Error).message).toBe(SIGN_IN);
+    // The FROZEN binding is what was checked, not the parent's.
+    expect(readinessAsked).toEqual(['gpt-5.6-terra']);
+  });
+
+  it('the runner hook answers with the provider sentence, and undefined when it is ready', async () => {
+    const bridge = new PlanHostBridge(port()) as any;
+    const runner = bridge.runner();
+    const plan = withReviewer();
+    expect(await runner.providerNotReady({ cwd: '/proj', sessionId: SID }, plan, 'reviewer')).toBeUndefined();
+    readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
+    expect(await runner.providerNotReady({ cwd: '/proj', sessionId: SID }, plan, 'reviewer')).toBe(SIGN_IN);
+    // A specialist the plan never approved is launchRefusal's business.
+    expect(await runner.providerNotReady({ cwd: '/proj', sessionId: SID }, plan, 'writer')).toBeUndefined();
   });
 
   it('a changed definition stays a drift, not a refusal', async () => {

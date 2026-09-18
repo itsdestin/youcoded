@@ -103,6 +103,17 @@ export class PlanLaunchDriftError extends Error {}
  *  and the assistant may only recommend Stop. */
 export class PlanLaunchRefusedError extends Error {}
 
+/** Task 13 (decision 26): thrown by the runner when the specialist's PROVIDER
+ *  cannot run as things stand — signed out of ChatGPT, no API key saved, no
+ *  endpoint, the local engine not installed. Its message is the provider's own
+ *  sentence about what to fix.
+ *  WHY not a PlanLaunchRefusedError: a refusal routes the card to Stop only,
+ *  and here Continue is exactly the right button once the person has signed in
+ *  or added the key. Never retried automatically — the identical launch could
+ *  not possibly succeed (Destin, 2026-09-18: a plan spent its ONE retry
+ *  re-running a launch that died with "Sign in with ChatGPT…"). */
+export class PlanNotReadyError extends Error {}
+
 // ---- the runner contract (implemented by the host) ----
 
 export interface PlanChildLaunch {
@@ -177,6 +188,13 @@ export interface PlanRunner {
    *  or that adapter was switched off), or undefined. Asked BEFORE its wave is
    *  reserved, so a refusal never holds any budget (Task 3 obligation). */
   launchRefusal?(ref: PlanRef, plan: PlanRecord, specialist: string): Promise<string | undefined>;
+  /** Task 13 (decision 26): the provider's OWN sentence about what to fix when
+   *  `specialist`'s provider cannot run right now (signed out, no key saved,
+   *  no endpoint, engine not installed), or undefined when it can. Asked
+   *  BEFORE every automatic retry of a launch failure or a specialist error,
+   *  because a credential problem fails identically every time. A FACT check —
+   *  never a string match on the error text. */
+  providerNotReady?(ref: PlanRef, plan: PlanRecord, specialist: string): Promise<string | undefined>;
   /** Review fix 2: the certified input bound of the report-only request —
    *  `message` sent next on the specialist session of `attemptId` — or
    *  undefined when it can't be measured (then it is not attempted). */
@@ -304,7 +322,8 @@ type HaltRequest =
     /** Final review F4: a report turn its allowance can't fund (Add budget funds it). */
     reportOnlyOf?: string;
     /** Task 9a: the facts pause-routing.ts reads back from the saved pause. */
-    launch?: 'refused' | 'drift'; retried?: true; toolEffect?: ToolEffect;
+    /** Task 13: `not-ready` = the specialist's provider couldn't run at all. */
+    launch?: 'refused' | 'drift' | 'not-ready'; retried?: true; toolEffect?: ToolEffect;
     /** Task 9a: this attempt's unknown outcome is shown by THIS pause, so the
      *  settle write marks it (Continue is then the explicit recovery). */
     acknowledge?: string;
@@ -1028,13 +1047,22 @@ export class PlanExecutor implements PlanExecutorHooks {
           if (run.halt) return undefined;
           const drift = e instanceof PlanLaunchDriftError;
           const refused = e instanceof PlanLaunchRefusedError;
-          const reason = `A specialist in step "${step.id}" couldn't start: ${errorText(e)}`;
-          const again = drift || refused ? undefined : await this.restartAfter(run, step, attemptId, 'launch-failed');
+          // Task 13 (decision 26): the runner already proved the provider
+          // can't run, so there is nothing to ask about and nothing to retry.
+          const thrownNotReady = e instanceof PlanNotReadyError ? errorText(e) : undefined;
+          const base = `A specialist in step "${step.id}" couldn't start: ${errorText(e)}`;
+          const again = drift || refused || thrownNotReady !== undefined
+            ? undefined : await this.restartAfter(run, step, attemptId, 'launch-failed');
           if (again === 'retry') { member.recovered = 'launch-failed'; continue; }
           if (again !== 'halted') {
+            const notReady = thrownNotReady ?? again?.notReady;
             this.requestHalt(run, {
-              kind: 'pause', why: 'launch-failed', stepId: step.id, attemptId, reason,
-              ...(drift ? { launch: 'drift' as const } : refused ? { launch: 'refused' as const } : {}),
+              kind: 'pause', why: 'launch-failed', stepId: step.id, attemptId,
+              // The provider's own sentence is what tells the person what to
+              // fix. When the start failed WITH it, it is already here.
+              reason: notReady && !base.includes(notReady) ? `${base} ${notReady}` : base,
+              ...(drift ? { launch: 'drift' as const } : refused ? { launch: 'refused' as const }
+                : notReady ? { launch: 'not-ready' as const } : {}),
               ...(again?.retried ? { retried: true as const } : {}),
             });
           }
@@ -1122,10 +1150,16 @@ export class PlanExecutor implements PlanExecutorHooks {
       // A specialist error: its session is dropped first, so its transcript
       // is complete on disk before the routing check reads it.
       await this.retire(run, wave, child);
-      const reason = `A specialist in step "${step.id}" stopped with an error: ${outcome.detail}`;
+      const base = `A specialist in step "${step.id}" stopped with an error: ${outcome.detail}`;
       const again = await this.restartAfter(run, step, attemptId, 'specialist-error');
       if (again === 'retry') { member.recovered = 'specialist-error'; return 'retry'; }
       if (again === 'halted') return 'done';
+      // Task 13 (decision 26): the card must carry the provider's own sentence
+      // about what to fix. In the bug this task exists for the specialist died
+      // WITH that sentence, so nothing is added; when the error said something
+      // else, the provider's words follow it rather than replace them.
+      const notReady = again.notReady;
+      const reason = notReady && !base.includes(notReady) ? `${base} ${notReady}` : base;
       if (again.unanswered) {
         // The error left an outside action with no result: this pause
         // shows it, so Continue restarts with the check-first turn instead
@@ -1134,12 +1168,17 @@ export class PlanExecutor implements PlanExecutorHooks {
         this.requestHalt(run, {
           kind: 'pause', why: 'unknown-outcome', stepId: step.id, attemptId, tool, toolEffect: 'external', acknowledge: attemptId,
           ...(again.retried ? { retried: true as const } : {}),
+          ...(notReady ? { launch: 'not-ready' as const } : {}),
           reason: `${reason}. Its last action (${tool}) has no recorded result, so it isn't known whether it finished. `
             + 'Press Continue to let it check and pick up from what it recorded.',
         });
         return 'done';
       }
-      this.requestHalt(run, { kind: 'pause', why: 'specialist-error', stepId: step.id, attemptId, reason, ...(again.retried ? { retried: true as const } : {}) });
+      this.requestHalt(run, {
+        kind: 'pause', why: 'specialist-error', stepId: step.id, attemptId, reason,
+        ...(again.retried ? { retried: true as const } : {}),
+        ...(notReady ? { launch: 'not-ready' as const } : {}),
+      });
       return 'done';
     } catch (e) {
       // WHY: an unexpected throw here must still end the wave (a pause
@@ -1158,10 +1197,11 @@ export class PlanExecutor implements PlanExecutorHooks {
    */
   private async restartAfter(
     run: ActiveRun, step: PlanStepV1, attemptId: string, cause: 'launch-failed' | 'specialist-error',
-  ): Promise<'retry' | 'halted' | { retried?: true; unanswered?: { tool: string } }> {
+  ): Promise<'retry' | 'halted' | { retried?: true; unanswered?: { tool: string }; notReady?: string }> {
     // An unsettled request is charged in full first: it may have been billed.
     await this.budget.chargeUnresolved(run.ref, run.planId, run.fence, step.id, attemptId);
-    const before = this.findAttempt(await this.load(run), step.id, attemptId);
+    const loaded = await this.load(run);
+    const before = this.findAttempt(loaded, step.id, attemptId);
     const verdict: TranscriptVerdict = before.childId
       ? this.runner.inspectTranscript(run.ref, before.childId)
       : { kind: 'resumable', briefDelivered: false };
@@ -1170,8 +1210,18 @@ export class PlanExecutor implements PlanExecutorHooks {
     // Review fix 1: once the plan is halting, no retry is started (and none
     // is recorded); the settle gives back whatever this attempt holds.
     if (run.halt) return 'halted';
+    // Task 13 (decision 26): before ANY automatic retry of a launch failure or
+    // a specialist error, ask whether that specialist's provider can still run
+    // at all. Destin, 2026-09-18: the plan spent its one retry re-running a
+    // launch that had died with "Sign in with ChatGPT…", which could never
+    // succeed. This is a fact from the provider registry, never a string match
+    // on the error text.
+    const notReady = await this.runner.providerNotReady?.(run.ref, loaded, step.specialist);
     const decided = await this.journal.mutateFenced(run.ref, run.planId, run.fence, (plan) => {
-      const ctx: PlanPauseContext = { unansweredExternal: !!unanswered, alreadyRecovered: hasRecovery(plan, key, cause) };
+      const ctx: PlanPauseContext = {
+        unansweredExternal: !!unanswered, alreadyRecovered: hasRecovery(plan, key, cause),
+        ...(notReady !== undefined ? { notReady: true } : {}),
+      };
       if (routePlanPause(cause, ctx).route !== 'auto') return { auto: false as const, retried: ctx.alreadyRecovered === true };
       // The recovery, the attempt made restartable, and its hold given back
       // — one write, before the relaunch, so a crash can't multiply it.
@@ -1181,7 +1231,12 @@ export class PlanExecutor implements PlanExecutorHooks {
       a.reservedTokens = 0;
       return { auto: true as const };
     });
-    if (!decided.auto) return { ...(decided.retried ? { retried: true as const } : {}), ...(unanswered ? { unanswered } : {}) };
+    if (!decided.auto) {
+      return {
+        ...(decided.retried ? { retried: true as const } : {}), ...(unanswered ? { unanswered } : {}),
+        ...(notReady !== undefined ? { notReady } : {}),
+      };
+    }
     const members: ReserveMember[] = [{ stepId: step.id, attemptId }];
     const reserved = await this.budget.reserveAttempts(run.ref, run.planId, run.fence, members);
     if (!reserved.ok) {

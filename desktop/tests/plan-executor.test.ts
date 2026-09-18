@@ -8,7 +8,7 @@ import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
 import { PlanBudget, planCeilingTokens } from '../src/main/harness/plans/plan-budget';
 import {
-  PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, PLAN_DEPENDENCY_REPORT_MAX_CHARS, PLAN_REPORT_ONLY_RESEND, PLAN_RESTART_BRIEF, classifyChildTranscript as classifyWith, planRestartBrief,
+  PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError, PLAN_DEPENDENCY_REPORT_MAX_CHARS, PLAN_REPORT_ONLY_RESEND, PLAN_RESTART_BRIEF, classifyChildTranscript as classifyWith, planRestartBrief,
   type PlanChildHandle, type PlanChildLaunch, type PlanChildOutcome, type PlanRunner, type TranscriptVerdict,
 } from '../src/main/harness/plans/plan-executor';
 import { resetDisabledAdaptersForTests, type PlanBudgetAdapter, type PlanChildRequestGate } from '../src/main/harness/plans/budget-adapter';
@@ -103,6 +103,13 @@ class FakeRunner implements PlanRunner {
   onOrphaned?: (ref: PlanRef, planId: string) => void;
   refusal: string | undefined = undefined;
   async launchRefusal(): Promise<string | undefined> { return this.refusal; }
+  /** Task 13 (decision 26): the provider's own sentence, when it can't run. */
+  notReady: string | undefined = undefined;
+  notReadyAsked: string[] = [];
+  async providerNotReady(_ref: PlanRef, _plan: PlanRecord, specialist: string): Promise<string | undefined> {
+    this.notReadyAsked.push(specialist);
+    return this.notReady;
+  }
   /** Review fix 2: the measured input of a report-only request. */
   reportBound: number | undefined = 100;
   reportBoundAsked: Array<{ attemptId: string; message: string }> = [];
@@ -1449,6 +1456,84 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
     expect((await plan()).status).toBe('completed');
+  });
+
+  // Task 13 (decision 26) — an error that cannot heal itself is never retried.
+  // Destin, 2026-09-18: "the plan burned its one automatic retry on 'Sign in
+  // with ChatGPT…', which could never succeed."
+  describe('a provider that is not ready', () => {
+    const SIGN_IN = 'Sign in with ChatGPT in Settings → Model Providers to use this model.';
+
+    it('takes NO automatic retry after a start failure, and records the not-ready fact', async () => {
+      const runner = new FakeRunner(() => completes('ok'));
+      runner.notReady = SIGN_IN;
+      const real = runner.launch.bind(runner);
+      let calls = 0;
+      runner.launch = async (input) => {
+        if (input.brief === 'Do flaky') { calls++; throw new Error('the model service refused the connection'); }
+        return real(input);
+      };
+      const fence = await seed(record(THREE));
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      const p = await plan();
+      expect(calls).toBe(1);                       // exactly one launch, zero retries
+      expect(p.recoveries).toBeUndefined();        // no recovery was journalled
+      expect(p.paused).toMatchObject({ kind: 'launch-failed', launch: 'not-ready' });
+      expect(p.paused!.reason).toContain(SIGN_IN); // the provider's own sentence
+      expect(runner.notReadyAsked).toContain('reviewer');
+      expect(pausedRouting(p.paused!)).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+    });
+
+    it('takes NO automatic retry after a specialist error, and the card keeps Continue', async () => {
+      const runner = new FakeRunner((l) => (l.brief === 'Do flaky' ? failsWith(SIGN_IN) : completes('ok')));
+      runner.notReady = SIGN_IN;
+      const fence = await seed(record(THREE));
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      const p = await plan();
+      expect(runner.launches.filter((l) => l.brief === 'Do flaky')).toHaveLength(1);
+      expect(p.recoveries).toBeUndefined();
+      expect(p.paused).toMatchObject({ kind: 'specialist-error', launch: 'not-ready' });
+      // The sentence the specialist died with is already the provider's own —
+      // it is not repeated twice.
+      expect(p.paused!.reason).toBe(`A specialist in step "s1" stopped with an error: ${SIGN_IN}`);
+      expect(pausedRouting(p.paused!)).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+    });
+
+    it('a launch refused by the readiness check itself is a pause, never a retry and never Stop-only', async () => {
+      const runner = new FakeRunner(() => completes('ok'));
+      const real = runner.launch.bind(runner);
+      let calls = 0;
+      runner.launch = async (input) => {
+        if (input.brief === 'Do flaky') { calls++; throw new PlanNotReadyError(SIGN_IN); }
+        return real(input);
+      };
+      const fence = await seed(record(THREE));
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      const p = await plan();
+      expect(calls).toBe(1);
+      expect(p.recoveries).toBeUndefined();
+      expect(p.paused).toMatchObject({ kind: 'launch-failed', launch: 'not-ready' });
+      expect(p.paused!.reason).toBe(`A specialist in step "s1" couldn't start: ${SIGN_IN}`);
+      expect(pausedRouting(p.paused!)).toEqual({ route: 'assistant', actions: ['continue', 'stop'] });
+    });
+
+    it('still takes its one retry when the provider IS ready', async () => {
+      const runner = new FakeRunner(failsOnce());
+      runner.notReady = undefined;
+      const fence = await seed(record(THREE));
+      const exec = executor(runner);
+      exec.start({ ref: REF, planId: 'p1', fence });
+      await exec.settled('p1');
+      expect((await plan()).status).toBe('completed');
+      expect(runner.notReadyAsked).toEqual(['reviewer']);
+      expect(runner.launches.filter((l) => l.brief === 'Do flaky' || l.resumeChildId === 'child-1')).toHaveLength(2);
+    });
   });
 
   it('a specialist that changed since approval (drift) is never retried', async () => {

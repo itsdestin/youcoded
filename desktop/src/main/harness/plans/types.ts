@@ -235,7 +235,10 @@ const PlanRecordSchema = z.object({
      *  start was refused or the specialist changed since approval (never
      *  retried); `retried`: this is the failure after an automatic recovery;
      *  `toolEffect`: what the unanswered `tool` could change. */
-    launch: z.enum(['refused', 'drift']).optional(),
+    /** Task 13 (decision 26): `not-ready` = the specialist's provider could
+     *  not run (signed out, no key, endpoint or engine missing). Also never
+     *  retried, but Continue is offered — signing in is the fix. */
+    launch: z.enum(['refused', 'drift', 'not-ready']).optional(),
     retried: z.literal(true).optional(),
     toolEffect: z.enum(TOOL_EFFECTS).optional(),
     /** Final review F1: the request ids of the Add budget presses THIS pause
