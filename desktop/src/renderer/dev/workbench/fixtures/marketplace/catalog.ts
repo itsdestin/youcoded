@@ -323,7 +323,7 @@ export function buildCatalog(plugins: readonly unknown[]): SkillEntry[] {
   return [...bundles, ...STANDALONE_ENTRIES, ...buildMemberEntries(bundles)];
 }
 
-/** Render-cost plan (docs/active/investigations/2026-09-18-list-render-cost-sweep.md,
+/** Render-cost plan (docs/archive/investigations/2026-09-18-list-render-cost-sweep.md,
  *  Task 0 step 2b): the workbench `stress` scenario's marketplace. The sampled
  *  catalog is ~60 rows, so "Explore everything" never showed what drawing the
  *  whole list costs; this pads it with generated standalone rows (same shape as

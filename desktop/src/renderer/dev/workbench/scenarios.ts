@@ -176,7 +176,7 @@ function stressPast(): PastSession[] {
   });
 }
 
-// Render-cost plan (docs/active/investigations/2026-09-18-list-render-cost-sweep.md,
+// Render-cost plan (docs/archive/investigations/2026-09-18-list-render-cost-sweep.md,
 // Task 0 step 2b): generated model rows so the model picker's search results
 // reach the same size as the other stress lists. Every label contains "a" on
 // purpose — the DOM-size sweep types "a", and a sample the search filters down
