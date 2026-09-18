@@ -1,4 +1,9 @@
-// Finding 2 (final pre-merge review): requestChatsearchRefresh's 3s debounce
+// index-service: a metadata change that lands while a refresh cycle is running.
+// WHY a separate file from chatsearch-index-service.test.ts: the vi.mock below
+// replaces conversations/service for the whole file, and that file's
+// onConversationMetaChanged cases need the real one.
+//
+// requestChatsearchRefresh's 3s debounce
 // coalesces BURSTS of triggers before it fires, but a cycle that's still
 // genuinely running when the timer fires used to have that trigger silently
 // dropped — a tag/note applied mid-cycle stayed invisible to the CLI until the
