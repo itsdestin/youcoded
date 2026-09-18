@@ -949,8 +949,10 @@ export function ProjectView(props: ProjectViewProps) {
             {activeProject && (
               <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={() => setCountsKey((k) => k + 1)} onClearSearch={() => setArtifactSearch('')} onCurrentDirChange={setCurrentRelDir} />
             )}
+            {/* Keyed by project so a switch starts a fresh 50-card window at the
+                top, instead of keeping the last project's scroll depth. */}
             {activeProject && tab === 'conversations' && (
-              <ConversationsTab conversations={conversations} onOpenPreview={setPreviewSession} />
+              <ConversationsTab key={activeProject.id} conversations={conversations} onOpenPreview={setPreviewSession} />
             )}
             {previewSession && activeProject && (
               <ConversationPreview

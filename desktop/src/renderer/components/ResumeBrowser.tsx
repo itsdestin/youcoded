@@ -26,7 +26,7 @@ import { useTagRegistry } from '../hooks/useTagRegistry';
 import { TagPicker } from './tags/TagPicker';
 import { TagManagerPopup } from './tags/TagManagerPopup';
 import { TagChip } from './tags/TagChip';
-import { SessionCardTags, SessionCardMeta, CompleteToggle } from './SessionCardDetails';
+import { SessionCardTags, SessionCardMeta, CompleteToggle, SESSION_CARD_SURFACE_BASE } from './SessionCardDetails';
 import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
 import { TagGlyph } from './tags/glyphs';
 import { NoteEditor } from './tags/NoteEditor';
@@ -1175,7 +1175,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // this card, not the panel. The icon buttons are SIBLINGS of the expand
         // trigger, never nested — a button inside a button is invalid HTML and
         // the inner one would never receive its own click.
-        className={`relative rounded-lg border bg-inset overflow-hidden transition-colors ${
+        // Surface shared with the Projects → Conversations card
+        // (SessionCardDetails.tsx); only the border colour is this card's own.
+        className={`relative overflow-hidden ${SESSION_CARD_SURFACE_BASE} ${
           isSelected ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
         }`}
       >
