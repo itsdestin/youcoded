@@ -152,7 +152,11 @@ describe('FilesTab list view', () => {
 });
 
 describe('flat search results', () => {
-  it('draw a chunk at a time and the rest as you scroll', async () => {
+  // WHY both views: grid and list are separate draw sites over the same window.
+  // Pinned on list alone, the grid (the default view, and what the DOM-size
+  // sweep opens) could draw every match and this test stayed green — proven by
+  // a break-it run in the render-cost consolidation's closing check (2026-09-18).
+  it.each(['list', 'grid'] as const)('draw a chunk at a time and the rest as you scroll (%s view)', async (view) => {
     // A search over a big project is the 2,000-card case; drawing every match
     // at once is what made typing in the search box stall.
     const many = Array.from({ length: REVEAL_CHUNK * 2 + 20 }, (_, i) => ({
@@ -160,7 +164,7 @@ describe('flat search results', () => {
       lastModified: new Date().toISOString(),
     }));
     listAllFiles.mockResolvedValue({ ok: true, files: many });
-    const { container, findByTitle } = renderTab('list', 'match');
+    const { container, findByTitle } = renderTab(view, 'match');
     await findByTitle('match-000.md');
     const rows = () => container.querySelectorAll('button[title^="match-"]').length;
     expect(rows()).toBe(REVEAL_CHUNK);
