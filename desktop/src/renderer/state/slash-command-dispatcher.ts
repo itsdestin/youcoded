@@ -137,7 +137,7 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
   // discriminator: no command or skill id contains one — the app's two
   // inventories (cc-builtin-commands.ts, youcoded-commands.ts) hold 30 names
   // with no slash, and skill ids namespace with ':' (plugin:skill).
-  // Guard: tests/slash-command-filepath.test.ts.
+  // Guard: tests/slash-command-dispatcher-filepath.test.ts.
   if (cmd.includes('/', 1)) {
     return { handled: false };
   }
