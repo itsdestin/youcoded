@@ -17,6 +17,7 @@ import { render, cleanup, waitFor, act } from '@testing-library/react';
 import { FilesTab } from '../src/renderer/components/project-view/tabs/FilesTab';
 import { REVEAL_CHUNK } from '../src/renderer/hooks/use-chunked-reveal';
 import { installFiringIntersectionObserver } from './helpers/firing-intersection-observer';
+import type { FileTypeGroup } from '../src/shared/artifacts/categorization';
 
 const listAllFiles = vi.fn();
 
@@ -180,7 +181,7 @@ describe('folder browsing', () => {
     // The folder grid scrolls in the same box the flat results' reveal resets,
     // so a reset key that held the sort threw the reader back to the top here.
     const props = {
-      project, search: '', types: new Set<string>(), view: 'grid' as const, onViewChange: vi.fn(),
+      project, search: '', types: new Set<FileTypeGroup>(), view: 'grid' as const, onViewChange: vi.fn(),
       refreshKey: 0, pvActiveId: null, artifactDispatch: vi.fn(),
     };
     const { container, findByTitle, rerender } = render(<FilesTab {...props} sortBy="name" />);
