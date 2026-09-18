@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
-import { createProposePlanTool } from '../src/main/harness/tools/propose-plan';
+import { createProposePlanTool, PLAN_UNFINISHED_DETAIL } from '../src/main/harness/tools/propose-plan';
 import { BUILTIN_ROSTER } from '../src/main/harness/specialists/registry';
 import { CLOUD_DEFAULT, resolveProfile } from '../src/main/harness/capability-profile';
 import { HarnessSession } from '../src/main/harness/harness-session';
@@ -340,6 +340,79 @@ describe('HarnessSession plan integration', () => {
   it('fails closed when providerType is absent', () => {
     const { session } = scriptedSession([stream(finishChunk('stop'))], { providerType: undefined });
     expect(Object.keys((session as any).buildAiTools())).not.toContain('propose_plan');
+  });
+
+  // Double-encoded arguments (2026-09-18). `toolCallChunk` JSON-stringifies
+  // whatever it is given, so handing it an already-stringified document
+  // reproduces exactly what Destin's sessions recorded: `toolInput` arriving as
+  // a STRING holding the whole plan. Recovery lives at the shared runOneTool
+  // seam, so these prove the plan path end-to-end, not a propose_plan special case.
+  it('accepts a string-wrapped plan document and proposes the same plan as the object form', async () => {
+    const object = scriptedSession([
+      stream(toolCallChunk('obj-plan', 'propose_plan', VALID), finishChunk('tool-calls')),
+      stream(finishChunk('stop')),
+    ]);
+    await object.session.send('make a plan');
+
+    const wrapped = scriptedSession([
+      stream(toolCallChunk('str-plan', 'propose_plan', JSON.stringify(VALID)), finishChunk('tool-calls')),
+      stream(finishChunk('stop')),
+    ]);
+    await wrapped.session.send('make a plan');
+
+    // The provider really did hand the driver a string, not an object.
+    const use = wrapped.events.find((event) => event.type === 'tool-use' && event.data.toolUseId === 'str-plan');
+    expect(typeof use?.data.toolInput).toBe('string');
+
+    expect(wrapped.propose).toHaveBeenCalledTimes(1);
+    expect(object.propose).toHaveBeenCalledTimes(1);
+    // Same document reaches the proposal service either way. (The shared mock
+    // is typed for the two fields the other tests use; the proposal carries more.)
+    const wrappedDocument = (wrapped.propose.mock.calls[0][0] as any).document;
+    expect(wrappedDocument).toEqual((object.propose.mock.calls[0][0] as any).document);
+    expect(wrappedDocument).toEqual(VALID);
+    const result = wrapped.events.find((event) => event.type === 'tool-result' && event.data.toolUseId === 'str-plan');
+    expect(result?.data).toMatchObject({ isError: false, plan: { status: 'proposed' } });
+  });
+
+  it('a string that is not JSON gets exactly one repair and never blames the argument type', async () => {
+    const { session, events, propose, calls } = scriptedSession([
+      // The real shape: a runaway plan cut off mid-string by the token cap.
+      stream(toolCallChunk('cut-1', 'propose_plan', '{"goal":"Review","steps":[{"id":"a"'), finishChunk('tool-calls')),
+      stream(toolCallChunk('cut-2', 'propose_plan', '{"goal":"Review","steps":[{"id":"a"'), finishChunk('tool-calls')),
+      stream(finishChunk('stop')),
+    ]);
+    await session.send('make a plan');
+    expect(calls()).toBe(2);
+    expect(propose).not.toHaveBeenCalled();
+    const results = events.filter((event) => event.type === 'tool-result' && event.data.toolName === 'propose_plan');
+    expect(results).toHaveLength(2);
+    expect(results[0].data.toolResult).toMatch(/not valid JSON/i);
+    expect(results[0].data.toolResult).toMatch(/one plan-specific repair opportunity/i);
+    expect(results[1].data.toolResult).toMatch(/repair exhausted/i);
+    // The misleading sentence Destin actually saw must not come back.
+    expect(results.every((event) => !/received string/.test(event.data.toolResult))).toBe(true);
+    // The card says the plan was never finished, not that its shape was wrong.
+    expect(results[0].data.plan).toMatchObject({ status: 'failed', failure: { detail: PLAN_UNFINISHED_DETAIL } });
+  });
+
+  it('a string whose JSON fails the schema still gets exactly one repair, reported against the document', async () => {
+    const bad = { ...VALID, steps: [{ ...VALID.steps[0], budget_tokens: 1 }] };
+    const { session, events, propose, calls } = scriptedSession([
+      stream(toolCallChunk('bad-str-1', 'propose_plan', JSON.stringify(bad)), finishChunk('tool-calls')),
+      stream(toolCallChunk('bad-str-2', 'propose_plan', JSON.stringify(bad)), finishChunk('tool-calls')),
+      stream(finishChunk('stop')),
+    ]);
+    await session.send('make a plan');
+    expect(calls()).toBe(2);
+    expect(propose).not.toHaveBeenCalled();
+    const results = events.filter((event) => event.type === 'tool-result' && event.data.toolName === 'propose_plan');
+    expect(results).toHaveLength(2);
+    // Reported against the PARSED document (the budget), not the envelope.
+    expect(results[0].data.toolResult).toMatch(/budget_tokens/);
+    expect(results[0].data.toolResult).not.toMatch(/received string/);
+    expect(results[0].data.toolResult).toMatch(/one plan-specific repair opportunity/i);
+    expect(results[1].data.toolResult).toMatch(/repair exhausted/i);
   });
 
   it('pairs and terminates a truncated plan input without calling the model again or persisting', async () => {

@@ -165,7 +165,7 @@ export function rememberedRuleFor(
   return { tool: toolName, pattern: subject, action: 'allow', match: 'exact' };
 }
 import { formatAnswers } from './tools/ask-user-question';
-import { formatArgErrors } from './tools/arg-errors';
+import { formatArgErrors, formatStringArgFailure, parseToolCallInput } from './tools/arg-errors';
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile } from './capability-profile';
 import { adaptForWire } from './wire-adapter';
@@ -559,6 +559,17 @@ function isUsableMessage(s: unknown): s is string {
   return typeof s === 'string' && s.trim().length > 0 && s.trim() !== '[object Object]';
 }
 
+/** SDK wrapper sentences that name no cause anyone can act on. `@ai-sdk/
+ *  provider-utils`' response handlers raise these for ANY throw while reading a
+ *  response body, so the words describe the SDK's own control flow rather than
+ *  what went wrong. Seen live on ~openai/* through OpenRouter (2026-09-17, and
+ *  for background specialists since 2026-09-09). The real error, when there is
+ *  one, is on `cause` — see describeProviderError. */
+const OPAQUE_SDK_MESSAGES = new Set([
+  'Failed to process successful response',
+  'Failed to process error response',
+]);
+
 export function describeProviderError(err: any): string {
   // A thrown value isn't always an object at all — `throw 'rate limited'` is
   // legal JS and describeProviderError must not turn that into the generic
@@ -585,6 +596,16 @@ export function describeProviderError(err: any): string {
   // No structured detail (network error, etc.) — the SDK message beats nothing,
   // as long as it's not itself the poisoned '[object Object]' literal.
   const sdkMessage = api?.message ?? err?.message;
+  if (isUsableMessage(sdkMessage) && OPAQUE_SDK_MESSAGES.has(sdkMessage.trim())) {
+    // The SDK throws this ONE sentence for any failure while consuming an
+    // already-successful response body, and hangs the real error off `cause`.
+    // Surface that cause when there is one (specific + accurate); otherwise say
+    // only what is known — that the reply could not be read to the end — and
+    // never guess why (error-message-standards.md).
+    const causeMessage = api?.cause?.message ?? err?.cause?.message;
+    if (isUsableMessage(causeMessage)) return `${causeMessage.trim()} (while reading the model's reply)`;
+    return "The model's reply could not be read to the end.";
+  }
   return isUsableMessage(sdkMessage) ? sdkMessage.trim() : 'The model request failed.';
 }
 // Back-filled into a tool-result when a turn is interrupted mid-step (during a
@@ -4160,31 +4181,28 @@ export class HarnessSession extends EventEmitter {
 
     // 1. Validate (zod) — invalid args are a RESULT the model repairs from, not
     //    a crash, and precede permissions (never ask about garbage).
-    let parsed = tool.inputSchema.safeParse(call.input);
-    if (!parsed.success && typeof call.input === 'string') {
-      // Weak-model hardening (Task 12, spec §3): the ai@7 SDK already parses a
-      // provider tool-call's stringified args into an object for us (see
-      // harness-sdk-toolcall-contract.test.ts), but a weak local model
-      // sometimes puts its WHOLE args object as a STRING one level further in
-      // — e.g. it emits `"{\"prompt\": ...}"` where a real object belongs. If
-      // the raw string itself JSON.parses to an object, give it ONE recovery
-      // attempt before falling back to the normal arg error — never a general
-      // coercion layer (YAGNI: one attempt, then the ordinary failure path).
-      try {
-        const recovered: unknown = JSON.parse(call.input);
-        if (recovered && typeof recovered === 'object') {
-          const reparsed = tool.inputSchema.safeParse(recovered);
-          if (reparsed.success) parsed = reparsed;
-        }
-      } catch { /* not JSON — fall through to the normal arg error below */ }
-    }
-    if (!parsed.success) {
+    // Weak-model / provider hardening (Task 12, spec §3; widened 2026-09-18):
+    // the ai@7 SDK normally parses a tool-call's stringified args into an object
+    // for us (harness-sdk-toolcall-contract.test.ts), but a model sometimes puts
+    // its WHOLE args object as a STRING one level further in — and the SDK hands
+    // that string straight through. parseToolCallInput owns that ONE bounded
+    // recovery for EVERY tool, so propose_plan is not a special case.
+    const parsed = parseToolCallInput(tool.inputSchema, call.input);
+    if (!parsed.ok) {
       // Worded in arg-errors.ts (ledger D-2): names the unknown / missing /
       // mistyped parameter and, for an unknown one, the parameters that exist —
       // the strict schemas below make that the common case for CC-trained models.
-      const detail = formatArgErrors(call.toolName, parsed.error, tool.inputSchema);
+      // A string the seam could not read back gets its own sentence: reporting
+      // zod's outer "must be a object (received string)" described the envelope
+      // and sent the model to repair arguments that were never the problem.
+      const detail = parsed.stringFailure
+        ? formatStringArgFailure(call.toolName, parsed.stringFailure)
+        : formatArgErrors(call.toolName, parsed.error, tool.inputSchema);
       if (call.toolName === 'propose_plan') {
-        const terminal = failedPlanProjection(call.toolCallId, this.binding.modelId, { detail: PLAN_INVALID_DETAIL }, this.planShellFacts(call.toolCallId));
+        // A plan whose arguments never arrived intact is UNFINISHED, not
+        // malformed — the card says so rather than blaming the plan's shape.
+        const cardDetail = parsed.stringFailure ? PLAN_UNFINISHED_DETAIL : PLAN_INVALID_DETAIL;
+        const terminal = failedPlanProjection(call.toolCallId, this.binding.modelId, { detail: cardDetail }, this.planShellFacts(call.toolCallId));
         return planRepairUsed
           ? { text: `${detail}\nPlan repair exhausted; stop and wait for the user's next message.`, isError: true, plan: terminal, planArgsInvalid: true, planRepairExhausted: true }
           : { text: `${detail}\nYou have exactly one plan-specific repair opportunity. Call propose_plan once more with corrected arguments.`, isError: true, plan: terminal, planArgsInvalid: true };

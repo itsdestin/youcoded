@@ -67,3 +67,63 @@ export function formatArgErrors(toolName: string, error: z.ZodError, schema: z.Z
   }
   return `Invalid arguments for ${toolName}: ${problems.join('; ')}. Fix the arguments and call again.`;
 }
+
+/** Why a string-wrapped arguments blob could not be read back. `undefined`
+ *  means the string WAS a JSON object — its schema errors are the real ones. */
+export type ToolInputStringFailure = 'unparseable' | 'oversize';
+
+export type ToolInputParse<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: z.ZodError; stringFailure?: ToolInputStringFailure };
+
+/** The bound on the one recovery `JSON.parse`. A runaway tool call can be
+ *  hundreds of kilobytes (one real propose_plan call was 210 KB), and parsing
+ *  an arbitrarily large blob on a doomed call buys nothing. Comfortably above
+ *  any honest arguments object. */
+export const TOOL_INPUT_STRING_RECOVERY_LIMIT = 1_000_000;
+
+/**
+ * Read a tool call's raw arguments, accepting the double-encoded form.
+ *
+ * WHY this is ONE shared seam rather than a fix inside propose_plan: the
+ * provider decides the shape, not the tool. The ai SDK normally parses a
+ * tool-call's stringified arguments into an object for us, but when it cannot —
+ * or when a model nests the whole object one level further in as a string — the
+ * raw STRING arrives as `call.input` for whichever tool was called. Verified
+ * 2026-09-18 against ai@7: a double-encoded argument string is passed straight
+ * through, so every native tool and every MCP tool can meet this.
+ *
+ * Rules: an already-valid input is parsed ONCE and never re-parsed; only a
+ * string gets the single bounded recovery attempt; and when the string does
+ * hold a JSON object, that object's schema errors are what we report — the
+ * outer "must be a object (received string)" describes the envelope, not the
+ * mistake the model has to fix.
+ */
+export function parseToolCallInput<T>(schema: z.ZodType<T>, raw: unknown): ToolInputParse<T> {
+  const first = schema.safeParse(raw);
+  if (first.success) return { ok: true, data: first.data };
+  if (typeof raw !== 'string') return { ok: false, error: first.error };
+  if (raw.length > TOOL_INPUT_STRING_RECOVERY_LIMIT) return { ok: false, error: first.error, stringFailure: 'oversize' };
+
+  let recovered: unknown;
+  try {
+    recovered = JSON.parse(raw);
+  } catch {
+    // Not JSON at all — most often arguments cut off before they finished.
+    return { ok: false, error: first.error, stringFailure: 'unparseable' };
+  }
+  // A bare scalar ("hello", 3, null) is not an arguments object; treating it as
+  // one would hand the schema a value it can only reject for the same reason.
+  if (!recovered || typeof recovered !== 'object') return { ok: false, error: first.error, stringFailure: 'unparseable' };
+
+  const second = schema.safeParse(recovered);
+  return second.success ? { ok: true, data: second.data } : { ok: false, error: second.error };
+}
+
+/** The model-facing sentence for a string the seam could not read back. Kept
+ *  beside formatArgErrors so all tool-argument wording lives in one file. */
+export function formatStringArgFailure(toolName: string, failure: ToolInputStringFailure): string {
+  return failure === 'oversize'
+    ? `Invalid arguments for ${toolName}: the arguments arrived as text too large to read back. Call again with a much shorter set of arguments.`
+    : `Invalid arguments for ${toolName}: the arguments arrived as text that is not valid JSON, so they could not be read. If they were long, they were probably cut off before they finished — call again with a shorter, complete set of arguments.`;
+}

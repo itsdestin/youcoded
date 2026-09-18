@@ -5,9 +5,9 @@
 // the parameters that DO exist so the fix is one retry away. Before this, an
 // unknown key (`Grep {pattern, "-i": true}`) was silently dropped and a missing
 // key produced zod's raw "Invalid input: expected string, received undefined".
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { z } from 'zod';
-import { formatArgErrors } from '../src/main/harness/tools/arg-errors';
+import { formatArgErrors, parseToolCallInput, TOOL_INPUT_STRING_RECOVERY_LIMIT } from '../src/main/harness/tools/arg-errors';
 
 const grepLike = z.object({
   pattern: z.string(),
@@ -72,5 +72,75 @@ describe('formatArgErrors', () => {
     const msg = formatArgErrors('X', fail(anyObj, { a: 'no' }), anyObj);
     expect(msg).toMatch(/^Invalid arguments for X: /);
     expect(msg).not.toContain('Valid parameters');
+  });
+});
+
+// The double-encoded-arguments seam (2026-09-18). Some providers hand the whole
+// arguments object through as a STRING one level further in — `"{\"a\":1}"`
+// where an object belongs. runOneTool recovers that at ONE shared seam for
+// every native tool, so propose_plan, recommend_plan_action and the file tools
+// all get the same treatment. Evidence it is real: two of Destin's sessions
+// recorded `toolInput` as a string for propose_plan (2026-09-17).
+describe('parseToolCallInput — the shared double-encoded-arguments seam', () => {
+  const schema = z.object({ goal: z.string(), count: z.number() }).strict();
+
+  it('accepts a string-wrapped document and yields the same data as the object form', () => {
+    const object = { goal: 'ship it', count: 2 };
+    const fromObject = parseToolCallInput(schema, object);
+    const fromString = parseToolCallInput(schema, JSON.stringify(object));
+    expect(fromObject).toEqual({ ok: true, data: object });
+    expect(fromString).toEqual(fromObject);
+  });
+
+  it('a string that is not JSON fails with the unparseable reason, not a type complaint', () => {
+    // The real shape: arguments cut off mid-string by the output-token cap.
+    const result = parseToolCallInput(schema, '{"goal":"ship it","count":');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.stringFailure).toBe('unparseable');
+  });
+
+  it('a string whose JSON fails the schema reports the PARSED document\'s errors', () => {
+    // WHY: reporting the outer "must be a object (received string)" here told
+    // the model its arguments were the wrong TYPE when they were the wrong
+    // SHAPE — it repaired the wrong thing and spent its one plan repair.
+    const result = parseToolCallInput(schema, JSON.stringify({ goal: 'ship it' }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.stringFailure).toBeUndefined();
+      const message = formatArgErrors('X', result.error, schema);
+      expect(message).toContain('missing required parameter "count"');
+      expect(message).not.toContain('received string');
+    }
+  });
+
+  it('an oversized string is refused without being parsed at all', () => {
+    const result = parseToolCallInput(schema, 'x'.repeat(TOOL_INPUT_STRING_RECOVERY_LIMIT + 1));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.stringFailure).toBe('oversize');
+  });
+
+  it('an input that is already an object is parsed once and never JSON.parsed', () => {
+    const parse = vi.spyOn(JSON, 'parse');
+    const safeParse = vi.fn(schema.safeParse.bind(schema));
+    const result = parseToolCallInput({ safeParse } as any, { goal: 'ship it', count: 2 });
+    expect(result.ok).toBe(true);
+    expect(safeParse).toHaveBeenCalledTimes(1);
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
+  });
+
+  it('a non-string, non-object input still reports the schema error and never re-parses', () => {
+    const parse = vi.spyOn(JSON, 'parse');
+    const result = parseToolCallInput(schema, 42);
+    expect(result.ok).toBe(false);
+    expect(parse).not.toHaveBeenCalled();
+    parse.mockRestore();
+  });
+
+  it('a JSON string holding a bare scalar is unparseable, not a silent object', () => {
+    // `"\"hello\""` parses fine but is not an arguments object.
+    const result = parseToolCallInput(schema, JSON.stringify('hello'));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.stringFailure).toBe('unparseable');
   });
 });

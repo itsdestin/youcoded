@@ -39,23 +39,44 @@ let TRIALS;
 
 // Exported so the production schema can be pinned byte-for-byte (as data) to
 // the exact constrained-decoding grammar that the live model probe exercised.
+// 2026-09-18: the recursion is BOUNDED (`steps` now points at `$defs/leafStep`,
+// which has no `steps` and cannot be a `repeat`). This REMOVES a production
+// rather than adding one, so every grammar the probe proved still parses; the
+// probe was NOT re-run. Why it had to change: in two of Destin's real sessions
+// a model rode the old unbounded recursion 343, 353 and 206 levels deep with
+// filler steps until the output-token cap cut the arguments mid-string. See
+// plans/schema.ts and tests/plan-schema.test.ts.
 export const STEP_SCHEMA = {
   $defs: {
+    leafStep: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['id', 'kind', 'specialist', 'task', 'budget_tokens'],
+      properties: {
+        id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
+        specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
+        task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
+        budget_tokens: { type: 'integer', minimum: 500, maximum: 30000 },
+        items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
+        of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
+        kind: { type: 'string', enum: ['map', 'verify', 'combine'] },
+      },
+    },
     step: {
       type: 'object',
       additionalProperties: false,
       required: ['id', 'kind', 'specialist', 'task', 'budget_tokens'],
       properties: {
         id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
-        kind: { type: 'string', enum: ['map', 'verify', 'combine', 'repeat'] },
         specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
         task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
         budget_tokens: { type: 'integer', minimum: 500, maximum: 30000 }, // raised from 20000 on 2026-09-16 (numeric bound only; grammar evidence unchanged, not re-run)
         items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
         of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
+        kind: { type: 'string', enum: ['map', 'verify', 'combine', 'repeat'] },
         max_iterations: { type: 'integer', minimum: 1, maximum: 5, description: 'repeat only: hard cap.' },
         until: { type: 'string', minLength: 1, maxLength: 2000, description: 'repeat only: plain-words stop condition.' },
-        steps: { type: 'array', items: { $ref: '#/$defs/step' }, minItems: 1, maxItems: 4, description: 'repeat only: the steps to repeat.' },
+        steps: { type: 'array', items: { $ref: '#/$defs/leafStep' }, minItems: 1, maxItems: 4, description: 'repeat only: the steps to repeat. These may not repeat again.' },
       },
     },
   },

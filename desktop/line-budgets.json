@@ -10,7 +10,7 @@
     "main/harness/native-session-host.ts": 5349,
     "main/ipc-handlers.ts": 5330,
     "renderer/App.tsx": 4802,
-    "main/harness/harness-session.ts": 4461,
+    "main/harness/harness-session.ts": 4479,
     "main/remote-server.ts": 4091,
     "renderer/components/SettingsPanel.tsx": 3195,
     "renderer/remote-shim.ts": 3188,

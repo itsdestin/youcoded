@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import Ajv from 'ajv';
 import { PLAN_DOCUMENT_JSON_SCHEMA, PlanDocumentSchema } from '../src/main/harness/plans/schema';
 import { validatePlanDocument } from '../src/main/harness/plans/validator';
 import { BUILTIN_ROSTER, type SpecialistRoster } from '../src/main/harness/specialists/registry';
@@ -40,9 +41,47 @@ describe('plan schema and semantic validator', () => {
   it('pins the complete model-facing schema to the schema proven by the live probe', () => {
     expect(PLAN_DOCUMENT_JSON_SCHEMA).toEqual(PROBE_PLAN_DOCUMENT_JSON_SCHEMA);
     expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.specialist.enum).toEqual(['explorer', 'researcher', 'reviewer', 'worker']);
-    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.steps.items.$ref).toBe('#/$defs/step');
+    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.steps.items.$ref).toBe('#/$defs/leafStep');
     expect(PlanDocumentSchema.safeParse(mapVerifyCombine).success).toBe(true);
     expect(PlanDocumentSchema.safeParse(nestedRepeat).success).toBe(true);
+  });
+
+  // WHY this guard exists (2026-09-18, from two of Destin's real sessions):
+  // `$defs/step` offered the recursive `steps` on EVERY step, so a model doing
+  // constrained decoding could descend steps→steps→steps with nothing to stop
+  // it. Three real propose_plan calls did exactly that — 343, 353 and 206
+  // levels of filler steps ("Do not run.", "unused") — until the output-token
+  // cap cut the arguments mid-string. The arguments then arrived as unparseable
+  // text and the plan died. validator.ts already rejects a repeat inside a
+  // repeat, so the unbounded grammar could only ever produce documents the
+  // semantics would refuse. A repeat body is now a LEAF step: one level, and
+  // the runaway is not expressible.
+  it('the model-facing grammar cannot nest steps without bound', () => {
+    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.leafStep.properties).not.toHaveProperty('steps');
+    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.leafStep.properties.kind.enum).toEqual(['map', 'verify', 'combine']);
+
+    const validate = new Ajv({ strict: false }).compile(PLAN_DOCUMENT_JSON_SCHEMA);
+    // One level of repeat body is still expressible…
+    expect(validate(nestedRepeat)).toBe(true);
+    // …a second is not, at any depth.
+    const twoLevels = structuredClone(nestedRepeat);
+    twoLevels.steps[0].steps = [{
+      id: 'again', kind: 'repeat', specialist: 'reviewer', task: 'Repeat again.', budget_tokens: 500,
+      max_iterations: 2, until: 'Done.', steps: [{ id: 'leaf', kind: 'map', specialist: 'worker', task: 'Do {item}.', budget_tokens: 500, items: ['x'] }],
+    }];
+    expect(validate(twoLevels)).toBe(false);
+
+    // The exact shape the runaway rode: `map` steps chained through their own
+    // `steps`, the way all three real calls descended. One level is still
+    // grammatical; the third link — where the old grammar happily went to 343 —
+    // is not, so the descent can no longer run away.
+    const mapChain = (depth: number): any => ({
+      id: `m${depth}`, kind: 'map', specialist: 'explorer', task: 'Do not run.', budget_tokens: 500, items: ['none'],
+      ...(depth > 0 ? { steps: [mapChain(depth - 1)] } : {}),
+    });
+    expect(validate({ goal: 'g', steps: [mapChain(1)] })).toBe(true);
+    expect(validate({ goal: 'g', steps: [mapChain(2)] })).toBe(false);
+    expect(validate({ goal: 'g', steps: [mapChain(50)] })).toBe(false);
   });
 
   it('keeps the live semantic specialist field open to custom roster ids', () => {

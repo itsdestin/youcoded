@@ -268,6 +268,30 @@ describe('HarnessSession', () => {
       expect(describeProviderError(new Error('fetch failed'))).toBe('fetch failed');
       expect(describeProviderError(undefined)).toBe('The model request failed.');
     });
+
+    // 2026-09-18: Destin saw "Plan proposal failed: Failed to process successful
+    // response" on a plan card AND a red banner. That sentence is the ai SDK's
+    // own wrapper for "something threw while I was reading a 200 response body"
+    // — it names nothing a person can act on, so error-message-standards.md
+    // forbids shipping it verbatim. Prefer the wrapped cause; otherwise say
+    // what is actually known, without guessing why.
+    it('never ships the SDK\'s opaque "Failed to process successful response" verbatim', () => {
+      const api: any = new Error('Failed to process successful response');
+      api.statusCode = 200;
+      expect(describeProviderError(api)).toBe("The model's reply could not be read to the end.");
+    });
+    it('prefers the real cause the SDK wrapped, when it carries one', () => {
+      const api: any = new Error('Failed to process successful response');
+      api.statusCode = 200;
+      api.cause = new Error('Unexpected end of JSON input');
+      expect(describeProviderError(api)).toBe("Unexpected end of JSON input (while reading the model's reply)");
+    });
+    it('still prefers a structured provider body over the opaque wrapper', () => {
+      const api: any = new Error('Failed to process successful response');
+      api.statusCode = 502;
+      api.responseBody = JSON.stringify({ error: { message: 'upstream timed out' } });
+      expect(describeProviderError(api)).toBe('upstream timed out (provider error 502)');
+    });
   });
 
   it('distinct text partIds are preserved per delta (deltas are not all merged under one id)', async () => {
