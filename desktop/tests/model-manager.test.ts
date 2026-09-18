@@ -335,11 +335,19 @@ describe('a foldered model is found by the header reader and by the loaded-memor
 
 /** A model on disk with a real GGUF header, so its context memory is measured
  *  rather than guessed — the whole rule turns on a context length, so the number
- *  it turns on has to be a real reading of this file. Sparse: no bytes written. */
-function plantModel(id: string, bytes: number): void {
-  const file = path.join(cacheDir, `${id}.gguf`);
-  fs.writeFileSync(file, miniGguf());
-  fs.truncateSync(file, bytes);
+ *  it turns on has to be a real reading of this file.
+ *
+ *  WHY the file is only the header, not padded to the model's size: every §D4
+ *  test scores the model at the size `liveModels` reports (warnMachine's
+ *  `sizeBytes`, or the too-large test's own stub), never at the file's length,
+ *  and the header parse finishes inside the first read. Padding it with
+ *  `truncateSync(file, 8 GB)` was free only on Linux and macOS (sparse files): on
+ *  Windows it is not, and Windows CI measured that one call at
+ *  226 ms to 3,133 ms (run 35328039563). The test that plants a model and then
+ *  checks it six times timed out at 30 s on Windows (run 35325056026) while
+ *  every other step in it took single-digit milliseconds. */
+function plantModel(id: string): void {
+  fs.writeFileSync(path.join(cacheDir, `${id}.gguf`), miniGguf());
 }
 
 /** A manager for a machine with plenty of memory in total but little free right
@@ -368,7 +376,7 @@ const dismissedAt = (contextLength: number) => ({ at: 1_757_000_000_000, context
 
 describe('ModelManager.memoryCheck — the remembered warning', () => {
   it('a dismissal made at 32k silences the warning at 32k', async () => {
-    plantModel('M-Q4_K_M', 8 * GB);
+    plantModel('M-Q4_K_M');
     // Before: this machine really does warn about this model. Without this
     // line the test below would pass on a fixture that never warned at all.
     expect((await warnMachine(['M-Q4_K_M']).memoryCheck('M-Q4_K_M')).verdict).toBe('tight');
@@ -385,7 +393,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     // engine-wide default, so its own `contextLength` stays null throughout —
     // storing THAT number, or a bare timestamp, would keep the dismissal alive
     // for exactly the model that now needs four times the memory.
-    plantModel('M-Q4_K_M', 8 * GB);
+    plantModel('M-Q4_K_M');
     await writeModelSettings('M-Q4_K_M', {
       contextLength: null, memoryWarningDismissed: dismissedAt(32768),
     });
@@ -401,7 +409,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
   });
 
   it("a model's own context setting moving asks again too", async () => {
-    plantModel('M-Q4_K_M', 8 * GB);
+    plantModel('M-Q4_K_M');
     await writeModelSettings('M-Q4_K_M', {
       contextLength: 32768, memoryWarningDismissed: dismissedAt(32768),
     });
@@ -416,8 +424,8 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
   });
 
   it('a dismissal belongs to ONE model and does not answer for another', async () => {
-    plantModel('A-Q4_K_M', 8 * GB);
-    plantModel('B-Q4_K_M', 8 * GB);
+    plantModel('A-Q4_K_M');
+    plantModel('B-Q4_K_M');
     await writeModelSettings('A-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
     const mm = warnMachine(['A-Q4_K_M', 'B-Q4_K_M']);
     expect((await mm.memoryCheck('A-Q4_K_M')).verdict).toBe('ok');
@@ -429,7 +437,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     // context cache is counted, so the "KV may reach tight, never too-large"
     // clamp does not rescue it either. RuntimeBinding refuses to create the
     // session on this verdict, so a dismissal must not be able to reach it.
-    plantModel('H-Q4_K_M', 8 * GB);
+    plantModel('H-Q4_K_M');
     await writeModelSettings('H-Q4_K_M', { memoryWarningDismissed: dismissedAt(32768) });
     const userData = path.join(root, 'userData');
     plantEngine(userData);
@@ -449,7 +457,7 @@ describe('ModelManager.memoryCheck — the remembered warning', () => {
     // written. A record without the length it was made at cannot answer "is this
     // the same length?", and one without a time is not a record of an answer —
     // both mean "ask again", never "assume yes".
-    plantModel('M-Q4_K_M', 8 * GB);
+    plantModel('M-Q4_K_M');
     const broken = [
       { contextLength: 32768 },                    // no `at`
       { at: 1_757_000_000_000 },                   // no length
