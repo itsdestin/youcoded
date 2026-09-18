@@ -166,7 +166,7 @@ import { PROJECT_IPC } from './project/ipc-channels';
 // The artifact and Project View READ bodies, shared with remote-server.ts
 // (remote access batch 3) so a phone gets the desktop's own answers.
 import {
-  listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
+  listSessionFiles, listProjectFiles, listAllFiles, listFolder, readArtifactText, readArtifactBytes,
   searchArtifactContent, checkArtifactExistence, resolveArtifactPath,
 } from './artifacts/read-service';
 import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
@@ -4805,6 +4805,11 @@ export function registerIpcHandlers(
   // here; the remote host adds one (remote-server.ts fileReads).
   ipcMain.handle(ARTIFACT_IPC.RESOLVE_PATH, (_e, projectRoot: string, filePath: string) =>
     resolveArtifactPath(projectRoot, filePath));
+
+  // LIST_FOLDER → one folder of Project Files, a page at a time, straight from
+  // disk (folder-listing.ts). No depth cap and no home-folder gate.
+  ipcMain.handle(ARTIFACT_IPC.LIST_FOLDER, (_e, projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number }) =>
+    listFolder(projectId, relDir, opts));
 
   // full: the user clicked "Load the whole file" on the partial-view bar. Still
   // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an

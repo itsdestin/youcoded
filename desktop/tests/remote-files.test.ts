@@ -211,6 +211,14 @@ describe('the file lists answer the same on both transports', () => {
     expect(names(remote)).toContain('notes.md');
   });
 
+  it('artifacts:list-folder — one folder, the same page on both transports', async () => {
+    const ipc = await overIpc('artifacts:list-folder', root, '', { offset: 0 });
+    const remote = await overRemote('artifacts:list-folder', { projectId: root, relDir: '', opts: { offset: 0 } });
+    expect(remote?.ok).toBe(true);
+    expect(remote).toEqual(ipc);
+    expect((remote.files as any[]).map((f) => f.path)).toContain('notes.md');
+  });
+
   it('artifacts:list-session and list-project answer with the same (empty) tracked lists', async () => {
     const ipcS = await overIpc('artifacts:list-session', 'sess-1', root);
     const remS = await overRemote('artifacts:list-session', { sessionId: 'sess-1', projectRoot: root });
@@ -304,6 +312,7 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
       ['artifacts:list-session', { sessionId: 's', projectRoot: outside }],
       ['artifacts:list-project', { projectId: outside }],
       ['artifacts:list-all-files', { projectId: outside }],
+      ['artifacts:list-folder', { projectId: outside, relDir: '' }],
       ['artifacts:search-content', { projectRoot: outside, query: 'secret' }],
       ['artifacts:check-existence', { projectRoot: outside, artifactIds: ['x'] }],
       ['project:list-context', { projectPath: outside }],
@@ -331,6 +340,7 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
     for (const [type, payload] of [
       ['artifacts:get', { projectRoot: sessionRoot, artifactId: 'untracked.txt' }],
       ['artifacts:list-all-files', { projectId: sessionRoot }],
+      ['artifacts:list-folder', { projectId: sessionRoot, relDir: '' }],
       ['artifacts:search-content', { projectRoot: sessionRoot, query: 'ship' }],
       ['artifacts:read-binary', { absolutePath: path.join(sessionRoot, 'untracked.txt') }],
       ['artifacts:watch-project', { projectRoot: sessionRoot }],
@@ -351,6 +361,7 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
   it('a malformed payload answers bad-request, never a Node error\'s text', async () => {
     expect(await overRemote('artifacts:get', { projectRoot: root })).toMatchObject({ ok: false, error: 'bad-request' });
     expect(await overRemote('artifacts:list-all-files', {})).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(await overRemote('artifacts:list-folder', { projectId: root })).toMatchObject({ ok: false, error: 'bad-request' });
     expect(await overRemote('artifacts:watch-project', { projectRoot: 42 })).toMatchObject({ ok: false, error: 'bad-request' });
   });
 

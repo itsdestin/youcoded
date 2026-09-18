@@ -67,6 +67,11 @@ export const ARTIFACT_IPC = {
   // see resolveArtifactPath in read-service.ts. A read, bridged over remote.
   // (No apostrophes in this comment — the parity test reads quoted strings.)
   RESOLVE_PATH: 'artifacts:resolve-path',
+  // ONE folder of a project, straight from disk, a page at a time. Project
+  // Files browses with this instead of carving folders out of the capped
+  // whole-project walk, so any depth and any folder size lists (Stage 1 of
+  // the any-size spec; folder-listing.ts). A read, bridged over remote.
+  LIST_FOLDER: 'artifacts:list-folder',
 } as const;
 
 export type ArtifactIpcChannel = typeof ARTIFACT_IPC[keyof typeof ARTIFACT_IPC];
