@@ -1,5 +1,11 @@
 import { GameState, GameAction, createInitialGameState, matchIdOf } from './game-types';
 
+// WHY: GameChat (components/game/GameChat.tsx) renders the whole list on
+// every message and has no scrollback/pagination — an hours-long match's
+// transcript would otherwise grow the array and the re-rendered DOM without
+// bound. 200 is comfortably more than anyone scrolls back to read.
+const GAME_CHAT_LIMIT = 200;
+
 export function gameReducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case 'PARTY_CONNECTED': {
@@ -155,12 +161,17 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     }
 
     case 'CHAT_MESSAGE':
+      // WHY: game chat has no "load older" path, no unread counter and no
+      // persistence (GameChat.tsx just maps state.chatMessages) — a long
+      // match's transcript otherwise grows unbounded in memory and re-renders
+      // a longer list on every message. Cap at the last GAME_CHAT_LIMIT so
+      // old messages age out; nothing else reads the dropped ones.
       return {
         ...state,
         chatMessages: [
           ...state.chatMessages,
           { from: action.from, text: action.text, timestamp: Date.now() },
-        ],
+        ].slice(-GAME_CHAT_LIMIT),
       };
 
     case 'OPPONENT_DISCONNECTED':

@@ -273,3 +273,24 @@ describe('gameReducer — MATCH_RECORDED (games §6.2)', () => {
     expect(s.record).toBeNull();
   });
 });
+
+describe('gameReducer — CHAT_MESSAGE (Task 10 cap)', () => {
+  it('keeps the last 200 of 250 messages, dropping the oldest', () => {
+    let s = createInitialGameState();
+    for (let i = 0; i < 250; i++) {
+      s = gameReducer(s, { type: 'CHAT_MESSAGE', from: 'Alice', text: `msg-${i}` });
+    }
+    expect(s.chatMessages).toHaveLength(200);
+    // Oldest 50 (msg-0..msg-49) aged out; the newest survives at the tail.
+    expect(s.chatMessages[0].text).toBe('msg-50');
+    expect(s.chatMessages[s.chatMessages.length - 1].text).toBe('msg-249');
+  });
+
+  it('does not truncate under the cap', () => {
+    let s = createInitialGameState();
+    for (let i = 0; i < 5; i++) {
+      s = gameReducer(s, { type: 'CHAT_MESSAGE', from: 'Bob', text: `hi-${i}` });
+    }
+    expect(s.chatMessages).toHaveLength(5);
+  });
+});
