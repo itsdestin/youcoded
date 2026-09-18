@@ -3,7 +3,7 @@
 // InstallFavoriteCorner; integrations render through the same component via
 // optional iconUrl + accentColor props (no separate IntegrationCard).
 
-import { useId, useState } from "react";
+import { memo, useId, useState } from "react";
 import type { SkillEntry, SkillComponents } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
 import { useMarketplaceStats } from "../../state/marketplace-stats-context";
@@ -27,7 +27,13 @@ export type MarketplaceCardEntry =
 
 interface Props {
   item: MarketplaceCardEntry;
-  onOpen(): void;
+  // Task 8 (render-cost consolidation 2026-09-18): takes the card's OWN id
+  // (this card's `id` local below — bare skill id, or `theme:<slug>`) rather
+  // than being called with none. The card is memoized (see the `export
+  // default` below); a per-row list now hands every card the SAME onOpen
+  // reference and lets each one report which row it is, instead of a fresh
+  // `() => open(id)` closure per row that would defeat the memo every render.
+  onOpen(id: string): void;
   installed?: boolean;
   updateAvailable?: boolean;
   /** Optional custom icon (integrations). Renders top-left inside the tile. */
@@ -86,7 +92,7 @@ function componentSummary(c: SkillComponents | null | undefined): string | null 
   return parts.join(" · ") || null;
 }
 
-export default function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
+function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
   const stats = useMarketplaceStats();
   const mp = useMarketplace();
   const kind = item.kind;
@@ -232,11 +238,11 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
       <div
         role="button"
         tabIndex={0}
-        onClick={onOpen}
+        onClick={() => onOpen(id)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
-            onOpen();
+            onOpen(id);
           }
         }}
         className="layer-surface flex flex-row items-center gap-3 p-3 text-left transition-colors hover:bg-inset focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -318,11 +324,11 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
     <div
       role="button"
       tabIndex={0}
-      onClick={onOpen}
+      onClick={() => onOpen(id)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onOpen();
+          onOpen(id);
         }
       }}
       // hover-lift replaces `transition-transform duration-200 hover:scale-[1.02]`:
@@ -478,3 +484,12 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
     </div>
   );
 }
+
+// WHY memo (Task 8, render-cost consolidation 2026-09-18): the two lists that
+// now window through useChunkedReveal (MarketplaceScreen's bottom catalog and
+// search grid) still redraw 50-100 cards on every parent re-render otherwise —
+// mp.installingIds/mp.favorites etc. change on every install click. Memoizing
+// only pays off with a stable `onOpen` (see the Props comment above); callers
+// of lists that stay small (rails, Your Library) may keep inline closures —
+// they cost a few dozen skipped bail-outs, not tens of thousands of elements.
+export default memo(MarketplaceCard);
