@@ -1,27 +1,13 @@
+import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BuddyWindowManager, type BuddyWindowManagerDeps, type BuddyWorkAreaSource } from '../src/main/buddy-window-manager';
+import { BuddyWindowManager, clampToWorkArea, type BuddyWindowManagerDeps, type BuddyWorkAreaSource } from '../src/main/buddy-window-manager';
 import { buildCaption, parseCaption, type BuddyRole } from '../src/shared/buddy-caption';
 import { MASCOT_SIZE, CHAT_SIZE, BAR_SIZE } from '../src/main/buddy-bar-geometry';
 import { WorkAreaResolver } from '../src/main/buddy-work-area';
 import { readSource } from './helpers/guard-scope';
 
-/**
- * The caption channel — how the buddy moves on native-Wayland Linux.
- *
- * WHAT IS BEING PROTECTED, in plain terms: on a Wayland Linux desktop an app is
- * not allowed to move its own windows, and the request fails silently. So the
- * app renames the window instead ("YC:mascot@480,900") and a helper running
- * inside the desktop reads the name and moves it. This suite pins two things:
- *
- *  1. Every single way the buddy can be moved goes through the ONE method that
- *     makes that choice — proved mechanically, by reading the source, because a
- *     behaviour test can only cover the paths it thinks to drive.
- *  2. That method chooses correctly: rename on Wayland-with-helper, and the
- *     ordinary move everywhere else, so Windows, macOS and Linux/X11 behave
- *     exactly as they do today.
- */
-
+// One fake display and one Electron stand-in, shared by every section below.
 const { DISPLAY } = vi.hoisted(() => ({
   DISPLAY: {
     id: 1,
@@ -45,6 +31,24 @@ const SIZE: Record<BuddyRole, { width: number; height: number }> = {
   chat: CHAT_SIZE,
   bar: BAR_SIZE,
 };
+
+// ─── The caption channel ─────────────────────────────────────────────────────
+
+/**
+ * The caption channel — how the buddy moves on native-Wayland Linux.
+ *
+ * WHAT IS BEING PROTECTED, in plain terms: on a Wayland Linux desktop an app is
+ * not allowed to move its own windows, and the request fails silently. So the
+ * app renames the window instead ("YC:mascot@480,900") and a helper running
+ * inside the desktop reads the name and moves it. This suite pins two things:
+ *
+ *  1. Every single way the buddy can be moved goes through the ONE method that
+ *     makes that choice — proved mechanically, by reading the source, because a
+ *     behaviour test can only cover the paths it thinks to drive.
+ *  2. That method chooses correctly: rename on Wayland-with-helper, and the
+ *     ordinary move everywhere else, so Windows, macOS and Linux/X11 behave
+ *     exactly as they do today.
+ */
 
 type FakeWin = ReturnType<typeof fakeWin>;
 
@@ -454,4 +458,273 @@ describe('persistence on the platforms where the move event still fires', () => 
     const registered = h.wins.mascot!.on.mock.calls.map((c) => c[0] as string);
     expect(registered).not.toContain('move');
   });
+});
+
+// ─── Dragging, in window-local coordinates ───────────────────────────────────
+
+/**
+ * Dragging the buddy, in the coordinates the renderer can actually see.
+ *
+ * WHAT IS BEING PROTECTED, in plain terms. To drag the buddy the app has to
+ * know where the user's finger is. A web page can ask for that two ways:
+ * where the finger is INSIDE this window, or where it is ON THE SCREEN. The
+ * second one is a lie on a Wayland Linux desktop — the page is told its window
+ * sits at 0,0 forever, no matter where the desktop has actually put it (probe
+ * Round 8: three real moves to 500,300 / 900,600 / 200,150, and the page read
+ * 0 every time).
+ *
+ * So the app used to be told the finger had moved backwards by exactly the
+ * distance the window had just travelled forwards. Every frame undid the one
+ * before it and the buddy bounced between two points as fast as the pointer
+ * fired — "the buddy flickers all over the screen when dragging" (Destin,
+ * 2026-09-04). This suite drives a real drag through a model of the desktop
+ * and pins that it tracks the finger instead.
+ */
+describe('dragging in window-local coordinates', () => {
+  /**
+   * A buddy window plus the piece of desktop that moves it.
+   *
+   * `caption: true` models Wayland-with-the-helper — setPosition does NOTHING
+   * (which is what really happens, silently) and renaming the window is what
+   * moves it. `caption: false` models Windows/macOS/X11, where setPosition works.
+   * Either way `at` is the window's TRUE position, which is the thing the
+   * renderer is not allowed to know.
+   */
+  function fakeWin(role: BuddyRole, x: number, y: number, caption: boolean) {
+    const at = { x, y };
+    return {
+      at,
+      setPosition: vi.fn((nx: number, ny: number) => { if (!caption) { at.x = nx; at.y = ny; } }),
+      setTitle: vi.fn((t: string) => {
+        if (!caption) return;
+        const p = parseCaption(t);           // the helper, running inside KWin
+        if (p) { at.x = p.x; at.y = p.y; }
+      }),
+      getBounds: vi.fn(() => ({ ...at, ...SIZE[role] })),
+      getPosition: vi.fn(() => [at.x, at.y]),
+      isDestroyed: () => false,
+      isVisible: () => false,
+      show: vi.fn(), showInactive: vi.fn(), hide: vi.fn(), focus: vi.fn(),
+      moveTop: vi.fn(), destroy: vi.fn(), setIgnoreMouseEvents: vi.fn(), on: vi.fn(),
+      webContents: { send: vi.fn(), on: vi.fn(), once: vi.fn(), id: 7 },
+    };
+  }
+
+  function harness(caption: boolean, start: { x: number; y: number }) {
+    const wins: Partial<Record<BuddyRole, ReturnType<typeof fakeWin>>> = {};
+    const deps: BuddyWindowManagerDeps = {
+      createBuddyWindow: (variant, o) => {
+        const w = fakeWin(variant, o.x, o.y, caption);
+        wins[variant] = w;
+        return w as unknown as Electron.BrowserWindow;
+      },
+      getPersistedPosition: () => start,
+      setPersistedPosition: vi.fn(),
+      getPersistedDock: () => null,
+      setPersistedDock: vi.fn(),
+      registry: { subscribe: vi.fn(), unsubscribe: vi.fn() } as never,
+      mainWindow: () => null,
+      onStatusChanged: vi.fn(),
+      captionChannelLive: caption ? () => true : undefined,
+    };
+    const manager = new BuddyWindowManager(deps);
+    manager.show();
+    return { manager, mascot: () => wins.mascot!.at };
+  }
+
+  /**
+   * One drag, driven the way the desktop really drives it.
+   *
+   * The finger walks a straight line. On every frame we work out what the WINDOW
+   * would report — the finger's position minus wherever the window currently is,
+   * because that is the only coordinate a window ever gets honestly — and hand
+   * the app how far that has strayed from the pixel the finger grabbed.
+   */
+  function drag(h: ReturnType<typeof harness>, grab: { x: number; y: number }, path: Array<{ x: number; y: number }>) {
+    const seen: Array<{ x: number; y: number }> = [];
+    for (const finger of path) {
+      const here = h.mascot();
+      h.manager.moveMascotFromPointer(finger.x - here.x - grab.x, finger.y - here.y - grab.y);
+      seen.push({ ...h.mascot() });
+    }
+    return seen;
+  }
+
+  const START = { x: 400, y: 300 };
+  const GRAB = { x: 40, y: 40 };
+  // 20 frames of a slow, straight drag down and to the right.
+  const PATH = Array.from({ length: 20 }, (_, i) => ({
+    x: START.x + GRAB.x + i * 7,
+    y: START.y + GRAB.y + i * 5,
+  }));
+
+  describe.each([
+    ['Wayland, moved by the helper', true],
+    ['Windows / macOS / X11, moved by the OS', false],
+  ])('a drag on %s', (_label, caption) => {
+    it('puts the buddy exactly under the finger on every single frame', () => {
+      const h = harness(caption, START);
+      const seen = drag(h, GRAB, PATH);
+      expect(seen).toEqual(PATH.map((f) => ({ x: f.x - GRAB.x, y: f.y - GRAB.y })));
+    });
+
+    it('never moves backwards while the finger moves forwards', () => {
+      // The flicker, stated as a property. A window that bounces between two
+      // points fails this on frame 2, whatever the endpoints happen to be.
+      const h = harness(caption, START);
+      const seen = drag(h, GRAB, PATH);
+      for (let i = 1; i < seen.length; i++) {
+        expect(seen[i].x).toBeGreaterThan(seen[i - 1].x);
+        expect(seen[i].y).toBeGreaterThan(seen[i - 1].y);
+      }
+    });
+
+    it('holds still when the finger holds still', () => {
+      const h = harness(caption, START);
+      const still = Array.from({ length: 8 }, () => ({ x: START.x + GRAB.x, y: START.y + GRAB.y }));
+      const seen = drag(h, GRAB, still);
+      expect(new Set(seen.map((p) => `${p.x},${p.y}`)).size).toBe(1);
+    });
+  });
+
+  describe('moveMascotFromPointer', () => {
+    it('refuses a cursor offset that is not a number, and does not move him', () => {
+      // main.ts forwards the renderer's payload unvalidated, and a NaN here would
+      // be added to a real position and park him in the corner permanently.
+      const h = harness(true, START);
+      h.manager.moveMascotFromPointer(Number.NaN, 10);
+      h.manager.moveMascotFromPointer(10, Number.POSITIVE_INFINITY);
+      expect(h.mascot()).toEqual(START);
+    });
+  });
+});
+
+// ─── clampToWorkArea ──────────────────────────────────────────────────────────
+
+describe('clampToWorkArea', () => {
+  const wa = { x: 0, y: 0, width: 1920, height: 1080 };
+
+  it('returns input position when fully inside', () => {
+    expect(clampToWorkArea({ x: 100, y: 100 }, { width: 80, height: 80 }, wa))
+      .toEqual({ x: 100, y: 100 });
+  });
+
+  it('clamps right edge when x + width > workArea right', () => {
+    expect(clampToWorkArea({ x: 1900, y: 100 }, { width: 80, height: 80 }, wa))
+      .toEqual({ x: 1840, y: 100 });
+  });
+
+  it('clamps bottom edge when y + height > workArea bottom', () => {
+    expect(clampToWorkArea({ x: 100, y: 1060 }, { width: 80, height: 80 }, wa))
+      .toEqual({ x: 100, y: 1000 });
+  });
+
+  it('clamps negative x/y to work area origin', () => {
+    expect(clampToWorkArea({ x: -50, y: -50 }, { width: 80, height: 80 }, wa))
+      .toEqual({ x: 0, y: 0 });
+  });
+
+  it('handles non-zero workArea origin (secondary monitor)', () => {
+    const wa2 = { x: 1920, y: 0, width: 1920, height: 1080 };
+    expect(clampToWorkArea({ x: 1900, y: 100 }, { width: 80, height: 80 }, wa2))
+      .toEqual({ x: 1920, y: 100 });
+  });
+});
+
+// ─── Where the buddy's position comes from ────────────────────────────────────
+
+/**
+ * Where the buddy's numbers come from.
+ *
+ * TWO THINGS CAN GO WRONG HERE, and both are invisible on the machine that
+ * writes the code, because both only misbehave on a Wayland Linux desktop:
+ *
+ *  1. ASKING THE WINDOW WHERE IT IS. On Wayland the window answers with the
+ *     position it was BORN at, forever, however many times it has really moved.
+ *     Code that asks would animate a snap from the wrong corner, open the chat
+ *     where the buddy used to be, and save the wrong position on exit. The app
+ *     has to remember instead, which is what rectOf() does.
+ *
+ *  2. ASKING ELECTRON HOW MUCH OF THE SCREEN IS USABLE. On Wayland Electron
+ *     hands back the WHOLE screen, taskbar included — measured 2026-09-04, it
+ *     said 1707x1067 while the desktop had reserved 52px at the bottom. Code
+ *     that trusts it puts the buddy on top of the taskbar, covering the clock,
+ *     with nothing in the app able to notice.
+ *
+ * These are source-text checks rather than behaviour checks on purpose: the
+ * failure being guarded against is a future change quietly adding a tenth read
+ * on a path no test drives. A behaviour test only covers what it thought to try;
+ * reading the file covers the file.
+ */
+
+describe('where the buddy’s position comes from', () => {
+  const MANAGER = 'src/main/buddy-window-manager.ts';
+
+  function read(rel: string): string[] {
+    // Split on \r?\n, not '\n': a Windows checkout has CRLF endings, so splitting
+    // on '\n' alone leaves a trailing '\r' on every line and any exact comparison
+    // below (`l === '  }'`) silently never matches. That failed only on the
+    // Windows runner, and only as "expected -1 to be greater than 246".
+    return readFileSync(join(__dirname, '..', rel), 'utf8').split(/\r?\n/);
+  }
+
+  function isComment(line: string): boolean {
+    const t = line.trimStart();
+    return t.startsWith('//') || t.startsWith('*') || t.startsWith('/*');
+  }
+
+  const lines = read(MANAGER);
+
+  it('nothing asks a buddy window where it is, except rectOf', () => {
+    const hits = lines
+      .map((l, i) => ({ line: l, n: i + 1 }))
+      .filter(({ line }) => /\.(getBounds|getPosition)\(/.test(line) && !isComment(line));
+
+    // The two inside rectOf: one for a window that isn't one of ours, one for
+    // the ordinary desktops where the window tells the truth.
+    const rectOfStart = lines.findIndex((l) => l.includes('private rectOf(win: BrowserWindow)'));
+    const rectOfEnd = lines.findIndex((l, i) => i > rectOfStart && l === '  }');
+    expect(rectOfStart).toBeGreaterThan(-1);
+    expect(rectOfEnd).toBeGreaterThan(rectOfStart);
+
+    // ONE sanctioned exception, marked in the source. The 'move' listener reads
+    // the window's REAL bounds on purpose: it only exists off the caption path,
+    // where that event fires and the answer is truthful, and it is what keeps a
+    // Meta+drag on KDE X11 being remembered. Marking it rather than widening the
+    // rule keeps the invariant exact — anything else is still a failure.
+    const sanctioned = hits.filter(({ line }) => line.includes('sanctioned-real-bounds'));
+    expect(sanctioned, 'the sanctioned-real-bounds marker should appear exactly once').toHaveLength(1);
+
+    const strays = hits.filter(
+      ({ n, line }) =>
+        (n <= rectOfStart || n > rectOfEnd) && !line.includes('sanctioned-real-bounds'),
+    );
+    expect(
+      strays.map((h) => `${MANAGER}:${h.n}  ${h.line.trim()}`),
+      'a buddy window may only be asked for its position inside rectOf()',
+    ).toEqual([]);
+    // ...and rectOf really is the thing doing the asking, so the scope above
+    // cannot silently become empty and pass by accident.
+    expect(hits.length).toBeGreaterThan(0);
+  });
+
+  it('nothing reads Electron’s idea of the usable screen area, except the one marked line', () => {
+    const hits = lines
+      .map((l, i) => ({ line: l, n: i + 1 }))
+      .filter(({ line }) => /\.workArea\b/.test(line) && !isComment(line))
+      // `this.deps.workArea` is the name of the injected source itself, not a
+      // read of Electron's number.
+      .filter(({ line }) => !/deps\.workArea/.test(line));
+
+    // Exactly one raw read is allowed: the fallback for every platform that has
+    // no work-area source, which is every platform except Wayland Linux. It
+    // carries the marker so it is a deliberate exception, not an oversight.
+    expect(hits.map((h) => h.line.trim())).toEqual([
+      'if (!source) return display.workArea; // sanctioned-raw-work-area',
+    ]);
+  });
+  // Until 2026-09-16 a second buddy implementation (a one-window overlay) was
+  // exempt from this scan because it was written, kept and never chosen. It has
+  // been deleted, so buddy-window-manager.ts is the ONLY file that positions a
+  // buddy and this scan's scope is the whole story.
 });
