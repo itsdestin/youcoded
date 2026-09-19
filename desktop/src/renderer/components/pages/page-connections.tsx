@@ -173,7 +173,15 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
           />
         </div>
       ))}
-      <div className="text-xs text-fg-muted leading-relaxed">YouCoded keeps your key. The page never sees it.</div>
+      {/* Review round 2, D-2: "page never sees it" read as nonsense to someone
+          pasting a key precisely so the page can use it. This says what is true
+          of the storage instead: SecretsStore encrypts with the OS keychain,
+          refuses a plaintext fallback, and lives in per-install app data that
+          sync never touches. The key does leave the machine — to its own
+          service — so that is said too, never "not accessible to anyone". */}
+      <div className="text-xs text-fg-muted leading-relaxed" data-key-storage-note>
+        Your key is stored encrypted on this computer only. It isn't backed up or synced, and YouCoded sends it only to {toType.length === 1 ? toType[0].address : 'the service it belongs to'}.
+      </div>
       <div className="flex flex-col gap-2">
         <Button variant="primary" onClick={() => { void allow(); }} disabled={busy || missingKey} className="w-full">
           {busy ? 'Allowing…' : 'Allow and open'}
@@ -187,10 +195,14 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
     {heading(isChange ? 'This page changed' : 'Before this page opens', isChange ? `${page.name} wants additional permissions` : `${page.name} wants to connect`)}
 
     <div className="flex flex-col gap-2">
-      <div className="text-xs text-fg-dim">{isChange ? 'New — this page would also be able to:' : 'This page would be able to:'}</div>
+      <div className="text-xs text-fg-dim">This page would be able to:</div>
+      {/* One box for everything the page could do (review round 2, D-4): on a
+          re-ask the new lines lead, marked New, and what was already allowed
+          follows under a hairline, quieter. */}
       <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
         {asking.map((c) => (
           <ConnectionLine key={c.id} c={c}>
+            {isChange && <div className="text-2xs font-medium text-fg tracking-wider uppercase order-first" data-new-line>New</div>}
             {c.kind === 'open' && (
               <ul className="list-disc pl-5 text-xs text-fg-muted leading-relaxed flex flex-col gap-0.5" data-open-internet-means>
                 {OPEN_INTERNET_MEANS.map((t) => <li key={t}>{t}</li>)}
@@ -208,28 +220,27 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
             )}
           </ConnectionLine>
         ))}
+        {isChange && (
+          <div className="border-t border-edge-dim pt-3 flex flex-col gap-2" data-already-allowed>
+            <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">Already allowed</div>
+            {already.map((c) => <ConnectionLine key={c.id} c={c} small />)}
+          </div>
+        )}
       </div>
     </div>
-
-    {isChange && (
-      <div className="flex flex-col gap-2">
-        <div className="text-xs text-fg-dim">Already allowed:</div>
-        <div className="flex flex-col gap-2 px-3">
-          {already.map((c) => <ConnectionLine key={c.id} c={c} />)}
-        </div>
-      </div>
-    )}
 
     <div className="flex flex-col gap-2">
       {/* On the phone a key cannot be typed (deck Q-phone). The button sits where
           Allow would, greyed, with the reason under it (review round 1, C-5). */}
       {toType.length > 0 && !here ? (
-        <>
-          <Button variant="primary" disabled className="w-full" data-finish-on-computer>Finish on your computer</Button>
-          <div className="text-xs text-fg-muted leading-relaxed text-center">
-            Adding a key isn't supported on the phone yet. Open this page on your computer to set it up.
-          </div>
-        </>
+        // The reason sits INSIDE the greyed button (review round 2, D-6), so
+        // the one control where Allow would be carries its own explanation.
+        <Button variant="primary" disabled className="w-full h-auto" data-finish-on-computer>
+          <span className="flex flex-col items-center gap-0.5 py-1 whitespace-normal text-center">
+            <span>Finish on your computer</span>
+            <span className="text-2xs opacity-80">Adding a key isn't supported on the phone yet. Open this page on your computer to set it up.</span>
+          </span>
+        </Button>
       ) : toType.length > 0 ? (
         <Button variant="primary" onClick={() => setStep('keys')} className="w-full">Continue</Button>
       ) : (
