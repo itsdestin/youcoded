@@ -219,6 +219,22 @@ describe('mutation chokepoint', () => {
     expect(view.steps[2].items).toBeUndefined();
   });
 
+  // The plan already records which earlier step a checking or combining step
+  // consumes, and the executor feeds exactly those reports in as its input —
+  // but the card never showed it, so the reader could not tell how one step
+  // flowed into the next (Destin, 2026-09-18).
+  it('carries the earlier step a checking or combining step consumes onto the card', () => {
+    const view = projectPlan(record('p1'));
+    // s2 combines s1: the card can now name both ends of that edge.
+    expect(view.steps[1].kind).toBe('combine');
+    expect(view.steps[1].of).toBe('s1');
+    // A fan-out step consumes nothing, so it claims no input.
+    expect(view.steps[0].of).toBeUndefined();
+    // A repeat-body row's reference, if it had one, would name a body step;
+    // this one has none and must not invent an edge.
+    expect(view.steps[2].of).toBeUndefined();
+  });
+
   it('leaves a step with no sentence of its own showing exactly the headline it showed before', () => {
     const view = projectPlan(record('p1'));
     expect(view.steps[0].summary).toBeUndefined();

@@ -816,6 +816,77 @@ function itemsRowLine(items: string[]): string {
   return shown.length < items.length ? `${line}, …` : line;
 }
 
+// ---- what a step is given, what it makes, and where that goes ---------------
+
+/** A specialist's output is a report, always: "one report" / "7 reports". */
+function reportsPhrase(n: number): string { return n === 1 ? 'one report' : `${n} reports`; }
+/** The same count as a thing already made: "the report" / "the 7 reports". */
+function theReports(n: number): string { return n === 1 ? 'the report' : `the ${n} reports`; }
+
+/** "step 2" · "steps 2 and 3" · "steps 2, 3 and 5" — the card's own numbering. */
+function stepNumbers(ns: number[]): string {
+  if (ns.length === 1) return `step ${ns[0]}`;
+  return `steps ${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`;
+}
+
+/** What a step DOES with the results it is handed, by its kind. */
+const CONSUMES_VERB: Record<PlanStepView['kind'], string> = {
+  verify: 'checks', combine: 'combines', map: 'uses', repeat: 'uses',
+};
+
+/**
+ * One plain line per step — what it is given, what it produces, and which step
+ * takes that on: "Each reviewer gets one of the 7 below · produces 7 reports →
+ * step 2 combines them".
+ *
+ * WHY every word is derived and none of it is read out of the model's prose
+ * (Destin, decision 31: "it's not clear to me how this breaks out into 7
+ * reviewers, what the inputs/ouputs are, and how it flows to the next step"):
+ * `items`, `fanOut`, the step's kind and `of` are facts the plan document
+ * already carries and the validator already checked. `of` names the earlier
+ * step whose reports the executor literally feeds in as this step's input, so
+ * both ends of every edge are on the card without inventing anything.
+ *
+ * WHY a reference is resolved against the ROWS and not the document: the card
+ * flattens a repeat body into one row per body step, so a document id is not
+ * always a row. An id naming no EARLIER row — a hand-edited file, a reference
+ * to the repeat wrapper, a forward reference — produces no input clause at
+ * all, because a wrong step number is worse than a missing one.
+ */
+function stepFlow(plan: PlanView, index: number): string {
+  const step = plan.steps[index];
+  const clauses: string[] = [];
+  const sourceIndex = step.of ? plan.steps.findIndex((s) => s.id === step.of) : -1;
+  const source = sourceIndex >= 0 && sourceIndex < index ? plan.steps[sourceIndex] : undefined;
+  if (step.items && step.items.length > 0) {
+    // This line sits directly above those rows, so it can point at them.
+    clauses.push(`Each ${step.specialist} gets one of the ${step.items.length} below`);
+  } else if (source) {
+    // A repeat row's fan-out is a worst case, so its output is not a count.
+    clauses.push(`Gets ${source.kind === 'repeat' ? 'the reports' : theReports(source.fanOut)} from step ${sourceIndex + 1}`);
+  }
+  // A repeating step stops as soon as it meets its goal, so its rounds — and
+  // with them its reports — are a ceiling, never a number of things to expect.
+  let makes = step.kind === 'repeat' && step.fanOut > 1
+    ? `produces up to ${step.fanOut} reports`
+    : `produces ${reportsPhrase(step.fanOut)}`;
+  const consumers = plan.steps.map((s, i) => ({ s, i })).filter(({ s, i }) => i > index && s.of === step.id);
+  if (consumers.length > 0) {
+    const them = step.fanOut > 1 ? 'them' : 'it';
+    const verb = consumers.length === 1 ? CONSUMES_VERB[consumers[0].s.kind] : 'use';
+    makes += ` → ${stepNumbers(consumers.map((c) => c.i + 1))} ${verb} ${them}`;
+  }
+  clauses.push(makes);
+  return clauses.join(' · ');
+}
+
+/** WHY the card caps the rows a fan-out step draws (renderer-lists.md: nothing
+ *  the user cannot see is built): the grammar stops a fan-out at 8 items, but
+ *  the card also replays records written by other builds, and a step's
+ *  breakdown must never become an unbounded list. The rest are counted, not
+ *  dropped in silence. */
+const ITEM_ROWS_MAX = 8;
+
 /**
  * The brief, minus the line the row above it is already showing.
  *
@@ -910,17 +981,26 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
       )}
       {open && (
         <div className="px-1.5 pb-1.5 pt-1 space-y-1 border-t border-edge-dim">
+          {/* Decision 31: the one plain line that says what this step is
+              given, what it produces and which step takes that on. It sits
+              ABOVE the rows it refers to ("one of the 7 below"), and it says
+              the same thing whether the plan is proposed or running — the
+              flow does not change when Approve is pressed. */}
+          <div className="text-2xs text-fg-muted break-words" data-testid="plan-step-flow">{stepFlow(plan, index)}</div>
           {step.children && step.children.length > 0 ? (
             step.children.map((c) => <PlanSpecialistCard key={c.childId} child={c} sessionId={sessionId} />)
           ) : (
             <>
-              {/* Decision 30: the row names a few of the items and says there
-                  are more; here every one is readable, one per line, however
-                  long its label is. */}
+              {/* Decision 31: one ROW PER SPECIALIST, each carrying its own
+                  slice — the same rows this step draws once it is running, so
+                  the card keeps its shape when the plan starts. */}
               {step.items && step.items.length > 0 && (
-                <ul className="text-2xs text-fg-dim space-y-0.5" data-testid="plan-step-items">
-                  {step.items.map((item, i) => <li key={`${i}-${item}`} className="break-words">{item}</li>)}
-                </ul>
+                <div className="space-y-1" data-testid="plan-step-items">
+                  {step.items.slice(0, ITEM_ROWS_MAX).map((item, i) => <PlanItemRow key={`${i}-${item}`} index={i} item={item} />)}
+                  {step.items.length > ITEM_ROWS_MAX && (
+                    <div className="text-2xs text-fg-muted">…and {step.items.length - ITEM_ROWS_MAX} more.</div>
+                  )}
+                </div>
               )}
               {/* Destin, 2026-09-18: the row shows only the first line of the
                   brief, so before Approve there was no way to read the rest.
@@ -942,6 +1022,58 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * The header every specialist row inside a step wears: glyph · divider · name ·
+ * whatever that row has to say · chevron. Shared by the RUNNING specialist card
+ * and by the pending rows a fan-out step shows before it starts, so the two
+ * cannot drift apart (decision 31: approving the plan is a preview of watching
+ * it run, and the card must not change shape the moment it starts).
+ */
+function SpecialistRowButton({ open, onToggle, glyph, name, children }: {
+  open: boolean; onToggle: () => void; glyph: React.ReactNode; name: React.ReactNode; children?: React.ReactNode;
+}) {
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={open}
+      className="w-full flex items-center gap-1.5 px-2 py-1 text-left hover:bg-inset transition-colors">
+      <span className="shrink-0 inline-flex w-3 justify-center">{glyph}</span>
+      <span aria-hidden="true" className="w-px h-3 bg-edge shrink-0" />
+      <span className="text-xs font-medium text-fg-2 shrink-0">{name}</span>
+      {children}
+      <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
+    </button>
+  );
+}
+
+/** The circle a specialist that has not started wears, here and on a stopped
+ *  child that never sent its first request. */
+const NOT_STARTED_GLYPH = <span className="inline-block w-3 h-3 rounded-full border border-edge" aria-label="not started" />;
+
+/**
+ * One PENDING specialist of a fan-out step, carrying the slice of the work that
+ * specialist will be given.
+ *
+ * WHY a row rather than a line in a list (decision 31, Destin: "it's not clear
+ * to me how this breaks out into 7 reviewers"): a real fan-out item is a label
+ * plus a long file list, so seven of them read as seven paragraphs, not seven
+ * workers. Held to two lines each; the whole of it is one click away, because
+ * the point is that he can SEE both the breakdown and the detail. The row is
+ * the running specialist's own row in its not-started state, so these exact
+ * rows are the ones that light up when the plan starts.
+ */
+function PlanItemRow({ index, item }: { index: number; item: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border border-edge rounded-md overflow-hidden bg-inset/60" data-testid="plan-step-item">
+      <SpecialistRowButton open={open} onToggle={() => setOpen((v) => !v)} glyph={NOT_STARTED_GLYPH} name={`${index + 1}.`}>
+        <span
+          className={`min-w-0 flex-1 text-xs text-fg-dim ${open ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'}`}
+          data-testid="plan-step-item-text"
+        >{item}</span>
+      </SpecialistRowButton>
+    </div>
   );
 }
 
@@ -976,15 +1108,11 @@ function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessio
     : child.status === 'completed' ? <CheckIcon className="w-3 h-3 text-fg-dim" />
     : child.status === 'failed' ? <FailIcon className="w-3 h-3 text-destructive-fg" />
     // The same empty circle a step that hasn't started wears.
-    : notStarted ? <span className="inline-block w-3 h-3 rounded-full border border-edge" aria-label="not started" />
+    : notStarted ? NOT_STARTED_GLYPH
     : <StoppedIcon className="w-3 h-3 text-fg-muted" />;
   return (
     <div className="border border-edge rounded-md overflow-hidden bg-inset/60" data-testid="plan-child">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-        className="w-full flex items-center gap-1.5 px-2 py-1 text-left hover:bg-inset transition-colors">
-        <span className="shrink-0 inline-flex w-3 justify-center">{glyph}</span>
-        <span aria-hidden="true" className="w-px h-3 bg-edge shrink-0" />
-        <span className="text-xs font-medium text-fg-2 shrink-0">{child.title}</span>
+      <SpecialistRowButton open={open} onToggle={() => setOpen((v) => !v)} glyph={glyph} name={child.title}>
         <div className="min-w-0 flex-1 truncate">
           {notStarted
             ? <div className="text-xs text-fg-muted" data-testid="specialist-status-line">Not started</div>
@@ -996,8 +1124,7 @@ function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessio
         {child.retried && (
           <span className="shrink-0 text-2xs text-fg-muted" data-testid="plan-child-retried">Retried after an error</span>
         )}
-        <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
-      </button>
+      </SpecialistRowButton>
       {open && (
         <div className="px-2 py-1.5 border-t border-edge-dim space-y-1">
           <AgentSections tool={tool} sessionId={sessionId}>

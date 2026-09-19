@@ -42,6 +42,17 @@
  * halves of that decision — a fan-out step's item labels and the assistant's
  * plain per-step sentence — cannot show here at all, because these frozen
  * inputs were captured before either field existed.
+ *
+ * Re-recorded once more, decision 31 (2026-09-18): he read the result and said
+ * "still isnt great for transparency/understanding … it's not clear to me how
+ * this breaks out into 7 reviewers, what the inputs/ouputs are, and how it
+ * flows to the next step". An OPEN step now carries one plain line saying what
+ * it is given, what it produces and which step takes that on. The whole diff
+ * in these five states is the three words "produces 3 reports", once per card,
+ * inside the one step that opens itself while a plan is running or paused.
+ * The other two clauses cannot show here: these frozen inputs predate both the
+ * item labels and `of`, so no step claims an input or names a consumer. Every
+ * other word, and every collapsed row, is byte-for-byte as signed.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';

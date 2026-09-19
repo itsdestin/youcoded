@@ -284,6 +284,14 @@ export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanVie
     // were. Only a top-level map — a repeat-body row's fan-out is its items
     // times its rounds, so the labels would not match the count beside them.
     if (kind === 'map' && step.items && step.items.length > 0) out.items = [...step.items];
+    // WHY the reference travels (decision 31): `of` is the plan's OWN edge —
+    // the earlier step whose reports the executor feeds in as this step's
+    // input (dependencyReports). It is the only place the flow between steps
+    // is written down, and the card had never been given it, so the reader
+    // could not see how one step fed the next. Passed as the document's step
+    // id; turning that into "step 2" is the card's job, because only the card
+    // knows which rows it drew.
+    if ((step.kind === 'verify' || step.kind === 'combine') && step.of) out.of = step.of;
     if (attempts.length > 0) {
       out.done = attempts.filter((a) => isCommitted(a) && a.terminal === 'completed').length;
       out.usedTokens = attempts.reduce((n, a) => n + a.spentTokens, 0);

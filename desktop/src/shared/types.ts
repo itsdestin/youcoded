@@ -694,44 +694,44 @@ export interface PlanStepView {
   id: string;
   /** Spec §4 building blocks. */
   kind: 'map' | 'verify' | 'combine' | 'repeat';
-  /** "Review 6 files" — what the step does, in the model's words. The row
-   *  falls back to this when the step has no `summary`. */
+  /** "Review 6 files" — the model's words; the row's fallback without `summary`. */
   title: string;
   /** Decision 30: ONE plain sentence the assistant writes FOR the person
-   *  approving the plan. The row shows it instead of `title`, which is only
-   *  the first line of a brief addressed to a machine. Optional: a plan
-   *  written before it existed renders exactly as it always did. */
+   *  approving the plan, shown instead of `title` (the first line of a brief
+   *  addressed to a machine). Absent on plans written before it existed. */
   summary?: string;
-  /** Decision 30: a fan-out step's item labels, one per child, so the row can
-   *  say "7 reviewers, one each: …" rather than only how many. A top-level
-   *  `map` only — a repeat-body row's fan-out is its items times its rounds,
-   *  so the labels would not match the count beside them. */
+  /** Decision 30: a fan-out step's item labels, ONE PER CHILD — what each
+   *  specialist is actually given, and since decision 31 one card row each.
+   *  A top-level `map` only: a repeat-body row's fan-out is its items times
+   *  its rounds, so the labels would not match the count beside them. */
   items?: string[];
   /** The step's WHOLE brief, as the specialist will receive it. `title` is only
    *  its first line, capped and then clipped by the window, which left the user
    *  approving real spending on text he could not finish reading (Destin,
-   *  2026-09-18). Optional: a plan projected before this existed simply has
-   *  nothing extra to open onto. Read-only — editing a plan by hand is
-   *  roadmapped, not built. */
+   *  2026-09-18). Read-only — editing a plan by hand is roadmapped, not built. */
   task?: string;
+  /** Decision 31: the id of the EARLIER step whose reports this one consumes —
+   *  the plan's own edge (`of` in the document, fed in as this step's input by
+   *  the executor). The card names both ends of it by STEP NUMBER; a reference
+   *  that matches no earlier row on the card says nothing at all rather than a
+   *  wrong number. verify/combine only. */
+  of?: string;
   /** Definition id of the specialist each child runs as (explorer / reviewer / …). */
   specialist: string;
   /** How many children this step fans out to. */
   fanOut: number;
   /** The ENFORCED per-child cap — a hard stop, never an estimate (spec §4). */
   budgetTokens: number;
-  /** Decision 4: each child's fixed starting cost (prompt + tool list),
-   *  allowed ON TOP of budgetTokens. Rows sum to the plan ceiling only with
-   *  it: Σ (budgetTokens + setupTokens) × fanOut. */
+  /** Decision 4: each child's fixed starting cost (prompt + tool list), allowed
+   *  ON TOP of budgetTokens — rows sum to the ceiling only with it. */
   setupTokens?: number;
   status: 'pending' | 'running' | 'done' | 'paused' | 'failed' | 'skipped';
   /** Children finished so far (≤ fanOut). */
   done?: number;
   /** Spent by this step so far, summed over its children. */
   usedTokens?: number;
-  /** The live children. Each renders as the app's ordinary specialist card —
-   *  Briefing / Activity / Report — nested under this step (Destin, review
-   *  round 1, P-5: "keep our current agent/specialist cards"). */
+  /** The live children, each the app's ordinary specialist card — Briefing /
+   *  Activity / Report — nested under this step (Destin, round 1, P-5). */
   children?: PlanChildView[];
 }
 

@@ -13,6 +13,14 @@
  * from this card." So the rest of this file covers the row itself — the items
  * each specialist is given, the assistant's own plain sentence, the token
  * figure moving off a proposed row, and the line the expansion used to repeat.
+ *
+ * Extended again (decision 31) after he read the result: "still isnt great for
+ * transparency/understanding. like it's not clear to me how this breaks out
+ * into 7 reviewers, what the inputs/ouputs are, and how it flows to the next
+ * step of the plans inputs/outputs." So a fan-out step breaks out into one row
+ * per specialist, and every step says in plain words what it is given, what it
+ * produces and which step takes that on. Every word of it comes from the plan
+ * document the app already holds — never from reading the model's prose.
  */
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { render, cleanup, screen, fireEvent, within } from '@testing-library/react';
@@ -22,6 +30,7 @@ import ToolCard from '../src/renderer/components/ToolCard';
 import { ChatProvider, useChatDispatch, useChatState } from '../src/renderer/state/chat-context';
 import type { PlanView } from '../src/shared/types';
 import { resetPlanSupportForTests } from '../src/renderer/components/plans/plan-bridge';
+import { NARROW_VIEWPORT_QUERY } from '../src/renderer/hooks/use-narrow-viewport';
 
 const S = 's1';
 const CARD = 'call-plan';
@@ -125,21 +134,16 @@ describe('a fan-out step says what each of its specialists gets', () => {
     expect(row()).not.toHaveTextContent('Games');
   });
 
-  it('lists every item in full when the step is opened, one per line', () => {
+  it('says nothing about the items until the step is opened', () => {
     show(proposed({ items: SURFACES }));
     expect(screen.queryByTestId('plan-step-items')).not.toBeInTheDocument();
     openStep();
-    const list = screen.getByTestId('plan-step-items');
-    expect(within(list).getAllByRole('listitem').map((li) => li.textContent)).toEqual(SURFACES);
+    expect(screen.getByTestId('plan-step-items')).toBeInTheDocument();
   });
 
-  it('keeps a long item readable when the step is opened, however it was cut on the row', () => {
-    const long = 'The whole Settings panel, including the Model Providers section';
-    show(proposed({ items: [long, 'Chat'] }));
-    expect(row().textContent).toContain('…');
-    openStep();
-    expect(within(screen.getByTestId('plan-step-items')).getByText(long)).toBeInTheDocument();
-  });
+  // What the opened step then shows — a row per specialist rather than a block
+  // of lines, and what a long item does there — is pinned by "a fan-out step
+  // breaks out into one row per specialist" below (decision 31).
 
   it('leaves a repeating step exactly as it reads today, with no item list', () => {
     show(proposed({ kind: 'repeat', fanOut: 3 }));
@@ -220,5 +224,170 @@ describe('opening a step does not repeat the line its row already shows', () => 
     show(proposed({ task: `${long}\nThen stop.`, title: `${long.slice(0, 79)}…` }));
     openStep();
     expect(screen.getByTestId('plan-step-task')).toHaveTextContent(long);
+  });
+});
+
+// ---- decision 31: the work, and the way it flows -----------------------------
+
+type Step = PlanView['steps'][number];
+const aStep = (over: Partial<Step> & { id: string }): Step => ({
+  kind: 'map', title: FIRST_LINE, task: TASK, specialist: 'reviewer',
+  fanOut: 1, budgetTokens: 2000, status: 'pending', ...over,
+});
+const planOf = (steps: Step[], status: PlanView['status'] = 'proposed'): PlanView => ({
+  planId: 'plan-1', toolUseId: CARD, title: 'Audit every desktop surface', status,
+  steps, ceilingTokens: 42000, ceilingUsd: null, model: { label: 'm' }, seq: 1,
+});
+/** Open step `id` and answer with the words inside it. */
+const openAndRead = (id: string): HTMLElement => {
+  const step = screen.getByTestId(`plan-step-${id}`);
+  fireEvent.click(within(step).getByTestId('plan-step-title').closest('button')!);
+  return step;
+};
+const flowOf = (id: string): string => within(openAndRead(id)).getByTestId('plan-step-flow').textContent ?? '';
+
+describe('a fan-out step breaks out into one row per specialist', () => {
+  it('gives every item its own numbered row rather than a block of lines', () => {
+    show(proposed({ items: SURFACES }));
+    const rows = within(openAndRead('s1')).getAllByTestId('plan-step-item');
+    expect(rows).toHaveLength(SURFACES.length);
+    // Each row says which of the seven it is, and what that one specialist gets.
+    expect(rows[0]).toHaveTextContent('1.');
+    expect(rows[0]).toHaveTextContent('Chat');
+    expect(rows[6]).toHaveTextContent('7.');
+    expect(rows[6]).toHaveTextContent('Games');
+  });
+
+  it('holds a long piece of work to a couple of lines until its row is opened', () => {
+    const long = 'The whole Settings panel, including Model Providers, Appearance, Remote access, and every row under Advanced that a student is ever shown.';
+    show(proposed({ items: [long, 'Chat'] }));
+    const row = within(openAndRead('s1')).getAllByTestId('plan-step-item')[0];
+    const text = within(row).getByTestId('plan-step-item-text');
+    expect(text).toHaveClass('line-clamp-2');
+    fireEvent.click(within(row).getByRole('button'));
+    expect(within(row).getByTestId('plan-step-item-text')).not.toHaveClass('line-clamp-2');
+    expect(row).toHaveTextContent('every row under Advanced');
+  });
+
+  it('draws a bounded number of rows however many items the record carries', () => {
+    // The grammar stops at 8, but the card also replays records written by
+    // other builds: a fan-out row may never become an unbounded list.
+    const many = Array.from({ length: 20 }, (_, i) => `Surface ${i + 1}`);
+    show(proposed({ items: many, fanOut: 20 }));
+    const step = openAndRead('s1');
+    expect(within(step).getAllByTestId('plan-step-item')).toHaveLength(8);
+    expect(step).toHaveTextContent('12 more');
+  });
+
+  it('still shows a running step its real specialists, not a second set of pending rows', () => {
+    const plan = proposed({
+      status: 'running', items: SURFACES,
+      children: [{ childId: 'kid-a', parentToolCallId: CARD, agentType: 'reviewer', title: 'Wren the Reviewer', background: false, status: 'running', startedAt: 1 }],
+    });
+    show({ ...plan, status: 'running' });
+    const step = screen.getByTestId('plan-step-s1');
+    expect(within(step).getByText('Wren the Reviewer')).toBeInTheDocument();
+    expect(within(step).queryAllByTestId('plan-step-item')).toHaveLength(0);
+  });
+});
+
+describe('a plan step says what it is given, what it produces and where that goes', () => {
+  const chain = () => planOf([
+    aStep({ id: 's1', kind: 'map', fanOut: 7, items: SURFACES }),
+    aStep({ id: 's2', kind: 'combine', of: 's1', specialist: 'worker' }),
+    aStep({ id: 's3', kind: 'verify', of: 's2' }),
+  ]);
+
+  it('tells a fan-out step\'s reader that each specialist takes one of the rows below', () => {
+    show(chain());
+    expect(flowOf('s1')).toContain('Each reviewer gets one of the 7 below');
+  });
+
+  it('says how many reports a fan-out step produces, one per specialist', () => {
+    show(chain());
+    expect(flowOf('s1')).toContain('produces 7 reports');
+  });
+
+  it('says a combining step produces a single report', () => {
+    show(chain());
+    expect(flowOf('s2')).toContain('produces one report');
+  });
+
+  it('names the step whose results it consumes by the number on the card', () => {
+    show(chain());
+    expect(flowOf('s2')).toContain('Gets the 7 reports from step 1');
+    expect(flowOf('s3')).toContain('Gets the report from step 2');
+  });
+
+  it('names the step that takes a step\'s results on', () => {
+    show(chain());
+    expect(flowOf('s1')).toContain('step 2 combines them');
+    expect(flowOf('s2')).toContain('step 3 checks it');
+  });
+
+  it('names every step when more than one consumes the same results', () => {
+    show(planOf([
+      aStep({ id: 's1', kind: 'map', fanOut: 3, items: ['a', 'b', 'c'] }),
+      aStep({ id: 's2', kind: 'verify', of: 's1' }),
+      aStep({ id: 's3', kind: 'combine', of: 's1', specialist: 'worker' }),
+    ]));
+    expect(flowOf('s1')).toContain('steps 2 and 3 use them');
+  });
+
+  it('says nothing about a flow for a step nothing feeds and nothing consumes', () => {
+    show(planOf([aStep({ id: 'only', kind: 'combine', specialist: 'worker' })]));
+    const flow = flowOf('only');
+    expect(flow).toContain('produces one report');
+    expect(flow).not.toContain('Gets');
+    expect(flow).not.toContain('→');
+  });
+
+  it('says nothing rather than a wrong number when the reference names no step on the card', () => {
+    show(planOf([
+      aStep({ id: 's1', kind: 'map', fanOut: 2, items: ['a', 'b'] }),
+      aStep({ id: 's2', kind: 'combine', of: 'a-step-that-is-not-here', specialist: 'worker' }),
+    ]));
+    expect(flowOf('s2')).not.toContain('from step');
+    expect(flowOf('s1')).not.toContain('→');
+  });
+
+  it('says nothing rather than a wrong number when the reference points forwards', () => {
+    // A document the validator would have refused, replayed from disk.
+    show(planOf([
+      aStep({ id: 's1', kind: 'combine', of: 's2', specialist: 'worker' }),
+      aStep({ id: 's2', kind: 'map', fanOut: 2, items: ['a', 'b'] }),
+    ]));
+    expect(flowOf('s1')).not.toContain('from step');
+  });
+
+  it('counts a repeating step\'s reports as a worst case, because it stops when it is done', () => {
+    show(planOf([aStep({ id: 'loop', kind: 'repeat', fanOut: 15, specialist: 'worker' })]));
+    expect(flowOf('loop')).toContain('produces up to 15 reports');
+  });
+});
+
+describe('narrow widths (390 px): the breakdown stays readable', () => {
+  // narrow-viewport rule: a test of a viewport-branching component declares the
+  // viewport (jsdom has no matchMedia, which reads as wide). StepRow branches
+  // on it, so the breakdown it draws must be checked on the phone-width branch
+  // too — a fan-out item is a long label and the flow line is a sentence.
+  beforeEach(() => {
+    window.matchMedia = ((q: string) => ({
+      matches: q === NARROW_VIEWPORT_QUERY, media: q, onchange: null,
+      addEventListener: () => {}, removeEventListener: () => {}, addListener: () => {}, removeListener: () => {}, dispatchEvent: () => false,
+    })) as any;
+  });
+  afterEach(() => { delete (window as any).matchMedia; });
+
+  it('still breaks a fan-out step out into one row per specialist', () => {
+    show(proposed({ items: SURFACES }));
+    expect(within(openAndRead('s1')).getAllByTestId('plan-step-item')).toHaveLength(SURFACES.length);
+  });
+
+  it('lets the flow line wrap rather than run off the card', () => {
+    show(proposed({ items: SURFACES }));
+    const flow = within(openAndRead('s1')).getByTestId('plan-step-flow');
+    expect(flow.className.split(/\s+/)).toContain('break-words');
+    expect(flow.className.split(/\s+/)).not.toContain('truncate');
   });
 });
