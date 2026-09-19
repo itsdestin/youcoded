@@ -102,6 +102,36 @@ function rowAround(label: HTMLElement, reason: string): HTMLElement {
   return (el?.parentElement?.parentElement ?? el)!;
 }
 
+describe('Always On section and announcement popup', () => {
+  // WHY: these four are the controls the bar always draws; the menu names them
+  // once, at the top, instead of tagging a single row "always on".
+  it('lists Model, Permissions, Tags & Note and Announcements first, with no per-row tag', async () => {
+    await openMenu('claude');
+    const headings = screen.getAllByRole('heading', { level: 3 }).map(h => h.textContent);
+    expect(headings[0]).toBe('Always On');
+    for (const label of ['Model', 'Permissions', 'Tags & Note', 'Announcements']) {
+      expect(screen.getByText(label).closest('button')!.hasAttribute('disabled')).toBe(true);
+    }
+    expect(screen.queryByText('always on')).toBeNull();
+  });
+
+  it('turns Git Branch off for a fresh install', async () => {
+    await openMenu('claude');
+    const box = screen.getByText('Git Branch').closest('button')!.querySelector('span')!;
+    expect(box.className).not.toContain('bg-accent');
+  });
+
+  it('shows the announcement even when it was hidden before, and opens the full text on click', async () => {
+    window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['usage-5h']));
+    const message = 'A long announcement that would be cut off by the chip\nwith a second line.';
+    render(<StatusBar statusData={{ ...statusData, announcement: { message } }} provider="claude" sessionId="s1" nativeTotals={null} />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /long announcement/ }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getAllByText(/second line/).length).toBeGreaterThan(0);
+  });
+});
+
 describe('Customize Status Bar menu', () => {
   it('explains the subscription rows in a native session', async () => {
     await openMenu('native');

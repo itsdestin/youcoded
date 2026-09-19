@@ -23,7 +23,7 @@
     "main/engine/engine-manager.ts": 2032,
     "renderer/components/ResumeBrowser.tsx": 1837,
     "main/preload.ts": 1874,
-    "renderer/components/StatusBar.tsx": 1748,
+    "renderer/components/StatusBar.tsx": 1789,
     "renderer/components/ToolCard.tsx": 1600
   }
 }
