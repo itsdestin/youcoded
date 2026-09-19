@@ -7000,7 +7000,12 @@ export const COMPARE_SURFACES: CompareSurface[] = [
     frame: 'canvas',
     // FIXED at a chat bubble's real width. A plan card is never wider than the
     // bubble it sits in, so a candidate judged stretched has not been judged.
-    paneWidth: 460,
+    // 400 rather than 460 so all THREE panes fit one 1440px screen side by
+    // side: a comparison he has to scroll between is not a comparison. The
+    // deck's own paneWidth must stay equal to this — the registry sizes what
+    // is drawn, the deck sizes the frame it is drawn in, and when the two
+    // disagree the wider one is simply clipped (seen 2026-09-18).
+    paneWidth: 400,
     rounds: [
       {
         n: 1,
