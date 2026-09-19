@@ -45,10 +45,14 @@ async function isSameFile(a: string, b: string): Promise<boolean> {
   try {
     const [ra, rb] = await Promise.all([fs.promises.realpath(a), fs.promises.realpath(b)]);
     if (ra === rb) return true;
-    const [sa, sb] = await Promise.all([fs.promises.stat(ra), fs.promises.stat(rb)]);
+    // WHY bigint: Windows file ids are 64-bit and routinely exceed 2^53, so the
+    // default Number `ino` rounds and two DIFFERENT files can compare equal —
+    // Windows CI saw an import onto .env report "already-in-place" (2026-09-19).
+    const opts = { bigint: true } as const;
+    const [sa, sb] = await Promise.all([fs.promises.stat(ra, opts), fs.promises.stat(rb, opts)]);
     // ino === 0 means the filesystem didn't report one — don't claim identity
     // from two zeroes, which would make every file look like every other file.
-    return sa.ino !== 0 && sa.dev === sb.dev && sa.ino === sb.ino;
+    return sa.ino !== 0n && sa.dev === sb.dev && sa.ino === sb.ino;
   } catch { return false; }
 }
 
