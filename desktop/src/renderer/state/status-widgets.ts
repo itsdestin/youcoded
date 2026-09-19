@@ -16,7 +16,9 @@ export type WidgetId =
   | 'cache-hit-rate' | 'active-ratio' | 'output-speed'
   | 'announcement'
   | 'open-tasks'
-  | 'session-tags';
+  | 'session-tags'
+  // Fixed controls the bar always draws — listed so the menu's Always On section can name them.
+  | 'model' | 'permission-mode';
 
 /** The session's runtime — NOT its provider type. Known the instant a session
  *  exists and never absent, which is why the gate below can never flicker. */

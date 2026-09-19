@@ -1,4 +1,4 @@
-import { useState, useCallback, memo } from 'react';
+import { useState, useCallback, useEffect, memo } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
 import { createPortal } from 'react-dom';
 import { useTheme, type ContextDisplay } from '../state/theme-context';
@@ -484,6 +484,46 @@ interface WidgetCategory {
 }
 
 const WIDGET_CATEGORIES: WidgetCategory[] = [
+  // WHY first and locked: these are the controls the bar always draws. Listing
+  // them here (instead of a lone "always on" tag beside Tags & Note) tells the
+  // user up front what cannot be switched off, so the rows below are all choices.
+  {
+    name: 'Always On',
+    widgets: [
+      {
+        id: 'model',
+        label: 'Model',
+        defaultVisible: true,
+        locked: true,
+        description: 'Which model this session is using. Click it to switch models.',
+        bestFor: 'Everyone. Always know which model is answering.',
+      },
+      {
+        id: 'permission-mode',
+        label: 'Permissions',
+        defaultVisible: true,
+        locked: true,
+        description: 'How much Claude may do without asking first. Click it to change the mode.',
+        bestFor: 'Everyone. Always see whether Claude will ask before acting.',
+      },
+      {
+        id: 'session-tags',
+        label: 'Tags & Note',
+        defaultVisible: true,
+        locked: true,
+        description: 'Tag the current session and attach a freeform note. Always shown next to the model and permission controls.',
+        bestFor: 'Everyone. Organize and annotate sessions so they\'re easy to find and resume later.',
+      },
+      {
+        id: 'announcement',
+        label: 'Announcements',
+        defaultVisible: true,
+        locked: true,
+        description: 'Messages from the YouCoded team — new releases, outages, tips. Click the announcement in the bar to read the whole message.',
+        bestFor: 'Everyone. Only appears when there is something to say.',
+      },
+    ],
+  },
   {
     name: 'Rate Limits',
     widgets: [
@@ -506,14 +546,6 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
   {
     name: 'Session',
     widgets: [
-      {
-        id: 'session-tags',
-        label: 'Tags & Note',
-        defaultVisible: true,
-        locked: true,
-        description: 'Tag the current session and attach a freeform note. Always shown next to the model and permission controls.',
-        bestFor: 'Everyone. Organize and annotate sessions so they\'re easy to find and resume later.',
-      },
       {
         id: 'context',
         label: 'Context %',
@@ -600,7 +632,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
       {
         id: 'git-branch',
         label: 'Git Branch',
-        defaultVisible: true,
+        defaultVisible: false,
         description: 'The current git repository and branch for your working directory.',
         bestFor: 'Developers working across multiple branches or repos.',
       },
@@ -644,23 +676,13 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
       },
     ],
   },
-  {
-    name: 'Updates',
-    widgets: [
-      {
-        id: 'announcement',
-        label: 'Announcement',
-        defaultVisible: true,
-        description: 'Platform announcements from the YouCoded team — new releases, outages, tips. Pulled every hour from the announcement cache.',
-        bestFor: 'Everyone. Hides automatically when there is no active announcement.',
-      },
-    ],
-  },
 ];
 
 // Flat list for iteration
 const ALL_WIDGET_DEFS = WIDGET_CATEGORIES.flatMap((c) => c.widgets);
 const DEFAULT_VISIBLE = new Set<WidgetId>(ALL_WIDGET_DEFS.filter((w) => w.defaultVisible).map((w) => w.id));
+
+const LOCKED_WIDGETS = new Set<WidgetId>(ALL_WIDGET_DEFS.filter((w) => w.locked).map((w) => w.id));
 
 const STORAGE_KEY = 'youcoded-statusbar-widgets';
 
@@ -825,7 +847,6 @@ function WidgetConfigPopup({ open, onClose, visible, toggle, relevance }: {
                               )}
                             </span>
                             <span className="text-2xs text-fg">{w.label}</span>
-                            {w.locked && <span className="text-4xs text-fg-muted">always on</span>}
                           </button>
                           )}
 
@@ -978,6 +999,13 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   // Version pill now opens the in-app UpdatePanel (changelog + update action) instead of firing external URLs.
   const [updatePanelOpen, setUpdatePanelOpen] = useState(false);
   const [contextPopupOpen, setContextPopupOpen] = useState(false);
+  // Full-text view of the announcement chip — the chip itself truncates at 280px,
+  // so longer messages are read here.
+  const [announcementOpen, setAnnouncementOpen] = useState(false);
+  const hasAnnouncement = !!statusData.announcement?.message && !isExpired(statusData.announcement.expires);
+  // WHY: without this, an announcement that expires while its popup is open would
+  // leave the flag set, and the NEXT announcement would pop open unprompted.
+  useEffect(() => { if (!hasAnnouncement) setAnnouncementOpen(false); }, [hasAnnouncement]);
 
   // Runtime gate (spec §3, Rule 2): a widget that belongs to the OTHER runtime
   // never renders here, whatever the user's saved on/off choice says. The choice
@@ -987,7 +1015,9 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
   // gate reserves for Claude Code apply again — fed with the ChatGPT windows
   // App put in `usage` for exactly this session.
   const chatgptWindows = usagePlan === 'chatgpt';
-  const show = (id: WidgetId) => visible.has(id)
+  // Locked (Always On) widgets ignore the saved choice, so anyone who hid the
+  // announcement before it became always-on sees it again.
+  const show = (id: WidgetId) => (LOCKED_WIDGETS.has(id) || visible.has(id))
     && (widgetApplies(id, runtime) || (chatgptWindows && (id === 'usage-5h' || id === 'usage-7d')));
   // Where a usage chip goes when clicked: the Claude account page, or — for a
   // ChatGPT plan — the Model Providers row that shows the plan and its windows.
@@ -1642,9 +1672,10 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
       {show('announcement') &&
         statusData.announcement?.message &&
         !isExpired(statusData.announcement.expires) && (
-        <Tooltip text={statusData.announcement.message}>
-        <span
-          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border truncate max-w-[280px]"
+        <Tooltip text="Click to read the full announcement">
+        <button
+          onClick={() => setAnnouncementOpen(true)}
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border truncate max-w-[280px] cursor-pointer hover:bg-inset transition-colors"
           style={{
             color: '#EA580C',
             borderColor: 'rgba(234,88,12,0.35)',
@@ -1652,7 +1683,7 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         >
           <span aria-hidden>★</span>
           <span className="truncate">{statusData.announcement.message}</span>
-        </span>
+        </button>
         </Tooltip>
       )}
 
@@ -1717,6 +1748,16 @@ export default memo(function StatusBar({ // WHY memo (2026-09-16 audit W21): App
         // chip for it — the menu has to offer the row whenever the chip is up.
         relevance={{ runtime, hasPricedWork: nativeTotals?.anyPriced ?? true, anyUnpriced: nativeTotals?.anyUnpriced ?? false, runsLocally: nativeTotals?.anyFree ?? false, chatgptWindows }}
       />
+
+      {/* Announcement popup — the whole message, since the chip truncates it.
+          pre-wrap keeps the line breaks the author wrote. */}
+      {hasAnnouncement && statusData.announcement && (
+        <Dialog open={announcementOpen} onClose={() => setAnnouncementOpen(false)} title="Announcement" size="panel">
+          <p className="text-sm text-fg whitespace-pre-wrap break-words leading-relaxed">
+            {statusData.announcement.message}
+          </p>
+        </Dialog>
+      )}
 
       {/* Update panel — opened from the version pill. Guard on updateStatus
          since the pill is only rendered when it exists, but the mount lives outside that gate. */}
