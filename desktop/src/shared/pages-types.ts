@@ -34,7 +34,12 @@ export type PageConnection =
   /** YouCoded's own service, as the signed-in person. */
   | { id: string; kind: 'youcoded' }
   /** A service that takes a pasted key. The key lives in the app, never the page. */
-  | { id: string; kind: 'key'; service: string; address: string; access: PageAccess }
+  | {
+      id: string; kind: 'key'; service: string; address: string; access: PageAccess;
+      /** How to find the key, written by the page's author and carried with the
+       *  page (review round 1, C-1). Shown as the author's words. */
+      keyHelp?: { steps: string[] };
+    }
   /** Public information: an approved address, nothing secret. */
   | { id: string; kind: 'public'; address: string }
   /** The GitHub sign-in the app already holds. */
@@ -60,7 +65,7 @@ interface PageRefreshState {
   failed: boolean;
 }
 
-/** A key saved once under Settings › Connected accounts, with the pages using it. */
+/** A key saved once under Settings › Connected services, with the pages using it. */
 export interface SavedPageKey {
   service: string;
   address: string;

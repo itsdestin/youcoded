@@ -1,4 +1,5 @@
-// PageFreshness — "Updated 2 min ago" and the refresh button, in the band
+// PageFreshness — a bare "2m" and the refresh button (review round 1, C-6:
+// "drop this to just a bare 2m with retry. no updated/ago"), in the band
 // beside a connected page's name (Pages Phase 2, deck Q-last-updated: the app
 // owns it, so it sits in the same place on every page and is true because the
 // app made the request). Small and muted on purpose: the band was kept quiet
@@ -20,12 +21,13 @@ function useClock(): number {
   return now;
 }
 
-function ago(iso: string, now: number): string {
+/** Compact age: "now", "2m", "3h", "4d". */
+function age(iso: string, now: number): string {
   const m = Math.floor((now - new Date(iso).getTime()) / 60_000);
-  if (!Number.isFinite(m) || m < 1) return 'just now';
-  if (m < 60) return `${m} min ago`;
+  if (!Number.isFinite(m) || m < 1) return 'now';
+  if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
-  return h < 24 ? `${h} h ago` : `${Math.floor(h / 24)} d ago`;
+  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
 export function PageFreshness({ page }: { page: PageSummary }) {
@@ -43,13 +45,13 @@ export function PageFreshness({ page }: { page: PageSummary }) {
 
   const words = busy ? 'Updating…'
     : r.failed ? "Couldn't update"
-    : r.at ? `Updated ${ago(r.at, now)}` : 'Not updated yet';
+    : r.at ? age(r.at, now) : 'Not updated yet';
 
   return (
     <span className="flex items-center gap-1 shrink-0 text-xs font-normal text-fg-muted" data-page-freshness={r.failed ? 'failed' : 'ok'} style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
       <span aria-hidden="true" className="text-fg-faint">·</span>
       <span>{words}</span>
-      {r.failed && r.at && !busy && <span className="max-sm:hidden text-fg-faint">· last {ago(r.at, now)}</span>}
+      {r.failed && r.at && !busy && <span className="max-sm:hidden text-fg-faint">· {age(r.at, now)}</span>}
       <Tooltip text={r.failed ? 'Try again' : 'Update now'} placement="bottom">
         <Button
           size="icon-sm"

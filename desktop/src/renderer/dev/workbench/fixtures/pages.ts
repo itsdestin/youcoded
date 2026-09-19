@@ -404,7 +404,8 @@ function connectedPages(): PageDocument[] {
       updatedAt: '2026-09-19T06:40:00.000Z', htmlStamp: 1789800000000,
       html: simplePage('Todoist', 'Task board', [['Draft fiscal note', 'Today'], ['Reply to Sarah', 'Today'], ['Renew domain', 'Mon']]),
       // First ask, fresh key, FULL access: the blunter sentence and the key box.
-      connections: [{ id: 'todoist', kind: 'key', service: 'Todoist', address: 'api.todoist.com', access: 'full', approved: false, savedKey: false }],
+      connections: [{ id: 'todoist', kind: 'key', service: 'Todoist', address: 'api.todoist.com', access: 'full', approved: false, savedKey: false,
+        keyHelp: { steps: ['Open todoist.com and sign in.', 'Go to Settings, then Integrations, then Developer.', 'Copy the API token and paste it below.'] } }],
     },
     {
       ...base, id: 'page-headlines', name: 'Headlines', icon: 'notes',

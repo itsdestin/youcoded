@@ -14,7 +14,7 @@ import React, { useState } from 'react';
 import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
-import { Badge, Button, TextInput } from '../ui';
+import { Button, TextInput } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import { PageGlyph } from './page-icons';
 import { publishPages } from './use-pages';
@@ -57,32 +57,60 @@ export function needsApproval(page: PageSummary | null): boolean {
   return !!page?.connections?.some((c) => !c.approved);
 }
 
-function ConnectionGlyph({ kind }: { kind: PageConnection['kind'] }) {
-  const common = { className: 'w-4 h-4', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const, 'aria-hidden': true };
-  if (kind === 'key') return <svg {...common}><circle cx="7.5" cy="15.5" r="4.5" /><path d="M10.7 12.3L20 3M16.5 6.5l3 3M13.5 9.5l2.5 2.5" /></svg>;
-  if (kind === 'youcoded' || kind === 'github') return <svg {...common}><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4 4-6 8-6s8 2 8 6" /></svg>;
-  // public and open: the globe
-  return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" /></svg>;
-}
+/** What the whole internet means in practice, spelled out under its sentence
+ *  (review round 1, C-4: "clearer about what the permission actually means in
+ *  practice, and associated risks"). The last line is true because an
+ *  open-internet page never also holds a key or sign-in (deck Q-open-mix). */
+const OPEN_INTERNET_MEANS = [
+  'It can load from, and send to, any site. There is no fixed list.',
+  'Anything you type or paste into this page could be sent somewhere you did not choose.',
+  'It still cannot see your files, your other pages, or your saved keys and sign-ins.',
+];
 
+/** No glyph beside the sentence (review round 1: "remove the key symbol",
+ *  "drop icon") — the words carry it. */
 function ConnectionLine({ c, children, small }: { c: PageConnectionStatus; children?: React.ReactNode; small?: boolean }) {
   const words = describeConnection(c);
   return (
-    <div className="flex items-start gap-2.5" data-page-connection={c.kind}>
-      <span className="text-fg-dim inline-flex mt-0.5 shrink-0"><ConnectionGlyph kind={c.kind} /></span>
-      <div className="min-w-0 flex-1 flex flex-col gap-1.5">
-        <div className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`}>
-          {words.what} <span className="text-fg-dim">{words.limit}</span>
-        </div>
-        {children}
+    <div className="flex flex-col gap-1.5" data-page-connection={c.kind}>
+      <div className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`}>
+        {words.what} <span className="text-fg-dim">{words.limit}</span>
       </div>
+      {children}
+    </div>
+  );
+}
+
+/** How to find a key: the page's author may supply the steps (they travel with
+ *  the page); otherwise a general pointer. Shown as the author's words, not the
+ *  app's, because the app cannot vouch for them. */
+function KeyHelp({ c }: { c: PageConnectionStatus & { kind: 'key' } }) {
+  const steps = c.keyHelp?.steps ?? [];
+  if (steps.length === 0) {
+    return (
+      <div className="text-sm text-fg-2 leading-relaxed">
+        Sign in on {c.service}'s website and look for a section called API, Developer or Integrations. Copy the key shown there.
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-xs text-fg-dim">Where to find it, from this page's author:</div>
+      <ol className="list-decimal pl-5 text-sm text-fg-2 leading-relaxed flex flex-col gap-0.5">
+        {steps.map((t, i) => <li key={i}>{t}</li>)}
+      </ol>
     </div>
   );
 }
 
 /** Shown IN PLACE OF the page until every line is approved (decks Q-own-pages,
  *  S-change, S-key-entry). Same card species as the library's welcome card;
- *  actions stack full width, primary over secondary, like the app's dialogs. */
+ *  actions stack full width, primary over secondary, like the app's dialogs.
+ *
+ *  TWO STEPS when a key must be typed (review round 1, C-1: "the explanation of
+ *  the permission and the key entry are kinda separate things… just have a
+ *  continue button, then a second page that has instructions for how to find
+ *  the relevant key"): step 1 is what the page may do, step 2 is the key. */
 export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: () => void }) {
   const all = page.connections ?? [];
   const asking = all.filter((c) => !c.approved);
@@ -90,101 +118,132 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   // A re-ask after an edit shows what was already allowed too, so the new line
   // is read in context; the first ask has nothing approved yet.
   const isChange = already.length > 0;
-  const open = asking.some((c) => c.kind === 'open');
+  const [step, setStep] = useState<'what' | 'keys'>('what');
   const [keys, setKeys] = useState<Record<string, string>>({});
-  const [pasteInstead, setPasteInstead] = useState<Record<string, boolean>>({});
+  const [differentKey, setDifferentKey] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const here = keysEnteredHere();
 
   const keyLines = asking.filter((c): c is PageConnectionStatus & { kind: 'key' } => c.kind === 'key');
-  const wantsNewKey = (c: PageConnectionStatus) => c.kind === 'key' && (!c.savedKey || pasteInstead[c.id]);
-  const blockedOnComputer = !here && keyLines.some(wantsNewKey);
-  const missingKey = keyLines.some((c) => wantsNewKey(c) && !(keys[c.id] ?? '').trim());
+  const toType = keyLines.filter((c) => !c.savedKey || differentKey[c.id]);
+  const missingKey = toType.some((c) => !(keys[c.id] ?? '').trim());
 
   const allow = async () => {
     const b = bridge();
     if (!b?.approve) return;
     setBusy(true);
     const sent: Record<string, string> = {};
-    for (const c of keyLines) sent[c.id] = wantsNewKey(c) ? keys[c.id].trim() : 'saved';
+    for (const c of keyLines) sent[c.id] = toType.includes(c) ? keys[c.id].trim() : 'saved';
     try { publishPages(await b.approve(page.id, sent)); } finally { setBusy(false); }
   };
 
-  return (
-    <div className="absolute inset-0 overflow-y-auto flex items-center justify-center max-sm:items-start p-4 select-none" data-page-approval>
-      <div className="w-full max-w-xl bg-panel border border-edge rounded-lg p-5 sm:p-6 flex flex-col gap-4">
-        <div className="flex items-center gap-3">
-          <span aria-hidden="true" className="shrink-0 inline-flex w-10 h-10 rounded-md bg-inset border border-edge-dim items-center justify-center text-fg-2">
-            <PageGlyph icon={page.icon} className="w-5 h-5" />
-          </span>
-          <div className="min-w-0">
-            <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">{isChange ? 'This page changed' : 'Before this page opens'}</div>
-            <h3 className="text-base font-semibold text-fg leading-snug">
-              {isChange ? `${page.name} wants one more thing` : `${page.name} wants to connect`}
-            </h3>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <div className="text-xs text-fg-dim">{isChange ? 'New — this page would also be able to:' : 'This page would be able to:'}</div>
-          <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
-            {asking.map((c) => (
-              <ConnectionLine key={c.id} c={c}>
-                {c.kind === 'key' && c.savedKey && !pasteInstead[c.id] && (
-                  <div className="flex items-center gap-2 text-xs text-fg-muted">
-                    <span>Uses your saved {c.service} key.</span>
-                    {here && <Button variant="ghost" size="sm" onClick={() => setPasteInstead((m) => ({ ...m, [c.id]: true }))}>Paste a different one</Button>}
-                  </div>
-                )}
-                {wantsNewKey(c) && c.kind === 'key' && here && (
-                  <div className="flex flex-col gap-1">
-                    <TextInput
-                      type="password"
-                      autoComplete="off"
-                      aria-label={`Your ${c.service} key`}
-                      placeholder={`Paste your ${c.service} key`}
-                      value={keys[c.id] ?? ''}
-                      onChange={(e) => setKeys((m) => ({ ...m, [c.id]: e.target.value }))}
-                      className="select-text"
-                    />
-                    <div className="text-2xs text-fg-muted leading-relaxed">
-                      Kept by YouCoded on this computer and sent only to {c.address}. The page never sees it.
-                    </div>
-                  </div>
-                )}
-                {wantsNewKey(c) && !here && (
-                  <div className="text-xs text-fg-muted">Needs a {c.kind === 'key' ? c.service : ''} key. Finish setting this up on your computer.</div>
-                )}
-              </ConnectionLine>
-            ))}
-          </div>
-          {!open && <div className="text-xs text-fg-muted leading-relaxed">Everything else on the internet stays blocked for this page.</div>}
-        </div>
-
-        {isChange && (
-          <div className="flex flex-col gap-2">
-            <div className="text-xs text-fg-dim">Already allowed:</div>
-            <div className="flex flex-col gap-2 px-3">
-              {already.map((c) => <ConnectionLine key={c.id} c={c} />)}
-            </div>
-          </div>
-        )}
-
-        <div className="flex flex-col gap-2">
-          {!blockedOnComputer && (
-            <Button variant="primary" onClick={() => { void allow(); }} disabled={busy || missingKey} className="w-full py-2.5">
-              {busy ? 'Allowing…' : 'Allow and open'}
-            </Button>
-          )}
-          <Button variant="secondary" onClick={onNotNow} className="w-full py-2.5">Not now</Button>
-        </div>
+  const shell = (children: React.ReactNode) => (
+    <div className="absolute inset-0 overflow-y-auto flex items-center justify-center max-sm:items-start p-4 select-none" data-page-approval={step}>
+      <div className="w-full max-w-xl bg-panel border border-edge rounded-lg p-5 sm:p-6 flex flex-col gap-4">{children}</div>
+    </div>
+  );
+  const heading = (eyebrow: string, title: string) => (
+    <div className="flex items-center gap-3">
+      <span aria-hidden="true" className="shrink-0 inline-flex w-10 h-10 rounded-md bg-inset border border-edge-dim items-center justify-center text-fg-2">
+        <PageGlyph icon={page.icon} className="w-5 h-5" />
+      </span>
+      <div className="min-w-0">
+        <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">{eyebrow}</div>
+        <h3 className="text-base font-semibold text-fg leading-snug">{title}</h3>
       </div>
     </div>
   );
+
+  if (step === 'keys') {
+    const names = toType.map((c) => c.service);
+    return shell(<>
+      {heading('One more step', names.length === 1 ? `Add your ${names[0]} key` : 'Add your keys')}
+      {toType.map((c) => (
+        <div key={c.id} className="flex flex-col gap-3" data-page-key-step={c.service}>
+          {toType.length > 1 && <div className="text-sm font-medium text-fg">{c.service}</div>}
+          <KeyHelp c={c} />
+          <TextInput
+            type="password"
+            autoComplete="off"
+            aria-label={`Your ${c.service} key`}
+            placeholder={`Paste your ${c.service} key`}
+            value={keys[c.id] ?? ''}
+            onChange={(e) => setKeys((m) => ({ ...m, [c.id]: e.target.value }))}
+            className="select-text"
+          />
+        </div>
+      ))}
+      <div className="text-xs text-fg-muted leading-relaxed">YouCoded keeps your key. The page never sees it.</div>
+      <div className="flex flex-col gap-2">
+        <Button variant="primary" onClick={() => { void allow(); }} disabled={busy || missingKey} className="w-full">
+          {busy ? 'Allowing…' : 'Allow and open'}
+        </Button>
+        <Button variant="secondary" onClick={() => setStep('what')} className="w-full">Back</Button>
+      </div>
+    </>);
+  }
+
+  return shell(<>
+    {heading(isChange ? 'This page changed' : 'Before this page opens', isChange ? `${page.name} wants additional permissions` : `${page.name} wants to connect`)}
+
+    <div className="flex flex-col gap-2">
+      <div className="text-xs text-fg-dim">{isChange ? 'New — this page would also be able to:' : 'This page would be able to:'}</div>
+      <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
+        {asking.map((c) => (
+          <ConnectionLine key={c.id} c={c}>
+            {c.kind === 'open' && (
+              <ul className="list-disc pl-5 text-xs text-fg-muted leading-relaxed flex flex-col gap-0.5" data-open-internet-means>
+                {OPEN_INTERNET_MEANS.map((t) => <li key={t}>{t}</li>)}
+              </ul>
+            )}
+            {c.kind === 'key' && c.savedKey && (
+              <div className="flex items-center gap-2 text-xs text-fg-muted" data-saved-key-offer>
+                <span>{differentKey[c.id] ? `You'll paste a different ${c.service} key next.` : `Uses your saved ${c.service} key.`}</span>
+                {here && (
+                  <Button variant="secondary" size="sm" onClick={() => setDifferentKey((m) => ({ ...m, [c.id]: !m[c.id] }))}>
+                    {differentKey[c.id] ? 'Use the saved key' : 'Use a different key'}
+                  </Button>
+                )}
+              </div>
+            )}
+          </ConnectionLine>
+        ))}
+      </div>
+    </div>
+
+    {isChange && (
+      <div className="flex flex-col gap-2">
+        <div className="text-xs text-fg-dim">Already allowed:</div>
+        <div className="flex flex-col gap-2 px-3">
+          {already.map((c) => <ConnectionLine key={c.id} c={c} />)}
+        </div>
+      </div>
+    )}
+
+    <div className="flex flex-col gap-2">
+      {/* On the phone a key cannot be typed (deck Q-phone). The button sits where
+          Allow would, greyed, with the reason under it (review round 1, C-5). */}
+      {toType.length > 0 && !here ? (
+        <>
+          <Button variant="primary" disabled className="w-full" data-finish-on-computer>Finish on your computer</Button>
+          <div className="text-xs text-fg-muted leading-relaxed text-center">
+            Adding a key isn't supported on the phone yet. Open this page on your computer to set it up.
+          </div>
+        </>
+      ) : toType.length > 0 ? (
+        <Button variant="primary" onClick={() => setStep('keys')} className="w-full">Continue</Button>
+      ) : (
+        <Button variant="primary" onClick={() => { void allow(); }} disabled={busy} className="w-full">
+          {busy ? 'Allowing…' : 'Allow and open'}
+        </Button>
+      )}
+      <Button variant="secondary" onClick={onNotNow} className="w-full">Not now</Button>
+    </div>
+  </>);
 }
 
 /** One page's connections, opened from its library card (deck Q-manage). */
-export function PageConnectionsDialog({ page, onClose }: { page: PageSummary | null; onClose: () => void }) {
+export function PageConnectionsDialog({ page, onClose, onConnect }: { page: PageSummary | null; onClose: () => void; onConnect: (pageId: string) => void }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   const remove = async (connectionId: string) => {
     const b = bridge();
@@ -199,27 +258,31 @@ export function PageConnectionsDialog({ page, onClose }: { page: PageSummary | n
         {list.length === 0 && <div className="text-sm text-fg-muted">This page reaches nothing outside itself.</div>}
         {list.map((c) => (
           <div key={c.id} className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-2">
-            <ConnectionLine c={c} small>
-              {!c.approved && <div><Badge>Waiting for your OK</Badge></div>}
-            </ConnectionLine>
+            <ConnectionLine c={c} small />
             {confirming === c.id ? (
               <div className="flex flex-col gap-2">
                 <div className="text-2xs text-fg-2 leading-relaxed" data-remove-confirm>
                   This stops future use. It cannot undo anything the page already sent or received. The page will ask again next time it opens.
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button variant="danger" size="sm" onClick={() => { void remove(c.id); }}>Remove</Button>
+                {/* Right-aligned, Remove rightmost (review round 1, C-10). */}
+                <div className="flex items-center justify-end gap-2">
                   <Button variant="secondary" size="sm" onClick={() => setConfirming(null)}>Never mind</Button>
+                  <Button variant="danger" size="sm" onClick={() => { void remove(c.id); }}>Remove</Button>
                 </div>
               </div>
-            ) : c.approved && (
+            ) : (
+              // Not connected yet: offer to connect, bottom right, instead of a
+              // "waiting" label (review round 1, C-9). It opens the page, whose
+              // approval card is the one place a connection is agreed to.
               <div className="flex justify-end">
-                <Button variant="secondary" size="sm" onClick={() => setConfirming(c.id)}>Remove</Button>
+                {c.approved
+                  ? <Button variant="secondary" size="sm" onClick={() => setConfirming(c.id)}>Remove</Button>
+                  : <Button variant="primary" size="sm" data-connect onClick={() => { if (page) onConnect(page.id); }}>Connect</Button>}
               </div>
             )}
           </div>
         ))}
-        {list.length > 0 && <div className="text-2xs text-fg-muted leading-relaxed">Saved keys are kept under Settings › Account › Connected accounts.</div>}
+        {list.length > 0 && <div className="text-2xs text-fg-muted leading-relaxed">Saved keys are kept under Settings › Account › Connected services.</div>}
       </div>
     </Dialog>
   );

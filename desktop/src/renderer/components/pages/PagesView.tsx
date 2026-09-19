@@ -111,7 +111,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
           ))}
         </div>
       </main>
-      <PageConnectionsDialog page={connectionsPage} onClose={() => setConnectionsFor(null)} />
+      <PageConnectionsDialog page={connectionsPage} onClose={() => setConnectionsFor(null)} onConnect={(id) => { setConnectionsFor(null); openPage(id); }} />
     </div>
   );
 }
@@ -185,7 +185,6 @@ function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: Page
               size="sm"
               data-page-connections-link
               onClick={(e) => { e.stopPropagation(); onConnections(); }}
-              className="px-1 py-0 text-2xs"
             >
               {connectionCount === 1 ? '1 connection' : `${connectionCount} connections`}
             </Button>
