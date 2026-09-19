@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
     modelLoadedBytes: 0,
     modelEverResident: false,
   },
+  artifact: { drawerOpenBySession: {} as Record<string, boolean>, drawerExpanded: false },
 }));
 
 vi.mock('../src/renderer/state/chat-context', () => ({
@@ -37,7 +38,7 @@ vi.mock('../src/renderer/state/chat-context', () => ({
 // than provided for real.
 vi.mock('../src/renderer/state/ArtifactContext', () => ({
   useArtifact: () => ({
-    state: { drawerOpenBySession: {}, drawerExpanded: false },
+    state: mocks.artifact,
     dispatch: vi.fn(),
   }),
 }));
@@ -170,5 +171,32 @@ describe('ChatView pane layout containment', () => {
     const style = renderPane({ visible: false, sessionActive: true });
     expect(style.contentVisibility).toBe('visible');
     expect(style.visibility).toBe('hidden');
+  });
+});
+
+// The expand flag is app-wide but the drawer is per-session. Expanding in one
+// session used to hide the chat of every other session (Destin, 2026-09-19):
+// only a session whose own drawer is open may take the expanded layout.
+describe('ChatView expanded drawer', () => {
+  function shellClass(open: Record<string, boolean>) {
+    mocks.artifact.drawerOpenBySession = open;
+    mocks.artifact.drawerExpanded = true;
+    try {
+      // visible=false: the drawer's CONTENTS only mount when visible, and
+      // this test is about the shell's layout class, which is computed either way.
+      const { container } = render(<ChatView sessionId="s1" visible={false} sessionActive />);
+      return container.querySelector('.framed-shell')!.className;
+    } finally {
+      mocks.artifact.drawerOpenBySession = {};
+      mocks.artifact.drawerExpanded = false;
+    }
+  }
+
+  it('does not expand a session whose drawer is closed', () => {
+    expect(shellClass({ other: true })).not.toContain('drawer-expanded');
+  });
+
+  it('expands the session whose drawer is open', () => {
+    expect(shellClass({ s1: true })).toContain('drawer-expanded');
   });
 });
