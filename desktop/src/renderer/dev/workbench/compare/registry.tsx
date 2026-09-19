@@ -93,7 +93,11 @@ import { RemoteSetupDemo } from '../mockups/RemoteSetup';
 // drawing the same real fixture plan (fixtures/bubbles/plan-proposed.jsonl) so
 // the comparison is about layout and nothing else. Real Button, Badge and
 // ChevronIcon inside; the shipped components/plans/PlanCard.tsx is untouched.
-import { SpinePlanCard, LedgerPlanCard, StripPlanCard } from '../mockups/PlanCardLayouts';
+// Round 2 (nested · rows · bar) redraws the same three ideas in the app's own
+// vocabulary: every row is the real SettingRow, every count the real Badge, the
+// nesting the shipped card's own bordered containers, and the bar a real new
+// primitive (ui/SegmentedProgress) rather than a class string.
+import { SpinePlanCard, LedgerPlanCard, StripPlanCard, NestedPlanCard, RowsPlanCard, BarPlanCard } from '../mockups/PlanCardLayouts';
 // The REAL derivation the shipping card will use — a candidate that hardcoded
 // its options would be comparing wording against something that cannot happen.
 import { bashGrantOptions } from '../../../../shared/bash-grant-shapes';
@@ -7028,6 +7032,30 @@ export const COMPARE_SURFACES: CompareSurface[] = [
             label: 'C · Strip',
             note: 'The shape of the whole plan is one line at the top: three dots, then one, then one, numbered underneath — "three at once, then one, then one" at a glance. Clicking a node opens that step below. The list itself is deliberately bare (number, sentence, count, chevron); the items, the brief and the per-step limit are all one click away.',
             render: () => <StripPlanCard />,
+          },
+        ],
+      },
+      {
+        n: 2,
+        basis: 'R1, rejected whole (Destin, 2026-09-18): "doesnt match existing ui at all. lots of bare text and divider lines, which we don\'t use anywhere else in the app. we need to make this look/feel like native app ui. try again." Round 1 hand-rolled a <button> row per step (G-1: that row is SettingRow), hung a bare chevron on it (G-29, and "I HATE the bare dropdowns with a chevron"), separated steps with divide-y hairlines — an idiom that exists in ONE renderer file, because this app separates by CONTAINMENT — and carried information at text-3xs (G-5\'s floor is text-2xs). Round 2 keeps the three ideas and redraws them in the app\'s own materials: every row is the real SettingRow (its chevron, its hover/press/focus ladder, its two densities), every count the real Badge, and the nesting the SHIPPED card\'s own bordered step and specialist cards — which were already Destin\'s round-2 call there. Same fixture plan, same shared header and Approve row, so only the arrangement differs.',
+        candidates: [
+          {
+            id: 'nested',
+            label: 'A · Nested',
+            note: 'The structure IS the containment. Every step is a card, and a fan-out step CONTAINS its three helper cards, visible and unfolded — the same cards that light up when the plan runs. Nothing has to be clicked to see the shape. The chevron then means one thing only: the step\'s brief.',
+            render: () => <NestedPlanCard />,
+          },
+          {
+            id: 'rows',
+            label: 'B · Rows',
+            note: 'The app\'s universal row and nothing else: title, one derived line ("← step 1 · 1 report → step 3"), the count as a Badge, the chevron the primitive brings. Open, the row reveals the helper cards and the brief. The card carries nothing but the rows, the limit line and the two buttons.',
+            render: () => <RowsPlanCard />,
+          },
+          {
+            id: 'bar',
+            label: 'C · Bar',
+            note: 'B\'s rows under one glance line: a segmented bar whose segments are the steps, each as wide as its fan-out, so "three at once, then one, then one" reads before a word does. Empty outline before approval; the same object fills in as steps finish once it runs. Drawn by a new primitive, ui/SegmentedProgress, with its own pinning test.',
+            render: () => <BarPlanCard />,
           },
         ],
       },

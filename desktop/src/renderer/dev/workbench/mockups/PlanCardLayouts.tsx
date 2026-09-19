@@ -30,7 +30,7 @@
 //
 // Dev-only, like the rest of dev/.
 import React, { useRef, useState } from 'react';
-import { Badge, Button } from '../../../components/ui';
+import { Badge, Button, SegmentedProgress, SettingRow, type ProgressSegment } from '../../../components/ui';
 import { ChevronIcon } from '../../../components/Icons';
 import type { PlanStepView, PlanView } from '../../../../shared/types';
 
@@ -417,5 +417,238 @@ function StripRow({ step, index, open, onToggle, rowRef }: {
         </div>
       )}
     </li>
+  );
+}
+
+// ═══ ROUND 2 ═════════════════════════════════════════════════════════════════
+//
+// Destin on round 1: "doesnt match existing ui at all. lots of bare text and
+// divider lines, which we don't use anywhere else in the app. we need to make
+// this look/feel like native app ui. try again."
+//
+// He is right and the design guide says so in specifics. Round 1 hand-rolled a
+// <button> row per step (G-1: that row IS `SettingRow`), put a leading glyph and
+// a bare chevron on it (G-29, and Destin 2026-09-05: "I HATE the bare dropdowns
+// with a chevron"), separated steps with `divide-y` hairlines — an idiom that
+// appears in exactly ONE renderer file, because this app separates things by
+// CONTAINMENT — and printed information at `text-3xs` (G-5's floor is
+// `text-2xs`).
+//
+// What round 1 got wrong was throwing out the SHIPPED card's materials along
+// with its hierarchy. Those materials were already Destin's own round-2 call:
+// nested bordered containers, so the nesting reads plan → step → specialist by
+// SHAPE (PlanCard.tsx `StepRow`). Round 2 keeps them and changes only the
+// arrangement and the amount of copy.
+//
+// So every row below is the real `SettingRow`: the app's universal row, which
+// brings the right-hand chevron that turns while open, the hover/press/focus
+// ladder (§2.4) and the two approved densities with it. The counts are the real
+// `Badge`. The bar in C is a real primitive (`ui/SegmentedProgress`), not a
+// class string, because no primitive drew one — G-1's own answer to "the app
+// has nothing for this".
+
+/** A step's container, verbatim from the SHIPPED card's `StepRow` <li>: one
+ *  step down the depth ladder from the card it sits in, `md` radius (G-3: a
+ *  list row), `edge-dim` because it is an inset container (§2.4). Copied
+ *  rather than imported because it is a module-local there — and copied
+ *  EXACTLY, so a winner pastes back into that file unchanged. */
+const STEP_CARD = 'border border-edge-dim rounded-md overflow-hidden bg-inset/25';
+
+/** A helper's container, verbatim from the shipped `PlanItemRow`: the same card
+ *  one step deeper and one shade brighter, which is how the app already draws a
+ *  specialist inside a step. These are the exact cards that light up when the
+ *  plan runs — approving is a preview of watching it run (decision 31). */
+const HELPER_CARD = 'border border-edge rounded-md overflow-hidden bg-inset/60';
+
+/** The shipped card's `NOT_STARTED_GLYPH`, without round 1's `mt-0.5` nudge:
+ *  `SettingRow`'s icon slot centres its own contents. */
+const NOT_STARTED_DOT = <span className="inline-block w-3 h-3 rounded-full border border-edge" aria-label="not started" />;
+
+/** renderer-lists.md: nothing unbounded is drawn. The shipped card's cap, so
+ *  the two never disagree about when a fan-out stops listing and starts
+ *  counting. */
+const HELPERS_MAX = 8;
+
+/**
+ * The one line a step says about itself, in one grammar for every step: what it
+ * is handed, what it makes, and who takes that on — "← step 1 · 1 report →
+ * step 3". It lives in the row's DESCRIPTION slot, under the title, which is
+ * where `SettingRow` puts a row's second line and the only place it may go.
+ *
+ * Every part is derived: `of` names the earlier step whose reports the executor
+ * literally feeds in (decision 31), `fanOut` is one report per specialist, and
+ * the step nobody consumes ends at the answer. Nothing is invented and nothing
+ * is read out of the model's prose.
+ */
+function flow(step: PlanStepView): string {
+  const from = sourceIndex(step);
+  const toIndex = STEPS.findIndex((s) => s.of === step.id);
+  const makes = `${reports(step.fanOut)} → ${toIndex >= 0 ? `step ${toIndex + 1}` : ANSWER_LABEL}`;
+  return from > 0 ? `← step ${from} · ${makes}` : makes;
+}
+
+/**
+ * The helpers a fan-out step hands its work to, as nested cards — the fan-out
+ * drawn in the app's own material instead of on a rail. Each is the specialist's
+ * own card in its not-started state, numbered (decision 31: one row per
+ * specialist, each showing its own item).
+ */
+function HelperCards({ step }: { step: PlanStepView }) {
+  const items = step.items ?? [];
+  if (items.length === 0) return null;
+  return (
+    <div className="space-y-1" data-testid="r2-helpers">
+      {items.slice(0, HELPERS_MAX).map((item, i) => (
+        <div key={`${i}-${item}`} className={HELPER_CARD}>
+          <SettingRow
+            variant="item"
+            icon={
+              <span className="flex items-center gap-1.5">
+                {NOT_STARTED_DOT}
+                <span className="text-2xs text-fg-muted tabular-nums">{i + 1}.</span>
+              </span>
+            }
+            title={item}
+          />
+        </div>
+      ))}
+      {items.length > HELPERS_MAX && (
+        <div className="text-2xs text-fg-muted">…and {items.length - HELPERS_MAX} more.</div>
+      )}
+    </div>
+  );
+}
+
+/** The step's brief — the specialist's own headline, which the row does not
+ *  show. Data, not layout copy: it is the plan's `title` field verbatim. */
+function Brief({ step }: { step: PlanStepView }) {
+  return <div className="text-2xs text-fg-dim break-words" data-testid="r2-brief">{step.title}</div>;
+}
+
+// ── A · nested — the structure IS the containment ────────────────────────────
+
+/**
+ * A · every step is a card, and a fan-out step CONTAINS its helpers, visible and
+ * unfolded. Three helpers is three cards inside the step's card: that is the
+ * fan-out, drawn in the material the app already nests with, so the shape is
+ * there before anything is clicked — which is exactly when he is deciding.
+ * The chevron then has one meaning and one only: the brief.
+ */
+export function NestedPlanCard() {
+  return (
+    <div data-testid="plan-candidate-nested">
+      <PlanHeader />
+      <div className="px-3 pb-2.5 pt-1.5 space-y-2">
+        <ol className="space-y-1.5">
+          {STEPS.map((step) => <NestedStep key={step.id} step={step} />)}
+        </ol>
+        <ApproveRow />
+      </div>
+    </div>
+  );
+}
+
+function NestedStep({ step }: { step: PlanStepView }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <li className={STEP_CARD} data-testid="nested-step">
+      <SettingRow
+        variant="item"
+        title={step.summary}
+        description={flow(step)}
+        accessory={<Badge>{who(step)}</Badge>}
+        onClick={() => setOpen((v) => !v)}
+        expanded={open}
+      />
+      {/* The helpers sit on the step card's own padding — the container is the
+          only thing saying they belong to this step, which is the point. */}
+      {(step.items?.length ?? 0) > 0 && (
+        <div className="px-1.5 pb-1.5">
+          <HelperCards step={step} />
+        </div>
+      )}
+      {open && (
+        <div className="px-3 pb-2">
+          <Brief step={step} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+// ── B · rows — the app's universal row, and nothing else ─────────────────────
+
+/**
+ * B · the conservative one: it invents nothing at all. Every step is the app's
+ * own row — title, description, count, chevron — and the card carries nothing
+ * else but the limit line and the two buttons. Open, the row reveals the same
+ * nested helper cards A shows always, plus the brief.
+ */
+export function RowsPlanCard() {
+  return (
+    <div data-testid="plan-candidate-rows">
+      <PlanHeader />
+      <div className="px-3 pb-2.5 pt-1.5 space-y-2">
+        <ol className="space-y-1">
+          {STEPS.map((step) => <RowStep key={step.id} step={step} />)}
+        </ol>
+        <ApproveRow />
+      </div>
+    </div>
+  );
+}
+
+function RowStep({ step }: { step: PlanStepView }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <li data-testid="rows-step">
+      <SettingRow
+        variant="item"
+        title={step.summary}
+        description={flow(step)}
+        accessory={<Badge>{who(step)}</Badge>}
+        onClick={() => setOpen((v) => !v)}
+        expanded={open}
+      />
+      {/* Indented under the row it belongs to, in the same cards A uses. */}
+      {open && (
+        <div className="mt-1 pl-3 space-y-1" data-testid="rows-open">
+          <HelperCards step={step} />
+          <Brief step={step} />
+        </div>
+      )}
+    </li>
+  );
+}
+
+// ── C · bar — one glance line that becomes the progress bar ──────────────────
+
+/** The plan's shape as parts: one segment per step, each as wide as its
+ *  fan-out, so "three at once, then one, then one" is one glance. Before
+ *  approval every segment is an empty outline — nothing has happened yet, and
+ *  the accent paints state, not decoration (G-8). The SAME object fills in as
+ *  steps finish once it runs. */
+const PLAN_SHAPE: ProgressSegment[] = STEPS.map((step, i) => ({
+  id: step.id,
+  weight: step.fanOut,
+  label: `Step ${i + 1} · ${who(step)}`,
+}));
+
+/** The bar's accessible name: a shape is a picture, so it says in words what it
+ *  shows, and how much of it is done. */
+const SHAPE_LABEL = `Plan shape — ${STEPS.map((s) => who(s)).join(', then ')}. None finished yet.`;
+
+export function BarPlanCard() {
+  return (
+    <div data-testid="plan-candidate-bar">
+      <PlanHeader />
+      <div className="px-3 pb-2.5 pt-1.5 space-y-2">
+        <SegmentedProgress segments={PLAN_SHAPE} aria-label={SHAPE_LABEL} className="mt-1 mb-0.5" />
+        <ol className="space-y-1">
+          {STEPS.map((step) => <RowStep key={step.id} step={step} />)}
+        </ol>
+        <ApproveRow />
+      </div>
+    </div>
   );
 }
