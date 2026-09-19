@@ -150,7 +150,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   useSessionPreviewListener(sessionId, sessionActive, artifactDispatch);
   // Drawer open/closed is per-session — read this session's flag (absent → closed).
   const drawerOpen = artifactState.drawerOpenBySession[sessionId] ?? false;
-  const drawerExpanded = artifactState.drawerExpanded;
+  // WHY drawerOpen &&: expand is app-wide, so ungated it hid every OTHER session's chat.
+  const drawerExpanded = drawerOpen && artifactState.drawerExpanded;
   // The game pane and artifact drawer share the framed-shell's right slot.
   // The game pane wins when both are somehow open (App also enforces mutual
   // exclusivity, so this is just a render-time safety net).
