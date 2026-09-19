@@ -89,6 +89,11 @@ import { SessionStripMotionDemo } from '../mockups/SessionStripMotion';
 import { BuddySleepDemo } from '../mockups/BuddySleep';
 import { FriendlyMascots } from '../mockups/FriendlyMascots';
 import { RemoteSetupDemo } from '../mockups/RemoteSetup';
+// plan-card-hierarchy: three ARRANGEMENTS of the proposed plan card, all three
+// drawing the same real fixture plan (fixtures/bubbles/plan-proposed.jsonl) so
+// the comparison is about layout and nothing else. Real Button, Badge and
+// ChevronIcon inside; the shipped components/plans/PlanCard.tsx is untouched.
+import { SpinePlanCard, LedgerPlanCard, StripPlanCard } from '../mockups/PlanCardLayouts';
 // The REAL derivation the shipping card will use — a candidate that hardcoded
 // its options would be comparing wording against something that cannot happen.
 import { bashGrantOptions } from '../../../../shared/bash-grant-shapes';
@@ -6988,6 +6993,41 @@ function StopComposerDemo({ motion }: { motion: StopMotion }) {
 }
 
 export const COMPARE_SURFACES: CompareSurface[] = [
+  {
+    id: 'plan-card-hierarchy',
+    label: 'Plan card — proposed, the layout',
+    question: 'Before you approve a plan, which arrangement shows you fastest what it will do?',
+    frame: 'canvas',
+    // FIXED at a chat bubble's real width. A plan card is never wider than the
+    // bubble it sits in, so a candidate judged stretched has not been judged.
+    paneWidth: 460,
+    rounds: [
+      {
+        n: 1,
+        basis: 'Decision 32 (Destin, 2026-09-18, after task 17): "this whole thing is just not well organized or easy to navigate through visually. i want you to propose a new plan card style with better visual heirarchy that is easier to quickly glance/click through and understand. minimal copy, maximum transparency and comprehensibility". Rounds 30 and 31 both kept the flat step list and rewrote its sentences; this one changes the arrangement and cuts the words. All three draw the SAME fixture plan (plan-proposed.jsonl) in its proposed state, and all three are clickable — the steps open. What differs is only where the structure lives: drawn on a rail (A), implied by type size and a fixed column (B), or summarised as one glance line above a bare list (C).',
+        candidates: [
+          {
+            id: 'spine',
+            label: 'A · Spine',
+            note: 'The fan-out is DRAWN, not described: a rail down the left, each step a node on it, and step 1\'s three specialists hanging off it as a branch that is always visible and re-joins the rail before step 2. The rail carries what passes down it (3 reports → 1 report → your answer). No flow sentence anywhere. A click opens the specialist\'s brief and nothing else.',
+            render: () => <SpinePlanCard />,
+          },
+          {
+            id: 'ledger',
+            label: 'B · Ledger',
+            note: 'No drawing at all. A real heading (the plan\'s goal) and one muted meta line, then steps whose number, sentence and count each sit at their own size in their own column — the counts line up down the card. Under each step, one line in one grammar that always names what comes IN (← step 1\'s 3 reports). A click opens the fan-out rows plus the brief.',
+            render: () => <LedgerPlanCard />,
+          },
+          {
+            id: 'strip',
+            label: 'C · Strip',
+            note: 'The shape of the whole plan is one line at the top: three dots, then one, then one, numbered underneath — "three at once, then one, then one" at a glance. Clicking a node opens that step below. The list itself is deliberately bare (number, sentence, count, chevron); the items, the brief and the per-step limit are all one click away.',
+            render: () => <StripPlanCard />,
+          },
+        ],
+      },
+    ],
+  },
   {
     id: 'stop-button-alive',
     label: 'Message box — stop button while replying',
