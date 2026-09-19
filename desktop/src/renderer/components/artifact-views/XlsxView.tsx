@@ -7,7 +7,7 @@ import {
 } from './exceljs-cell';
 import { evalFormula, type CellValue } from './xlsx-formula';
 // Theme-tinted "paper" constants shared with CsvView — see sheet-theme.ts.
-import { PAPER, GUTTER_BG, FBAR_BG, TAB_BG, GRID, GUTTER_FG, SEL, NOTE_FG, NOTE_BG } from './sheet-theme';
+import { PAPER, GUTTER_BG, FBAR_BG, TAB_BG, GRID, GUTTER_FG, SEL, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
 
 // Safety caps — agent sheets are small, but guard against a pathological file
 // producing a million-cell DOM. Truncation is surfaced to the user.
@@ -248,12 +248,9 @@ function XlsxSheets({ bytes }: { bytes: Uint8Array }) {
           </tbody>
         </table>
         {sheet.truncated && (
-          // WHY name only the limit hit (matches CsvView): a tall, narrow sheet
-          // is not missing any columns, so the note must not say it is.
+          // Wording shared with CsvView — see largeSheetNote in sheet-theme.ts.
           <div style={{ padding: '8px 12px', fontSize: 12, color: NOTE_FG, background: NOTE_BG }}>
-            Large sheet — showing the first {sheet.rowsTruncated && sheet.colsTruncated
-              ? `${MAX_ROWS.toLocaleString()} rows × ${MAX_COLS} columns`
-              : sheet.rowsTruncated ? `${MAX_ROWS.toLocaleString()} rows` : `${MAX_COLS} columns`}. Use “Open externally” for the full file.
+            {largeSheetNote(sheet.rowsTruncated, sheet.colsTruncated, MAX_ROWS, MAX_COLS)}
           </div>
         )}
       </div>

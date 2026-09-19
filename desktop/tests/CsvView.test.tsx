@@ -8,6 +8,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { CsvView } from '../src/renderer/components/artifact-views/CsvView';
+import { largeSheetNote } from '../src/renderer/components/artifact-views/sheet-theme';
 import type { ArtifactViewProps } from '../src/renderer/components/artifact-views/types';
 
 afterEach(cleanup);
@@ -45,14 +46,18 @@ describe('CsvView — column cap', () => {
     expect(note).not.toMatch(/rows/);
   });
 
-  // WHY no "too tall AND too wide" render case: drawing 2,000 rows × 100 columns
-  // in jsdom took 28s alone — past the suite budget. That wording is unchanged.
-  it('a CSV too tall but narrow says only that rows were cut', () => {
-    const csv = Array.from({ length: 5000 }, (_, r) => `${r},a,b,c`).join('\n');
-    const { getByText } = render(<CsvView {...baseProps(csv)} />);
-    const note = getByText(/Large sheet/).textContent!;
+  // WHY the tall cases check the wording function, not a render: drawing even
+  // 2,000 rows × 26 columns in jsdom took 30s+ on Windows CI and timed out, and
+  // 2,000 × 100 took 28s on Linux. The short-and-wide render above proves the
+  // viewer shows this function's words.
+  it('a sheet too tall but narrow says only that rows were cut', () => {
+    const note = largeSheetNote(true, false, 2000, 100);
     expect(note).toContain('showing the first 2,000 rows.');
     expect(note).not.toMatch(/columns/);
+  });
+
+  it('a sheet too tall AND too wide names both limits', () => {
+    expect(largeSheetNote(true, true, 2000, 100)).toContain('showing the first 2,000 rows × 100 columns.');
   });
 
   it('renders every column and no truncation note under the cap', () => {
