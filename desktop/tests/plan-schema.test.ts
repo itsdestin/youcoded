@@ -16,11 +16,13 @@ type LooseDocument = { goal: string; steps: Array<Record<string, any>> };
 const branch = (kind: string): any =>
   (PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.anyOf as any[]).find((b) => b.properties.kind.enum[0] === kind);
 
-const COMMON_FIELDS = ['id', 'kind', 'specialist', 'task', 'budget_tokens'];
+const COMMON_FIELDS = ['id', 'kind', 'specialist', 'task', 'budget_tokens', 'summary'];
 /** Fields EVERY kind may carry and NO kind must: advertised on all four
- *  branches so a constrained decoder may emit one, never in `required` so an
- *  older plan — and a model that ignores it — still validates. */
-const OPTIONAL_COMMON_FIELDS = ['summary'];
+ *  branches so a constrained decoder may emit one, never in `required`.
+ *  EMPTY since decision 33 made `summary` required — the mechanism stays, and
+ *  the pin below still walks it, so the next optional field is covered on the
+ *  day it is added. */
+const OPTIONAL_COMMON_FIELDS: string[] = [];
 /** The fields each kind owns, as the ADVERTISED schema states them. The
  *  drift pin below proves the runtime validator agrees with exactly this. */
 const ADVERTISED_KIND_FIELDS: Record<string, string[]> = {
@@ -28,8 +30,10 @@ const ADVERTISED_KIND_FIELDS: Record<string, string[]> = {
 };
 /** A minimal, valid step of each kind — only the fields that kind owns. */
 const minimalStep = (kind: string, id = kind): Record<string, any> => ({
-  id, kind, specialist: 'worker', task: 'Do the thing.', budget_tokens: 500,
-  ...(kind === 'map' ? { items: ['x'] } : {}),
+  id, kind, specialist: 'worker', task: 'Do the thing.', budget_tokens: 500, summary: 'One plain sentence for the user.',
+  // TWO items, not one: decision 33 refuses a whole PLAN whose worst case is a
+  // single specialist run, and every document below is built from this step.
+  ...(kind === 'map' ? { items: ['x', 'y'] } : {}),
   ...(kind === 'verify' || kind === 'combine' ? { of: 'earlier' } : {}),
   ...(kind === 'repeat' ? { max_iterations: 2, until: 'Done.', steps: [minimalStep('map', 'body')] } : {}),
 });
@@ -37,26 +41,26 @@ const minimalStep = (kind: string, id = kind): Record<string, any> => ({
 const mapVerifyCombine: LooseDocument = {
   goal: 'Review each source and produce one report.',
   steps: [
-    { id: 'map', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, items: ['auth.ts', 'billing.ts'] },
-    { id: 'verify', kind: 'verify', specialist: 'researcher', task: 'Check the reviews.', budget_tokens: 600, of: 'map' },
-    { id: 'combine', kind: 'combine', specialist: 'worker', task: 'Write the report.', budget_tokens: 700, of: 'verify' },
+    { id: 'map', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, summary: 'Two helpers read one changed file each.', items: ['auth.ts', 'billing.ts'] },
+    { id: 'verify', kind: 'verify', specialist: 'researcher', task: 'Check the reviews.', budget_tokens: 600, summary: 'One helper checks those notes against the files.', of: 'map' },
+    { id: 'combine', kind: 'combine', specialist: 'worker', task: 'Write the report.', budget_tokens: 700, summary: 'One helper writes it all up as one report.', of: 'verify' },
   ],
 };
 
 const nestedRepeat: LooseDocument = {
   goal: 'Iterate on a draft.',
   steps: [{
-    id: 'repeat', kind: 'repeat', specialist: 'reviewer', task: 'Direct the iteration.', budget_tokens: 500,
+    id: 'repeat', kind: 'repeat', specialist: 'reviewer', task: 'Direct the iteration.', budget_tokens: 500, summary: 'Draft and check, over and over, until it is right.',
     max_iterations: 3, until: 'The draft is correct.', steps: [
-      { id: 'draft', kind: 'map', specialist: 'worker', task: 'Draft {item}.', budget_tokens: 800, items: ['document'] },
-      { id: 'check', kind: 'verify', specialist: 'reviewer', task: 'Check it.', budget_tokens: 600, of: 'draft' },
+      { id: 'draft', kind: 'map', specialist: 'worker', task: 'Draft {item}.', budget_tokens: 800, summary: 'One helper writes the next draft.', items: ['document'] },
+      { id: 'check', kind: 'verify', specialist: 'reviewer', task: 'Check it.', budget_tokens: 600, summary: 'One helper says whether the draft is right yet.', of: 'draft' },
     ],
   }],
 };
 
 describe('plan schema and semantic validator', () => {
   it('a step may budget up to 30,000 tokens of work (product decision 4, 2026-09-16)', () => {
-    const doc = (budget: number) => ({ goal: 'g', steps: [{ id: 's', kind: 'map', specialist: 'worker', task: 't', budget_tokens: budget, items: ['x'] }] });
+    const doc = (budget: number) => ({ goal: 'g', steps: [{ id: 's', kind: 'map', specialist: 'worker', task: 't', budget_tokens: budget, summary: 's', items: ['x'] }] });
     expect(PlanDocumentSchema.safeParse(doc(30_000)).success).toBe(true);
     expect(PlanDocumentSchema.safeParse(doc(30_001)).success).toBe(false);
     expect(branch('map').properties.budget_tokens.maximum).toBe(30_000);
@@ -103,7 +107,7 @@ describe('plan schema and semantic validator', () => {
     // own branch, a `map` cannot carry `steps` at ALL, so the chain is
     // ungrammatical from its very first link rather than merely bounded.
     const mapChain = (depth: number): any => ({
-      id: `m${depth}`, kind: 'map', specialist: 'explorer', task: 'Do not run.', budget_tokens: 500, items: ['none'],
+      id: `m${depth}`, kind: 'map', specialist: 'explorer', task: 'Do not run.', budget_tokens: 500, summary: 'Filler.', items: ['none'],
       ...(depth > 0 ? { steps: [mapChain(depth - 1)] } : {}),
     });
     expect(validate({ goal: 'g', steps: [mapChain(0)] })).toBe(true);
@@ -183,13 +187,16 @@ describe('plan schema and semantic validator', () => {
         expect(PlanDocumentSchema.safeParse(ok).success).toBe(true);
         // …an optional common field is accepted on EVERY kind, and leaving it
         // out is still valid — the half that broke twice is the half where one
-        // side learns a field and the other does not.
+        // side learns a field and the other does not. (The list is empty today;
+        // the walk stays so the next optional field is covered from day one.)
         for (const optional of OPTIONAL_COMMON_FIELDS) {
           const withOptional = { goal: 'g', steps: [minimalStep('map', 'earlier'), { ...minimalStep(kind), [optional]: 'One plain sentence for the user.' }] };
           expect(PlanDocumentSchema.safeParse(withOptional).success).toBe(true);
           expect(validatePlanDocument(withOptional, BUILTIN_ROSTER).ok).toBe(true);
           const validateBranch = new Ajv({ strict: false }).compile(PLAN_DOCUMENT_JSON_SCHEMA);
           expect(validateBranch(withOptional)).toBe(true);
+          const without = { goal: 'g', steps: [minimalStep('map', 'earlier'), minimalStep(kind)] };
+          expect(PlanDocumentSchema.safeParse(without).success).toBe(true);
         }
         // …and ANY field this branch does not advertise → refused.
         for (const other of ['items', 'of', 'max_iterations', 'until', 'steps']) {
@@ -254,7 +261,7 @@ describe('plan schema and semantic validator', () => {
         id: 'i'.repeat(64), kind: 'repeat', specialist: 'worker', task: 't'.repeat(4_000), budget_tokens: 500,
         summary: 's'.repeat(200),
         max_iterations: 1, until: 'u'.repeat(2_000), steps: [{
-          id: 'm'.repeat(64), kind: 'map', specialist: 'worker', task: 't', budget_tokens: 500, items: ['x'.repeat(2_000)],
+          id: 'm'.repeat(64), kind: 'map', specialist: 'worker', task: 't', budget_tokens: 500, summary: 's', items: ['x'.repeat(2_000)],
         }],
       }],
     };
@@ -265,6 +272,75 @@ describe('plan schema and semantic validator', () => {
   // has to be told that — the old row was the first line of a prompt written
   // for a machine ("EXPECTATION PASS (fresh eyes, no implementation reading)…")
   // and told the user nothing about what the step would do.
+  // Decision 33, Destin 2026-09-18 ("i'm not sure what the benefit would be of
+  // making it optional"): every step draws its own row on the approval card,
+  // and the row's words ARE the summary. Optional meant a plan could reach the
+  // person approving real spending with nothing but the first line of a machine
+  // prompt on every row. Old journals may stop parsing; that was accepted.
+  it('requires the plain sentence on every step of every kind, in BOTH halves', () => {
+    const ajv = new Ajv({ strict: false });
+    for (const kind of ['map', 'verify', 'combine', 'repeat']) {
+      // Advertised: in this branch's `required`, not merely in its properties.
+      expect(branch(kind).required).toContain('summary');
+      const step = { ...minimalStep(kind) };
+      delete step.summary;
+      const document = { goal: 'g', steps: [minimalStep('map', 'earlier'), step] };
+      expect(ajv.compile(PLAN_DOCUMENT_JSON_SCHEMA)(document)).toBe(false);
+      expect(PlanDocumentSchema.safeParse(document).success).toBe(false);
+      expect(validatePlanDocument(document, BUILTIN_ROSTER).ok).toBe(false);
+    }
+    // Including a repeat's BODY step, which draws its own row too.
+    const body = structuredClone(nestedRepeat);
+    delete body.steps[0].steps[0].summary;
+    expect(PlanDocumentSchema.safeParse(body).success).toBe(false);
+    expect(ajv.compile(PLAN_DOCUMENT_JSON_SCHEMA)(body)).toBe(false);
+  });
+
+  // Decision 33, Destin's own words: "we need to allow single-specialist split
+  // steps, but not single-specialists single-step plans. if the entire plan is
+  // a single specialist doing a single thing, its a shitty plan and should just
+  // be a specialist call."
+  describe('a whole plan may not be one specialist doing one thing', () => {
+    const oneRun: LooseDocument = {
+      goal: 'Rename one function.',
+      steps: [{ id: 's1', kind: 'map', specialist: 'worker', task: 'Rename {item}.', budget_tokens: 500, summary: 'One helper renames it.', items: ['the function'] }],
+    };
+
+    it('refuses the document, and tells the assistant to hire a specialist instead', () => {
+      const result = validatePlanDocument(oneRun, BUILTIN_ROSTER);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.issues.join('\n')).toContain('hire a specialist directly instead of proposing a plan');
+    });
+
+    it('keeps a ONE-ITEM split legal inside a larger plan (items still has a minimum of 1)', () => {
+      const withSingleWorker: LooseDocument = {
+        goal: 'Fix it and check it.',
+        steps: [
+          oneRun.steps[0],
+          { id: 's2', kind: 'verify', specialist: 'reviewer', task: 'Check it.', budget_tokens: 500, summary: 'One helper checks the change.', of: 's1' },
+        ],
+      };
+      expect(validatePlanDocument(withSingleWorker, BUILTIN_ROSTER).ok).toBe(true);
+      expect(branch('map').properties.items.minItems).toBe(1);
+    });
+
+    it('counts repeat rounds, so a one-round repeat over one item is still refused', () => {
+      const onceRound: LooseDocument = {
+        goal: 'Draft it.',
+        steps: [{
+          id: 'loop', kind: 'repeat', specialist: 'worker', task: 'Iterate.', budget_tokens: 500, summary: 'Draft until it is right.',
+          max_iterations: 1, until: 'The draft is correct.',
+          steps: [{ id: 'draft', kind: 'map', specialist: 'worker', task: 'Draft {item}.', budget_tokens: 500, summary: 'One helper drafts it.', items: ['document'] }],
+        }],
+      };
+      expect(validatePlanDocument(onceRound, BUILTIN_ROSTER).ok).toBe(false);
+      // Two rounds IS two specialist runs, and is a plan.
+      const twice = structuredClone(onceRound);
+      twice.steps[0].max_iterations = 2;
+      expect(validatePlanDocument(twice, BUILTIN_ROSTER).ok).toBe(true);
+    });
+  });
+
   it('tells the model the per-step sentence is written for the user, not for a machine', () => {
     const description = branch('map').properties.summary.description as string;
     expect(description).toMatch(/one .*sentence/i);
@@ -317,7 +393,7 @@ describe('plan schema and semantic validator', () => {
 
   it('rejects duplicate or forward ids, unknown specialists, and invalid bounds', () => {
     expect(validatePlanDocument({ ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], id: 'same' }, { ...mapVerifyCombine.steps[1], id: 'same', of: 'same' }] }, BUILTIN_ROSTER).ok).toBe(false);
-    expect(validatePlanDocument({ ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[1], of: 'combine' }] }, BUILTIN_ROSTER).ok).toBe(false);
+    expect(validatePlanDocument({ ...mapVerifyCombine, steps: [mapVerifyCombine.steps[0], { ...mapVerifyCombine.steps[1], of: 'combine' }] }, BUILTIN_ROSTER).ok).toBe(false);
     expect(validatePlanDocument({ ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], specialist: 'missing' }] }, BUILTIN_ROSTER).ok).toBe(false);
     expect(validatePlanDocument({ ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], budget_tokens: 499 }] }, BUILTIN_ROSTER).ok).toBe(false);
   });

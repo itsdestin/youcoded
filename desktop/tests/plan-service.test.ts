@@ -19,7 +19,7 @@ const REF: PlanRef = { cwd: '/proj', sessionId: SID };
 
 const doc = (budget = 1000, items = ['a', 'b']): PlanDocumentV1 => ({
   goal: 'Review things',
-  steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: budget, items }],
+  steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: budget, summary: 'Plain sentence.', items }],
 });
 
 const baseManifest = (): ExecutionManifest => ({

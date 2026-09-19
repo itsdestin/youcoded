@@ -155,10 +155,9 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?
   if (!paused) throw new Error(`Plan ${plan.planId} is not paused.`);
   const view = projectPlan(plan, now);
   const index = view.steps.findIndex((s) => s.id === paused.stepId);
-  // A repeat pauses on the repeat's own id, which is not a card row: name the
-  // first row of its body instead of inventing a number.
-  const repeatBody = index < 0 ? plan.document.steps.find((s) => s.id === paused.stepId && s.kind === 'repeat')?.steps?.[0]?.id : undefined;
-  const rowIndex = index >= 0 ? index : view.steps.findIndex((s) => s.id === repeatBody);
+  // Decision 33: a repeat is ONE row that CONTAINS its body, so a pause inside
+  // the body belongs to the repeat's row — that is the number the user sees.
+  const rowIndex = index >= 0 ? index : view.steps.findIndex((s) => s.body?.some((b) => b.id === paused.stepId));
   const where = rowIndex >= 0
     ? `step ${rowIndex + 1} of ${view.steps.length}, "${fact(view.steps[rowIndex].title)}"`
     : `step "${fact(paused.stepId)}"`;

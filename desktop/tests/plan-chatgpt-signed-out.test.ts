@@ -34,7 +34,7 @@ const SIGN_IN = 'Sign in with ChatGPT in Settings → Model Providers to use thi
 const SID = 'root';
 const REF: PlanRef = { cwd: '/proj', sessionId: SID };
 const DOC: PlanDocumentV1 = { goal: 'summarise the repo', steps: [
-  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a'] },
+  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] },
 ] };
 
 let root: string; let home: NativeHome; let registry: ProviderRegistry;

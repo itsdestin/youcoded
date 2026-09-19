@@ -71,7 +71,12 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
       // a prompt written for a machine, so nothing in the plan ever addressed
       // the person pressing Approve. This is the only plan-writing instruction
       // besides the schema's own field descriptions, so it says it here too.
-      + 'Give every step a `summary`: one plain sentence, in everyday words, telling the person approving the plan what that step does.',
+      + 'Give every step a `summary`: one plain sentence, in everyday words, telling the person approving the plan what that step does. '
+      // Decision 33 (2026-09-18): the validator refuses a document whose whole
+      // worst case is one specialist run, so the model must be told here too —
+      // otherwise it reaches for a plan it cannot have and burns its one repair
+      // on a shape no repair can fix.
+      + 'A plan must be more than one specialist doing one thing: if the whole job is a single specialist run, hire a specialist directly instead of proposing a plan.',
     shortDescription: 'Propose a bounded multi-specialist plan for user approval.',
     inputSchema: PlanDocumentSchema,
     // Model-facing constrained decoding must stay byte-for-byte on the completed

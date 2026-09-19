@@ -23,7 +23,7 @@ const REF: PlanRef = { cwd: '/proj', sessionId: SID };
 /** 2 items × (1,000 work + setup) — one specialist, so one tier to change. */
 const doc = (): PlanDocumentV1 => ({
   goal: 'Review things',
-  steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a', 'b'] }],
+  steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a', 'b'] }],
 });
 
 /** The plan as approved: a ChatGPT specialist at $3/$15 per million. */

@@ -1,4 +1,18 @@
-import type { PlanChildView, PlanView, SubagentSegment, ToolCallState } from '../../../shared/types';
+import type { PlanChildView, PlanStepView, PlanView, SubagentSegment, ToolCallState } from '../../../shared/types';
+
+/**
+ * Every row that can carry specialists, a repeat's body included.
+ *
+ * WHY it exists (decision 33): a repeat is now ONE row that CONTAINS its body,
+ * so `plan.steps` alone no longer reaches every specialist the plan launches —
+ * anything that answers "which specialists does this plan have" must descend
+ * one level or a repeating plan's workers vanish from it (they did, from the
+ * Specialists popup, until this was added). One level is all there is: the
+ * grammar forbids a repeat inside a repeat.
+ */
+export function planLeafSteps(steps: PlanStepView[]): PlanStepView[] {
+  return steps.flatMap((s) => (s.body ? s.body : [s]));
+}
 
 /**
  * Specialists plans, Task 5a — the plan record as its card renders it: each
@@ -27,13 +41,23 @@ export function planWithActivity(plan: PlanView, segments: SubagentSegment[] | u
   }
   if (byChild.size === 0) return plan;
   let changed = false;
-  const steps = plan.steps.map((step) => {
-    if (!step.children?.some((c) => byChild.has(c.childId))) return step;
+  // Decision 33: a repeat's specialists sit on its body rows, so the join
+  // descends one level as well.
+  const join = (step: PlanStepView): PlanStepView => {
+    const body = step.body?.map(join);
+    const bodyChanged = !!body && body.some((b, i) => b !== step.body![i]);
+    if (!step.children?.some((c) => byChild.has(c.childId))) return bodyChanged ? { ...step, body } : step;
     changed = true;
     return {
       ...step,
+      ...(body ? { body } : {}),
       children: step.children.map((c) => (byChild.has(c.childId) ? { ...c, segments: byChild.get(c.childId) } : c)),
     };
+  };
+  const steps = plan.steps.map((step) => {
+    const joined = join(step);
+    if (joined !== step) changed = true;
+    return joined;
   });
   return changed ? { ...plan, steps } : plan;
 }

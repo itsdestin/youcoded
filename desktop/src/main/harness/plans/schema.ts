@@ -43,20 +43,30 @@ const STEP_KINDS = ['map', 'verify', 'combine', 'repeat'] as const;
 const LEAF_STEP_KINDS = ['map', 'verify', 'combine'] as const;
 type StepKind = (typeof STEP_KINDS)[number];
 
-const COMMON_STEP_FIELDS = ['id', 'kind', 'specialist', 'task', 'budget_tokens'] as const;
+/**
+ * WHY `summary` is REQUIRED here rather than optional (decision 33, Destin
+ * 2026-09-18: "i'm not sure what the benefit would be of making it optional"):
+ * every step — including every step of a repeat body — draws its own row on the
+ * approval card, and that row's words ARE the summary. Optional meant a plan
+ * could reach the person approving real spending with nothing but the first
+ * line of a prompt written for a machine on every row. Old journals that were
+ * written without it may now fail to parse; the owner accepted that explicitly
+ * ("all of the existing plans are demos").
+ */
+const COMMON_STEP_FIELDS = ['id', 'kind', 'specialist', 'task', 'budget_tokens', 'summary'] as const;
 /**
  * Fields EVERY kind may carry and no kind must.
  *
- * WHY they are in this table rather than added to one half (decision 30,
- * 2026-09-18): `summary` is the plain sentence the card shows the person
- * approving the plan, and it is optional so that every plan written before it
- * existed — and every model that ignores it — still validates untouched. It
- * still has to reach BOTH halves from here, because a field advertised to the
- * decoder but absent from Zod is precisely what produced the owner's "unknown
- * parameter(s)" failure, and a field Zod knows but the schema never advertises
- * is a field no model will ever write.
+ * WHY the list stays although it is EMPTY today (decision 33): it is the
+ * mechanism that carries a field to BOTH halves of the schema — the advertised
+ * JSON Schema and Zod — without making it required, and `requiredFieldsFor`
+ * exists only because of it. A field advertised to the decoder but absent from
+ * Zod is precisely what produced the owner's "unknown parameter(s)" failure,
+ * and a field Zod knows but the schema never advertises is a field no model
+ * will ever write. Deleting the mechanism would mean rebuilding it for the
+ * next optional field.
  */
-const OPTIONAL_COMMON_STEP_FIELDS = ['summary'] as const;
+const OPTIONAL_COMMON_STEP_FIELDS: readonly string[] = [];
 /** The extra fields each kind owns — and the ONLY ones it accepts. */
 const KIND_FIELDS: Record<StepKind, readonly string[]> = {
   map: ['items'],
@@ -107,13 +117,14 @@ const KIND_DESCRIPTION: Record<StepKind, string> = {
 };
 
 function jsonStepBranch(kind: StepKind): Record<string, unknown> {
-  const properties: Record<string, unknown> = {
-    id: JSON_FIELD.id,
-    kind: { type: 'string', enum: [kind], description: KIND_DESCRIPTION[kind] },
-    specialist: JSON_FIELD.specialist,
-    task: JSON_FIELD.task,
-    budget_tokens: JSON_FIELD.budget_tokens,
-  };
+  // Built by walking the ONE table, in its order, so a field added to
+  // COMMON_STEP_FIELDS cannot reach Zod and miss the advertised schema.
+  const properties: Record<string, unknown> = {};
+  for (const field of COMMON_STEP_FIELDS) {
+    properties[field] = field === 'kind'
+      ? { type: 'string', enum: [kind], description: KIND_DESCRIPTION[kind] }
+      : JSON_FIELD[field as keyof typeof JSON_FIELD];
+  }
   for (const field of OPTIONAL_COMMON_STEP_FIELDS) properties[field] = JSON_FIELD[field as keyof typeof JSON_FIELD];
   for (const field of KIND_FIELDS[kind]) properties[field] = JSON_FIELD[field as keyof typeof JSON_FIELD];
   return {
@@ -153,7 +164,7 @@ const nonEmptyBounded = (maximum: number) => z.string().min(1).max(maximum).refi
 
 type PlanStep = {
   id: string; kind: StepKind; specialist: string; task: string; budget_tokens: number;
-  summary?: string;
+  summary: string;
   items?: string[]; of?: string; max_iterations?: number; until?: string; steps?: PlanStep[];
 };
 
@@ -202,8 +213,10 @@ function stepSchema(kinds: readonly StepKind[]): z.ZodType<PlanStep> {
     specialist: nonEmptyBounded(PLAN_MAX_ID_CHARS),
     task: nonEmptyBounded(PLAN_MAX_TASK_CHARS),
     budget_tokens: z.number().int().min(PLAN_MIN_BUDGET_TOKENS).max(PLAN_MAX_BUDGET_TOKENS),
-    // Optional on every kind, and the same bound the advertised schema states.
-    summary: nonEmptyBounded(PLAN_MAX_SUMMARY_CHARS).optional(),
+    // Decision 33: required on every kind, and the same bound the advertised
+    // schema states. A step without a plain sentence has nothing to show the
+    // person approving it.
+    summary: nonEmptyBounded(PLAN_MAX_SUMMARY_CHARS),
     items: z.array(nonEmptyBounded(PLAN_MAX_ITEM_CHARS)).min(1).max(PLAN_MAX_MAP_ITEMS).optional(),
     of: nonEmptyBounded(PLAN_MAX_ID_CHARS).optional(),
     max_iterations: z.number().int().min(1).max(PLAN_MAX_REPEAT_ITERATIONS).optional(),

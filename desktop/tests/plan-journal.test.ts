@@ -15,10 +15,10 @@ const REF: PlanRef = { cwd: '/some/project', sessionId: 'parent-1' };
 const DOC: PlanDocumentV1 = {
   goal: 'Review the auth module',
   steps: [
-    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}\nmore detail', budget_tokens: 1000, items: ['a.ts', 'b.ts'] },
-    { id: 's2', kind: 'combine', specialist: 'worker', task: 'Combine the reviews', budget_tokens: 2000, of: 's1' },
-    { id: 'loop', kind: 'repeat', specialist: 'worker', task: 'Iterate', budget_tokens: 500, max_iterations: 3, until: 'tests pass',
-      steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Fix it', budget_tokens: 700, items: ['x'] }] },
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}\nmore detail', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
+    { id: 's2', kind: 'combine', specialist: 'worker', task: 'Combine the reviews', budget_tokens: 2000, summary: 'Plain sentence.', of: 's1' },
+    { id: 'loop', kind: 'repeat', specialist: 'worker', task: 'Iterate', budget_tokens: 500, summary: 'Plain sentence.', max_iterations: 3, until: 'tests pass',
+      steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Fix it', budget_tokens: 700, summary: 'Plain sentence.', items: ['x'] }] },
   ],
 };
 
@@ -192,13 +192,21 @@ describe('mutation chokepoint', () => {
       planId: 'p1', toolUseId: 'tool-p1', title: 'Review the auth module', status: 'running',
       ceilingTokens: 6100, ceilingUsd: null, model: { label: 'Test model' }, usedTokens: 5, autoApproved: true, seq: 1,
     });
-    expect(view.steps.map((s) => [s.id, s.kind, s.fanOut, s.budgetTokens, s.title])).toEqual([
-      ['s1', 'map', 2, 1000, 'Review {item}'],
-      ['s2', 'combine', 1, 2000, 'Combine the reviews'],
-      ['fix', 'repeat', 3, 700, 'Fix it'],
+    // Decision 33: a repeat is ONE row that CONTAINS its body — the loop, its
+    // round cap and its stop condition now have somewhere to appear.
+    expect(view.steps.map((s) => [s.id, s.kind, s.fanOut, s.title])).toEqual([
+      ['s1', 'map', 2, 'Review {item}'],
+      ['s2', 'combine', 1, 'Combine the reviews'],
+      ['loop', 'repeat', 3, 'Iterate'],
     ]);
-    // Σ(fanOut × budget) is the ceiling the validator derived.
-    expect(view.steps.reduce((n, s) => n + s.fanOut * s.budgetTokens, 0)).toBe(6100);
+    expect(view.steps[2].rounds).toBe(3);
+    expect(view.steps[2].until).toBe('tests pass');
+    // The body rows are exactly the rows the flattened projection produced.
+    expect(view.steps[2].body!.map((s) => [s.id, s.kind, s.fanOut, s.budgetTokens, s.title])).toEqual([
+      ['fix', 'map', 3, 700, 'Fix it'],
+    ]);
+    // Σ(each row's worst case) is still the ceiling the validator derived.
+    expect(view.steps.reduce((n, s) => n + (s.ceilingTokens ?? s.fanOut * s.budgetTokens), 0)).toBe(6100);
   });
 
   // The card knew only "2 reviewers" and never on WHAT, although the document's
@@ -235,8 +243,12 @@ describe('mutation chokepoint', () => {
     expect(view.steps[2].of).toBeUndefined();
   });
 
+  // Decision 33 made `summary` required, but a journal written before that
+  // change still has to draw: its row falls back to the headline it always had.
   it('leaves a step with no sentence of its own showing exactly the headline it showed before', () => {
-    const view = projectPlan(record('p1'));
+    const older = structuredClone(DOC) as any;
+    delete older.steps[0].summary;
+    const view = projectPlan(record('p1', { document: older }));
     expect(view.steps[0].summary).toBeUndefined();
     expect(view.steps[0].title).toBe('Review {item}');
   });
@@ -296,24 +308,77 @@ describe('5b follow-up: pause facts and attempt phase reach the card', () => {
 });
 
 describe('repeat projection', () => {
-  it('labels every repeat-body row as repeat, and the rows still sum to the ceiling', () => {
-    const doc: PlanDocumentV1 = {
-      goal: 'Loop',
-      steps: [
-        { id: 'r', kind: 'repeat', specialist: 'worker', task: 'Loop', budget_tokens: 500, max_iterations: 5, until: 'done',
-          steps: [
-            { id: 'rev', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a', 'b', 'c'] },
-            { id: 'chk', kind: 'verify', specialist: 'reviewer', task: 'Check', budget_tokens: 800, of: 'rev' },
-          ] },
-      ],
-    };
-    const view = projectPlan(record('p1', { document: doc, ceilingTokens: 5 * (3 * 1000 + 800),
-      steps: ['r', 'rev', 'chk'].map((id) => ({ id, status: 'pending' as const, attempts: [] })) }));
-    expect(view.steps.map((s) => [s.id, s.kind, s.fanOut, s.budgetTokens])).toEqual([
-      ['rev', 'repeat', 15, 1000],
-      ['chk', 'repeat', 5, 800],
+  const LOOP: PlanDocumentV1 = {
+    goal: 'Loop',
+    steps: [
+      { id: 'r', kind: 'repeat', specialist: 'worker', task: 'Loop', budget_tokens: 500, summary: 'Keep going until the tests pass.', max_iterations: 5, until: 'done',
+        steps: [
+          { id: 'rev', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Three helpers each read one part.', items: ['a', 'b', 'c'] },
+          { id: 'chk', kind: 'verify', specialist: 'reviewer', task: 'Check', budget_tokens: 800, summary: 'One helper says whether it is right yet.', of: 'rev' },
+        ] },
+    ],
+  };
+  const loopRecord = () => record('p1', {
+    document: LOOP, ceilingTokens: 5 * (3 * 1000 + 800),
+    steps: ['r', 'rev', 'chk'].map((id) => ({ id, status: 'pending' as const, attempts: [] })),
+  });
+
+  it('draws a repeat as ONE row carrying its body, its rounds and its stop condition', () => {
+    const view = projectPlan(loopRecord());
+    expect(view.steps.map((s) => [s.id, s.kind, s.fanOut])).toEqual([['r', 'repeat', 20]]);
+    expect(view.steps[0].rounds).toBe(5);
+    expect(view.steps[0].until).toBe('done');
+    // The body keeps its own kinds — the card no longer needs a "repeat" label
+    // on every inner row, because the row above them says it once.
+    expect(view.steps[0].body!.map((s) => [s.id, s.kind, s.fanOut, s.budgetTokens])).toEqual([
+      ['rev', 'map', 15, 1000],
+      ['chk', 'verify', 5, 800],
     ]);
-    expect(view.steps.reduce((n, s) => n + s.fanOut * s.budgetTokens, 0)).toBe(view.ceilingTokens);
+  });
+
+  // THE PRICING PIN (task 21). The ceiling the user approves may not move by a
+  // single token because a repeat changed shape on the card. `oldRows` is the
+  // projection exactly as it was before decision 33 — one row per body step,
+  // fan-out times the round cap — and both totals the card reads off the rows
+  // (Σ fan-out for the specialist count, Σ worst case for the money) must match
+  // it document for document.
+  it('costs the same as the flattened projection it replaced, to the token', () => {
+    const rec = loopRecord();
+    // The setup cost the card adds per specialist (decision 4), as the rows
+    // have always carried it.
+    const setup = (id: string) => rec.manifest.specialists[id]?.setupTokens ?? 0;
+    const oldRows = LOOP.steps.flatMap((step) => (step.kind === 'repeat'
+      ? step.steps!.map((inner) => ({
+        fanOut: (inner.kind === 'map' ? inner.items!.length : 1) * step.max_iterations!,
+        perChild: inner.budget_tokens + setup(inner.specialist),
+      }))
+      : [{ fanOut: step.kind === 'map' ? step.items!.length : 1, perChild: step.budget_tokens + setup(step.specialist) }]));
+    const rows = projectPlan(rec).steps;
+    const newTotal = rows.reduce((n, s) => n + (s.ceilingTokens ?? (s.budgetTokens + (s.setupTokens ?? 0)) * s.fanOut), 0);
+
+    expect(rows.reduce((n, s) => n + s.fanOut, 0)).toBe(oldRows.reduce((n, s) => n + s.fanOut, 0));
+    expect(newTotal).toBe(oldRows.reduce((n, s) => n + s.fanOut * s.perChild, 0));
+    // Spelt out, so a change to either side has to face the arithmetic:
+    // 5 rounds × (3 reviewers × (1,000 + 300 setup) + 1 × (800 + 300)).
+    expect(newTotal).toBe(5 * (3 * 1_300 + 1_100));
+  });
+
+  it('carries the body\'s progress and spend onto the repeat\'s own row', () => {
+    const attempt = (spent: number) => ({
+      attemptId: `a${spent}`, itemIndex: 0, iteration: 0, childId: `c${spent}`, childTitle: 'c', startedAt: 1,
+      baseTokens: 1000, addedTokens: 0, reservedTokens: 0, spentTokens: spent,
+      phase: 'committed' as const, terminal: 'completed' as const, completedAt: 2,
+    });
+    const view = projectPlan(record('p1', {
+      document: LOOP, ceilingTokens: 5 * (3 * 1000 + 800), status: 'running',
+      steps: [
+        { id: 'r', status: 'running' as const, attempts: [] },
+        { id: 'rev', status: 'running' as const, attempts: [attempt(300), attempt(400)] },
+        { id: 'chk', status: 'pending' as const, attempts: [] },
+      ],
+    }));
+    expect(view.steps[0].done).toBe(2);
+    expect(view.steps[0].usedTokens).toBe(700);
   });
 });
 

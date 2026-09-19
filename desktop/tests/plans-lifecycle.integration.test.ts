@@ -189,8 +189,8 @@ async function propose(doc: unknown, toolUseId = 'call-plan'): Promise<string> {
 const REVIEW_DOC = {
   goal: 'Review two files, then sum up',
   steps: [
-    { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 2000, items: ['a.ts', 'b.ts'] },
-    { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 2000, of: 'review' },
+    { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 2000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
+    { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 2000, summary: 'Plain sentence.', of: 'review' },
   ],
 };
 const isCombine = (p: string) => p.includes('Combine the reviews');
@@ -320,8 +320,8 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     const doc = {
       goal: 'Two steps',
       steps: [
-        { id: 'first', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, items: ['a.ts'] },
-        { id: 'second', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 500, of: 'first' },
+        { id: 'first', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts'] },
+        { id: 'second', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 500, summary: 'Plain sentence.', of: 'first' },
       ],
     };
     const planId = await propose(doc);
@@ -464,7 +464,9 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     // Turn 1 proposes plan A, then (held) proposes plan B later in the SAME turn.
     let releaseB!: () => void;
     const bHeld = new Promise<void>((r) => { releaseB = r; });
-    const revisedDoc = { ...REVIEW_DOC, goal: 'Review only a.ts', steps: [{ ...REVIEW_DOC.steps[0], items: ['a.ts'] }] };
+    // Decision 33: a plan may not be one specialist doing one thing, so the
+    // revision narrows the split to one file but KEEPS the summing step.
+    const revisedDoc = { ...REVIEW_DOC, goal: 'Review only a.ts', steps: [{ ...REVIEW_DOC.steps[0], items: ['a.ts'] }, REVIEW_DOC.steps[1]] };
     parentSteps = [
       proposeStep('call-a', REVIEW_DOC),
       { after: bHeld, chunks: proposeStep('call-b', { ...REVIEW_DOC, goal: 'Something else' }) },
@@ -510,8 +512,8 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     const doc = {
       goal: 'Review four files',
       steps: [
-        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a.ts', 'b.ts', 'c.ts', 'd.ts'] },
-        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 1000, of: 'review' },
+        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts', 'c.ts', 'd.ts'] },
+        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 1000, summary: 'Plain sentence.', of: 'review' },
       ],
     };
     const planId = await propose(doc);
@@ -560,8 +562,8 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     const doc = {
       goal: 'Two reviews',
       steps: [
-        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, items: ['a.ts'] },
-        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 500, of: 'review' },
+        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts'] },
+        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 500, summary: 'Plain sentence.', of: 'review' },
       ],
     };
     const planId = await propose(doc);
@@ -592,7 +594,13 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
   });
 
   it('a plan specialist\'s permission ask is answered through the broker, and the approved action runs', async () => {
-    const doc = { goal: 'Tidy up', steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, items: ['notes'] }] };
+    // Decision 33: a plan may not be one specialist run, so a summing step
+    // follows the one this test is about. It launches after the removal and
+    // simply reports (childReply's catch-all).
+    const doc = { goal: 'Tidy up', steps: [
+      { id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, summary: 'Plain sentence.', items: ['notes'] },
+      { id: 'sum', kind: 'combine', specialist: 'worker', task: 'Say what was tidied', budget_tokens: 3000, summary: 'Plain sentence.', of: 'fix' },
+    ] };
     const planId = await propose(doc);
     // A specialist's approved envelope allows its ordinary tools; a removal is
     // on the always-ask list, so it reaches the user. The file lives in the
@@ -628,7 +636,11 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     // belongs to the plan (interrupt() skips it), so its request must survive
     // too — before the merge, Stop cancelled it and cut the specialist off.
     it('the conversation\'s Stop leaves a plan specialist\'s waiting ask open; answering it finishes the plan', async () => {
-      const doc = { goal: 'Tidy up', steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, items: ['notes'] }] };
+      // Decision 33: two specialist runs at worst, or the plan is refused.
+      const doc = { goal: 'Tidy up', steps: [
+        { id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, summary: 'Plain sentence.', items: ['notes'] },
+        { id: 'sum', kind: 'combine', specialist: 'worker', task: 'Say what was tidied', budget_tokens: 3000, summary: 'Plain sentence.', of: 'fix' },
+      ] };
       const planId = await propose(doc);
       const target = path.join(root, 'old-notes.txt');
       fs.writeFileSync(target, 'stale');
@@ -663,7 +675,12 @@ describe('specialists plans — whole lifecycles on the real host (Task 7)', () 
     // user-interrupt / session-error). A plan specialist cut off by the plan's
     // Stop spent real tokens too; the conversation's Cost figure must count them.
     it('a plan specialist stopped mid-turn still reports its completed steps\' spend to the conversation', async () => {
-      const doc = { goal: 'Read one file', steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 3000, items: ['a.ts'] }] };
+      // Decision 33: two specialist runs at worst. The plan is stopped inside
+      // step 1, so the summing step never launches and the counts below stand.
+      const doc = { goal: 'Read one file', steps: [
+        { id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 3000, summary: 'Plain sentence.', items: ['a.ts'] },
+        { id: 'sum', kind: 'combine', specialist: 'reviewer', task: 'Sum up', budget_tokens: 3000, summary: 'Plain sentence.', of: 'review' },
+      ] };
       const planId = await propose(doc);
       fs.writeFileSync(path.join(root, 'a.ts'), 'export const a = 1;\n');
       childReply = (_p, call) => (call === 1

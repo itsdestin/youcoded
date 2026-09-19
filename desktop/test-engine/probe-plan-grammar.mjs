@@ -53,12 +53,17 @@ let TRIALS;
 // Both changes NARROW the grammar, so every document the probe proved still
 // parses; the probe was NOT re-run. See plans/schema.ts and plan-schema.test.ts.
 //
-// 2026-09-18, a THIRD change (decision 30): an OPTIONAL `summary` on every
-// step — one plain sentence for the person approving the plan, because the
-// card's row was the first line of a prompt written for a machine. It is
-// advertised on all four branches and required by none, so it WIDENS the
-// grammar: every document the probe proved is still valid, unchanged, and no
-// model is obliged to write one. The probe was NOT re-run.
+// 2026-09-18, a THIRD change (decision 30, tightened by decision 33): a
+// `summary` on every step — one plain sentence for the person approving the
+// plan, because the card's row was the first line of a prompt written for a
+// machine. It is advertised on all four branches and REQUIRED on all four: the
+// owner asked for it ("i'm not sure what the benefit would be of making it
+// optional"), knowing plans written before it stop parsing ("all of the
+// existing plans are demos"). This is the one change that does NOT merely
+// narrow or widen around the probe's documents — the probe's own trial
+// documents would need a summary per step to pass today. The probe was NOT
+// re-run; it exercises whether a local model can fill a deep tree at all, and
+// one more short bounded string per node does not change that question.
 const FIELD = {
   id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
   specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
@@ -96,8 +101,8 @@ function stepBranch(kind) {
   return {
     type: 'object',
     additionalProperties: false,
-    // `summary` is advertised on every branch and required by none.
-    required: ['id', 'kind', 'specialist', 'task', 'budget_tokens', ...KIND_FIELDS[kind]],
+    // Decision 33: `summary` is advertised on every branch and required on all.
+    required: ['id', 'kind', 'specialist', 'task', 'budget_tokens', 'summary', ...KIND_FIELDS[kind]],
     properties,
   };
 }

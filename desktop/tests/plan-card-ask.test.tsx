@@ -341,7 +341,9 @@ describe('narrow widths (390 px): the card wraps instead of crushing its text', 
     expect(title).not.toContain('truncate');
     expect(title).toEqual(expect.arrayContaining(['break-words', 'min-w-0', 'flex-1']));
     expect(first.textContent).not.toContain('worker');
-    expect(second).toHaveTextContent('1 worker · combines the results');
+    // Decision 33: the second line is the COUNT and the ROLE, with no kind word.
+    expect(second).toHaveTextContent('1 worker');
+    expect(second).not.toHaveTextContent('combines the results');
     expect(second).toHaveTextContent('up to 4,000 tokens');
   });
 
@@ -364,9 +366,14 @@ describe('narrow widths (390 px): the card wraps instead of crushing its text', 
     viewport(false);
     show(paused());
     const row = within(screen.getByTestId('plan-step-s2')).getAllByRole('button')[0];
-    expect(row.className.split(/\s+/)).not.toContain('flex-col');
+    // Decision 33 gave the row a place for a repeat's second line, so the
+    // button is a column — but a step that has no second line still draws
+    // exactly ONE, and that line keeps its signed single-row arrangement.
+    expect(row.children).toHaveLength(1);
+    expect((row.children[0] as HTMLElement).className.split(/\s+/)).not.toContain('flex-col');
     expect(within(row).getByTestId('plan-step-title')).toHaveTextContent('Combine');
-    expect(row).toHaveTextContent('1 worker · combines the results');
+    expect(row).toHaveTextContent('1 worker');
+    expect(row).not.toHaveTextContent('combines the results');
   });
 });
 

@@ -36,7 +36,7 @@ const MANIFEST: ExecutionManifest = {
 };
 const DOC: PlanDocumentV1 = {
   goal: 'Review the auth module',
-  steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review the login flow', budget_tokens: 1000, items: ['a', 'b'] }],
+  steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review the login flow', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a', 'b'] }],
 };
 
 let root: string; let home: NativeHome; let journal: PlanJournal; let events: PlanEvent[]; let ids: number;
@@ -428,7 +428,7 @@ describe('a pause is never handed to the assistant by itself (§6)', () => {
       return { childId: `child-${input.attemptId}`, outcome: Promise.resolve(outcome), abort: () => {}, dispose: async () => {} };
     }
   }
-  const single: PlanDocumentV1 = { goal: 'One', steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a'] }] };
+  const single: PlanDocumentV1 = { goal: 'One', steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] }] };
 
   it('an assistant-routed pause settles with its default buttons and no handoff; the executor has no pause-time hook', async () => {
     const rec: PlanRecord = {

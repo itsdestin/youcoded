@@ -24,8 +24,8 @@ const WORKER_RATES = { in: 2, out: 4, cacheWrite: 20 };
 const DOC: PlanDocumentV1 = {
   goal: 'Review and combine',
   steps: [
-    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a.ts', 'b.ts'] },
-    { id: 's2', kind: 'combine', specialist: 'worker', task: 'Combine', budget_tokens: 2000, of: 's1' },
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
+    { id: 's2', kind: 'combine', specialist: 'worker', task: 'Combine', budget_tokens: 2000, summary: 'Plain sentence.', of: 's1' },
   ],
 };
 
@@ -116,8 +116,8 @@ describe('pricing snapshot and dollar limits', () => {
 
   it('repeat iterations are all priced', () => {
     const doc: PlanDocumentV1 = { goal: 'g', steps: [
-      { id: 'r', kind: 'repeat', specialist: 'worker', task: 'loop', budget_tokens: 500, max_iterations: 3, until: 'done',
-        steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'fix', budget_tokens: 700, items: ['x', 'y'] }] },
+      { id: 'r', kind: 'repeat', specialist: 'worker', task: 'loop', budget_tokens: 500, summary: 'Plain sentence.', max_iterations: 3, until: 'done',
+        steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'fix', budget_tokens: 700, summary: 'Plain sentence.', items: ['x', 'y'] }] },
     ] };
     expect(planCeilingUsd(doc, PRICED)).toBeCloseTo(700 * 2 * 3 * 20 / 1e6, 12);
   });
@@ -545,8 +545,8 @@ describe('setup cost counted separately (decision 4)', () => {
     expect(planCeilingTokens(DOC, M)).toBe(2 * (1000 + 100) + (2000 + 200));
     expect(planCeilingUsd(DOC, M)).toBeCloseTo((2 * 1100 * 10 + 2200 * 20) / 1e6, 12);
     const doc: PlanDocumentV1 = { goal: 'g', steps: [
-      { id: 'r', kind: 'repeat', specialist: 'worker', task: 'loop', budget_tokens: 500, max_iterations: 3, until: 'done',
-        steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'fix', budget_tokens: 700, items: ['x', 'y'] }] },
+      { id: 'r', kind: 'repeat', specialist: 'worker', task: 'loop', budget_tokens: 500, summary: 'Plain sentence.', max_iterations: 3, until: 'done',
+        steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'fix', budget_tokens: 700, summary: 'Plain sentence.', items: ['x', 'y'] }] },
     ] };
     expect(planCeilingTokens(doc, M)).toBe(2 * 3 * (700 + 200));
   });

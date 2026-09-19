@@ -233,14 +233,17 @@ function childView(plan: PlanRecord, step: PlanStepV1, stepStatus: string, a: Pl
  * The renderer's view of one journal record. The ONLY place a PlanView is
  * built from durable state — the renderer never invents lifecycle states.
  *
- * WHY repeat bodies are flattened into rows: the card prices each row as
- * `budgetTokens × fanOut`, and a repeat body with several differently-budgeted
- * steps has no single honest pair of numbers. Each body step becomes its own
- * row with its fan-out multiplied by max_iterations, so the rows still add up
- * to exactly the approved ceiling. Every such row is labelled `repeat`
- * ("repeats until done"), never with the inner step's own kind: a 3-item map
- * inside a 5-iteration repeat is 15 specialists over time, and "at the same
- * time" would misdescribe what will happen.
+ * WHY a repeat is ONE row carrying its body (decision 33, 2026-09-18): the
+ * projection used to flatten a repeat into one row per body step, each labelled
+ * `repeat`, which left the loop itself, the round count and the stop condition
+ * with nowhere to appear — the card showed two independent-looking steps and
+ * never said they repeated, how many times, or when they would stop. The body
+ * rows are still built exactly as before, so the pricing is unchanged: the
+ * wrapper carries `ceilingTokens` (Σ of its body's worst cases, rounds
+ * included) and a `fanOut` that is the same total number of specialist runs the
+ * flattened rows summed to. `plan-journal.test.ts` pins both totals against the
+ * old projection on the same document — the ceiling the user approves may not
+ * move by a single token.
  */
 /**
  * Task 12 follow-up 1: the Add budget minimum that applies at `now` — the warm
@@ -255,8 +258,7 @@ export function pausedMinimum(paused: NonNullable<PlanRecord['paused']>, now: nu
 /** `now` (Task 12 follow-up 1) only decides how long a warm minimum still
  *  holds; every caller that has a clock passes it. */
 export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanView {
-  const rows: PlanStepView[] = [];
-  const row = (step: PlanStepV1, kind: PlanStepView['kind'], multiplier: number): void => {
+  const row = (step: PlanStepV1, kind: PlanStepView['kind'], multiplier: number): PlanStepView => {
     const rec = plan.steps.find((s) => s.id === step.id);
     const attempts = rec?.attempts ?? [];
     const out: PlanStepView = {
@@ -305,14 +307,37 @@ export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanVie
       const children = attempts.filter((a) => a.childId && latestPerChild.get(a.childId) === a).map((a) => childView(plan, step, rec!.status, a));
       if (children.length > 0) out.children = children;
     }
-    rows.push(out);
+    return out;
   };
+  /** What one row may spend at worst: its per-child allowance (work + setup)
+   *  times the number of children it may ever launch. */
+  const worstCase = (view: PlanStepView): number => (view.budgetTokens + (view.setupTokens ?? 0)) * view.fanOut;
+  const rows: PlanStepView[] = [];
   for (const step of plan.document.steps) {
     if (step.kind !== 'repeat') {
-      row(step, step.kind, 1);
+      rows.push(row(step, step.kind, 1));
       continue;
     }
-    for (const inner of step.steps!) row(inner, 'repeat', step.max_iterations!);
+    // The body rows are built EXACTLY as the flattened projection built them —
+    // fan-out multiplied by the round cap, no item labels (their count would
+    // not match a fan-out that counts rounds too) — so every figure on them is
+    // the figure that shipped. Only their home changed: they now hang off the
+    // repeat's own row instead of standing beside it.
+    const body = step.steps!.map((inner) => row(inner, inner.kind, step.max_iterations!));
+    const wrapper = row(step, 'repeat', 1);
+    wrapper.body = body;
+    wrapper.rounds = step.max_iterations!;
+    if (step.until) wrapper.until = step.until;
+    // The two totals the card reads off the rows, preserved exactly: the
+    // specialist count (Σ fan-out) and the worst-case spend (Σ per-row).
+    wrapper.fanOut = body.reduce((n, b) => n + b.fanOut, 0);
+    wrapper.ceilingTokens = body.reduce((n, b) => n + worstCase(b), 0);
+    // A repeat launches no specialist of its own, so its progress and spend are
+    // its body's. Without this the row would read "0 of 9 done · 0 tokens"
+    // while its own body rows showed real work.
+    if (body.some((b) => b.done !== undefined)) wrapper.done = body.reduce((n, b) => n + (b.done ?? 0), 0);
+    if (body.some((b) => b.usedTokens !== undefined)) wrapper.usedTokens = body.reduce((n, b) => n + (b.usedTokens ?? 0), 0);
+    rows.push(wrapper);
   }
 
   const view: PlanView = {

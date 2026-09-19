@@ -1,6 +1,6 @@
 import { useCallback, useRef, useEffect, useState, useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
-import { planChildCard, planWithActivity } from '../components/plans/plan-activity';
+import { planChildCard, planLeafSteps, planWithActivity } from '../components/plans/plan-activity';
 import { isPlanCard } from '../utils/specialist-cards';
 import { planStatusPhrase } from '../components/plans/plan-status';
 import type { SpecialistRunView, ToolCallState, SpecialistDefinitionView, DelegatedModelsView, SubagentSegment, SpecialistsListResult } from '../../shared/types';
@@ -223,7 +223,9 @@ export function useSpecialistSummary(sessionId: string | undefined): SpecialistS
         // Only a plan that is under way can have specialists at work.
         const live = record.status === 'running' || record.status === 'paused';
         const rows: HelperView[] = [];
-        for (const kid of record.steps.flatMap((st) => st.children ?? [])) {
+        // Decision 33: a repeat's specialists hang off its body rows, one
+        // level down, so the popup descends to reach them.
+        for (const kid of planLeafSteps(record.steps).flatMap((st) => st.children ?? [])) {
           const kidTools: AskSegment[] = [];
           for (const seg of kid.segments ?? []) if (seg.type === 'tool') kidTools.push(seg);
           const asks = kidTools.filter(t => t.status === 'awaiting-approval' && !!t.requestId);

@@ -32,13 +32,15 @@ import { finishChunk, stream, textChunks, toolCallChunk, toolInputChunks } from 
 
 const VALID: PlanDocumentV1 = {
   goal: 'Review the source files.',
-  steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, items: ['a.ts'] }],
+  // TWO items: decision 33 refuses a plan whose whole worst case is one
+  // specialist run, and this document has to be a VALID one.
+  steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] }],
 };
 const BAD: PlanDocumentV1 = { ...VALID, steps: [{ ...VALID.steps[0], specialist: 'missing' }] };
 
 const proposed = (toolUseId: string): PlanView => ({
   planId: 'plan-1', toolUseId, title: VALID.goal, status: 'proposed', steps: [],
-  ceilingTokens: 500, ceilingUsd: null, model: { label: 'model' }, seq: 1,
+  ceilingTokens: 1_000, ceilingUsd: null, model: { label: 'model' }, seq: 1,
 });
 
 const STALL_MS = 150;

@@ -12,7 +12,7 @@ import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
 // Typed as the tool's own input so `kind` stays the literal union (tsconfig.tests).
 const VALID: PlanDocumentV1 = {
   goal: 'Review the source files.',
-  steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, items: ['a.ts', 'b.ts'] }],
+  steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] }],
 };
 
 const proposed = (toolUseId: string): PlanView => ({
@@ -44,6 +44,31 @@ function scriptedSession(scripts: any[][], over: Record<string, unknown> = {}) {
 }
 
 describe('propose_plan tool', () => {
+  // Decision 33: the validator refuses a plan whose whole worst case is one
+  // specialist run, so the tool's own guidance has to say so — otherwise the
+  // model reaches for a plan it cannot have and spends its one repair on a
+  // shape no repair can fix. Same for the required per-step sentence.
+  it('tells the model both rules its plan will be judged by', () => {
+    const description = createProposePlanTool(BUILTIN_ROSTER).description ?? '';
+    expect(description).toContain('`summary`');
+    expect(description).toContain('hire a specialist directly instead of proposing a plan');
+  });
+
+  it('refuses a plan that is one specialist doing one thing, and says what to do instead', async () => {
+    const propose = vi.fn();
+    const oneRun: PlanDocumentV1 = {
+      goal: 'Rename one function.',
+      steps: [{ id: 's1', kind: 'map', specialist: 'worker', task: 'Rename {item}.', budget_tokens: 500, summary: 'One helper renames it.', items: ['the function'] }],
+    };
+    const result = await createProposePlanTool(BUILTIN_ROSTER).execute(oneRun, {
+      sessionId: 's-1', cwd: FAKE_SESSION_CWD, signal: new AbortController().signal,
+      toolCallId: 'call-1', readRegistry: new Map(), todos: [], services: { plans: { propose } },
+    } as any);
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain('hire a specialist directly instead of proposing a plan');
+    expect(propose).not.toHaveBeenCalled();
+  });
+
   it('validates semantically and persists only through the injected callback', async () => {
     const propose = vi.fn(async ({ toolUseId, commit }: { toolUseId: string; commit(): boolean }) => {
       if (!commit()) throw new Error('commit refused');

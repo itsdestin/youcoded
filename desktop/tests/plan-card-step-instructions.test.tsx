@@ -143,21 +143,30 @@ function drawnBefore(step: HTMLElement, first: string, second: string): boolean 
   return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 }
 
-describe('a fan-out step says what each of its specialists gets', () => {
-  it('names the items on the collapsed row instead of only counting the specialists', () => {
-    show(proposed({ items: SURFACES }));
-    // "7 reviewers" alone never said on WHAT; the labels are already in the plan.
+// ---- decision 33: ONE row anatomy, the same on every kind --------------------
+//
+// marker · number · the plain sentence · who does it · chevron. "Who" is a
+// COUNT and a ROLE and nothing else: the kind words ("at the same time",
+// "checks each result", "combines the results") are gone, because with a
+// required plain sentence on the row they restated the sentence, and the item
+// preview is gone with them — the items are a labelled section of the opened
+// step, at full width, where they can actually be read.
+describe('every collapsed row says who does it — a count and a role, nothing else', () => {
+  it('says only the count and the role for a fan-out step', () => {
+    show(proposed({ items: SURFACES, summary: 'Seven reviewers each look at one screen.' }));
     expect(row()).toHaveTextContent('7 reviewers');
-    expect(row()).toHaveTextContent('one each:');
-    expect(row()).toHaveTextContent('Chat');
-    expect(row()).toHaveTextContent('Files');
+    expect(row()).not.toHaveTextContent('one each');
+    expect(row()).not.toHaveTextContent('Chat');
+    expect(row()).not.toHaveTextContent('at the same time');
   });
 
-  it('shortens a long list on the row, and still ends it honestly', () => {
-    show(proposed({ items: SURFACES }));
-    // Not all seven fit one line, so the row says there are more.
-    expect(row().textContent).toContain('…');
-    expect(row()).not.toHaveTextContent('Games');
+  it.each([
+    ['verify', 'checks each result'],
+    ['combine', 'combines the results'],
+  ] as const)('drops the %s kind word from the row', (kind, word) => {
+    show(proposed({ kind, fanOut: 1, specialist: 'worker', of: undefined }));
+    expect(row()).toHaveTextContent('1 worker');
+    expect(row()).not.toHaveTextContent(word);
   });
 
   it('says nothing about the items until the step is opened', () => {
@@ -167,16 +176,37 @@ describe('a fan-out step says what each of its specialists gets', () => {
     expect(screen.getByTestId('plan-step-items')).toBeInTheDocument();
   });
 
-  // What the opened step then shows — a row per specialist rather than a block
-  // of lines, and what a long item does there — is pinned by "a fan-out step
-  // breaks out into one row per specialist" below (decision 31).
-
-  it('leaves a repeating step exactly as it reads today, with no item list', () => {
-    show(proposed({ kind: 'repeat', fanOut: 3 }));
-    expect(row()).toHaveTextContent('repeats until done');
-    expect(row()).not.toHaveTextContent('one each');
+  // Decision 33 item 2: a one-item split is how the assistant puts a single
+  // worker in a plan, and one item is not a list.
+  it('draws no item list for a one-item split, but still says what that one gets', () => {
+    show(proposed({ items: ['The sign-in screen'], fanOut: 1, specialist: 'worker' }));
+    expect(row()).toHaveTextContent('1 worker');
     openStep();
+    // No numbered rows — one thing is not a list…
     expect(screen.queryByTestId('plan-step-items')).not.toBeInTheDocument();
+    // …but the one item is still readable, or the brief's {item} slot would
+    // point at nothing on the card.
+    expect(screen.getByTestId('plan-step-item-only')).toHaveTextContent('The sign-in screen');
+    expect(screen.getByText('What it gets')).toBeInTheDocument();
+  });
+
+  // Decision 33 item 3: a repeat's count is a CEILING and its stop condition is
+  // on the collapsed row — the one fact that decides whether the rounds are
+  // worth approving.
+  it('gives a repeat a round ceiling and its stop condition, on the collapsed row', () => {
+    show(proposed({ kind: 'repeat', fanOut: 6, rounds: 3, until: 'every test passes twice in a row' }));
+    expect(row()).toHaveTextContent('up to 3 rounds');
+    expect(row()).not.toHaveTextContent('repeats until done');
+    expect(screen.getByTestId('plan-step-stops')).toHaveTextContent('Stops when: every test passes twice in a row');
+    // One line, whole, whatever the window: the rest is one click away.
+    expect(screen.getByTestId('plan-step-stops').className.split(/\s+/)).toContain('truncate');
+  });
+
+  it('shows the whole stop condition when the repeat is opened', () => {
+    const until = 'every test passes twice in a row, and the reviewer says the change is safe';
+    show(proposed({ kind: 'repeat', fanOut: 6, rounds: 3, until }));
+    openStep();
+    expect(screen.getByTestId('plan-step-until')).toHaveTextContent(until);
   });
 });
 
@@ -270,7 +300,6 @@ const openAndRead = (id: string): HTMLElement => {
   fireEvent.click(within(step).getByTestId('plan-step-title').closest('button')!);
   return step;
 };
-const flowOf = (id: string): string => within(openAndRead(id)).getByTestId('plan-step-flow').textContent ?? '';
 
 describe('a fan-out step breaks out into one row per specialist', () => {
   it('gives every item its own numbered row rather than a block of lines', () => {
@@ -323,78 +352,120 @@ describe('a fan-out step breaks out into one row per specialist', () => {
   });
 });
 
-describe('a plan step says what it is given, what it produces and where that goes', () => {
+// ---- decision 33: a flow label ONLY where the source is not the row above ----
+//
+// This reverses part of decision 31. Every link names exactly one earlier step,
+// so a plan is always a tree, and in the ordinary chain each step simply
+// consumes the one above it — saying so on every row was noise. The forward
+// clause ("produces 3 reports → step 2 combines them") went with it: now that
+// every row carries a required plain sentence, it restated that sentence and
+// doubled the row's text.
+describe('a step says where its input comes from only when that is not obvious', () => {
   const chain = () => planOf([
     aStep({ id: 's1', kind: 'map', fanOut: 7, items: SURFACES }),
     aStep({ id: 's2', kind: 'combine', of: 's1', specialist: 'worker' }),
     aStep({ id: 's3', kind: 'verify', of: 's2' }),
   ]);
+  /** The collapsed row's right-hand words for step `id`. */
+  const detailOf = (id: string): string =>
+    within(screen.getByTestId(`plan-step-${id}`)).getByTestId('plan-step-detail').textContent ?? '';
 
-  it('tells a fan-out step\'s reader that each specialist takes one of the rows below', () => {
+  it('says nothing at all in a plain chain, where each step feeds the next', () => {
     show(chain());
-    expect(flowOf('s1')).toContain('Each reviewer gets one of the 7 below');
+    for (const id of ['s1', 's2', 's3']) expect(detailOf(id)).not.toContain('from step');
   });
 
-  it('says how many reports a fan-out step produces, one per specialist', () => {
+  it('never says what a step produces, or which step takes it on', () => {
     show(chain());
-    expect(flowOf('s1')).toContain('produces 7 reports');
+    for (const id of ['s1', 's2', 's3']) {
+      expect(detailOf(id)).not.toContain('produces');
+      expect(detailOf(id)).not.toContain('→');
+    }
   });
 
-  it('says a combining step produces a single report', () => {
-    show(chain());
-    expect(flowOf('s2')).toContain('produces one report');
+  it('names the source when it is NOT the row directly above', () => {
+    // A fork: steps 3 and 4 both take step 1's results, so both say so; step 2
+    // takes step 1's too, but step 1 is the row directly above it.
+    show(planOf([
+      aStep({ id: 's1', kind: 'map', fanOut: 3, items: ['a', 'b', 'c'] }),
+      aStep({ id: 's2', kind: 'verify', of: 's1' }),
+      aStep({ id: 's3', kind: 'combine', of: 's1', specialist: 'worker' }),
+      aStep({ id: 's4', kind: 'verify', of: 's1' }),
+    ]));
+    expect(detailOf('s2')).not.toContain('from step');
+    expect(detailOf('s3')).toContain('← from step 1');
+    expect(detailOf('s4')).toContain('← from step 1');
   });
 
-  it('names the step whose results it consumes by the number on the card', () => {
-    show(chain());
-    expect(flowOf('s2')).toContain('Gets the 7 reports from step 1');
-    expect(flowOf('s3')).toContain('Gets the report from step 2');
-  });
-
-  it('names the step that takes a step\'s results on', () => {
-    show(chain());
-    expect(flowOf('s1')).toContain('step 2 combines them');
-    expect(flowOf('s2')).toContain('step 3 checks it');
-  });
-
-  it('names every step when more than one consumes the same results', () => {
+  it('keeps the count and role beside the label', () => {
     show(planOf([
       aStep({ id: 's1', kind: 'map', fanOut: 3, items: ['a', 'b', 'c'] }),
       aStep({ id: 's2', kind: 'verify', of: 's1' }),
       aStep({ id: 's3', kind: 'combine', of: 's1', specialist: 'worker' }),
     ]));
-    expect(flowOf('s1')).toContain('steps 2 and 3 use them');
-  });
-
-  it('says nothing about a flow for a step nothing feeds and nothing consumes', () => {
-    show(planOf([aStep({ id: 'only', kind: 'combine', specialist: 'worker' })]));
-    const flow = flowOf('only');
-    expect(flow).toContain('produces one report');
-    expect(flow).not.toContain('Gets');
-    expect(flow).not.toContain('→');
+    expect(detailOf('s3')).toContain('1 worker');
   });
 
   it('says nothing rather than a wrong number when the reference names no step on the card', () => {
     show(planOf([
       aStep({ id: 's1', kind: 'map', fanOut: 2, items: ['a', 'b'] }),
       aStep({ id: 's2', kind: 'combine', of: 'a-step-that-is-not-here', specialist: 'worker' }),
+      aStep({ id: 's3', kind: 'verify', of: 's1' }),
     ]));
-    expect(flowOf('s2')).not.toContain('from step');
-    expect(flowOf('s1')).not.toContain('→');
+    expect(detailOf('s2')).not.toContain('from step');
   });
 
   it('says nothing rather than a wrong number when the reference points forwards', () => {
     // A document the validator would have refused, replayed from disk.
     show(planOf([
-      aStep({ id: 's1', kind: 'combine', of: 's2', specialist: 'worker' }),
+      aStep({ id: 's1', kind: 'combine', of: 's3', specialist: 'worker' }),
       aStep({ id: 's2', kind: 'map', fanOut: 2, items: ['a', 'b'] }),
+      aStep({ id: 's3', kind: 'map', fanOut: 2, items: ['c', 'd'] }),
     ]));
-    expect(flowOf('s1')).not.toContain('from step');
+    expect(detailOf('s1')).not.toContain('from step');
+  });
+});
+
+// ---- decision 33: a repeat is ONE row that CONTAINS its body ----------------
+describe('a repeat draws as one row holding its body, not several loose rows', () => {
+  const body = () => [
+    aStep({ id: 'draft', kind: 'map', fanOut: 3, items: ['a', 'b', 'c'], specialist: 'worker', budgetTokens: 1000 }),
+    aStep({ id: 'check', kind: 'verify', of: 'draft', fanOut: 1, budgetTokens: 800 }),
+  ];
+  const looping = () => planOf([
+    aStep({
+      id: 'loop', kind: 'repeat', specialist: 'worker', fanOut: 4, rounds: 2,
+      until: 'the tests pass', ceilingTokens: 2 * (3 * 1000 + 800), body: body(),
+    }),
+    aStep({ id: 'after', kind: 'combine', of: 'loop', specialist: 'worker' }),
+  ]);
+
+  it('shows one top-level row for the repeat, with the body folded inside it', () => {
+    show(looping());
+    expect(screen.getAllByTestId(/^plan-step-(loop|after|draft|check)$/).map((el) => el.dataset.testid))
+      .toEqual(['plan-step-loop', 'plan-step-after']);
+    const loop = openAndRead('loop');
+    expect(within(loop).getByTestId('plan-step-body')).toBeInTheDocument();
+    // A body row's count is its worst case over ALL the rounds, so the heading
+    // above them must not promise per-round figures.
+    expect(within(loop).getByText('What repeats, up to 2 times')).toBeInTheDocument();
+    expect(within(loop).getByTestId('plan-step-draft')).toBeInTheDocument();
+    expect(within(loop).getByTestId('plan-step-check')).toBeInTheDocument();
   });
 
-  it('counts a repeating step\'s reports as a worst case, because it stops when it is done', () => {
-    show(planOf([aStep({ id: 'loop', kind: 'repeat', fanOut: 15, specialist: 'worker' })]));
-    expect(flowOf('loop')).toContain('produces up to 15 reports');
+  it('numbers the body rows under the repeat that owns them', () => {
+    show(looping());
+    const loop = openAndRead('loop');
+    expect(within(within(loop).getByTestId('plan-step-draft')).getByText('1.1.')).toBeInTheDocument();
+    expect(within(within(loop).getByTestId('plan-step-check')).getByText('1.2.')).toBeInTheDocument();
+  });
+
+  it('prices the whole loop on its own row, never a per-specialist limit it has none of', () => {
+    show({ ...looping(), status: 'running' });
+    const loop = openAndRead('loop');
+    const limits = within(loop).getAllByTestId('plan-step-limits')[0];
+    expect(limits).toHaveTextContent('Up to 7,600 tokens for this step, over all its rounds.');
+    expect(limits).not.toHaveTextContent('stops at its');
   });
 });
 
@@ -431,10 +502,13 @@ describe('an opened step says whose brief it is showing', () => {
     expect(within(step).getByTestId('plan-step-brief')).toHaveTextContent('The same brief for all 7');
   });
 
-  it('draws the shared brief above the rows it is shared between', () => {
-    // It is what the seven have in common; the rows are the part that varies.
+  // Decision 33 fixes ONE order for every opened step: the parts each
+  // specialist gets, then the brief they share, then the stop condition, then
+  // the limits. (Task 20 had put the brief above the rows; this order is the
+  // one the owner's brief for decision 33 names.)
+  it('draws the parts first and the shared brief under them', () => {
     show(heavy());
-    expect(drawnBefore(openAndRead('s1'), 'plan-step-brief', 'plan-step-items')).toBe(true);
+    expect(drawnBefore(openAndRead('s1'), 'plan-step-items', 'plan-step-brief')).toBe(true);
   });
 
   it('shows a slice of a long brief rather than all thirty lines', () => {
@@ -473,7 +547,8 @@ describe('the placeholder in a brief is marked as the slot it is', () => {
   it('says once, plainly, what gets put there', () => {
     show(heavy());
     expect(within(openAndRead('s1')).getByTestId('plan-step-slot-note'))
-      .toHaveTextContent('own line from the list below');
+      // "above": the items are drawn first and the shared brief under them.
+      .toHaveTextContent('own line from the list above');
   });
 
   it('says nothing about a slot in a brief that has none', () => {
@@ -533,39 +608,37 @@ describe('a row offers a chevron only when it is really hiding something', () =>
   });
 });
 
-describe('the collapsed row keeps the count and drops a preview no one can read', () => {
-  it('stands the item preview down when not one label fits the row whole', () => {
+describe('the collapsed row carries no item preview at all', () => {
+  // Task 20 shortened the preview so a label was printed whole or not at all.
+  // Decision 33 removes the slot: "who" is a count and a role, and the labels
+  // live in the opened step's own labelled section, at full width.
+  it('keeps the count and drops every label, however short the labels are', () => {
     show(heavy());
     expect(row()).toHaveTextContent('7 reviewers');
     expect(row()).not.toHaveTextContent('HeaderBar');
-    expect(row()).toHaveTextContent('one piece each');
-  });
+    expect(row()).not.toHaveTextContent('one piece each');
 
-  it('still previews the labels that do fit, and never half of one', () => {
+    cleanup();
     show(proposed({ items: SURFACES }));
-    const text = row().textContent ?? '';
-    expect(text).toContain('Chat, Files');
-    // Every label printed is a whole label: the only ellipsis is the list's.
-    for (const shown of text.replace(/^.*one each: /, '').split(', ')) {
-      expect(shown === '…' || SURFACES.includes(shown)).toBe(true);
-    }
+    expect(row()).toHaveTextContent('7 reviewers');
+    expect(row()?.textContent).not.toContain('Chat, Files');
   });
 });
 
-describe('the limit sentence has a home instead of floating', () => {
-  it('sits after the rows, on its own side of a hairline', () => {
+describe('every part of an opened step is labelled, and the limits come last', () => {
+  it('labels the parts and the limits, and puts the limits after everything else', () => {
     show(heavy());
     const step = openAndRead('s1');
-    const limits = within(step).getByTestId('plan-step-limits');
-    expect(limits).toHaveTextContent('stops at its');
-    expect(limits.className.split(/\s+/)).toContain('border-t');
+    expect(within(step).getByText('What each one gets')).toBeInTheDocument();
+    expect(within(step).getByText('Limits')).toBeInTheDocument();
+    expect(within(step).getByTestId('plan-step-limits')).toHaveTextContent('stops at its');
     expect(drawnBefore(step, 'plan-step-items', 'plan-step-limits')).toBe(true);
+    expect(drawnBefore(step, 'plan-step-brief', 'plan-step-limits')).toBe(true);
   });
 
-  it('is no longer the paragraph directly under the brief', () => {
+  it('is no longer a bare paragraph inside the brief', () => {
     show(heavy());
     const step = openAndRead('s1');
-    expect(drawnBefore(step, 'plan-step-brief', 'plan-step-limits')).toBe(true);
     expect(within(step).getByTestId('plan-step-brief'))
       .not.toContainElement(within(step).getByTestId('plan-step-limits'));
   });
@@ -589,10 +662,26 @@ describe('narrow widths (390 px): the breakdown stays readable', () => {
     expect(within(openAndRead('s1')).getAllByTestId('plan-step-item')).toHaveLength(SURFACES.length);
   });
 
-  it('lets the flow line wrap rather than run off the card', () => {
-    show(proposed({ items: SURFACES }));
-    const flow = within(openAndRead('s1')).getByTestId('plan-step-flow');
-    expect(flow.className.split(/\s+/)).toContain('break-words');
-    expect(flow.className.split(/\s+/)).not.toContain('truncate');
+  // Decision 33 put a flow label in FRONT of the count ("← from step 1 · 1
+  // researcher"), and at 390 px that cut the role word off the end — the same
+  // unreadable half-line the item preview was removed for. Only a row with more
+  // to say than fits gets a second line.
+  it('wraps a row\'s count and role rather than cutting the role in half', () => {
+    show(planOf([
+      aStep({ id: 's1', kind: 'map', fanOut: 3, items: ['a', 'b', 'c'] }),
+      aStep({ id: 's2', kind: 'verify', of: 's1' }),
+      aStep({ id: 's3', kind: 'combine', of: 's1', specialist: 'researcher' }),
+    ]));
+    const detail = within(screen.getByTestId('plan-step-s3')).getByTestId('plan-step-detail');
+    expect(detail).toHaveTextContent('← from step 1 · 1 researcher');
+    expect(detail.className.split(/\s+/)).not.toContain('truncate');
+    expect(detail.className.split(/\s+/)).toContain('break-words');
+  });
+
+  it('lets the stop condition wrap inside the opened step rather than run off the card', () => {
+    show(proposed({ kind: 'repeat', fanOut: 6, rounds: 3, until: 'every test passes twice in a row' }));
+    const until = within(openAndRead('s1')).getByTestId('plan-step-until');
+    expect(until.className.split(/\s+/)).toContain('break-words');
+    expect(until.className.split(/\s+/)).not.toContain('truncate');
   });
 });

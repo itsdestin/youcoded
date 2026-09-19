@@ -21,7 +21,7 @@ const SID = 'root';
 // Task 13: the provider registry's own sentence, verbatim — never reworded here.
 const SIGN_IN = 'Sign in with ChatGPT in Settings → Model Providers to use this model.';
 const DOC: PlanDocumentV1 = { goal: 'g', steps: [
-  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a'] },
+  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] },
 ] };
 
 let root: string; let home: NativeHome; let routeType: PlanRoute['providerType']; let mode: string;
@@ -130,8 +130,8 @@ describe('the frozen manifest', () => {
     // Review finding 9: throwing inside the loop named only the first one, so
     // the person fixed it, asked again and was refused for the second.
     const two: PlanDocumentV1 = { goal: 'g', steps: [
-      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a'] },
-      { id: 's2', kind: 'map', specialist: 'worker', task: 'Fix {item}', budget_tokens: 1000, items: ['a'] },
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] },
+      { id: 's2', kind: 'map', specialist: 'worker', task: 'Fix {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] },
     ] };
     const p = port();
     p.probeSession = async () => { throw new Error('the probe must not run for a specialist that cannot run'); };
@@ -204,7 +204,7 @@ describe('the minimum Add budget', () => {
     nextBound = 0;
     childEvents = [ev('user-message', { text: 'brief' })];
     const plan = soft({ usedTokens: 6600, ceilingTokens: 4000 });
-    plan.document = { goal: 'g', steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a', 'b'] }] };
+    plan.document = { goal: 'g', steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a', 'b'] }] };
     plan.steps[0].attempts.push({
       attemptId: 'b1', itemIndex: 1, iteration: 0, childId: 'kid-b', baseTokens: 2000, addedTokens: 0, reservedTokens: 0, spentTokens: 4000, phase: 'response-persisted', softLimit: true,
     });

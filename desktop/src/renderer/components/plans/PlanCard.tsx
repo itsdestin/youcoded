@@ -205,8 +205,13 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // sensible size for one more pass), shown with a thousands comma.
   // Task 5b: when the host says a smaller amount would only pause again
   // (`minimumAddTokens`), the field starts AT that minimum instead.
-  const pausedIndex = plan.steps.findIndex((st) => st.id === plan.paused?.stepId);
-  const pausedStep = pausedIndex >= 0 ? plan.steps[pausedIndex] : undefined;
+  // Decision 33: a repeat is one row that contains its body, so a pause inside
+  // the body belongs to the repeat's row — that is the number the reader sees —
+  // while the amount to top up comes from the body step that actually ran out.
+  const pausedAt = findPausedRow(plan.steps, plan.paused?.stepId);
+  const pausedIndex = pausedAt ? pausedAt.index : -1;
+  const pausedStep = pausedAt?.step;
+  const numbers = useMemo(() => rowNumbers(plan.steps), [plan.steps]);
   const minimum = useMinimumNow(plan.paused);
   const defaultExtra = String(minimum ?? pausedStep?.budgetTokens ?? 10000);
   const [extra, setExtra] = useState(defaultExtra);
@@ -395,7 +400,8 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     <div className={`px-3 pb-2.5 pt-1.5 space-y-2 ${revised || handoffPending ? 'opacity-60' : ''}`} data-testid="plan-block" data-plan-status={plan.status} {...(handoff ? { 'data-handoff': handoff.state } : {})}>
       <ol className="space-y-1" data-testid="plan-steps">
             {plan.steps.map((step, i) => (
-              <StepRow key={step.id} step={step} index={i} plan={plan} sessionId={sessionId} />
+              <StepRow key={step.id} step={step} index={i} siblings={plan.steps} number={String(i + 1)}
+                numbers={numbers} plan={plan} sessionId={sessionId} />
             ))}
           </ol>
 
@@ -778,120 +784,65 @@ const STEP_GLYPH: Record<PlanStepView['status'], React.ReactNode> = {
   skipped: <StoppedIcon className="w-3.5 h-3.5 text-fg-muted" />,
 };
 
-const KIND_WORD: Record<PlanStepView['kind'], string> = {
-  map: 'at the same time',
-  verify: 'checks each result',
-  combine: 'combines the results',
-  repeat: 'repeats until done',
-};
+// ---- where a step's input comes from ----------------------------------------
 
-/** How much of the item list the collapsed row may spend. Characters, not
- *  pixels: the row already has CSS truncation, but letting it cut mid-list
- *  would leave "7 reviewers, one each: Ch" with no sign that anything was
- *  dropped. */
-const ITEMS_ROW_MAX_CHARS = 52;
-
-/**
- * "Chat, Files, Settings, Terminal, …" — as many of a fan-out step's items as
- * fit one row WHOLE, ending in an ellipsis whenever any were left out. Nothing
- * at all ('') when not even the first label fits.
- *
- * WHY a label now prints whole or not at all (Destin, 2026-09-18, on his real
- * plan: the row's second half is "truncated noise"): the earlier version also
- * cut each label to 24 characters, which is fine for "Chat" and useless for a
- * label that is a comma-separated file list — seven of those became
- * "App chrome: HeaderBar.t…, Chat and status: ChatVi…, …", a preview in which
- * not one item could be read. A preview that cannot be read says less than the
- * count standing beside it, so the row drops it (see `itemsDetail`) and the
- * item text appears only in the opened rows, at full width, where it CAN be
- * read.
- */
-function itemsRowLine(items: string[]): string {
-  const shown: string[] = [];
-  let used = 0;
-  for (const item of items) {
-    if (used + item.length + 2 > ITEMS_ROW_MAX_CHARS) break;
-    shown.push(item);
-    used += item.length + 2;
+/** Every row's display number, in the order the card draws them: "1", "2",
+ *  "2.1" for the first step of the repeat on row 2. `order` is that same
+ *  sequence as a number, so "is this source earlier?" is one comparison. */
+type RowNumber = { label: string; order: number };
+function rowNumbers(steps: PlanStepView[]): Map<string, RowNumber> {
+  const map = new Map<string, RowNumber>();
+  let order = 0;
+  for (const [i, step] of steps.entries()) {
+    const label = String(i + 1);
+    map.set(step.id, { label, order: order++ });
+    step.body?.forEach((b, j) => map.set(b.id, { label: `${label}.${j + 1}`, order: order++ }));
   }
-  if (shown.length === 0) return '';
-  const line = shown.join(', ');
-  return shown.length < items.length ? `${line}, …` : line;
+  return map;
 }
 
 /**
- * The collapsed row's right-hand half for a fan-out step. The COUNT always
- * survives; the item preview stands down when `itemsRowLine` cannot print a
- * single label whole, and the row then says only that the work is split one
- * piece per specialist — which the rows inside the step spell out in full.
+ * "← from step 1", and only when the row directly above is NOT where this
+ * step's input comes from.
+ *
+ * WHY the label is backward-only and usually absent (decision 33; it reverses
+ * part of decision 31): every link names exactly one earlier step, so the plan
+ * is always a tree, and in the ordinary chain each step simply consumes the one
+ * above it — saying so on every row is noise the reader has to filter. The
+ * forward clause decision 31 added ("produces 3 reports → step 2 combines
+ * them") is gone with it: now that every row carries a required plain sentence,
+ * it restated that sentence and doubled the row's text.
+ *
+ * A reference that names no EARLIER row — a hand-edited file, a forward
+ * reference — produces no label at all: a wrong step number is worse than a
+ * missing one.
  */
-function itemsDetail(who: string, items: string[]): string {
-  const preview = itemsRowLine(items);
-  return preview ? `${who}, one each: ${preview}` : `${who} · one piece each`;
+function flowLabel(step: PlanStepView, siblings: PlanStepView[], index: number, numbers: Map<string, RowNumber>): string {
+  if (!step.of) return '';
+  const source = numbers.get(step.of);
+  const self = numbers.get(step.id);
+  if (!source || !self || source.order >= self.order) return '';
+  if (index > 0 && siblings[index - 1].id === step.of) return '';
+  return `← from step ${source.label}`;
 }
 
-// ---- what a step is given, what it makes, and where that goes ---------------
-
-/** A specialist's output is a report, always: "one report" / "7 reports". */
-function reportsPhrase(n: number): string { return n === 1 ? 'one report' : `${n} reports`; }
-/** The same count as a thing already made: "the report" / "the 7 reports". */
-function theReports(n: number): string { return n === 1 ? 'the report' : `the ${n} reports`; }
-
-/** "step 2" · "steps 2 and 3" · "steps 2, 3 and 5" — the card's own numbering. */
-function stepNumbers(ns: number[]): string {
-  if (ns.length === 1) return `step ${ns[0]}`;
-  return `steps ${ns.slice(0, -1).join(', ')} and ${ns[ns.length - 1]}`;
+/** What this step may spend at worst. A repeat's body steps each carry their
+ *  own budget, so its total is computed once in the projection rather than
+ *  from a single pair of numbers here. */
+function stepCeiling(step: PlanStepView): number {
+  return step.ceilingTokens ?? perSpecialist(step) * step.fanOut;
 }
 
-/** What a step DOES with the results it is handed, by its kind. */
-const CONSUMES_VERB: Record<PlanStepView['kind'], string> = {
-  verify: 'checks', combine: 'combines', map: 'uses', repeat: 'uses',
-};
-
-/**
- * One plain line per step — what it is given, what it produces, and which step
- * takes that on: "Each reviewer gets one of the 7 below · produces 7 reports →
- * step 2 combines them".
- *
- * WHY every word is derived and none of it is read out of the model's prose
- * (Destin, decision 31: "it's not clear to me how this breaks out into 7
- * reviewers, what the inputs/ouputs are, and how it flows to the next step"):
- * `items`, `fanOut`, the step's kind and `of` are facts the plan document
- * already carries and the validator already checked. `of` names the earlier
- * step whose reports the executor literally feeds in as this step's input, so
- * both ends of every edge are on the card without inventing anything.
- *
- * WHY a reference is resolved against the ROWS and not the document: the card
- * flattens a repeat body into one row per body step, so a document id is not
- * always a row. An id naming no EARLIER row — a hand-edited file, a reference
- * to the repeat wrapper, a forward reference — produces no input clause at
- * all, because a wrong step number is worse than a missing one.
- */
-function stepFlow(plan: PlanView, index: number): string {
-  const step = plan.steps[index];
-  const clauses: string[] = [];
-  const sourceIndex = step.of ? plan.steps.findIndex((s) => s.id === step.of) : -1;
-  const source = sourceIndex >= 0 && sourceIndex < index ? plan.steps[sourceIndex] : undefined;
-  if (step.items && step.items.length > 0) {
-    // This line sits directly above those rows, so it can point at them.
-    clauses.push(`Each ${step.specialist} gets one of the ${step.items.length} below`);
-  } else if (source) {
-    // A repeat row's fan-out is a worst case, so its output is not a count.
-    clauses.push(`Gets ${source.kind === 'repeat' ? 'the reports' : theReports(source.fanOut)} from step ${sourceIndex + 1}`);
+/** The ROW a pause belongs to (a repeat's, when it paused inside the body) and
+ *  the step that actually ran out (the body step itself). */
+function findPausedRow(steps: PlanStepView[], id: string | undefined): { index: number; step: PlanStepView } | undefined {
+  if (!id) return undefined;
+  for (const [index, step] of steps.entries()) {
+    if (step.id === id) return { index, step };
+    const inner = step.body?.find((b) => b.id === id);
+    if (inner) return { index, step: inner };
   }
-  // A repeating step stops as soon as it meets its goal, so its rounds — and
-  // with them its reports — are a ceiling, never a number of things to expect.
-  let makes = step.kind === 'repeat' && step.fanOut > 1
-    ? `produces up to ${step.fanOut} reports`
-    : `produces ${reportsPhrase(step.fanOut)}`;
-  const consumers = plan.steps.map((s, i) => ({ s, i })).filter(({ s, i }) => i > index && s.of === step.id);
-  if (consumers.length > 0) {
-    const them = step.fanOut > 1 ? 'them' : 'it';
-    const verb = consumers.length === 1 ? CONSUMES_VERB[consumers[0].s.kind] : 'use';
-    makes += ` → ${stepNumbers(consumers.map((c) => c.i + 1))} ${verb} ${them}`;
-  }
-  clauses.push(makes);
-  return clauses.join(' · ');
+  return undefined;
 }
 
 /** WHY the card caps the rows a fan-out step draws (renderer-lists.md: nothing
@@ -965,10 +916,13 @@ function StepBrief({ text, items }: { text: string; items: number }) {
       <div className="text-2xs uppercase tracking-wide text-fg-muted">
         {items > 1 ? `The same brief for all ${items}` : 'The brief'}
       </div>
-      {/* Decision: say it ONCE, plainly, and only where the slot exists. */}
+      {/* Decision: say it ONCE, plainly, and only where the slot exists.
+          "above", not "below": decision 33 puts the item rows FIRST and the
+          shared brief under them, so the old word pointed the reader the wrong
+          way down the card. */}
       {items > 1 && text.includes(ITEM_SLOT) && (
         <div className="text-2xs text-fg-muted" data-testid="plan-step-slot-note">
-          Each one gets its own line from the list below where {ITEM_SLOT} appears.
+          Each one gets its own line from the list above where {ITEM_SLOT} appears.
         </div>
       )}
       <div
@@ -1016,7 +970,30 @@ function useClamped(open: boolean, text: string): [(el: HTMLSpanElement | null) 
   return [setNode, clamped];
 }
 
-function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: number; plan: PlanView; sessionId?: string }) {
+/**
+ * One labelled part of an opened step (design guide G-7: an eyebrow is the only
+ * section header). Every section of the opened body wears one, so the four
+ * things a step can show — the parts, the shared brief, the stop condition and
+ * the limits — are never again a run of unlabelled paragraphs.
+ */
+function StepSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1" data-testid={`plan-step-section-${label.toLowerCase().replace(/[^a-z]+/g, '-')}`}>
+      <div className="text-2xs uppercase tracking-wide text-fg-muted">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function StepRow({ step, index, siblings, number, numbers, plan, sessionId }: {
+  step: PlanStepView; index: number;
+  /** The list this row sits in — the plan's steps, or a repeat's body. */
+  siblings: PlanStepView[];
+  /** "2" at the top level, "2.1" inside a repeat. */
+  number: string;
+  numbers: Map<string, RowNumber>;
+  plan: PlanView; sessionId?: string;
+}) {
   // A running step opens itself so its specialists are visible without a
   // click (Q-5: the card is the progress surface); anything else folds.
   // Task 5a: a specialist in this step waiting on the user opens the step
@@ -1026,20 +1003,30 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
   const [open, setOpen] = useState(step.status === 'running' || step.status === 'paused' || asking);
   useEffect(() => { if (step.status === 'running' || step.status === 'paused') setOpen(true); }, [step.status]);
   useEffect(() => { if (asking) setOpen(true); }, [asking]);
-  const who = `${step.fanOut} ${step.specialist}${step.fanOut === 1 ? '' : 's'}`;
+  // Decision 33: WHO does it — a count and a role, on every kind, with no kind
+  // word beside it. "at the same time" / "checks each result" / "combines the
+  // results" are gone: with a required plain sentence on the row they restated
+  // the sentence. A repeat launches no specialist of its own, so its count is
+  // its rounds, and a ceiling ("up to 3 rounds") because it stops the moment it
+  // meets its goal.
+  const who = step.kind === 'repeat'
+    ? `up to ${step.rounds ?? 1} round${step.rounds === 1 ? '' : 's'}`
+    : `${step.fanOut} ${step.specialist}${step.fanOut === 1 ? '' : 's'}`;
   // Task 11: on a phone-width screen one line cut every title to "1." (the
   // token figure and the specialist words took the room), so the details
   // move to a second line there. Wide screens keep the signed one-line row.
   const narrow = useNarrowViewport();
-  // Decision 30: the row is the assistant's plain sentence for the reader when
-  // it wrote one, and today's headline — the first line of the specialist's
-  // brief — when it did not.
+  // Decision 30: the row is the assistant's plain sentence for the reader.
+  // Decision 33 made it required, so `title` — the first line of a brief
+  // addressed to a machine — is only the fallback for a record written before
+  // that change.
   const line = step.summary ?? step.title;
-  // Decision 30: a fan-out step names what each specialist gets; every other
-  // kind keeps the word it has always had.
-  const detail = step.items && step.items.length > 0
-    ? itemsDetail(who, step.items)
-    : `${who} · ${KIND_WORD[step.kind]}`;
+  const flow = flowLabel(step, siblings, index, numbers);
+  const detail = flow ? `${flow} · ${who}` : who;
+  // Decision 33 item 3: a repeat says on its COLLAPSED row when it will stop —
+  // the one fact that decides whether "up to 3 rounds" is worth approving. One
+  // line here, whole when the row is opened.
+  const stops = step.kind === 'repeat' && step.until ? `Stops when: ${step.until}` : '';
   // WHY the token figure leaves a PROPOSED row (decision 30): "up to 286,181
   // tokens" was the loudest thing on every row and the least useful before
   // approval. While a plan is only proposed the row is about WHAT will happen
@@ -1048,7 +1035,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
   const proposing = plan.status === 'proposed';
   const right =
     proposing ? ''
-    : step.status === 'pending' ? `up to ${limitTokens(plan, perSpecialist(step) * step.fanOut)}`
+    : step.status === 'pending' ? `up to ${limitTokens(plan, stepCeiling(step))}`
     // Final review F26: "0 of 1 reviewer done", not "reviewers".
     : step.status === 'running' || step.status === 'paused' ? `${step.done ?? 0} of ${step.fanOut} ${step.specialist}${step.fanOut === 1 ? '' : 's'} done · ${tokens(step.usedTokens ?? 0)}`
     : step.status === 'done' ? tokens(step.usedTokens ?? 0)
@@ -1064,7 +1051,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
           className="w-full flex flex-col gap-0.5 text-left px-2 py-1 hover:bg-inset/50 transition-colors">
           <span className="flex items-center gap-2 min-w-0">
             <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
-            <span className="text-xs text-fg-muted tabular-nums shrink-0">{index + 1}.</span>
+            <span className="text-xs text-fg-muted tabular-nums shrink-0">{number}.</span>
             {/* Final review F8 (R41): on a narrow window the title wraps. */}
             <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} break-words flex-1 min-w-0`} data-testid="plan-step-title">{line}</span>
             <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
@@ -1074,63 +1061,111 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
               tokens") was held at full width and clipped by the card edge.
               It now wraps: first onto its own line, then within itself. */}
           <span className="flex flex-wrap items-center gap-x-2 min-w-0 pl-5.5">
-            <span className="text-2xs text-fg-dim truncate min-w-0" data-testid="plan-step-detail">{detail}</span>
+            {/* WRAPS on a phone, where the wide row truncates. Decision 33 put
+                a flow label in front of the count ("← from step 1 · 1
+                researcher"), and at 390 px that cut the role word off the end —
+                the same unreadable half-line the item preview was removed for.
+                Only a row that has more to say than fits gets a second line. */}
+            <span className="text-2xs text-fg-dim break-words min-w-0" data-testid="plan-step-detail">{detail}</span>
             <span className="ml-auto text-2xs text-fg-muted tabular-nums min-w-0 text-right">{right}</span>
           </span>
+          {stops && <span className="text-2xs text-fg-dim truncate max-w-full pl-5.5" data-testid="plan-step-stops">{stops}</span>}
         </button>
       ) : (
         <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}
-          className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-inset/50 transition-colors">
-          <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
-          <span className="text-xs text-fg-muted tabular-nums shrink-0">{index + 1}.</span>
-          <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} truncate`} data-testid="plan-step-title">{line}</span>
-          <span className="text-2xs text-fg-dim truncate" data-testid="plan-step-detail">{detail}</span>
-          <span className="ml-auto text-2xs text-fg-muted tabular-nums shrink-0">{right}</span>
-          <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
+          className="w-full flex flex-col gap-0.5 text-left px-2 py-1 hover:bg-inset/50 transition-colors">
+          <span className="flex items-center gap-2 w-full min-w-0">
+            <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
+            <span className="text-xs text-fg-muted tabular-nums shrink-0">{number}.</span>
+            <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} truncate`} data-testid="plan-step-title">{line}</span>
+            <span className="text-2xs text-fg-dim truncate" data-testid="plan-step-detail">{detail}</span>
+            <span className="ml-auto text-2xs text-fg-muted tabular-nums shrink-0">{right}</span>
+            <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
+          </span>
+          {/* The repeat's second line. `truncate` holds it to ONE line whatever
+              the window is, so a long stop condition can never make one row
+              taller than the rest; the whole of it is one click away. */}
+          {stops && <span className="text-2xs text-fg-dim truncate max-w-full pl-5.5" data-testid="plan-step-stops">{stops}</span>}
         </button>
       )}
       {open && (
-        <div className="px-1.5 pb-1.5 pt-1 space-y-1 border-t border-edge-dim">
-          {/* Decision 31: the one plain line that says what this step is
-              given, what it produces and which step takes that on. It sits
-              ABOVE the rows it refers to ("one of the 7 below"), and it says
-              the same thing whether the plan is proposed or running — the
-              flow does not change when Approve is pressed. */}
-          <div className="text-2xs text-fg-muted break-words" data-testid="plan-step-flow">{stepFlow(plan, index)}</div>
+        // Decision 33: ONE opened anatomy, in one fixed order, each part
+        // labelled and each omitted when this step has no such data — the
+        // parts, the shared brief, the stop condition, the limits.
+        <div className="px-1.5 pb-1.5 pt-1 space-y-1.5 border-t border-edge-dim">
+          {/* Decision 33: a repeat is one row that CONTAINS its body — the only
+              nesting the card has, because the grammar forbids a repeat inside
+              a repeat. The rows below are numbered 2.1, 2.2 under step 2. */}
+          {step.body && step.body.length > 0 && (
+            // NOT "each round": a body row's count is its worst case over ALL
+            // the rounds (2 items × 3 rounds = 6 workers), the same number the
+            // flattened rows always showed, so a per-round heading would
+            // misread every figure under it.
+            <StepSection label={`What repeats${step.rounds ? `, up to ${step.rounds} times` : ''}`}>
+              <ol className="space-y-1" data-testid="plan-step-body">
+                {step.body.map((b, i) => (
+                  <StepRow key={b.id} step={b} index={i} siblings={step.body!} number={`${number}.${i + 1}`}
+                    numbers={numbers} plan={plan} sessionId={sessionId} />
+                ))}
+              </ol>
+            </StepSection>
+          )}
           {step.children && step.children.length > 0 ? (
             step.children.map((c) => <PlanSpecialistCard key={c.childId} child={c} sessionId={sessionId} />)
           ) : (
             <>
-              {/* Destin, 2026-09-18: the row shows only the first line of the
-                  brief, so before Approve there was no way to read the rest.
-                  It sits ABOVE the rows because it is the thing they all share
-                  (StepBrief). Absent on plans projected before `task` existed,
-                  and on a brief the row is already showing whole. */}
-              {brief && <StepBrief text={brief} items={step.items?.length ?? step.fanOut} />}
               {/* Decision 31: one ROW PER SPECIALIST, each carrying its own
                   slice — the same rows this step draws once it is running, so
                   the card keeps its shape when the plan starts. */}
-              {step.items && step.items.length > 0 && (
-                <div className="space-y-1" data-testid="plan-step-items">
-                  {step.items.slice(0, ITEM_ROWS_MAX).map((item, i) => <PlanItemRow key={`${i}-${item}`} index={i} item={item} />)}
-                  {step.items.length > ITEM_ROWS_MAX && (
-                    <div className="text-2xs text-fg-muted">…and {step.items.length - ITEM_ROWS_MAX} more.</div>
-                  )}
-                </div>
+              {step.items && step.items.length > 1 && (
+                <StepSection label="What each one gets">
+                  <div className="space-y-1" data-testid="plan-step-items">
+                    {step.items.slice(0, ITEM_ROWS_MAX).map((item, i) => <PlanItemRow key={`${i}-${item}`} index={i} item={item} />)}
+                    {step.items.length > ITEM_ROWS_MAX && (
+                      <div className="text-2xs text-fg-muted">…and {step.items.length - ITEM_ROWS_MAX} more.</div>
+                    )}
+                  </div>
+                </StepSection>
               )}
-              {/* Destin, 2026-09-18: this sentence "floats" — it used to be a
-                  third bare paragraph directly under the brief, reading as one
-                  more line of it. It is the step body's FOOTER now: after the
-                  rows, on its own side of a hairline, with the brief no longer
-                  anywhere near it. */}
-              <div className="text-2xs text-fg-muted border-t border-edge-dim pt-1" data-testid="plan-step-limits">
-                Each {step.specialist} stops at its {tokenLimit(plan, perSpecialist(step))}.
-                {/* Decision 30: the figure the proposed row no longer carries,
-                    beside the per-specialist limit it belongs with. */}
-                {proposing ? ` Up to ${limitTokens(plan, perSpecialist(step) * step.fanOut)} for this step.` : ''}
-              </div>
+              {/* Decision 33: a ONE-ITEM split draws no list — one thing is not
+                  a list, and a numbered row with a chevron promises siblings it
+                  does not have. It still says WHAT the one specialist is given:
+                  the brief above it can name `{item}`, and a slot pointing at
+                  nothing at all is worse than no list. */}
+              {step.items && step.items.length === 1 && (
+                <StepSection label="What it gets">
+                  <div className="text-2xs text-fg-dim break-words" data-testid="plan-step-item-only">{step.items[0]}</div>
+                </StepSection>
+              )}
+              {/* Destin, 2026-09-18: the row shows one sentence, so before
+                  Approve there was no way to read what the specialists are
+                  actually sent. Labelled and bounded (StepBrief). Absent on
+                  plans projected before `task` existed. A repeat's own brief is
+                  shared with nobody — its body steps carry theirs — so it is
+                  "The brief", never "the same brief for all 9". */}
+              {brief && <StepBrief text={brief} items={step.body ? 1 : (step.items?.length ?? step.fanOut)} />}
             </>
           )}
+          {/* Decision 33 item 3: the whole stop condition, for the repeat whose
+              row could only show one line of it. */}
+          {step.until && (
+            <StepSection label="Stops when">
+              <div className="text-2xs text-fg-dim break-words" data-testid="plan-step-until">{step.until}</div>
+            </StepSection>
+          )}
+          <StepSection label="Limits">
+            <div className="text-2xs text-fg-muted" data-testid="plan-step-limits">
+              {/* A repeat launches no specialist of its own — its body rows
+                  carry the per-specialist figures — so it states its total
+                  only, and never a per-specialist limit it does not have. */}
+              {step.body
+                ? `Up to ${limitTokens(plan, stepCeiling(step))} for this step, over all its rounds.`
+                : <>Each {step.specialist} stops at its {tokenLimit(plan, perSpecialist(step))}.
+                  {/* Decision 30: the figure the proposed row no longer carries,
+                      beside the per-specialist limit it belongs with. */}
+                  {proposing ? ` Up to ${limitTokens(plan, stepCeiling(step))} for this step.` : ''}</>}
+            </div>
+          </StepSection>
         </div>
       )}
     </li>

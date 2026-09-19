@@ -49,5 +49,16 @@ export function validatePlanDocument(input: unknown, roster: SpecialistRoster): 
     priorIds.add(step.id);
   }
 
+  // WHY a whole plan may not be one specialist run (decision 33, Destin
+  // 2026-09-18: "if the entire plan is a single specialist doing a single
+  // thing, its a shitty plan and should just be a specialist call"). The rule
+  // belongs to the PLAN, not the step — a one-item split is still how the
+  // assistant puts a single worker inside a larger plan — and `maximumAttempts`
+  // is already exactly the number the rule is about: the worst case count of
+  // specialist runs, items times repeat rounds included.
+  if (maximumAttempts < 2) {
+    issues.push('this plan\'s whole worst case is one specialist doing one thing — hire a specialist directly instead of proposing a plan');
+  }
+
   return issues.length ? { ok: false, issues } : { ok: true, document: parsed.data, maximumAttempts, ceilingTokens, maxFanOut };
 }

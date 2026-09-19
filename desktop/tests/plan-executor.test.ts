@@ -196,7 +196,7 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); });
 
 const MAP6: PlanDocumentV1 = { goal: 'Six', steps: [
-  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a', 'b', 'c', 'd', 'e', 'f'] },
+  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a', 'b', 'c', 'd', 'e', 'f'] },
 ] };
 
 describe('waves', () => {
@@ -236,7 +236,7 @@ describe('waves', () => {
 
   it('write-capable specialists still serialize', async () => {
     const doc: PlanDocumentV1 = { goal: 'w', steps: [
-      { id: 's1', kind: 'map', specialist: 'worker', task: 'Fix {item}', budget_tokens: 1000, items: ['a', 'b', 'c'] },
+      { id: 's1', kind: 'map', specialist: 'worker', task: 'Fix {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a', 'b', 'c'] },
     ] };
     const runner = new FakeRunner(() => async (ctx) => { await new Promise((r) => setTimeout(r, 5)); return completes('ok')(ctx); });
     runner.writers.add('worker');
@@ -251,9 +251,9 @@ describe('waves', () => {
   it('verify/combine receive only their bounded, labelled dependencies', async () => {
     const long = 'x'.repeat(PLAN_DEPENDENCY_REPORT_MAX_CHARS + 500);
     const doc: PlanDocumentV1 = { goal: 'c', steps: [
-      { id: 's0', kind: 'map', specialist: 'explorer', task: 'Unrelated', budget_tokens: 1000, items: ['z'] },
-      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a.ts', 'b.ts'] },
-      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 1000, of: 's1' },
+      { id: 's0', kind: 'map', specialist: 'explorer', task: 'Unrelated', budget_tokens: 1000, summary: 'Plain sentence.', items: ['z'] },
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
+      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 1000, summary: 'Plain sentence.', of: 's1' },
     ] };
     const runner = new FakeRunner((l) => {
       if (l.stepId === 's0') return completes('SECRET-UNRELATED');
@@ -280,8 +280,8 @@ describe('waves', () => {
 });
 
 const TWO_STEP: PlanDocumentV1 = { goal: 'two', steps: [
-  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, items: ['a', 'b'] },
-  { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine', budget_tokens: 1000, of: 's1' },
+  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a', 'b'] },
+  { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine', budget_tokens: 1000, summary: 'Plain sentence.', of: 's1' },
 ] };
 
 function committed(id: string, itemIndex: number, report: string, spent = 400): PlanAttemptRecord {
@@ -511,10 +511,10 @@ describe('durable completion and resume', () => {
 
 describe('repeat', () => {
   const repeatDoc = (max: number): PlanDocumentV1 => ({ goal: 'loop', steps: [
-    { id: 'r', kind: 'repeat', specialist: 'reviewer', task: 'loop', budget_tokens: 500, max_iterations: max, until: 'tests pass',
+    { id: 'r', kind: 'repeat', specialist: 'reviewer', task: 'loop', budget_tokens: 500, summary: 'Plain sentence.', max_iterations: max, until: 'tests pass',
       steps: [
-        { id: 'fix', kind: 'map', specialist: 'reviewer', task: 'Fix {item}', budget_tokens: 1000, items: ['x'] },
-        { id: 'check', kind: 'verify', specialist: 'reviewer', task: 'Check the fix', budget_tokens: 1000, of: 'fix' },
+        { id: 'fix', kind: 'map', specialist: 'reviewer', task: 'Fix {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['x'] },
+        { id: 'check', kind: 'verify', specialist: 'reviewer', task: 'Check the fix', budget_tokens: 1000, summary: 'Plain sentence.', of: 'fix' },
       ] },
   ] });
 
@@ -592,8 +592,8 @@ describe('repeat', () => {
 
 describe('pausing, stopping and interruption settle before anything is visible', () => {
   const FOUR: PlanDocumentV1 = { goal: 'four', steps: [
-    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', budget_tokens: 1000, items: ['fail', 'quick', 'stuck1', 'stuck2'] },
-    { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine', budget_tokens: 1000, of: 's1' },
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['fail', 'quick', 'stuck1', 'stuck2'] },
+    { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine', budget_tokens: 1000, summary: 'Plain sentence.', of: 's1' },
   ] };
   const fourScripts = (failFirst: boolean) => (l: PlanChildLaunch): Script => {
     // Task 9a: a specialist error is retried once by itself (same brief — it
@@ -1119,7 +1119,7 @@ describe('a specialist whose budget route cannot be used', () => {
 describe('review fixes (Task 4 review 1)', () => {
   it('item 1: a failed step can be retried once Add budget covers the recorded shortfall', async () => {
     const doc: PlanDocumentV1 = { goal: 'one', steps: [
-      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1500, items: ['a'] },
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1500, summary: 'Plain sentence.', items: ['a'] },
     ] };
     // Final review F4: this used to be a failed (invalid-report) attempt that
     // Continue re-ran from scratch. A failed report is now asked for again on
@@ -1148,7 +1148,7 @@ describe('review fixes (Task 4 review 1)', () => {
 
   it('round 2: a shortfall pause stays fundable when the step still has an unfinished specialist', async () => {
     const doc: PlanDocumentV1 = { goal: 'two', steps: [
-      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1500, items: ['a', 'b'] },
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1500, summary: 'Plain sentence.', items: ['a', 'b'] },
     ] };
     // Final review F4: item a has no attempt yet (a failed report would now be
     // asked for again, not re-run); the 1,200 were spent before.
@@ -1200,7 +1200,7 @@ describe('review fixes (Task 4 review 1)', () => {
 
 describe('Task 9a: automatic recovery (pause handoff §1)', () => {
   const THREE: PlanDocumentV1 = { goal: 'three', steps: [
-    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', budget_tokens: 1000, items: ['flaky', 'b', 'c'] },
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['flaky', 'b', 'c'] },
   ] };
   const slowCompletes = (ms: number): Script => async (ctx) => {
     await new Promise((r) => setTimeout(r, ms));
@@ -1541,7 +1541,7 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
       // automatic retry, and it did not ask. A provider that is signed out
       // cannot answer the report turn either.
       const BIG: PlanDocumentV1 = { goal: 'big', steps: [
-        { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Write it up {item}', budget_tokens: 6000, items: ['x'] },
+        { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Write it up {item}', budget_tokens: 6000, summary: 'Plain sentence.', items: ['x'] },
       ] };
       const runner = new FakeRunner(() => completes('   ', 1000, 500));
       runner.notReady = SIGN_IN;
@@ -1760,8 +1760,8 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
 
   describe('the report-only turn after an invalid report', () => {
     const BIG: PlanDocumentV1 = { goal: 'big', steps: [
-      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Write it up {item}', budget_tokens: 6000, items: ['x'] },
-      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine', budget_tokens: 1000, of: 's1' },
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Write it up {item}', budget_tokens: 6000, summary: 'Plain sentence.', items: ['x'] },
+      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine', budget_tokens: 1000, summary: 'Plain sentence.', of: 's1' },
     ] };
 
     it('asks the same specialist once more, tools off, from the failed attempt\'s unspent share', async () => {
@@ -1800,10 +1800,10 @@ describe('Task 9a: automatic recovery (pause handoff §1)', () => {
 
     it('a repeat check answers in the required form on its report-only turn', async () => {
       const doc: PlanDocumentV1 = { goal: 'loop', steps: [
-        { id: 'r', kind: 'repeat', specialist: 'reviewer', task: 'loop', budget_tokens: 500, max_iterations: 2, until: 'tests pass',
+        { id: 'r', kind: 'repeat', specialist: 'reviewer', task: 'loop', budget_tokens: 500, summary: 'Plain sentence.', max_iterations: 2, until: 'tests pass',
           steps: [
-            { id: 'fix', kind: 'map', specialist: 'reviewer', task: 'Fix {item}', budget_tokens: 1000, items: ['x'] },
-            { id: 'check', kind: 'verify', specialist: 'reviewer', task: 'Check the fix', budget_tokens: 5000, of: 'fix' },
+            { id: 'fix', kind: 'map', specialist: 'reviewer', task: 'Fix {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['x'] },
+            { id: 'check', kind: 'verify', specialist: 'reviewer', task: 'Check the fix', budget_tokens: 5000, summary: 'Plain sentence.', of: 'fix' },
           ] },
       ] };
       let checks = 0;

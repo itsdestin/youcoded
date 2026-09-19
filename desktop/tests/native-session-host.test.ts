@@ -5490,8 +5490,8 @@ describe('specialists plans in the native host (Task 4)', () => {
   const DOC = {
     goal: 'Review two files',
     steps: [
-      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 2000, items: ['a.ts', 'b.ts'] },
-      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 2000, of: 's1' },
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 2000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
+      { id: 's2', kind: 'combine', specialist: 'reviewer', task: 'Combine the reviews', budget_tokens: 2000, summary: 'Plain sentence.', of: 's1' },
     ],
   };
   type Reply = { chunks: any[] } | 'hang';
@@ -5828,7 +5828,12 @@ describe('specialists plans in the native host (Task 4)', () => {
   });
 
   it('review item 6: a plan specialist\'s routed ask carries the plan, step and specialist identity', async () => {
-    const doc = { goal: 'Clean up', steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, items: ['build'] }] };
+    // Decision 33: a plan may not be one specialist doing one thing, so a
+    // summing step follows the one this test is about.
+    const doc = { goal: 'Clean up', steps: [
+      { id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, summary: 'Plain sentence.', items: ['build'] },
+      { id: 'sum', kind: 'combine', specialist: 'worker', task: 'Say what was tidied', budget_tokens: 3000, summary: 'Plain sentence.', of: 'fix' },
+    ] };
     await host.create({ sessionId: SID, cwd: root, binding: PARENT });
     parentSteps = [proposeStep('call-clean', doc), textStep('ok')];
     host.send(SID, 'Plan it');
@@ -6035,7 +6040,9 @@ describe('specialists plans in the native host (Task 4)', () => {
   });
 
   it('a budget pause records the smallest Add budget that lets the specialist continue, and smaller amounts are refused', async () => {
-    const small = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, items: ['a.ts'] }] };
+    // Decision 33: the split narrows to one file but the summing step stays,
+    // or the whole plan would be one specialist run and be refused.
+    const small = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts'] }, DOC.steps[1]] };
     await host.create({ sessionId: SID, cwd: root, binding: PARENT });
     parentSteps = [proposeStep('call-small', small), textStep('ok')];
     host.send(SID, 'Plan it');
@@ -6064,7 +6071,9 @@ describe('specialists plans in the native host (Task 4)', () => {
     childReply = () => ({ chunks: [...textChunks('y', 'REPORT a'), finishChunk('stop', 1, 1)] });
     expect(await host.resumePlan(SID, rec.planId)).toMatchObject({ ok: true });
     await waitFor(() => planStatus()[0] === 'completed', 'completion after the top-up');
-    expect(childCalls).toHaveLength(2);
+    // The refused request, the restarted one, and the summing step decision 33
+    // requires this plan to have.
+    expect(childCalls).toHaveLength(3);
   });
 
   it('exposes the seven plan actions, reporting unsupported when the host has no home to keep plans in', async () => {
@@ -6089,7 +6098,9 @@ describe('specialists plans in the native host (Task 4)', () => {
   // each from a bug a design review found.
   // -------------------------------------------------------------------------
   describe('Task 11: asking the assistant about a paused plan', () => {
-    const SMALL = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, items: ['a.ts'] }] };
+    // Decision 33: one file, but the summing step stays — a plan may not be
+    // one specialist doing one thing.
+    const SMALL = { ...DOC, steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts'] }, DOC.steps[1]] };
     const handoff = () => journalFile().plans[0].paused?.handoff;
     const notices = () => events.filter((e) => e.type === 'user-message' && String(e.data.text).startsWith('[Plan paused]'));
     // The prompt is the whole conversation: the LATEST notice's ids count.
@@ -6189,7 +6200,9 @@ describe('specialists plans in the native host (Task 4)', () => {
       expect(await host.addPlanBudget(SID, planId, rec.paused.handoff.recommendation.addTokens)).toMatchObject({ ok: true });
       expect(await host.resumePlan(SID, planId)).toMatchObject({ ok: true });
       await waitFor(() => planStatus()[0] === 'completed', 'completion after the recommended top-up');
-      expect(childCalls).toHaveLength(2);
+      // The refused request, the restarted one, and the summing step decision
+      // 33 requires this plan to have.
+      expect(childCalls).toHaveLength(3);
       expect(notices()).toHaveLength(1);
     });
 
@@ -6437,7 +6450,9 @@ describe('specialists plans in the native host (Task 4)', () => {
       parentSteps.push(
         async () => {
           await host.setPlanAutoApprove(10_000_000);
-          return proposeStep('call-revised', { ...SMALL, goal: 'Review a.ts with more room', steps: [{ ...SMALL.steps[0], budget_tokens: 3000 }] });
+          // Decision 33: the revision keeps SMALL's summing step; a plan whose
+          // whole worst case is one specialist run is refused.
+          return proposeStep('call-revised', { ...SMALL, goal: 'Review a.ts with more room', steps: [{ ...SMALL.steps[0], budget_tokens: 3000 }, SMALL.steps[1]] });
         },
         textStep('Here is a revised plan with more room.'),
       );
