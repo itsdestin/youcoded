@@ -232,6 +232,34 @@ describe('6. a minimum top-up', () => {
     expect(plans.resume).toHaveBeenCalledWith(S, 'plan-1');
   });
 
+  it('keeps saying it is working while the slow half of Add budget runs', async () => {
+    // Destin, 2026-09-19: "adding budget to a specialist in a plan seems to
+    // completely freeze the app". It does not freeze — Add budget is TWO host
+    // calls, and the second (Continue) re-resolves the plan's manifest, which
+    // opens a probe session per specialist and can take minutes. The card
+    // closed its Add budget box the moment the FIRST call landed, so the whole
+    // slow half was a pause strip with every button disabled and nothing
+    // saying why. Disabled and silent for minutes reads as frozen.
+    let releaseResume!: (v: unknown) => void;
+    const resume = vi.fn().mockReturnValue(new Promise((r) => { releaseResume = r; }));
+    const plans = bridge({
+      addBudget: vi.fn().mockResolvedValue({ ok: true, plan: { ...budgetPause(), ceilingTokens: 54500, seq: 2 } }),
+      resume,
+    });
+    render(<ChatProvider><Card initial={budgetPause()} /></ChatProvider>);
+    fireEvent.click(within(block()).getByRole('button', { name: 'Add budget' }));
+    fireEvent.click(within(screen.getByTestId('plan-add-budget')).getByRole('button', { name: 'Continue' }));
+    // The first call has landed and the second is in flight.
+    await waitFor(() => expect(plans.resume).toHaveBeenCalled());
+    // The card must still be visibly working, not a silent row of dead buttons.
+    expect(screen.getByTestId('plan-add-budget')).toBeInTheDocument();
+    expect(within(screen.getByTestId('plan-add-budget')).getByRole('button', { name: 'Continuing…' })).toBeDisabled();
+    releaseResume({ ok: true, plan: plan({ status: 'running', seq: 3 }) });
+    await waitFor(() => expect(status()).toBe('running'));
+    // And it stands down once the plan really is running.
+    expect(screen.queryByTestId('plan-add-budget')).toBeNull();
+  });
+
   it('a budget answer that already runs the plan is not resumed twice', async () => {
     const plans = bridge({
       addBudget: vi.fn().mockResolvedValue({ ok: true, plan: plan({ status: 'running', seq: 2 }) }),

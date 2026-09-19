@@ -349,7 +349,6 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     budgetRequest.current ??= newRequestId();
     const landed = await act('budget', (b) => b.addBudget(id, plan.planId, Number(extra) || 0, budgetRequest.current!));
     if (!landed) return;
-    setAdding(false);
     // Task 5b: the real host only raises the limit and leaves the plan
     // paused; the control's button says Continue (R8: "continues from where
     // the plan stopped"), so the card presses Continue for the user. An
@@ -358,6 +357,16 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     // Retry after THIS step only continues (a repeated Add budget would add
     // nothing anyway: same request id, final review F1).
     if (landed.status === 'paused') { lastAction.current = 'continue'; await act('continue', (b) => b.resume(id, plan.planId)); }
+    // WHY the box closes only HERE, after both calls (Destin, 2026-09-19:
+    // "adding budget to a specialist in a plan seems to completely freeze the
+    // app"): Continue re-resolves the plan's manifest, which opens a probe
+    // session per specialist and can run for minutes. Closing on the FIRST
+    // call's answer handed that whole wait back to the pause strip, whose
+    // every button is disabled while an action is in flight and none of which
+    // says why — disabled and silent for minutes is indistinguishable from
+    // frozen. The box's own button reads "Continuing…" for both calls, so
+    // keeping it up is the only thing on the card that admits work is going on.
+    setAdding(false);
   };
   const cont = () => { lastAction.current = 'continue'; return act('continue', (b) => b.resume(id, plan.planId)); };
   const stop = () => { lastAction.current = 'stop'; return act('stop', (b) => b.stop(id, plan.planId)); };
