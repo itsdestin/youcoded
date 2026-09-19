@@ -95,6 +95,27 @@ const LIMIT_LINE_SHORT = `Up to ${PLAN.ceilingTokens.toLocaleString()} tokens ·
 const ANSWER_LABEL = 'your answer';
 
 /**
+ * The header the card really sits under, identical in all three.
+ *
+ * WHY it is here at all: in the app the plan block is the BODY of a tool card
+ * whose header already draws "Plan: <title> · waiting for approval"
+ * (PlanCard.tsx `planDisplay`/`planIcon`). The first build of these candidates
+ * gave B its own title and left A and C without one, so B looked like the only
+ * one with a heading when in truth all three inherit the same one — he would
+ * have been picking a layout for a reason that is not real. Drawn plainly here
+ * rather than by importing ToolCard, which would need a whole ToolCallState;
+ * it is the same in every pane, so it is not what is being compared.
+ */
+function PlanHeader() {
+  return (
+    <div className="flex items-baseline gap-2 px-3 pt-2 pb-1 border-b border-edge-dim">
+      <span className="text-xs text-fg-2 truncate">Plan: {PLAN.title}</span>
+      <span className="text-2xs text-fg-muted shrink-0">waiting for approval</span>
+    </div>
+  );
+}
+
+/**
  * The card's bottom row, identical in all three so it is not what is being
  * compared: the limit on the left, Comment then Approve on the right (decision
  * 9/15 — the filled button rightmost, the light one on its left, both sharing
@@ -135,13 +156,16 @@ const SPINE_ITEMS_MAX = 4;
  */
 export function SpinePlanCard() {
   return (
-    <div className="px-3 pb-2.5 pt-1.5 space-y-2" data-testid="plan-candidate-spine">
+    <div data-testid="plan-candidate-spine">
+      <PlanHeader />
+      <div className="px-3 pb-2.5 pt-1.5 space-y-2">
       <ol>
         {STEPS.map((step, i) => (
           <SpineNode key={step.id} step={step} index={i} last={i === STEPS.length - 1} />
         ))}
       </ol>
       <ApproveRow />
+      </div>
     </div>
   );
 }
@@ -159,7 +183,7 @@ function SpineNode({ step, index, last }: { step: PlanStepView; index: number; l
       {/* THE RAIL. One px of border token, drawn per node so the segments
           stack into one continuous line; the last node's stops at its closing
           label instead of running off the bottom of the card. */}
-      <span aria-hidden="true" className={`absolute left-2.5 top-0 w-px bg-edge-dim ${last ? 'bottom-4' : 'bottom-0'}`} />
+      <span aria-hidden="true" className={`absolute left-2.5 top-0 w-px bg-edge ${last ? 'bottom-4' : 'bottom-0'}`} />
       {/* The node itself: the step number in a circle ON the rail. bg-canvas so
           the rail passes behind it rather than through the digit. */}
       <span className="absolute left-0 top-1 w-5 h-5 rounded-full border border-edge bg-canvas flex items-center justify-center text-3xs text-fg-muted tabular-nums">
@@ -189,7 +213,7 @@ function SpineNode({ step, index, last }: { step: PlanStepView; index: number; l
               to say in words. One box of border tokens with its left side
               missing (the spine is that side), 4.5 spacing units wide, which is
               exactly the gap between the spine (x=10) and the branch (x=28). */}
-          <span aria-hidden="true" className="absolute left-0 top-0 bottom-2 -ml-4.5 w-4.5 border-r border-t border-b border-edge-dim rounded-r-md" />
+          <span aria-hidden="true" className="absolute left-0 top-0 bottom-2 -ml-4.5 w-4.5 border-r border-t border-b border-edge rounded-r-md" />
           <ul className="space-y-1">
             {shown.map((item, i) => (
               <li key={`${i}-${item}`} className="flex items-start gap-1.5">
@@ -221,20 +245,23 @@ function SpineNode({ step, index, last }: { step: PlanStepView; index: number; l
  */
 export function LedgerPlanCard() {
   return (
-    <div className="px-3 pb-2.5 pt-1.5 space-y-2" data-testid="plan-candidate-ledger">
-      {/* The heading the card has never had: the plan's own goal, at the one
-          size above the steps, with a single muted meta line under it. The eye
-          now has an entry point (fault 1: today nothing is a heading). */}
-      <div>
-        <div className="text-sm font-medium text-fg break-words">{PLAN.title}</div>
-        <div className="text-2xs text-fg-muted">
-          {STEPS.length} steps · {SPECIALISTS} specialists · up to about ${PLAN.ceilingUsd?.toFixed(2)}
-        </div>
+    <div data-testid="plan-candidate-ledger">
+      <PlanHeader />
+      <div className="px-3 pb-2.5 pt-1.5 space-y-2">
+      {/* B's entry point. It was the plan's title until the shared PlanHeader
+          went in above and printed the same words one line higher — the goal is
+          already stated by the card this block sits inside, so repeating it is
+          the exact duplication this round is meant to cut. What B keeps is the
+          part the header does NOT say: the shape of the whole plan in one muted
+          line, read before any step is. */}
+      <div className="text-2xs text-fg-muted">
+        {STEPS.length} steps · {SPECIALISTS} specialists · up to about ${PLAN.ceilingUsd?.toFixed(2)}
       </div>
       <ol className="divide-y divide-edge-dim border-t border-edge-dim">
         {STEPS.map((step, i) => <LedgerRow key={step.id} step={step} index={i} last={i === STEPS.length - 1} />)}
       </ol>
       <ApproveRow limit={LIMIT_LINE_SHORT} />
+      </div>
     </div>
   );
 }
@@ -307,7 +334,9 @@ export function StripPlanCard() {
     rows.current[id]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   };
   return (
-    <div className="px-3 pb-2.5 pt-1.5 space-y-2" data-testid="plan-candidate-strip">
+    <div data-testid="plan-candidate-strip">
+      <PlanHeader />
+      <div className="px-3 pb-2.5 pt-1.5 space-y-2">
       {/* THE STRIP. Divs and tokens, no SVG: each step is a node whose SIZE is
           its fan-out (three dots for three specialists), joined by thin
           connectors, numbered underneath. */}
@@ -351,6 +380,7 @@ export function StripPlanCard() {
         ))}
       </ol>
       <ApproveRow />
+      </div>
     </div>
   );
 }
