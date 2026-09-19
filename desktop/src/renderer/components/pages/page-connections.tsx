@@ -204,7 +204,7 @@ export function PageConnectionsDialog({ page, onClose }: { page: PageSummary | n
             </ConnectionLine>
             {confirming === c.id ? (
               <div className="flex flex-col gap-2">
-                <div className="text-2xs text-fg-2 leading-relaxed">
+                <div className="text-2xs text-fg-2 leading-relaxed" data-remove-confirm>
                   This stops future use. It cannot undo anything the page already sent or received. The page will ask again next time it opens.
                 </div>
                 <div className="flex items-center gap-2">
