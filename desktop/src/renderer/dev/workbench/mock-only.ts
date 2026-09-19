@@ -97,6 +97,15 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // Pages Phase 2 (2026-09-19): the approval screen, the band's "Updated" line, a card's
+  // connections and the saved keys under Connected accounts are designed here first.
+  // Backend to build once approved: connections in page.json, the approval store, keys in
+  // SecretsStore, fetch-on-behalf over net-guard, blocking everything else, refresh.
+  { channel: 'pages.approve', feature: 'Pages Phase 2 — connections and refresh' },
+  { channel: 'pages.removeConnection', feature: 'Pages Phase 2 — connections and refresh' },
+  { channel: 'pages.refresh', feature: 'Pages Phase 2 — connections and refresh' },
+  { channel: 'pages.savedKeys', feature: 'Pages Phase 2 — connections and refresh' },
+  { channel: 'pages.deleteSavedKey', feature: 'Pages Phase 2 — connections and refresh' },
   // Sign in with OpenRouter (2026-09-18): `openrouter.status/signIn/cancelSignIn` were
   // designed here ahead of the backend and came off the same day when openrouter:* landed
   // on all five surfaces. The fake in mock-shim.ts stays so `?openrouterSignIn=` can pin

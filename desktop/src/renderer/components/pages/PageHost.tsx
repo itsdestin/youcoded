@@ -48,6 +48,8 @@ import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-typ
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PAGE_KIT_CSS } from './page-kit';
+import { PageApproval, needsApproval } from './page-connections';
+import { PageFreshness } from './PageFreshness';
 import { PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
 
 
@@ -190,6 +192,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         title={<>
           {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
           <span className="truncate">{title || 'Pages'}</span>
+          {/* Freshness belongs to the app, not the page (deck Q-last-updated):
+              same place on every connected page, and true because the app made
+              the request. Hidden until the page is approved. */}
+          {summary && !needsApproval(summary) && <PageFreshness page={summary} />}
         </>}
       />
 
@@ -244,7 +250,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               <ErrorState message={load.failure.message} onRetry={() => { if (pageId !== null) dispatch({ type: 'PAGE_OPENED', pageId }); }} />
             </div>
           )}
-          {load.state === 'ready' && (
+          {/* A page with a line waiting for a yes stays closed: the approval
+              shows IN PLACE OF it, so nothing in the page runs first (decks
+              Q-own-pages, S-change). "Not now" leaves the page unselected — or, from
+              a pinned button (no panel to fall back to), goes back to chat. */}
+          {load.state === 'ready' && summary && needsApproval(summary) && (
+            <PageApproval page={summary} onNotNow={() => dispatch({ type: state.pageFocus ? 'PAGE_VIEW_CLOSED' : 'PAGE_CLOSED' })} />
+          )}
+          {load.state === 'ready' && !needsApproval(summary) && (
             <iframe
               ref={frameRef}
               srcDoc={load.doc}
