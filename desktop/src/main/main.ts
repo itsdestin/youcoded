@@ -1704,7 +1704,14 @@ void app.whenReady().then(async () => {
         if (r.repaired > 0) log('WARN', 'Main', 'Stale hook commands repaired', { count: r.repaired });
         if (r.repairedFile) log('WARN', 'Main', 'Claude settings file was unreadable — backed up and rewritten with the hooks', { backupPath: r.repairedFile.backupPath });
         if (r.refused) log('WARN', 'Main', 'Hook entries not written', { refused: r.refused });
-        else log('INFO', 'Main', 'Hooks installed', { copied: r.copied, written: r.written });
+        else {
+          log('INFO', 'Main', 'Hooks installed', { copied: r.copied, written: r.written });
+          // WHY also stdout: scripts/smoke-test.js (every installer build) waits
+          // for this line on the app's output, and log() writes only to
+          // desktop.log. When install-hooks.js stopped printing it (9185e39c4)
+          // every build's launch check timed out. Pinned by smoke-test-markers.test.ts.
+          console.log('[Main] Hooks installed');
+        }
       }
     } catch (e) {
       log('ERROR', 'Main', 'Failed to install hooks', { error: String(e) });
