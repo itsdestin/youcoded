@@ -1704,14 +1704,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     comment: async (_sessionId: string, planId: string, _text: string) => nextPlan(planId, (p) => ({
       ...p, status: 'stopped', revisedBy: `${p.planId}-r2`,
     })),
+    // WHY this answers STILL PAUSED (2026-09-19): the real host only raises the
+    // limit and leaves the plan paused — the card then presses Continue for the
+    // user (PlanCard's `addBudget`). This fake used to return a RUNNING plan, so
+    // that second call never happened here and the workbench exercised a path
+    // the app does not have. Destin hit a freeze on Add budget that no workbench
+    // run could reproduce, for exactly that reason. A test double that is
+    // kinder than the host hides the bugs the host will produce.
     addBudget: async (_sessionId: string, planId: string, tokens: number) => nextPlan(planId, (p) => ({
-      ...p, status: 'running', paused: undefined, ceilingTokens: p.ceilingTokens + tokens,
+      ...p, ceilingTokens: p.ceilingTokens + tokens,
       ceilingUsd: p.ceilingUsd == null ? null : p.ceilingUsd * ((p.ceilingTokens + tokens) / p.ceilingTokens),
-      // UX run 1, U7: the specialist that hit the cap goes back to work, so the
-      // card visibly resumes instead of keeping its "Stopped" line.
       steps: p.steps.map((st) => st.status === 'paused'
-        ? { ...st, status: 'running', budgetTokens: st.budgetTokens + Math.ceil(tokens / Math.max(1, st.fanOut)),
-            children: st.children?.map((c) => c.status === 'interrupted' ? { ...c, status: 'running' as const, endedAt: undefined, startedAt: Date.now() } : c) }
+        ? { ...st, budgetTokens: st.budgetTokens + Math.ceil(tokens / Math.max(1, st.fanOut)) }
         : st),
     })),
     resume: async (_sessionId: string, planId: string) => nextPlan(planId, (p) => {
