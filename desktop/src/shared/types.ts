@@ -696,6 +696,13 @@ export interface PlanStepView {
   kind: 'map' | 'verify' | 'combine' | 'repeat';
   /** "Review 6 files" — what the step does, in the model's words. */
   title: string;
+  /** The step's WHOLE brief, as the specialist will receive it. `title` is only
+   *  its first line, capped and then clipped by the window, which left the user
+   *  approving real spending on text he could not finish reading (Destin,
+   *  2026-09-18). Optional: a plan projected before this existed simply has
+   *  nothing extra to open onto. Read-only — editing a plan by hand is
+   *  roadmapped, not built. */
+  task?: string;
   /** Definition id of the specialist each child runs as (explorer / reviewer / …). */
   specialist: string;
   /** How many children this step fans out to. */

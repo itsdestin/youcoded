@@ -263,6 +263,11 @@ export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanVie
       id: step.id,
       kind,
       title: stepTitle(step.task),
+      // WHY the whole brief travels beside its one-line title: the row can only
+      // ever show the first line, so without this the user approves spending on
+      // instructions he cannot finish reading (Destin, 2026-09-18). Sent as the
+      // model wrote it — the card neither trims nor reflows it.
+      task: step.task,
       specialist: step.specialist,
       fanOut: (step.kind === 'map' ? step.items!.length : 1) * multiplier,
       budgetTokens: step.budget_tokens,

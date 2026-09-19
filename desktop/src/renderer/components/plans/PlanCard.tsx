@@ -846,9 +846,19 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
           {step.children && step.children.length > 0 ? (
             step.children.map((c) => <PlanSpecialistCard key={c.childId} child={c} sessionId={sessionId} />)
           ) : (
-            <div className="text-2xs text-fg-muted">
-              Each {step.specialist} stops at its {tokenLimit(plan, perSpecialist(step))}.
-            </div>
+            <>
+              {/* Destin, 2026-09-18: the row shows only the first line of the
+                  brief, so before Approve there was no way to read the rest.
+                  `whitespace-pre-wrap` keeps the model's own line breaks —
+                  running them together would change what he is agreeing to.
+                  Absent on plans projected before `task` existed. */}
+              {step.task && (
+                <div className="text-2xs text-fg-dim whitespace-pre-wrap break-words" data-testid="plan-step-task">{step.task}</div>
+              )}
+              <div className="text-2xs text-fg-muted">
+                Each {step.specialist} stops at its {tokenLimit(plan, perSpecialist(step))}.
+              </div>
+            </>
           )}
         </div>
       )}
