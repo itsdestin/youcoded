@@ -2832,23 +2832,28 @@ describe('NativeSessionHost', () => {
         rawReport: 'the real, already-finished report', delivered: false, owner: OWNER, missedSteers: [],
       });
 
+      // WHY spy on the guarded write: interruptSpecialist and destroyAll both
+      // start it fire-and-forget. Polling the row proved nothing — recordStart
+      // above already wrote it, so the poll passed before the guarded write
+      // had even run (the assertion could pass for the wrong reason), and the
+      // still-running write raced afterEach's folder removal into ENOTEMPTY on
+      // '.youcoded/sessions' (Linux CI, 2026-09-19). Awaiting the write itself
+      // is the signal.
+      const guarded = vi.spyOn((h as any).ledger, 'updateUnlessCompleted');
+      const settleWrites = () => Promise.allSettled(guarded.mock.results.map((r) => r.value));
+
       const result = h.interruptSpecialist('root-1', childId);
       expect(result.status).toBe('ok'); // the interrupt call itself still succeeds — only the ledger write is guarded
+      expect(guarded).toHaveBeenCalledTimes(1);
+      await settleWrites();
 
-      // The ledger write is fire-and-forget — poll for it, then assert it
-      // never actually clobbered the completed row. (The comment said "poll"
-      // and the code slept 30ms; a slow machine reached the assertion before
-      // the guarded write had run at all, which passes for the wrong reason.)
-      let rec: any;
-      await vi.waitFor(() => {
-        rec = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
-        expect(rec).toBeTruthy();
-      });
+      const rec = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
       expect(rec?.status).toBe('completed');
       const claimed = await (h as any).ledger.claimUndelivered(root, 'root-1');
       expect(claimed?.childId).toBe(childId);
 
       await h.destroyAll();
+      await settleWrites();
     });
   });
 
