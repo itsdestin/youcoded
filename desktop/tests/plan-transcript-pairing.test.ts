@@ -21,6 +21,7 @@ import { AcceptedHistoryStore } from '../src/main/harness/accepted-history-store
 import { NativeHome } from '../src/main/native-home';
 import { BUILTIN_ROSTER } from '../src/main/harness/specialists/registry';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
+import { PLAN_INVALID_DETAIL } from '../src/main/harness/tools/propose-plan';
 import type { AskDecision } from '../src/main/harness/permission-broker';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { createSessionChatState, type ChatState } from '../src/renderer/state/chat-types';
@@ -391,5 +392,91 @@ describe('propose_plan: a provider failure mid-proposal still reports what the t
     expect(errors).toHaveLength(1);
     expect(errors[0].data.usage).toMatchObject({ inputTokens: 300, outputTokens: 10 });
     await expectAllViewsAgree(session, events);
+  });
+});
+
+// Decision 28: a plan failure the assistant fixes BY ITSELF, in the same turn,
+// is never shown. The transcript still records every attempt — a persisted
+// event is never retracted — but the conversation a reader sees carries AT
+// MOST ONE plan card for the assistant's plan writing. These drive a real
+// session, then replay its PERSISTED events through the reducer exactly the
+// way re-opening the conversation page does (pageEventToAction).
+describe('propose_plan: a turn shows one plan card for the assistant\'s plan writing', () => {
+  const cardsOf = (state: ChatState) => [...state.get('s-1')!.toolCalls.values()].filter((t) => t.toolName === 'propose_plan');
+  const placedIds = (state: ChatState) => [...state.get('s-1')!.toolGroups.values()].flatMap((g) => g.toolIds);
+  const emptyGroups = (state: ChatState) => [...state.get('s-1')!.toolGroups.values()].filter((g) => g.toolIds.length === 0);
+
+  it('a failed attempt the assistant repairs in the same turn leaves no card, no group slot and no failure', async () => {
+    const { session, events } = planSession([
+      scripted(stream(...toolInputChunks('bad', 'propose_plan', '{}'), toolCallChunk('bad', 'propose_plan', BAD), finishChunk('tool-calls'))),
+      scripted(stream(...toolInputChunks('good', 'propose_plan', '{}'), toolCallChunk('good', 'propose_plan', VALID), finishChunk('tool-calls'))),
+      scripted(stream(...textChunks('t', 'Plan ready.'), finishChunk('stop'))),
+    ]);
+    await session.send('plan');
+    // The transcript keeps both calls and both results — nothing is retracted.
+    expect(resultsFor(events, 'bad')).toHaveLength(1);
+    expect(resultsFor(events, 'bad')[0].data).toMatchObject({ plan: { status: 'failed' } });
+
+    const state = replayIntoReducer(events);
+    expect(cardsOf(state).map((t) => [t.toolUseId, t.plan?.status])).toEqual([['good', 'proposed']]);
+    expect(placedIds(state)).not.toContain('bad');
+    expect(emptyGroups(state)).toEqual([]);
+  });
+
+  it('a repair that also fails shows exactly one failure, the one that says why', async () => {
+    const { session, events } = planSession([
+      scripted(stream(...toolInputChunks('bad-1', 'propose_plan', '{}'), toolCallChunk('bad-1', 'propose_plan', BAD), finishChunk('tool-calls'))),
+      scripted(stream(
+        ...toolInputChunks('bad-2', 'propose_plan', '{}'), toolCallChunk('bad-2', 'propose_plan', BAD),
+        ...toolInputChunks('sib', 'propose_plan', '{}'), toolCallChunk('sib', 'propose_plan', VALID),
+        finishChunk('tool-calls'),
+      )),
+      failing(),
+    ]);
+    await session.send('plan');
+    const state = replayIntoReducer(events);
+    expect(cardsOf(state).map((t) => t.toolUseId)).toEqual(['bad-2']);
+    expect(cardsOf(state)[0].plan).toMatchObject({ status: 'failed', failure: { detail: PLAN_INVALID_DETAIL } });
+    expect(emptyGroups(state)).toEqual([]);
+  });
+
+  it('two plans sent at once, then a repair: only the repaired plan is drawn', async () => {
+    const { session, events } = planSession([
+      scripted(stream(
+        ...toolInputChunks('bad-a', 'propose_plan', '{}'), toolCallChunk('bad-a', 'propose_plan', BAD),
+        ...toolInputChunks('sib-a', 'propose_plan', '{}'), toolCallChunk('sib-a', 'propose_plan', VALID),
+        finishChunk('tool-calls'),
+      )),
+      scripted(stream(...toolInputChunks('good', 'propose_plan', '{}'), toolCallChunk('good', 'propose_plan', VALID), finishChunk('tool-calls'))),
+      scripted(stream(...textChunks('t', 'Plan ready.'), finishChunk('stop'))),
+    ]);
+    await session.send('plan');
+    const state = replayIntoReducer(events);
+    expect(cardsOf(state).map((t) => [t.toolUseId, t.plan?.status])).toEqual([['good', 'proposed']]);
+    expect(emptyGroups(state)).toEqual([]);
+  });
+
+  it('a plan abandoned mid-write and re-written in the same turn leaves one card', async () => {
+    const { session, events } = planSession([
+      hanging(...toolInputChunks('stalled', 'propose_plan', '{"goal":')),
+      scripted(stream(...toolInputChunks('fresh', 'propose_plan', '{}'), toolCallChunk('fresh', 'propose_plan', VALID), finishChunk('tool-calls'))),
+      scripted(stream(...textChunks('t', 'Plan ready.'), finishChunk('stop'))),
+    ], { stallWarningMs: STALL_MS, stallCountdownMs: STALL_MS });
+    await session.send('plan');
+    const state = replayIntoReducer(events);
+    expect(cardsOf(state).map((t) => [t.toolUseId, t.plan?.status])).toEqual([['fresh', 'proposed']]);
+    expect(emptyGroups(state)).toEqual([]);
+  }, 20_000);
+
+  it('a first failure the user had to ask again about is a new turn, so it stays', async () => {
+    const { session, events } = planSession([
+      scripted(stream(...toolInputChunks('bp', 'propose_plan', '{"goal":'), finishChunk('tool-calls'))),
+      scripted(stream(...toolInputChunks('later', 'propose_plan', '{}'), toolCallChunk('later', 'propose_plan', VALID), finishChunk('tool-calls'))),
+      scripted(stream(...textChunks('t2', 'Plan ready.'), finishChunk('stop'))),
+    ]);
+    await session.send('plan');
+    await session.send('try again');
+    const state = replayIntoReducer(events);
+    expect(cardsOf(state).map((t) => [t.toolUseId, t.plan?.status])).toEqual([['bp', 'failed'], ['later', 'proposed']]);
   });
 });

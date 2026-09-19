@@ -7,7 +7,8 @@ import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
 import { shouldRenderAssistantTurn, userEntryRenderKind, planAskMessage } from '../../state/chat-types';
 import { CompactToolStrip } from './CompactToolStrip';
-import { helperAsksOf } from '../../utils/specialist-cards';
+import { helperAsksOf, proposedPlansOf } from '../../utils/specialist-cards';
+import ToolCard from '../ToolCard';
 import PromptCard from '../PromptCard';
 import { sendPromptInput } from '../../state/prompt-input';
 import UsageCard from '../UsageCard';
@@ -490,6 +491,12 @@ export function BubbleFeed({ sessionId }: Props) {
     return { hasAwaitingApproval: hasAwaiting, hasRunningTools: hasRunning, awaitingTools: [...awaiting, ...helper] };
   }, [state.toolCalls, state.activeTurnToolIds]);
 
+  // Decision 29: a plan awaiting approval is lifted to the bottom here too, so
+  // the buddy window and the chat show it in the same place. It keeps its own
+  // card rather than joining the compact permission strip — that strip's whole
+  // shape is Allow / Deny, and a plan is steps, a ceiling and four buttons.
+  const proposedPlans = useMemo(() => proposedPlansOf(state.toolCalls), [state.toolCalls]);
+
   // ── No sessionId guard ────────────────────────────────────────────────────
   if (!sessionId) {
     return (
@@ -558,6 +565,8 @@ export function BubbleFeed({ sessionId }: Props) {
                       toolCalls={state.toolCalls}
                       sessionId={sessionId}
                       showTimestamps={showTimestamps}
+                      turnLive={state.currentTurnId === entry.turnId}
+                      liftsPlans
                     />
                   );
                   break;
@@ -617,6 +626,14 @@ export function BubbleFeed({ sessionId }: Props) {
               />
             </div>
           )}
+
+          {/* A plan awaiting approval (decision 29) — the same card this feed
+              drew in the timeline, moved to the bottom. */}
+          {proposedPlans.map((tool) => (
+            <div key={tool.toolUseId} style={{ padding: '4px 16px' }}>
+              <ToolCard tool={tool} sessionId={sessionId} />
+            </div>
+          ))}
 
           {/* Thinking indicator — only shown when no tool is pending.
               Buddy is a passive viewer so we only show 'ok' state (no attention

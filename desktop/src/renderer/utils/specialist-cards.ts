@@ -10,6 +10,62 @@ export function isPlanCard(tool: ToolCallState): boolean {
 }
 
 /**
+ * Decision 28: a plan attempt that ended without ever producing a plan. Its
+ * only record is the card's own projection — `writing:<toolUseId>`, minted by
+ * the harness's writingPlanProjection and terminalized in place — so there is
+ * no journal entry, no steps and nothing to approve. A plan the host really
+ * journalled has its own planId and is never one of these, whatever state it
+ * later reaches.
+ */
+export function isSpentPlanShell(tool: ToolCallState): boolean {
+  if (!isPlanCard(tool)) return false;
+  // No record at all counts: the card can only be the shell of an attempt.
+  if (!tool.plan) return true;
+  return tool.plan.planId.startsWith('writing:') && tool.plan.status !== 'writing';
+}
+
+/**
+ * Decision 29: a plan AWAITING APPROVAL is drawn as the last thing in the
+ * chat, the way an unanswered permission prompt is, and snaps back to its
+ * place once answered. Only `proposed` lifts — a running, paused, interrupted
+ * or finished plan is a record of what happened, not a decision to make.
+ */
+function isLiftedPlan(tool: ToolCallState): boolean {
+  return isPlanCard(tool) && tool.plan?.status === 'proposed';
+}
+
+/**
+ * Should this card be left out of its place in the conversation timeline?
+ * ONE function so the chat, the buddy feed and the "does this bubble paint
+ * anything" test cannot drift — the same reason awaiting-approval tools are
+ * filtered in exactly two mirrored places.
+ *
+ * `turnLive` = this card's turn is the one still running. A spent plan shell
+ * is hidden only then: the assistant has one automatic repair left, and a
+ * failure it fixes by itself is never shown (decision 28). When the turn ends
+ * with no usable plan the same card is drawn, once, where it always was.
+ *
+ * `liftsPlans` = this timeline has a bottom to lift a proposal to. A read-only
+ * preview does not, so there a proposal stays in its place rather than
+ * disappearing.
+ */
+export function hiddenFromTimeline(tool: ToolCallState, turnLive: boolean, liftsPlans: boolean): boolean {
+  return (liftsPlans && isLiftedPlan(tool)) || (turnLive && isSpentPlanShell(tool));
+}
+
+/**
+ * Every plan waiting for Approve / Comment in this conversation, drawn at the
+ * bottom of the chat. Scans ALL cards, not the active turn, because decision
+ * 29 keeps a proposal following the bottom until it is answered — losing a
+ * plan you were about to approve is worse than seeing it twice.
+ */
+export function proposedPlansOf(toolCalls: Map<string, ToolCallState>): ToolCallState[] {
+  const out: ToolCallState[] = [];
+  for (const tool of toolCalls.values()) if (isLiftedPlan(tool)) out.push(tool);
+  return out;
+}
+
+/**
  * Specialists 1c: does this Task card hold a helper's ask that is waiting on
  * the user? Where it is read (checked 2026-09-16, Task 5a review — the old
  * comment named a ChatView hoist that no longer exists):

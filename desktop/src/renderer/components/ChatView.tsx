@@ -34,7 +34,7 @@ import { CardKeysLiveContext } from '../state/card-keys-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { Tooltip, StatusStrip, Button } from './ui';
-import { helperAsksOf } from '../utils/specialist-cards';
+import { helperAsksOf, proposedPlansOf } from '../utils/specialist-cards';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -233,6 +233,11 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // Helper (specialist) requests join the main assistant's at the bottom —
   // see helperAsksOf for why they were invisible before.
   const helperAsks = useMemo(() => helperAsksOf(state.toolCalls), [state.toolCalls]);
+  // Decision 29: a plan awaiting approval joins them — the same lift, because
+  // Destin asked for it by pointing at the permission prompt's behaviour. Like
+  // helperAsksOf and unlike awaitingTools, it scans EVERY card rather than the
+  // active turn: a proposal keeps following the bottom until it is answered.
+  const proposedPlans = useMemo(() => proposedPlansOf(state.toolCalls), [state.toolCalls]);
 
 
 
@@ -1187,6 +1192,8 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                       sessionId={sessionId}
                       provider={provider}
                       showTimestamps={showTimestamps}
+                      turnLive={state.currentTurnId === entry.turnId}
+                      liftsPlans
                     />
                   );
                   break;
@@ -1288,7 +1295,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                 glass. Normal timeline bubbles get `in-view` from their wrapper; these
                 pop-out bubbles aren't in that wrapper, so set it here. They're pinned
                 at the bottom and always visible, so a static `in-view` is correct. */}
-            {[...awaitingTools, ...helperAsks].map((tool) => (
+            {[...awaitingTools, ...helperAsks, ...proposedPlans].map((tool) => (
                 <div key={tool.requestId ?? tool.toolUseId} className="in-view flex justify-start px-4 py-0.5">
                   <div className="assistant-bubble max-w-[85%] rounded-2xl rounded-bl-sm bg-inset px-5 py-3">
                     <ToolCard tool={tool} sessionId={sessionId} />

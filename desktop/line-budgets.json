@@ -14,7 +14,7 @@
     "main/remote-server.ts": 4091,
     "renderer/components/SettingsPanel.tsx": 3195,
     "renderer/remote-shim.ts": 3188,
-    "renderer/state/chat-reducer.ts": 3105,
+    "renderer/state/chat-reducer.ts": 3173,
     "renderer/styles/globals.css": 2917,
     "renderer/components/SessionStrip.tsx": 2776,
     "main/main.ts": 2536,

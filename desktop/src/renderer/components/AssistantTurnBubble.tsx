@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AssistantTurn, abnormalStopReason } from '../state/chat-types';
 import { ToolCallState, ToolGroupState, SessionProvider } from '../../shared/types';
 import { assistantName } from '../utils/assistant-name';
-import { hasNestedAsk, hasPlanChildAsk } from '../utils/specialist-cards';
+import { hasNestedAsk, hasPlanChildAsk, hiddenFromTimeline } from '../utils/specialist-cards';
 import { buildToolGroupHeadline } from '../utils/tool-group-summary';
 import MarkdownContent from './MarkdownContent';
 import { SessionRefsEnabled } from './session-refs-context';
@@ -26,6 +26,13 @@ interface Props {
   /** Session provider — drives provider-aware stop-reason copy (native vs Claude). */
   provider?: SessionProvider;
   showTimestamps: boolean;
+  /** Is this the turn still running? Decision 28: a plan attempt that produced
+   *  no plan is not drawn while the assistant may still repair it. */
+  turnLive?: boolean;
+  /** Does this timeline lift a plan awaiting approval to its own bottom
+   *  (decision 29)? True for the chat and the buddy feed, false for a
+   *  read-only preview, which has no bottom to lift it to. */
+  liftsPlans?: boolean;
 }
 
 // Non-end_turn stop reasons rendered inline under the affected turn.
@@ -344,6 +351,7 @@ function bubblePaintsSomething(
   toolGroups: Map<string, ToolGroupState>,
   toolCalls: Map<string, ToolCallState>,
   sentFilesCount: number,
+  elsewhere: (tool: ToolCallState) => boolean,
 ): boolean {
   if (bubble.plan || sentFilesCount > 0) return true;
   if (bubble.text && bubble.text.content.trim() !== '') return true;
@@ -358,6 +366,10 @@ function bubblePaintsSomething(
       // A link delivery counts like a file: a bubble whose ONLY content is a
       // link must still paint (it's a deliverable, not a no-op turn).
       if (!t || t.toolName === 'Skill' || t.toolName === SENT_FILES_TOOL || isSendUserLinkToolName(t.toolName)) continue;
+      // A plan lifted to the bottom of the chat, or an attempt the assistant
+      // may still repair, is the same kind of "rendered somewhere else, or not
+      // at all" as an awaiting-approval tool — see hiddenFromTimeline.
+      if (elsewhere(t)) continue;
       if (t.status !== 'awaiting-approval') return true;
     }
   }
@@ -429,6 +441,8 @@ function assistantTurnPropsAreEqual(prev: Props, next: Props): boolean {
   if (prev.sessionId !== next.sessionId) return false;
   if (prev.provider !== next.provider) return false;
   if (prev.showTimestamps !== next.showTimestamps) return false;
+  if (prev.turnLive !== next.turnLive) return false;
+  if (prev.liftsPlans !== next.liftsPlans) return false;
 
   // Same turn object (checked above) ⇒ same segments ⇒ same group IDs. We only
   // need to walk one side's IDs.
@@ -445,7 +459,7 @@ function assistantTurnPropsAreEqual(prev: Props, next: Props): boolean {
   return true;
 }
 
-export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, provider, showTimestamps }: Props) {
+export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, provider, showTimestamps, turnLive = false, liftsPlans = false }: Props) {
   // Read opt-in metadata preference here so the strip below only renders when
   // the user has explicitly turned it on in PreferencesPopup (default false).
   const { showTurnMetadata } = useTheme();
@@ -476,12 +490,17 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
   // this list, not on the raw split. A turn whose only content is its Skill
   // card (a "/skill" turn before the reply streams) keeps its final shell so
   // that row has a home.
+  // Decisions 28 and 29: a plan card this timeline draws at its own bottom, or
+  // an attempt the assistant may still repair, is not drawn here. ONE function
+  // so the group render and the "does this bubble paint anything" test cannot
+  // drift — exactly like the awaiting-approval pair above it.
+  const drawnElsewhere = (tool: ToolCallState) => hiddenFromTimeline(tool, turnLive, liftsPlans);
   const withFiles = bubbles.map((bubble) => ({
     bubble,
     sentFiles: collectBubbleSentFiles(bubble, toolGroups, toolCalls),
   }));
   let shown = withFiles.filter(({ bubble, sentFiles }) =>
-    bubblePaintsSomething(bubble, toolGroups, toolCalls, sentFiles.length));
+    bubblePaintsSomething(bubble, toolGroups, toolCalls, sentFiles.length, drawnElsewhere));
   if (shown.length === 0 && turnSkills.length > 0) shown = withFiles.slice(-1);
 
   // Empty-step recovery (spec 2026-08-21, decision 4): a fully-contentless
@@ -557,6 +576,7 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                   toolCalls={toolCalls}
                   sessionId={sessionId}
                   afterText={!!bubble.text}
+                  drawnElsewhere={drawnElsewhere}
                 />
               )}
               {/* Sent-files card: LAST in the bubble, after the tool cards
@@ -661,6 +681,7 @@ function ToolGroupInline({
   toolCalls,
   sessionId,
   afterText = false,
+  drawnElsewhere = () => false,
 }: {
   groupIds: string[];
   toolGroups: Map<string, ToolGroupState>;
@@ -668,6 +689,9 @@ function ToolGroupInline({
   sessionId: string;
   /** A group right after the spoken text gets a little more room above it. */
   afterText?: boolean;
+  /** Cards this timeline draws somewhere else, or not at all — see
+   *  hiddenFromTimeline. Mirrored by bubblePaintsSomething. */
+  drawnElsewhere?: (tool: ToolCallState) => boolean;
 }) {
   const toolIds = groupIds.flatMap((gid) => toolGroups.get(gid)?.toolIds ?? []);
   if (toolIds.length === 0) return null;
@@ -688,7 +712,9 @@ function ToolGroupInline({
   // Skip awaiting-approval tools — they render as standalone bubbles at the bottom of the timeline.
   // (A Task card whose HELPER is asking stays put: those asks are managed from
   // the specialists popup — SpecialistsChip — not by moving the card. Destin, 1c round 1.)
-  const restTools = tools.filter((t) => t.status !== 'awaiting-approval');
+  // …and a plan lifted to the bottom of the chat, or an attempt the assistant
+  // may still repair, goes the same way (decisions 28 and 29).
+  const restTools = tools.filter((t) => t.status !== 'awaiting-approval' && !drawnElsewhere(t));
   if (restTools.length === 0) return null;
 
   return (

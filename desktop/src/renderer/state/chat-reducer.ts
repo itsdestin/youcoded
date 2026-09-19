@@ -14,7 +14,7 @@ import {
 import { PlanView, SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
-import { isPlanCard } from '../utils/specialist-cards';
+import { isPlanCard, isSpentPlanShell } from '../utils/specialist-cards';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -286,6 +286,24 @@ function removePreparingTool(
 ): boolean {
   const entry = toolCalls.get(toolUseId);
   if (!entry?.preparing) return false;
+  dropToolCard(toolCalls, toolGroups, assistantTurns, toolUseId);
+  return true;
+}
+
+/**
+ * Take a tool card out of the VIEW — the card, its slot in its group, and the
+ * group's turn segment if that emptied the group. Its transcript events and
+ * model history are untouched, so a caller needs a reason a reader would
+ * accept that the call never happened or never mattered (the two: a preparing
+ * card nothing invoked, and a plan attempt the assistant replaced itself).
+ * Mutates the Maps it is handed — callers pass their own fresh copies.
+ */
+function dropToolCard(
+  toolCalls: Map<string, ToolCallState>,
+  toolGroups: Map<string, ToolGroupState>,
+  assistantTurns: Map<string, AssistantTurn>,
+  toolUseId: string,
+): void {
   toolCalls.delete(toolUseId);
 
   for (const [gid, group] of toolGroups) {
@@ -306,7 +324,45 @@ function removePreparingTool(
     }
     break;
   }
-  return true;
+}
+
+/**
+ * Decision 28: a turn shows AT MOST ONE plan card for the assistant's plan
+ * writing, so the turn's spent plan shells (isSpentPlanShell) leave the view.
+ *
+ * `onNewAttempt` = the assistant has just started writing again, which makes
+ * every attempt already spent its own superseded work: all of them go. A
+ * sibling still mid-write is not spent, so a parallel provider's second call
+ * never deletes its own twin. At turn end (`null`) the FIRST spent shell is
+ * kept instead — it is the one that actually executed, so it is the one
+ * carrying the real reason — unless the turn produced a plan, which makes
+ * even that one unnecessary.
+ *
+ * WHY the view and not the transcript: a transcript event is on disk the
+ * instant it is emitted and is never retracted. A live turn and a re-opened
+ * page run these same actions through this same reducer, so both decide it
+ * the same way.
+ */
+function pruneSpentPlanShells(
+  toolCalls: Map<string, ToolCallState>,
+  toolGroups: Map<string, ToolGroupState>,
+  assistantTurns: Map<string, AssistantTurn>,
+  turnToolIds: Iterable<string>,
+  onNewAttempt: string | null,
+): void {
+  const spent: string[] = [];
+  let realPlan = false;
+  for (const id of turnToolIds) {
+    const tool = toolCalls.get(id);
+    if (!tool || tool.toolName !== 'propose_plan') continue;
+    if (id === onNewAttempt) continue;
+    if (isSpentPlanShell(tool)) spent.push(id);
+    else if (tool.plan && !tool.plan.planId.startsWith('writing:')) realPlan = true;
+  }
+  // A new attempt supersedes everything spent; a turn's end keeps the first
+  // spent shell unless a real plan made even that one unnecessary.
+  const drop = onNewAttempt !== null || realPlan ? spent : spent.slice(1);
+  for (const id of drop) dropToolCard(toolCalls, toolGroups, assistantTurns, id);
 }
 
 /**
@@ -431,6 +487,11 @@ function endTurn(
       });
     }
   }
+  // Decision 28: the turn is over, so its plan writing is settled and what is
+  // left of the attempts becomes visible (the filter that hid them is "the
+  // turn is still running"). It has to be ONE card, so sweep the cards the
+  // loop above just terminalized.
+  pruneSpentPlanShells(toolCalls, toolGroups, assistantTurns, session.activeTurnToolIds, null);
   return {
     toolCalls,
     toolGroups,
@@ -1980,6 +2041,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
       const activeTurnToolIds = new Set(session.activeTurnToolIds);
       activeTurnToolIds.add(action.toolUseId);
+      // Decision 28: a second propose_plan in the same turn is the assistant
+      // repairing its own plan, so the attempts it already spent leave nothing
+      // behind — no red row and no stuck "writing a plan…" shell.
+      if (action.toolName === 'propose_plan') {
+        pruneSpentPlanShells(toolCalls, toolGroups, assistantTurns, activeTurnToolIds, action.toolUseId);
+        for (const id of activeTurnToolIds) if (!toolCalls.has(id)) activeTurnToolIds.delete(id);
+      }
       // adoptPendingPlans finds the record already applied above (newerPlan
       // keeps the same object) and only forgets it.
       next.set(action.sessionId, adoptPendingPlans({
