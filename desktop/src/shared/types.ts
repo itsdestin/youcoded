@@ -694,8 +694,19 @@ export interface PlanStepView {
   id: string;
   /** Spec §4 building blocks. */
   kind: 'map' | 'verify' | 'combine' | 'repeat';
-  /** "Review 6 files" — what the step does, in the model's words. */
+  /** "Review 6 files" — what the step does, in the model's words. The row
+   *  falls back to this when the step has no `summary`. */
   title: string;
+  /** Decision 30: ONE plain sentence the assistant writes FOR the person
+   *  approving the plan. The row shows it instead of `title`, which is only
+   *  the first line of a brief addressed to a machine. Optional: a plan
+   *  written before it existed renders exactly as it always did. */
+  summary?: string;
+  /** Decision 30: a fan-out step's item labels, one per child, so the row can
+   *  say "7 reviewers, one each: …" rather than only how many. A top-level
+   *  `map` only — a repeat-body row's fan-out is its items times its rounds,
+   *  so the labels would not match the count beside them. */
+  items?: string[];
   /** The step's WHOLE brief, as the specialist will receive it. `title` is only
    *  its first line, capped and then clipped by the window, which left the user
    *  approving real spending on text he could not finish reading (Destin,

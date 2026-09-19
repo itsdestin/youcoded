@@ -358,8 +358,12 @@ describe('F24/F26: step figures', () => {
   it('"up to" includes each specialist\'s setup cost, and the limit sentence matches', () => {
     bridge();
     render(<ChatProvider><Card initial={plan({ steps: [{ ...plan().steps[0], setupTokens: 500 }], ceilingTokens: 5000 })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('up to 5,000 tokens');
+    // Decision 30 (2026-09-18): on a proposed plan the row is about WHAT will
+    // happen, so both figures are read inside the opened step now. What this
+    // test pins — that "up to" counts each specialist's setup cost, and that
+    // the per-specialist sentence agrees with it — is unchanged.
     fireEvent.click(within(screen.getByTestId('plan-step-s1')).getByRole('button'));
+    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('Up to 5,000 tokens for this step.');
     expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('Each reviewer stops at its 2,500-token limit.');
   });
 

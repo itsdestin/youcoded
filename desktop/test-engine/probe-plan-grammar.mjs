@@ -52,11 +52,19 @@ let TRIALS;
 //     only its own fields, all of them required, so the two cannot disagree.
 // Both changes NARROW the grammar, so every document the probe proved still
 // parses; the probe was NOT re-run. See plans/schema.ts and plan-schema.test.ts.
+//
+// 2026-09-18, a THIRD change (decision 30): an OPTIONAL `summary` on every
+// step — one plain sentence for the person approving the plan, because the
+// card's row was the first line of a prompt written for a machine. It is
+// advertised on all four branches and required by none, so it WIDENS the
+// grammar: every document the probe proved is still valid, unchanged, and no
+// model is obliged to write one. The probe was NOT re-run.
 const FIELD = {
   id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
   specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
   task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
   budget_tokens: { type: 'integer', minimum: 500, maximum: 30000 }, // raised from 20000 on 2026-09-16 (numeric bound only; grammar evidence unchanged, not re-run)
+  summary: { type: 'string', minLength: 1, maxLength: 200, description: 'One plain sentence for the user who approves this plan, in everyday words: what this step does. Not a restatement of task, no jargon, no file paths or tool names.' },
   items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
   of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
   max_iterations: { type: 'integer', minimum: 1, maximum: 5, description: 'repeat only: hard cap.' },
@@ -82,11 +90,13 @@ function stepBranch(kind) {
     specialist: FIELD.specialist,
     task: FIELD.task,
     budget_tokens: FIELD.budget_tokens,
+    summary: FIELD.summary,
   };
   for (const field of KIND_FIELDS[kind]) properties[field] = FIELD[field];
   return {
     type: 'object',
     additionalProperties: false,
+    // `summary` is advertised on every branch and required by none.
     required: ['id', 'kind', 'specialist', 'task', 'budget_tokens', ...KIND_FIELDS[kind]],
     properties,
   };

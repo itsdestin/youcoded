@@ -17,6 +17,10 @@ const branch = (kind: string): any =>
   (PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.anyOf as any[]).find((b) => b.properties.kind.enum[0] === kind);
 
 const COMMON_FIELDS = ['id', 'kind', 'specialist', 'task', 'budget_tokens'];
+/** Fields EVERY kind may carry and NO kind must: advertised on all four
+ *  branches so a constrained decoder may emit one, never in `required` so an
+ *  older plan — and a model that ignores it — still validates. */
+const OPTIONAL_COMMON_FIELDS = ['summary'];
 /** The fields each kind owns, as the ADVERTISED schema states them. The
  *  drift pin below proves the runtime validator agrees with exactly this. */
 const ADVERTISED_KIND_FIELDS: Record<string, string[]> = {
@@ -168,14 +172,25 @@ describe('plan schema and semantic validator', () => {
       for (const b of branches) {
         const kind = b.properties.kind.enum[0];
         const advertised = Object.keys(b.properties).sort();
-        // Advertised: common + this kind's own fields, every one of them required.
-        expect(advertised).toEqual([...COMMON_FIELDS, ...ADVERTISED_KIND_FIELDS[kind]].sort());
-        expect([...b.required].sort()).toEqual(advertised);
+        // Advertised: common + the optional common ones + this kind's own fields.
+        expect(advertised).toEqual([...COMMON_FIELDS, ...OPTIONAL_COMMON_FIELDS, ...ADVERTISED_KIND_FIELDS[kind]].sort());
+        // Required: everything EXCEPT the optional common ones.
+        expect([...b.required].sort()).toEqual([...COMMON_FIELDS, ...ADVERTISED_KIND_FIELDS[kind]].sort());
         expect(b.additionalProperties).toBe(false);
 
         // Accepted by the validator: exactly the advertised set. Present → ok…
         const ok = { goal: 'g', steps: [minimalStep('map', 'earlier'), minimalStep(kind)] };
         expect(PlanDocumentSchema.safeParse(ok).success).toBe(true);
+        // …an optional common field is accepted on EVERY kind, and leaving it
+        // out is still valid — the half that broke twice is the half where one
+        // side learns a field and the other does not.
+        for (const optional of OPTIONAL_COMMON_FIELDS) {
+          const withOptional = { goal: 'g', steps: [minimalStep('map', 'earlier'), { ...minimalStep(kind), [optional]: 'One plain sentence for the user.' }] };
+          expect(PlanDocumentSchema.safeParse(withOptional).success).toBe(true);
+          expect(validatePlanDocument(withOptional, BUILTIN_ROSTER).ok).toBe(true);
+          const validateBranch = new Ajv({ strict: false }).compile(PLAN_DOCUMENT_JSON_SCHEMA);
+          expect(validateBranch(withOptional)).toBe(true);
+        }
         // …and ANY field this branch does not advertise → refused.
         for (const other of ['items', 'of', 'max_iterations', 'until', 'steps']) {
           if (advertised.includes(other)) continue;
@@ -213,6 +228,9 @@ describe('plan schema and semantic validator', () => {
     ['until length', { ...nestedRepeat, steps: [{ ...nestedRepeat.steps[0], until: 'u'.repeat(2_001) }] }],
     ['item', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], items: [''] }] }],
     ['item length', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], items: ['x'.repeat(2_001)] }] }],
+    ['summary', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], summary: '' }] }],
+    // Bounded so the one plain sentence can never grow into a second brief.
+    ['summary length', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], summary: 's'.repeat(201) }] }],
   ])('rejects empty or oversized %s text', (_name, document) => {
     expect(PlanDocumentSchema.safeParse(document).success).toBe(false);
   });
@@ -224,6 +242,7 @@ describe('plan schema and semantic validator', () => {
     ['of', { ...mapVerifyCombine, steps: [mapVerifyCombine.steps[0], { ...mapVerifyCombine.steps[1], of: '  ' }] }],
     ['until', { ...nestedRepeat, steps: [{ ...nestedRepeat.steps[0], until: '\t' }] }],
     ['item', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], items: ['\n'] }] }],
+    ['summary', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], summary: '   ' }] }],
   ])('rejects whitespace-only %s text', (_name, document) => {
     expect(PlanDocumentSchema.safeParse(document).success).toBe(false);
   });
@@ -233,12 +252,27 @@ describe('plan schema and semantic validator', () => {
       goal: 'g'.repeat(2_000),
       steps: [{
         id: 'i'.repeat(64), kind: 'repeat', specialist: 'worker', task: 't'.repeat(4_000), budget_tokens: 500,
+        summary: 's'.repeat(200),
         max_iterations: 1, until: 'u'.repeat(2_000), steps: [{
           id: 'm'.repeat(64), kind: 'map', specialist: 'worker', task: 't', budget_tokens: 500, items: ['x'.repeat(2_000)],
         }],
       }],
     };
     expect(PlanDocumentSchema.safeParse(document).success).toBe(true);
+  });
+
+  // The per-step sentence exists for the PERSON pressing Approve, so the model
+  // has to be told that — the old row was the first line of a prompt written
+  // for a machine ("EXPECTATION PASS (fresh eyes, no implementation reading)…")
+  // and told the user nothing about what the step would do.
+  it('tells the model the per-step sentence is written for the user, not for a machine', () => {
+    const description = branch('map').properties.summary.description as string;
+    expect(description).toMatch(/one .*sentence/i);
+    expect(description).toMatch(/user|person/i);
+    // Every kind advertises the same words: a summary is not a map-only idea.
+    for (const kind of ['map', 'verify', 'combine', 'repeat']) {
+      expect(branch(kind).properties.summary.description).toBe(description);
+    }
   });
 
   it('accepts a valid map → verify → combine document and derives every attempt', () => {

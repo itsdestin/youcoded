@@ -110,10 +110,14 @@ describe('A. an approximate limit wears a tilde, and no extra sentence', () => {
 
   it('each step\'s "up to" figure wears it too', () => {
     render(<ChatProvider><Card initial={plan({ approximateLimit: true })} /></ChatProvider>);
-    expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('up to ~4,000 tokens');
-    expect(screen.getByTestId('plan-step-s2')).toHaveTextContent('up to ~4,000 tokens');
-    // A folded step with no specialists yet says each one's own limit.
-    fireEvent.click(within(screen.getByTestId('plan-step-s1')).getAllByRole('button')[0]);
+    // Decision 30 (2026-09-18): while a plan is only PROPOSED its rows are
+    // about what will happen, so each step's own figure now waits inside the
+    // opened step. The tilde it wears there is what this test guards.
+    for (const id of ['plan-step-s1', 'plan-step-s2']) {
+      fireEvent.click(within(screen.getByTestId(id)).getAllByRole('button')[0]);
+      expect(screen.getByTestId(id)).toHaveTextContent('Up to ~4,000 tokens for this step.');
+    }
+    // An opened step with no specialists yet says each one's own limit too.
     expect(screen.getByTestId('plan-step-s1')).toHaveTextContent('Each reviewer stops at its ~2,000-token limit.');
   });
 

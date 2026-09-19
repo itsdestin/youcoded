@@ -12,6 +12,12 @@ const PLAN_MAX_GOAL_CHARS = 2_000;
 const PLAN_MAX_TASK_CHARS = 4_000;
 const PLAN_MAX_ITEM_CHARS = 2_000;
 const PLAN_MAX_UNTIL_CHARS = 2_000;
+// WHY a sentence's worth and no more (decision 30, 2026-09-18): `summary` is
+// the ONE plain line the person approving the plan reads on the row. Left
+// unbounded — or bounded like `task` at 4,000 — a model would write a second
+// brief into it and the row would be exactly as unreadable as the machine
+// prompt it replaced. Every other free-text field here is bounded too.
+const PLAN_MAX_SUMMARY_CHARS = 200;
 const PLAN_MAX_REPEAT_BODY_STEPS = 4;
 const PLAN_MAX_TOP_LEVEL_STEPS = 6;
 const PLAN_MAX_MAP_ITEMS = 8;
@@ -38,6 +44,19 @@ const LEAF_STEP_KINDS = ['map', 'verify', 'combine'] as const;
 type StepKind = (typeof STEP_KINDS)[number];
 
 const COMMON_STEP_FIELDS = ['id', 'kind', 'specialist', 'task', 'budget_tokens'] as const;
+/**
+ * Fields EVERY kind may carry and no kind must.
+ *
+ * WHY they are in this table rather than added to one half (decision 30,
+ * 2026-09-18): `summary` is the plain sentence the card shows the person
+ * approving the plan, and it is optional so that every plan written before it
+ * existed — and every model that ignores it — still validates untouched. It
+ * still has to reach BOTH halves from here, because a field advertised to the
+ * decoder but absent from Zod is precisely what produced the owner's "unknown
+ * parameter(s)" failure, and a field Zod knows but the schema never advertises
+ * is a field no model will ever write.
+ */
+const OPTIONAL_COMMON_STEP_FIELDS = ['summary'] as const;
 /** The extra fields each kind owns — and the ONLY ones it accepts. */
 const KIND_FIELDS: Record<StepKind, readonly string[]> = {
   map: ['items'],
@@ -47,9 +66,14 @@ const KIND_FIELDS: Record<StepKind, readonly string[]> = {
 };
 /** Every field any kind can carry, used to tell "belongs to another kind" from
  *  "not a parameter at all" — the two deserve different sentences. */
-const ALL_STEP_FIELDS = new Set<string>([...COMMON_STEP_FIELDS, 'items', 'of', 'max_iterations', 'until', 'steps']);
+const ALL_STEP_FIELDS = new Set<string>([...COMMON_STEP_FIELDS, ...OPTIONAL_COMMON_STEP_FIELDS, 'items', 'of', 'max_iterations', 'until', 'steps']);
 
-const allowedFieldsFor = (kind: StepKind): string[] => [...COMMON_STEP_FIELDS, ...KIND_FIELDS[kind]];
+const allowedFieldsFor = (kind: StepKind): string[] => [...COMMON_STEP_FIELDS, ...OPTIONAL_COMMON_STEP_FIELDS, ...KIND_FIELDS[kind]];
+/** What a step of this kind MUST carry — the allowed set minus the optional
+ *  common fields. Separate from `allowedFieldsFor` since 2026-09-18, when the
+ *  first optional field arrived: `required` and "accepted" stopped being the
+ *  same list. */
+const requiredFieldsFor = (kind: StepKind): string[] => [...COMMON_STEP_FIELDS, ...KIND_FIELDS[kind]];
 
 // ---------------------------------------------------------------------------
 // The model-facing grammar (JSON Schema), one branch per kind.
@@ -60,6 +84,7 @@ const JSON_FIELD = {
   specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
   task: { type: 'string', minLength: 1, maxLength: PLAN_MAX_TASK_CHARS, description: 'What each child does. For map, may reference {item}.' },
   budget_tokens: { type: 'integer', minimum: PLAN_MIN_BUDGET_TOKENS, maximum: PLAN_MAX_BUDGET_TOKENS },
+  summary: { type: 'string', minLength: 1, maxLength: PLAN_MAX_SUMMARY_CHARS, description: 'One plain sentence for the user who approves this plan, in everyday words: what this step does. Not a restatement of task, no jargon, no file paths or tool names.' },
   items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ITEM_CHARS }, minItems: 1, maxItems: PLAN_MAX_MAP_ITEMS, description: 'map only: one child per item.' },
   of: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ID_CHARS, description: 'verify/combine: the id of the step whose results this consumes.' },
   max_iterations: { type: 'integer', minimum: 1, maximum: PLAN_MAX_REPEAT_ITERATIONS, description: 'repeat only: hard cap.' },
@@ -89,14 +114,17 @@ function jsonStepBranch(kind: StepKind): Record<string, unknown> {
     task: JSON_FIELD.task,
     budget_tokens: JSON_FIELD.budget_tokens,
   };
+  for (const field of OPTIONAL_COMMON_STEP_FIELDS) properties[field] = JSON_FIELD[field as keyof typeof JSON_FIELD];
   for (const field of KIND_FIELDS[kind]) properties[field] = JSON_FIELD[field as keyof typeof JSON_FIELD];
   return {
     type: 'object',
     additionalProperties: false,
-    // Every field a kind owns is REQUIRED for that kind — a `map` without
+    // Every field a kind OWNS is REQUIRED for that kind — a `map` without
     // `items` is not a map. This is what makes the branches mutually exclusive,
     // so `anyOf` picks exactly one and the decoder cannot mix two kinds' fields.
-    required: allowedFieldsFor(kind),
+    // The optional common fields are advertised but never required, which keeps
+    // the branches exclusive on `kind` exactly as before.
+    required: requiredFieldsFor(kind),
     properties,
   };
 }
@@ -125,6 +153,7 @@ const nonEmptyBounded = (maximum: number) => z.string().min(1).max(maximum).refi
 
 type PlanStep = {
   id: string; kind: StepKind; specialist: string; task: string; budget_tokens: number;
+  summary?: string;
   items?: string[]; of?: string; max_iterations?: number; until?: string; steps?: PlanStep[];
 };
 
@@ -173,6 +202,8 @@ function stepSchema(kinds: readonly StepKind[]): z.ZodType<PlanStep> {
     specialist: nonEmptyBounded(PLAN_MAX_ID_CHARS),
     task: nonEmptyBounded(PLAN_MAX_TASK_CHARS),
     budget_tokens: z.number().int().min(PLAN_MIN_BUDGET_TOKENS).max(PLAN_MAX_BUDGET_TOKENS),
+    // Optional on every kind, and the same bound the advertised schema states.
+    summary: nonEmptyBounded(PLAN_MAX_SUMMARY_CHARS).optional(),
     items: z.array(nonEmptyBounded(PLAN_MAX_ITEM_CHARS)).min(1).max(PLAN_MAX_MAP_ITEMS).optional(),
     of: nonEmptyBounded(PLAN_MAX_ID_CHARS).optional(),
     max_iterations: z.number().int().min(1).max(PLAN_MAX_REPEAT_ITERATIONS).optional(),

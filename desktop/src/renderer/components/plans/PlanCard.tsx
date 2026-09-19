@@ -785,6 +785,56 @@ const KIND_WORD: Record<PlanStepView['kind'], string> = {
   repeat: 'repeats until done',
 };
 
+/** How much of the item list the collapsed row may spend, and the longest one
+ *  label it will print there. Both are characters, not pixels: the row already
+ *  has CSS truncation, but letting it cut mid-list would leave "7 reviewers,
+ *  one each: Ch" with no sign that anything was dropped. */
+const ITEMS_ROW_MAX_CHARS = 52;
+const ITEM_ROW_MAX_CHARS = 24;
+
+/**
+ * "Chat, Files, Settings, Terminal, …" — as many of a fan-out step's items as
+ * fit one row, ending in an ellipsis whenever any were left out.
+ *
+ * WHY it is cut here rather than left to CSS (decision 30): the point of the
+ * line is that the reader can SEE some of what the specialists get and can see
+ * that there is more. A CSS clip says neither. The first item always prints,
+ * shortened on its own if it has to be, so a step with one very long label
+ * still says something about it.
+ */
+function itemsRowLine(items: string[]): string {
+  const shown: string[] = [];
+  let used = 0;
+  for (const item of items) {
+    const label = item.length > ITEM_ROW_MAX_CHARS ? `${item.slice(0, ITEM_ROW_MAX_CHARS - 1)}…` : item;
+    if (shown.length > 0 && used + label.length + 2 > ITEMS_ROW_MAX_CHARS) break;
+    shown.push(label);
+    used += label.length + 2;
+  }
+  // A shortened label carries its own ellipsis; this one says items were left out.
+  const line = shown.join(', ');
+  return shown.length < items.length ? `${line}, …` : line;
+}
+
+/**
+ * The brief, minus the line the row above it is already showing.
+ *
+ * WHY (2026-09-18): opening a step was made to show the whole `task`, but the
+ * row shows that task's first line, so every expansion repeated it. A line is
+ * dropped ONLY when the row printed it in full — a headline the row had to cut
+ * at 80 characters, or a row showing the assistant's `summary` instead, still
+ * needs the brief entire. A one-line brief the row already shows leaves nothing
+ * to add, and returns '' so the card draws no empty block.
+ */
+function briefBelowRow(task: string | undefined, rowLine: string): string {
+  if (!task) return '';
+  const body = task.trim();
+  const breakAt = body.indexOf('\n');
+  const firstLine = (breakAt === -1 ? body : body.slice(0, breakAt)).trim();
+  if (firstLine !== rowLine) return body;
+  return breakAt === -1 ? '' : body.slice(breakAt + 1).replace(/^\n+/, '');
+}
+
 function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: number; plan: PlanView; sessionId?: string }) {
   // A running step opens itself so its specialists are visible without a
   // click (Q-5: the card is the progress surface); anything else folds.
@@ -800,12 +850,29 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
   // token figure and the specialist words took the room), so the details
   // move to a second line there. Wide screens keep the signed one-line row.
   const narrow = useNarrowViewport();
+  // Decision 30: the row is the assistant's plain sentence for the reader when
+  // it wrote one, and today's headline — the first line of the specialist's
+  // brief — when it did not.
+  const line = step.summary ?? step.title;
+  // Decision 30: a fan-out step names what each specialist gets; every other
+  // kind keeps the word it has always had.
+  const detail = step.items && step.items.length > 0
+    ? `${who}, one each: ${itemsRowLine(step.items)}`
+    : `${who} · ${KIND_WORD[step.kind]}`;
+  // WHY the token figure leaves a PROPOSED row (decision 30): "up to 286,181
+  // tokens" was the loudest thing on every row and the least useful before
+  // approval. While a plan is only proposed the row is about WHAT will happen
+  // and the figure moves into the opened step; the moment it is running,
+  // paused or finished the row is about progress and spend, exactly as signed.
+  const proposing = plan.status === 'proposed';
   const right =
-    step.status === 'pending' || plan.status === 'proposed' ? `up to ${limitTokens(plan, perSpecialist(step) * step.fanOut)}`
+    proposing ? ''
+    : step.status === 'pending' ? `up to ${limitTokens(plan, perSpecialist(step) * step.fanOut)}`
     // Final review F26: "0 of 1 reviewer done", not "reviewers".
     : step.status === 'running' || step.status === 'paused' ? `${step.done ?? 0} of ${step.fanOut} ${step.specialist}${step.fanOut === 1 ? '' : 's'} done · ${tokens(step.usedTokens ?? 0)}`
     : step.status === 'done' ? tokens(step.usedTokens ?? 0)
     : '';
+  const brief = briefBelowRow(step.task, line);
   return (
     // Destin, round 2 (R-2): a step is a container like the cards above and
     // below it, so the nesting reads plan → step → specialist by shape rather
@@ -818,7 +885,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
             <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
             <span className="text-xs text-fg-muted tabular-nums shrink-0">{index + 1}.</span>
             {/* Final review F8 (R41): on a narrow window the title wraps. */}
-            <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} break-words flex-1 min-w-0`} data-testid="plan-step-title">{step.title}</span>
+            <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} break-words flex-1 min-w-0`} data-testid="plan-step-title">{line}</span>
             <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
           </span>
           {/* Lined up under the title (glyph 0.875rem + gap 0.5rem). */}
@@ -826,7 +893,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
               tokens") was held at full width and clipped by the card edge.
               It now wraps: first onto its own line, then within itself. */}
           <span className="flex flex-wrap items-center gap-x-2 min-w-0 pl-5.5">
-            <span className="text-2xs text-fg-dim truncate min-w-0">{who} · {KIND_WORD[step.kind]}</span>
+            <span className="text-2xs text-fg-dim truncate min-w-0" data-testid="plan-step-detail">{detail}</span>
             <span className="ml-auto text-2xs text-fg-muted tabular-nums min-w-0 text-right">{right}</span>
           </span>
         </button>
@@ -835,8 +902,8 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
           className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-inset/50 transition-colors">
           <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
           <span className="text-xs text-fg-muted tabular-nums shrink-0">{index + 1}.</span>
-          <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} truncate`} data-testid="plan-step-title">{step.title}</span>
-          <span className="text-2xs text-fg-dim truncate">{who} · {KIND_WORD[step.kind]}</span>
+          <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} truncate`} data-testid="plan-step-title">{line}</span>
+          <span className="text-2xs text-fg-dim truncate" data-testid="plan-step-detail">{detail}</span>
           <span className="ml-auto text-2xs text-fg-muted tabular-nums shrink-0">{right}</span>
           <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
         </button>
@@ -847,16 +914,28 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
             step.children.map((c) => <PlanSpecialistCard key={c.childId} child={c} sessionId={sessionId} />)
           ) : (
             <>
+              {/* Decision 30: the row names a few of the items and says there
+                  are more; here every one is readable, one per line, however
+                  long its label is. */}
+              {step.items && step.items.length > 0 && (
+                <ul className="text-2xs text-fg-dim space-y-0.5" data-testid="plan-step-items">
+                  {step.items.map((item, i) => <li key={`${i}-${item}`} className="break-words">{item}</li>)}
+                </ul>
+              )}
               {/* Destin, 2026-09-18: the row shows only the first line of the
                   brief, so before Approve there was no way to read the rest.
                   `whitespace-pre-wrap` keeps the model's own line breaks —
                   running them together would change what he is agreeing to.
-                  Absent on plans projected before `task` existed. */}
-              {step.task && (
-                <div className="text-2xs text-fg-dim whitespace-pre-wrap break-words" data-testid="plan-step-task">{step.task}</div>
+                  Absent on plans projected before `task` existed, and on a
+                  brief the row is already showing whole (briefBelowRow). */}
+              {brief && (
+                <div className="text-2xs text-fg-dim whitespace-pre-wrap break-words" data-testid="plan-step-task">{brief}</div>
               )}
               <div className="text-2xs text-fg-muted">
                 Each {step.specialist} stops at its {tokenLimit(plan, perSpecialist(step))}.
+                {/* Decision 30: the figure the proposed row no longer carries,
+                    beside the per-specialist limit it belongs with. */}
+                {proposing ? ` Up to ${limitTokens(plan, perSpecialist(step) * step.fanOut)} for this step.` : ''}
               </div>
             </>
           )}

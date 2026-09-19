@@ -29,6 +29,19 @@
  * the plan-failed state changed. The plan-writing input now carries
  * `model.local` (F19: the "on your computer" hint follows that flag instead of
  * a missing price); its words are unchanged.
+ *
+ * Re-recorded once more, decision 30 (2026-09-18): the product owner read a
+ * real six-step plan and said "it's still a bit hard to tell what exactly is
+ * going on or what the plan will do from this card", naming the per-step token
+ * figure as the loudest and least useful thing on every row before approval.
+ * So while a plan is only PROPOSED, each step's "up to N tokens" moves off the
+ * row and into the opened step, beside the per-specialist limit sentence that
+ * already lives there. That is the ONLY change in these three proposed states:
+ * one figure per row is gone from the collapsed card and nothing is added, and
+ * a running, paused or finished card is byte-for-byte as signed. The other two
+ * halves of that decision — a fan-out step's item labels and the assistant's
+ * plain per-step sentence — cannot show here at all, because these frozen
+ * inputs were captured before either field existed.
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, cleanup, fireEvent, screen } from '@testing-library/react';

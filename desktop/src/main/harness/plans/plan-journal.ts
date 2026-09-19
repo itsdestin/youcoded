@@ -274,6 +274,16 @@ export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanVie
       setupTokens: plan.manifest.specialists[step.specialist]?.setupTokens ?? 0,
       status: rec?.status ?? 'pending',
     };
+    // WHY the assistant's own sentence travels (decision 30, 2026-09-18): the
+    // row was `title` — the first line of a prompt written for a specialist,
+    // not for the person approving real spending. Absent on every plan written
+    // before the field existed, and the card falls back to `title` then.
+    if (step.summary) out.summary = step.summary;
+    // WHY the item labels travel: they are what each child of a fan-out step
+    // actually gets, and the card could only ever say how MANY children there
+    // were. Only a top-level map — a repeat-body row's fan-out is its items
+    // times its rounds, so the labels would not match the count beside them.
+    if (kind === 'map' && step.items && step.items.length > 0) out.items = [...step.items];
     if (attempts.length > 0) {
       out.done = attempts.filter((a) => isCommitted(a) && a.terminal === 'completed').length;
       out.usedTokens = attempts.reduce((n, a) => n + a.spentTokens, 0);

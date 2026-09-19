@@ -200,6 +200,30 @@ describe('mutation chokepoint', () => {
     // Σ(fanOut × budget) is the ceiling the validator derived.
     expect(view.steps.reduce((n, s) => n + s.fanOut * s.budgetTokens, 0)).toBe(6100);
   });
+
+  // The card knew only "2 reviewers" and never on WHAT, although the document's
+  // own item list is exactly that answer (Destin, 2026-09-18: "it's still a bit
+  // hard to tell … what the plan will do from this card").
+  it('carries a fan-out step\'s item labels and the assistant\'s own sentence onto the card', () => {
+    const summary = 'Two reviewers each read one file and report what they find.';
+    const document: PlanDocumentV1 = { ...DOC, steps: [{ ...DOC.steps[0], summary }, ...DOC.steps.slice(1)] };
+    const view = projectPlan(record('p1', { document }));
+
+    expect(view.steps[0].items).toEqual(['a.ts', 'b.ts']);
+    expect(view.steps[0].summary).toBe(summary);
+    // A combine runs one specialist on an earlier step's results — no items.
+    expect(view.steps[1].items).toBeUndefined();
+    // A repeat-body row's fan-out is its items TIMES the rounds, so naming the
+    // items beside "3 workers" would misdescribe what will happen.
+    expect(view.steps[2].kind).toBe('repeat');
+    expect(view.steps[2].items).toBeUndefined();
+  });
+
+  it('leaves a step with no sentence of its own showing exactly the headline it showed before', () => {
+    const view = projectPlan(record('p1'));
+    expect(view.steps[0].summary).toBeUndefined();
+    expect(view.steps[0].title).toBe('Review {item}');
+  });
 });
 
 describe('5b follow-up: pause facts and attempt phase reach the card', () => {
