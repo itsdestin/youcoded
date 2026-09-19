@@ -1078,7 +1078,14 @@ function StepRow({ step, index, siblings, number, numbers, plan, sessionId }: {
             <span className="shrink-0 inline-flex w-3.5 justify-center">{STEP_GLYPH[step.status]}</span>
             <span className="text-xs text-fg-muted tabular-nums shrink-0">{number}.</span>
             <span className={`text-xs ${step.status === 'done' ? 'text-fg-dim' : 'text-fg-2'} truncate`} data-testid="plan-step-title">{line}</span>
-            <span className="text-2xs text-fg-dim truncate" data-testid="plan-step-detail">{detail}</span>
+            {/* WHY the detail never shrinks (2026-09-19): both this and the
+                sentence beside it were flex items that could truncate, so
+                flexbox cut them in proportion and a long sentence ate the
+                count — "← from step 1 · 1 re…" on the fork fixture. The count
+                and the source step are short, bounded and the two facts a row
+                exists to carry; the sentence is the long, self-describing one
+                and is the only thing here that may lose its tail. */}
+            <span className="text-2xs text-fg-dim shrink-0" data-testid="plan-step-detail">{detail}</span>
             <span className="ml-auto text-2xs text-fg-muted tabular-nums shrink-0">{right}</span>
             <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
           </span>
