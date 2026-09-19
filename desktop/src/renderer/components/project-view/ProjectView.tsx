@@ -31,6 +31,7 @@ import type { FileSortKey, FileViewMode } from './tabs/FilesTab';
 // One project:list-conversations row — a plain past session.
 type ConversationSummary = PastSession;
 import { FilesTab, PV_SESSION } from './tabs/FilesTab';
+import { folderFileNames } from './folder-file-names';
 import { ConversationsTab } from './tabs/ConversationsTab';
 import { ContextTab } from './tabs/ContextTab';
 import { ConversationPreview } from './ConversationPreview';
@@ -419,10 +420,12 @@ export function ProjectView(props: ProjectViewProps) {
     // persisted stats.artifactCount in the central index — neither is a
     // renderer concern here.
     // ALL FILES count — the project folder's on-disk files (DISTINCT from the
-    // artifact count). Shares main's discovery cache with the Files tab's
-    // Project Files section, so this and the tab don't double-scan. Gated roots
-    // (home dir / drive root)
-    // return { gated } with NO scan → null here → the stat renders "—".
+    // artifact count). Since 2026-09-18 the Files tab browses one folder at a
+    // time (artifacts:list-folder) and no longer shares this walk — it reuses
+    // main's 10 s discovery cache only when a search follows. This count still
+    // walks the project (capped) on open, off the Files tab's path; the Stage 2
+    // background index replaces it (roadmap files.md). Gated roots (home dir /
+    // drive root) return { gated } with NO scan → null here → the stat renders "—".
     const getAllFilesCount = async (): Promise<{ count: number | null; truncated: boolean }> => {
       try {
         const res = await (window.claude as any).artifacts.listAllFiles(id);
@@ -605,41 +608,32 @@ export function ProjectView(props: ProjectViewProps) {
   };
 
   // Collisions: basenames among the picked paths that already exist directly
-  // in the destination folder. Compared against the SAME on-disk listing
-  // FilesTab's Project Files section reads (artifacts:list-all-files) — an
-  // extra IPC round trip rather than reaching into FilesTab's internal state,
-  // but that call is cache-backed (project-file-discovery.ts), so it's cheap,
-  // and it keeps this component from depending on FilesTab's internals.
+  // in the destination folder. Read from that ONE folder on disk
+  // (artifacts:list-folder, the same listing FilesTab's folder view shows) —
+  // an extra IPC round trip rather than reaching into FilesTab's internal
+  // state, and it keeps this component from depending on FilesTab's internals.
   //
-  // This list is BEST EFFORT and deliberately treated as such downstream:
-  // discovery skips noise files (package-lock.json, *.map, *.min.js,
-  // .DS_Store), truncates at its caps, and this function returns [] if the call
-  // fails at all. Everything it returns is NAMED in the dialog and forwarded as
+  // WHY list-folder and not the whole-project list (Stage 1, 2026-09-18): the
+  // whole-project walk skipped noise files (package-lock.json, *.map …),
+  // stopped at its caps, never reached deep or dot/build folders, and was gated
+  // on a home folder — each a way for a real collision to go unseen. The folder
+  // listing has none of those gaps. It stays BEST EFFORT downstream anyway:
+  // everything it returns is NAMED in the dialog and forwarded as
   // disclosedCollisions, and main refuses to 'replace' anything absent from it —
-  // so an omission here costs a keep-both rename, never an unseen overwrite.
+  // so a failed listing ([] here) costs a keep-both rename, never an unseen
+  // overwrite.
   const computeImportCollisions = async (paths: string[]): Promise<string[]> => {
     if (!activeProject) return [];
-    // force: true — collision detection must see the REAL listing even on a
-    // gated root (home dir / drive root). Without it, a user who clicked
-    // "Browse anyway" in FilesTab sees the true file list there while this
-    // call silently gets back { files: [] } from the gate, so every collision
-    // would go undetected and the Replace/Keep both/Skip choice would never
-    // be offered. listAllFiles is cache-backed (project-file-discovery.ts),
-    // so this doesn't add a redundant scan when FilesTab already forced one.
-    const res = await (window.claude as any).artifacts.listAllFiles(activeProject.id, { force: true });
-    if (!res?.ok || !Array.isArray(res.files)) return [];
-    const prefix = currentRelDir ? currentRelDir.replace(/\\/g, '/') + '/' : '';
-    const existing = new Set<string>();
-    for (const a of res.files as ArtifactRecord[]) {
-      const p = a.path.replace(/\\/g, '/');
-      if (prefix && !p.startsWith(prefix)) continue;
-      const rest = p.slice(prefix.length);
-      if (!rest || rest.includes('/')) continue; // lives in a deeper subfolder, not this one
-      existing.add(rest);
-    }
+    const listFolder = (window.claude as any).artifacts.listFolder;
+    if (!listFolder) return [];
+    let existing: Set<string> | null = null;
+    try {
+      existing = await folderFileNames(listFolder, activeProject.id, currentRelDir.replace(/\\/g, '/'));
+    } catch { return []; }
+    if (!existing) return [];
     return paths
       .map((p) => p.replace(/\\/g, '/').split('/').pop() ?? p)
-      .filter((name) => existing.has(name));
+      .filter((name) => existing!.has(name));
   };
 
   // + Add file — was a manualIncludes pin (a "fake" tracked entry pointing at a

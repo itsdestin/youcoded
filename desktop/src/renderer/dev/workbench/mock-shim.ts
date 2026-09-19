@@ -45,6 +45,7 @@ import { buildCatalog, buildStressCatalog } from './fixtures/marketplace/catalog
 import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
 import { createRemoteAccessPreview } from './fixtures/remote-access';
+import { folderPageFromRecords } from '../../../shared/artifacts/folder-page';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
 // states (partial-view banner, handoff) against the fake backend.
@@ -165,7 +166,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'firstRun.localSetup', 'firstRun.localDownload',
   'firstRun.resumeLocalDownload', 'firstRun.connectLocalApp', 'claudeCode.install',
   'artifacts.listProjectsIndex', 'artifacts.listSession', 'artifacts.listProject',
-  'artifacts.listAllFiles', 'artifacts.get', 'artifacts.checkExistence',
+  'artifacts.listAllFiles', 'artifacts.listFolder', 'artifacts.get', 'artifacts.checkExistence',
   'artifacts.searchContent', 'artifacts.watchProject', 'artifacts.unwatchProject',
   'artifacts.readBinary', 'artifacts.save',
   'syncSpaces.status', 'syncSpaces.syncNow', 'syncSpaces.stopProject',
@@ -2440,6 +2441,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     return Promise.reject(new Error(`remote-unsupported: ${channel}`));
   };
   const filesRefused = () => remoteFilesSwitch === 'refused';
+  // `&filesLocked=1`: Project Files gets a folder that refuses to open (see
+  // listFolder) — the only way to reach that error without a real disk.
+  const lockedSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('filesLocked') === '1';
   // A file only a phone would balk at: 24 MB is over the 10 MB image/PDF ceiling
   // but well under the desktop's 50 MB, so the same row previews fine at the
   // desk and shows the too-large card on the phone. Appended to the lists only in
@@ -2475,6 +2480,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     listAllFiles: async (projectId: string) => {
       if (filesRefused()) return refuseAsToday('artifacts:list-all-files');
       return { ok: true, files: withRemoteRows(filesIn(projectId)), truncated: false };
+    },
+    // artifacts:list-folder — one folder, a page at a time, carved from the
+    // fixture rows by the same helper the renderer tests use
+    // (shared/artifacts/folder-page.ts), because the workbench has no disk.
+    // `&filesLocked=1` adds a folder the "system" refuses to open, so the
+    // permission error can be reached and captured.
+    listFolder: async (projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) => {
+      if (filesRefused()) return refuseAsToday('artifacts:list-folder');
+      const dir = relDir.replace(/^\/+|\/+$/g, '');
+      if (lockedSwitch && dir === 'Locked') return { ok: false, error: 'permission-denied' };
+      const page = folderPageFromRecords(withRemoteRows(filesIn(projectId)), dir, opts);
+      if (lockedSwitch && !dir && page.ok && !page.hasMore) {
+        page.folders = [...page.folders, { name: 'Locked', path: 'Locked', samples: [] }]
+          .sort((x, y) => x.name.localeCompare(y.name));
+        page.total += 1;
+      }
+      return page;
     },
     // artifacts:resolve-path — one tapped chat path. Same answer shapes as the
     // real lookup (read-service.ts resolveArtifactPath): the fixture row whose

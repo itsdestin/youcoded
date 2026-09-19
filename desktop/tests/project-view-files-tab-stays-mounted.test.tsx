@@ -24,6 +24,7 @@ import React, { useState } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
 import { FilesTab } from '../src/renderer/components/project-view/tabs/FilesTab';
+import { folderPageFromRecords } from '../src/shared/artifacts/folder-page';
 import { ProjectView } from '../src/renderer/components/project-view/ProjectView';
 import { ArtifactProvider } from '../src/renderer/state/ArtifactContext';
 
@@ -48,6 +49,9 @@ vi.mock('../src/renderer/hooks/useProjectWatch', async (importOriginal) => {
 vi.mock('../src/renderer/components/ScreenBand', () => ({ ScreenBand: () => null }));
 
 const listAllFiles = vi.fn();
+// Folder browsing reads one folder at a time (artifacts:list-folder, Stage 1
+// 2026-09-18); the whole-project list is only fetched for a search.
+const listFolder = vi.fn();
 
 const FILES = [
   { id: 'f1', kind: 'internal', path: 'notes.md', lastModified: new Date().toISOString() },
@@ -77,9 +81,11 @@ beforeEach(() => {
     observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
   };
   listAllFiles.mockResolvedValue({ ok: true, files: FILES });
+  listFolder.mockImplementation((_id: string, dir: string, opts: any) => Promise.resolve(folderPageFromRecords(FILES as any, dir, opts)));
   (window as any).claude = {
     artifacts: {
       listAllFiles,
+      listFolder,
       listProjectsIndex: () => Promise.resolve({ ok: true, projects: [project] }),
       onChanged: () => () => {},
       watchProject: () => Promise.reject(new Error('no watcher in tests')),
@@ -156,7 +162,9 @@ describe('Files tab survives a tab switch', () => {
   it('hides on `hidden` without refetching the file list', async () => {
     const { container, rerender, findByTitle } = renderTab(false);
     await findByTitle('notes.md');
-    expect(listAllFiles).toHaveBeenCalledTimes(1);
+    expect(listFolder).toHaveBeenCalledTimes(1);
+    // Browsing never waits on the whole-project walk.
+    expect(listAllFiles).not.toHaveBeenCalled();
 
     // Stable callbacks, as ProjectView passes them.
     const onViewChange = vi.fn();
@@ -175,7 +183,7 @@ describe('Files tab survives a tab switch', () => {
     rerender(shown(false));   // → back to Files
     await waitFor(() => expect(container.firstElementChild?.className).not.toBe('hidden'));
     // The one call from the first mount, and no more.
-    expect(listAllFiles).toHaveBeenCalledTimes(1);
+    expect(listFolder).toHaveBeenCalledTimes(1);
   });
 });
 
