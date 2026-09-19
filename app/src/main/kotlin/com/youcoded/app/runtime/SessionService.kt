@@ -3956,6 +3956,14 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it,
                     org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
             }
+            // One folder of Project Files, a page at a time (desktop:
+            // folder-listing.ts). Project View has no file data on the phone
+            // yet; the stub keeps the type-string parity and the shared UI
+            // shows the same empty folder it showed before this channel.
+            "artifacts:list-folder" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                    org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
+            }
             // One file path tapped in chat, resolved to the record the drawer
             // opens (desktop: read-service.ts resolveArtifactPath). Not built on
             // the phone yet: this answer makes the shared UI fall back to its

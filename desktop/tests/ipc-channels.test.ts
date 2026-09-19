@@ -595,6 +595,8 @@ describe('artifact IPC parity', () => {
     SEARCH_CONTENT: 'artifacts:search-content',
     // One tapped chat path resolved on the host (read-service.ts resolveArtifactPath).
     RESOLVE_PATH: 'artifacts:resolve-path',
+    // One folder of Project Files, a page at a time (folder-listing.ts).
+    LIST_FOLDER: 'artifacts:list-folder',
   }).reduce<Record<string, string>>((acc, [name, value]) => {
     acc[value] = `ARTIFACT_IPC.${name}`;
     return acc;

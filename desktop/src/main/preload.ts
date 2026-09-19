@@ -1729,6 +1729,11 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('artifacts:list-project', projectId, opts),
     listAllFiles: (projectId: string, opts?: { force?: boolean }) =>
       ipcRenderer.invoke('artifacts:list-all-files', projectId, opts),
+    // One folder of Project Files, a page at a time, from disk (folder-listing.ts).
+    // relDir is project-relative ('' = the project folder). Answers
+    // { ok:true, files, folders, total, offset, hasMore } or { ok:false, error }.
+    listFolder: (projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) =>
+      ipcRenderer.invoke('artifacts:list-folder', projectId, relDir, opts),
     // Resolve ONE file path tapped in chat to the record the drawer opens — a
     // tracked record, or the on-disk file inside the folder. Replaces
     // downloading the whole project list to find one file (read-service.ts

@@ -4,7 +4,7 @@ import { listProjectsIndex } from './artifacts/projects-index';
 // Files over remote (batch 3): the same read bodies the Electron handlers
 // call, plus the phone's smaller preview ceilings.
 import {
-  listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
+  listSessionFiles, listProjectFiles, listAllFiles, listFolder, readArtifactText, readArtifactBytes,
   searchArtifactContent, checkArtifactExistence, isKnownRoot, isKnownProjectRef,
   resolveArtifactPath,
 } from './artifacts/read-service';
@@ -3684,6 +3684,7 @@ export class RemoteServer {
       case 'artifacts:list-session':
       case 'artifacts:list-project':
       case 'artifacts:list-all-files':
+      case 'artifacts:list-folder':
       case 'artifacts:resolve-path':
       case 'artifacts:get':
       case 'artifacts:read-binary':
@@ -3899,6 +3900,13 @@ export class RemoteServer {
       (await this.refuseUnknownProject(p.projectId, { records: true })) ?? listProjectFiles(p.projectId, p.opts),
     'artifacts:list-all-files': async (p) =>
       (await this.refuseUnknownProject(p.projectId)) ?? listAllFiles(p.projectId, p.opts),
+    // One folder of a shared project. The same root gate as list-all-files
+    // first; inside the project, folder-listing's own in-folder and
+    // protected-path checks apply exactly as they do on the desktop.
+    'artifacts:list-folder': async (p) => {
+      if (typeof p.relDir !== 'string') return { ok: false, error: 'bad-request' };
+      return (await this.refuseUnknownProject(p.projectId)) ?? listFolder(p.projectId, p.relDir, p.opts);
+    },
     // One file path tapped in chat (2026-09-11). A phone can name ANY path
     // here, so: the root gate runs first and nothing is looked up for a folder
     // the computer never showed; and a folder known only because a chat runs

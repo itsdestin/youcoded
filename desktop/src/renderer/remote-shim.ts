@@ -2431,6 +2431,11 @@ export function installShim(): void {
         invoke('artifacts:list-project', { projectId, opts }),
       listAllFiles: (projectId: string, opts?: { force?: boolean }) =>
         invoke('artifacts:list-all-files', { projectId, opts }),
+      // One folder, a page at a time (folder-listing.ts on the host). Its
+      // { ok:false, error } answers are DATA the Files tab words for the person
+      // (permission-denied, not-found…), so it is not in REJECT_ON_NOT_OK.
+      listFolder: (projectId: string, relDir: string, opts?: { sort?: 'name' | 'recent'; offset?: number; limit?: number; snapshot?: string; namesOnly?: boolean }) =>
+        invoke('artifacts:list-folder', { projectId, relDir, opts }),
       // One tapped chat path, resolved on the host (remote-server.ts, same
       // root gate as the other reads). Its { ok:false, error } answers are DATA
       // the caller words for the person (not-found, not-allowed…), so this
