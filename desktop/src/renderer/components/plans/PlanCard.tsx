@@ -785,35 +785,49 @@ const KIND_WORD: Record<PlanStepView['kind'], string> = {
   repeat: 'repeats until done',
 };
 
-/** How much of the item list the collapsed row may spend, and the longest one
- *  label it will print there. Both are characters, not pixels: the row already
- *  has CSS truncation, but letting it cut mid-list would leave "7 reviewers,
- *  one each: Ch" with no sign that anything was dropped. */
+/** How much of the item list the collapsed row may spend. Characters, not
+ *  pixels: the row already has CSS truncation, but letting it cut mid-list
+ *  would leave "7 reviewers, one each: Ch" with no sign that anything was
+ *  dropped. */
 const ITEMS_ROW_MAX_CHARS = 52;
-const ITEM_ROW_MAX_CHARS = 24;
 
 /**
  * "Chat, Files, Settings, Terminal, …" — as many of a fan-out step's items as
- * fit one row, ending in an ellipsis whenever any were left out.
+ * fit one row WHOLE, ending in an ellipsis whenever any were left out. Nothing
+ * at all ('') when not even the first label fits.
  *
- * WHY it is cut here rather than left to CSS (decision 30): the point of the
- * line is that the reader can SEE some of what the specialists get and can see
- * that there is more. A CSS clip says neither. The first item always prints,
- * shortened on its own if it has to be, so a step with one very long label
- * still says something about it.
+ * WHY a label now prints whole or not at all (Destin, 2026-09-18, on his real
+ * plan: the row's second half is "truncated noise"): the earlier version also
+ * cut each label to 24 characters, which is fine for "Chat" and useless for a
+ * label that is a comma-separated file list — seven of those became
+ * "App chrome: HeaderBar.t…, Chat and status: ChatVi…, …", a preview in which
+ * not one item could be read. A preview that cannot be read says less than the
+ * count standing beside it, so the row drops it (see `itemsDetail`) and the
+ * item text appears only in the opened rows, at full width, where it CAN be
+ * read.
  */
 function itemsRowLine(items: string[]): string {
   const shown: string[] = [];
   let used = 0;
   for (const item of items) {
-    const label = item.length > ITEM_ROW_MAX_CHARS ? `${item.slice(0, ITEM_ROW_MAX_CHARS - 1)}…` : item;
-    if (shown.length > 0 && used + label.length + 2 > ITEMS_ROW_MAX_CHARS) break;
-    shown.push(label);
-    used += label.length + 2;
+    if (used + item.length + 2 > ITEMS_ROW_MAX_CHARS) break;
+    shown.push(item);
+    used += item.length + 2;
   }
-  // A shortened label carries its own ellipsis; this one says items were left out.
+  if (shown.length === 0) return '';
   const line = shown.join(', ');
   return shown.length < items.length ? `${line}, …` : line;
+}
+
+/**
+ * The collapsed row's right-hand half for a fan-out step. The COUNT always
+ * survives; the item preview stands down when `itemsRowLine` cannot print a
+ * single label whole, and the row then says only that the work is split one
+ * piece per specialist — which the rows inside the step spell out in full.
+ */
+function itemsDetail(who: string, items: string[]): string {
+  const preview = itemsRowLine(items);
+  return preview ? `${who}, one each: ${preview}` : `${who} · one piece each`;
 }
 
 // ---- what a step is given, what it makes, and where that goes ---------------
@@ -906,6 +920,102 @@ function briefBelowRow(task: string | undefined, rowLine: string): string {
   return breakAt === -1 ? '' : body.slice(breakAt + 1).replace(/^\n+/, '');
 }
 
+/** The placeholder a fan-out brief carries where each specialist's own line
+ *  goes. MARKED, never substituted: substituting it silently would say all
+ *  seven specialists are sent seven different briefs, when the truth is one
+ *  brief with one slot (Destin, 2026-09-18). */
+const ITEM_SLOT = '{item}';
+
+/** How many lines of the brief the collapsed preview draws. A real slice, not
+ *  a fade (renderer-lists.md); the rest opens into a capped scroller, the same
+ *  treatment a file box gets. */
+const BRIEF_PREVIEW_LINES = 6;
+
+/** The brief with every `{item}` drawn as the slot it is. */
+function markItemSlot(text: string): React.ReactNode {
+  const parts = text.split(ITEM_SLOT);
+  if (parts.length === 1) return text;
+  return parts.map((part, i) => (
+    <span key={i}>
+      {i > 0 && <span className="rounded border border-edge px-1 text-fg-2" data-testid="plan-step-slot">{ITEM_SLOT}</span>}
+      {part}
+    </span>
+  ));
+}
+
+/**
+ * The ONE brief every specialist in this step is sent.
+ *
+ * WHY it is labelled, bounded, and sits ABOVE the rows (Destin, 2026-09-18:
+ * "lots of bare text at the bottom with no indication how it ties into the
+ * cards above"): it used to be thirty unlabelled lines under seven rows, and
+ * nothing on the card said what those lines were or who received them. That
+ * relationship is the most important fact on an opened fan-out step. The brief
+ * is what the specialists have in COMMON, so it goes above the part that
+ * varies, wearing an eyebrow that names it and a collapsed preview so it can
+ * never be a wall again.
+ */
+function StepBrief({ text, items }: { text: string; items: number }) {
+  const [open, setOpen] = useState(false);
+  const lines = text.split('\n');
+  const hidden = Math.max(0, lines.length - BRIEF_PREVIEW_LINES);
+  const shown = open || hidden === 0 ? text : lines.slice(0, BRIEF_PREVIEW_LINES).join('\n');
+  return (
+    <div className="rounded-md border border-edge-dim bg-inset/40 px-2 py-1.5 space-y-1" data-testid="plan-step-brief">
+      <div className="text-2xs uppercase tracking-wide text-fg-muted">
+        {items > 1 ? `The same brief for all ${items}` : 'The brief'}
+      </div>
+      {/* Decision: say it ONCE, plainly, and only where the slot exists. */}
+      {items > 1 && text.includes(ITEM_SLOT) && (
+        <div className="text-2xs text-fg-muted" data-testid="plan-step-slot-note">
+          Each one gets its own line from the list below where {ITEM_SLOT} appears.
+        </div>
+      )}
+      <div
+        className={`text-2xs text-fg-dim whitespace-pre-wrap break-words ${open ? 'max-h-64 overflow-y-auto' : ''}`}
+        data-testid="plan-step-task"
+      >{markItemSlot(shown)}</div>
+      {hidden > 0 && (
+        <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)} data-testid="plan-step-brief-toggle">
+          {open ? 'Show less' : `Show all ${lines.length} lines`}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Whether a clamped element is actually hiding any of its text.
+ *
+ * WHY it is MEASURED and not guessed from the string's length (Destin,
+ * 2026-09-18: "substep cards that have chevrons and appear to be
+ * clickable/expandable but never expand"): a fan-out item wraps differently at
+ * every card width, so the only honest answer is the element's own. Measured
+ * while the element is CLAMPED and remembered while it is open — an open row is
+ * unclamped, so re-measuring there would report "nothing hidden" and take away
+ * the control that closes it again.
+ *
+ * WHY a callback ref and an `isConnected` guard rather than a plain one: saying
+ * "this row has something hidden" turns its wrapper from a <div> into a
+ * <button>, which remounts the measured element. With a plain ref the observer
+ * stayed on the DETACHED node, measured 0 against 0, and reported the text
+ * unclamped again — the chevron appeared and vanished within a frame, so every
+ * row on the real plan lost it. The callback ref re-binds to the new node.
+ */
+function useClamped(open: boolean, text: string): [(el: HTMLSpanElement | null) => void, boolean] {
+  const [node, setNode] = useState<HTMLSpanElement | null>(null);
+  const [clamped, setClamped] = useState(false);
+  useEffect(() => {
+    if (open || !node) return undefined;
+    const measure = () => { if (node.isConnected) setClamped(node.scrollHeight - node.clientHeight > 1); };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [open, text, node]);
+  return [setNode, clamped];
+}
+
 function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: number; plan: PlanView; sessionId?: string }) {
   // A running step opens itself so its specialists are visible without a
   // click (Q-5: the card is the progress surface); anything else folds.
@@ -928,7 +1038,7 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
   // Decision 30: a fan-out step names what each specialist gets; every other
   // kind keeps the word it has always had.
   const detail = step.items && step.items.length > 0
-    ? `${who}, one each: ${itemsRowLine(step.items)}`
+    ? itemsDetail(who, step.items)
     : `${who} · ${KIND_WORD[step.kind]}`;
   // WHY the token figure leaves a PROPOSED row (decision 30): "up to 286,181
   // tokens" was the loudest thing on every row and the least useful before
@@ -991,6 +1101,12 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
             step.children.map((c) => <PlanSpecialistCard key={c.childId} child={c} sessionId={sessionId} />)
           ) : (
             <>
+              {/* Destin, 2026-09-18: the row shows only the first line of the
+                  brief, so before Approve there was no way to read the rest.
+                  It sits ABOVE the rows because it is the thing they all share
+                  (StepBrief). Absent on plans projected before `task` existed,
+                  and on a brief the row is already showing whole. */}
+              {brief && <StepBrief text={brief} items={step.items?.length ?? step.fanOut} />}
               {/* Decision 31: one ROW PER SPECIALIST, each carrying its own
                   slice — the same rows this step draws once it is running, so
                   the card keeps its shape when the plan starts. */}
@@ -1002,16 +1118,12 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
                   )}
                 </div>
               )}
-              {/* Destin, 2026-09-18: the row shows only the first line of the
-                  brief, so before Approve there was no way to read the rest.
-                  `whitespace-pre-wrap` keeps the model's own line breaks —
-                  running them together would change what he is agreeing to.
-                  Absent on plans projected before `task` existed, and on a
-                  brief the row is already showing whole (briefBelowRow). */}
-              {brief && (
-                <div className="text-2xs text-fg-dim whitespace-pre-wrap break-words" data-testid="plan-step-task">{brief}</div>
-              )}
-              <div className="text-2xs text-fg-muted">
+              {/* Destin, 2026-09-18: this sentence "floats" — it used to be a
+                  third bare paragraph directly under the brief, reading as one
+                  more line of it. It is the step body's FOOTER now: after the
+                  rows, on its own side of a hairline, with the brief no longer
+                  anywhere near it. */}
+              <div className="text-2xs text-fg-muted border-t border-edge-dim pt-1" data-testid="plan-step-limits">
                 Each {step.specialist} stops at its {tokenLimit(plan, perSpecialist(step))}.
                 {/* Decision 30: the figure the proposed row no longer carries,
                     beside the per-specialist limit it belongs with. */}
@@ -1031,17 +1143,30 @@ function StepRow({ step, index, plan, sessionId }: { step: PlanStepView; index: 
  * and by the pending rows a fan-out step shows before it starts, so the two
  * cannot drift apart (decision 31: approving the plan is a preview of watching
  * it run, and the card must not change shape the moment it starts).
+ *
+ * WHY `onToggle` is optional (Destin, 2026-09-18: rows "that have chevrons and
+ * appear to be clickable/expandable but never expand"): a row with nothing
+ * hidden is not a button at all — no chevron, no hover, no focus stop. A
+ * chevron is a promise of a disclosure, and the card may only draw one where
+ * there is something to disclose.
  */
 function SpecialistRowButton({ open, onToggle, glyph, name, children }: {
-  open: boolean; onToggle: () => void; glyph: React.ReactNode; name: React.ReactNode; children?: React.ReactNode;
+  open: boolean; onToggle?: () => void; glyph: React.ReactNode; name: React.ReactNode; children?: React.ReactNode;
 }) {
-  return (
-    <button type="button" onClick={onToggle} aria-expanded={open}
-      className="w-full flex items-center gap-1.5 px-2 py-1 text-left hover:bg-inset transition-colors">
+  const row = 'w-full flex items-center gap-1.5 px-2 py-1 text-left';
+  const inner = (
+    <>
       <span className="shrink-0 inline-flex w-3 justify-center">{glyph}</span>
       <span aria-hidden="true" className="w-px h-3 bg-edge shrink-0" />
       <span className="text-xs font-medium text-fg-2 shrink-0">{name}</span>
       {children}
+    </>
+  );
+  if (!onToggle) return <div className={row}>{inner}</div>;
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={open}
+      className={`${row} hover:bg-inset transition-colors`}>
+      {inner}
       <ChevronIcon className="w-3 h-3 text-fg-muted shrink-0" expanded={open} />
     </button>
   );
@@ -1062,13 +1187,19 @@ const NOT_STARTED_GLYPH = <span className="inline-block w-3 h-3 rounded-full bor
  * the point is that he can SEE both the breakdown and the detail. The row is
  * the running specialist's own row in its not-started state, so these exact
  * rows are the ones that light up when the plan starts.
+ *
+ * It offers that click ONLY while its two lines are actually hiding something
+ * (`useClamped`). An item that already fits is a plain row: pressing it did
+ * nothing, and a chevron that does nothing is worse than no chevron.
  */
 function PlanItemRow({ index, item }: { index: number; item: string }) {
   const [open, setOpen] = useState(false);
+  const [textRef, clamped] = useClamped(open, item);
   return (
     <div className="border border-edge rounded-md overflow-hidden bg-inset/60" data-testid="plan-step-item">
-      <SpecialistRowButton open={open} onToggle={() => setOpen((v) => !v)} glyph={NOT_STARTED_GLYPH} name={`${index + 1}.`}>
+      <SpecialistRowButton open={open} onToggle={clamped ? () => setOpen((v) => !v) : undefined} glyph={NOT_STARTED_GLYPH} name={`${index + 1}.`}>
         <span
+          ref={textRef}
           className={`min-w-0 flex-1 text-xs text-fg-dim ${open ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'}`}
           data-testid="plan-step-item-text"
         >{item}</span>
@@ -1110,9 +1241,17 @@ function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessio
     // The same empty circle a step that hasn't started wears.
     : notStarted ? NOT_STARTED_GLYPH
     : <StoppedIcon className="w-3 h-3 text-fg-muted" />;
+  // The same promise-of-interactivity bug as PlanItemRow's, found in the sweep
+  // that fix asked for: AgentSections renders NOTHING for a child with no
+  // briefing, no activity and no report — which is exactly a specialist Stop
+  // caught before its first request went out. Its chevron opened onto an empty
+  // box. These are the four things the opened body can contain, so the row is
+  // a button only when one of them exists.
+  const hasBody = !!child.prompt || (child.segments?.length ?? 0) > 0 || !!child.report
+    || (child.status === 'running' && !!sessionId && !readOnly);
   return (
     <div className="border border-edge rounded-md overflow-hidden bg-inset/60" data-testid="plan-child">
-      <SpecialistRowButton open={open} onToggle={() => setOpen((v) => !v)} glyph={glyph} name={child.title}>
+      <SpecialistRowButton open={open} onToggle={hasBody ? () => setOpen((v) => !v) : undefined} glyph={glyph} name={child.title}>
         <div className="min-w-0 flex-1 truncate">
           {notStarted
             ? <div className="text-xs text-fg-muted" data-testid="specialist-status-line">Not started</div>
@@ -1125,7 +1264,7 @@ function PlanSpecialistCard({ child, sessionId }: { child: PlanChildView; sessio
           <span className="shrink-0 text-2xs text-fg-muted" data-testid="plan-child-retried">Retried after an error</span>
         )}
       </SpecialistRowButton>
-      {open && (
+      {open && hasBody && (
         <div className="px-2 py-1.5 border-t border-edge-dim space-y-1">
           <AgentSections tool={tool} sessionId={sessionId}>
             {child.status === 'running' && sessionId && !readOnly && <SpecialistActions sessionId={sessionId} run={child} />}

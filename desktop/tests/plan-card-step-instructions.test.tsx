@@ -117,6 +117,32 @@ describe('a plan step opens onto the instructions its specialist will be sent', 
 const SURFACES = ['Chat', 'Files', 'Settings', 'Terminal', 'Specialists', 'Skills', 'Games'];
 const row = () => screen.getByTestId('plan-step-detail');
 
+/**
+ * jsdom lays nothing out, so every element reports `scrollHeight: 0` and a
+ * clamped row can never discover on its own that it is hiding text. A test
+ * about the chevron therefore has to DECLARE what the browser would have
+ * measured — the same obligation the narrow-viewport rule puts on a test of a
+ * component that branches on `matchMedia`. Returns its own undo.
+ */
+function clampedRows(hiding: boolean): () => void {
+  const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight');
+  Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+    configurable: true,
+    get(this: HTMLElement) { return hiding && this.className.includes('line-clamp-2') ? 100 : 0; },
+  });
+  return () => {
+    if (original) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', original);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight;
+  };
+}
+
+/** True when `first` really does come before `second` in the card's markup. */
+function drawnBefore(step: HTMLElement, first: string, second: string): boolean {
+  const a = within(step).getByTestId(first);
+  const b = within(step).getByTestId(second);
+  return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
 describe('a fan-out step says what each of its specialists gets', () => {
   it('names the items on the collapsed row instead of only counting the specialists', () => {
     show(proposed({ items: SURFACES }));
@@ -260,13 +286,19 @@ describe('a fan-out step breaks out into one row per specialist', () => {
 
   it('holds a long piece of work to a couple of lines until its row is opened', () => {
     const long = 'The whole Settings panel, including Model Providers, Appearance, Remote access, and every row under Advanced that a student is ever shown.';
-    show(proposed({ items: [long, 'Chat'] }));
-    const row = within(openAndRead('s1')).getAllByTestId('plan-step-item')[0];
-    const text = within(row).getByTestId('plan-step-item-text');
-    expect(text).toHaveClass('line-clamp-2');
-    fireEvent.click(within(row).getByRole('button'));
-    expect(within(row).getByTestId('plan-step-item-text')).not.toHaveClass('line-clamp-2');
-    expect(row).toHaveTextContent('every row under Advanced');
+    // The row offers that click only while it is really hiding text, and jsdom
+    // measures nothing — so this test says which rows are clamped (see
+    // `clampedRows`), the way a viewport-branching test declares its viewport.
+    const restore = clampedRows(true);
+    try {
+      show(proposed({ items: [long, 'Chat'] }));
+      const row = within(openAndRead('s1')).getAllByTestId('plan-step-item')[0];
+      const text = within(row).getByTestId('plan-step-item-text');
+      expect(text).toHaveClass('line-clamp-2');
+      fireEvent.click(within(row).getByRole('button'));
+      expect(within(row).getByTestId('plan-step-item-text')).not.toHaveClass('line-clamp-2');
+      expect(row).toHaveTextContent('every row under Advanced');
+    } finally { restore(); }
   });
 
   it('draws a bounded number of rows however many items the record carries', () => {
@@ -363,6 +395,179 @@ describe('a plan step says what it is given, what it produces and where that goe
   it('counts a repeating step\'s reports as a worst case, because it stops when it is done', () => {
     show(planOf([aStep({ id: 'loop', kind: 'repeat', fanOut: 15, specialist: 'worker' })]));
     expect(flowOf('loop')).toContain('produces up to 15 reports');
+  });
+});
+
+// ---- the clean-up pass: the card read against a REAL plan ---------------------
+//
+// Destin, 2026-09-18, looking at the shipped card running on his own seven-item
+// plan: "whatever is live in the dev window is still the best i've seen, but
+// that's still a mess. lots of bare text at the bottom with no indication how it
+// ties into the cards above, substep cards that have chevrons and appear to be
+// clickable/expandable but never expand". Every defect below only appears at
+// real sizes — seven items that are each a long file list, and a thirty-line
+// brief with a `{item}` placeholder — which is what these fixtures carry and
+// what `fixtures/bubbles/plan-proposed-heavy.jsonl` shows in the workbench.
+
+const HEAVY_ITEMS = [
+  'App chrome: HeaderBar.tsx, SessionStrip.tsx, SessionDrawer.tsx, OverflowMenu.tsx, NarrowViewToggle.tsx, WideViewToggle.tsx, ViewToggleHint.tsx',
+  'Chat and status: ChatView.tsx, BubbleFeed.tsx, InputBar.tsx, StatusBar.tsx, ThinkingIndicator.tsx, AttentionBanner.tsx, ToolCard.tsx',
+  'Settings: SettingsPanel.tsx, SettingRow.tsx, AppearancePopup.tsx, ModelProviders.tsx, RemoteAccessPanel.tsx, ThemePicker.tsx',
+  'Panels and viewers: ArtifactDrawer.tsx, FilesTab.tsx, CsvView.tsx, UnifiedDiff.tsx, SessionPreviewPane.tsx, ResumeBrowser.tsx',
+  'Setup, models and providers: SetupWizard.tsx, ModelPicker.tsx, ProviderCard.tsx, EngineManagerPanel.tsx, SignInDialog.tsx',
+  'Arcade and buddy: GamePanel.tsx, ConnectFourBoard.tsx, ChessBoard.tsx, FlappyGame.tsx, BuddyBar.tsx, MascotWindow.tsx',
+  'Shared primitives: Button.tsx, Dialog.tsx, Callout.tsx, StatusStrip.tsx, TextInput.tsx, Textarea.tsx, Toast.tsx',
+];
+/** A brief the length of a real one, carrying the placeholder a real one carries. */
+const HEAVY_TASK = [FIRST_LINE, '', 'Your group: {item}', '',
+  ...Array.from({ length: 26 }, (_, i) => `Instruction line ${i + 1} of the brief.`)].join('\n');
+const heavy = (over: Partial<PlanView['steps'][number]> = {}) =>
+  proposed({ items: HEAVY_ITEMS, task: HEAVY_TASK, ...over });
+
+describe('an opened step says whose brief it is showing', () => {
+  it('labels the brief as the one every specialist in the step is sent', () => {
+    show(heavy());
+    const step = openAndRead('s1');
+    expect(within(step).getByTestId('plan-step-brief')).toHaveTextContent('The same brief for all 7');
+  });
+
+  it('draws the shared brief above the rows it is shared between', () => {
+    // It is what the seven have in common; the rows are the part that varies.
+    show(heavy());
+    expect(drawnBefore(openAndRead('s1'), 'plan-step-brief', 'plan-step-items')).toBe(true);
+  });
+
+  it('shows a slice of a long brief rather than all thirty lines', () => {
+    show(heavy());
+    const step = openAndRead('s1');
+    expect(within(step).getByTestId('plan-step-task')).not.toHaveTextContent('Instruction line 26');
+    expect(within(step).getByText(/Show all \d+ lines/)).toBeInTheDocument();
+  });
+
+  it('opens the rest into a capped scroller instead of growing the card', () => {
+    show(heavy());
+    const step = openAndRead('s1');
+    fireEvent.click(within(step).getByText(/Show all \d+ lines/));
+    const body = within(step).getByTestId('plan-step-task');
+    expect(body).toHaveTextContent('Instruction line 26');
+    expect(body.className.split(/\s+/)).toContain('overflow-y-auto');
+    expect(within(step).getByText('Show less')).toBeInTheDocument();
+  });
+
+  it('leaves a brief that already fits without a Show-all control', () => {
+    show(proposed());
+    const step = openAndRead('s1');
+    expect(within(step).queryByText(/Show all/)).toBeNull();
+  });
+});
+
+describe('the placeholder in a brief is marked as the slot it is', () => {
+  it('leaves {item} in the text rather than filling it in silently', () => {
+    // Filling it in would say all seven are sent seven different briefs.
+    show(heavy());
+    const step = openAndRead('s1');
+    expect(within(step).getByTestId('plan-step-task')).toHaveTextContent('Your group: {item}');
+    expect(within(step).getAllByTestId('plan-step-slot').length).toBeGreaterThan(0);
+  });
+
+  it('says once, plainly, what gets put there', () => {
+    show(heavy());
+    expect(within(openAndRead('s1')).getByTestId('plan-step-slot-note'))
+      .toHaveTextContent('own line from the list below');
+  });
+
+  it('says nothing about a slot in a brief that has none', () => {
+    show(proposed({ items: SURFACES }));
+    expect(within(openAndRead('s1')).queryByTestId('plan-step-slot-note')).toBeNull();
+  });
+});
+
+describe('a row offers a chevron only when it is really hiding something', () => {
+  it('makes a row that has text beyond its two lines pressable', () => {
+    const restore = clampedRows(true);
+    try {
+      show(heavy());
+      const rows = within(openAndRead('s1')).getAllByTestId('plan-step-item');
+      expect(within(rows[0]).getByRole('button')).toBeInTheDocument();
+    } finally { restore(); }
+  });
+
+  it('leaves a row that fits as a plain row — no chevron, no focus stop', () => {
+    const restore = clampedRows(false);
+    try {
+      show(proposed({ items: SURFACES }));
+      const rows = within(openAndRead('s1')).getAllByTestId('plan-step-item');
+      expect(within(rows[0]).queryByRole('button')).toBeNull();
+      expect(rows[0]).toHaveTextContent('Chat');
+    } finally { restore(); }
+  });
+
+  it('leaves a specialist with nothing to open as a plain row too', () => {
+    // A specialist Stop caught before its first request has no briefing, no
+    // activity and no report, so its sections render empty — the same broken
+    // promise, found in the sweep the item rows asked for.
+    show({
+      ...proposed({
+        status: 'skipped',
+        children: [{ childId: 'kid-a', parentToolCallId: CARD, agentType: 'reviewer', title: 'Mara the Reviewer', background: false, status: 'interrupted', phase: 'prepared', startedAt: 1 }],
+      }),
+      status: 'stopped',
+    });
+    openAndRead('s1');
+    const child = screen.getByTestId('plan-child');
+    expect(within(child).queryByRole('button')).toBeNull();
+    expect(child).toHaveTextContent('Mara the Reviewer');
+  });
+
+  it('still opens a specialist that has a briefing to show', () => {
+    show({
+      ...proposed({
+        status: 'running',
+        children: [{ childId: 'kid-b', parentToolCallId: CARD, agentType: 'reviewer', title: 'Wren the Reviewer', background: false, status: 'completed', startedAt: 1, prompt: 'Review the sign-in screen.' }],
+      }),
+      status: 'running',
+    });
+    const child = screen.getByTestId('plan-child');
+    fireEvent.click(within(child).getByRole('button'));
+    expect(child).toHaveTextContent('Briefing');
+  });
+});
+
+describe('the collapsed row keeps the count and drops a preview no one can read', () => {
+  it('stands the item preview down when not one label fits the row whole', () => {
+    show(heavy());
+    expect(row()).toHaveTextContent('7 reviewers');
+    expect(row()).not.toHaveTextContent('HeaderBar');
+    expect(row()).toHaveTextContent('one piece each');
+  });
+
+  it('still previews the labels that do fit, and never half of one', () => {
+    show(proposed({ items: SURFACES }));
+    const text = row().textContent ?? '';
+    expect(text).toContain('Chat, Files');
+    // Every label printed is a whole label: the only ellipsis is the list's.
+    for (const shown of text.replace(/^.*one each: /, '').split(', ')) {
+      expect(shown === '…' || SURFACES.includes(shown)).toBe(true);
+    }
+  });
+});
+
+describe('the limit sentence has a home instead of floating', () => {
+  it('sits after the rows, on its own side of a hairline', () => {
+    show(heavy());
+    const step = openAndRead('s1');
+    const limits = within(step).getByTestId('plan-step-limits');
+    expect(limits).toHaveTextContent('stops at its');
+    expect(limits.className.split(/\s+/)).toContain('border-t');
+    expect(drawnBefore(step, 'plan-step-items', 'plan-step-limits')).toBe(true);
+  });
+
+  it('is no longer the paragraph directly under the brief', () => {
+    show(heavy());
+    const step = openAndRead('s1');
+    expect(drawnBefore(step, 'plan-step-brief', 'plan-step-limits')).toBe(true);
+    expect(within(step).getByTestId('plan-step-brief'))
+      .not.toContainElement(within(step).getByTestId('plan-step-limits'));
   });
 });
 
