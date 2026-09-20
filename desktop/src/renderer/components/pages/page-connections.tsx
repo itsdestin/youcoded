@@ -196,13 +196,13 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
 
     <div className="flex flex-col gap-2">
       <div className="text-xs text-fg-dim">This page would be able to:</div>
-      {/* One box for everything the page could do (review round 2, D-4): on a
-          re-ask the new lines lead, marked New, and what was already allowed
-          follows under a hairline, quieter. */}
+      {/* Two boxes on a re-ask, one under each label (review round 3, E-2):
+          the new permissions, then what was already allowed. A first ask has
+          only the one box and no labels. */}
+      {isChange && <div className="text-2xs font-medium text-fg tracking-wider uppercase" data-new-label>New</div>}
       <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
         {asking.map((c) => (
           <ConnectionLine key={c.id} c={c}>
-            {isChange && <div className="text-2xs font-medium text-fg tracking-wider uppercase order-first" data-new-line>New</div>}
             {c.kind === 'open' && (
               <ul className="list-disc pl-5 text-xs text-fg-muted leading-relaxed flex flex-col gap-0.5" data-open-internet-means>
                 {OPEN_INTERNET_MEANS.map((t) => <li key={t}>{t}</li>)}
@@ -220,13 +220,15 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
             )}
           </ConnectionLine>
         ))}
-        {isChange && (
-          <div className="border-t border-edge-dim pt-3 flex flex-col gap-2" data-already-allowed>
-            <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">Already allowed</div>
+      </div>
+      {isChange && (
+        <div className="flex flex-col gap-2 pt-1" data-already-allowed>
+          <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase">Already allowed</div>
+          <div className="rounded-lg border border-edge bg-inset/40 p-3 flex flex-col gap-3">
             {already.map((c) => <ConnectionLine key={c.id} c={c} small />)}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
 
     <div className="flex flex-col gap-2">
