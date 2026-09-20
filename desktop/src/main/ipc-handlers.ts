@@ -109,7 +109,7 @@ import { readDevices, renameDevice, removeDevice } from './sync-spaces/device-re
 // createGithubConnect is the stateful orchestrator that owns the in-flight flow.
 import { installGh } from './github-auth';
 import { createGithubConnect, setGithubConnect, disconnectGithub } from './github-connect';
-import { combinedGithubStatus } from './github-client';
+import { combinedGithubStatus, getGithubClient } from './github-client';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
@@ -142,6 +142,9 @@ import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArtifact, removeArtifactRecord } from './artifacts/artifact-store';
 import { listProjects, removeProject } from './artifacts/central-index';
 import { initPagesService, getPagesService } from './pages/pages-service';
+import { PageConnectionsStore } from './pages/connections-store';
+import { createAuthStore } from './marketplace-auth-store';
+import type { PageFetchRequest } from '../shared/pages-types';
 import { getMachineIdentity } from './device-identity';
 // Shared with remote-server.ts — see that module's header for why these left
 // this file (they were closures, so the remote transport could not reach them).
@@ -4969,6 +4972,14 @@ export function registerIpcHandlers(
     deviceId: () => getMachineIdentity(app.getPath('userData'))?.id ?? null,
     localFallbackDir: () => app.getPath('userData'),
     noteOwnWrite,
+    // Phase 2: approvals and key POINTERS beside the model-provider keys in
+    // userData, never in a sync space — a key is machine-bound ciphertext.
+    connections: new PageConnectionsStore(app.getPath('userData'), secretsStore),
+    // A FRESH reader per call, not a held instance: the fs-backed store caches
+    // after its first load, so a long-lived one here would keep answering with
+    // the token from before the person signed in or out.
+    youcodedToken: () => createAuthStore(app.getPath('userData')).getToken(),
+    githubToken: async () => (await getGithubClient()?.getToken())?.token ?? null,
     broadcast: (pages) => {
       webContents.getAllWebContents().forEach((wc) => wc.send(IPC.PAGES_CHANGED, pages));
       remoteServer?.broadcast({ type: IPC.PAGES_CHANGED, payload: pages });
@@ -4978,6 +4989,19 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.PAGES_GET, async (_e, id: string) => pagesService.store.get(String(id ?? '')));
   ipcMain.handle(IPC.PAGES_SET_PINNED, async (_e, id: string, pinned: boolean) => pagesService.store.setPinned(String(id ?? ''), !!pinned));
   ipcMain.handle(IPC.PAGES_SET_DATA, async (_e, id: string, data: unknown) => pagesService.store.setData(String(id ?? ''), data));
+  // Phase 2. `remote: false` here and `true` in remote-server.ts is the whole
+  // of "no keys on the phone" (design review 1, finding 13): a desktop window
+  // may paste a key, a remote caller may only reuse one already saved.
+  ipcMain.handle(IPC.PAGES_APPROVE, async (_e, id: string, keys: Record<string, string>) =>
+    pagesService.approve(String(id ?? ''), keys ?? {}, { remote: false }));
+  ipcMain.handle(IPC.PAGES_REMOVE_CONNECTION, async (_e, id: string, connectionId: string) =>
+    pagesService.removeConnection(String(id ?? ''), String(connectionId ?? '')));
+  ipcMain.handle(IPC.PAGES_REFRESH, async (_e, id: string) => pagesService.refresh(String(id ?? '')));
+  ipcMain.handle(IPC.PAGES_SAVED_KEYS, async () => pagesService.savedKeys());
+  ipcMain.handle(IPC.PAGES_DELETE_SAVED_KEY, async (_e, service: string, address: string) =>
+    pagesService.deleteSavedKey(String(service ?? ''), String(address ?? '')));
+  ipcMain.handle(IPC.PAGES_FETCH, async (_e, id: string, req: PageFetchRequest) =>
+    pagesService.fetch(String(id ?? ''), req ?? { url: '' }));
   // A crashed/closed renderer never sends unwatch — drop its refs on destroy so
   // it cannot pin a watcher forever. One listener per webContents, attached on
   // its first subscribe.

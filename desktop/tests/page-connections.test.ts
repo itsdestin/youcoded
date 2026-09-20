@@ -1,7 +1,7 @@
 // The sentences a person approves are the permission model's whole surface,
 // so the wording rules decided on the Phase 2 questions decks are pinned here.
 import { describe, expect, it } from 'vitest';
-import { describeConnection, needsApproval } from '../src/renderer/components/pages/page-connections';
+import { describeConnection, needsApproval, splitAddress } from '../src/renderer/components/pages/page-connections';
 import type { PageConnection, PageSummary } from '../src/shared/pages-types';
 
 const ALL: PageConnection[] = [
@@ -35,6 +35,25 @@ describe('page connection wording', () => {
 
   it('is blunt about the whole internet', () => {
     expect(sentence(ALL[6])).toBe('Reach any website. Anything shown in this page, or typed into it, could be sent anywhere.');
+  });
+});
+
+describe('reading an address', () => {
+  it('names the site that actually receives the request, not the one it reads like', () => {
+    // The whole reason this exists: a legal hostname can wear another company's
+    // name (design review 1, finding 6).
+    expect(splitAddress('api.openweathermap.org.evil.example')).toEqual({ prefix: 'api.openweathermap.org.', site: 'evil.example' });
+    expect(splitAddress('api.openweathermap.org')).toEqual({ prefix: 'api.', site: 'openweathermap.org' });
+  });
+
+  it('emphasises the whole address when there is nothing in front of it', () => {
+    expect(splitAddress('hnrss.org')).toEqual({ prefix: '', site: 'hnrss.org' });
+    expect(splitAddress('bbc.co.uk')).toEqual({ prefix: '', site: 'bbc.co.uk' });
+  });
+
+  it('counts a registry ending as part of the site', () => {
+    expect(splitAddress('api.bbc.co.uk')).toEqual({ prefix: 'api.', site: 'bbc.co.uk' });
+    expect(splitAddress('a.b.example.com.au')).toEqual({ prefix: 'a.b.', site: 'example.com.au' });
   });
 });
 

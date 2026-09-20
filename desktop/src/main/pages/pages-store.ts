@@ -18,7 +18,12 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
-import type { PageDocument, PageHome, PageIcon, PageLoadFailure, PageSummary } from '../../shared/pages-types';
+import { fingerprint, parseConnections } from './page-connections';
+import { approvalKey, savedKeyId, type ConnectionsSnapshot, type PageConnectionsStore } from './connections-store';
+import type {
+  PageConnection, PageConnectionStatus, PageDocument, PageHome, PageIcon,
+  PageLoadFailure, PageRefreshState, PageSummary,
+} from '../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../shared/pages-types';
 
 export const PAGES_DIR = 'Pages';
@@ -40,6 +45,12 @@ export interface PagesStoreDeps {
   localFallbackDir: () => string;
   /** project-watcher.noteOwnWrite, so our own data/pin writes are not echoed as external changes. */
   noteOwnWrite?: (absPath: string) => void;
+  /** Approvals and saved keys (Phase 2). Absent on a host without one, where
+   *  every connection then reads as unapproved — the safe answer. */
+  connections?: PageConnectionsStore;
+  /** Per-page freshness, kept in memory by the service and never on disk
+   *  (design §3: approvals must not share a 60-a-minute write path). */
+  refreshState?: (pageId: string) => PageRefreshState | undefined;
 }
 
 interface Located { id: string; dir: string; slug: string; home: PageHome }
@@ -69,6 +80,11 @@ export class PagesStore {
       homes.push({ root: path.join(p.path, PAGES_DIR), home: { kind: 'project', path: p.path, name: p.name }, prefix: `project:${p.name}` });
     }
     const pinned = new Set(await this.readPins());
+    // ONE read of the approvals file per listing, not one per page. An
+    // unreadable one (a newer version's file) reads as "nothing is approved",
+    // which pauses every connected page rather than guessing at a grant.
+    let saved: ConnectionsSnapshot = { pages: {}, keys: {} };
+    try { saved = (await this.deps.connections?.read()) ?? saved; } catch { saved = { pages: {}, keys: {} }; }
     const out: PageSummary[] = [];
     const next = new Map<string, Located>();
     for (const h of homes) {
@@ -91,6 +107,12 @@ export class PagesStore {
         const jsonStat = await fs.stat(path.join(dir, 'page.json')).catch(() => null);
         const updated = Math.max(htmlStat.mtimeMs, jsonStat?.mtimeMs ?? 0);
         next.set(id, { id, dir, slug: e.name, home: h.home });
+        const approvals = saved.pages[approvalKey(h.home, e.name)] ?? {};
+        const connections: PageConnectionStatus[] = manifest.connections.map((c) => ({
+          ...c,
+          approved: approvals[c.id]?.fingerprint === fingerprint(c),
+          ...(c.kind === 'key' ? { savedKey: !!saved.keys[savedKeyId(c.service, c.address)] } : {}),
+        }));
         out.push({
           id,
           name: manifest.name,
@@ -100,6 +122,12 @@ export class PagesStore {
           pinned: pinned.has(id),
           updatedAt: new Date(updated).toISOString(),
           htmlStamp: Math.round(htmlStat.mtimeMs),
+          ...(connections.length ? { connections } : {}),
+          // The band only appears once the page can actually reach something:
+          // a time beside a paused page would be a time for nothing.
+          ...(connections.length && connections.every((c) => c.approved)
+            ? { refresh: this.deps.refreshState?.(id) ?? { at: null, failed: false } }
+            : {}),
         });
       }
     }
@@ -110,7 +138,7 @@ export class PagesStore {
 
   /** page.json, with conflict copies folded by their `updatedAt` stamp. Returns
    *  null when there is no readable manifest (then the folder is not a page). */
-  private async readManifest(dir: string): Promise<{ name: string; description: string; icon: PageIcon } | null> {
+  private async readManifest(dir: string): Promise<{ name: string; description: string; icon: PageIcon; connections: PageConnection[] } | null> {
     await this.foldJsonCopies(dir, 'page.json', 'updatedAt');
     let raw: string;
     try { raw = await fs.readFile(path.join(dir, 'page.json'), 'utf8'); } catch { return null; }
@@ -121,7 +149,28 @@ export class PagesStore {
     const name = typeof o.name === 'string' && o.name.trim() ? o.name.trim().slice(0, 80) : path.basename(dir);
     const description = typeof o.description === 'string' ? o.description.trim().slice(0, 200) : '';
     const icon = (typeof o.icon === 'string' && ICONS.has(o.icon) ? o.icon : 'page') as PageIcon;
-    return { name, description, icon };
+    // Phase 2 (§2): additive, and strict — parseConnections drops what it
+    // cannot vouch for and drops the whole list when it contradicts itself, so
+    // an old page.json with no `connections` still reads as a page.
+    return { name, description, icon, connections: parseConnections(o.connections) };
+  }
+
+  /** Where a page's approvals are filed. Project pages use the project's
+   *  canonical path, never its display name (design review 1, finding 5). */
+  async approvalKeyFor(id: string): Promise<string | null> {
+    const loc = await this.locate(id);
+    return loc ? approvalKey(loc.home, loc.slug) : null;
+  }
+
+  /** The page's manifest connections and its document hash — what `approve`
+   *  records against, and what `pages:fetch` checks. */
+  async connectionsOf(id: string): Promise<{ connections: PageConnection[]; html: string } | null> {
+    const loc = await this.locate(id);
+    if (!loc) return null;
+    const manifest = await this.readManifest(loc.dir);
+    if (!manifest) return null;
+    const html = await fs.readFile(path.join(loc.dir, 'page.html'), 'utf8').catch(() => '');
+    return { connections: manifest.connections, html };
   }
 
   // ── One page ─────────────────────────────────────────────────────────────

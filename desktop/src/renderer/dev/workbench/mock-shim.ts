@@ -3214,6 +3214,10 @@ function createPagesMock(empty: boolean): PagesBridge {
       pages = pages.map((p) => (p.id === id ? { ...p, data } : p));
       return { ok: true };
     },
+    // The workbench never reaches the network: every fixture page's numbers are
+    // baked in. The door still answers, so a page that calls it gets an honest
+    // refusal rather than a promise that never settles.
+    fetch: async () => ({ ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' }),
     onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
     // ── Phase 2 (connections) — no backend yet; mock-only.ts carries the rows ──
     // Allow: every waiting line becomes approved, a pasted key becomes a saved
@@ -3228,7 +3232,7 @@ function createPagesMock(empty: boolean): PagesBridge {
         return { ...p, connections: (p.connections ?? []).map((c) => ({ ...c, approved: true, ...(c.kind === 'key' ? { savedKey: true } : {}) })), refresh: { at: new Date().toISOString(), failed: false } };
       });
       publish();
-      return summaries();
+      return { ok: true, pages: summaries() };
     },
     // Remove: the line stays listed but goes back to waiting, so the page asks
     // again next time it opens (deck S-remove).
@@ -3245,8 +3249,10 @@ function createPagesMock(empty: boolean): PagesBridge {
       return summaries();
     },
     savedKeys: async () => listSavedKeys(),
-    deleteSavedKey: async (service) => {
-      savedServices.delete(service);
+    // A key is service AND address, so the workbench deletes by both — the real
+    // store cannot offer one page's key to another page's host.
+    deleteSavedKey: async (service, address) => {
+      if (savedServices.get(service) === address) savedServices.delete(service);
       pages = pages.map((p) => ({ ...p, refresh: p.connections?.some((c) => c.kind === 'key' && c.service === service) ? undefined : p.refresh, connections: p.connections?.map((c) => (c.kind === 'key' && c.service === service ? { ...c, approved: false, savedKey: false } : c)) }));
       publish();
       return listSavedKeys();

@@ -30,15 +30,21 @@ function age(iso: string, now: number): string {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
-export function PageFreshness({ page }: { page: PageSummary }) {
+export function PageFreshness({ page, onRefresh }: { page: PageSummary; onRefresh?: () => void }) {
   const now = useClock();
   const [busy, setBusy] = useState(false);
   const r = page.refresh;
   if (!r) return null;
 
   const refresh = async () => {
+    if (busy) return;
+    // The page is what actually fetches: the host posts `youcoded:refresh` into
+    // the frame and the page re-runs its own requests (design §5). That comes
+    // first, and happens even where the host has no `refresh` channel, so the
+    // button is never a control that does nothing.
+    onRefresh?.();
     const b = (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
-    if (!b?.refresh || busy) return;
+    if (!b?.refresh) return;
     setBusy(true);
     try { publishPages(await b.refresh(page.id)); } finally { setBusy(false); }
   };

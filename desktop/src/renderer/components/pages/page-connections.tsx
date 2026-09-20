@@ -14,7 +14,7 @@ import React, { useState } from 'react';
 import type { PageConnection, PageConnectionStatus, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { isRemoteMode } from '../../platform';
 import { isWorkbenchMode } from '../../workbench-mode';
-import { Button, TextInput } from '../ui';
+import { Button, ErrorState, TextInput } from '../ui';
 import { Dialog } from '../ui/Dialog';
 import { PageGlyph } from './page-icons';
 import { publishPages } from './use-pages';
@@ -52,6 +52,61 @@ export function describeConnection(c: PageConnection): { what: string; limit: st
   }
 }
 
+/** Two-label endings that are registries rather than somebody's website, so
+ *  the real site is the THIRD label from the right. A short hand-kept list, not
+ *  the public suffix list: bundling and updating that list is a dependency this
+ *  screen does not need, and being one label too generous ("bbc.co.uk" shown as
+ *  "co.uk" would be) is the failure worth avoiding. An unlisted ending simply
+ *  emphasises the last two labels, which is right for nearly every address. */
+const REGISTRY_ENDINGS = new Set([
+  'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'me.uk', 'net.uk', 'sch.uk',
+  'com.au', 'net.au', 'org.au', 'edu.au', 'gov.au',
+  'co.nz', 'net.nz', 'org.nz',
+  'co.jp', 'or.jp', 'ne.jp', 'ac.jp', 'go.jp',
+  'com.br', 'com.cn', 'com.hk', 'com.mx', 'com.pl', 'com.sg', 'com.tr', 'com.tw', 'com.ar',
+  'co.in', 'co.il', 'co.id', 'co.kr', 'co.th', 'co.za',
+  'ac.in', 'net.in', 'org.in',
+]);
+
+/** The website an address really belongs to, and the rest of it.
+ *  `api.openweathermap.org.evil.example` is a perfectly legal address that
+ *  reads as OpenWeather at a glance (design review 1, finding 6), so the part
+ *  that decides who receives the request is the part that is emphasised. */
+export function splitAddress(address: string): { prefix: string; site: string } {
+  const labels = address.split('.').filter(Boolean);
+  if (labels.length <= 2) return { prefix: '', site: address };
+  const take = REGISTRY_ENDINGS.has(labels.slice(-2).join('.')) ? 3 : 2;
+  if (labels.length <= take) return { prefix: '', site: address };
+  const site = labels.slice(-take).join('.');
+  return { prefix: address.slice(0, address.length - site.length), site };
+}
+
+/** The address as it is read: the real website solid, everything in front of
+ *  it dim. Same everywhere an address appears, so one screen never teaches a
+ *  way of reading that another screen breaks. */
+function Address({ address }: { address: string }) {
+  const { prefix, site } = splitAddress(address);
+  return (
+    <span data-page-address={site}>
+      {prefix && <span className="text-fg-dim">{prefix}</span>}
+      <span className="text-fg font-medium">{site}</span>
+    </span>
+  );
+}
+
+function addressOf(c: PageConnection): string | undefined {
+  return c.kind === 'key' || c.kind === 'public' ? c.address : undefined;
+}
+
+/** The connection's sentence, with its address rendered rather than written —
+ *  the same words, only read correctly. */
+function withAddress(text: string, address: string | undefined): React.ReactNode {
+  if (!address) return text;
+  const at = text.indexOf(address);
+  if (at < 0) return text;
+  return <>{text.slice(0, at)}<Address address={address} />{text.slice(at + address.length)}</>;
+}
+
 /** True while any line is waiting for a yes — the page stays closed until then. */
 export function needsApproval(page: PageSummary | null): boolean {
   return !!page?.connections?.some((c) => !c.approved);
@@ -74,7 +129,7 @@ function ConnectionLine({ c, children, small }: { c: PageConnectionStatus; child
   return (
     <div className="flex flex-col gap-1.5" data-page-connection={c.kind}>
       <div className={`${small ? 'text-xs' : 'text-sm'} text-fg-2 leading-relaxed`}>
-        {words.what} <span className="text-fg-dim">{words.limit}</span>
+        {withAddress(words.what, addressOf(c))} <span className="text-fg-dim">{words.limit}</span>
       </div>
       {children}
     </div>
@@ -122,6 +177,11 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [differentKey, setDifferentKey] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
+  // Allowing can fail where nothing is wrong with the page: a computer with no
+  // keychain, where the secrets store refuses by design and NO approval is
+  // recorded (design review 1, finding 11). Before this, the button simply
+  // un-greyed and the screen stayed — which reads as "nothing happened".
+  const [failure, setFailure] = useState<string | null>(null);
   const here = keysEnteredHere();
 
   const keyLines = asking.filter((c): c is PageConnectionStatus & { kind: 'key' } => c.kind === 'key');
@@ -132,10 +192,26 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
     const b = bridge();
     if (!b?.approve) return;
     setBusy(true);
+    setFailure(null);
     const sent: Record<string, string> = {};
     for (const c of keyLines) sent[c.id] = toType.includes(c) ? keys[c.id].trim() : 'saved';
-    try { publishPages(await b.approve(page.id, sent)); } finally { setBusy(false); }
+    try {
+      const r = await b.approve(page.id, sent);
+      // On a yes the host replaces this screen with the page itself, so the
+      // button stays "Allowing…" rather than flicking back to Allow for the
+      // frame or two in between — which would invite a second press.
+      if (r.ok) { publishPages(r.pages); return; }
+      setFailure(r.message);
+    } catch {
+      // The reason is not known here, so none is claimed — Retry is the offer.
+      setFailure("Allowing this page didn't finish.");
+    }
+    setBusy(false);
   };
+
+  const failureState = failure === null ? null : (
+    <ErrorState variant="inline" message={failure} onRetry={() => { void allow(); }} />
+  );
 
   const shell = (children: React.ReactNode) => (
     <div className="absolute inset-0 overflow-y-auto flex items-center justify-center max-sm:items-start p-4 select-none" data-page-approval={step}>
@@ -180,8 +256,9 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
           sync never touches. The key does leave the machine — to its own
           service — so that is said too, never "not accessible to anyone". */}
       <div className="text-xs text-fg-muted leading-relaxed" data-key-storage-note>
-        Your key is stored encrypted on this computer only. It isn't backed up or synced, and YouCoded sends it only to {toType.length === 1 ? toType[0].address : 'the service it belongs to'}.
+        Your key is stored encrypted on this computer only. It isn't backed up or synced, and YouCoded sends it only to {toType.length === 1 ? <Address address={toType[0].address} /> : 'the service it belongs to'}.
       </div>
+      {failureState}
       <div className="flex flex-col gap-2">
         <Button variant="primary" onClick={() => { void allow(); }} disabled={busy || missingKey} className="w-full">
           {busy ? 'Allowing…' : 'Allow and open'}
@@ -230,6 +307,8 @@ export function PageApproval({ page, onNotNow }: { page: PageSummary; onNotNow: 
         </div>
       )}
     </div>
+
+    {failureState}
 
     <div className="flex flex-col gap-2">
       {/* On the phone a key cannot be typed (deck Q-phone). The button sits where

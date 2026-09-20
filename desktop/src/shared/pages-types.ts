@@ -28,7 +28,7 @@ export type PageIcon =
 /** `lookup`: the app sends look-up requests only and blocks the rest, so the
  *  approval can truthfully say "Cannot send changes". Never worded as
  *  "read-only" or "safe" for an outside service (deck Q-readonly). */
-type PageAccess = 'lookup' | 'full';
+export type PageAccess = 'lookup' | 'full';
 
 export type PageConnection =
   /** YouCoded's own service, as the signed-in person. */
@@ -39,6 +39,12 @@ export type PageConnection =
       /** How to find the key, written by the page's author and carried with the
        *  page (review round 1, C-1). Shown as the author's words. */
       keyHelp?: { steps: string[] };
+      /** Where the service wants the key. Every service takes it somewhere
+       *  different and the person is never asked — OpenWeather wants `appid`
+       *  in the URL, most others want a header — so the manifest says which,
+       *  and main attaches it there. Default: the `Authorization` header. */
+      keyIn?: 'header' | 'query';
+      keyParam?: string;
     }
   /** Public information: an approved address, nothing secret. */
   | { id: string; kind: 'public'; address: string }
@@ -60,17 +66,50 @@ export type PageConnectionStatus = PageConnection & {
 
 /** Freshness of a connected page, owned by the app and shown in the band
  *  (deck Q-last-updated). `at` is null before the first successful update. */
-interface PageRefreshState {
+export interface PageRefreshState {
   at: string | null;
   failed: boolean;
 }
 
-/** A key saved once under Settings › Connected services, with the pages using it. */
+/** A key saved once under Settings › Connected services, with the pages using
+ *  it. Identified by service AND address: a saved key is offered to another
+ *  page only when the address matches byte for byte, so a second page cannot
+ *  point your key at its own collector (design review 1, finding 3). */
 export interface SavedPageKey {
   service: string;
   address: string;
   usedBy: { id: string; name: string }[];
 }
+
+/** What a page asked the app to fetch on its behalf. The page never holds the
+ *  credential; main attaches it and redacts it from everything it returns. */
+export interface PageFetchRequest {
+  /** Absolute http(s) URL. A relative or protocol-relative URL is refused. */
+  url: string;
+  method?: string;
+  /** Only Accept, Accept-Language and Content-Type survive. */
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+type PageFetchRefusal =
+  | 'not-approved'        // no connection covers that address, or it is not approved
+  | 'method-not-allowed'  // a look-up connection was asked to send a change
+  | 'too-many-requests'   // the page's own rate cap
+  | 'bad-url'             // not an absolute http(s) URL
+  | 'unsupported'         // this window cannot fetch for a page at all (Android, an older host)
+  | 'network';            // the guard or the service refused; `message` says what
+
+export type PageFetchResult =
+  | { ok: true; status: number; headers: Record<string, string>; body: string }
+  | { ok: false; reason: PageFetchRefusal; message: string };
+
+/** Approving can fail for a reason the person must see — most often a computer
+ *  with no keychain, where the secrets store refuses by design and NO approval
+ *  is recorded (design review 1, finding 11). */
+export type PageApproveResult =
+  | { ok: true; pages: PageSummary[] }
+  | { ok: false; message: string };
 
 export interface PageSummary {
   /** `personal:<slug>` or `project:<project name>:<slug>` — the same on every
@@ -127,13 +166,16 @@ export interface PagesBridge {
   // Phase 2 — workbench-only until the screens are approved (mock-only.ts).
   /** Approves every unapproved line. `keys` carries a pasted key per `key`
    *  connection id, or 'saved' to use the one already kept. */
-  approve?: (id: string, keys: Record<string, string>) => Promise<PageSummary[]>;
+  approve?: (id: string, keys: Record<string, string>) => Promise<PageApproveResult>;
   /** Stops future use of one connection; the page asks again next time. */
   removeConnection?: (id: string, connectionId: string) => Promise<PageSummary[]>;
   /** Fetch fresh information now (the band's refresh button). */
   refresh?: (id: string) => Promise<PageSummary[]>;
   savedKeys?: () => Promise<SavedPageKey[]>;
-  deleteSavedKey?: (service: string) => Promise<SavedPageKey[]>;
+  /** Both parts, because a key is identified by service AND address. */
+  deleteSavedKey?: (service: string, address: string) => Promise<SavedPageKey[]>;
+  /** The one door out of a page. Main checks it against the approvals on disk. */
+  fetch?: (id: string, req: PageFetchRequest) => Promise<PageFetchResult>;
 }
 
 /** How many pinned pages the header shows before the rest stay in the

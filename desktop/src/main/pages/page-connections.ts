@@ -17,6 +17,20 @@
 // again (deck S-change). Renaming the id alone does not re-ask.
 import type { PageAccess, PageConnection } from '../../shared/pages-types';
 
+/** Where a key connection's key is attached when the manifest does not say.
+ *  A header is the common case and the safer one: a key in a query string is
+ *  written into the service's own access logs. */
+const DEFAULT_KEY_PLACEMENT = { in: 'header', param: 'authorization' } as const;
+
+export interface KeyPlacement { in: 'header' | 'query'; param: string; }
+
+/** Where this connection wants its key. Always answers — an author who says
+ *  nothing gets the header default. */
+export function keyPlacement(c: PageConnection): KeyPlacement {
+  if (c.kind !== 'key' || !c.keyParam) return { ...DEFAULT_KEY_PLACEMENT };
+  return { in: c.keyIn === 'query' ? 'query' : 'header', param: c.keyParam };
+}
+
 /** Caps. A manifest is written by an assistant or a stranger, so every string
  *  is bounded before it reaches a screen or a request. */
 const MAX_CONNECTIONS = 8;
@@ -49,6 +63,16 @@ function cleanAccess(raw: unknown): PageAccess {
   // Anything unrecognised means look-up only: the narrower reading of an
   // unclear manifest is the safe one.
   return raw === 'full' ? 'full' : 'lookup';
+}
+
+/** A header name or query-parameter name: RFC 7230 token characters only, so
+ *  nothing an author writes can smuggle a second header or a URL fragment in.
+ *  Lower-cased, because it is compared against our own header allowlist. */
+function cleanParam(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const name = raw.trim().toLowerCase();
+  if (!name || name.length > 64 || !/^[a-z0-9!#$%&'*+.^_`|~-]+$/.test(name)) return null;
+  return name;
 }
 
 function cleanSteps(raw: unknown): { steps: string[] } | undefined {
@@ -84,7 +108,16 @@ export function parseConnections(raw: unknown): PageConnection[] {
       case 'key': {
         const address = cleanAddress(o.address);
         const service = typeof o.service === 'string' ? o.service.trim().slice(0, MAX_SERVICE) : '';
-        if (address && service) c = { id, kind: 'key', service, address, access: cleanAccess(o.access), keyHelp: cleanSteps(o.keyHelp) };
+        if (address && service) {
+          c = { id, kind: 'key', service, address, access: cleanAccess(o.access), keyHelp: cleanSteps(o.keyHelp) };
+          // Where the service takes the key. A bad name is DROPPED rather than
+          // corrected, so the default (an Authorization header) applies: a
+          // header or parameter name we cannot vouch for must never reach a
+          // request, and a page whose key lands in the wrong place simply
+          // fails to authenticate — it does not leak the key somewhere else.
+          const param = cleanParam(o.keyParam);
+          if (param) { c.keyIn = o.keyIn === 'query' ? 'query' : 'header'; c.keyParam = param; }
+        }
         break;
       }
       default: break;
@@ -109,7 +142,17 @@ export function fingerprint(c: PageConnection): string {
     case 'open': return 'open';
     case 'github': return `github|${c.access}`;
     case 'public': return `public|${c.address}`;
-    case 'key': return `key|${c.service}|${c.address}|${c.access}`;
+    case 'key': {
+      // The placement rides the fingerprint only when it is NOT the default, so
+      // the ordinary key connection keeps the plain four-part string. Moving a
+      // key from a header into the URL changes who can see it — the service
+      // writes query strings into its own access logs — so that edit lapses the
+      // approval and the page asks again.
+      const p = keyPlacement(c);
+      const moved = p.in === DEFAULT_KEY_PLACEMENT.in && p.param === DEFAULT_KEY_PLACEMENT.param
+        ? '' : `|${p.in}:${p.param}`;
+      return `key|${c.service}|${c.address}|${c.access}${moved}`;
+    }
   }
 }
 
@@ -130,8 +173,8 @@ export function covers(c: PageConnection, hostname: string): boolean {
 /** The one address each built-in sign-in may be used with. Fixed here, never
  *  taken from the manifest, so a page cannot point the app's own credential at
  *  a host of its choosing. */
-export const YOUCODED_HOST = 'api.youcoded.ai';
-export const GITHUB_HOST = 'api.github.com';
+const YOUCODED_HOST = 'api.youcoded.ai';
+const GITHUB_HOST = 'api.github.com';
 
 /** Look-up only means the app sends look-ups only; this is the check that
  *  makes "Cannot send changes" true rather than decorative. */
