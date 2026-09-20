@@ -2001,11 +2001,11 @@ export function registerIpcHandlers(
       // first; selectRelease picks the highest VERSION carrying this computer's
       // installer, so the full 1.3.0 ends a beta run without a special case.
       const release = listing
-        ? selectRelease(parsed, { includePrereleases: true, platform: process.platform, arch: process.arch, linuxKind: linuxInstallKind() })
+        ? selectRelease(parsed, { includePrereleases: true, platform: process.platform, arch: process.arch, linuxKind: linuxInstallKind(), translated: app.runningUnderARM64Translation })
         : (parsed as Parameters<typeof readReleaseStatus>[0]);
       // The install kind rides along because a pacman/deb/rpm install can only apply
       // its OWN package — offering it the AppImage was 180 MB wasted (2026-09-20).
-      const next = readReleaseStatus(release, app.getVersion(), process.platform, process.arch, linuxInstallKind());
+      const next = readReleaseStatus(release, app.getVersion(), process.platform, process.arch, linuxInstallKind(), app.runningUnderARM64Translation);
       if (next) cachedUpdateStatus = next;
       else if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
       // Stamped even for a reply that is not a release (GitHub's rate-limit body),

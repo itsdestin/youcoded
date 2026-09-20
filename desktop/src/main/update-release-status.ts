@@ -53,15 +53,25 @@ export function pickInstallerAsset(
   platform: NodeJS.Platform,
   arch: string,
   linuxKind: LinuxInstallKind = 'unknown',
+  translated = false,
 ): ReleaseAssetJson | undefined {
   if (platform === 'win32') return assets.find((a) => a.name.endsWith('.exe'));
   if (platform === 'darwin') {
     // electron-builder cuts an arm64 and an Intel dmg and GitHub lists them in no
     // fixed order, so a bare `.endsWith('.dmg')` could hand an Intel Mac the Apple
-    // silicon build, which will not open. Match the arch first, then any dmg.
-    const wantArm = arch === 'arm64';
-    return assets.find((a) => a.name.endsWith('.dmg') && a.name.includes('arm64') === wantArm)
-      ?? assets.find((a) => a.name.endsWith('.dmg'));
+    // silicon build, which will not open.
+    //
+    // WHY `translated` (2026-09-20): an Apple-silicon Mac running the INTEL build
+    // reports arch 'x64' — macOS is emulating it — so the Intel build would keep
+    // updating to itself forever and nothing would ever move that Mac onto its
+    // native build. Electron's app.runningUnderARM64Translation is the only thing
+    // that can tell those two x64s apart.
+    const wantArm = arch === 'arm64' || translated;
+    // WHY no "…else any dmg" fallback: the other build does not RUN on this Mac,
+    // so offering it is the macOS spelling of the AppImage bug below. A release
+    // that is missing this Mac's file is mid-build; "no installer yet" hides the
+    // offer for the minutes until its own dmg lands.
+    return assets.find((a) => a.name.endsWith('.dmg') && a.name.includes('arm64') === wantArm);
   }
   // Linux: ONE suffix per install kind, and no fallback to another one. WHY no
   // "…else the AppImage": that fallback WAS the bug (2026-09-20) — a pacman
@@ -106,7 +116,7 @@ export function isPreRelease(version: string): boolean {
  */
 export function selectRelease(
   releases: unknown,
-  opts: { includePrereleases: boolean; platform: NodeJS.Platform; arch: string; linuxKind?: LinuxInstallKind },
+  opts: { includePrereleases: boolean; platform: NodeJS.Platform; arch: string; linuxKind?: LinuxInstallKind; translated?: boolean },
 ): ReleaseJson | null {
   if (!Array.isArray(releases)) return null;
   let best: ReleaseJson | null = null;
@@ -121,7 +131,7 @@ export function selectRelease(
     // Same bar the pill uses below: a release carrying no installer for THIS
     // computer is not an offer yet. One tag starts the Android and desktop
     // workflows separately, so a fresh tag is briefly assets-less.
-    if (!pickInstallerAsset(readAssets(release), opts.platform, opts.arch, opts.linuxKind)) continue;
+    if (!pickInstallerAsset(readAssets(release), opts.platform, opts.arch, opts.linuxKind, opts.translated)) continue;
     const version = tagName.replace(/^v/, '');
     if (!best || compareVersions(version, bestVersion) > 0) {
       best = release;
@@ -143,13 +153,14 @@ export function readReleaseStatus(
   platform: NodeJS.Platform,
   arch: string,
   linuxKind: LinuxInstallKind = 'unknown',
+  translated = false,
 ): UpdateStatus | null {
   const tagName = typeof release?.tag_name === 'string' ? release.tag_name : '';
   if (!tagName) return null;
   const latestVersion = tagName.replace(/^v/, '');
   const assets = readAssets(release);
   const htmlUrl = typeof release?.html_url === 'string' ? release.html_url : null;
-  const installer = pickInstallerAsset(assets, platform, arch, linuxKind);
+  const installer = pickInstallerAsset(assets, platform, arch, linuxKind, translated);
 
   return {
     current: currentVersion,

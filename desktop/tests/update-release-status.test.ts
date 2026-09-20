@@ -243,6 +243,37 @@ describe('the beta channel — which release is offered', () => {
   });
 });
 
+describe('a Mac is only ever offered a build its chip can run', () => {
+  const ONLY_ARM = releaseWith([NAMES.macArm, ...MANIFEST_FILES]);
+  const ONLY_INTEL = releaseWith([NAMES.macIntel, ...MANIFEST_FILES]);
+
+  it('moves an Apple-silicon Mac running the Intel build onto the native build', () => {
+    // macOS emulates the Intel build, so process.arch reads 'x64' on an M-series
+    // Mac and the Intel build would keep updating to itself forever. Electron's
+    // runningUnderARM64Translation is the only thing that tells the two apart.
+    const s = readReleaseStatus(FULL_RELEASE, BETA, 'darwin', 'x64', undefined, true);
+    expect(s?.download_url).toBe(urlOf(NAMES.macArm));
+  });
+
+  it('leaves a real Intel Mac on the Intel build', () => {
+    expect(readReleaseStatus(FULL_RELEASE, BETA, 'darwin', 'x64', undefined, false)?.download_url)
+      .toBe(urlOf(NAMES.macIntel));
+  });
+
+  it('never offers an Intel Mac a build that will not open', () => {
+    // An arm64-only dmg does not run on Intel hardware, so "no installer for this
+    // computer" is the honest answer — the same rule the Linux packages follow.
+    const s = readReleaseStatus(ONLY_ARM, BETA, 'darwin', 'x64');
+    expect(s?.update_available).toBe(false);
+    expect(s?.download_url).toBe(HTML_URL);
+  });
+
+  it('never offers an Apple-silicon Mac the Intel-only build', () => {
+    const s = readReleaseStatus(ONLY_INTEL, BETA, 'darwin', 'arm64');
+    expect(s?.update_available).toBe(false);
+  });
+});
+
 // Reported 2026-09-20 on an Arch install (`youcoded 1.3.0_beta.80-1`): clicking
 // the update pill downloaded ~180 MB of AppImage, could not apply it — the
 // self-replace path needs a running AppImage — and opened the download page.
