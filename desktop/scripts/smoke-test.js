@@ -103,7 +103,7 @@ async function main() {
       ...process.env,
       // Prevent port conflicts with any running instance
       YOUCODED_REMOTE_PORT: String(port),
-      // Asks the app to report whether its main window rendered (smoke-probe.ts)
+      // Enables the renderer probe and keeps this ephemeral launch out of analytics.
       YOUCODED_SMOKE_TEST: '1',
     },
     timeout: TIMEOUT_MS,
