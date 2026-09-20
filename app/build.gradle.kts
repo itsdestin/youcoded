@@ -22,8 +22,8 @@ android {
         applicationId = "com.youcoded.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.2.4"
+        versionCode = 21
+        versionName = "1.3.0"
         // WHY: the bootstrap only ships an aarch64 runtime (bootstrap-aarch64.zip,
         // Termux's binary-aarch64 index), but ML Kit / zstd / the terminal JNI
         // bring native libs for all four ABIs, so the APK advertised

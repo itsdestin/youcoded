@@ -1,6 +1,6 @@
 {
   "name": "youcoded",
-  "version": "1.2.4",
+  "version": "1.3.0",
   "description": "Open-source, multi-model AI assistant for your files, projects, and everyday work",
   "homepage": "https://github.com/itsdestin/youcoded",
   "main": "dist/main/bootstrap.js",
