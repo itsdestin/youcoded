@@ -10,7 +10,7 @@ import { createPortal } from 'react-dom';
 import MarkdownContent from './MarkdownContent';
 import { Button, Dialog, LoadingState, ProgressBar } from './ui';
 import { BetaChannelRow } from './BetaChannelToggle';
-import { stripInvokeWrapper } from '../utils/ipc-error';
+import { plainMessage, stripInvokeWrapper } from '../utils/ipc-error';
 
 // Error codes where a fresh download might succeed (transient or file-level).
 // The complement (dmg-corrupt, appimage-not-writable, unsupported-platform,
@@ -18,7 +18,9 @@ import { stripInvokeWrapper } from '../utils/ipc-error';
 // benefit from retry — the user's best move is the browser fallback link.
 // 'verify-failed' IS retriable: a corrupted download can succeed next time (the
 // main process deletes the bad file so Retry re-downloads it). 2026-09-10 #7.
-const RETRIABLE_ERROR_CODES = new Set(['network-failed', 'disk-full', 'file-missing', 'verify-failed']);
+// 'install-cancelled' is retriable because Retry raises the password dialog
+// again — dismissing it is a choice, not a broken download (2026-09-20).
+const RETRIABLE_ERROR_CODES = new Set(['network-failed', 'disk-full', 'file-missing', 'verify-failed', 'install-cancelled']);
 function isRetriableErrorCode(code: string): boolean {
   return RETRIABLE_ERROR_CODES.has(code);
 }
@@ -48,6 +50,9 @@ function downloadErrorCode(e: unknown): string {
 function updateErrorMessage(code: string): string {
   if (code === 'signature-invalid') return "This update couldn't be verified, so it wasn't installed. Your current version still works.";
   if (code === 'verify-failed') return 'The download looked corrupted — Retry';
+  // Installing a Linux system package needs an administrator password (2026-09-20).
+  if (code === 'install-cancelled') return 'The password prompt was closed, so nothing was installed.';
+  if (code === 'install-failed') return "Your package manager wouldn't install the update.";
   return 'Launch failed';
 }
 
@@ -110,9 +115,38 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     // `stage` is which step failed. WHY (error inventory 2026-09-10, false message 17):
     // the label used to be chosen by retriability alone, so every failure retry could
     // not fix — including a refused or busy DOWNLOAD — read "Launch failed".
-    | { kind: 'error'; code: string; stage: 'download' | 'launch' };
+    // Linux system package with no way to ask for a password: the download is
+    // on disk and `command` finishes it (2026-09-20).
+    | { kind: 'manual'; command: string; filePath: string }
+    | { kind: 'error'; code: string; stage: 'download' | 'launch'; command?: string };
 
   const [installState, setInstallState] = useState<InstallState>({ kind: 'idle' });
+  // The one command that finishes a Linux package update by hand — shown when
+  // there is no password dialog to raise, or when the install was refused.
+  const [copiedCommand, setCopiedCommand] = useState(false);
+  const [runningCommand, setRunningCommand] = useState(false);
+  const [terminalError, setTerminalError] = useState<string | null>(null);
+  const finishCommand = installState.kind === 'manual' ? installState.command
+    : installState.kind === 'error' ? installState.command
+    : undefined;
+
+  const copyFinishCommand = useCallback(async (command: string) => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopiedCommand(true);
+      setTimeout(() => setCopiedCommand(false), 1500);
+    } catch { /* clipboard blocked — the command is on screen and selectable */ }
+  }, []);
+
+  const runFinishCommand = useCallback(async (command: string) => {
+    // busy guard: a double-click would otherwise open two terminals, and the
+    // second steals focus from the first (same reason as EngineCard's).
+    setRunningCommand(true);
+    setTerminalError(null);
+    try { await window.claude.engine.runInTerminal(command); }
+    catch (e: unknown) { setTerminalError(plainMessage(e)); }
+    finally { setRunningCommand(false); }
+  }, []);
   // Ref rather than state because the progress handler fires asynchronously and
   // we want the freshest jobId without re-subscribing.
   const activeJobIdRef = useRef<string | null>(null);
@@ -181,7 +215,13 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     setInstallState({ kind: 'launching' });
     const result: UpdateLaunchResult = await window.claude.update.launch(jobId, filePath);
     if (!result.success) {
-      setInstallState({ kind: 'error', code: result.error, stage: 'launch' });
+      // A Linux package install hands back the command that would finish the
+      // job by hand, so a refusal is not a dead end (2026-09-20).
+      setInstallState({ kind: 'error', code: result.error, stage: 'launch', command: result.command });
+      return;
+    }
+    if ('fallback' in result && result.fallback === 'manual') {
+      setInstallState({ kind: 'manual', command: result.command, filePath: result.filePath });
       return;
     }
     if ('fallback' in result && result.fallback === 'browser') {
@@ -322,6 +362,9 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
               disabled={
                 installState.kind === 'downloading' ||
                 installState.kind === 'launching' ||
+                // The download is done and waiting on a terminal — the block
+                // below is the next step, not this button.
+                installState.kind === 'manual' ||
                 // Disable "retry" for errors where a fresh download won't help.
                 (installState.kind === 'error' && !isRetriableErrorCode(installState.code))
               }
@@ -332,6 +375,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
               )}
               {installState.kind === 'ready' && 'Launch Installer'}
               {installState.kind === 'launching' && 'Launching…'}
+              {installState.kind === 'manual' && 'Downloaded — one step left'}
               {installState.kind === 'error' && (
                 // A blocked/unverifiable update and a corrupt download read differently
                 // (security review #7, 2026-09-10). Every other failure names the step
@@ -353,6 +397,31 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 Offering it there would reopen the attack outside the app. Retry
                 (which re-downloads and re-verifies) is the only safe move; a
                 signature-invalid shows an explanation instead. 2026-09-10 #7 review. */}
+            {/* The update is downloaded and verified; installing a system
+                package is the one step that needs an administrator password.
+                Same shape the engine prerequisites use: the command in full,
+                Copy, and Run in terminal. */}
+            {finishCommand && (
+              <div className="w-full mt-2 text-left">
+                <p className="text-xs text-fg-dim mb-1">
+                  {installState.kind === 'manual'
+                    ? 'The update is downloaded. Finish it with this command — it asks for your password:'
+                    : 'You can finish the update yourself with this command:'}
+                </p>
+                <div className="flex items-start gap-1.5 rounded-md bg-inset px-2 py-1.5">
+                  <pre className="flex-1 min-w-0 text-3xs font-mono whitespace-pre-wrap break-words select-all">{finishCommand}</pre>
+                  <Button size="sm" variant="ghost" onClick={() => void copyFinishCommand(finishCommand)} className="shrink-0 -my-1">
+                    {copiedCommand ? 'Copied' : 'Copy'}
+                  </Button>
+                </div>
+                <div className="flex gap-1.5 mt-1.5">
+                  <Button size="sm" onClick={() => void runFinishCommand(finishCommand)} disabled={runningCommand}>
+                    Run in terminal
+                  </Button>
+                </div>
+                {terminalError && <p className="text-xs text-red-600 mt-1">{terminalError}</p>}
+              </div>
+            )}
             {installState.kind === 'error' && installState.code !== 'verify-failed' && (
               <div className="text-xs mt-2">
                 {installState.code === 'signature-invalid' ? (

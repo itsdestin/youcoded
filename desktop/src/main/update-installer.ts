@@ -47,7 +47,9 @@ export function isAllowedUpdateHost(urlString: string): boolean {
 const ALLOWED_EXTENSIONS_BY_PLATFORM: Record<string, readonly string[]> = {
   win32:  ['.exe'],
   darwin: ['.dmg'],
-  linux:  ['.AppImage', '.deb'],
+  // Every format electron-builder cuts for Linux — the picker hands over the one
+  // that matches how this copy was installed (linux-install-kind.ts).
+  linux:  ['.AppImage', '.deb', '.rpm', '.pacman'],
 };
 
 export class UpdateInstallError extends Error {
@@ -426,6 +428,46 @@ export function findCachedDownload(
 // we treat it as a bad DMG; beyond it, we assume success and return quitPending.
 const QUICK_EXIT_WINDOW_MS = 2000;
 
+// A package install is seconds of work, but the password dialog in front of it
+// is a person. Ten minutes is "they walked away", not "it hung".
+const PRIVILEGED_INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+
+interface NativePackageSpec {
+  suffix: string;
+  /** Arguments to pkexec — the package manager and its own flags. */
+  args: (filePath: string) => string[];
+  /** What the person would type instead, if we cannot ask for a password. */
+  manual: (filePath: string) => string;
+}
+
+/** WHY each command takes the FILE, not a package name: this installs the exact
+ *  build the app just downloaded and verified against the signed manifest, not
+ *  whatever a distro repository happens to carry. */
+const NATIVE_PACKAGE_SPECS: readonly NativePackageSpec[] = [
+  {
+    suffix: '.pacman',
+    args: (f) => ['pacman', '-U', '--noconfirm', f],
+    manual: (f) => `sudo pacman -U ${shellQuote(f)}`,
+  },
+  {
+    suffix: '.deb',
+    // apt-get, not dpkg: it pulls any missing dependency instead of leaving the
+    // package half-configured.
+    args: (f) => ['apt-get', 'install', '-y', f],
+    manual: (f) => `sudo apt-get install -y ${shellQuote(f)}`,
+  },
+  {
+    suffix: '.rpm',
+    args: (f) => ['rpm', '-U', '--replacepkgs', f],
+    manual: (f) => `sudo rpm -U --replacepkgs ${shellQuote(f)}`,
+  },
+];
+
+/** Single-quote a path for display in a copyable shell command. */
+function shellQuote(p: string): string {
+  return /^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`;
+}
+
 export interface LaunchInstallerDeps {
   platform?: NodeJS.Platform;
   // Injected for testability. Production wires in node child_process spawn + Electron shell/app.
@@ -436,6 +478,9 @@ export interface LaunchInstallerDeps {
   fallbackDownloadUrl: () => string;
   // Override for Linux AppImage detection — prod reads process.env.APPIMAGE.
   envAppImage?: string;
+  // Linux package installs: where pkexec lives, and how to test for it.
+  pkexecPath?: string;
+  exists?: (p: string) => boolean;
 }
 
 export interface LaunchInstallerInput {
@@ -471,12 +516,8 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
     }
 
     if (platform === 'linux') {
-      if (input.filePath.endsWith('.deb')) {
-        // .deb requires root / package manager — we can't launch it directly.
-        // Open the release page in the browser so the user can install manually.
-        await deps.shellOpenExternal(deps.fallbackDownloadUrl());
-        return { success: true, quitPending: false, fallback: 'browser' };
-      }
+      const pkg = nativePackageSpec(input.filePath);
+      if (pkg) return await installNativePackage(pkg, input.filePath);
 
       if (input.filePath.endsWith('.AppImage')) {
         // AppImage self-replace: overwrite the currently-running AppImage, then relaunch.
@@ -527,6 +568,71 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
     }
 
     return { success: false, error: 'unsupported-platform' };
+  }
+
+  /** The package manager that applies each Linux package, and the command a
+   *  person would run by hand if we cannot ask for a password ourselves. */
+  function nativePackageSpec(filePath: string): NativePackageSpec | null {
+    for (const spec of NATIVE_PACKAGE_SPECS) {
+      if (filePath.endsWith(spec.suffix)) return spec;
+    }
+    return null;
+  }
+
+  /**
+   * Install a .pacman / .deb / .rpm over the running install.
+   *
+   * WHY pkexec and not sudo: replacing files under /opt needs root, and pkexec
+   * raises the desktop's own password dialog (the one KDE and GNOME already use
+   * for system updates) instead of needing a terminal. With no polkit agent
+   * running there is nothing to type a password into, so we hand back the exact
+   * command rather than failing — the download is already on disk either way.
+   */
+  async function installNativePackage(
+    spec: NativePackageSpec,
+    filePath: string,
+  ): Promise<UpdateLaunchResult> {
+    const manualCommand = spec.manual(filePath);
+    const exists = deps.exists ?? ((p: string) => fs.existsSync(p));
+    const pkexec = deps.pkexecPath ?? '/usr/bin/pkexec';
+    if (!exists(pkexec)) {
+      return { success: true, quitPending: false, fallback: 'manual', command: manualCommand, filePath };
+    }
+
+    const status = await runToCompletion(pkexec, spec.args(filePath));
+    if (status === 0) {
+      // The package manager has replaced the files under /opt; the running
+      // process keeps its own inode until it exits, so relaunch is what picks
+      // up the new version.
+      deps.appRelaunch();
+      return { success: true, quitPending: true };
+    }
+    // 126 = the dialog was dismissed or authorisation was refused; 127 = pkexec
+    // could not run the command at all. Both are the user's prompt, not a broken
+    // download, so neither should read as "the update failed".
+    if (status === 126 || status === 127) {
+      return { success: false, error: 'install-cancelled', command: manualCommand };
+    }
+    return { success: false, error: 'install-failed', command: manualCommand };
+  }
+
+  /** Run a child to completion and hand back its exit status (null if it never
+   *  started, or outran the timeout). */
+  function runToCompletion(cmd: string, args: string[]): Promise<number | null> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (status: number | null) => { if (!settled) { settled = true; resolve(status); } };
+      let child: any;
+      try {
+        child = spawnFn(cmd, args, { stdio: 'ignore' });
+      } catch {
+        done(null);
+        return;
+      }
+      const timer = setTimeout(() => done(null), PRIVILEGED_INSTALL_TIMEOUT_MS);
+      child.on?.('error', () => { clearTimeout(timer); done(null); });
+      child.on?.('exit', (code: number | null) => { clearTimeout(timer); done(code); });
+    });
   }
 
   /**

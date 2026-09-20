@@ -15,6 +15,8 @@ export type UpdateInstallErrorCode =
   | 'appimage-not-writable' // EACCES/EPERM replacing a root-owned AppImage
   | 'dmg-corrupt'           // `open -W` exited non-zero on macOS
   | 'unsupported-platform'  // platform/arch combination we don't handle
+  | 'install-cancelled'     // Linux package install: the password prompt was dismissed
+  | 'install-failed'        // Linux package install: the package manager itself refused
   | 'remote-unsupported'    // attempted from a remote-browser session
   | 'network-failed'        // download failed mid-stream
   | 'disk-full'             // ENOSPC during write
@@ -39,8 +41,13 @@ export interface UpdateProgressEvent {
 
 export type UpdateLaunchResult =
   | { success: true; quitPending: true }                         // installer spawned, app.quit() scheduled
-  | { success: true; quitPending: false; fallback: 'browser' }   // .deb / missing-APPIMAGE: shell.openExternal, app keeps running
-  | { success: false; error: UpdateInstallErrorCode };
+  | { success: true; quitPending: false; fallback: 'browser' }   // missing-APPIMAGE: shell.openExternal, app keeps running
+  // Linux package install with no way to ask for a password (no polkit agent):
+  // the file is downloaded and `command` finishes the job in a terminal.
+  | { success: true; quitPending: false; fallback: 'manual'; command: string; filePath: string }
+  // `command` rides along on a failed package install so the UI can offer the
+  // same manual finish instead of a dead end.
+  | { success: false; error: UpdateInstallErrorCode; command?: string };
 
 export interface UpdateCachedDownload {
   filePath: string;
