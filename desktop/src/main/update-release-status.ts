@@ -9,6 +9,7 @@
 // release listing, beta → full release included.
 
 import { compareVersions } from './update-manifest-verify';
+import type { LinuxInstallKind } from './linux-install-kind';
 
 export interface ReleaseAssetJson {
   name: string;
@@ -35,11 +36,23 @@ export interface UpdateStatus {
   tag: string | null;
 }
 
+/** The file a Linux install of each kind can actually apply to itself. */
+const LINUX_ASSET_SUFFIX: Record<LinuxInstallKind, string> = {
+  appimage: '.AppImage',
+  pacman: '.pacman',
+  deb: '.deb',
+  rpm: '.rpm',
+  // A dev checkout, a tarball, Nix: nothing owns the binary, so the portable
+  // AppImage is the only thing that could stand in.
+  unknown: '.AppImage',
+};
+
 /** The installer this computer would download from a release, if it has one. */
 export function pickInstallerAsset(
   assets: ReleaseAssetJson[],
   platform: NodeJS.Platform,
   arch: string,
+  linuxKind: LinuxInstallKind = 'unknown',
 ): ReleaseAssetJson | undefined {
   if (platform === 'win32') return assets.find((a) => a.name.endsWith('.exe'));
   if (platform === 'darwin') {
@@ -50,8 +63,13 @@ export function pickInstallerAsset(
     return assets.find((a) => a.name.endsWith('.dmg') && a.name.includes('arm64') === wantArm)
       ?? assets.find((a) => a.name.endsWith('.dmg'));
   }
-  // Linux: the AppImage can replace itself in place; a .deb only opens the browser.
-  return assets.find((a) => a.name.endsWith('.AppImage')) ?? assets.find((a) => a.name.endsWith('.deb'));
+  // Linux: ONE suffix per install kind, and no fallback to another one. WHY no
+  // "…else the AppImage": that fallback WAS the bug (2026-09-20) — a pacman
+  // install downloaded 180 MB of AppImage it could not apply. A release missing
+  // this computer's package is better read as "no installer for this computer",
+  // which hides the offer rather than promising an update that cannot happen.
+  const suffix = LINUX_ASSET_SUFFIX[linuxKind];
+  return assets.find((a) => a.name.endsWith(suffix));
 }
 
 /** The well-formed assets of a release, ignoring anything GitHub shaped oddly. */
@@ -88,7 +106,7 @@ export function isPreRelease(version: string): boolean {
  */
 export function selectRelease(
   releases: unknown,
-  opts: { includePrereleases: boolean; platform: NodeJS.Platform; arch: string },
+  opts: { includePrereleases: boolean; platform: NodeJS.Platform; arch: string; linuxKind?: LinuxInstallKind },
 ): ReleaseJson | null {
   if (!Array.isArray(releases)) return null;
   let best: ReleaseJson | null = null;
@@ -103,7 +121,7 @@ export function selectRelease(
     // Same bar the pill uses below: a release carrying no installer for THIS
     // computer is not an offer yet. One tag starts the Android and desktop
     // workflows separately, so a fresh tag is briefly assets-less.
-    if (!pickInstallerAsset(readAssets(release), opts.platform, opts.arch)) continue;
+    if (!pickInstallerAsset(readAssets(release), opts.platform, opts.arch, opts.linuxKind)) continue;
     const version = tagName.replace(/^v/, '');
     if (!best || compareVersions(version, bestVersion) > 0) {
       best = release;
@@ -124,13 +142,14 @@ export function readReleaseStatus(
   currentVersion: string,
   platform: NodeJS.Platform,
   arch: string,
+  linuxKind: LinuxInstallKind = 'unknown',
 ): UpdateStatus | null {
   const tagName = typeof release?.tag_name === 'string' ? release.tag_name : '';
   if (!tagName) return null;
   const latestVersion = tagName.replace(/^v/, '');
   const assets = readAssets(release);
   const htmlUrl = typeof release?.html_url === 'string' ? release.html_url : null;
-  const installer = pickInstallerAsset(assets, platform, arch);
+  const installer = pickInstallerAsset(assets, platform, arch, linuxKind);
 
   return {
     current: currentVersion,

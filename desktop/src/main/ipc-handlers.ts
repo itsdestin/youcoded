@@ -119,6 +119,7 @@ import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateI
 import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
 import { verifyDownloadedUpdate } from './update-manifest-verify';
 import { readReleaseStatus, selectRelease, type UpdateStatus } from './update-release-status';
+import { linuxInstallKind } from './linux-install-kind';
 import { UpdateSettings } from './update-settings';
 import { UPDATE_SIGNING_PUBLIC_KEY_PEM } from './update-signing-key';
 import { getChangelog } from './changelog-service';
@@ -2000,9 +2001,11 @@ export function registerIpcHandlers(
       // first; selectRelease picks the highest VERSION carrying this computer's
       // installer, so the full 1.3.0 ends a beta run without a special case.
       const release = listing
-        ? selectRelease(parsed, { includePrereleases: true, platform: process.platform, arch: process.arch })
+        ? selectRelease(parsed, { includePrereleases: true, platform: process.platform, arch: process.arch, linuxKind: linuxInstallKind() })
         : (parsed as Parameters<typeof readReleaseStatus>[0]);
-      const next = readReleaseStatus(release, app.getVersion(), process.platform, process.arch);
+      // The install kind rides along because a pacman/deb/rpm install can only apply
+      // its OWN package — offering it the AppImage was 180 MB wasted (2026-09-20).
+      const next = readReleaseStatus(release, app.getVersion(), process.platform, process.arch, linuxInstallKind());
       if (next) cachedUpdateStatus = next;
       else if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
       // Stamped even for a reply that is not a release (GitHub's rate-limit body),
