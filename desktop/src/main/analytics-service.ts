@@ -17,6 +17,7 @@ import * as os from "node:os";
 import { randomUUID, createHmac } from "node:crypto";
 import { machineIdSync } from "node-machine-id";
 import { ANALYTICS_SALT } from "./analytics-salt";
+import { isSmokeTest } from "./smoke-probe";
 
 // WHY: Moved to its own domain so Cloudflare's cache and rate limiter apply; the old workers.dev address still answers for older app versions.
 const API_BASE = "https://api.youcoded.ai";
@@ -112,6 +113,10 @@ async function postEvent(p: string, body: unknown): Promise<boolean> {
 }
 
 export async function runAnalyticsOnLaunch(): Promise<void> {
+  // WHY: packaged CI smoke tests use ephemeral machines; counting them creates
+  // phantom devices and retention cohorts, and must not mutate analytics state.
+  if (isSmokeTest()) return;
+
   const state = readState();
   if (!state.optIn) return;
 
