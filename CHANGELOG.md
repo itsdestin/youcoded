@@ -4,6 +4,12 @@ All notable changes to YouCoded are documented in this file.
 
 ## [Unreleased]
 
+**1.3.0 is skipped as a release (2026-09-19).** Betas continue on the `1.3.1-beta`
+line and the next official release is **1.3.1**; the entry below stays as the record
+of what the 1.3 beta line carries. Why: no published build before `1.3.0-beta.86`
+can be offered a beta from inside the app, so the only way to reach v1.2.4 users and
+the earlier beta testers is an official release, and 1.3.1 is now that release.
+
 ## [1.3.0-beta] — 2026-09-11
 
 Everything between v1.2.4 (18 May) and the 1.3 beta: 3,119 commits.
