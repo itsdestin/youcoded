@@ -106,19 +106,27 @@ export async function runLeaseTakeoverGate({
     if (typeof askClaimDenied === 'function') {
       const retry = await askClaimDenied(claim.device || 'another device');
       if (!retry) { onAbandon?.(); return false; } // "Leave it" — abort, nothing was created
-      // Try again: re-claim once. A second denial ends the loop — the user has
-      // now been told twice; proceed-and-warn beats an endless dialog.
+      // Try again: re-claim once.
       const again = await runClaim(claudeSessionId, claimLease);
-      if (again?.outcome === 'denied') {
-        onWarn(`Still held by ${again.device || 'another device'} — it may still be editing this conversation, and recent turns may be missing.`);
+      if (again?.outcome === 'acquired') return true; // holder let go — clean
+      if (again && again.outcome !== 'denied') {
+        // free-unconfirmed / error → proceed (escape hatch; the lease client
+        // holds optimistically on null, matching the claim's report).
+        return true;
       }
-      // acquired / free-unconfirmed / error / null → proceed (the last claim's
-      // own semantics: acquired = held, the others = escape hatch).
+      // again === 'denied' (or the re-claim threw): STILL held. Do NOT
+      // warn-and-proceed — that would open a session without the lease beside
+      // a live writer (the audit's H1 shape, with a blessing). Fall through to
+      // the takeover gate below: the query will confirm held:true and the
+      // user gets the REAL override path (confirm → hand-off → force), whose
+      // outcome is ownership, not a warned dual-write. The fall-through keeps
+      // the takeover flow reachable at all on a healthy hub — the claim denies
+      // before the query would otherwise ever run.
+    } else {
+      // No askClaimDenied member: degrade to proceed-and-warn (never-block).
+      onWarn(`This conversation is being used on ${claim.device || 'another device'} right now — opening it here may create two separate copies.`);
       return true;
     }
-    // No askClaimDenied member: degrade to proceed-and-warn (never-block).
-    onWarn(`This conversation is being used on ${claim.device || 'another device'} right now — opening it here may create two separate copies.`);
-    return true;
   }
   if (claim?.outcome === 'acquired') {
     // Lease is OURS before anything exists — the healthy-hub race window

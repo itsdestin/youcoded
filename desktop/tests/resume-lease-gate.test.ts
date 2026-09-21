@@ -140,14 +140,30 @@ describe('runLeaseTakeoverGate — claim-before-open', () => {
     expect(leaseRelease).toHaveBeenCalled();
   });
 
-  it('Try again after a denial re-claims once; still denied → proceed + warn', async () => {
-    leaseClaim.mockResolvedValueOnce({ outcome: 'denied', device: 'laptop' })
-      .mockResolvedValueOnce({ outcome: 'denied', device: 'laptop' });
-    const ask = vi.fn().mockResolvedValue(true); // Try again
-    const onWarn = vi.fn();
-    expect(await claimRun(ask, onWarn)).toBe(true);
-    expect(leaseClaim).toHaveBeenCalledTimes(2);
-    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('laptop'));
+  it('Try again + still denied falls through to the takeover gate, not warn-and-proceed', async () => {
+    // Proceeding with a warned toast would open a session WITHOUT the lease
+    // beside a live writer — the audit's H1 shape with a blessing. The takeover
+    // gate is the real override path (its outcome is ownership via force, or an
+    // honest abort); it must stay reachable now that the claim runs first.
+    leaseClaim.mockResolvedValue({ outcome: 'denied', device: 'laptop' });
+    leaseQuery.mockResolvedValue({ held: true, self: false, device: 'laptop' });
+    // The takeover gate asks 'confirm'; the user accepts the takeover.
+    const ask = vi.fn().mockImplementation((_device: string, phase: string) =>
+      Promise.resolve(phase === 'claim-denied' || phase === 'confirm'));
+    leaseTakeover.mockResolvedValue({ outcome: 'acquired' });
+    expect(await claimRun(ask)).toBe(true);
+    expect(leaseQuery).toHaveBeenCalled();
+    expect(ask).toHaveBeenCalledWith('laptop', 'confirm');
+    expect(leaseTakeover).toHaveBeenCalled();
+  });
+
+  it('Try again + still denied + user declines the takeover → abort, no session', async () => {
+    leaseClaim.mockResolvedValue({ outcome: 'denied', device: 'laptop' });
+    leaseQuery.mockResolvedValue({ held: true, self: false, device: 'laptop' });
+    const ask = vi.fn().mockImplementation((_device: string, phase: string) =>
+      Promise.resolve(phase === 'claim-denied')); // Try again yes, confirm no
+    expect(await claimRun(ask)).toBe(false);
+    expect(leaseRelease).toHaveBeenCalled(); // onAbandon on the takeover decline
   });
 
   it('Try again after a denial re-claims once; then acquired → proceed cleanly', async () => {
