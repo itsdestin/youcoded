@@ -71,6 +71,15 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       ],
     },
     {
+      // WHY (lease-handoff deck Q-5, 2026-09-21): the only place handoff rules
+      // appeared was the takeover dialog itself — mid-task. Destin chose a
+      // short paragraph here over a full section.
+      heading: 'Using the same conversation on two devices',
+      paragraphs: [
+        'A conversation runs on one device at a time. If you open one your other computer is using, YouCoded asks that computer to hand it over, and it keeps a separate copy of anything it wrote — nothing is lost. This works between your computers; the phone app joins in when its rebuild lands.',
+      ],
+    },
+    {
       heading: 'If something looks off',
       bullets: [
         { term: "Sync won't turn on", text: 'It needs GitHub. If you see a "GitHub CLI / not signed in" message, connect GitHub and try again.' },

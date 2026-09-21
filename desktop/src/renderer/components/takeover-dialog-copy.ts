@@ -1,4 +1,8 @@
-// Copy for the conversation-lease takeover dialog (Destin sign-off 2026-07-23).
+// Copy for the conversation-lease takeover dialog (Destin sign-off 2026-07-23;
+// 'force' lead reworded 2026-09-21 — the hub relays the request but gets no
+// acknowledgement back (room.ts sets ok before safeSend, which swallows closed
+// sockets), so "didn't answer" claimed more than the system can know. Chosen
+// from lease-handoff deck Q-7).
 // Extracted from App.tsx as a pure function so the approved strings are
 // pinnable (tests/takeover-dialog-copy.test.ts) and future copy edits are
 // deliberate rather than a drive-by JSX tweak. Returns RAW strings with
@@ -29,7 +33,10 @@ export function takeoverDialogCopy(phase: TakeoverDialogPhase, device: string): 
       };
     case 'force':
       return {
-        lead: `${device} was asked to hand this conversation off, but didn't answer. It may be offline or busy.`,
+        // The hub cannot distinguish "asked, no reply" from "the handoff
+        // finished after our poll gave up" — both look like a timeout. State
+        // only what is known: no confirmed handoff.
+        lead: `We couldn't confirm that ${device} handed off this conversation. It may be offline or busy.`,
         consequence: `You can still take over. When ${device} catches up it will stop and save on its own — but anything it writes before then is kept as a separate copy, not added to this conversation.`,
       };
   }

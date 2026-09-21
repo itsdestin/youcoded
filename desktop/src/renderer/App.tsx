@@ -4425,6 +4425,9 @@ function AppInner() {
             <p>A conversation runs on one device at a time.</p>
             <p>Taking over asks the current device to stop, save everything, and hand off — nothing is lost.</p>
             <p>Taking over <em>without</em> a confirmed handoff doesn&apos;t wait. When the other device reconnects, it stops and saves on its own — but anything it wrote in the meantime is kept as a separate copy, not added to this conversation.</p>
+            {/* WHY (deck Q-9, 2026-09-21): lease protection is desktop-only today — Android stubs
+                the takeover RPCs — so say so here rather than let the phone's silence read as a fault. */}
+            <p>This works between your computers. The phone app joins in when its rebuild lands.</p>
           </AnchorTip>
         );
         return (

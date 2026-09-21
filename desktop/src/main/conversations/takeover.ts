@@ -161,10 +161,12 @@ export interface RequesterTakeoverDeps {
 
 // 'undeliverable' is distinct from 'timeout': the hub had NO delivery path at
 // all (offline/not connected to any device), so the holder was never asked —
-// as opposed to 'timeout', where the request WAS delivered and the holder
-// simply didn't answer within the poll budget. Blaming a device that was never
-// contacted ("<device> isn't responding") is dishonest; the renderer surfaces
-// each with its own copy (App.tsx takeoverPrompt phase).
+// as opposed to 'timeout', where the request WAS delivered but no confirmation
+// came back within the poll budget. The hub does not wait for the holder to
+// acknowledge, so a timeout never proves the device was reached — only that no
+// confirmed handoff happened (dialog copy says "couldn't confirm", 2026-09-21).
+// Blaming a device that was never contacted ("<device> isn't responding") is
+// dishonest; the renderer surfaces each with its own copy (App.tsx takeoverPrompt phase).
 export interface RequesterOutcome { outcome: 'acquired' | 'timeout' | 'error' | 'undeliverable' }
 
 // The requester object's type — referenced by ipc-handlers' leaseWiring param so
