@@ -99,13 +99,17 @@ export function hubLeaseRequest(op: string, sessionId: string, deviceId: string)
   // Debug: takeover/lease failures are silent by design (never-block), which made
   // "takeover didn't happen" undiagnosable from logs (2026-07-23). Log every op +
   // whether the hub could answer — `null` here means the op had NO delivery path.
+  // Elapsed-ms (2026-09-21, deck Q-1 rider): claim-before-open leans on this round
+  // trip happening before a resume can show anything, so its real latency needs to
+  // be measurable on Destin's devices before that order is committed to.
   if (!hubSocket) {
     console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub socket absent (status=${hubStatus}) — no delivery path, answering null`);
     return Promise.resolve(null);
   }
+  const startedAt = Date.now();
   return hubSocket.request(op, sessionId, deviceId).then(
-    (r) => { console.log(`[lease] ${op} ${sessionId.slice(0, 8)}: ${r ? `ok=${r.ok} holder=${r.holder?.deviceId?.slice(0, 8) ?? 'none'}` : 'null (hub gave no answer)'}`); return r; },
-    (e) => { console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub request failed: ${e?.message ?? e}`); throw e; },
+    (r) => { console.log(`[lease] ${op} ${sessionId.slice(0, 8)}: ${r ? `ok=${r.ok} holder=${r.holder?.deviceId?.slice(0, 8) ?? 'none'}` : 'null (hub gave no answer)'} (${Date.now() - startedAt}ms)`); return r; },
+    (e) => { console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub request failed after ${Date.now() - startedAt}ms: ${e?.message ?? e}`); throw e; },
   );
 }
 
