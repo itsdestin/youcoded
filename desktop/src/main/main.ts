@@ -267,9 +267,15 @@ skillProvider.ensureMigrated();
 // state for every in-repo plugin other than the three bundled ids).
 void (async () => {
   await skillProvider.repairPackageVersions();
-  // Fire-and-forget: install bundled plugins if missing. Silent retry on
-  // every launch. See docs/superpowers/specs/2026-04-20-bundled-default-plugins-design.md.
-  void skillProvider.ensureBundledPluginsInstalled();
+  // Fire-and-forget: install bundled plugins if missing, upgrade stale ones.
+  // Silent retry on every launch. See
+  // docs/superpowers/specs/2026-04-20-bundled-default-plugins-design.md.
+  //
+  // app.getVersion() is passed so the FIRST launch of a new app version
+  // forces a marketplace cache refresh. Without it, an app update could
+  // compare bundled plugin versions against a cache fetched minutes earlier
+  // and correctly report `unchanged` — shipping no skill content at all.
+  void skillProvider.ensureBundledPluginsInstalled({ appVersion: app.getVersion() });
 })();
 
 // commandProvider is constructed after skillProvider so it can read skills

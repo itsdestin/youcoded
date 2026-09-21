@@ -4,7 +4,7 @@ import os from 'os';
 import { scanSkills } from './skill-scanner';
 import { SkillConfigStore } from './skill-config-store';
 import { encodeSkillLink, decodeSkillLink } from './skill-share';
-import { installPlugin, uninstallPlugin, upgradePluginFromLocal, refreshLocalMarketplaceCache, readPluginVersion, isPluginInstalled, marketplaceCacheDir, sweepStaleUpgradeDirs, type InstallResult, upgradePluginFromGit } from './plugin-installer';
+import { installPlugin, uninstallPlugin, upgradePluginFromLocal, refreshLocalMarketplaceCache, readPluginVersion, isPluginInstalled, marketplaceCacheDir, sweepStaleUpgradeDirs, readLastReconciledAppVersion, writeLastReconciledAppVersion, type InstallResult, upgradePluginFromGit } from './plugin-installer';
 import { pluginInstallDir, YOUCODED_PLUGINS_DIR, listInstalledPluginDirs } from './claude-code-registry';
 import { getConfig as getMarketplaceConfig } from './marketplace-config-store';
 import { reconcileHooks } from './hook-reconciler';
@@ -1036,8 +1036,18 @@ export class LocalSkillProvider {
    * the installed one, otherwise leave it alone. Runs on every app launch —
    * unlike the old installMany()-only path, an already-installed bundled
    * plugin that ships a fix now actually reaches users who already have it.
+   *
+   * `opts.appVersion` forces a marketplace cache refresh for the bundled
+   * ids on the FIRST launch of a newly installed app version, bypassing
+   * refreshLocalMarketplaceCache()'s 1h gate. WHY that matters: an app
+   * update must deliver the bundled skill content that shipped with it, and
+   * the version compare below can only see content the cache has actually
+   * fetched. Without the force, an app updated minutes after a previous
+   * launch compares against a stale cache and reports `unchanged` — the
+   * exact "the app updated but my skills didn't" failure. Callers that
+   * omit it (tests, one-off invocations) keep the plain 1h-gated behaviour.
    */
-  async reconcileBundledPlugins(): Promise<Array<{ id: string; action: 'installed' | 'upgraded' | 'unchanged' | 'skipped-dev' | 'failed'; from?: string; to?: string; error?: string; via?: string }>> {
+  async reconcileBundledPlugins(opts?: { appVersion?: string }): Promise<Array<{ id: string; action: 'installed' | 'upgraded' | 'unchanged' | 'skipped-dev' | 'failed'; from?: string; to?: string; error?: string; via?: string }>> {
     type ReconcileAction = 'installed' | 'upgraded' | 'unchanged' | 'skipped-dev' | 'failed';
     const ids = [...BUNDLED_PLUGIN_IDS];
 
@@ -1084,11 +1094,25 @@ export class LocalSkillProvider {
     // gate inside refreshLocalMarketplaceCache would make a per-id call cheap
     // too, but grouping is one fewer thing to reason about.
     const marketplaces = new Set(ids.map((id) => index.find((e) => e.id === id)?.sourceMarketplace ?? 'youcoded'));
+
+    // First launch of a newly installed app version → refresh even if the
+    // cache is inside its 1h gate. The marker is written on every launch, so
+    // this forces the refresh exactly once per version, not once per launch.
+    // Read BEFORE the loop so a refresh failure still records the version —
+    // otherwise a flaky network would re-force (and re-fail) on every launch.
+    const appVersion = opts?.appVersion;
+    const forceOnAppUpdate = !!appVersion && readLastReconciledAppVersion() !== appVersion;
+
     for (const mp of marketplaces) {
-      const refreshed = await refreshLocalMarketplaceCache(mp);
+      const refreshed = await refreshLocalMarketplaceCache(mp, { force: forceOnAppUpdate });
       if (!refreshed.ok) {
-        log('WARN', 'bundled-plugins', 'marketplace cache refresh failed; comparing against the last copy', { marketplace: mp, error: refreshed.error });
+        log('WARN', 'bundled-plugins', 'marketplace cache refresh failed; comparing against the last copy', { marketplace: mp, error: refreshed.error, forced: forceOnAppUpdate });
       }
+    }
+
+    if (forceOnAppUpdate && appVersion) {
+      writeLastReconciledAppVersion(appVersion);
+      log('INFO', 'bundled-plugins', 'app version changed; refreshed the marketplace cache for bundled plugins', { appVersion });
     }
 
     const out: Array<{ id: string; action: ReconcileAction; from?: string; to?: string; error?: string; via?: string }> = [];
@@ -1233,9 +1257,9 @@ export class LocalSkillProvider {
    * upgrade stale ones. Never rejects — main.ts calls this fire-and-forget
    * at boot and a thrown error here must not block startup.
    */
-  async ensureBundledPluginsInstalled(): Promise<void> {
+  async ensureBundledPluginsInstalled(opts?: { appVersion?: string }): Promise<void> {
     try {
-      const results = await this.reconcileBundledPlugins();
+      const results = await this.reconcileBundledPlugins(opts);
       for (const r of results) {
         if (r.action !== 'unchanged' && r.action !== 'skipped-dev') {
           // Fix (Track B final review, Finding F9): a Claude-Code-owned

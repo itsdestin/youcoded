@@ -17,6 +17,13 @@ const inst = vi.hoisted(() => ({
   // ref) so the readPluginVersion mock below — which switches on that
   // substring — still tells an installed-tree read from a cache-clone read.
   marketplaceCacheDir: vi.fn((mp: string, sourceRef: string) => `/home/test/.claude/youcoded-marketplace-cache/${mp}/${sourceRef}`),
+  // reconcileBundledPlugins() now reads/writes the app-version marker so the
+  // first launch of a new app version forces a cache refresh. The mock module
+  // needs both exports or the real call throws "not a function".
+  // Explicit return type: `vi.fn(() => null)` infers `null`, which makes
+  // mockReturnValue('1.2.0') a type error in the tests below.
+  readLastReconciledAppVersion: vi.fn((): string | null => null),
+  writeLastReconciledAppVersion: vi.fn(),
 }));
 vi.mock('../src/main/plugin-installer', () => inst);
 // Mocked so F3/F9 tests can assert on log LEVEL (WARN vs ERROR) without the
@@ -41,6 +48,7 @@ describe('LocalSkillProvider.reconcileBundledPlugins', () => {
     inst.readPluginVersion.mockImplementation((dir: string) => dir.includes('youcoded-marketplace-cache') ? '0.2.0' : '0.1.0');
     inst.upgradePluginFromLocal.mockResolvedValue({ status: 'installed' });
     inst.installPlugin.mockResolvedValue({ status: 'installed' });
+    inst.readLastReconciledAppVersion.mockReturnValue(null);
   });
   it('is a no-op on a dev instance unless overridden', async () => {
     process.env.YOUCODED_PROFILE = 'dev';
@@ -59,6 +67,29 @@ describe('LocalSkillProvider.reconcileBundledPlugins', () => {
     inst.readPluginVersion.mockReturnValue('0.2.0');
     expect((await p.reconcileBundledPlugins()).every((r) => r.action === 'unchanged')).toBe(true);
     expect(inst.upgradePluginFromLocal).not.toHaveBeenCalled();
+  });
+  it('forces a cache refresh on the first launch of a new app version, and records it', async () => {
+    inst.readLastReconciledAppVersion.mockReturnValue('1.2.0');
+    await p.reconcileBundledPlugins({ appVersion: '1.3.0' });
+    expect(inst.refreshLocalMarketplaceCache).toHaveBeenCalledWith('youcoded', { force: true });
+    expect(inst.writeLastReconciledAppVersion).toHaveBeenCalledWith('1.3.0');
+  });
+  it('does not force a refresh when the app version is unchanged', async () => {
+    inst.readLastReconciledAppVersion.mockReturnValue('1.3.0');
+    await p.reconcileBundledPlugins({ appVersion: '1.3.0' });
+    expect(inst.refreshLocalMarketplaceCache).toHaveBeenCalledWith('youcoded', { force: false });
+    expect(inst.writeLastReconciledAppVersion).not.toHaveBeenCalled();
+  });
+  it('records the app version even when the forced refresh fails, so it retries once not every launch', async () => {
+    inst.readLastReconciledAppVersion.mockReturnValue('1.2.0');
+    inst.refreshLocalMarketplaceCache.mockResolvedValue({ ok: false, refreshed: false, error: 'fetch failed: offline' });
+    await p.reconcileBundledPlugins({ appVersion: '1.3.0' });
+    expect(inst.writeLastReconciledAppVersion).toHaveBeenCalledWith('1.3.0');
+  });
+  it('never forces a refresh when no app version is supplied', async () => {
+    await p.reconcileBundledPlugins();
+    expect(inst.refreshLocalMarketplaceCache).toHaveBeenCalledWith('youcoded', { force: false });
+    expect(inst.writeLastReconciledAppVersion).not.toHaveBeenCalled();
   });
   it('still compares against the last cache copy when the refresh fails', async () => {
     inst.refreshLocalMarketplaceCache.mockResolvedValue({ ok: false, refreshed: false, error: 'fetch failed: offline' });

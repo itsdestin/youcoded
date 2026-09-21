@@ -335,8 +335,45 @@ async function installFromLocal(id: string, sourceRef: string, sourceMarketplace
  * only fetches/resets once the 1 h gate (CACHE_REFRESH_MS) has elapsed —
  * reconcile runs on EVERY launch, so without the gate that's a GitHub
  * round-trip on every app start.
+ *
+ * `opts.force` bypasses that gate for the one launch after an app version
+ * change (see reconcileBundledPlugins). Deliberately an opt-in rather than a
+ * shorter TTL: the gate exists to keep launches cheap, and only the app-update
+ * case has a reason to spend a round-trip outside it.
  */
-export async function refreshLocalMarketplaceCache(sourceMarketplace?: string): Promise<{ ok: boolean; refreshed: boolean; error?: string }> {
+/**
+ * Which app version last ran the bundled-plugin reconcile.
+ *
+ * WHY a file and not a config key: the reconcile is a boot chore that may run
+ * before the config store is ready, and this marker is throwaway state — losing
+ * it costs one extra cache refresh, never a correctness problem. Sits in
+ * CACHE_DIR (the marketplace cache root), NOT in ~/.claude/plugins/, so it is
+ * never mistaken for plugin content by listInstalledPluginDirs().
+ *
+ * Returns null when absent or unreadable, which callers treat as "no version
+ * seen yet" — the first launch after this feature ships forces one refresh.
+ */
+function appVersionMarkerPath(): string {
+  return path.join(CACHE_DIR, '.youcoded-last-reconciled-app-version');
+}
+
+export function readLastReconciledAppVersion(): string | null {
+  try {
+    const v = fs.readFileSync(appVersionMarkerPath(), 'utf8').trim();
+    return v || null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLastReconciledAppVersion(version: string): void {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+    fs.writeFileSync(appVersionMarkerPath(), version);
+  } catch { /* non-fatal — worst case is one extra forced refresh next launch */ }
+}
+
+export async function refreshLocalMarketplaceCache(sourceMarketplace?: string, opts?: { force?: boolean }): Promise<{ ok: boolean; refreshed: boolean; error?: string }> {
   const cacheRepo = path.join(CACHE_DIR, getCacheRepoName(sourceMarketplace));
   const repoUrl = getMarketplaceRepo(sourceMarketplace);
   if (!fs.existsSync(cacheRepo)) {
@@ -346,7 +383,7 @@ export async function refreshLocalMarketplaceCache(sourceMarketplace?: string): 
     setCacheTimestamp(cacheRepo);
     return { ok: true, refreshed: true };
   }
-  if (Date.now() - getCacheTimestamp(cacheRepo) < CACHE_REFRESH_MS) return { ok: true, refreshed: false };
+  if (!opts?.force && Date.now() - getCacheTimestamp(cacheRepo) < CACHE_REFRESH_MS) return { ok: true, refreshed: false };
   const f = await runGit('-C', cacheRepo, 'fetch', 'origin');
   if (!f.ok) return { ok: false, refreshed: false, error: `fetch failed: ${f.output.slice(0, 200)}` };
   const r = await runGit('-C', cacheRepo, 'reset', '--hard', `origin/${marketplaceBranch}`);

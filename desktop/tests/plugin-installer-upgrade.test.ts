@@ -3,7 +3,9 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 
 let home: string; let origHome: string | undefined;
 const w = (p: string, s: string) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, s); };
-const cacheDir = () => path.join(home, '.claude', 'youcoded-marketplace-cache', 'wecoded-marketplace');
+// The cache ROOT (holds the per-marketplace clones and the app-version marker).
+const cacheRoot = () => path.join(home, '.claude', 'youcoded-marketplace-cache');
+const cacheDir = () => path.join(cacheRoot(), 'wecoded-marketplace');
 const pluginsDir = () => path.join(home, '.claude', 'plugins', 'marketplaces', 'youcoded', 'plugins');
 
 beforeEach(() => {
@@ -26,6 +28,29 @@ describe('plugin-installer upgrade primitives', () => {
     fs.mkdirSync(cacheDir(), { recursive: true });
     fs.writeFileSync(path.join(cacheDir(), '.youcoded-last-pull'), String(Date.now())); // the file setCacheTimestamp writes (:218)
     expect(await refreshLocalMarketplaceCache('youcoded')).toEqual({ ok: true, refreshed: false });
+  });
+  it('refreshLocalMarketplaceCache force bypasses the 1 h gate', async () => {
+    const { refreshLocalMarketplaceCache } = await import('../src/main/plugin-installer');
+    fs.mkdirSync(cacheDir(), { recursive: true });
+    fs.writeFileSync(path.join(cacheDir(), '.youcoded-last-pull'), String(Date.now()));
+    // Force must NOT short-circuit on the fresh timestamp. There is no git repo
+    // at this path, so the fetch fails — which is the point: reaching `fetch`
+    // at all is what proves the gate was bypassed, and the failure is reported
+    // honestly rather than swallowed.
+    const r = await refreshLocalMarketplaceCache('youcoded', { force: true });
+    expect(r.refreshed).toBe(false);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/fetch failed/);
+  });
+  it('the app-version marker round-trips and is null when absent', async () => {
+    const mod = await import('../src/main/plugin-installer');
+    expect(mod.readLastReconciledAppVersion()).toBeNull();
+    mod.writeLastReconciledAppVersion('1.3.0');
+    expect(mod.readLastReconciledAppVersion()).toBe('1.3.0');
+    // Lives in the cache root, never under the plugins dir — otherwise
+    // listInstalledPluginDirs() would read it as plugin content.
+    expect(fs.existsSync(path.join(cacheRoot(), '.youcoded-last-reconciled-app-version'))).toBe(true);
+    expect(fs.existsSync(path.join(pluginsDir(), '.youcoded-last-reconciled-app-version'))).toBe(false);
   });
   it('upgradePluginFromLocal swaps the tree and registers the real version', async () => {
     const mod = await import('../src/main/plugin-installer');
