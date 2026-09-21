@@ -409,9 +409,9 @@ function AppInner() {
   // delivered to the holder); 'undeliverable' is the honest third state — the
   // hub had no delivery path at all, so the holder was never asked (distinct
   // from 'force': never claim a device ignored a request it never received).
-  const [takeoverPrompt, setTakeoverPrompt] = useState<{ device: string; phase: 'confirm' | 'force' | 'undeliverable' } | null>(null);
+  const [takeoverPrompt, setTakeoverPrompt] = useState<{ device: string; phase: 'confirm' | 'force' | 'undeliverable' | 'claim-denied' } | null>(null);
   const takeoverResolveRef = useRef<((choice: boolean) => void) | null>(null);
-  const askTakeover = useCallback((device: string, phase: 'confirm' | 'force' | 'undeliverable') =>
+  const askTakeover = useCallback((device: string, phase: 'confirm' | 'force' | 'undeliverable' | 'claim-denied') =>
     new Promise<boolean>((resolve) => {
       // Reentrancy guard: only one resolver slot exists. If a second resume opens
       // a dialog while one is pending, resolve the prior one as "declined" so its
@@ -2928,8 +2928,17 @@ function AppInner() {
       claudeSessionId,
       askTakeover,
       onWarn: (message) => setToast({ message, durationMs: 8000 }),
+      // Claim-before-open (deck Q-1/Q-2): acquire BEFORE any session exists.
+      // The dialog phase is Q-2's Try again / Leave it — same reentrancy-guarded
+      // promise plumbing as the takeover ask above.
+      claimLease: (id) => (window.claude.syncSpaces as any)?.leaseClaim?.(id),
+      askClaimDenied: (device) => askTakeover(device, 'claim-denied'),
+      // A failed claim must not keep the lease: release it if this resume dies
+      // below (create returned nothing / picker path bailed). Fire-and-forget —
+      // the lease is idempotent and reconciles at the next renew either way.
+      onAbandon: () => { try { (window.claude.syncSpaces as any)?.leaseRelease?.(claudeSessionId); } catch { /* best-effort */ } },
     });
-    if (!proceed) return false; // "Never mind" — abort the resume
+    if (!proceed) return false; // "Never mind" / "Leave it" — abort the resume
 
     // Native-harness resume. Task 6 / Destin's ruling: NEVER auto-launch a
     // binding — the resume-time model selector is ALWAYS the source of the
@@ -4440,7 +4449,7 @@ function AppInner() {
               scrollBody={false}
               className="p-5"
             >
-              {takeoverPrompt.phase === 'confirm' ? (
+              {takeoverPrompt.phase === 'confirm' || takeoverPrompt.phase === 'claim-denied' ? (
                 <p className="text-sm text-fg mb-4">
                   {copy.lead}
                   {infoTip}
@@ -4460,7 +4469,7 @@ function AppInner() {
                   size="lg"
                   onClick={() => resolveTakeover(false)}
                 >
-                  Never mind
+                  {takeoverPrompt.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}
                 </Button>
                 <Button
                   variant="primary"
@@ -4468,7 +4477,7 @@ function AppInner() {
                   className="px-3 py-1.5"
                   onClick={() => resolveTakeover(true)}
                 >
-                  Take over
+                  {takeoverPrompt.phase === 'claim-denied' ? 'Try again' : 'Take over'}
                 </Button>
               </div>
             </Dialog>

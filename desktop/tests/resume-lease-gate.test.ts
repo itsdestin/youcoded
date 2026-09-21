@@ -8,16 +8,28 @@ import { runLeaseTakeoverGate } from '../src/renderer/state/resume-lease-gate';
 const leaseQuery = vi.fn();
 const leaseTakeover = vi.fn();
 const leaseForce = vi.fn();
+const leaseClaim = vi.fn();
+const leaseRelease = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
   (globalThis as any).window = {
-    claude: { syncSpaces: { leaseQuery, leaseTakeover, leaseForce } },
+    claude: { syncSpaces: { leaseQuery, leaseTakeover, leaseForce, leaseClaim, leaseRelease } },
   };
 });
 
-const run = (askTakeover: any, onWarn = vi.fn()) =>
-  runLeaseTakeoverGate({ claudeSessionId: 'sid', askTakeover, onWarn });
+const run = (askTakeover: any, onWarn = vi.fn(), extra: Record<string, unknown> = {}) =>
+  runLeaseTakeoverGate({ claudeSessionId: 'sid', askTakeover, onWarn, ...extra });
+
+const claimRun = (askTakeover: any, onWarn = vi.fn(), opts: { ask?: any } = {}) =>
+  runLeaseTakeoverGate({
+    claudeSessionId: 'sid',
+    askTakeover,
+    onWarn,
+    claimLease: (id: string) => leaseClaim(id),
+    askClaimDenied: opts.ask ?? ((device: string) => askTakeover(device, 'claim-denied')),
+    onAbandon: leaseRelease,
+  });
 
 describe('runLeaseTakeoverGate', () => {
   it('proceeds without asking when the lease is not held', async () => {
@@ -94,5 +106,94 @@ describe('runLeaseTakeoverGate', () => {
   it('proceeds when the bridge has no syncSpaces at all', async () => {
     (globalThis as any).window = { claude: {} };
     expect(await run(vi.fn())).toBe(true);
+  });
+});
+
+// Claim-before-open (deck Q-1/Q-2, 2026-09-21): the gate's first step claims the
+// lease; a denial is the Q-2 message + Try again; a claim that cannot run is the
+// escape hatch and proceeds exactly as the old path.
+describe('runLeaseTakeoverGate — claim-before-open', () => {
+  it('claims BEFORE the query gate: an acquired claim skips the query entirely', async () => {
+    leaseClaim.mockResolvedValue({ outcome: 'acquired' });
+    const ask = vi.fn();
+    expect(await claimRun(ask)).toBe(true);
+    expect(leaseQuery).not.toHaveBeenCalled();
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it('a denied claim asks Try again / Leave it and does NOT query', async () => {
+    leaseClaim.mockResolvedValue({ outcome: 'denied', device: 'laptop' });
+    const ask = vi.fn().mockResolvedValue(false); // Leave it
+    expect(await claimRun(ask)).toBe(false);
+    expect(ask).toHaveBeenCalledWith('laptop', 'claim-denied');
+    expect(leaseQuery).not.toHaveBeenCalled();
+  });
+
+  it('Leave it after a denial also releases — a harmless no-op the hub confirms', async () => {
+    // On a denial the DO granted nothing (acquire was refused, nothing was
+    // re-stamped), so the release is a no-op — but calling onAbandon
+    // unconditionally on every decline branch keeps ONE decline path, not two
+    // to keep apart. Idempotent at the hub (release of a free lease = ok).
+    leaseClaim.mockResolvedValue({ outcome: 'denied', device: 'laptop' });
+    const ask = vi.fn().mockResolvedValue(false);
+    await claimRun(ask);
+    expect(leaseRelease).toHaveBeenCalled();
+  });
+
+  it('Try again after a denial re-claims once; still denied → proceed + warn', async () => {
+    leaseClaim.mockResolvedValueOnce({ outcome: 'denied', device: 'laptop' })
+      .mockResolvedValueOnce({ outcome: 'denied', device: 'laptop' });
+    const ask = vi.fn().mockResolvedValue(true); // Try again
+    const onWarn = vi.fn();
+    expect(await claimRun(ask, onWarn)).toBe(true);
+    expect(leaseClaim).toHaveBeenCalledTimes(2);
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('laptop'));
+  });
+
+  it('Try again after a denial re-claims once; then acquired → proceed cleanly', async () => {
+    leaseClaim.mockResolvedValueOnce({ outcome: 'denied', device: 'laptop' })
+      .mockResolvedValueOnce({ outcome: 'acquired' });
+    const ask = vi.fn().mockResolvedValue(true);
+    expect(await claimRun(ask)).toBe(true);
+    expect(leaseClaim).toHaveBeenCalledTimes(2);
+    expect(leaseQuery).not.toHaveBeenCalled();
+  });
+
+  it('free-unconfirmed is the escape hatch: falls through to the query gate and proceeds', async () => {
+    // Sync down → the socket answers null → claim says free-unconfirmed. The
+    // Q-1 rider: never block a resume on sync being unreachable.
+    leaseClaim.mockResolvedValue({ outcome: 'free-unconfirmed' });
+    leaseQuery.mockResolvedValue({ held: false });
+    expect(await claimRun(vi.fn())).toBe(true);
+    expect(leaseQuery).toHaveBeenCalled();
+  });
+
+  it('error claim is the same escape hatch', async () => {
+    leaseClaim.mockResolvedValue({ outcome: 'error' });
+    leaseQuery.mockResolvedValue({ held: false });
+    expect(await claimRun(vi.fn())).toBe(true);
+  });
+
+  it('a THROWN claim degrades to the old path (never-block)', async () => {
+    leaseClaim.mockRejectedValue(new Error('bridge gone'));
+    leaseQuery.mockResolvedValue({ held: false });
+    expect(await claimRun(vi.fn())).toBe(true);
+  });
+
+  it('no claim member at all → the old path unchanged', async () => {
+    leaseQuery.mockResolvedValue({ held: false });
+    expect(await run(vi.fn())).toBe(true);
+    expect(leaseClaim).not.toHaveBeenCalled();
+  });
+
+  it('a declined takeover (old path) releases the claim this run took', async () => {
+    // The claim fell through to the takeover gate (free-unconfirmed), the user
+    // saw a holder and declined the takeover: the claim DID take a hold (the
+    // lease client held optimistically), so Leave-it must release it.
+    leaseClaim.mockResolvedValue({ outcome: 'free-unconfirmed' });
+    leaseQuery.mockResolvedValue({ held: true, self: false, device: 'laptop' });
+    const ask = vi.fn().mockResolvedValue(false);
+    expect(await claimRun(ask)).toBe(false);
+    expect(leaseRelease).toHaveBeenCalled();
   });
 });

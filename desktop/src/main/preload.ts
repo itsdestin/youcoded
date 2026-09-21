@@ -232,6 +232,11 @@ const IPC = {
   SYNC_SPACES_LEASE_QUERY: 'syncspaces:lease-query',
   SYNC_SPACES_LEASE_TAKEOVER: 'syncspaces:lease-takeover',
   SYNC_SPACES_LEASE_FORCE: 'syncspaces:lease-force',
+  // Claim-before-open (2026-09-21): acquire before the resume creates anything.
+  SYNC_SPACES_LEASE_CLAIM: 'syncspaces:lease-claim',
+  // And release it again when the resume fails AFTER a successful claim, so a
+  // dead-end resume doesn't hold the conversation for 300 s.
+  SYNC_SPACES_LEASE_RELEASE: 'syncspaces:lease-release',
   // Device registry (Plan 2b spec §10a) — inlined literals (preload can't import).
   SYNC_SPACES_LIST_DEVICES: 'syncspaces:list-devices',
   SYNC_SPACES_RENAME_DEVICE: 'syncspaces:rename-device',
@@ -1097,6 +1102,14 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SYNC_SPACES_LEASE_TAKEOVER, { claudeSessionId }),
     leaseForce: (claudeSessionId: string) =>
       ipcRenderer.invoke(IPC.SYNC_SPACES_LEASE_FORCE, { claudeSessionId }),
+    // Claim-before-open (2026-09-21, deck Q-1/Q-2): acquire the lease before the
+    // resume creates a session. Four-state ClaimResult — see takeover.ts.
+    leaseClaim: (claudeSessionId: string) =>
+      ipcRenderer.invoke(IPC.SYNC_SPACES_LEASE_CLAIM, { claudeSessionId }),
+    // Release a claim the resume couldn't carry through (create failed / user
+    // cancelled later). Idempotent at the hub — releasing a free lease is ok:true.
+    leaseRelease: (claudeSessionId: string) =>
+      ipcRenderer.invoke(IPC.SYNC_SPACES_LEASE_RELEASE, { claudeSessionId }),
     // Device registry (Plan 2b spec §10a): the "Your devices" list marks the
     // current machine with self:true; renameDevice sets a friendly label.
     listDevices: () => ipcRenderer.invoke(IPC.SYNC_SPACES_LIST_DEVICES),

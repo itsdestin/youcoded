@@ -1816,6 +1816,12 @@ export const IPC = {
   SYNC_SPACES_LEASE_QUERY: 'syncspaces:lease-query',
   SYNC_SPACES_LEASE_TAKEOVER: 'syncspaces:lease-takeover',
   SYNC_SPACES_LEASE_FORCE: 'syncspaces:lease-force',
+  // Claim-before-open (2026-09-21, deck Q-1/Q-2): acquire the lease BEFORE a
+  // resume creates the session, so the healthy-hub race window (audit H1/H4)
+  // closes. Four-state result — see takeover.ts ClaimResult.
+  SYNC_SPACES_LEASE_CLAIM: 'syncspaces:lease-claim',
+  // Release a claim whose resume failed after the fact (idempotent at the hub).
+  SYNC_SPACES_LEASE_RELEASE: 'syncspaces:lease-release',
   // Device registry (Plan 2b spec §10a) — the "Your devices" list + rename.
   SYNC_SPACES_LIST_DEVICES: 'syncspaces:list-devices',
   SYNC_SPACES_RENAME_DEVICE: 'syncspaces:rename-device',

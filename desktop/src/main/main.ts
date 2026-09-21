@@ -52,7 +52,7 @@ import { SecretsStore } from './providers/secrets-store';
 import { SyncService } from './sync-service';
 import { setSyncService, getSyncConfig } from './sync-state';
 // Cross-device sync spaces (spec 2026-07-03) — folder-based sync engine.
-import { startSyncSpaces, stopSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited } from './sync-spaces/service';
+import { startSyncSpaces, stopSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited, isSyncSpacesEnabled } from './sync-spaces/service';
 import { createGithubClient, setGithubClient } from './github-client';
 // Plan 2b Task 8: conversation-lease lifecycle. The lease client coordinates
 // which device "holds" a conversation so two devices don't append to the same
@@ -62,7 +62,7 @@ import { createLeaseClient, sweepExpiredLeases, sweepLegacyLeaseDir, type LeaseC
 // Plan 2b Task 9: the requester-side takeover flow (ask-hand-off, poll, pull,
 // acquire). Built here where deviceId + hubLeaseRequest + materializeOne +
 // syncSpacesSyncNow are all reachable, then passed to registerIpcHandlers.
-import { createRequesterTakeover } from './conversations/takeover';
+import { createRequesterTakeover, createClaim } from './conversations/takeover';
 import { upsertSelf } from './sync-spaces/device-registry';
 // Conversation Store (Phase 2a): records + transcript sync ride the personal
 // space. Imported statically like the sync-spaces stop so the non-async quit
@@ -1069,6 +1069,14 @@ function createWindow(firstRunManager?: FirstRunManager) {
     delay: (ms) => new Promise((r) => setTimeout(r, ms)),
   });
 
+  // Claim-before-open (2026-09-21, deck Q-1/Q-2): the atomic admission half.
+  // Built beside the requester — it needs the same lease client, and the
+  // sync-enabled gate mirrors the post-start acquires' isSyncSpacesEnabled().
+  const claim = createClaim({
+    leaseClient,
+    syncEnabled: () => isSyncSpacesEnabled(),
+  });
+
   // Sign in with ChatGPT (backend design 2026-09-05 §1, §6). Built HERE, right
   // before registerIpcHandlers — i.e. AFTER the dev-profile userData override
   // near the top of this file — and never beside `remoteServer`, which is
@@ -1093,7 +1101,7 @@ function createWindow(firstRunManager?: FirstRunManager) {
   });
 
   const ipcWiring = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry,
-    { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester,
+    { client: leaseClient, setHolderTakeover: (fn) => { holderTakeoverRef.fn = fn; }, requester, claim,
       deviceId: deviceIdentity.id, machineId: machineIdentity?.id ?? '' },
     chatgptAuth);
   cleanupIpcHandlers = ipcWiring.cleanup;

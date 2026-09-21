@@ -37,6 +37,7 @@ import type { SessionManager } from './session-manager';
 import { prepareRunInTerminal, shellDisplayName } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
+import type { RequesterTakeoverType, ClaimType } from './conversations/takeover';
 import { RemoteConfig as RemoteConfigStatics } from './remote-config';
 import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
@@ -350,7 +351,9 @@ export class RemoteServer {
   // way the desktop handlers do (free/error) so a remote resume never hard-blocks.
   private leaseWiring: {
     client: import('./conversations/lease-client').LeaseClient;
-    requester: import('./conversations/takeover').RequesterTakeoverType;
+    requester: RequesterTakeoverType;
+    // Claim-before-open (2026-09-21): remote resumes claim like desktop ones do.
+    claim: ClaimType;
     deviceId: string;  // per-INSTALL — leases only
     machineId: string; // per-MACHINE — device-registry self-marking only
   } | null = null;
@@ -466,7 +469,8 @@ export class RemoteServer {
    *  deviceId is the per-INSTALL lease id and must NOT be used for that. */
   setLeaseWiring(w: {
     client: import('./conversations/lease-client').LeaseClient;
-    requester: import('./conversations/takeover').RequesterTakeoverType;
+    requester: RequesterTakeoverType;
+    claim: ClaimType;
     deviceId: string;
     machineId: string;
   }): void {
@@ -3439,6 +3443,19 @@ export class RemoteServer {
       case 'syncspaces:lease-force': {
         this.respond(client.ws, type, id,
           (await this.leaseWiring?.requester.force(String(payload?.claudeSessionId ?? ''))) ?? { ok: false });
+        break;
+      }
+      // Claim-before-open (2026-09-21): same degrade-to-'error' shape as the
+      // desktop IPC handler above, so a remote resume never hard-blocks.
+      case 'syncspaces:lease-claim': {
+        this.respond(client.ws, type, id,
+          (await this.leaseWiring?.claim.claim(String(payload?.claudeSessionId ?? ''))) ?? { outcome: 'error' });
+        break;
+      }
+      case 'syncspaces:lease-release': {
+        // release() resolves; absent wiring resolves void (nothing to release).
+        await this.leaseWiring?.client.release(String(payload?.claudeSessionId ?? ''));
+        this.respond(client.ws, type, id, { ok: true });
         break;
       }
       // Device registry (Plan 2b spec §10a). readDevices/renameDevice are direct

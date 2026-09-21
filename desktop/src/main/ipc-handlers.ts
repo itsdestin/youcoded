@@ -193,6 +193,7 @@ import type { PortableModelRef } from './conversations/store-core';
 // Plan 2b Task 8: holder-side takeover — when another device requests a session
 // this device holds, cleanly interrupt/flush/release/move/destroy it.
 import { createHolderTakeover } from './conversations/takeover';
+import type { RequesterTakeoverType, ClaimType } from './conversations/takeover';
 import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
 import { writeContextFile } from './project-context';
@@ -372,7 +373,11 @@ export function registerIpcHandlers(
     // Plan 2b Task 9: the requester-side takeover flow, built in main.ts (where
     // deviceId + hubLeaseRequest + materializeOne + syncSpacesSyncNow are all
     // reachable). The three lease IPC handlers below are thin passthroughs to it.
-    requester: import('./conversations/takeover').RequesterTakeoverType;
+    requester: RequesterTakeoverType;
+    // Claim-before-open (2026-09-21, deck Q-1/Q-2): acquire before a resume
+    // creates the session. Same construction site as the requester — it needs
+    // the lease client and the sync-enabled flag, both available in main.ts.
+    claim: ClaimType;
     // deviceId  — per-INSTALL. Leases ONLY. Distinguishes the dev instance from
     //             the built app on one machine; never use it for the registry.
     // machineId — per-MACHINE. Device registry ONLY (self-marking). '' when this
@@ -3104,7 +3109,7 @@ export function registerIpcHandlers(
   // deviceId so its WS clients reach the identical lease/device state the
   // Electron IPC handlers use (mirrors setNativeRuntime). Absent when sync is off.
   if (leaseWiring && remoteServer) {
-    remoteServer.setLeaseWiring({ client: leaseWiring.client, requester: leaseWiring.requester, deviceId: leaseWiring.deviceId, machineId: leaseWiring.machineId });
+    remoteServer.setLeaseWiring({ client: leaseWiring.client, requester: leaseWiring.requester, claim: leaseWiring.claim, deviceId: leaseWiring.deviceId, machineId: leaseWiring.machineId });
   }
 
   // Perf cycle 2: paged history. A window opening/resuming a session asks for
@@ -4420,6 +4425,15 @@ export function registerIpcHandlers(
     leaseWiring?.requester.takeover(String(p?.claudeSessionId ?? '')) ?? { outcome: 'error' });
   ipcMain.handle(IPC.SYNC_SPACES_LEASE_FORCE, (_e, p: { claudeSessionId: string }) =>
     leaseWiring?.requester.force(String(p?.claudeSessionId ?? '')) ?? { ok: false });
+  // Claim-before-open (2026-09-21, deck Q-1/Q-2): acquire before the resume
+  // creates anything. Degrades to 'error' (proceed) when lease wiring is absent —
+  // same never-block discipline as the three passthroughs above.
+  ipcMain.handle(IPC.SYNC_SPACES_LEASE_CLAIM, (_e, p: { claudeSessionId: string }) =>
+    leaseWiring?.claim.claim(String(p?.claudeSessionId ?? '')) ?? { outcome: 'error' });
+  // Release a claim whose resume failed after the claim landed (idempotent;
+  // absent wiring resolves void — nothing to release).
+  ipcMain.handle(IPC.SYNC_SPACES_LEASE_RELEASE, (_e, p: { claudeSessionId: string }) =>
+    leaseWiring?.client.release(String(p?.claudeSessionId ?? '')) ?? Promise.resolve());
 
   // Device registry (Plan 2b spec §10a): the "Your devices" list (Task 12 UI
   // consumes these). self:true marks the current machine so the UI can label it.

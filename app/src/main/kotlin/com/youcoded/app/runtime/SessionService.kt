@@ -4315,6 +4315,11 @@ class SessionService : Service() {
             "syncspaces:lease-query",
             "syncspaces:lease-takeover",
             "syncspaces:lease-force",
+            // Claim-before-open (2026-09-21): desktop-only like its siblings —
+            // the phone stays outside live handoff by decision (lease-handoff
+            // deck Q-9). The shared gate degrades on these rejects and proceeds.
+            "syncspaces:lease-claim",
+            "syncspaces:lease-release",
             "syncspaces:list-devices",
             "syncspaces:rename-device",
             "syncspaces:remove-device",

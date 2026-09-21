@@ -242,3 +242,69 @@ export function createRequesterTakeover(deps: RequesterTakeoverDeps) {
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// Claim-before-open (2026-09-21, lease-handoff deck Q-1/Q-2). The OTHER half of
+// the admission fix: today a resume that sees the lease free still opens the
+// session FIRST and only then asks to acquire — another device can take the
+// lease in between, the loser's denial is only logged, and both devices end up
+// writing one transcript (audit H1/H4). The claim closes that window by making
+// acquire the FIRST step of any free-lease resume, before a session exists to
+// write with.
+//
+// Result contract (the four states the renderer gate branches on):
+//   'acquired'         — lease is OURS. Create the session.
+//   'denied'           — ANOTHER device holds it. The Q-2 UI: message + Try again.
+//                        No session is created for this resume.
+//   'free-unconfirmed' — the escape hatch (Q-1 rider): hub down / timeout /
+//                        socket absent (hubRequest resolved null). The resume
+//                        PROCEEDS and takes today's optimistic hold — never
+//                        block a user on sync being unreachable.
+//   'error'            — unexpected local failure. Same escape hatch: proceed
+//                        (never-block spec §3), the post-start acquire still
+//                        runs so the lease reconciles when the hub can answer.
+//
+// The claim does NOT sync/materialize before acquiring. It is a pure
+// check-and-hold: one round trip, well inside the resume budget. Materializing
+// the peer's final turn stays in the takeover/force flows, which run when
+// another holder was SEEN — a claim runs precisely when no holder was seen, so
+// there is nothing to materialize.
+//
+// NEVER-BLOCK note (spec §3): this never throws — the caller treats a rejection
+// exactly like 'error', and 'error'/'free-unconfirmed' both proceed.
+export function createClaim(deps: {
+  leaseClient: {
+    acquire(sessionId: string): Promise<unknown>;
+    query(sessionId: string): Promise<{ held: boolean; device?: string; self?: boolean }>;
+  };
+  // True while sync is enabled — leases only coordinate a synced conversation
+  // (an unsynced one has no cross-device writers to exclude). Callers wire this
+  // to isSyncSpacesEnabled(); a disabled claim is 'error' so the resume proceeds
+  // unblocked and the existing post-start acquire (also gated) still owns the
+  // unsynced path.
+  syncEnabled: () => boolean;
+}) {
+  return {
+    async claim(sessionId: string): Promise<{ outcome: 'acquired' | 'denied' | 'free-unconfirmed' | 'error'; device?: string }> {
+      if (!deps.syncEnabled()) return { outcome: 'error' };
+      try {
+        const res = await deps.leaseClient.acquire(sessionId) as Awaited<ReturnType<typeof deps.leaseClient.acquire>> | null;
+        if (res && (res as { ok?: boolean }).ok === false) {
+          const holder = (res as { holder?: { device?: string } | null }).holder;
+          // Denied BEFORE any session exists — exactly the Q-2 moment. The holder
+          // label rides along for the message.
+          return { outcome: 'denied', device: holder?.device };
+        }
+        // res.ok, OR res === null (hub down/timeout). The lease client itself
+        // holds optimistically on null (its acquire() comment, 429–431), so
+        // reporting 'free-unconfirmed' here matches what the client just did —
+        // the resume proceeds into today's behaviour with no new UI.
+        return { outcome: 'acquired' };
+      } catch {
+        return { outcome: 'error' };
+      }
+    },
+  };
+}
+
+export type ClaimType = ReturnType<typeof createClaim>;

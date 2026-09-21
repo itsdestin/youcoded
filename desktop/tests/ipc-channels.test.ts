@@ -748,6 +748,9 @@ describe('syncspaces:* channel parity (desktop surfaces)', () => {
     ['syncspaces:lease-query', 'IPC.SYNC_SPACES_LEASE_QUERY'],
     ['syncspaces:lease-takeover', 'IPC.SYNC_SPACES_LEASE_TAKEOVER'],
     ['syncspaces:lease-force', 'IPC.SYNC_SPACES_LEASE_FORCE'],
+    // Claim-before-open (2026-09-21, deck Q-1/Q-2) + its failed-resume release.
+    ['syncspaces:lease-claim', 'IPC.SYNC_SPACES_LEASE_CLAIM'],
+    ['syncspaces:lease-release', 'IPC.SYNC_SPACES_LEASE_RELEASE'],
     ['syncspaces:list-devices', 'IPC.SYNC_SPACES_LIST_DEVICES'],
     ['syncspaces:rename-device', 'IPC.SYNC_SPACES_RENAME_DEVICE'],
     ['syncspaces:remove-device', 'IPC.SYNC_SPACES_REMOVE_DEVICE'],
@@ -777,6 +780,10 @@ describe('syncspaces:* channel parity (desktop surfaces)', () => {
     'syncspaces:lease-query',
     'syncspaces:lease-takeover',
     'syncspaces:lease-force',
+    // Claim-before-open (2026-09-21): desktop-only like its siblings — the phone
+    // stays outside live handoff by decision (lease-handoff deck Q-9).
+    'syncspaces:lease-claim',
+    'syncspaces:lease-release',
     'syncspaces:list-devices',
     'syncspaces:rename-device',
     'syncspaces:remove-device',

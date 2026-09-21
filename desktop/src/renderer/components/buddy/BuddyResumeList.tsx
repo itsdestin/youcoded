@@ -139,6 +139,12 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
         claudeSessionId: s.sessionId,
         askTakeover,
         onWarn: setWarning,
+        // Claim-before-open (deck Q-1/Q-2): acquire BEFORE anything is created.
+        // Same members App passes — the buddy is the second resume surface and
+        // must not re-derive this one differently.
+        claimLease: (id) => (window.claude.syncSpaces as any)?.leaseClaim?.(id),
+        askClaimDenied: (device) => askTakeover(device, 'claim-denied'),
+        onAbandon: () => { try { (window.claude.syncSpaces as any)?.leaseRelease?.(s.sessionId); } catch { /* best-effort */ } },
       });
       if (!proceed) { setResuming(null); return; }
 
@@ -181,8 +187,8 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
           <p className="text-3xs text-fg-muted" style={{ margin: 0, lineHeight: 1.45 }}>{copy.consequence}</p>
         )}
         <div style={{ display: 'flex', gap: 8 }}>
-          <Button variant="secondary" size="sm" onClick={() => answerTakeover(false)}>Never mind</Button>
-          <Button variant="primary" size="sm" className="flex-1" onClick={() => answerTakeover(true)}>Take over</Button>
+          <Button variant="secondary" size="sm" onClick={() => answerTakeover(false)}>{takeover.phase === 'claim-denied' ? 'Leave it' : 'Never mind'}</Button>
+          <Button variant="primary" size="sm" className="flex-1" onClick={() => answerTakeover(true)}>{takeover.phase === 'claim-denied' ? 'Try again' : 'Take over'}</Button>
         </div>
       </div>
     );

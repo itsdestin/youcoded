@@ -24,6 +24,13 @@ import type { TakeoverDialogPhase } from '../components/takeover-dialog-copy';
 // a lease left over from this very install (an unclean shutdown) popping a
 // confusing "active on <your own hostname>" dialog.
 //
+// Claim-before-open (2026-09-21, deck Q-1/Q-2): when the bridge offers
+// leaseClaim, the gate's FIRST step is claiming the lease — before any session
+// exists to write with — which closes the healthy-hub window where two devices
+// could both pass a "free" query and both open the conversation (audit H1/H4).
+// A denial becomes the Q-2 message + Try again; a claim that cannot run
+// (offline/timeout/'error') proceeds exactly as today — the escape hatch.
+//
 // Pinned by tests/resume-lease-gate.test.ts.
 
 export interface LeaseGateOptions {
@@ -33,26 +40,108 @@ export interface LeaseGateOptions {
   askTakeover: (device: string, phase: TakeoverDialogPhase) => Promise<boolean>;
   /** Surface a non-blocking warning (a toast on main, an inline line in the buddy). */
   onWarn: (message: string) => void;
+  /**
+   * Ask the "this conversation moved to your other device" question (deck Q-2).
+   * Resolves true = Try again (re-run the claim), false = Leave it (abort).
+   * Optional so a resume surface predating the member still typechecks; when
+   * absent, a denial degrades to today's behaviour (proceed with a warning)
+   * rather than a hard block — the never-block rule outranks the new UI.
+   */
+  askClaimDenied?: (device: string) => Promise<boolean>;
+  /**
+   * Claim the lease BEFORE any session exists (deck Q-1/Q-2, 2026-09-21).
+   * Optional for the same backward-compat reason. Four-state ClaimResult —
+   * 'denied' is the Q-2 moment; 'free-unconfirmed'/'error' proceed (escape
+   * hatch — never block a resume on sync being unreachable).
+   */
+  claimLease?: (claudeSessionId: string) => Promise<{ outcome: 'acquired' | 'denied' | 'free-unconfirmed' | 'error'; device?: string }>;
+  /**
+   * The resume died after a hold was taken (user declined after the claim, or
+   * the takeover was declined). Release the hold so a dead-end resume doesn't
+   * sit on the lease for the 300 s TTL. Fire-and-forget by contract; the gate
+   * calls it before every `return false` that happens AFTER a hold was taken.
+   */
+  onAbandon?: () => void;
+}
+
+/**
+ * Claim the lease before any session exists (deck Q-1/Q-2). When the bridge has
+ * no leaseClaim member (older remote builds, the workbench shim), the claim step
+ * is skipped entirely and the open-then-acquire path below runs unchanged —
+ * degraded behaviour, not broken behaviour.
+ *
+ * @returns the four-state ClaimResult the gate branches on, or null when the
+ *          claim cannot run at all (no member / threw).
+ */
+async function runClaim(
+  claudeSessionId: string,
+  claimLease?: LeaseGateOptions['claimLease'],
+): Promise<{ outcome: 'acquired' | 'denied' | 'free-unconfirmed' | 'error'; device?: string } | null> {
+  if (typeof claimLease !== 'function') return null;
+  try {
+    return await claimLease(claudeSessionId);
+  } catch {
+    return null; // never-block: a thrown claim degrades to the old path
+  }
 }
 
 /**
  * @returns true to go ahead with the resume, false only when the USER declined.
+ *
+ * The post-start acquires (native create + CC SessionStart) are UNCHANGED by
+ * this feature: after a claim holds the lease they re-affirm it idempotently
+ * (the DO re-stamps a fresh TTL on acquire-or-already-ours), and on the
+ * degraded/override paths they still log the honest "running without its lease"
+ * breadcrumb. The race is closed by the claim running FIRST, not by removing
+ * the later acquire.
  */
 export async function runLeaseTakeoverGate({
-  claudeSessionId, askTakeover, onWarn,
+  claudeSessionId, askTakeover, onWarn, askClaimDenied, claimLease, onAbandon,
 }: LeaseGateOptions): Promise<boolean> {
+  // ---- Claim-before-open (deck Q-1/Q-2). Acquire BEFORE anything is created. ----
+  const claim = await runClaim(claudeSessionId, claimLease);
+  if (claim?.outcome === 'denied') {
+    // Someone holds the conversation and the user hasn't been asked yet —
+    // this is the Q-2 moment, BEFORE any session exists. Ask Try again / Leave it.
+    if (typeof askClaimDenied === 'function') {
+      const retry = await askClaimDenied(claim.device || 'another device');
+      if (!retry) { onAbandon?.(); return false; } // "Leave it" — abort, nothing was created
+      // Try again: re-claim once. A second denial ends the loop — the user has
+      // now been told twice; proceed-and-warn beats an endless dialog.
+      const again = await runClaim(claudeSessionId, claimLease);
+      if (again?.outcome === 'denied') {
+        onWarn(`Still held by ${again.device || 'another device'} — it may still be editing this conversation, and recent turns may be missing.`);
+      }
+      // acquired / free-unconfirmed / error / null → proceed (the last claim's
+      // own semantics: acquired = held, the others = escape hatch).
+      return true;
+    }
+    // No askClaimDenied member: degrade to proceed-and-warn (never-block).
+    onWarn(`This conversation is being used on ${claim.device || 'another device'} right now — opening it here may create two separate copies.`);
+    return true;
+  }
+  if (claim?.outcome === 'acquired') {
+    // Lease is OURS before anything exists — the healthy-hub race window
+    // (audit H1/H4) is closed for this resume. Nothing can fail between here
+    // and the return, so no onAbandon branch is needed inside the gate.
+    return true;
+  }
+  // 'free-unconfirmed', 'error', or no claim member → fall through to the
+  // original query-then-takeover gate. The escape hatch (Q-1 rider): sync being
+  // down never blocks the resume.
+
   try {
     const q = await window.claude.syncSpaces?.leaseQuery?.(claudeSessionId);
     if (!q?.held || q.self) return true;
 
     const device = q.device || 'another device';
     const confirmed = await askTakeover(device, 'confirm');
-    if (!confirmed) return false; // "Never mind" — abort the resume
+    if (!confirmed) { onAbandon?.(); return false; } // "Never mind" — abort the resume
 
     const r = await window.claude.syncSpaces?.leaseTakeover?.(claudeSessionId);
     if (r?.outcome === 'timeout' || r?.outcome === 'undeliverable') {
       const forced = await askTakeover(device, r.outcome === 'undeliverable' ? 'undeliverable' : 'force');
-      if (!forced) return false; // "Never mind" — abort
+      if (!forced) { onAbandon?.(); return false; } // "Never mind" — abort
       const fr = await window.claude.syncSpaces?.leaseForce?.(claudeSessionId);
       if (fr && fr.ok === false) {
         onWarn(`Couldn't confirm the handoff from ${device} — it may still be editing this conversation, and recent turns may be missing.`);

@@ -9,7 +9,7 @@
 // `device` already interpolated — the `font-medium` bold-device span for
 // 'undeliverable'/'force' stays a JSX concern in App.tsx (this module has no
 // JSX dependency), which splits `lead` on the device substring to wrap it.
-export type TakeoverDialogPhase = 'confirm' | 'force' | 'undeliverable';
+export type TakeoverDialogPhase = 'confirm' | 'force' | 'undeliverable' | 'claim-denied';
 
 export interface TakeoverDialogCopy {
   // First paragraph. Always present.
@@ -23,6 +23,13 @@ export function takeoverDialogCopy(phase: TakeoverDialogPhase, device: string): 
   switch (phase) {
     case 'confirm':
       return { lead: `This session is active on ${device} — take over here?` };
+    case 'claim-denied':
+      // Deck Q-2 (2026-09-21): the claim lost the race — the conversation moved
+      // to another device before this one could open it. Different ask from
+      // 'confirm' (which offers to take a live session over): this one offers
+      // Try again / Leave it. No consequence paragraph — the user has not been
+      // offered an override here, so there is no fork to warn about.
+      return { lead: `This conversation moved to ${device}.` };
     case 'undeliverable':
       // The hub had no delivery path — the other device was never asked. Do NOT
       // blame it for "not responding" (that's the 'force' phase, a different,

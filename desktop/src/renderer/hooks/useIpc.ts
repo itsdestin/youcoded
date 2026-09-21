@@ -522,6 +522,14 @@ declare global {
         // distinct from 'timeout' (asked, no answer within the poll budget).
         leaseTakeover?: (claudeSessionId: string) => Promise<{ outcome: 'acquired' | 'timeout' | 'error' | 'undeliverable' }>;
         leaseForce?: (claudeSessionId: string) => Promise<{ ok: boolean }>;
+        // Claim-before-open (2026-09-21, deck Q-1/Q-2): acquire before the resume
+        // creates a session. 'denied' = another device holds it (Q-2 message +
+        // Try again); 'free-unconfirmed'/'error' = proceed (never-block escape
+        // hatch). Optional like its siblings so older remote/Android builds
+        // typecheck; the gate guards every call.
+        leaseClaim?: (claudeSessionId: string) => Promise<{ outcome: 'acquired' | 'denied' | 'free-unconfirmed' | 'error'; device?: string }>;
+        // Release a claim whose resume failed after the claim landed (idempotent).
+        leaseRelease?: (claudeSessionId: string) => Promise<unknown>;
         // Device registry (Plan 2b spec §10a): the "Your devices" list. Optional so
         // remote / older Android builds without the handler still typecheck — every
         // caller keeps a `typeof fn === 'function'` runtime guard. listDevices marks

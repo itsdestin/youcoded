@@ -225,7 +225,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // takeover states on demand instead of whatever the catch-all's [] renders as.
   'remote.getConfig', 'remote.setConfig', 'remote.setPassword', 'remote.detectTailscale',
   'remote.getClientCount', 'remote.getClientList', 'remote.devices', 'remote.getStatus', 'remote.onStatus',
-  'syncSpaces.leaseQuery', 'syncSpaces.leaseTakeover', 'syncSpaces.leaseForce',
+  'syncSpaces.leaseQuery', 'syncSpaces.leaseTakeover', 'syncSpaces.leaseForce', 'syncSpaces.leaseClaim', 'syncSpaces.leaseRelease',
   // ?update=available (error-state review, 2026-09-11) — the real update:* channels, so the
   // Update panel can be opened and its download made to fail. onProgress is left to the
   // catch-all on purpose: it must return its unsubscribe synchronously.
@@ -1875,6 +1875,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     leaseQuery: async () => leaseHolder ? { held: true, device: leaseHolder, self: false, source: 'workbench' } : { held: false },
     leaseTakeover: async () => ({ outcome: 'acquired' as const }),
     leaseForce: async () => ({ ok: true }),
+    // Claim-before-open (2026-09-21): the gate claims before it resumes. When
+    // ?lease= names a holder the claim is DENIED (the Q-2 Try again state); a
+    // retry re-claims denied the same way, so the workbench can film the state
+    // persistently. No holder → acquired.
+    leaseClaim: async () => leaseHolder ? { outcome: 'denied' as const, device: leaseHolder } : { outcome: 'acquired' as const },
+    leaseRelease: async () => ({ ok: true }),
     // The synced device registry behind the popup's Devices count-tab. Without
     // it the catch-all answers [] and the demo reads "0 Devices / No devices
     // yet" directly under "All synced", which contradicts itself — cross-device

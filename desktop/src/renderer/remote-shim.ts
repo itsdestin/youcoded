@@ -2389,6 +2389,10 @@ export function installShim(): void {
       leaseQuery: (claudeSessionId: string) => invoke('syncspaces:lease-query', { claudeSessionId }),
       leaseTakeover: (claudeSessionId: string) => invoke('syncspaces:lease-takeover', { claudeSessionId }),
       leaseForce: (claudeSessionId: string) => invoke('syncspaces:lease-force', { claudeSessionId }),
+      // Claim-before-open (2026-09-21): same shape as preload for parity. Routed
+      // by remote-server; degrades to 'error' (proceed) when the wiring is absent.
+      leaseClaim: (claudeSessionId: string) => invoke('syncspaces:lease-claim', { claudeSessionId }),
+      leaseRelease: (claudeSessionId: string) => invoke('syncspaces:lease-release', { claudeSessionId }),
       // Device registry (Plan 2b spec §10a). Object-payload invoke over WS to
       // match the shim's convention; routed by remote-server (Task 11).
       listDevices: () => invoke('syncspaces:list-devices'),
