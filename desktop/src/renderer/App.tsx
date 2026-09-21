@@ -2931,12 +2931,12 @@ function AppInner() {
       // Claim-before-open (deck Q-1/Q-2): acquire BEFORE any session exists.
       // The dialog phase is Q-2's Try again / Leave it — same reentrancy-guarded
       // promise plumbing as the takeover ask above.
-      claimLease: (id) => (window.claude.syncSpaces as any)?.leaseClaim?.(id),
+      claimLease: (id) => window.claude.syncSpaces?.leaseClaim?.(id) ?? null,
       askClaimDenied: (device) => askTakeover(device, 'claim-denied'),
       // A failed claim must not keep the lease: release it if this resume dies
       // below (create returned nothing / picker path bailed). Fire-and-forget —
       // the lease is idempotent and reconciles at the next renew either way.
-      onAbandon: () => { try { (window.claude.syncSpaces as any)?.leaseRelease?.(claudeSessionId); } catch { /* best-effort */ } },
+      onAbandon: () => { try { void window.claude.syncSpaces?.leaseRelease?.(claudeSessionId); } catch { /* best-effort */ } },
     });
     if (!proceed) return false; // "Never mind" / "Leave it" — abort the resume
 

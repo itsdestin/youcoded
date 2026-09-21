@@ -54,7 +54,7 @@ export interface LeaseGateOptions {
    * 'denied' is the Q-2 moment; 'free-unconfirmed'/'error' proceed (escape
    * hatch — never block a resume on sync being unreachable).
    */
-  claimLease?: (claudeSessionId: string) => Promise<{ outcome: 'acquired' | 'denied' | 'free-unconfirmed' | 'error'; device?: string }>;
+  claimLease?: (claudeSessionId: string) => Promise<{ outcome: 'acquired' | 'denied' | 'free-unconfirmed' | 'error'; device?: string } | null> | null;
   /**
    * The resume died after a hold was taken (user declined after the claim, or
    * the takeover was declined). Release the hold so a dead-end resume doesn't
@@ -79,7 +79,10 @@ async function runClaim(
 ): Promise<{ outcome: 'acquired' | 'denied' | 'free-unconfirmed' | 'error'; device?: string } | null> {
   if (typeof claimLease !== 'function') return null;
   try {
-    return await claimLease(claudeSessionId);
+    // undefined means the bridge member is missing — same degradation as "no
+    // member at all": the old query-then-takeover path runs.
+    const r = await claimLease(claudeSessionId);
+    return r ?? null;
   } catch {
     return null; // never-block: a thrown claim degrades to the old path
   }

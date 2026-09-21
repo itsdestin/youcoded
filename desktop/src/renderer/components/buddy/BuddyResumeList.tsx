@@ -142,9 +142,9 @@ export function BuddyResumeList({ onResumed, onCancel }: Props) {
         // Claim-before-open (deck Q-1/Q-2): acquire BEFORE anything is created.
         // Same members App passes — the buddy is the second resume surface and
         // must not re-derive this one differently.
-        claimLease: (id) => (window.claude.syncSpaces as any)?.leaseClaim?.(id),
+        claimLease: (id) => window.claude.syncSpaces?.leaseClaim?.(id) ?? null,
         askClaimDenied: (device) => askTakeover(device, 'claim-denied'),
-        onAbandon: () => { try { (window.claude.syncSpaces as any)?.leaseRelease?.(s.sessionId); } catch { /* best-effort */ } },
+        onAbandon: () => { try { void window.claude.syncSpaces?.leaseRelease?.(s.sessionId); } catch { /* best-effort */ } },
       });
       if (!proceed) { setResuming(null); return; }
 
