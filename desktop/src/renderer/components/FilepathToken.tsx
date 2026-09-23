@@ -1,4 +1,4 @@
-import { useArtifactOptional } from '../state/ArtifactContext';
+import { useArtifactSelectorOptional } from '../state/ArtifactContext';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
 import { Tooltip } from './ui';
 
@@ -59,13 +59,16 @@ export function FilepathToken({ path, sessionId, variant = 'pill', label }: Prop
   // Optional: the buddy window / sandbox render this without ArtifactProvider.
   // When absent, the pill still renders (so prose isn't disrupted) but the
   // click is a no-op — there's no drawer to open in those roots.
-  const artifactCtx = useArtifactOptional();
+  // WHY a narrow selector (perf, 2026-09-23): this pill only needs its
+  // session's cwd; reading the whole state redrew every pill in every chat
+  // whenever any session wrote a file.
+  const sessionCwd = useArtifactSelectorOptional((s) => s.sessionCwd?.[sessionId]);
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
   // Basename only inline — the full path lives in the title tooltip. Keeps prose
   // calm when Claude references deep paths mid-sentence.
   const name = path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? path;
   // Absolute path for the chat right-click menu (View in folder / Copy as path).
-  const menuPath = resolveForMenu(path, artifactCtx?.state.sessionCwd?.[sessionId]);
+  const menuPath = resolveForMenu(path, sessionCwd);
 
   // Resolve-and-open lives in useOpenFilepath, shared with DeliverablesCard, so
   // a pill and a sent-file tile can never disagree about what a click opens.

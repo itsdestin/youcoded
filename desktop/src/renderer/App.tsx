@@ -3,7 +3,7 @@
 // Must run before any TerminalView mounts (which call registerTerminal).
 import { guardDirtyEditor } from './components/artifact-views/dirty-editor-guard';
 import './bootstrap/terminal-bridge';
-import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { SessionTerminal } from './components/SessionTerminal';
 import ChatView from './components/ChatView';
 import HeaderBar, { BareHeaderBar } from './components/HeaderBar';
@@ -32,8 +32,7 @@ import {
   remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
   choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
 } from './state/remote-place';
-import { artifactReducer, initialArtifactState } from './state/artifact-tracker';
-import { ArtifactProvider } from './state/ArtifactContext';
+import { ArtifactProvider, createArtifactStore } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
@@ -676,24 +675,19 @@ function AppInner() {
   const dispatch = useChatDispatch();
   const chatStore = useChatStore();
   // Artifact tracker — global reducer for session/project artifact state.
-  const [artifactState, dispatchArtifact] = useReducer(artifactReducer, initialArtifactState);
+  // WHY a store created once (perf, 2026-09-23): a `{ state, dispatch }` context
+  // value changed on every artifact dispatch and redrew every reader (each open
+  // chat, each tool card) for a file ANY session wrote. Readers now select their
+  // own slice. This component still reads the whole state, as with useReducer.
+  const [artifactStore] = useState(() => createArtifactStore());
+  const artifactState = useSyncExternalStore(artifactStore.subscribe, artifactStore.getState);
+  const dispatchArtifact = artifactStore.dispatch;
   // Pages' "Create a page" / Edit: the new-session dialog waiting for a folder
   // and model (Destin, 2026-09-17). Null while closed.
   const [pageCreate, setPageCreate] = useState<PageCreateRequest | null>(null);
   // Ref mirror of artifact state so the (once-registered) tool-use handler can
   // dedup Read-tracking against the session's already-known artifacts without
   // re-subscribing on every reducer tick.
-  // MEMOIZED, and it has to be: an inline `{ state, dispatch }` object literal is
-  // a new identity on every render of this component — which is every streamed
-  // token — so every consumer of ArtifactContext (the session drawer, the file
-  // pane, Project View) re-rendered on each one, whether or not any artifact
-  // state had changed. `artifactState` only changes on a dispatch and
-  // `dispatchArtifact` is stable, so this now changes exactly when the artifact
-  // state does. Renderer rule: memoize every Context value.
-  const artifactContextValue = useMemo(
-    () => ({ state: artifactState, dispatch: dispatchArtifact }),
-    [artifactState, dispatchArtifact],
-  );
   const artifactStateRef = useRef(artifactState);
   useEffect(() => { artifactStateRef.current = artifactState; }, [artifactState]);
   // Latest-value ref so transcript-shrink and turn-complete handlers see
@@ -3580,7 +3574,7 @@ function AppInner() {
     // ArtifactProvider: exposes artifact state + dispatch to the entire AppInner
     // subtree. Sits inside all top-level providers (ChatProvider, ThemeProvider,
     // etc.) because artifact operations may eventually consume chat/theme context.
-    <ArtifactProvider value={artifactContextValue}>
+    <ArtifactProvider store={artifactStore}>
     <div className={`app-shell flex w-screen h-full text-fg ${getPlatform() === 'android' && currentViewMode === 'terminal' ? '' : 'bg-canvas'}`}>
       {/* Mount-only: listens for chat:export-snapshot from main, serializes
           ChatState, and sends the snapshot back for remote-browser hydration. */}

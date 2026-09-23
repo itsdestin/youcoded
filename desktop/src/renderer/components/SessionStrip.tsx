@@ -16,7 +16,7 @@ import { ProviderIcon } from './ProviderIcon';
 import { nextSlotId, clampFloatLeft, layoutRects, reorderIndices, neighbourOffsets, mapToSettled, DRAG_TUNE, type PillRect } from './header/drag-order';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import { useScrollFade } from '../hooks/useScrollFade';
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactDispatch } from '../state/ArtifactContext';
 import { useTheme } from '../state/theme-context';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -362,7 +362,7 @@ export default function SessionStrip({
   // Artifact dispatch — SessionStrip renders only in the main window, inside
   // the ArtifactContext provider, so calling the hook at top level is safe.
   // Used by the FolderSwitcher "Manage projects…" footer to open Project View.
-  const { dispatch: artifactDispatch } = useArtifact();
+  const artifactDispatch = useArtifactDispatch(); // dispatch only: never redraws for artifact state (perf, 2026-09-23)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   // THE DRAG VISUALS ARE STATE, NOT THE isDragging REF (2026-09-03, R10). The
   // twin, the neighbours' step-aside and the hidden in-flow box used to read
