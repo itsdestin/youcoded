@@ -1767,19 +1767,11 @@ export class RemoteServer {
           this.respond(client.ws, type, id, { ok: false, error: 'A terminal session can only be opened from the app itself.' });
           break;
         }
-        // Same guard as ipc-handlers' SESSION_CREATE: resuming a conversation
-        // that is already open answers with the open session (`alreadyOpen`)
-        // instead of a second tab on the same transcript. sessionMetaWiring's
-        // resolve IS the desktop→conversation id map (see session:browse below).
-        if (payload?.resumeSessionId) {
-          const resolve = this.sessionMetaWiring?.resolve ?? ((sid: string) => sid);
-          const live = this.sessionManager.listSessions();
-          const openId = findLiveSessionForConversation(
-            payload.resumeSessionId, live, new Map(live.map((s) => [s.id, resolve(s.id)])),
-          );
-          const openInfo = openId ? live.find((s) => s.id === openId) : undefined;
-          if (openInfo) { this.respond(client.ws, type, id, { ...openInfo, alreadyOpen: true }); break; }
-        }
+        // Same guard as ipc-handlers' SESSION_CREATE (a conversation already open
+        // answers with its session); the wiring's resolve IS the desktop→conversation id map.
+        const openInfo = payload?.resumeSessionId ? findLiveSessionForConversation(payload.resumeSessionId,
+          this.sessionManager.listSessions(), (sid) => this.sessionMetaWiring?.resolve(sid)) : undefined;
+        if (openInfo) { this.respond(client.ws, type, id, { ...openInfo, alreadyOpen: true }); break; }
         const info = this.sessionManager.createSession(this.prepareCreate(payload));
         this.respond(client.ws, type, id, info);
         // session:created broadcast is handled by the onSessionCreated event listener
@@ -3908,10 +3900,9 @@ export class RemoteServer {
   private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
     'artifacts:list-session': async (p) => {
       if (typeof p.sessionId !== 'string') return { ok: false, error: 'bad-request' };
-      // Same conversation-id match as the desktop's LIST_SESSION — the wiring's
-      // resolve IS the desktop→conversation id map (identity when unmapped).
+      // Same conversation-id match as the desktop's LIST_SESSION (resolve = the id map).
       const resolved = this.sessionMetaWiring?.resolve?.(p.sessionId);
-      const conversationId = resolved && resolved !== p.sessionId ? resolved : undefined;
+      const conversationId = resolved !== p.sessionId ? resolved : undefined;
       return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot, conversationId);
     },
     'artifacts:list-project': async (p) =>

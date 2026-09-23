@@ -53,15 +53,13 @@ export function resolveMappingAction(
 // conversation id is whatever the map last adopted for it. Only sessions still
 // in `liveSessions` count — the map is a cache that can outlive an exit (the
 // same reason session:browse filters it, "Bug 1").
-export function findLiveSessionForConversation(
+export function findLiveSessionForConversation<T extends { id: string; status?: string }>(
   conversationId: string,
-  liveSessions: ReadonlyArray<{ id: string; status?: string }>,
-  sessionIdMap: ReadonlyMap<string, string>,
-): string | undefined {
-  const live = new Set(liveSessions.filter((s) => s.status !== 'destroyed').map((s) => s.id));
-  if (live.has(conversationId)) return conversationId;
-  for (const [desktopId, claudeId] of sessionIdMap) {
-    if (claudeId === conversationId && live.has(desktopId)) return desktopId;
-  }
-  return undefined;
+  liveSessions: ReadonlyArray<T>,
+  // desktop id → the conversation id it last adopted (undefined = not mapped)
+  conversationIdOf: (desktopId: string) => string | undefined,
+): T | undefined {
+  const live = liveSessions.filter((s) => s.status !== 'destroyed');
+  return live.find((s) => s.id === conversationId)
+    ?? live.find((s) => conversationIdOf(s.id) === conversationId);
 }

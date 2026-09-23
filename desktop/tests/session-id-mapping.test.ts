@@ -68,25 +68,26 @@ describe('resolveMappingAction', () => {
 
 describe('findLiveSessionForConversation', () => {
   const live = [{ id: 'desk-1', status: 'active' }, { id: 'native-9', status: 'idle' }];
+  const of = (m: Record<string, string>) => (id: string) => m[id];
 
   it('finds a live Claude Code session through the id map', () => {
-    expect(findLiveSessionForConversation('claude-A', live, new Map([['desk-1', 'claude-A']]))).toBe('desk-1');
+    expect(findLiveSessionForConversation('claude-A', live, of({ 'desk-1': 'claude-A' }))?.id).toBe('desk-1');
   });
 
   it('finds a live native session by its own id', () => {
-    expect(findLiveSessionForConversation('native-9', live, new Map())).toBe('native-9');
+    expect(findLiveSessionForConversation('native-9', live, of({}))?.id).toBe('native-9');
   });
 
   it('ignores a map entry whose desktop session has exited', () => {
-    expect(findLiveSessionForConversation('claude-B', live, new Map([['desk-gone', 'claude-B']]))).toBeUndefined();
+    expect(findLiveSessionForConversation('claude-B', live, of({ 'desk-gone': 'claude-B' }))).toBeUndefined();
   });
 
   it('ignores a destroyed session', () => {
     const withDead = [{ id: 'desk-1', status: 'destroyed' }];
-    expect(findLiveSessionForConversation('claude-A', withDead, new Map([['desk-1', 'claude-A']]))).toBeUndefined();
+    expect(findLiveSessionForConversation('claude-A', withDead, of({ 'desk-1': 'claude-A' }))).toBeUndefined();
   });
 
   it('answers nothing for a conversation no session holds', () => {
-    expect(findLiveSessionForConversation('claude-Z', live, new Map([['desk-1', 'claude-A']]))).toBeUndefined();
+    expect(findLiveSessionForConversation('claude-Z', live, of({ 'desk-1': 'claude-A' }))).toBeUndefined();
   });
 });

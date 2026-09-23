@@ -2937,19 +2937,13 @@ function AppInner() {
     });
     if (!proceed) return false; // "Never mind" — abort the resume
 
-    // WHY: main answers a resume of a conversation that is already open with
-    // that open session (`alreadyOpen`) rather than spawning a second tab of
-    // the same name. Switch to it here; if another window owns it, say so
-    // instead of pulling it across. Counts as "handled" so the caller's
-    // browser/modal closes.
+    // WHY: main answers a resume of an already-open conversation with that
+    // session (`alreadyOpen`), not a second same-named tab. Switch to it, or
+    // say another window has it; "handled" either way, so the caller closes.
     const landOnOpenSession = (created: any): boolean => {
       if (!created?.alreadyOpen) return false;
-      if (sessionsRef.current.some((s) => s.id === created.id)) {
-        setSessionId(created.id);
-        (window as any).claude?.session?.switch?.(created.id);
-      } else {
-        setToast({ message: 'This conversation is already open in another window.', durationMs: 6000 });
-      }
+      if (!sessionsRef.current.some((s) => s.id === created.id)) setToast({ message: 'This conversation is already open in another window.', durationMs: 6000 });
+      else { setSessionId(created.id); (window as any).claude?.session?.switch?.(created.id); }
       return true;
     };
 
