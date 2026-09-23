@@ -45,7 +45,7 @@ import { generateText } from 'ai';
 import type { ModelBinding } from '../shared/provider-types';
 import { createSessionNamer } from './session-namer';
 import { NamingSettings } from './naming-settings';
-import { reapplyStoredTitle, nameForTitleCheck, type ResumeTitleDeps } from './native-resume-title';
+import { reapplyStoredTitle, createProvisionalTitles, type ResumeTitleDeps } from './native-resume-title';
 import { ModelCatalog } from './providers/model-catalog';
 import { EngineManager } from './engine/engine-manager';
 // Faster-engine prerequisites (2026-09-05 §A5) — a pure-ish read of this
@@ -797,9 +797,9 @@ export function registerIpcHandlers(
   // matches the Resume Browser row — NOT a title: both `hasTitle` checks below
   // look through them via liveNameForTitleCheck, or the namer would read the
   // raw first message as a real name and never generate one.
-  const provisionalResumeTitles = new Map<string, string>();
+  const provisionalResumeTitles = createProvisionalTitles();
   const liveNameForTitleCheck = (desktopId: string): string | undefined =>
-    nameForTitleCheck(sessionManager.getSession(desktopId)?.name, provisionalResumeTitles.get(desktopId));
+    provisionalResumeTitles.forTitleCheck(desktopId, sessionManager.getSession(desktopId)?.name);
   const resumeTitleDeps: ResumeTitleDeps = {
     // NOTE: getConversationStore() is null for the whole launch when the managed
     // roots are unavailable (conversations/service.ts sets storePhase
@@ -808,7 +808,7 @@ export function registerIpcHandlers(
     // — the title feeder still generates a name at the next turn-complete.
     getStoredTitle: async (sessionId) => (await getConversationStore()?.get('native', sessionId))?.title,
     onTitle: (sessionId, title, opts) => {
-      if (opts?.provisional) provisionalResumeTitles.set(sessionId, title);
+      if (opts?.provisional) provisionalResumeTitles.mark(sessionId, title);
       sendForSession(sessionId, IPC.SESSION_RENAMED, sessionId, title);
       broadcastRename(sessionId, title);
     },
@@ -3028,7 +3028,9 @@ export function registerIpcHandlers(
         fs.writeFileSync(path.join(topicDir, `ask-${storeId}`), '');
       } catch { /* best-effort: a missed ask retries at the next review */ }
     },
-    currentName: (sessionId: string) => sessionManager.getSession(sessionId)?.name ?? '',
+    // A resumed chat's provisional opening words are not a name to "keep", or
+    // the review would echo them back as the title (createProvisionalTitles).
+    currentName: (sessionId: string) => provisionalResumeTitles.forNamer(sessionId, sessionManager.getSession(sessionId)?.name),
     // Store title wins; the live session name covers the boot window before
     // the store's first upsert. BOTH halves go through the shared placeholder
     // predicate — the 2026-08-06 lesson: a check that only excluded 'New

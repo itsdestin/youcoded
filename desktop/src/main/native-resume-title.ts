@@ -79,3 +79,25 @@ export async function reapplyStoredTitle(
 export function nameForTitleCheck(liveName: string | undefined, provisional: string | undefined): string | undefined {
   return liveName !== undefined && liveName === provisional ? undefined : liveName;
 }
+
+/** The opening-words names planted on resumed, never-titled pills, and the one
+ *  rule every reader of a live session name must apply to them.
+ *
+ *  WHY one object (review F5): the has-a-title checks looked through the
+ *  provisional words, but the namer's review prompt still received them as the
+ *  "current name" and was told to keep it — so the raw first message came
+ *  back as the conversation's real title. Every consumer now asks here. */
+export function createProvisionalTitles() {
+  const planted = new Map<string, string>();
+  return {
+    mark(sessionId: string, title: string): void { planted.set(sessionId, title); },
+    /** The live name for a "does it have a title?" check. */
+    forTitleCheck(sessionId: string, liveName: string | undefined): string | undefined {
+      return nameForTitleCheck(liveName, planted.get(sessionId));
+    },
+    /** The name the namer's review prompt may call "current" ('' = none). */
+    forNamer(sessionId: string, liveName: string | undefined): string {
+      return nameForTitleCheck(liveName, planted.get(sessionId)) ?? '';
+    },
+  };
+}

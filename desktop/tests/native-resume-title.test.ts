@@ -3,7 +3,8 @@
 // regenerates — so before this module, resuming an already-named native
 // session left its header pill stuck on 'Resuming…' forever.
 import { describe, it, expect, vi } from 'vitest';
-import { reapplyStoredTitle, nameForTitleCheck, type ResumeTitleDeps } from '../src/main/native-resume-title';
+import { reapplyStoredTitle, nameForTitleCheck, createProvisionalTitles, type ResumeTitleDeps } from '../src/main/native-resume-title';
+import { buildNamingPrompt } from '../src/main/session-namer';
 
 function mkDeps(overrides: Partial<ResumeTitleDeps> = {}): ResumeTitleDeps {
   return {
@@ -95,5 +96,26 @@ describe('nameForTitleCheck', () => {
   it('lets any other live name through, including one that replaced the provisional words', () => {
     expect(nameForTitleCheck('Refactoring Auth', 'raw words')).toBe('Refactoring Auth');
     expect(nameForTitleCheck('Refactoring Auth', undefined)).toBe('Refactoring Auth');
+  });
+});
+
+// Review F5: the namer's review prompt used to receive the provisional opening
+// words as the "current name" and was told to keep them.
+describe('createProvisionalTitles', () => {
+  it('the namer is given no current name while the pill shows provisional words', () => {
+    const titles = createProvisionalTitles();
+    titles.mark('s1', 'help me refactor the auth module');
+    const current = titles.forNamer('s1', 'help me refactor the auth module');
+    expect(current).toBe('');
+    expect(buildNamingPrompt({ first: 'help me refactor the auth module', recent: [], current })).not.toMatch(/current name/i);
+  });
+
+  it('a real name that replaced the provisional words is passed on, and kept', () => {
+    const titles = createProvisionalTitles();
+    titles.mark('s1', 'raw words');
+    expect(titles.forNamer('s1', 'Refactoring Auth')).toBe('Refactoring Auth');
+    expect(buildNamingPrompt({ first: 'x', recent: [], current: titles.forNamer('s1', 'Refactoring Auth') })).toMatch(/The current name is "Refactoring Auth"/);
+    expect(titles.forTitleCheck('s1', 'raw words')).toBeUndefined();
+    expect(titles.forTitleCheck('s2', 'raw words')).toBe('raw words');
   });
 });
