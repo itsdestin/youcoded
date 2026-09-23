@@ -766,7 +766,8 @@ export class HarnessSession extends EventEmitter {
   /** Trigger ids already injected in this session. Survives across turns on
    *  purpose — a rule is a standing instruction, not a per-turn reminder. */
   private readonly injectedTriggerIds = new Set<string>();
-  /** Delivered-image dedupe: canonical path → mtimeMs at delivery. A model that
+  /** Delivered-image dedupe: canonical path → { mtimeMs at delivery, the tool
+   *  call whose result carried the image }. A model that
    *  re-Reads the SAME unchanged file gets "already visible" text, not a second
    *  ~1.6k-token copy; a CHANGED file (new mtime) is delivered again. Cleared on
    *  every site that DISCARDS entries from `this.history` itself — resume
@@ -783,7 +784,7 @@ export class HarnessSession extends EventEmitter {
    *  be sitting in surviving history — but that is the safe failure direction:
    *  over-delivery costs tokens, the bug it replaces cost correctness.
    *
-   *  KNOWN GAP (2026-08-11 review, deliberately NOT fixed in this pass): the
+   *  KNOWN GAP (2026-08-11 review; closed 2026-09-23, see the end of this block): the
    *  list above is every site that discards from `this.history`. It is NOT
    *  exhaustive over every way the MODEL's effective view of history can
    *  shrink — fitToContext trims oldest messages for the OUTGOING REQUEST
@@ -810,16 +811,16 @@ export class HarnessSession extends EventEmitter {
    *  vision model with a very small context window — do not read the old
    *  "narrow" framing off this comment when triaging it.
    *
-   *  Intended eventual fix (deferred, not this pass): re-key this map to
-   *  Map<path, { mtime, toolCallId }> and reconcile against the FITTED window
-   *  after fitToContext runs, so the cache can only vouch for what the model
-   *  actually just saw. Two narrower fixes were considered and rejected
-   *  because fitToContext runs on EVERY request, not just ones near budget: an
-   *  unconditional clear there defeats dedupe entirely, and a count-diff there
-   *  (mirroring the prune sites) latches permanently true the moment history
-   *  outgrows the context window, which is ordinary steady-state for a long
-   *  conversation. */
-  private shownImages = new Map<string, number>();
+   *  CLOSED (2026-09-23): each entry now remembers WHICH tool call carried the
+   *  image, and fitToContext ends by dropping every entry whose call is no
+   *  longer in the window it is about to send (`reconcileShownImages`). The
+   *  cache can therefore only vouch for what the model actually just saw. Two
+   *  narrower fixes were considered and rejected because fitToContext runs on
+   *  EVERY request, not just ones near budget: an unconditional clear there
+   *  defeats dedupe entirely, and a count-diff there (mirroring the prune
+   *  sites) latches permanently true the moment history outgrows the context
+   *  window, which is ordinary steady-state for a long conversation. */
+  private shownImages = new Map<string, { mtime: number; toolCallId: string }>();
   /** Read-only view of the resolved profile. The host needs the injection budget
    *  to size a /skill-name body, and re-resolving it there would risk drifting
    *  from what this session actually runs with (setBinding can have changed it). */
@@ -1551,9 +1552,9 @@ export class HarnessSession extends EventEmitter {
    *  newest user message; chars/4 is a deliberate estimate, not a tokenizer.
    *  WHY this matters for shownImages: this trims the OUTGOING REQUEST only —
    *  `this.history` itself is untouched — so an image can drop out of what the
-   *  model actually sees while the dedupe cache still vouches for it. See the
-   *  shownImages field comment's KNOWN GAP section for the reachability
-   *  analysis and why that isn't fixed here. */
+   *  model actually sees while the dedupe cache still vouches for it — so the
+   *  fitted window is reconciled against that cache before it is returned
+   *  (reconcileShownImages; the shownImages field comment has the history). */
   private fitToContext(messages: ModelMessage[]): ModelMessage[] {
     // The emergency floor. Since 2026-09-10 (cache follow-ups item 2) the
     // compaction trigger is derived from THIS budget and sits below it, so in
@@ -1603,8 +1604,28 @@ export class HarnessSession extends EventEmitter {
     // returned a 100 KB tool result (read.ts raises its own cap to 100_000 chars)
     // that exceeded the window on its own, and the turn died. Latent on master,
     // not introduced by Plan C — Plan C just made big local reads routine.
-    if (kept.length === 0) return this.salvageOversizedTail(messages, budgetTokens, total0);
-    return kept;
+    const fitted = kept.length === 0 ? this.salvageOversizedTail(messages, budgetTokens, total0) : kept;
+    this.reconcileShownImages(fitted);
+    return fitted;
+  }
+
+  /** Forget every delivered image whose carrying tool result is NOT in the
+   *  window about to be sent. WHY: fitToContext trims the outgoing request only,
+   *  so on a small window an image can scroll out of the model's view while the
+   *  dedupe cache still answers a re-Read with "already visible earlier" — a
+   *  false claim that also withholds the picture. Only calls that are gone are
+   *  dropped, so dedupe keeps working for everything still in view. */
+  private reconcileShownImages(fitted: ModelMessage[]): void {
+    if (this.shownImages.size === 0) return;
+    const inView = new Set<string>();
+    for (const m of fitted) {
+      if ((m as any).role !== 'tool' || !Array.isArray((m as any).content)) continue;
+      for (const part of (m as any).content) {
+        if (part?.type === 'tool-result' && part.output?.type === 'content' && Array.isArray(part.output.value)
+          && part.output.value.some((v: any) => v?.type === 'file')) inView.add(part.toolCallId);
+      }
+    }
+    for (const [p, shown] of this.shownImages) if (!inView.has(shown.toolCallId)) this.shownImages.delete(p);
   }
 
   /** Last resort for fitToContext: the newest exchange doesn't fit even alone.
@@ -2286,6 +2307,7 @@ export class HarnessSession extends EventEmitter {
   private resolveToolImages(
     payload: ToolResultPayload,
     budget: { count: number; bytes: number },
+    toolCallId: string,
   ): { text: string; images: Array<{ path: string; mediaType: string; data: Buffer; filename: string }> } {
     const paths = payload.images ?? [];
     if (!paths.length) return { text: payload.text, images: [] };
@@ -2302,7 +2324,7 @@ export class HarnessSession extends EventEmitter {
       try { st = fs.statSync(p); mtime = st.mtimeMs; } catch {
         text += `\n[image not attached: ${p} is no longer readable]`; continue;
       }
-      if (this.shownImages.get(p) === mtime) {
+      if (this.shownImages.get(p)?.mtime === mtime) {
         text += `\n[image not re-attached: ${p} is unchanged and already visible earlier in this conversation]`; continue;
       }
       if (budget.count >= MAX_IMAGES_PER_TURN) {
@@ -2331,7 +2353,7 @@ export class HarnessSession extends EventEmitter {
         text += `\n[image not attached: over the ${MAX_IMAGE_BYTES_PER_TURN / (1024 * 1024)} MB-per-turn image budget]`; continue;
       }
       budget.count += 1; budget.bytes += img.data.length;
-      this.shownImages.set(p, mtime);
+      this.shownImages.set(p, { mtime, toolCallId });
       // Fix 3 (2026-08-11 review): carry the file's own basename through so
       // toolResultPart can label the part with it instead of the tool's name —
       // see that method for why an unset filename defeats the point.
@@ -2792,7 +2814,7 @@ export class HarnessSession extends EventEmitter {
           // Turn the tool's promised image paths into deliverable parts, charging
           // the per-turn budget/dedupe and amending the text with a named note
           // for every skip (Task 5 — the driver never promises silently).
-          const delivered = this.resolveToolImages(payload, imageBudget);
+          const delivered = this.resolveToolImages(payload, imageBudget, call.toolCallId);
           this.capture.recordEvent(this.emitEvent('tool-result', {
             toolUseId: call.toolCallId, toolName: call.toolName,
             toolResult: delivered.text, isError: payload.isError ?? false,
