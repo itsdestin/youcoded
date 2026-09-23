@@ -19,7 +19,7 @@ import { useCardKeysLive } from '../state/card-keys-context';
 import { asString } from '../utils/tool-input';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
-import { fullAutoStopCopy } from './permissions/deny-list-copy';
+import { fullAutoStopCopy, floorAskNote } from './permissions/deny-list-copy';
 import { PERMISSION_DISPLAY } from './StatusBar';
 // Same parser ToolBody uses to pick the card body, so header and body agree.
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
@@ -906,8 +906,14 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       {/* Why there is no "Always Allow" here. Without it a missing button on a
           command the user runs constantly reads as a bug rather than a decision
           (compare R2·C). Shape-owned copy — see CommandShape.noGrantNote. */}
-      {noGrantPossible && noGrantNote && (
+      {noGrantPossible && noGrantNote && !floorStop && (
         <p className="text-3xs text-fg-muted leading-relaxed">{noGrantNote}</p>
+      )}
+      {/* A floor below the rules forced this card (rm-target / secret paths):
+          say why it has no "Always Allow" and will keep asking. Replaces the
+          shape note above so the card never gives two reasons. */}
+      {floorStop && (
+        <p className="text-3xs text-fg-muted leading-relaxed">{floorAskNote(floorStop)}</p>
       )}
       {/* D2: the promise "Always allow" is about to make, in the user's words.
           Gated on canAlwaysAllow so it never describes a button that isn't

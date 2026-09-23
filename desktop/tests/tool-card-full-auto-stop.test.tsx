@@ -134,3 +134,21 @@ describe('full-auto stop for a command that names a secret file', () => {
     expect(screen.getByText('Stopped before deleting files')).toBeTruthy();
   });
 });
+
+// Review F7: outside Full auto a floor's card lost "Always allow" with no word
+// of why. One line now says it will always ask, and the reason.
+describe('Ask-mode card forced by a floor', () => {
+  it.each([
+    ['removal', 'rm -rf ~', 'Always asks: this deletes a protected folder'],
+    ['secret-path', 'cat ~/.ssh/id_rsa', 'Always asks: this uses a file that holds passwords or keys'],
+  ] as const)('%s explains itself in one line', (floorStop, command, line) => {
+    renderCard(stopTool({ input: { command }, floorStop, permissionMode: 'ask' }));
+    expect(screen.getByText(line)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /always/i })).toBeNull();
+  });
+
+  it('an ordinary ask shows no such line', () => {
+    renderCard(stopTool({ input: { command: 'npm test' }, denyListed: false, permissionMode: 'ask' }));
+    expect(screen.queryByText(/^Always asks:/)).toBeNull();
+  });
+});
