@@ -128,35 +128,42 @@ sealed class RelativeRecordVerdict {
     data class Trusted(val file: File) : RelativeRecordVerdict()
     object Missing : RelativeRecordVerdict()
     object Protected : RelativeRecordVerdict()
-    data class OutsideProjects(val path: String) : RelativeRecordVerdict()
+    // No location rides along (review 2026-09-23, F5): the refusal names none.
+    object OutsideProjects : RelativeRecordVerdict()
+    /** The check itself failed; [detail] is the platform's own message. */
+    data class Unreadable(val detail: String) : RelativeRecordVerdict()
 }
 
 /**
  * A legacy external record whose absolutePath is RELATIVE — usually a file the
  * agent wrote through `../`. Mirror of desktop write-authorization.ts
- * judgeRelativeRecord (Destin, 2026-09-23, option A).
+ * judgeRelativeRecord (Destin, 2026-09-23, option A; review fixes F1/F4/F5).
  *
  * WHY: such a record used to be answered "no longer on disk" whether or not the
  * file was there. It may not simply be trusted: the sidecar lives inside the
  * project, so a copied folder can carry a PLANTED record like
  * `../../.ssh/id_rsa`. So it is resolved against the PROJECT ROOT (never the
- * process cwd), symlinks resolved, and trusted only when it lands inside the
- * project or a saved folder AND its tier is FREE (the existing deny list:
- * credentials, .git/.youcoded, .claude, dotenv). The secret check runs first so
- * a secret's location is never echoed back.
+ * process cwd), symlinks resolved, refused when privateForRecordTrust says so,
+ * and trusted only inside the project or a saved folder that is STRICTLY BELOW
+ * [home] — a saved home folder (or an ancestor, or "/") vouches for nothing,
+ * since it would cover every credential file in home.
  */
-fun judgeRelativeRecord(projectRoot: String, recorded: String, allowedRoots: List<String>): RelativeRecordVerdict {
+fun judgeRelativeRecord(projectRoot: String, recorded: String, allowedRoots: List<String>, home: String): RelativeRecordVerdict {
     val target = File(projectRoot, recorded)
-    val resolved = try { target.canonicalFile } catch (_: java.io.IOException) { return RelativeRecordVerdict.Missing }
-    if (!resolved.exists()) return RelativeRecordVerdict.Missing
-    if (EditablePathPolicy.editTier(canonicalize(resolved.path, null)) != EditablePathPolicy.EditTier.FREE) {
-        return RelativeRecordVerdict.Protected
+    val resolved = try { target.canonicalFile } catch (e: java.io.IOException) {
+        return RelativeRecordVerdict.Unreadable(e.message ?: e.javaClass.simpleName)
+    } catch (e: SecurityException) {
+        return RelativeRecordVerdict.Unreadable("permission denied")
     }
+    if (!resolved.exists()) return RelativeRecordVerdict.Missing
+    if (EditablePathPolicy.privateForRecordTrust(canonicalize(resolved.path, null))) return RelativeRecordVerdict.Protected
+    val realHome = try { File(home).canonicalFile.path } catch (_: java.io.IOException) { return RelativeRecordVerdict.OutsideProjects }
     for (root in (listOf(projectRoot) + allowedRoots).distinct()) {
         val realRoot = try { File(root).canonicalFile.path } catch (_: java.io.IOException) { continue }
+        if (!realRoot.startsWith(realHome + File.separator)) continue
         if (resolved.path == realRoot || resolved.path.startsWith(realRoot + File.separator)) {
             return RelativeRecordVerdict.Trusted(resolved)
         }
     }
-    return RelativeRecordVerdict.OutsideProjects(resolved.path)
+    return RelativeRecordVerdict.OutsideProjects
 }

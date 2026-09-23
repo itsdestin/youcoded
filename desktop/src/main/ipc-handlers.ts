@@ -154,7 +154,7 @@ import { sweepStaleTmp } from './artifacts/cas-write';
 import { canonicalize } from '../shared/artifacts/canonicalize';
 import { readFileHead } from './fs-read-head';
 import { initProjectWatchers, watchProject, unwatchProject, dropSubscriber, noteOwnWrite, invalidateSidecarIdCache } from './artifacts/project-watcher';
-import { authorizeArtifactWrite } from './artifacts/write-authorization';
+import { authorizeArtifactWrite, isAbsoluteRecorded, judgeRelativeRecord } from './artifacts/write-authorization';
 import { trackedArtifacts } from './artifacts/visible-artifacts';
 import { importFile } from './artifacts/import-file';
 import { GIT_IPC } from './git/ipc-channels';
@@ -170,7 +170,7 @@ import { PROJECT_IPC } from './project/ipc-channels';
 // (remote access batch 3) so a phone gets the desktop's own answers.
 import {
   listSessionFiles, listProjectFiles, listAllFiles, listFolder, readArtifactText, readArtifactBytes,
-  searchArtifactContent, checkArtifactExistence, resolveArtifactPath,
+  searchArtifactContent, checkArtifactExistence, resolveArtifactPath, savedProjectRoots,
 } from './artifacts/read-service';
 import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 // Conversation Store (Phase 2a): live intake of transcript activity, session
@@ -4925,7 +4925,18 @@ export function registerIpcHandlers(
       : undefined;
 
     let fullPath: string;
-    if (artifact) {
+    if (artifact && artifact.kind !== 'internal' && artifact.absolutePath && !isAbsoluteRecorded(artifact.absolutePath)) {
+      // A `../` record: judged exactly as artifacts:get judges it (F3, review
+      // 2026-09-23) — the edit tier below then runs on the REAL location, not
+      // on the relative string, so a file that opens can also be saved.
+      const verdict = await judgeRelativeRecord(projectRoot, artifact.absolutePath, savedProjectRoots());
+      if (!verdict.ok) {
+        if (verdict.reason === 'missing') return { ok: false, error: 'artifact-not-found' };
+        if (verdict.reason === 'unreadable') return { ok: false, error: 'record-unreadable', code: verdict.code };
+        return { ok: false, error: verdict.reason };
+      }
+      fullPath = verdict.realPath;
+    } else if (artifact) {
       // NOTE the tracked branch historically wrote artifact.absolutePath! with
       // NO check at all — the sidecar-escalation hole (spec §12.1). Everything
       // below now runs on the RESOLVED path for both branches.

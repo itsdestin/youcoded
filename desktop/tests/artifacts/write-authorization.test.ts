@@ -163,47 +163,84 @@ describe('authorizeArtifactRead', () => {
 });
 
 // Records the agent wrote through `../` hold a RELATIVE absolutePath. They are
-// trusted only inside a project folder and outside the deny list — the sidecar
-// lives in the project, so a copied folder can carry a planted record.
+// trusted only inside a project folder strictly below home and outside the
+// deny lists — the sidecar lives in the project, so a copied folder can carry a
+// planted record.
 describe('judgeRelativeRecord', () => {
-  const rel = (abs: string) => path.relative(root, abs);
-  async function mkOut(relp: string, content = 'x'): Promise<string> {
-    const p = path.join(outside, relp);
-    await fs.promises.mkdir(path.dirname(p), { recursive: true });
-    await fs.promises.writeFile(p, content);
-    return p;
+  let home: string;      // a stand-in home folder
+  let proj: string;      // a project below it
+  let notes: string;     // another saved project below it
+  beforeEach(async () => {
+    home = await fs.promises.realpath(await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-home-')));
+    proj = path.join(home, 'proj');
+    notes = path.join(home, 'notes');
+    await fs.promises.mkdir(proj, { recursive: true });
+    await fs.promises.mkdir(notes, { recursive: true });
+  });
+  afterEach(async () => { await fs.promises.rm(home, { recursive: true, force: true, maxRetries: 3 }); });
+
+  async function put(abs: string, content = 'x'): Promise<string> {
+    await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+    await fs.promises.writeFile(abs, content);
+    return abs;
   }
+  const rel = (abs: string) => path.relative(proj, abs);
 
-  it('trusts a ../ file inside another saved project folder', async () => {
-    const target = await mkOut('notes/plan.md');
-    const res = await judgeRelativeRecord(root, rel(target), [outside]);
-    expect(res).toEqual({ ok: true, realPath: await fs.promises.realpath(target) });
+  it('trusts a ../ file inside another saved project folder below home', async () => {
+    const target = await put(path.join(notes, 'plan.md'));
+    expect(await judgeRelativeRecord(proj, rel(target), [notes], home)).toEqual({ ok: true, realPath: target });
   });
 
-  it('refuses a ../ file outside every project folder, and says where it is', async () => {
-    const target = await mkOut('notes/plan.md');
-    const res = await judgeRelativeRecord(root, rel(target), []);
-    expect(res).toEqual({ ok: false, reason: 'outside-projects', realPath: await fs.promises.realpath(target) });
+  it('refuses a ../ file outside every project folder — and never says where it is', async () => {
+    const target = await put(path.join(home, 'elsewhere', 'plan.md'));
+    expect(await judgeRelativeRecord(proj, rel(target), [notes], home)).toEqual({ ok: false, reason: 'outside-projects' });
   });
 
-  it('keeps a PLANTED record pointing at a secret refused — even inside a saved folder', async () => {
-    // e.g. a copied project whose sidecar says `../../.ssh/id_rsa`.
-    const key = await mkOut('.ssh/id_rsa', 'PRIVATE');
-    const res = await judgeRelativeRecord(root, rel(key), [outside]);
-    expect(res).toEqual({ ok: false, reason: 'protected-path' });
-    const env = await mkOut('.env', 'TOKEN=1');
-    expect(await judgeRelativeRecord(root, rel(env), [outside])).toEqual({ ok: false, reason: 'protected-path' });
+  // THE reviewer's scenario (2026-09-23, F1): the home folder itself is a saved
+  // folder, as it is on Destin's machine. It must vouch for nothing — and every
+  // credential below stays refused even so.
+  it('a saved home folder, an ancestor of home, or a filesystem root vouches for nothing', async () => {
+    const plain = await put(path.join(home, 'Documents', 'todo.md'));
+    for (const saved of [home, path.dirname(home), path.parse(home).root]) {
+      expect(await judgeRelativeRecord(proj, rel(plain), [saved], home), saved).toEqual({ ok: false, reason: 'outside-projects' });
+    }
+    // and the project itself vouches for nothing when the project IS home
+    expect(await judgeRelativeRecord(home, 'Documents/../Documents/todo.md', [], home)).toEqual({ ok: false, reason: 'outside-projects' });
+  });
+
+  it('keeps every PLANTED credential record refused with home saved as a folder', async () => {
+    const secrets = [
+      '.git-credentials', '.claude.json', '.npmrc', '.pypirc', '.docker/config.json', '.pgpass',
+      '.bash_history', '.zsh_history', '.local/share/fish/fish_history',
+      '.config/gcloud/application_default_credentials.json', '.local/share/keyrings/login.keyring',
+      '.ssh/id_rsa', '.aws/credentials', '.netrc', '.config/gh/hosts.yml',
+    ];
+    for (const s of secrets) {
+      const abs = await put(path.join(home, s), 'PRIVATE');
+      expect(await judgeRelativeRecord(proj, rel(abs), [home, notes], home), s).toEqual({ ok: false, reason: 'protected-path' });
+    }
+    // …and inside a legitimate project folder too.
+    for (const s of ['.npmrc', '.env', '.git-credentials', '.ssh/id_rsa']) {
+      const abs = await put(path.join(notes, s), 'PRIVATE');
+      expect(await judgeRelativeRecord(proj, rel(abs), [notes], home), `notes/${s}`).toEqual({ ok: false, reason: 'protected-path' });
+    }
   });
 
   it('judges the RESOLVED target of a symlink, not the link', async () => {
-    const key = await mkOut('.aws/credentials', 'PRIVATE');
-    const link = path.join(outside, 'innocent.md');
+    const key = await put(path.join(home, '.aws', 'credentials'), 'PRIVATE');
+    const link = path.join(notes, 'innocent.md');
     try { await fs.promises.symlink(key, link); } catch { return; } // no symlink rights (Windows)
-    expect(await judgeRelativeRecord(root, rel(link), [outside])).toEqual({ ok: false, reason: 'protected-path' });
+    expect(await judgeRelativeRecord(proj, rel(link), [notes], home)).toEqual({ ok: false, reason: 'protected-path' });
   });
 
   it('says missing only when nothing is on disk there', async () => {
-    expect(await judgeRelativeRecord(root, '../definitely-not-here/x.md', [outside])).toEqual({ ok: false, reason: 'missing' });
+    expect(await judgeRelativeRecord(proj, '../notes/never-was.md', [notes], home)).toEqual({ ok: false, reason: 'missing' });
+  });
+
+  it('reports a failed check with the filesystem code instead of throwing or saying missing', async () => {
+    // A symlink loop: realpath answers ELOOP.
+    const a = path.join(notes, 'a'); const b = path.join(notes, 'b');
+    try { await fs.promises.symlink(b, a); await fs.promises.symlink(a, b); } catch { return; }
+    expect(await judgeRelativeRecord(proj, '../notes/a', [notes], home)).toEqual({ ok: false, reason: 'unreadable', code: 'ELOOP' });
   });
 });
-

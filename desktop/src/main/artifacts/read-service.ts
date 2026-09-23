@@ -37,7 +37,7 @@ import { readFolders } from '../saved-folders';
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 
 /** The user's saved project folders — where a `../` record may be trusted. */
-function savedProjectRoots(): string[] {
+export function savedProjectRoots(): string[] {
   return readFolders().map((f) => f.path);
 }
 
@@ -289,6 +289,7 @@ export async function readArtifactText(
     : undefined;
 
   let fullPath: string;
+  let trusted: { resolvedPath?: string } = {};
   if (artifact && artifact.kind !== 'internal' && artifact.absolutePath && !isAbsoluteRecorded(artifact.absolutePath)) {
     // A file the agent wrote through `../` whose record was not repaired (yet).
     // WHY judged here and not refused outright: it used to come back as
@@ -296,13 +297,19 @@ export async function readArtifactText(
     // the repair would trust it (write-authorization.ts judgeRelativeRecord —
     // live, so a folder saved as a project a minute ago counts); otherwise
     // the answer names the real reason, never "missing" unless it is.
+    // F5 (review 2026-09-23): a refusal never carries where the file is —
+    // this answer also reaches remote browsers.
     const verdict = await judgeRelativeRecord(projectRoot, artifact.absolutePath, savedProjectRoots());
     if (!verdict.ok) {
       if (verdict.reason === 'missing') return { ok: true, artifact, content: null, orphan: true };
-      if (verdict.reason === 'protected-path') return { ok: false, error: 'protected-path' };
-      return { ok: false, error: 'outside-projects', path: verdict.realPath };
+      if (verdict.reason === 'unreadable') return { ok: false, error: 'record-unreadable', code: verdict.code };
+      return { ok: false, error: verdict.reason };
     }
     fullPath = verdict.realPath;
+    // F3: the byte viewers (images, PDFs, Office files) read by absolute path;
+    // a trusted `../` record hands them the judged location, since the record
+    // itself still holds a relative one until the repair rewrites it.
+    trusted = { resolvedPath: canonicalize(verdict.realPath, null) };
   } else if (artifact) {
     fullPath = artifact.kind === 'internal'
       ? path.join(projectRoot, artifact.path)
@@ -323,7 +330,7 @@ export async function readArtifactText(
   // path (write-authorization.ts owns the logic + its tests).
   const readAuth = await authorizeArtifactRead(projectRoot, fullPath, !artifact || artifact.kind === 'internal');
   if (!readAuth.ok) {
-    if ('orphan' in readAuth) return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
+    if ('orphan' in readAuth) return { ok: true, ...trusted, artifact: artifact ?? null, content: null, orphan: true };
     return { ok: false, error: readAuth.error };
   }
   const realPath = readAuth.realPath;
@@ -335,7 +342,7 @@ export async function readArtifactText(
     st = await fs.promises.stat(realPath);
   } catch (e: any) {
     if (e.code !== 'ENOENT') throw e;
-    return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
+    return { ok: true, ...trusted, artifact: artifact ?? null, content: null, orphan: true };
   }
   if (opts?.maxBytes !== undefined && st.size > opts.maxBytes) return tooLarge(st.size, opts.maxBytes);
 
@@ -363,7 +370,7 @@ export async function readArtifactText(
       const win = await readFully(EDIT_MAX_BYTES);
       const d = decideOverCapRead(head, win);
       return {
-        ok: true, artifact: artifact ?? null, orphan: false,
+        ok: true, ...trusted, artifact: artifact ?? null, orphan: false,
         content: d.content, binary: d.binary, truncated: d.truncated,
         sizeBytes: st.size, mtimeMs: st.mtimeMs,
       };
@@ -383,14 +390,14 @@ export async function readArtifactText(
     if (!binary) content = buf.toString('utf8');
   } catch (e: any) {
     if (e.code !== 'ENOENT') throw e;
-    return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
+    return { ok: true, ...trusted, artifact: artifact ?? null, content: null, orphan: true };
   }
   // mtimeMs is the optimistic-concurrency token: round-trip it into
   // artifacts:save as baseMtimeMs and the save is rejected when the file
   // changed underneath. sizeBytes and truncated ride EVERY response: the
   // renderer derives editability from the size, and a `full` read must clear
   // the partial bar.
-  return { ok: true, artifact: artifact ?? null, content, orphan: false, binary,
+  return { ok: true, ...trusted, artifact: artifact ?? null, content, orphan: false, binary,
            truncated: false, sizeBytes: st.size, mtimeMs: st.mtimeMs };
 }
 
@@ -561,8 +568,8 @@ export async function checkArtifactExistence(projectRoot: string, artifactIds: s
         // A `../` record: resolved against the project (never the process
         // cwd). WHY: marking it missing drew an existing file as deleted; now
         // only a file genuinely absent is, and opening a refused one says why.
-        const verdict = await judgeRelativeRecord(projectRoot, fullPath, savedProjectRoots()).catch(() => null);
-        return verdict && !verdict.ok && verdict.reason === 'missing' ? id : null;
+        const verdict = await judgeRelativeRecord(projectRoot, fullPath, savedProjectRoots());
+        return !verdict.ok && verdict.reason === 'missing' ? id : null;
       }
       try {
         await fs.promises.access(fullPath);

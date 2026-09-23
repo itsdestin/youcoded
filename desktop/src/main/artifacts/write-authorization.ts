@@ -12,9 +12,10 @@
 // Windows on-disk casing, so `.ENV` resolves to the real `.env` before the
 // policy match.
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
-import { editTier, protectedReadPath } from '../../shared/artifacts/editable-path-policy';
+import { editTier, protectedReadPath, privateForRecordTrust } from '../../shared/artifacts/editable-path-policy';
 
 export type ReadResolution =
   | { ok: true; realPath: string }
@@ -52,8 +53,30 @@ export function isAbsoluteRecorded(p: string): boolean {
   return path.isAbsolute(p);
 }
 
-/** Why a relative external record may not be opened (see judgeRelativeRecord). */
-export type RelativeRecordRefusal = 'missing' | 'protected-path' | 'outside-projects';
+/** Why a relative external record may not be opened (see judgeRelativeRecord).
+ *  'unreadable' = the check itself failed (permission denied, a symlink loop);
+ *  `code` carries the filesystem's own error code, never a guessed cause. */
+export type RelativeRecordVerdict =
+  | { ok: true; realPath: string }
+  | { ok: false; reason: 'missing' | 'protected-path' | 'outside-projects' }
+  | { ok: false; reason: 'unreadable'; code: string };
+
+/**
+ * May this folder vouch for a recorded path? Only a specific folder strictly
+ * INSIDE the home folder.
+ *
+ * WHY (review 2026-09-23, F1): saved folders routinely include the home folder
+ * itself (Destin's do). "Inside a saved folder" then covered every credential
+ * file in home — .git-credentials, .claude.json, .npmrc, the login keyring —
+ * and a planted `../` record was trusted for all of them. A folder that IS
+ * home, contains home, or is a filesystem root vouches for nothing.
+ */
+async function vouchingRoot(root: string, realHome: string | null): Promise<string | null> {
+  if (!root || !realHome) return null;
+  const realRoot = await fs.promises.realpath(path.resolve(root)).catch(() => null);
+  if (!realRoot) return null;
+  return realRoot.startsWith(realHome + path.sep) ? realRoot : null;
+}
 
 /**
  * Decide whether a legacy external record whose `absolutePath` is RELATIVE —
@@ -66,33 +89,38 @@ export type RelativeRecordRefusal = 'missing' | 'protected-path' | 'outside-proj
  * else can carry a PLANTED record like `../../.ssh/id_rsa`. So a record is
  * trusted only when, with symlinks resolved, it lands:
  *   1. inside the record's own project or one of the user's saved project
- *      folders (`allowedRoots`), AND
- *   2. in an ordinary location — `editTier(...) === 'free'`, the app's
- *      existing deny list (credentials, .git/.youcoded internals, .claude and
- *      dotenv all fail it). Deliberately stricter than protectedReadPath:
- *      this is a record nobody chose to open by name.
+ *      folders — and only one strictly below the home folder (vouchingRoot);
+ *   2. somewhere privateForRecordTrust allows: everything editTier refuses
+ *      (credentials, .git/.youcoded, .claude, dotenv) plus credential and
+ *      shell-history files a recorded path must never name.
  * The relative path is resolved against the PROJECT ROOT (what the agent's
- * tools resolved it against), never the process cwd.
+ * tools resolved it against), never the process cwd. Mirrored in Kotlin
+ * (ProjectManager.kt judgeRelativeRecord).
  */
 export async function judgeRelativeRecord(
   projectRoot: string,
   recordedPath: string,
   allowedRoots: string[],
-): Promise<{ ok: true; realPath: string } | { ok: false; reason: RelativeRecordRefusal; realPath?: string }> {
+  home: string = os.homedir(),
+): Promise<RelativeRecordVerdict> {
   let realPath: string;
   try {
     realPath = await fs.promises.realpath(path.resolve(projectRoot, recordedPath));
   } catch (e: any) {
-    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return { ok: false, reason: 'missing' };
-    throw e;
+    if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') return { ok: false, reason: 'missing' };
+    // F4: a symlink loop or a permission error is not "missing" and not a
+    // crash — say the check failed, with the filesystem's own code.
+    return { ok: false, reason: 'unreadable', code: String(e?.code ?? e?.message ?? 'unknown') };
   }
-  // Checked BEFORE the root test, so a secret never gets its location echoed
-  // back as an "outside your projects" path the renderer could reveal.
-  if (editTier(canonicalize(realPath, null)) !== 'free') return { ok: false, reason: 'protected-path' };
+  // Checked BEFORE the root test, so a secret is refused as private whatever
+  // folder it sits in.
+  if (privateForRecordTrust(canonicalize(realPath, null))) return { ok: false, reason: 'protected-path' };
+  const realHome = await fs.promises.realpath(home).catch(() => null);
   for (const root of new Set([projectRoot, ...allowedRoots])) {
-    if (root && await inRealRoot(root, realPath)) return { ok: true, realPath };
+    const r = await vouchingRoot(root, realHome);
+    if (r && (realPath === r || realPath.startsWith(r + path.sep))) return { ok: true, realPath };
   }
-  return { ok: false, reason: 'outside-projects', realPath };
+  return { ok: false, reason: 'outside-projects' };
 }
 
 async function inRealRoot(projectRoot: string, realPath: string): Promise<boolean> {

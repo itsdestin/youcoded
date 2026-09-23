@@ -689,6 +689,8 @@ describe('repairRelativeExternals', () => {
   let projectRoot: string;
   let sibling: string;
   beforeEach(() => {
+    // `parent` stands in for the home folder: only folders strictly below home
+    // can vouch for a `../` record (review 2026-09-23, F1).
     parent = mkdtempSync(join(tmpdir(), 'as-dotdot-'));
     projectRoot = join(parent, 'proj');
     sibling = join(parent, 'notes');
@@ -712,7 +714,7 @@ describe('repairRelativeExternals', () => {
   }) as any;
 
   it('gives a ../ file in a saved project folder its real absolute path', async () => {
-    const { sidecar, repaired } = await repairRelativeExternals(sidecarOf(rec('a', '../notes/plan.md')), projectRoot, [sibling]);
+    const { sidecar, repaired } = await repairRelativeExternals(sidecarOf(rec('a', '../notes/plan.md')), projectRoot, [sibling], parent);
     expect(repaired).toHaveLength(1);
     expect(sidecar.artifacts[0].kind).toBe('external');
     expect(sidecar.artifacts[0].absolutePath).toMatch(/\/notes\/plan\.md$/);
@@ -720,20 +722,27 @@ describe('repairRelativeExternals', () => {
   });
 
   it('makes a ../ path that lands back inside the project internal', async () => {
-    const { sidecar } = await repairRelativeExternals(sidecarOf(rec('a', 'sub/../here.md')), projectRoot, []);
+    const { sidecar } = await repairRelativeExternals(sidecarOf(rec('a', 'sub/../here.md')), projectRoot, [], parent);
     expect(sidecar.artifacts[0]).toMatchObject({ kind: 'internal', path: 'here.md', absolutePath: null });
   });
 
   it('leaves a ../ file outside every project folder untouched', async () => {
     const input = sidecarOf(rec('a', '../notes/plan.md'));
-    const { sidecar, repaired } = await repairRelativeExternals(input, projectRoot, []);
+    const { sidecar, repaired } = await repairRelativeExternals(input, projectRoot, [], parent);
     expect(repaired).toEqual([]);
     expect(sidecar.artifacts[0]).toEqual(input.artifacts[0]);
   });
 
+  it('never repairs a record because the HOME folder is saved as a project', async () => {
+    writeFileSync(join(parent, '.git-credentials'), 'https://u:token@github.com');
+    const input = sidecarOf(rec('a', '../notes/plan.md'), rec('b', '../.git-credentials'));
+    const { repaired } = await repairRelativeExternals(input, projectRoot, [parent], parent);
+    expect(repaired).toEqual([]);
+  });
+
   it('never repairs a PLANTED record that points at a secret, even inside a saved folder', async () => {
     const input = sidecarOf(rec('evil', '../notes/.ssh/id_rsa'));
-    const { sidecar, repaired } = await repairRelativeExternals(input, projectRoot, [sibling]);
+    const { sidecar, repaired } = await repairRelativeExternals(input, projectRoot, [sibling], parent);
     expect(repaired).toEqual([]);
     expect(sidecar.artifacts[0].absolutePath).toBe('../notes/.ssh/id_rsa');
   });

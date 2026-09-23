@@ -541,6 +541,7 @@ export async function repairRelativeExternals(
   sidecar: ProjectSidecar,
   projectRoot: string,
   savedRoots: string[],
+  home?: string,
 ): Promise<{ sidecar: ProjectSidecar; repaired: { from: string; to: string }[] }> {
   const repaired: { from: string; to: string }[] = [];
   const internalPaths = new Set(sidecar.artifacts.filter((a) => a.kind === 'internal').map((a) => a.path));
@@ -548,7 +549,7 @@ export async function repairRelativeExternals(
   const artifacts = [];
   for (const a of sidecar.artifacts) {
     if (a.kind !== 'external' || !a.absolutePath || isAbsoluteRecorded(a.absolutePath)) { artifacts.push(a); continue; }
-    const verdict = await judgeRelativeRecord(projectRoot, a.absolutePath, savedRoots).catch(() => null);
+    const verdict = await judgeRelativeRecord(projectRoot, a.absolutePath, savedRoots, home);
     if (!verdict?.ok) { artifacts.push(a); continue; }
     const inside = realRoot ? relative(realRoot, verdict.realPath) : '';
     const rel = inside && !inside.startsWith('..') && !isAbsolute(inside) ? canonicalize(inside, null) : null;
@@ -593,7 +594,12 @@ export async function runSidecarMigration(
   // cache in this layer (project-watcher.ts's sidecarIdCache,
   // project-file-discovery.ts's cache) keys on project root for this exact
   // reason.
-  const key = canonicalize(projectRoot, null);
+  // The saved-folder list is part of the key (F3, review 2026-09-23): a `../`
+  // record outside every project today becomes repairable the moment its
+  // folder is saved as a project, so a changed list re-runs the repair
+  // instead of the "done" memo holding for the rest of the process.
+  const savedRoots = readFolders().map((f) => f.path);
+  const key = `${canonicalize(projectRoot, null)}\0${[...savedRoots].sort().join('\0')}`;
   if (migrationChecked.has(key)) return NOTHING;
 
   // Fix: this best-effort repair runs INSIDE three handlers that were
@@ -623,7 +629,7 @@ export async function runSidecarMigration(
 
       const result = migrateRelativeExternals(current, projectRoot);
       // `../` records the pure pass leaves external (see repairRelativeExternals).
-      const escaped = await repairRelativeExternals(result.sidecar, projectRoot, readFolders().map((f) => f.path));
+      const escaped = await repairRelativeExternals(result.sidecar, projectRoot, savedRoots);
       if (result.reclassified === 0 && escaped.repaired.length === 0) {
         migrationChecked.add(key);   // nothing to do — don't re-scan this process
         return NOTHING;
