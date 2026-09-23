@@ -164,6 +164,7 @@ import {
 } from './git/git-service';
 import { initGitWatchers, watchGit, unwatchGit, dropGitSubscriber } from './git/git-watcher';
 import { resolveRepoRoot, invalidateRepoRootCache } from './git/git-exec';
+import { gitBranchLabel } from './git/git-branch-label';
 import { PROJECT_IPC } from './project/ipc-channels';
 // The artifact and Project View READ bodies, shared with remote-server.ts
 // (remote access batch 3) so a phone gets the desktop's own answers.
@@ -2329,9 +2330,14 @@ export function registerIpcHandlers(
       readJsonFile(path.join(home, '.claude', 'backup-meta.json')),
       fs.promises.stat(path.join(home, '.claude', 'toolkit-state', '.sync-lock')).then((s) => s.isDirectory(), () => false),
       Promise.all([...sessionIdMap].map(async ([desktopId, claudeId]) => {
+        // WHY: the .gitbranch file is written by Claude Code's status line,
+        // which a native session does not have — its Git Branch chip stayed
+        // empty inside a repo. Read a native session's branch from its folder.
+        const live = sessionManager.getSession(desktopId);
+        const nativeCwd = live?.provider === 'native' ? live.cwd : null;
         const [context, branch, stats] = await Promise.all([
           readTextFile(path.join(home, '.claude', `.context-${claudeId}`)),
-          readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
+          nativeCwd ? gitBranchLabel(nativeCwd) : readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
           readJsonFile(path.join(home, '.claude', `.session-stats-${claudeId}.json`)),
         ]);
         return { desktopId, context, branch, stats };
