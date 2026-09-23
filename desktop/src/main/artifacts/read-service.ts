@@ -37,8 +37,27 @@ import { readFolders } from '../saved-folders';
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 
 /** The user's saved project folders — where a `../` record may be trusted. */
-export function savedProjectRoots(): string[] {
+function savedProjectRoots(): string[] {
   return readFolders().map((f) => f.path);
+}
+
+/**
+ * Where a record with a RELATIVE location (a file written through `../`) really
+ * is, judged by judgeRelativeRecord against the saved project folders — or
+ * null for every other record. One helper so artifacts:get and artifacts:save
+ * cannot judge the same record differently (review 2026-09-23, F3). A refusal
+ * never carries the location (F5).
+ */
+export async function judgeRecordLocation(projectRoot: string, artifact: ArtifactRecord): Promise<
+  | { ok: true; realPath: string }
+  | { ok: false; error: 'missing' | 'protected-path' | 'outside-projects' }
+  | { ok: false; error: 'record-unreadable'; code: string }
+  | null
+> {
+  if (artifact.kind === 'internal' || !artifact.absolutePath || isAbsoluteRecorded(artifact.absolutePath)) return null;
+  const v = await judgeRelativeRecord(projectRoot, artifact.absolutePath, savedProjectRoots());
+  if (v.ok) return v;
+  return v.reason === 'unreadable' ? { ok: false, error: 'record-unreadable', code: v.code } : { ok: false, error: v.reason };
 }
 
 /** The phone's ceiling for one read; absent on the desktop's own transport. */
@@ -299,12 +318,8 @@ export async function readArtifactText(
     // the answer names the real reason, never "missing" unless it is.
     // F5 (review 2026-09-23): a refusal never carries where the file is —
     // this answer also reaches remote browsers.
-    const verdict = await judgeRelativeRecord(projectRoot, artifact.absolutePath, savedProjectRoots());
-    if (!verdict.ok) {
-      if (verdict.reason === 'missing') return { ok: true, artifact, content: null, orphan: true };
-      if (verdict.reason === 'unreadable') return { ok: false, error: 'record-unreadable', code: verdict.code };
-      return { ok: false, error: verdict.reason };
-    }
+    const verdict = (await judgeRecordLocation(projectRoot, artifact))!;
+    if (!verdict.ok) return verdict.error === 'missing' ? { ok: true, artifact, content: null, orphan: true } : verdict;
     fullPath = verdict.realPath;
     // F3: the byte viewers (images, PDFs, Office files) read by absolute path;
     // a trusted `../` record hands them the judged location, since the record

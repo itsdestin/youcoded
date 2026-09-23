@@ -154,7 +154,7 @@ import { sweepStaleTmp } from './artifacts/cas-write';
 import { canonicalize } from '../shared/artifacts/canonicalize';
 import { readFileHead } from './fs-read-head';
 import { initProjectWatchers, watchProject, unwatchProject, dropSubscriber, noteOwnWrite, invalidateSidecarIdCache } from './artifacts/project-watcher';
-import { authorizeArtifactWrite, isAbsoluteRecorded, judgeRelativeRecord } from './artifacts/write-authorization';
+import { authorizeArtifactWrite } from './artifacts/write-authorization';
 import { trackedArtifacts } from './artifacts/visible-artifacts';
 import { importFile } from './artifacts/import-file';
 import { GIT_IPC } from './git/ipc-channels';
@@ -170,7 +170,7 @@ import { PROJECT_IPC } from './project/ipc-channels';
 // (remote access batch 3) so a phone gets the desktop's own answers.
 import {
   listSessionFiles, listProjectFiles, listAllFiles, listFolder, readArtifactText, readArtifactBytes,
-  searchArtifactContent, checkArtifactExistence, resolveArtifactPath, savedProjectRoots,
+  searchArtifactContent, checkArtifactExistence, resolveArtifactPath, judgeRecordLocation,
 } from './artifacts/read-service';
 import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 // Conversation Store (Phase 2a): live intake of transcript activity, session
@@ -810,13 +810,10 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.SESSION_CREATE, async (event, rawOpts) => {
     // Resolve "No folder" to the app-owned folder before either runtime sees the cwd.
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
-    // WHY: resuming an already-open conversation made a second same-named tab
-    // (two writers on one transcript). Answer with the open session instead;
-    // the renderer switches to it. Checked before anything is spawned.
-    const openInfo = opts?.resumeSessionId
-      ? findLiveSessionForConversation(opts.resumeSessionId, sessionManager.listSessions(),
-        // F7: a resume still waiting for its first hook is known only to the session manager.
-        (id) => sessionIdMap.get(id) ?? sessionManager.resumedConversationOf?.(id)) : undefined;
+    // WHY: resuming an already-open conversation made a second same-named tab (two writers on one
+    // transcript); answer with the open one. A resume awaiting its first hook: session manager (F7).
+    const openInfo = opts?.resumeSessionId ? findLiveSessionForConversation(opts.resumeSessionId,
+      sessionManager.listSessions(), (id) => sessionIdMap.get(id) ?? sessionManager.resumedConversationOf?.(id)) : undefined;
     if (openInfo) return { ...openInfo, alreadyOpen: true };
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
@@ -2328,8 +2325,7 @@ export function registerIpcHandlers(
       readJsonFile(path.join(home, '.claude', 'backup-meta.json')),
       fs.promises.stat(path.join(home, '.claude', 'toolkit-state', '.sync-lock')).then((s) => s.isDirectory(), () => false),
       Promise.all([...sessionIdMap].map(async ([desktopId, claudeId]) => {
-        // WHY: .gitbranch is written by Claude Code's status line, which a native
-        // session lacks (empty chip in a repo) — read its branch from its folder.
+        // WHY: .gitbranch comes from Claude Code's status line, which native sessions lack.
         const live = sessionManager.getSession(desktopId);
         const nativeCwd = live?.provider === 'native' ? live.cwd : null;
         const [context, branch, stats] = await Promise.all([
@@ -4711,12 +4707,8 @@ export function registerIpcHandlers(
   // write and one .gitignore read; appendVersion queues per project and applies
   // the whole burst in a few read/write cycles instead of a thousand, each of
   // which used to pin a parsed 4.4 MB sidecar in memory until the app OOM'd.
-  // A Claude Code session's conversation id when it differs from its desktop
-  // id (VersionEvent.conversationId); undefined for native / not yet mapped.
-  const conversationIdFor = (sessionId: string): string | undefined => {
-    const claudeId = sessionIdMap.get(sessionId);
-    return claudeId && claudeId !== sessionId ? claudeId : undefined;
-  };
+  // A Claude Code session's conversation id when it differs from its desktop id (VersionEvent.conversationId).
+  const conversationIdFor = (id: string): string | undefined => [sessionIdMap.get(id)].find((c) => c && c !== id);
   ipcMain.handle(ARTIFACT_IPC.APPEND_VERSION, async (
     _e,
     projectRoot: string,
@@ -4740,9 +4732,8 @@ export function registerIpcHandlers(
       type: args.type,
       author: args.author,
       toolUseId: typeof args.toolUseId === 'string' && args.toolUseId ? args.toolUseId : undefined,
-      // WHY: a Claude Code resume gets a fresh desktop id, so a files list
-      // keyed on it alone lost everything before the resume. Stamp the
-      // conversation's own id so LIST_SESSION can find these versions again.
+      // WHY: a Claude Code resume gets a fresh desktop id, so a files list keyed on it alone lost
+      // everything before the resume; the conversation's own id lets LIST_SESSION find these again.
       conversationId: conversationIdFor(sessionId),
     });
     // AFTER the append resolves, not before it (2026-08-15 review): appendVersion
@@ -4927,17 +4918,11 @@ export function registerIpcHandlers(
       : undefined;
 
     let fullPath: string;
-    if (artifact && artifact.kind !== 'internal' && artifact.absolutePath && !isAbsoluteRecorded(artifact.absolutePath)) {
-      // A `../` record: judged exactly as artifacts:get judges it (F3, review
-      // 2026-09-23) — the edit tier below then runs on the REAL location, not
-      // on the relative string, so a file that opens can also be saved.
-      const verdict = await judgeRelativeRecord(projectRoot, artifact.absolutePath, savedProjectRoots());
-      if (!verdict.ok) {
-        if (verdict.reason === 'missing') return { ok: false, error: 'artifact-not-found' };
-        if (verdict.reason === 'unreadable') return { ok: false, error: 'record-unreadable', code: verdict.code };
-        return { ok: false, error: verdict.reason };
-      }
-      fullPath = verdict.realPath;
+    // A `../` record is judged as artifacts:get judges it (F3), so the tier below sees its REAL location.
+    const judged = artifact ? await judgeRecordLocation(projectRoot, artifact) : null;
+    if (judged && !judged.ok) return judged.error === 'missing' ? { ok: false, error: 'artifact-not-found' } : judged;
+    if (judged?.ok) {
+      fullPath = judged.realPath;
     } else if (artifact) {
       // NOTE the tracked branch historically wrote artifact.absolutePath! with
       // NO check at all — the sidecar-escalation hole (spec §12.1). Everything
