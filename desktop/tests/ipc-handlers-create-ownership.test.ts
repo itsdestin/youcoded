@@ -153,7 +153,7 @@ import { IPC } from '../src/shared/types';
  * window 1, so a send that lands there is exactly the misrouting this test is
  * about.
  */
-async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any[] = []) {
+async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any[] = [], managerExtras: Record<string, unknown> = {}) {
   rec.order.length = 0;
   rec.sends.length = 0;
 
@@ -192,6 +192,7 @@ async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any
   mockSessionManager.getSession = vi.fn(() => sessionInfo);
   mockSessionManager.sendInput = vi.fn();
   mockSessionManager.resizeSession = vi.fn();
+  Object.assign(mockSessionManager, managerExtras);
 
   const mainWindow: any = {
     isDestroyed: () => false,
@@ -392,6 +393,20 @@ describe('session:create — a conversation already open is not resumed a second
     expect(createSession).not.toHaveBeenCalled();
     expect(result).toMatchObject({ id: 'native-open', alreadyOpen: true });
     expect(sends.find((s) => s.channel === IPC.SESSION_CREATED)).toBeUndefined();
+  });
+
+  it('catches a second resume before Claude Code has reported the first one in', async () => {
+    // The desktop→Claude id map fills in only at the first hook; until then the
+    // session manager is the only one who knows which conversation it holds.
+    const pending = {
+      id: 'desk-9', name: 'Resuming…', cwd: '/tmp', provider: 'claude', status: 'active',
+      createdAt: 1, permissionMode: 'normal', skipPermissions: false,
+    };
+    const { result, createSession } = await runSessionCreate({
+      provider: 'claude', resumeSessionId: 'claude-X', cwd: '/tmp', name: 'Resuming…', skipPermissions: false,
+    }, 2, [pending], { resumedConversationOf: (id: string) => (id === 'desk-9' ? 'claude-X' : undefined) });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: 'desk-9', alreadyOpen: true });
   });
 
   it('still resumes when no open session holds the conversation', async () => {

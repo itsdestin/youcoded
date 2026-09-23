@@ -814,7 +814,9 @@ export function registerIpcHandlers(
     // (two writers on one transcript). Answer with the open session instead;
     // the renderer switches to it. Checked before anything is spawned.
     const openInfo = opts?.resumeSessionId
-      ? findLiveSessionForConversation(opts.resumeSessionId, sessionManager.listSessions(), (id) => sessionIdMap.get(id)) : undefined;
+      ? findLiveSessionForConversation(opts.resumeSessionId, sessionManager.listSessions(),
+        // F7: a resume still waiting for its first hook is known only to the session manager.
+        (id) => sessionIdMap.get(id) ?? sessionManager.resumedConversationOf?.(id)) : undefined;
     if (openInfo) return { ...openInfo, alreadyOpen: true };
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId

@@ -140,6 +140,12 @@ interface ManagedSession {
   // HarnessSession owned by NativeSessionHost (ipc-handlers wires it up after
   // createSession returns). Every `session.worker.X` access is guarded.
   worker?: ChildProcess;
+  /** The conversation a `--resume` launch was asked for. WHY (review
+   *  2026-09-23, F7): the desktop→Claude id map fills in only when Claude
+   *  Code's first hook arrives, seconds later; until then this is the only
+   *  record of which conversation the session holds, and without it a second
+   *  resume in that window opened a second tab. */
+  resumedConversation?: string;
 }
 
 export class SessionManager extends EventEmitter {
@@ -298,7 +304,7 @@ export class SessionManager extends EventEmitter {
       ...(isShell ? { shellName: shellDisplayName(shellCommand) } : {}),
     };
 
-    const session: ManagedSession = { info, worker };
+    const session: ManagedSession = { info, worker, ...(opts.resumeSessionId ? { resumedConversation: opts.resumeSessionId } : {}) };
     this.sessions.set(id, session);
     this.emit('session-created', info);
 
@@ -512,6 +518,12 @@ export class SessionManager extends EventEmitter {
 
   getSession(id: string): SessionInfo | undefined {
     return this.sessions.get(id)?.info;
+  }
+
+  /** The conversation this session was launched to resume, if any (see
+   *  ManagedSession.resumedConversation). */
+  resumedConversationOf(id: string): string | undefined {
+    return this.sessions.get(id)?.resumedConversation;
   }
 
   destroyAll(): void {

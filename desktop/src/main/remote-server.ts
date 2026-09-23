@@ -1770,7 +1770,10 @@ export class RemoteServer {
         // Same guard as ipc-handlers' SESSION_CREATE (a conversation already open
         // answers with its session); the wiring's resolve IS the desktop→conversation id map.
         const openInfo = payload?.resumeSessionId ? findLiveSessionForConversation(payload.resumeSessionId,
-          this.sessionManager.listSessions(), (sid) => this.sessionMetaWiring?.resolve(sid)) : undefined;
+          this.sessionManager.listSessions(), (sid) => {
+            const mapped = this.sessionMetaWiring?.resolve(sid);
+            return mapped && mapped !== sid ? mapped : (this.sessionManager as any).resumedConversationOf?.(sid);
+          }) : undefined;
         if (openInfo) { this.respond(client.ws, type, id, { ...openInfo, alreadyOpen: true }); break; }
         const info = this.sessionManager.createSession(this.prepareCreate(payload));
         this.respond(client.ws, type, id, info);
