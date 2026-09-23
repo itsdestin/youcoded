@@ -11,7 +11,7 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import type { GrantScope } from '../../shared/bash-grant-shapes';
-import type { HookEvent } from '../../shared/types';
+import type { HookEvent, FloorStop } from '../../shared/types';
 
 export interface AskRequest {
   sessionId: string;
@@ -27,13 +27,13 @@ export interface AskRequest {
    *  anything for path-subject tool asks; budget gates never set it.
    *  See spec 2026-08-11 (permissions management UI), finding 3. */
   external?: boolean;
-  /** The ask was forced by the removal-target floor (tools/rm-target.ts): the
-   *  command would remove the workspace, home folder, disk root or a system
-   *  folder, and that check runs below every rule — so a remembered grant could
-   *  never skip it. Renderer hides "Always allow"; nothing is remembered.
-   *  Separate from `external` because a specialist's external ask is refused
-   *  outright with outside-the-folder copy, while this one goes to the person. */
-  noAlwaysAllow?: boolean;
+  /** The ask was forced by a floor below every rule (see FloorStop): a removal
+   *  of a protected folder, or a command naming a secret file. A remembered
+   *  grant could never skip it, so the renderer hides "Always allow" and nothing
+   *  is remembered. Separate from `external` because a specialist's external ask
+   *  is refused outright with outside-the-folder copy, while this one goes to
+   *  the person. */
+  floorStop?: FloorStop;
   /** The session's permission mode at ask time. Full-auto + denyListed is the
    *  renderer's cue to swap the generic row for the safety-stop footer
    *  (spec 2026-08-12, M5 2b). Optional: CC-path asks never carry it. */
@@ -170,7 +170,7 @@ export class PermissionBroker extends EventEmitter {
           denyListed: req.denyListed,
           external: req.external === true,
           // Spread-omitted like permissionMode below: absent unless the floor fired.
-          ...(req.noAlwaysAllow ? { noAlwaysAllow: true } : {}),
+          ...(req.floorStop ? { floorStop: req.floorStop } : {}),
           ...(req.specialist ? { specialist: req.specialist } : {}),
           // Spread-omitted (not `undefined`-valued) so the CC-path payload
           // shape is byte-identical to before this field existed.

@@ -11,19 +11,19 @@
     "main/harness/native-session-host.ts": 4889,
     "renderer/App.tsx": 4774,
     "main/remote-server.ts": 4084,
-    "main/harness/harness-session.ts": 3894,
+    "main/harness/harness-session.ts": 3900,
     "renderer/components/SettingsPanel.tsx": 3195,
     "renderer/remote-shim.ts": 3123,
     "renderer/state/chat-reducer.ts": 3088,
     "renderer/styles/globals.css": 2921,
     "renderer/components/SessionStrip.tsx": 2774,
     "main/main.ts": 2536,
-    "shared/types.ts": 2208,
+    "shared/types.ts": 2216,
     "renderer/components/SyncPanel.tsx": 2033,
     "main/engine/engine-manager.ts": 2032,
     "renderer/components/ResumeBrowser.tsx": 1837,
     "main/preload.ts": 1874,
     "renderer/components/StatusBar.tsx": 1799,
-    "renderer/components/ToolCard.tsx": 1607
+    "renderer/components/ToolCard.tsx": 1611
   }
 }

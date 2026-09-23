@@ -1,4 +1,4 @@
-import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
+import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -692,7 +692,7 @@ export type ChatAction =
       external?: boolean;
       // Native broker only: forced by the removal-target floor (rm-target.ts),
       // which no stored rule can skip → ToolCard HIDES "Always allow" too.
-      noAlwaysAllow?: boolean;
+      floorStop?: FloorStop;
       // Native broker only: the session's mode at ask time. 'full-auto' +
       // denyListed → ToolCard renders the safety-stop footer (spec 2026-08-12).
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';

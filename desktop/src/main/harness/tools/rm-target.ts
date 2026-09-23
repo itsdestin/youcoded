@@ -30,7 +30,7 @@ export interface RmTargetContext {
 }
 
 /** One shell word, quotes removed, remembering what the shell would do to it. */
-interface Word {
+export interface Word {
   value: string;
   /** Per character of `value`: true where an UNQUOTED glob character sits. */
   glob: boolean[];
@@ -42,15 +42,16 @@ interface Word {
   tilde: boolean;
   op?: undefined;
 }
-interface Op { op: string }
-type Token = Word | Op;
+export interface Op { op: string }
+export type Token = Word | Op;
 
 const GLOB_CHARS = new Set(['*', '?', '[']);
 
 /** A small POSIX-ish tokenizer: quotes, backslash escapes, and the operators
+ *  (shared with bash-secret-paths.ts, so both floors read a command alike)
  *  that separate one simple command from the next. `$(` and backticks open a
  *  nested command so an `rm` inside a substitution is still seen. */
-function tokenize(command: string, backslashEscapes: boolean): Token[] {
+export function tokenize(command: string, backslashEscapes: boolean): Token[] {
   const out: Token[] = [];
   let cur: Word | null = null;
   const start = (): Word => (cur ??= { value: '', glob: [], expands: false, leadingExpansion: false, tilde: false });
@@ -236,7 +237,7 @@ function homeVariable(value: string): RegExpMatchArray | null {
   return value.match(/^(\$HOME|\$\{HOME\}|\$env:USERPROFILE|\$env:HOME|%USERPROFILE%)(?=$|[\\/])/i);
 }
 
-function expandHome(value: string, tilde: boolean, home: string): string {
+export function expandHome(value: string, tilde: boolean, home: string): string {
   if (tilde && (value === '~' || value.startsWith('~/') || value.startsWith('~\\'))) return home + value.slice(1);
   const m = homeVariable(value);
   if (m) return home + value.slice(m[0].length);

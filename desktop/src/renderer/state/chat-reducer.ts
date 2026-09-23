@@ -1890,7 +1890,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             // "Always allow" button on it, so losing it here would re-offer a
             // grant the engine can never honor.
             external: synTool.external,
-            noAlwaysAllow: synTool.noAlwaysAllow,
+            floorStop: synTool.floorStop,
             // Carried so the full-auto safety-stop footer survives the
             // synthetic→real tool-id handover (spec 2026-08-12, M5 2b).
             permissionMode: synTool.permissionMode,
@@ -1961,7 +1961,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             permissionSuggestions: superseded.permissionSuggestions,
             denyListed: superseded.denyListed,
             external: superseded.external,
-            noAlwaysAllow: superseded.noAlwaysAllow,
+            floorStop: superseded.floorStop,
             permissionMode: superseded.permissionMode,
           }
         : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
@@ -2383,7 +2383,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             requestId: action.requestId,
             denyListed: action.denyListed,
             external: action.external,
-            noAlwaysAllow: action.noAlwaysAllow,
+            floorStop: action.floorStop,
             permissionMode: action.permissionMode,
           };
           const target = inputIdx >= 0 ? inputIdx : nameIdx;
@@ -2510,7 +2510,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
           permissionSuggestions: action.permissionSuggestions,
           denyListed: action.denyListed,
           external: action.external,
-          noAlwaysAllow: action.noAlwaysAllow,
+          floorStop: action.floorStop,
           permissionMode: action.permissionMode,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
@@ -2536,7 +2536,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
           permissionSuggestions: action.permissionSuggestions,
           denyListed: action.denyListed,
           external: action.external,
-          noAlwaysAllow: action.noAlwaysAllow,
+          floorStop: action.floorStop,
           permissionMode: action.permissionMode,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });

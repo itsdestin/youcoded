@@ -8,6 +8,7 @@
 // own family grouping is safe to walk front-to-back.
 import { DESTRUCTIVE_DENY_LIST } from '../../../shared/permission-types';
 import { ruleMatches } from '../../../shared/subject-glob';
+import type { FloorStop } from '../../../shared/types';
 
 type DenyFamily = 'deleting' | 'pushing' | 'undoing' | 'admin' | 'formatting';
 
@@ -47,7 +48,15 @@ const CLAUSES: Record<DenyFamily, string> = {
 // reword without a new compare round.
 const SUBLINE_BASE = 'Full auto still stops here';
 
-export function fullAutoStopCopy(command: string | undefined): { header: string; subline: string } {
+/** The stops that come from a floor below the rules rather than the deny-list
+ *  (shared/types.ts FloorStop). Used when the deny-list itself has no family
+ *  for the command — a PowerShell `Remove-Item`, or `cat ~/.ssh/id_rsa`. */
+const FLOOR_COPY: Record<FloorStop, { header: string; subline: string }> = {
+  removal: { header: HEADERS.deleting, subline: `${SUBLINE_BASE} — ${CLAUSES.deleting}` },
+  'secret-path': { header: 'Stopped before using a secret file', subline: `${SUBLINE_BASE} — this uses a file that holds passwords or keys.` },
+};
+
+export function fullAutoStopCopy(command: string | undefined, floorStop?: FloorStop): { header: string; subline: string } {
   if (command) {
     for (const rule of DESTRUCTIVE_DENY_LIST) {
       // ruleMatches, not subjectMatches: the engine decides through it, and its
@@ -58,6 +67,9 @@ export function fullAutoStopCopy(command: string | undefined): { header: string;
       if (fam) return { header: HEADERS[fam], subline: `${SUBLINE_BASE} — ${CLAUSES[fam]}` };
     }
   }
+  // The deny-list names what the command DOES (deleting, pushing); a floor is
+  // the reason when it does not — `rm ~/.ssh/old` still reads "deleting files".
+  if (floorStop) return FLOOR_COPY[floorStop];
   // Deny-listed per the engine but unclassifiable here (or command missing):
   // generic header, no invented consequence.
   return { header: 'Stopped before a risky command', subline: `${SUBLINE_BASE}.` };

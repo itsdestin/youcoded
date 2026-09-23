@@ -26,7 +26,7 @@ import {
   type AcceptedHistoryTransformation,
   type AttemptId,
 } from './accepted-history-capture';
-import type { TranscriptEvent, InjectedMeta } from '../../shared/types';
+import type { TranscriptEvent, InjectedMeta, FloorStop } from '../../shared/types';
 import type { ModelBinding } from '../../shared/provider-types';
 import type { HarnessManifest } from '../../shared/harness-manifest';
 import type { PermissionDecision, PermissionRule } from '../../shared/permission-types';
@@ -34,6 +34,7 @@ import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shape
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { destructiveRmReason } from './tools/rm-target';
+import { secretPathIn } from './tools/bash-secret-paths';
 import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
 
@@ -3731,24 +3732,29 @@ export class HarnessSession extends EventEmitter {
     //     folder is ALWAYS asked about — below every rule, so a remembered
     //     "Always allow" cannot wave it through. It only ever turns an allow
     //     into an ask: a deny rule still denies.
-    const rmFloor = call.toolName === 'Bash' && typeof subject === 'string'
-      ? destructiveRmReason(subject, { cwd: this.opts.cwd, shellCwd: this.shellCwd ?? undefined, home: os.homedir() })
-      : null;
-    if (rmFloor) log('INFO', 'HarnessSession', 'removal-target floor forced an ask', { sessionId: this.opts.sessionId, reason: rmFloor });
+    //     The secret-path floor (tools/bash-secret-paths.ts) works the same way
+    //     for a command that names a file the file tools refuse (~/.ssh, .env…):
+    //     Bash used to read those with no card at all (Destin, 2026-09-23, option B).
+    const bashCtx = { cwd: this.opts.cwd, shellCwd: this.shellCwd ?? undefined, home: os.homedir() };
+    const isBash = call.toolName === 'Bash' && typeof subject === 'string';
+    const rmFloor = isBash ? destructiveRmReason(subject, bashCtx) : null;
+    const secretFloor = isBash && !rmFloor ? secretPathIn(subject, bashCtx) : null;
+    const floorStop: FloorStop | undefined = rmFloor ? 'removal' : secretFloor ? 'secret-path' : undefined;
+    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop, reason: rmFloor ?? `names ${secretFloor}` });
 
     // 4. Configured decision. An external-directory path forces 'ask' regardless
     //    of rules; otherwise consult decide() (default: ask — never silent-allow).
     const configured: PermissionDecision = externalAsk
       ? { action: 'ask', denyListed: false }
       : await (this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
-    // denyListed: true so the card carries the destructive-command warning (and
-    // Full auto's "Stopped before deleting files" band) like any deny-list stop.
-    const decision: PermissionDecision = rmFloor && configured.action !== 'deny'
+    // denyListed: true so Full auto shows its stop band (worded per floorStop —
+    // deny-list-copy.ts) like any deny-list stop, instead of silently running.
+    const decision: PermissionDecision = floorStop && configured.action !== 'deny'
       ? { action: 'ask', denyListed: true }
       : configured;
     // A forced ask never consults stored rules, so "Always allow" could never
     // be honoured for it — the card hides the button and nothing is remembered.
-    const forcedAsk = externalAsk || rmFloor !== null;
+    const forcedAsk = externalAsk || floorStop !== undefined;
     // A deny may carry its own model-facing reason (PermissionDecision.message):
     // the specialist caps (child-permissions.ts) refuse with "not available to
     // this specialist" / "read-only charter", which tells the model what to do
@@ -3767,7 +3773,7 @@ export class HarnessSession extends EventEmitter {
       // as `pattern` — threaded through so a routed CHILD ask (child-ask-
       // router.ts, which has no other way to reach it) can persist the exact
       // same rule a root session's own remember-rule listener would.
-      const d = await this.opts.askUser({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: decision.denyListed, external: externalAsk, ...(rmFloor ? { noAlwaysAllow: true } : {}), subject });
+      const d = await this.opts.askUser({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: decision.denyListed, external: externalAsk, ...(floorStop ? { floorStop } : {}), subject });
       if (d.behavior === 'canceled') return 'interrupted';
       // Task 8: d.message carries specific copy for a deny that ISN'T a real
       // user decline — e.g. child-ask-router's outside-the-folder refusal for

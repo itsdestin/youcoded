@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { ToolCallState } from '../../shared/types';
+import { ToolCallState, type FloorStop } from '../../shared/types';
 import { useChatDispatch } from '../state/chat-context';
 import { useSpecialistDefinition, useSpecialistRunByChild } from '../hooks/useSpecialists';
 import { TaskConsentBlock } from './SpecialistEnvelope';
@@ -509,7 +509,7 @@ function grantFolderName(workDir: unknown, sessionCwd?: string): string {
 
 const NATIVE_ALWAYS_ALLOW = 'native:always-allow';
 
-export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, suppressAlwaysAllow, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false, noKeyboard = false }: {
+export function PermissionButtons({ requestId, suggestions, denyListed, command, folderName, suppressAlwaysAllow, floorStop, alwaysAllowNote, permissionMode, onResponded, onFailed, bare = false, noKeyboard = false }: {
   requestId: string;
   /** Specialists 1c: render the generic row WITHOUT its own band (border/bg/
    *  padding) so a host can lay it out inline — the specialists popup puts the
@@ -533,6 +533,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
    *  Also set for an external-directory ask, where a remembered rule could
    *  never be consulted (harness-session.ts, step 4). */
   suppressAlwaysAllow?: boolean;
+  /** Which floor below the rules forced this ask, if any — names the Full-auto
+   *  stop band when the deny-list has no family for the command. */
+  floorStop?: FloorStop;
   /** D2: one line stating HOW WIDE this card's "Always allow" actually is.
    *  Only the caller knows (a hire card reads the specialist's grantScope), and
    *  the button label cannot carry it without becoming a sentence. Shown only
@@ -815,7 +818,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   // stopping itself, not a generic permission question.
   if (fullAutoStop) {
     const fa = PERMISSION_DISPLAY['full-auto'];
-    const stop = fullAutoStopCopy(command);
+    const stop = fullAutoStopCopy(command, floorStop);
     return (
       <div className="px-3 py-2 space-y-2 border-t" style={{ background: fa.bg, borderColor: fa.border }}>
         {/* Header + subheader as ONE tight block; the footer's only real gap
@@ -1563,10 +1566,11 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             // lookup POSITIVELY resolves (never shown-then-hidden), and an
             // unresolved hire must never be offered a grant optimistically —
             // we would not know which width it was even asking for.
-            // `tool.noAlwaysAllow`: the removal-target floor forced this ask
-            // below every rule, so a grant could never skip it either.
+            floorStop={tool.floorStop}
+            // `tool.floorStop`: a floor (protected-folder removal, secret file)
+            // forced this ask below every rule, so a grant could never skip it.
             suppressAlwaysAllow={tool.toolName === 'max_steps' || tool.toolName === 'doom_loop' || tool.external === true
-              || tool.noAlwaysAllow === true
+              || !!tool.floorStop
               || (tool.toolName === 'Task' && !!tool.input?.task_id)
               || (tool.toolName === 'Task' && !tool.input?.task_id && !hireDefinition)
               // A hire with no work_dir has NO permission subject at all

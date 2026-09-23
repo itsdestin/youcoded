@@ -59,7 +59,8 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
       permissionMode={segment.permissionMode}
       command={typeof segment.input?.command === 'string' ? (segment.input.command as string) : undefined}
       folderName={sessionCwd ? sessionCwd.split(/[\\/]/).filter(Boolean).pop() : undefined}
-      suppressAlwaysAllow={segment.external === true || segment.noAlwaysAllow === true}
+      suppressAlwaysAllow={segment.external === true || !!segment.floorStop}
+      floorStop={segment.floorStop}
       onResponded={onResponded}
       onFailed={onFailed}
       bare={compact}

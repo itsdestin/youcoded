@@ -1012,7 +1012,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     it('asks before removing the home folder even when a saved grant allows the command', async () => {
       const { askUser, remembered, ran } = await run('rm -rf ~', async () => ALLOW);
       expect(askUser).toHaveBeenCalledTimes(1);
-      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, noAlwaysAllow: true, external: false });
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'removal', external: false });
       expect(remembered).toEqual([]); // an answer of "always" stores nothing it could never honour
       expect(ran).toBe(1);            // the person said yes, so it runs
     });
@@ -1030,6 +1030,22 @@ describe('HarnessSession — multi-step turn driver', () => {
 
     it('leaves an ordinary allowed removal alone', async () => {
       const { askUser, ran } = await run('rm -rf build', async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(1);
+    });
+
+    // The secret-path floor (tools/bash-secret-paths.ts): the file tools refuse
+    // ~/.ssh and .env, so Bash reading them must at least ask — every time.
+    it('asks before a command that names a secret file even when a saved grant allows it', async () => {
+      const { askUser, remembered, ran } = await run('cat ~/.ssh/id_rsa', async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'secret-path', external: false });
+      expect(remembered).toEqual([]);
+      expect(ran).toBe(1);
+    });
+
+    it('leaves a command that only mentions a similar word alone', async () => {
+      const { askUser, ran } = await run('npm run env:check', async () => ALLOW);
       expect(askUser).not.toHaveBeenCalled();
       expect(ran).toBe(1);
     });
