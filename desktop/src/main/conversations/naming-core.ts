@@ -186,7 +186,7 @@ export function shortenPathTokens(text: string): string {
     return `\u0000${protectedTokens.length - 1}\u0000`;
   });
   return protectedText
-    .replace(/(?:[A-Za-z]:[\\/]|\.\.?[\\/]|\/)?(?:[\w.-]+[\\/]){2,}[\w.-]+(?:\.[A-Za-z0-9]+)?/g, (token, offset: number, whole: string) => {
+    .replace(/(?:(?:[A-Za-z]:[\\/]|\.\.?[\\/]|\/)(?:[\w.-]+[\\/])+|(?:[\w.-]+[\\/]){2,})[\w.-]+(?:\.[A-Za-z0-9]+)?/g, (token, offset: number, whole: string) => {
       const start = offset;
       const end = offset + token.length;
       const left = whole[start - 1] ?? '';

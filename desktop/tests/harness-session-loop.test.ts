@@ -132,6 +132,23 @@ describe('HarnessSession — multi-step turn driver', () => {
     }); // final accounting still includes the first step's chars/4 estimate
   });
 
+  it('withdraws live cost when a measured request is followed by a usage-silent request', async () => {
+    const first = stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }),
+      finishChunk('tool-calls', 10, 2));
+    const second = stream(...textChunks('b', 'done'),
+      { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: {}, outputTokens: {} } });
+    const session = new HarnessSession(makeOpts({ tools: [fakeTool('Read')], decide: async () => ALLOW,
+      pricing: { in: 1_000_000, out: 2_000_000 } }),
+    async () => scriptedModel([first, second]) as any);
+    const events = collect(session);
+    await session.send('go');
+    const progress = events.filter((e) => e.data.usageProgress).map((e) => e.data.usageProgress!);
+    expect(progress).toHaveLength(2);
+    expect(progress[0]).toMatchObject({ inputTokens: 10, outputTokens: 2, costUsd: 14 });
+    expect(progress[1]).toMatchObject({ inputTokens: 10, outputTokens: 2, liveProgress: true });
+    expect(progress[1]).not.toHaveProperty('costUsd');
+  });
+
   it('reports provider-metadata-only cache tokens without inventing output or cost', async () => {
     const session = new HarnessSession(makeOpts({ pricing: { in: 1_000_000, out: 2_000_000, cacheRead: 500_000 },
       contextLength: 100 }), async () => scriptedModel([

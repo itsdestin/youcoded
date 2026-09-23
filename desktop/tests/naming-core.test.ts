@@ -117,6 +117,8 @@ describe('name cleaning', () => {
     expect(shortenPathTokens('edit C:\\Users\\d\\project\\src\\components\\Button')).toBe('edit Button');
     expect(shortenPathTokens('edit C:\\Users\\d\\project\\main.kt!')).toBe('edit main.kt!');
     expect(shortenPathTokens('(see ./one/two.md), please')).toBe('(see two.md), please');
+    expect(shortenPathTokens('Edit /tmp/README.md')).toBe('Edit README.md');
+    expect(shortenPathTokens('Edit C:\\src\\App.tsx')).toBe('Edit App.tsx');
   });
 
   it('leaves URLs, prose compounds, bare filenames and trailing separators intact', () => {

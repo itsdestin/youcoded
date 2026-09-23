@@ -2571,16 +2571,15 @@ export class HarnessSession extends EventEmitter {
         }
         generationMs += step.generationMs;
 
-        // Only completed, provider-reported counters belong in live progress.
-        // Partial counters use zero for missing fields in the fixed event shape;
-        // neither a priced turn nor context occupancy can be inferred from them.
+        // WHY: after a silent step, retain measured counters but withdraw the
+        // now-incomplete cost; never emit before a real provider measurement.
         // Pricing remains bound to the model at turn start, never a later swap.
-        if (!this.opts.isSpecialistChild && !step.interrupted && step.measuredUsage) {
+        if (!this.opts.isSpecialistChild && !step.interrupted && (step.measuredUsage || this._currentUsageProgress)) {
           this.emitEvent('assistant-thinking', { usageProgress: {
             ...measuredTurnUsage,
             contextLength: turnContextLength ?? null,
             liveProgress: true,
-            ...(step.completeMeasuredUsage && step.measuredUsage.inputTokens > 0
+            ...(step.measuredUsage && step.completeMeasuredUsage && step.measuredUsage.inputTokens > 0
               ? { contextUsedTokens: step.measuredUsage.inputTokens + step.measuredUsage.outputTokens } : {}),
             // Incomplete counters with a known rate are not an unpriced model.
             // Omit cost until all steps are measured; preserve null for truly
