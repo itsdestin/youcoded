@@ -350,6 +350,10 @@ interface StepResult {
    *  card would spin beside the retry's own cards until the turn ends (the
    *  same reason the manual-Retry and stall-retry paths withdraw theirs). */
   pendingPreparing: { toolCallId: string; toolName: string; chars: number }[];
+  /** The part ids this step's visible TEXT streamed under (reasoning excluded).
+   *  The empty-step retry discards them when the step's text was whitespace
+   *  only — see the dropPart emit at that retry for why. */
+  textPartIds?: string[];
 }
 
 // v7 stream parts carry the chunk in .text (verified against ai@7.0.22:
@@ -2708,6 +2712,16 @@ export class HarnessSession extends EventEmitter {
             // empty_response break below needs no withdrawal — the turn ends
             // there and endTurn reaps.)
             this.withdrawOrphanedPreparing(step.pendingPreparing);
+            // A whitespace-only step still STREAMED its '\n  \n' — on screen and
+            // into the store's open part. History skipped it, so erase it from
+            // the other two places too (the same dropPart the manual Retry
+            // uses). WHY: the retry usually reuses the same part id, so the
+            // store would otherwise fold the whitespace into the retry's text
+            // and a resumed session would see different bytes than the live one
+            // did. Reasoning parts are NOT dropped — the user saw that thinking.
+            if (step.textPartIds?.length) {
+              this.emitEvent('assistant-thinking', { dropPart: { partIds: step.textPartIds } });
+            }
             // One structured log line so the silent retry is diagnosable from
             // ~/.claude/desktop.log (console.error reaches nobody in a packaged
             // build) — deliberately NOT a transcript event (emit surface frozen).
@@ -2978,7 +2992,10 @@ export class HarnessSession extends EventEmitter {
       // transient provider error before it lands here.
       // The attempt that produced this partial threw, so the loop never saw its
       // StepResult — this is the one acceptance decision made outside it.
-      if (partialAssistantText) {
+      // trim(): the same emptiness rule as every other assistant push (and as
+      // rebuildHistory), so a whitespace-only partial never becomes a blank
+      // assistant message live that a resume would then not reproduce.
+      if (partialAssistantText.trim()) {
         this.history.push({ role: 'assistant', content: partialAssistantText });
         if (this.lastAttempt !== undefined) this.capture.acceptAttemptText(this.lastAttempt);
       } else if (this.lastAttempt !== undefined) {
@@ -3253,6 +3270,7 @@ export class HarnessSession extends EventEmitter {
     // these to the renderer and the store so the abandoned text is removed
     // rather than appended to.
     const emittedPartIds = new Set<string>();
+    const textPartIds = new Set<string>();
 
     try {
       while (true) {
@@ -3369,6 +3387,7 @@ export class HarnessSession extends EventEmitter {
             // segment always separates consecutive text STEPS in the reducer, so a
             // repeated id across steps can't wrongly merge two bubbles.
             emittedPartIds.add(part.id ?? 'text-0');
+            textPartIds.add(part.id ?? 'text-0');
             this.capture.recordAttemptEvent(
               attempt, this.emitEvent('assistant-text', { text: t, partId: part.id ?? 'text-0' }), 'text');
             break;
@@ -3546,6 +3565,7 @@ export class HarnessSession extends EventEmitter {
       toolCalls,
       responseMessages,
       pendingPreparing,
+      textPartIds: [...textPartIds],
       usage: {
         inputTokens: usage?.inputTokens ?? 0,
         outputTokens: usage?.outputTokens ?? Math.ceil(outputChars / APPROX_CHARS_PER_TOKEN),

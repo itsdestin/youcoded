@@ -40,7 +40,13 @@ export function rebuildHistory(events: TranscriptEvent[], readImage?: RebuildIma
   let assistantParts: Array<TextPart | ToolCallPart> = [];
   let toolResults: ToolResultPart[] = [];
   const flushAssistant = () => {
-    if (assistantParts.length) { out.push({ role: 'assistant', content: assistantParts }); assistantParts = []; }
+    // Mirror the live push's emptiness rule (harness-session.ts `stepHasText`):
+    // a message of whitespace-only text and no tool calls never entered history
+    // live — a whitespace step is skipped, as is a whitespace interrupted
+    // partial — so its persisted deltas must not rebuild into one either.
+    const blank = assistantParts.every((p) => p.type === 'text' && p.text.trim().length === 0);
+    if (assistantParts.length && !blank) out.push({ role: 'assistant', content: assistantParts });
+    assistantParts = [];
   };
   const flushResults = () => {
     if (toolResults.length) { out.push({ role: 'tool', content: toolResults }); toolResults = []; }
