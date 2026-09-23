@@ -11,7 +11,7 @@
 // src/renderer/state/usage-snapshot.ts and is pinned here.
 import { describe, it, expect } from 'vitest';
 import { pruneExpiredUsage } from '../src/renderer/state/usage-snapshot';
-import { buildUsageSnapshot, type UsageSnapshotInput } from '../src/renderer/state/usage-snapshot';
+import { buildUsageSnapshot, nativeContextWindow, type UsageSnapshotInput } from '../src/renderer/state/usage-snapshot';
 import { emptyTotals } from '../src/renderer/state/session-totals';
 import { nativeDisplayTotals, widgetUnavailableReason } from '../src/renderer/state/status-widgets';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
@@ -345,5 +345,23 @@ describe('pruneExpiredUsage', () => {
   it('keeps a window with an unparseable reset time rather than guessing it expired', () => {
     const u = { five_hour: { utilization: 10, resets_at: 'garbage' } };
     expect(pruneExpiredUsage(u, NOW)).toEqual(u);
+  });
+});
+
+// After a model swap the last turn's contextLength is the OLD model's window;
+// the host re-pushes the session-context record with the new one at once.
+describe('the context window follows the current model, not the last turn', () => {
+  const usage = turn({ contextLength: 1_000_000, contextUsedTokens: 30_000 });
+
+  it('prefers the session-context window once the host has re-pushed it', () => {
+    const session = { ...nativeSession(usage), sessionContext: { contextWindowTokens: 8192 } };
+    expect(nativeContextWindow(session)).toBe(8192);
+    // 30k used of an 8k window: nothing left, not "97% remaining".
+    expect(buildUsageSnapshot({ ...base, isNative: true, session })!.contextPercent).toBe(0);
+  });
+
+  it('falls back to the last turn’s window when the record has none', () => {
+    expect(nativeContextWindow({ ...nativeSession(usage), sessionContext: { contextWindowTokens: null } })).toBe(1_000_000);
+    expect(nativeContextWindow(nativeSession(usage))).toBe(1_000_000);
   });
 });

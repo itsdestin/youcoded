@@ -293,6 +293,9 @@ interface LiveEntry {
   // is the same discipline McpLease applies inside the manager (where the
   // equivalent bug WAS reachable and is mutation-tested).
   mcpLease?: McpLease;
+  // The "What the assistant was given" record last pushed for this session, so a
+  // model swap can re-push it with the new model's window (republishWindow).
+  sessionContext?: SessionContext;
   // Per-session append serialization: each transcript event extends this chain
   // (append(prev).then(next)) so the SessionStore contract (serialized appends)
   // holds. Starts resolved; a failed append is logged but never breaks the
@@ -2559,6 +2562,7 @@ export class NativeSessionHost extends EventEmitter {
       const windowUnchanged = r.contextLength === entry.session.contextWindowTokens;
       if (capUnchanged && windowUnchanged) return;
       entry.session.setBinding(binding, r.contextLength, r.profile, r.pricing, r.free);
+      this.republishWindow(sessionId, entry);
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'could not re-read the local engine\u2019s slot count after the turn — helper cap unchanged', { sessionId, error: String((err as any)?.message ?? err) });
     }
@@ -3045,7 +3049,8 @@ export class NativeSessionHost extends EventEmitter {
     // session must still open if either fails. A missing line is a missing
     // explanation; a thrown one is a chat that never starts.
     try {
-      this.emit('session-context', { sessionId, context: this.buildSessionContext(cwd, session) });
+      entry.sessionContext = this.buildSessionContext(cwd, session);
+      this.emit('session-context', { sessionId, context: entry.sessionContext });
     } catch (err) {
       log('ERROR', 'NativeSessionHost', 'could not describe the session context', { sessionId, error: String(err) });
     }
@@ -3105,6 +3110,29 @@ export class NativeSessionHost extends EventEmitter {
       tools: inv.toolNames,
       droppedMcpServers: inv.droppedMcpServers,
     };
+  }
+
+  /** Re-push the session-context record after a model swap, with the NEW
+   *  model's name and window.
+   *
+   *  WHY (roadmap: the context chip kept the OLD model's window after a swap or
+   *  resume): the record was pushed once at wire(), and the chip read its window
+   *  off the last finished turn — so swapping a 1M model for a small local one
+   *  left "97% remaining" on screen until a turn completed on the new model,
+   *  and the panel's "Context window" row and small-window warning never
+   *  updated at all. The renderer now reads the window from this record first.
+   *
+   *  Only the model and window are patched: everything else in the record
+   *  describes what the session was given AT START (the instruction file's fit
+   *  is fixed then — setBinding does not re-apply it), so rebuilding it here
+   *  would describe a trim that never happened. */
+  private republishWindow(sessionId: string, entry: LiveEntry): void {
+    const prev = entry.sessionContext;
+    if (!prev) return;
+    const next: SessionContext = { ...prev, modelLabel: entry.session.binding.modelId, contextWindowTokens: entry.session.contextWindowTokens };
+    if (next.modelLabel === prev.modelLabel && next.contextWindowTokens === prev.contextWindowTokens) return;
+    entry.sessionContext = next;
+    this.emit('session-context', { sessionId, context: next });
   }
 
   /** One file's text for the panel, fetched when the user opens its row.
@@ -4450,6 +4478,7 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(binding);
     entry.session.setBinding(binding, contextLength, profile, pricing, free);
     entry.refreshSlotsAfterTurn = slotsUnknown;
+    this.republishWindow(sessionId, entry);
     // Cache Stage 4: a model swap changes the assembled prefix (and, for a
     // ChatGPT account swap, the identity the ciphertext was accepted under),
     // so the old checkpoint must be fenced now rather than left eligible.
