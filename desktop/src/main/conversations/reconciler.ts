@@ -11,8 +11,8 @@
 // file now costs one awaited lstat, so the event loop gets a turn between
 // files (typing, tab switches and chat updates are served mid-scan), and an
 // unchanged transcript's tail read is answered from the Resume Browser's
-// size+mtime cache instead of re-reading 64 KB. Guard: the
-// no-sync-fs-whole-file ast-grep rule lists this file.
+// size+mtime cache instead of re-reading 64 KB. Guard: PROTECTED (whole file)
+// in tests/main-blocking-calls.test.ts.
 import fs from 'node:fs';
 import path from 'node:path';
 import { readSessionTranscriptMeta, readSessionTranscriptMetaCached } from '../session-browser';

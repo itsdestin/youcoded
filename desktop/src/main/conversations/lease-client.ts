@@ -206,7 +206,7 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       ? async () => {
         console.log(`[lease-debug] ${debugTag} start ${sessionId} dir=${opts.leaseDir()} <- ${caller}`);
         try { await op(); } finally {
-          // Async check: this module must never call sync fs (ast-grep no-sync-fs-in-main-hot-path).
+          // Async check: this module must never call sync fs (PROTECTED in tests/main-blocking-calls.test.ts).
           const exists = await fs.promises.access(leaseFile(sessionId) ?? '').then(() => true, () => false);
           console.log(`[lease-debug] ${debugTag} end   ${sessionId} exists=${exists}`);
         }
