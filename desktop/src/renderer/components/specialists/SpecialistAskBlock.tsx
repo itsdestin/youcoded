@@ -2,7 +2,7 @@ import type React from 'react';
 import type { SubagentSegment } from '../../../shared/types';
 import { PermissionButtons } from '../ToolCard';
 import { useChatDispatch } from '../../state/chat-context';
-import { useArtifactOptional } from '../../state/ArtifactContext';
+import { useArtifactSelectorOptional } from '../../state/ArtifactContext';
 
 type ToolSegment = Extract<SubagentSegment, { type: 'tool' }>;
 
@@ -30,8 +30,8 @@ export function SpecialistAskBlock({ segment, sessionId, specialistName, compact
   leading?: React.ReactNode;
 }) {
   const dispatch = useChatDispatch();
-  const artifacts = useArtifactOptional();
-  const sessionCwd = sessionId ? artifacts?.state.sessionCwd?.[sessionId] : undefined;
+  // Narrow selector: redraws only when this session's cwd changes.
+  const sessionCwd = useArtifactSelectorOptional((s) => (sessionId ? s.sessionCwd?.[sessionId] : undefined));
   const requestId = segment.requestId!;
   // Destin's 2026-08-26/27 copy review: the outside-the-folder note is now a
   // full sentence, so the name lands MID-sentence — "The specialist" would

@@ -1,4 +1,4 @@
-import { useArtifactOptional } from '../state/ArtifactContext';
+import { useArtifactSelectorOptional } from '../state/ArtifactContext';
 import { asString } from '../utils/tool-input';
 import { useDelegatedModels, useSpecialistDefinition, useSpecialistRunByChild } from '../hooks/useSpecialists';
 import type { SpecialistDefinitionView, ToolCallState } from '../../shared/types';
@@ -9,8 +9,8 @@ import type { SpecialistDefinitionView, ToolCallState } from '../../shared/types
  *  and a Task card that never passes cwd would silently miss every one of
  *  the session's OWN project specialists. */
 export function TaskConsentBlock({ tool, sessionId }: { tool: ToolCallState; sessionId?: string }) {
-  const artifacts = useArtifactOptional();
-  const cwd = sessionId ? artifacts?.state.sessionCwd?.[sessionId] : undefined;
+  // Narrow selector: redraws only when this session's cwd changes.
+  const cwd = useArtifactSelectorOptional((s) => (sessionId ? s.sessionCwd?.[sessionId] : undefined));
   const agent = asString(tool.input.agent) || undefined;
   const definition = useSpecialistDefinition(cwd, agent);
   const taskId = asString(tool.input.task_id);

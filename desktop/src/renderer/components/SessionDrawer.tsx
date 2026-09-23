@@ -7,7 +7,7 @@
 // History: Task 6.x scaffolded a fixed 180px-list + viewer split. This file
 // replaced that split with the push-sidebar layout (2026-06).
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import { useTheme } from '../state/theme-context';
 import { clampDrawerWidth, applyDrawerWidthVar } from '../state/drawer-width';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -157,21 +157,26 @@ function IconBtn({ name, title, onClick, active, glyph }: { name?: string; title
 // all plain strings that only change when you switch conversation or project, so
 // a shallow compare skips the whole drawer — the file list, the open file's
 // viewer, the git footer — for the entire length of a reply. It has no chat
-// subscription of its own; the one thing it does watch, ArtifactContext, is
-// memoized at the provider (App.tsx), so a context change still redraws it.
+// subscription of its own; the one thing it does watch is ITS session's slice
+// of the artifact store (per-key selectors below), so another session's file
+// activity does not redraw it either.
 export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, projectRoot, projectId, projectName, cwd }: Props) {
-  const { state, dispatch } = useArtifact();
+  // WHY one selector per value (perf, 2026-09-23): each reads only THIS
+  // session's entry, so the drawer redraws when its own state moves and not
+  // when another session writes a file. Defaults (`?? []`) stay outside the
+  // selectors — a fresh array inside one would read as a change every time.
+  const dispatch = useArtifactDispatch();
   const { showDeletedArtifacts, setShowDeletedArtifacts, drawerWidth, setDrawerWidth, resetDrawerWidth } = useTheme();
-  const allArtifacts = state.sessionArtifacts[sessionId] ?? [];
+  const allArtifacts = useArtifactSelector((s) => s.sessionArtifacts[sessionId]) ?? [];
   // Drawer open/closed AND the selected artifact are per-session (remembered
   // across switches). This drawer instance belongs to `sessionId`.
-  const drawerOpen = state.drawerOpenBySession[sessionId] ?? false;
-  const activeArtifactId = state.activeArtifactBySession[sessionId] ?? null;
+  const drawerOpen = useArtifactSelector((s) => s.drawerOpenBySession[sessionId] ?? false);
+  const activeArtifactId = useArtifactSelector((s) => s.activeArtifactBySession[sessionId] ?? null);
   // A previewed past conversation occupies the content pane INSTEAD of an
   // artifact — mutually exclusive with activeArtifactId (see artifact-tracker.ts).
-  const activePreview = state.activeSessionPreviewBySession[sessionId] ?? null;
+  const activePreview = useArtifactSelector((s) => s.activeSessionPreviewBySession[sessionId] ?? null);
   // "Referenced conversations" list (6b, cut candidate — see Task 6 brief).
-  const referenced = state.referencedSessionsBySession[sessionId] ?? [];
+  const referenced = useArtifactSelector((s) => s.referencedSessionsBySession[sessionId]) ?? [];
 
   // ── Preview header: Resume + tag/note sheet (spec A1/A2/A4, 2026-08-26) ──
   // Called HERE, unconditionally, rather than inside the `activePreview ?`
@@ -268,11 +273,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // watcher in main is refcounted, so open drawers on the same project share one.
   // (Subscribed below, after listRetry exists: a reconnect re-lists through it.)
   // Set when a pill click couldn't resolve; cleared on next click/selection/close.
-  const pillError = state.pillError?.[sessionId] ?? null;
+  const pillError = useArtifactSelector((s) => s.pillError?.[sessionId] ?? null);
   // Set while a tapped file is still being looked up (the file's name). WHY:
   // the drawer used to open onto "Nothing here yet" for the whole lookup — up
   // to seconds on a phone — contradicting the file just tapped (2026-09-11).
-  const pillPending = state.pillPending?.[sessionId] ?? null;
+  const pillPending = useArtifactSelector((s) => s.pillPending?.[sessionId] ?? null);
 
   // Re-list this session's files whenever the drawer opens against a resolved
   // project root.
@@ -377,7 +382,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // The list stays open once toggled; it closes on the ☰ toggle, on selecting an
   // artifact, or on entering edit mode. (No pin — that was removed by request.)
   const [listOpen, setListOpen] = useState(false);  // push list shown
-  const expanded = state.drawerExpanded;             // fill-the-region (shared, drives ChatView)
+  const expanded = useArtifactSelector((s) => s.drawerExpanded);            // fill-the-region (shared, drives ChatView)
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   // Inline rename failure message (e.g. name taken). Null = no error.
@@ -422,7 +427,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     return () => document.removeEventListener('mousedown', onDown);
   }, [filterOpen]);
   const isElectron = getPlatform() === 'electron';
-  const gitReviewOpen = state.gitReviewBySession?.[sessionId] ?? false;
+  const gitReviewOpen = useArtifactSelector((s) => s.gitReviewBySession?.[sessionId] ?? false);
   // Footer git status only for the open file, only while the drawer is visible.
   const gitStatus = useGitFileStatus(projectRoot, active && isElectron ? active.path : null, drawerOpen, active?.id ?? null);
   const gitFooter = gitFooterState(gitStatus);

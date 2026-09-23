@@ -13,7 +13,7 @@
 // than filtered, so a person sees both at once and the project name on each
 // card says which folder owns it (scope §1: explicit source bindings).
 import React, { useEffect } from 'react';
-import { useArtifact } from '../../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, CloseButton, LoadingState, ErrorState, Tooltip } from '../ui';
 import type { PageSummary } from '../../../shared/pages-types';
@@ -31,8 +31,9 @@ interface PagesViewProps {
 }
 
 export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
-  const { state, dispatch } = useArtifact();
-  const open = state.pagesViewOpen;
+  // Narrow selector (perf, 2026-09-23): redraws only when the library opens or closes.
+  const dispatch = useArtifactDispatch();
+  const open = useArtifactSelector((s) => s.pagesViewOpen);
   useEscClose(open, () => dispatch({ type: 'PAGES_VIEW_CLOSED' }));
   const { pages, loaded, failed } = usePages();
   // Fresh list on every open (see refreshPages).

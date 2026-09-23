@@ -25,7 +25,7 @@ import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import { useSwitchFirstFrame } from '../hooks/use-switch-first-frame';
-import { useArtifact } from '../state/ArtifactContext';
+import { useArtifactSelector, useArtifactDispatch } from '../state/ArtifactContext';
 import { SessionDrawer } from './SessionDrawer';
 import { useActiveProject } from '../hooks/useActiveProject';
 import { assistantName } from '../utils/assistant-name';
@@ -138,9 +138,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   //  • `reducedEffects` is folded in here rather than at the class, so the
   //    timer never even starts when the user has effects off.
   const arriving = useOneShotWindow(sessionActive) && sessionActive && !reducedEffects;
-  // Artifact drawer state — read from ArtifactContext so ChatView reacts to
-  // the drawer toggle without needing a prop threaded down from App.tsx.
-  const { state: artifactState, dispatch: artifactDispatch } = useArtifact();
+  // Artifact drawer state, read from the artifact store. WHY narrow selectors (perf,
+  // 2026-09-23): the whole state redrew every open chat on ANY session's file write.
+  const drawerOpen = useArtifactSelector((s) => s.drawerOpenBySession[sessionId] ?? false);
+  const drawerExpandedFlag = useArtifactSelector((s) => s.drawerExpanded);
+  const artifactDispatch = useArtifactDispatch();
   // Preview cards (SessionRefActions, deep in the chat tree) ask for a past
   // conversation by event. Mounted here — not in SessionDrawer, which is
   // unmounted until it opens — so it hears the very first Preview click.
@@ -148,10 +150,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // responds — see the WHY comment inside the hook (deliberately not
   // `visible`, which also depends on the chat/terminal toggle).
   useSessionPreviewListener(sessionId, sessionActive, artifactDispatch);
-  // Drawer open/closed is per-session — read this session's flag (absent → closed).
-  const drawerOpen = artifactState.drawerOpenBySession[sessionId] ?? false;
   // WHY drawerOpen &&: expand is app-wide, so ungated it hid every OTHER session's chat.
-  const drawerExpanded = drawerOpen && artifactState.drawerExpanded;
+  const drawerExpanded = drawerOpen && drawerExpandedFlag;
   // The game pane and artifact drawer share the framed-shell's right slot.
   // The game pane wins when both are somehow open (App also enforces mutual
   // exclusivity, so this is just a render-time safety net).

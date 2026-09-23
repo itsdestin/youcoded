@@ -37,10 +37,9 @@ vi.mock('../src/renderer/state/chat-context', () => ({
 // These tests only care about the pane itself, so they are stubbed rather
 // than provided for real.
 vi.mock('../src/renderer/state/ArtifactContext', () => ({
-  useArtifact: () => ({
-    state: mocks.artifact,
-    dispatch: vi.fn(),
-  }),
+  // ChatView reads the artifact store through narrow selectors (perf, 2026-09-23).
+  useArtifactSelector: (select: (s: any) => unknown) => select(mocks.artifact),
+  useArtifactDispatch: () => vi.fn(),
 }));
 
 // jsdom ships no IntersectionObserver; ChatView constructs one for its
