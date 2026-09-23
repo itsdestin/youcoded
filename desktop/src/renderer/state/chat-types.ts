@@ -309,6 +309,11 @@ export interface SessionChatState {
    *  first `stalled` heartbeat and left alone by later ones, so the elapsed
    *  time never resets while the card is up. */
   stalledSince: number | null;
+  /** Helper run records that arrived before their card existed, keyed by the
+   *  helper's childId (latest record only). Applied the moment a matching card
+   *  appears — see chat-reducer.ts `applyParkedSpecialistRuns`. Transient:
+   *  never serialized; absent means nothing is waiting. */
+  parkedSpecialistRuns?: Map<string, SpecialistRunView>;
   /**
    * Native runtime: the model is READING the prompt (prefill), not hanging. Set
    * by a `promptProcessing`-bearing heartbeat and cleared the moment prefill ends
@@ -710,8 +715,8 @@ export type ChatAction =
     }
   | {
       // Background Bash (G-1): the live shell-run record lands on its Bash card
-      // (chat-reducer.ts's SHELL_RUN_CHANGED case). Same contract as
-      // SPECIALIST_RUN_CHANGED — a record for an unknown card is dropped.
+      // (chat-reducer.ts's SHELL_RUN_CHANGED case). A record for an unknown
+      // card is dropped (SPECIALIST_RUN_CHANGED parks one instead).
       type: 'SHELL_RUN_CHANGED';
       sessionId: string;
       run: ShellRunView;
