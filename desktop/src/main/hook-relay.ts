@@ -61,16 +61,11 @@ export class HookOwnerGate {
 // NOTE: setTimeout does not advance while the machine sleeps, so the hold can
 // stretch past 2h of wall-clock on a laptop — expected, not a bug.
 const APP_HOLD_MS = 7_200_000;
-// An ask whose session matches no live session can never render a card
-// anywhere; a 2h hold would be a 2h invisible hang. The old 5-minute timeout
-// was silently covering this case (spec §1a) — this restores it.
-const UNROUTABLE_HOLD_MS = 60_000;
 
 /** Why a held ask ended without a user decision (rides as payload._reason). */
 // WHY not exported: nothing outside this file imports it, and an unused exported
-// type trips the knip ratchet once the remote branch's lowered baseline (188)
-// lands beside it. It now types the reason armHold emits instead.
-type PermissionExpiryReason = 'app-timeout' | 'unroutable' | 'hook-closed';
+// type trips the knip ratchet (combined-branch fix). It types the reason armHold emits.
+type PermissionExpiryReason = 'app-timeout' | 'hook-closed';
 
 export class HookRelay extends EventEmitter {
   private server: net.Server | null = null;
@@ -89,16 +84,16 @@ export class HookRelay extends EventEmitter {
   private holdTimers = new Map<string, NodeJS.Timeout>();
   private sessionGate: ((sessionId: string) => boolean) | null = null;
   private readonly holdMs: number;
-  private readonly unroutableHoldMs: number;
 
-  constructor(pipeName?: string, holdMs: number = APP_HOLD_MS, unroutableHoldMs: number = UNROUTABLE_HOLD_MS) {
+  constructor(pipeName?: string, holdMs: number = APP_HOLD_MS) {
     super();
     this.pipeName = pipeName || DEFAULT_PIPE_NAME;
     this.holdMs = holdMs;
-    this.unroutableHoldMs = unroutableHoldMs;
   }
 
-  /** main.ts wires this to SessionManager.hasSession (mirrors setReloadPluginsGate). */
+  /** main.ts wires this to SessionManager.hasSession (mirrors setReloadPluginsGate).
+   *  An ask from a session this app does not own is passed straight back to
+   *  Claude Code with no decision — see processPayload. */
   setSessionGate(gate: (sessionId: string) => boolean): void {
     this.sessionGate = gate;
   }
@@ -111,8 +106,6 @@ export class HookRelay extends EventEmitter {
   /** Arm the app-owned hold for one ask: when it fires, the app answers with a
    *  labelled deny, so Claude Code moves on and the card can say what happened. */
   private armHold(requestId: string, sessionId: string): void {
-    const routable = this.sessionGate ? this.sessionGate(sessionId) : true;
-    const holdMs = routable ? this.holdMs : this.unroutableHoldMs;
     this.holdTimers.set(requestId, setTimeout(() => {
       this.holdTimers.delete(requestId);
       const hours = Math.round(this.holdMs / 3_600_000);
@@ -123,9 +116,7 @@ export class HookRelay extends EventEmitter {
       const delivered = this.respond(requestId, {
         decision: {
           behavior: 'deny',
-          message: routable
-            ? `YouCoded auto-denied this request after ${hours} hour${hours === 1 ? '' : 's'} with no response — ask again if it is still needed.`
-            : 'YouCoded could not show this request in any open conversation, so it auto-denied it. Ask again if it is still needed.',
+          message: `YouCoded auto-denied this request after ${hours} hour${hours === 1 ? '' : 's'} with no response — ask again if it is still needed.`,
         },
       });
       // respond() deletes the pending entry BEFORE the socket's 'close' fires,
@@ -133,10 +124,10 @@ export class HookRelay extends EventEmitter {
       // endings — they must emit their own reason. Only claim an auto-deny if
       // one was actually written (docs/error-message-standards.md).
       if (delivered) {
-        const reason: PermissionExpiryReason = routable ? 'app-timeout' : 'unroutable';
+        const reason: PermissionExpiryReason = 'app-timeout';
         this.emit('permission-expired', sessionId, requestId, reason);
       }
-    }, holdMs));
+    }, this.holdMs));
   }
 
   private parseHookPayload(data: string): HookEvent {
@@ -181,6 +172,32 @@ export class HookRelay extends EventEmitter {
                 sessionId: parsed._desktop_session_id, event: parsed.hook_event_name, pid: parsed._claude_pid,
               });
             }
+            socket.end();
+            return;
+          }
+
+          // WHY two gates, in this order (combined branch: integrations'
+          // HookOwnerGate meets plan-approval's pass-through). The owner gate
+          // above drops EVERY hook from a `claude` nested inside one of our
+          // sessions (same session id, different pid). This one handles an ask
+          // whose session id is not one of ours at all: it is passed back to
+          // Claude Code at once. An ask that clears both is ours and is held.
+          if (parsed.hook_event_name === 'PermissionRequest'
+              && this.sessionGate && !this.sessionGate(event.sessionId)) {
+            // NOT OURS: no live session of this app has this id — e.g. a claude
+            // that inherited the pipe from a closed session, or one reporting
+            // under its own Claude Code id. No card could ever show it, so do
+            // not hold it and do not decide it: end the socket WITHOUT writing.
+            // The relay then exits 0 printing nothing and Claude Code shows its
+            // own terminal prompt at once, with no YouCoded wording (measured
+            // on 2.1.281 for a file write and for AskUserQuestion:
+            // tests/fixtures/plan-menu/cc-2.1.281-passthrough-*.json). This
+            // replaced a 60s hold ending in a YouCoded deny, which denied asks
+            // the user could see and answer in their own terminal (review
+            // 2026-09-23, F2). Session ids are registered before the process
+            // starts (session-manager.ts), so no owned session is ever "not
+            // yet registered" here.
+            log('INFO', 'HookRelay', 'Passing through an ask for a session this app does not own', { sessionId: event.sessionId });
             socket.end();
             return;
           }

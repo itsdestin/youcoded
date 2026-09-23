@@ -104,8 +104,18 @@ export function parsePlanMenu(screenText: string | null | undefined): PlanMenuRe
     // mode" / Yes / No) is a real plan prompt with no reliable anchor for its
     // options — say "unreadable" so the card points at the terminal rather than
     // pretending nothing is being asked.
-    const tail = norm(lines.slice(-30).join(' '));
-    if (tail.includes(EMPTY_PLAN_BODY)) return { status: 'unreadable', reason: 'empty-plan-variant' };
+    // Only when that prompt is LIVE: its body line directly followed by
+    // numbered rows with a cursor. The phrase alone (say, in scrollback after
+    // the prompt closed) must not keep a menu "present" (review 2026-09-23).
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 40); i--) {
+      if (!norm(lines[i]).includes(EMPTY_PLAN_BODY)) continue;
+      const after = lines.slice(i + 1, i + 6).filter((l) => l.trim());
+      const rows = after.filter((l) => OPTION_LINE.test(l));
+      if (rows.length >= 2 && rows.some((l) => OPTION_LINE.exec(l)![2])) {
+        return { status: 'unreadable', reason: 'empty-plan-variant' };
+      }
+      break;
+    }
     return { status: 'absent' };
   }
 
@@ -142,6 +152,10 @@ export function parsePlanMenu(screenText: string | null | undefined): PlanMenuRe
   for (let k = 0; k < raw.length; k++) {
     if (raw[k].number !== k + 1) return { status: 'unreadable', reason: 'numbering' };
   }
+  // A row numbered 10+ cannot be picked by typing its number: the "1" alone
+  // would already select row 1 (review 2026-09-23, F3). No 2.1.281 plan menu
+  // has more than five rows; refuse rather than type a two-digit number.
+  if (raw.length > 9) return { status: 'unreadable', reason: 'two-digit-row' };
   const selected = raw.filter((r) => r.selected);
   if (selected.length !== 1) return { status: 'unreadable', reason: 'cursor' };
 

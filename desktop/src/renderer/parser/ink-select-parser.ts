@@ -423,3 +423,47 @@ export function rebindButtons(menu: ParsedMenu | null, toolName: string): Prompt
   if (buttons.some((b) => b.submitInput !== undefined)) return null;
   return buttons;
 }
+
+/** What a Claude Code permission prompt shows for this tool call — the text a
+ *  kept card must find in the menu's OWN prompt before it may answer it. */
+function bindingFor(toolName: string, input: Record<string, unknown> | undefined): { needle: string; keyword?: RegExp } | null {
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  const base = (p: string) => p.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? '';
+  const command = str(input?.command).split('\n')[0];
+  const file = base(str(input?.file_path) || str(input?.notebook_path));
+  const url = str(input?.url);
+  if (toolName === 'Bash' && command) return { needle: command, keyword: /bash command/i };
+  if (toolName === 'Write' && file) return { needle: file, keyword: /create/i };
+  if ((toolName === 'Edit' || toolName === 'MultiEdit' || toolName === 'NotebookEdit') && file) return { needle: file, keyword: /edit/i };
+  if (file) return { needle: file };
+  if (command) return { needle: command };
+  if (url) {
+    try { return { needle: new URL(url).hostname }; } catch { return { needle: url }; }
+  }
+  return toolName ? { needle: toolName } : null;
+}
+
+/**
+ * Buttons for a KEPT card, or null (review 2026-09-23, F1). On top of
+ * rebindButtons' rules, the menu on screen must be THIS card's ask: its own
+ * prompt text (title + body, bounded to the prompt's box) has to show this
+ * call's command, file or tool, and the tool's own verb where Claude Code
+ * prints one ("Bash command", "create", "edit"). Without that, a card whose ask
+ * was already answered in the terminal would read the NEXT ask's menu (a
+ * parallel tool call) as its own — and its "Yes" would approve that other
+ * call. If the binding cannot be confirmed, no buttons: Dismiss and the
+ * terminal remain. Whitespace is ignored when matching, because Claude Code
+ * wraps long commands and paths.
+ */
+export function keptCardButtons(screen: string | null, toolName: string, input: Record<string, unknown> | undefined): PromptButton[] | null {
+  const menu = screen ? parseInkSelect(screen) : null;
+  const buttons = rebindButtons(menu, toolName);
+  if (!menu || !buttons) return null;
+  const binding = bindingFor(toolName, input);
+  if (!binding) return null;
+  const prompt = `${menu.title} ${menu.description ?? ''}`;
+  const squash = (t: string) => t.replace(/\s+/g, '');
+  if (!squash(prompt).includes(squash(binding.needle))) return null;
+  if (binding.keyword && !binding.keyword.test(prompt)) return null;
+  return buttons;
+}

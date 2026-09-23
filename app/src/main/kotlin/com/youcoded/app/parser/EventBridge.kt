@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
  * For PermissionRequest events, the socket is held open so we can send a
  * structured decision back through it (blocking relay protocol).
  */
-class EventBridge(private val socketName: String) {
+class EventBridge(private val socketName: String, private val ownSessionId: String? = null) {
     companion object {
         /** Tier-1 app hold (2h) — the app owns the permission-ask clock, like
          *  desktop hook-relay.ts APP_HOLD_MS. Must stay UNDER the relay asset's
@@ -27,6 +27,16 @@ class EventBridge(private val socketName: String) {
          *  AskUserQuestion waits forever. Pinned by
          *  desktop/tests/permission-timeout-margins.test.ts. */
         const val PERMISSION_HOLD_MS = 7_200_000L
+
+        /** An ask that names a DIFFERENT YouCoded session than the one this
+         *  bridge serves. Nothing here can show it a card, so it is handed back
+         *  undecided (socket closed, nothing written → the relay exits 0,
+         *  prints nothing, and Claude Code shows its own prompt) — never held
+         *  and never denied. Same rule as desktop hook-relay.ts (review
+         *  2026-09-23, F2). An ask with no session id arrived on this session's
+         *  own socket, so it is this session's. */
+        fun isForeignAsk(askSessionId: String?, ownSessionId: String?): Boolean =
+            !askSessionId.isNullOrBlank() && !ownSessionId.isNullOrBlank() && askSessionId != ownSessionId
     }
 
     private val _events = MutableSharedFlow<HookEvent>(extraBufferCapacity = 1000)
@@ -135,6 +145,17 @@ class EventBridge(private val socketName: String) {
             // refreshes the maps above); there is no HookEvent for it, so it
             // stops here rather than logging a parse failure every launch.
             if (eventName == "SessionStart") { client.close(); return }
+
+            // WHY both, in this order (combined branch): the HookOwnerGate check
+            // above has already dropped a nested `claude`'s hooks; an ask for a
+            // session that is not this bridge's passes straight through
+            // (isForeignAsk); anything left is this session's own and is held.
+            if (eventName == "PermissionRequest" && isForeignAsk(mobileSessionId, ownSessionId)) {
+                // Not this session's ask: hand it straight back, undecided.
+                android.util.Log.i("EventBridge", "Passing through an ask for another session")
+                client.close()
+                return
+            }
 
             if (eventName == "PermissionRequest") {
                 // Hold socket open for blocking response

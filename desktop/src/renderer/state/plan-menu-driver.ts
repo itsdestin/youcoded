@@ -82,6 +82,25 @@ export function sanitizeFeedback(text: string): string {
   return text.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/** Split feedback into writes of at most PLAN_TIMING.chunk UTF-16 units that
+ *  never cut a character in half — an emoji or accented letter split across
+ *  two PTY writes can arrive as two broken halves (review 2026-09-23). Splits
+ *  on grapheme clusters where the runtime can, else on code points. */
+export function feedbackChunks(text: string): string[] {
+  const Seg = (Intl as unknown as { Segmenter?: new (l?: string, o?: { granularity: string }) => { segment(t: string): Iterable<{ segment: string }> } }).Segmenter;
+  const units = Seg
+    ? Array.from(new Seg(undefined, { granularity: 'grapheme' }).segment(text), (x) => x.segment)
+    : Array.from(text);
+  const out: string[] = [];
+  let cur = '';
+  for (const u of units) {
+    if (cur && cur.length + u.length > PLAN_TIMING.chunk) { out.push(cur); cur = ''; }
+    cur += u;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 const same = (a: string, b: string) => a.replace(/\s+/g, ' ').trim() === b.replace(/\s+/g, ' ').trim();
 
 function readMenu(io: PlanDriverIO): PlanMenu | 'absent' | 'unreadable' {
@@ -136,6 +155,10 @@ export async function answerPlanMenu(
 
   const fb = feedbackOption(start);
 
+  // Defence in depth for F3: only single-digit rows are ever typed (the parser
+  // already refuses a menu with a row 10+).
+  if (fb.number > 9 || (answer.kind === 'choice' && answer.number > 9)) return fail('menu-changed', false);
+
   if (answer.kind === 'choice') {
     const row = start.options.find((o) => o.number === answer.number);
     if (!row || row.kind !== 'choice' || row.label !== answer.label) return fail('menu-changed', false);
@@ -168,9 +191,10 @@ export async function answerPlanMenu(
   if (typeof box !== 'object' || !ours(box) || box.selectedNumber !== fb.number) return fail('menu-changed', true);
   if (box.feedbackDraft) return fail('draft-in-terminal', true);
 
-  for (let i = 0; i < text.length; i += PLAN_TIMING.chunk) {
-    io.write(text.slice(i, i + PLAN_TIMING.chunk));
-    if (i + PLAN_TIMING.chunk < text.length) await io.settle(15);
+  const chunks = feedbackChunks(text);
+  for (let i = 0; i < chunks.length; i++) {
+    io.write(chunks[i]);
+    if (i + 1 < chunks.length) await io.settle(15);
   }
   const echoed = await waitFor(io, PLAN_TIMING.reactMs + text.length * 2, (m) =>
     typeof m === 'object' && ours(m) && m.selectedNumber === fb.number && same(m.feedbackDraft, text));

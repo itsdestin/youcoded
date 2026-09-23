@@ -520,8 +520,8 @@ export class SessionManager extends EventEmitter {
     return this.sessions.get(id)?.info;
   }
 
-  /** True when this id belongs to a live session — HookRelay's routability gate:
-   *  an ask for no live session gets a 60s hold instead of 2h (hook-relay.ts). */
+  /** True when this id belongs to a live session — HookRelay's ownership gate:
+   *  an ask for any other id is handed straight back to Claude Code (hook-relay.ts). */
   hasSession(sessionId: string): boolean {
     return this.sessions.has(sessionId);
   }

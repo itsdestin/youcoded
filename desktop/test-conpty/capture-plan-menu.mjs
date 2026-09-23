@@ -76,6 +76,14 @@ const hookReleaseAfter = arg('hook-release-after', null);
 // Make the held hook answer ALLOW after this many ms — what the buddy floater's
 // old "Allow" button sent for a plan.
 const hookAllowAfter = arg('hook-allow-after', null);
+// Make the hook exit 0 at once, printing NOTHING — what the app's relay now does
+// for a session YouCoded does not own. Claude Code must show its own prompt.
+const hookPassthrough = !!arg('hook-passthrough', false);
+// A different task (e.g. an AskUserQuestion or a file write) and the screen
+// text that means its prompt is up.
+const customPrompt = arg('prompt', null);
+const waitRegex = arg('wait-for', null);
+const noPlan = !!arg('no-plan', false);
 
 function stripAnsi(s) {
   return String(s)
@@ -156,6 +164,7 @@ if (denyAfter !== null) setTimeout(() => {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: 'late deny from probe' } } }));
   process.exit(0);
 }, denyAfter);
+if (${hookPassthrough}) { process.stdin.on('end', () => { log('passthrough'); process.exit(0); }); }
 const allowAfter = ${hookAllowAfter === null ? 'null' : Number(hookAllowAfter)};
 if (allowAfter !== null) setTimeout(() => {
   log('allow-sent');
@@ -193,9 +202,9 @@ fs.writeFileSync(path.join(configDir, '.claude.json'), JSON.stringify({
 const prompt = 'Plan mode test. Do not read, search or explore anything. '
   + 'Write a one-sentence plan to create hello.txt containing the word hi, then call ExitPlanMode immediately.';
 
-const claudeArgs = ['--model', model, '--permission-mode', 'plan'];
+const claudeArgs = ['--model', model, ...(noPlan ? [] : ['--permission-mode', 'plan'])];
 if (bypass) claudeArgs.push('--allow-dangerously-skip-permissions');
-claudeArgs.push(prompt);
+claudeArgs.push(typeof customPrompt === 'string' ? customPrompt : prompt);
 
 const env = { ...cleanEnv(process.env), HOME: home, CLAUDE_CONFIG_DIR: configDir, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
 const t0 = Date.now();
@@ -241,7 +250,7 @@ function transcriptTail() {
 const outcome = {};
 try {
   // Plan menu is up when its closing question has rendered AND an option row exists.
-  const up = await waitFor(/Would\s*you\s*like\s*to\s*proceed[\s\S]*1\./, 180000);
+  const up = await waitFor(typeof waitRegex === 'string' ? new RegExp(waitRegex) : /Would\s*you\s*like\s*to\s*proceed[\s\S]*1\./, 180000);
   if (!up) throw new Error('plan menu never appeared');
   mark('menu-visible');
   await sleep(1500); // let the frame settle
@@ -329,6 +338,10 @@ outcome.exitPlanToolResults = results.filter((r) => ids.has(r.tool_use_id)).map(
   is_error: !!r.is_error,
   content: typeof r.content === 'string' ? r.content.slice(0, 600) : JSON.stringify(r.content).slice(0, 600),
 }));
+outcome.toolResults = results.map((r) => ({
+  is_error: !!r.is_error,
+  content: (typeof r.content === 'string' ? r.content : JSON.stringify(r.content)).slice(0, 300),
+}));
 outcome.transcriptFiles = [...new Set(tr.map((e) => e.file))];
 outcome.hookLog = fs.existsSync(hookLog) ? fs.readFileSync(hookLog, 'utf8') : '';
 
@@ -336,7 +349,7 @@ fs.mkdirSync(outDir, { recursive: true });
 const file = path.join(outDir, `cc-${ccVersion}-${variant}-${cols}x${rows}.json`);
 fs.writeFileSync(file, JSON.stringify({
   ccVersion, variant, cols, rows, capturedAt: new Date().toISOString(),
-  flags: { clearContext, bypass, answer, resizeTo, model, hookDenyAfter, hookReleaseAfter, hookAllowAfter }, settings: { showClearContextOnPlanAccept: clearContext },
+  flags: { clearContext, bypass, answer, resizeTo, model, hookDenyAfter, hookReleaseAfter, hookAllowAfter, hookPassthrough, customPrompt, waitRegex, noPlan }, settings: { showClearContextOnPlanAccept: clearContext },
   chunks, marks, outcome,
 }, null, 1));
 console.log(`wrote ${file}`);

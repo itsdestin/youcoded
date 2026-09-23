@@ -27,7 +27,6 @@ const desktopCcSeconds = () => literal('desktop/scripts/install-hooks.js', /comm
 const androidCcSeconds = () => literal('app/src/main/kotlin/com/youcoded/app/runtime/Bootstrap.kt', /PERMISSION_HOOK_TIMEOUT_SECONDS = ([\d_]+)/);
 const desktopHold = () => literal('desktop/src/main/hook-relay.ts', /APP_HOLD_MS = ([\d_]+)/);
 const androidHold = () => literal('app/src/main/kotlin/com/youcoded/app/parser/EventBridge.kt', /PERMISSION_HOLD_MS = ([\d_]+)L/);
-const unroutableHold = () => literal('desktop/src/main/hook-relay.ts', /UNROUTABLE_HOLD_MS = ([\d_]+)/);
 
 describe('permission-ask timeout tiers', () => {
   it('the app hold is 2h on both platforms', () => {
@@ -58,8 +57,4 @@ describe('permission-ask timeout tiers', () => {
     }
   });
 
-  it('an ask for no live session is held 60s — far below the normal hold', () => {
-    expect(unroutableHold()).toBe(60_000);
-    expect(unroutableHold()).toBeLessThanOrEqual(desktopHold() / 10);
-  });
 });

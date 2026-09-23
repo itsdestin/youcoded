@@ -81,7 +81,7 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
       // Why the ask ended (hook-relay.ts / EventBridge.kt). Unknown values are
       // dropped so the reducer's safe default (resolve the card) applies.
       const r = payload._reason;
-      const reason = r === 'app-timeout' || r === 'unroutable' || r === 'delivery-failed' || r === 'hook-closed' ? r : undefined;
+      const reason = r === 'app-timeout' || r === 'delivery-failed' || r === 'hook-closed' ? r : undefined;
       return { type: 'PERMISSION_EXPIRED', sessionId, requestId, ...(reason ? { reason } : {}) };
     }
 
