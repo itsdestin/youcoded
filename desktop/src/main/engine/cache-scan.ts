@@ -218,8 +218,10 @@ function scanOneDir(dirAbs: string, subdir: string | null): LocalDownload[] {
  *  and an attached picture silently vanished while Local Models said "vision
  *  ready". These files are exactly what the router pairs (and ensureServable
  *  re-scans before the first send to a model it has not seen), so they are a
- *  sound "yes". They never turn a router "yes" into a "no"; absent both, the
- *  answer stays unset ("don't know"). */
+ *  sound "yes" — used ONLY when the router gave no answer for the row (not yet
+ *  re-scanned, or the engine is off). An explicit router answer, including
+ *  "text only", always wins (review, 2026-09-23). Absent both, the answer
+ *  stays unset ("don't know"). */
 export function visionModelIdsOnDisk(cacheDir: string): Set<string> {
   return new Set(
     scanLocalDownloads(cacheDir).filter((d) => isComplete(d) && d.hasProjector).map((d) => d.modelId),

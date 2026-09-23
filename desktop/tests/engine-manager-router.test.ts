@@ -1971,13 +1971,13 @@ describe('the vision catalog', () => {
       expect(byId['older-Q4_K_M'].supportsVision).toBeUndefined();
     });
 
-    it('a stale router "text only" row does not override a projector on disk', async () => {
+    it('an explicit router "text only" answer is honoured even with a projector on disk', async () => {
       plantVisionFolder('gemma-3-4b-it-Q4_K_M');
       mgr = await runningManager({ object: 'list', data: [{
         id: 'gemma-3-4b-it-Q4_K_M', status: { value: 'unloaded' }, architecture: { input_modalities: ['text'] },
       }] });
       const [row] = await mgr.catalogModels();
-      expect(row.supportsVision).toBe(true);
+      expect(row.supportsVision).toBe(false);
     });
 
     it('the engine-OFF path sees the projector too', async () => {

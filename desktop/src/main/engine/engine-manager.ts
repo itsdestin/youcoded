@@ -1446,7 +1446,7 @@ export class EngineManager extends EventEmitter {
       // must stay undefined rather than become a `false` a caller would read as
       // "this model cannot see" and quietly drop the user's attachment.
       if (m.inputModalities) row.supportsVision = m.inputModalities.includes('image');
-      if (onDiskVision.has(m.id)) row.supportsVision = true; // either source's "yes" wins
+      else if (onDiskVision.has(m.id)) row.supportsVision = true; // router silent → trust the files
       return row;
     });
   }
