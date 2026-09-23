@@ -299,6 +299,14 @@ describe('plugin manifest scan (applyManifestEntries)', () => {
     expect((servers.gmessages as { command: string }).command).toBe(`${root}/mcp-servers/gmessages/gmessages`);
   });
 
+  it('repairs the old entry even when its keys were rewritten in another order', () => {
+    const servers: Record<string, unknown> = {
+      gmessages: { env: {}, args: [], command: `${PKG}/mcp-servers/gmessages/gmessages`, type: 'stdio' },
+    };
+    const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });
+    expect(r.repaired).toBe(1);
+  });
+
   it('still never overwrites an entry the user changed, even one holding the placeholder', () => {
     const custom = { type: 'stdio', command: `${PKG}/mcp-servers/gmessages/gmessages`, args: ['--verbose'], env: {} };
     const servers: Record<string, unknown> = { gmessages: { ...custom } };

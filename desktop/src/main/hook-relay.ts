@@ -25,19 +25,25 @@ const DEFAULT_PIPE_NAME = process.platform === 'win32'
  * (CLAUDE_PID, checked on 2.1.281), and the relay forwards it. A desktop
  * session runs exactly ONE Claude Code process for its whole life (no respawn
  * under the same id), and that process fires SessionStart before it can run
- * anything that could start another — so the first pid heard for a session is
- * the owner, and any other pid is a nested process. /clear, /resume and
+ * anything that could start another — so the pid of the first SessionStart
+ * for a session is the owner, and any other pid is a nested process. /clear, /resume and
  * subagents all stay inside the owner process. No pid (older Claude Code, an
  * old relay script) fails OPEN, exactly as before.
  */
 export class HookOwnerGate {
   private owners = new Map<string, string>();
 
-  /** True when this event may be attributed to `sessionId`. */
-  accept(sessionId: string, claudePid: unknown): boolean {
+  /** True when this event may be attributed to `sessionId`.
+   *  WHY only a SessionStart claims (review F2): a nested process whose hook
+   *  happened to arrive first must never become the owner and lock the real
+   *  session out. Before a SessionStart claims, everything passes (fail open). */
+  accept(sessionId: string, claudePid: unknown, isSessionStart: boolean): boolean {
     if (!sessionId || typeof claudePid !== 'string' || !claudePid) return true;
     const owner = this.owners.get(sessionId);
-    if (owner === undefined) { this.owners.set(sessionId, claudePid); return true; }
+    if (owner === undefined) {
+      if (isSessionStart) this.owners.set(sessionId, claudePid);
+      return true;
+    }
     return owner === claudePid;
   }
 }
@@ -166,7 +172,7 @@ export class HookRelay extends EventEmitter {
           // HookOwnerGate. Dropped before anything can map, watch or show it.
           // Ending the socket with no reply lets a blocking relay exit cleanly,
           // so the nested process falls back to its own permission prompt.
-          if (parsed._desktop_session_id && !this.owners.accept(parsed._desktop_session_id, parsed._claude_pid)) {
+          if (parsed._desktop_session_id && !this.owners.accept(parsed._desktop_session_id, parsed._claude_pid, parsed.hook_event_name === 'SessionStart')) {
             // Once per nested process, not per hook — a nested session fires many.
             const key = `${parsed._desktop_session_id}:${parsed._claude_pid}`;
             if (!this.warnedForeign.has(key)) {

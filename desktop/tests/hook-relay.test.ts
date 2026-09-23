@@ -216,21 +216,31 @@ describe('HookRelay', () => {
 // relay now forwards Claude Code's own CLAUDE_PID; only the first process
 // heard from owns the session.
 describe('HookOwnerGate', () => {
-  it('the first process to report owns the session; another pid is refused', async () => {
+  it('the first SessionStart owns the session; another pid is refused', async () => {
     const { HookOwnerGate } = await import('../src/main/hook-relay');
     const g = new HookOwnerGate();
-    expect(g.accept('desk-1', '1000')).toBe(true);
-    expect(g.accept('desk-1', '1000')).toBe(true);
-    expect(g.accept('desk-1', '2000')).toBe(false);
-    // Another session has its own owner.
-    expect(g.accept('desk-2', '2000')).toBe(true);
+    expect(g.accept('desk-1', '1000', true)).toBe(true);
+    expect(g.accept('desk-1', '1000', false)).toBe(true);
+    expect(g.accept('desk-1', '2000', false)).toBe(false);
+    expect(g.accept('desk-1', '2000', true)).toBe(false); // a nested SessionStart cannot take over
+    expect(g.accept('desk-2', '2000', true)).toBe(true);
+  });
+  // Review F2: a nested process whose hook arrives BEFORE any SessionStart
+  // must not become the owner and lock the real session out.
+  it('a non-SessionStart hook arriving first does not claim ownership', async () => {
+    const { HookOwnerGate } = await import('../src/main/hook-relay');
+    const g = new HookOwnerGate();
+    expect(g.accept('desk-1', '2000', false)).toBe(true);   // nested, first — passes, claims nothing
+    expect(g.accept('desk-1', '1000', true)).toBe(true);    // real SessionStart claims
+    expect(g.accept('desk-1', '1000', false)).toBe(true);
+    expect(g.accept('desk-1', '2000', false)).toBe(false);
   });
   it('fails open with no pid (older Claude Code or relay)', async () => {
     const { HookOwnerGate } = await import('../src/main/hook-relay');
     const g = new HookOwnerGate();
-    expect(g.accept('desk-1', '1000')).toBe(true);
-    expect(g.accept('desk-1', undefined)).toBe(true);
-    expect(g.accept('desk-1', '')).toBe(true);
+    expect(g.accept('desk-1', '1000', true)).toBe(true);
+    expect(g.accept('desk-1', undefined, false)).toBe(true);
+    expect(g.accept('desk-1', '', false)).toBe(true);
   });
 });
 

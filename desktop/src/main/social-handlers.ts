@@ -4,7 +4,7 @@
 // every call needs the bearer token, so all logic lives in the main process —
 // the token never crosses the contextBridge into the renderer bundle.
 
-import { ipcMain, webContents, powerMonitor } from "electron";
+import { app, ipcMain, webContents, powerMonitor, type WebContents } from "electron";
 import type { MarketplaceAuthStore } from "./marketplace-auth-store";
 import { createMarketplaceApiClient, MARKETPLACE_API_HOST } from "../renderer/state/marketplace-api-client";
 import type {
@@ -20,7 +20,7 @@ import { wrap, makeClearSessionOn401 } from "./handler-utils";
 // Platform-owned presence socket (Task 6). The account session token and the
 // WebSocket live in the main process; the renderer only ever sees relayed
 // social:presence-event pushes and expresses desired connection state.
-import { createPresenceSocket, wakeEvidence, type PresenceSocket } from "./presence-socket";
+import { createPresenceSocket, wakeEvidence, HUMAN_INPUT_TYPES, type PresenceSocket } from "./presence-socket";
 import { log } from "./logger";
 import type { WindowRegistry } from "./window-registry";
 import type { RemoteServer } from "./remote-server";
@@ -39,8 +39,22 @@ let onResume: (() => void) | null = null;
 // When the OS last reported suspend, cleared on any wake signal. Module scope
 // so a hot-reload re-registration can't strand a stale value in a closure.
 let suspendedAt: number | null = null;
-// macOS/Windows "the user is back" signals that also clear the suspend latch.
+// OS "a person is back" signals that also clear the suspend latch. Both need a
+// human by definition: unlock-screen (darwin, win32 — an unlock) and
+// user-did-become-active (darwin — a login session switched to).
 const WAKE_EVENTS = ["unlock-screen", "user-did-become-active"] as const;
+// Last deliberate input to any YouCoded window — see wakeEvidence(). Module
+// scope + a WeakSet so hot-reload re-registration never stacks listeners.
+let lastAppInputAt: number | null = null;
+const inputWatched = new WeakSet<WebContents>();
+let watchingNewWebContents = false;
+function watchAppInput(wc: WebContents): void {
+  if (inputWatched.has(wc)) return;
+  inputWatched.add(wc);
+  wc.on("input-event", (_e, input) => {
+    if (HUMAN_INPUT_TYPES.has(input.type)) lastAppInputAt = Date.now();
+  });
+}
 let idlePoller: NodeJS.Timeout | null = null;
 
 // Presence idle threshold: no system input AND no remote-client activity for
@@ -168,25 +182,25 @@ export function registerSocialHandlers(
   // takes the socket DOWN when the user goes idle, so "stop on disconnect"
   // would have stopped the only thing able to notice them coming back.
   stopIdlePoller(); // hot-reload: never stack a second poller
-  let lastTickAt: number | null = null;
+  for (const wc of webContents.getAllWebContents()) watchAppInput(wc);
+  if (!watchingNewWebContents) {
+    watchingNewWebContents = true;
+    app.on("web-contents-created", (_e, wc) => watchAppInput(wc));
+  }
   const pollIdle = () => {
     const now = Date.now();
-    const idleSeconds = powerMonitor.getSystemIdleTime();
-    const localIdleMs = idleSeconds * 1000;
-    // Evidence-based escape from the suspend latch — see wakeEvidence().
+    const localIdleMs = powerMonitor.getSystemIdleTime() * 1000;
+    // Evidence-based escape from the suspend latch — ONLY deliberate input to
+    // our own windows counts; see wakeEvidence() for why the idle clock and
+    // wall-clock gaps are not trusted.
     if (suspendedAt !== null) {
-      const why = wakeEvidence({
-        now, suspendedAt, idleSeconds,
-        sinceLastTickMs: lastTickAt === null ? null : now - lastTickAt,
-        pollIntervalMs: IDLE_POLL_MS,
-      });
+      const why = wakeEvidence({ now, suspendedAt, lastAppInputAt });
       if (why) {
         log("INFO", "Presence", "gate: wake-evidence", { why });
         suspendedAt = null;
         presence.setSuspended(false);
       }
     }
-    lastTickAt = now;
     const lastRemote = remoteServer?.getLastClientActivityMs() ?? 0;
     const remoteIdleMs = lastRemote === 0 ? Number.POSITIVE_INFINITY : now - lastRemote;
     presence.setIdle(localIdleMs >= IDLE_DISCONNECT_MS && remoteIdleMs >= IDLE_DISCONNECT_MS);
@@ -197,7 +211,6 @@ export function registerSocialHandlers(
   };
   const startIdlePoller = () => {
     stopIdlePoller();
-    lastTickAt = null;
     // WHY one synchronous poll first: the socket keeps `idle` as state that ONLY
     // this poller clears. After idle → intent off → intent on, setDesired(true)
     // would otherwise stay masked by `!idle` until the first 15 s tick, and the

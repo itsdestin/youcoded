@@ -42,40 +42,47 @@ export interface PresenceSocket {
   destroy(): void;
 }
 
-/** Evidence that a machine marked asleep is in fact awake (presence
- *  self-healing spec, Part 1).
+/** Evidence that a machine marked asleep is in fact awake AND a human is at
+ *  it (presence self-healing spec, Part 1, as tightened by review F1).
  *
  *  WHY (2026-09-23, roadmap other-features: "Last seen 7/26/2026" while the
  *  friend was using the app): `suspended` was cleared ONLY by powerMonitor
- *  'resume'. Miss that one OS event — a MacBook runs weeks of lid-close cycles
- *  without a quit — and presence stayed off until a full quit-and-relaunch.
- *  No gate may be clearable only by an OS event, so either of these clears it:
- *   - input newer than the suspend (the system idle clock restarted after it);
- *   - a wall-clock gap far longer than the poll interval (the process was
- *     frozen, i.e. the machine slept and has woken).
- *  Both wait out a grace period after the suspend so a tick racing the OS
- *  freeze cannot reopen a socket that is about to go to sleep (a ghost).
- *  Over-clearing is safe: `idle` is the real "a human is here" gate and still
- *  has to pass before anything connects. */
+ *  'resume'. Miss that one OS event and presence stayed off until a relaunch.
+ *
+ *  WHY ONLY input to our OWN windows counts (review F1): the first version also
+ *  trusted the system idle clock and a wall-clock gap. Neither is proven on
+ *  every OS — macOS and Windows Modern Standby may pause or reset the idle
+ *  clock across sleep, so a lid-shut maintenance wake would read as fresh
+ *  input and show a closed laptop Online (the 2026-07-22 bug this latch
+ *  exists to prevent). A key press, click, tap or scroll delivered to a
+ *  YouCoded window (Electron's webContents 'input-event') needs an open,
+ *  awake machine and a person, on every OS. Pointer moves/enter/leave are NOT
+ *  counted: a window reappearing under a resting cursor can produce them.
+ *  Keeping a stuck "Last seen" is the lesser failure, so every other signal is
+ *  deliberately ignored here — `idleSeconds` and `sinceLastTickMs` are taken
+ *  only so the test can prove they cannot release the latch.
+ *  Input within the grace period after the suspend may be queued from before
+ *  it and is not counted. */
 export function wakeEvidence(input: {
   now: number;
   suspendedAt: number;
-  idleSeconds: number;
-  /** ms since the previous poll tick, or null on the first tick. */
-  sinceLastTickMs: number | null;
-  pollIntervalMs: number;
+  /** When a deliberate input last reached one of our windows, or null. */
+  lastAppInputAt: number | null;
+  idleSeconds?: number;
+  sinceLastTickMs?: number | null;
   graceMs?: number;
-}): 'input' | 'clock-gap' | null {
+}): 'app-input' | null {
   const grace = input.graceMs ?? SUSPEND_GRACE_MS;
-  if (input.now - input.suspendedAt < grace) return null;
-  const lastInputAt = input.now - input.idleSeconds * 1000;
-  if (lastInputAt > input.suspendedAt) return 'input';
-  if (input.sinceLastTickMs !== null && input.sinceLastTickMs > input.pollIntervalMs * 3) return 'clock-gap';
-  return null;
+  if (input.lastAppInputAt === null) return null;
+  return input.lastAppInputAt - input.suspendedAt >= grace ? 'app-input' : null;
 }
 
-/** Real machines freeze within a second or two of the suspend event; a minute
- *  is irrelevant on wake, where it has long expired. */
+/** Input types that need a person: presses, clicks, taps, wheels. */
+export const HUMAN_INPUT_TYPES: ReadonlySet<string> = new Set([
+  'mouseDown', 'mouseUp', 'mouseWheel', 'contextMenu', 'rawKeyDown', 'keyDown', 'keyUp', 'char',
+  'touchStart', 'touchEnd', 'pointerDown', 'pointerUp', 'gestureTap', 'gestureTapDown', 'gestureScrollBegin',
+]);
+
 export const SUSPEND_GRACE_MS = 60_000;
 
 export function createPresenceSocket(opts: {

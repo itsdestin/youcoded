@@ -113,7 +113,7 @@ class EventBridge(private val socketName: String) {
             // session or show a card; closing with no reply lets a blocking
             // relay exit so the nested process uses its own prompt.
             val ownerSessionId = json.optString("mobileSessionId", "")
-            if (!owners.accept(ownerSessionId, json.optString("claudePid", ""))) {
+            if (!owners.accept(ownerSessionId, json.optString("claudePid", ""), eventName == "SessionStart")) {
                 client.close()
                 return
             }
@@ -130,6 +130,11 @@ class EventBridge(private val socketName: String) {
             if (mobileSessionId.isNotBlank() && transcriptPath.isNotBlank()) {
                 transcriptPathMap[mobileSessionId] = transcriptPath
             }
+
+            // SessionStart is registered only to claim the owner (and it
+            // refreshes the maps above); there is no HookEvent for it, so it
+            // stops here rather than logging a parse failure every launch.
+            if (eventName == "SessionStart") { client.close(); return }
 
             if (eventName == "PermissionRequest") {
                 // Hold socket open for blocking response
@@ -315,15 +320,26 @@ class EventBridge(private val socketName: String) {
  * its hooks as this session's, overwriting the session-id map (which, unlike
  * desktop, has no remap guard) and able to raise a permission card. Claude
  * Code puts its own pid in every hook's env (CLAUDE_PID) and the relay
- * forwards it as `claudePid`; a session runs one Claude Code process, which
- * reports first, so the first pid is the owner. A missing pid fails open.
+ * forwards it as `claudePid`.
+ *
+ * WHY only a SessionStart claims (review F2): the real process fires
+ * SessionStart at launch, before it can run anything that could start a nested
+ * one, so its pid is the first to claim. Letting ANY first hook claim would let
+ * a nested process that happened to report first lock the real session out.
+ * Until a SessionStart claims, everything is accepted (fail open, the old
+ * behaviour); a missing pid always fails open.
  */
 class HookOwnerGate {
     private val owners = ConcurrentHashMap<String, String>()
 
-    fun accept(sessionId: String, claudePid: String): Boolean {
+    fun accept(sessionId: String, claudePid: String, isSessionStart: Boolean): Boolean {
         if (sessionId.isBlank() || claudePid.isBlank()) return true
-        val owner = owners.putIfAbsent(sessionId, claudePid) ?: return true
+        val owner = owners[sessionId]
+        if (owner == null) {
+            if (!isSessionStart) return true
+            val raced = owners.putIfAbsent(sessionId, claudePid) ?: return true
+            return raced == claudePid
+        }
         return owner == claudePid
     }
 }

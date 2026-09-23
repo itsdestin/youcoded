@@ -954,9 +954,15 @@ class Bootstrap(internal val context: Context) {
         val hookCommand = "$nodePath $relayPath"
         val blockingHookCommand = "$nodePath $blockingRelayPath"
 
-        // Fire-and-forget events use relay.js
+        // Fire-and-forget events use relay.js.
+        // WHY SessionStart (2026-09-23, review F2): EventBridge's HookOwnerGate
+        // claims a session's owner from its first SessionStart — the real
+        // Claude Code fires it at launch, before it can run anything that could
+        // start a nested `claude`. Without it the first hook of ANY kind would
+        // claim, and a nested process reporting first would lock the real one
+        // out. Desktop has always registered it (install-hooks.js).
         val hookEvents = listOf(
-            "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "Notification"
+            "SessionStart", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "Notification"
         )
 
         // Read existing settings and merge (additive — don't overwrite user hooks)
