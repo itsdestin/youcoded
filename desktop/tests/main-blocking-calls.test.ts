@@ -16,7 +16,8 @@
  *      async) fails too, as "stale" — delete it. So the list can only shrink.
  *   3. PROTECTED below names hot paths that were already made async. A
  *      blocking call there fails even if someone allowlists it, and each named
- *      function must still exist (a rename would otherwise quietly un-guard it).
+ *      function must still exist, as the same kind of thing (a rename would
+ *      otherwise quietly un-guard it). Banned calls are matched on the AST.
  *
  * WHY one class-wide test (2026-09-23, Destin: "a small number of generally
  * applicable rules instead of many narrow ones"): this replaces fourteen
@@ -52,6 +53,13 @@ const HOW_TO_FIX = [
 // PROTECTED — hot paths already made async. Carried over, one row per retired
 // ast-grep rule, so nothing those rules banned can come back via the allowlist.
 // ---------------------------------------------------------------------------
+/** What a protected name must still BE, not just that something by that name
+ *  exists. WHY (review 2026-09-23): the retired rules each required one shape —
+ *  `walk` an arrow function held in a const, session-browser's names function
+ *  declarations — so turning one into a different kind of thing is drift the
+ *  guard must notice, the way the old rule would have. */
+type ScopeKind = 'function' | 'method' | 'class' | 'const-arrow';
+
 interface Protection {
   /** The retired rule this row replaces — kept so `git log -S` finds the history. */
   was: string;
@@ -64,18 +72,27 @@ interface Protection {
   except?: string[];
   /** More names that must still exist in the file. */
   mustExist?: string[];
-  /** Calls banned outright (blocking or not) — a sync twin of an async API. */
-  bannedCalls?: { scope?: string; re: RegExp; what: string }[];
+  /** The kind every name above must be. Required for each name (checked). */
+  kinds?: Record<string, ScopeKind>;
+  /** Calls banned outright (blocking or not) — a sync twin of an async API.
+   *  Matched on the AST, never on source text, so spacing, line breaks and
+   *  comments inside the call cannot hide it: `callee` is tested against the
+   *  dotted callee path (`fs.statSync`, `this.nativeHost.list`); `args`, when
+   *  given, must equal the printed arguments exactly (`[]` = no arguments). */
+  bannedCalls?: { scope?: string; callee: RegExp; args?: string[]; what: string }[];
   /** Identifiers / strings banned inside a scope. */
   bannedNames?: { scope: string; re: RegExp; what: string }[];
-  /** A call that must still appear, awaited. */
+  /** A call that must still appear, awaited (compared as printed code, so
+   *  formatting cannot make it look lost). */
   requiredAwait?: { text: string; what: string };
 }
 
 const PROTECTED: Protection[] = [
   { was: 'no-sync-fs-in-main-hot-path', file: 'conversations/lease-client.ts', noBlocking: ['createLeaseClient'],
+    kinds: { createLeaseClient: 'function' },
     why: 'runs per lease acquire/renew/release; 2026-09-08 a sync lease write froze the app 6+ minutes' },
   { was: 'no-sync-fs-in-main-hot-path-git-transport', file: 'sync-spaces/git-transport.ts', noBlocking: ['gitDirSizeBytes'],
+    kinds: { gitDirSizeBytes: 'method' },
     why: "runs from the sync engine's 120 s poll for EVERY space; a sync .git walk held the main thread" },
   ...['conversations/transcript-mirror.ts', 'marketplace-file-reader.ts', 'transcript-cwd.ts',
     'harness/tools/edit.ts', 'harness/tools/write.ts', 'harness/tools/file-fingerprint.ts',
@@ -86,42 +103,51 @@ const PROTECTED: Protection[] = [
   })),
   { was: 'no-sync-fs-in-main-read-path-session-browser', file: 'session-browser.ts', noBlocking: ['*'],
     except: ['loadHistory'], mustExist: ['readIndexMeta'],
+    kinds: { loadHistory: 'function', readIndexMeta: 'function' },
     why: "the Resume Browser's listing path runs once per project slug on every open" },
   { was: 'no-sync-fs-in-main-read-path-theme-preview', file: 'theme-preview-generator.ts', noBlocking: ['buildPreviewHTML'],
+    kinds: { buildPreviewHTML: 'function' },
     why: 'regenerating a theme preview after a wallpaper edit must not freeze the app' },
   { was: 'no-sync-fs-in-per-session-polls', file: 'ipc-handlers.ts',
     noBlocking: ['buildStatusData', 'readTopicFile', 'startPolling', 'attachTopicWatch'],
+    kinds: { buildStatusData: 'function', readTopicFile: 'function', startPolling: 'function', attachTopicWatch: 'function' },
     why: 'per-session timers (status every 10 s, topic every 2 s) for every open session' },
   { was: 'native-session-list-uses-async-form', file: 'ipc-handlers.ts', noBlocking: [],
-    bannedCalls: [{ re: /nativeHost\.list\(\)$/, what: 'nativeHost.list() — use nativeHost.listAsync()' }],
+    bannedCalls: [{ callee: /nativeHost\.list$/, args: [], what: 'nativeHost.list() — use nativeHost.listAsync()' }],
     why: 'the sync list head-reads every native session file on every Resume list open' },
   { was: 'native-session-list-uses-async-form', file: 'remote-server.ts', noBlocking: [],
-    bannedCalls: [{ re: /nativeHost\.list\(\)$/, what: 'nativeHost.list() — use nativeHost.listAsync()' }],
+    bannedCalls: [{ callee: /nativeHost\.list$/, args: [], what: 'nativeHost.list() — use nativeHost.listAsync()' }],
     why: 'the sync list head-reads every native session file on every Resume list open' },
   { was: 'no-sync-fs-in-native-home-async-reads', file: 'native-home.ts',
     noBlocking: ['readSessionLinesAsync', 'listSessionFilesAsync', 'readSessionHeadAsync'],
+    kinds: { readSessionLinesAsync: 'method', listSessionFilesAsync: 'method', readSessionHeadAsync: 'method' },
     why: 'every scroll-up page, tear-off and Resume list open; the sync twins stay legal for their sync callers' },
   { was: 'no-sync-fs-in-transcript-global-poll', file: 'transcript-watcher.ts', noBlocking: ['ensureGlobalPoll'],
+    kinds: { ensureGlobalPoll: 'method' },
     why: 'safety poll every 2 s for every watched transcript' },
   { was: 'native-host-history-reads-stay-async', file: 'harness/native-session-host.ts',
     noBlocking: ['getHistoryAsync', 'getHistoryPageAsync'], mustExist: ['isLive'],
+    kinds: { getHistoryAsync: 'method', getHistoryPageAsync: 'method', isLive: 'method' },
     bannedNames: [{ scope: 'isLive', re: /readEvents|getHistory/, what: 'a history read inside isLive()' }],
     why: 'history pages and tear-offs; isLive is a boolean check that once read a whole history to throw it away' },
   { was: 'no-sync-fs-in-accepted-history-publish', file: 'harness/accepted-history-store.ts',
     noBlocking: ['IncrementalTranscriptReader', 'publish', 'atomicWrite'],
+    kinds: { IncrementalTranscriptReader: 'class', publish: 'method', atomicWrite: 'method' },
     why: 'publish() runs at EVERY turn boundary' },
   { was: 'read-tool-no-blocking-read', file: 'harness/tools/read.ts', noBlocking: [],
     bannedCalls: [
-      { re: /^fs\.(readFileSync|readdirSync)\(/, what: 'fs.readFileSync / fs.readdirSync' },
-      { re: /^fs\.statSync\(abs\)$/, what: 'fs.statSync(abs) on the target (the missing-file hint may stat another path)' },
+      { callee: /^fs\.(readFileSync|readdirSync)$/, what: 'fs.readFileSync / fs.readdirSync' },
+      { callee: /^fs\.statSync$/, args: ['abs'], what: 'fs.statSync(abs) on the target (the missing-file hint may stat another path)' },
     ],
     why: 'the Read tool runs several times per turn' },
   { was: 'session-store-async-reads-stay-async', file: 'harness/session-store.ts',
     noBlocking: ['readEventsAsync'], mustExist: ['listAsync'],
-    bannedCalls: [{ scope: 'listAsync', re: /^([\w.]*\.)?(readSessionHead|listSessionFiles)\(/,
+    kinds: { readEventsAsync: 'method', listAsync: 'method' },
+    bannedCalls: [{ scope: 'listAsync', callee: /(^|\.)(readSessionHead|listSessionFiles)$/,
       what: 'the sync readSessionHead()/listSessionFiles() inside listAsync' }],
     why: 'history pages, tear-offs and every Resume list open' },
   { was: 'no-sync-fs-in-glob-walk', file: 'harness/tools/glob.ts', noBlocking: ['walk'],
+    kinds: { walk: 'const-arrow' },
     requiredAwait: { text: 'fs.promises.stat(root)', what: 'the async root probe `await fs.promises.stat(root)`' },
     why: "the Glob tool's directory walk ran sync and froze every window, several times per turn" },
 ];
@@ -157,7 +183,39 @@ function eachDescendant(n: ts.Node, fn: (d: ts.Node) => void): void {
   ts.forEachChild(n, (c) => { fn(c); eachDescendant(c, fn); });
 }
 
-const norm = (s: string): string => s.replace(/\s+/g, ' ');
+function isKind(n: ts.Node, kind: ScopeKind): boolean {
+  switch (kind) {
+    case 'function': return ts.isFunctionDeclaration(n);
+    case 'method': return ts.isMethodDeclaration(n);
+    case 'class': return ts.isClassDeclaration(n);
+    case 'const-arrow': return ts.isArrowFunction(n) && ts.isVariableDeclaration(n.parent);
+  }
+}
+
+/** The callee as a dotted path built from the AST (`fs.statSync`,
+ *  `this.nativeHost.list`), so no spacing or comment can change it. Wrappers
+ *  that do not change what is called (`( … )`, `x!`, `x as T`) are looked
+ *  through; any other segment reads `(…)`. */
+function calleePath(e: ts.Expression): string {
+  if (ts.isParenthesizedExpression(e) || ts.isNonNullExpression(e) || ts.isAsExpression(e)) return calleePath(e.expression);
+  if (ts.isIdentifier(e) || ts.isPrivateIdentifier(e)) return e.text;
+  if (e.kind === ts.SyntaxKind.ThisKeyword) return 'this';
+  if (ts.isPropertyAccessExpression(e)) return `${calleePath(e.expression)}.${e.name.text}`;
+  if (ts.isElementAccessExpression(e) && ts.isStringLiteralLike(e.argumentExpression)) {
+    return `${calleePath(e.expression)}.${e.argumentExpression.text}`;
+  }
+  return '(…)';
+}
+
+// Prints a node as canonical code: fixed spacing, no comments.
+const printer = ts.createPrinter({ removeComments: true });
+const printed = (n: ts.Node, sf: ts.SourceFile): string => printer.printNode(ts.EmitHint.Unspecified, n, sf);
+
+function callMatches(d: ts.CallExpression, sf: ts.SourceFile, b: { callee: RegExp; args?: string[] }): boolean {
+  if (!b.callee.test(calleePath(d.expression))) return false;
+  if (!b.args) return true;
+  return d.arguments.length === b.args.length && d.arguments.every((a, i) => printed(a, sf) === b.args![i]);
+}
 
 describe('main-process blocking calls (one allowlist, ratcheted)', () => {
   const scanned = scanMain(MAIN_DIR);
@@ -225,8 +283,17 @@ describe('main-process blocking calls (one allowlist, ratcheted)', () => {
         expect(f, `${p.file} is gone — point this PROTECTED row at its new path (or drop it if the code is gone on purpose)`).toBeDefined();
         const problems: string[] = [];
         for (const name of [...p.noBlocking, ...(p.except ?? []), ...(p.mustExist ?? [])]) {
-          if (name !== '*' && !f!.scopes.has(name)) {
+          if (name === '*') continue;
+          if (!f!.scopes.has(name)) {
             problems.push(`\`${name}\` no longer exists in ${p.file} — renamed? Update PROTECTED so the guard follows it.`);
+            continue;
+          }
+          const kind = p.kinds?.[name];
+          if (!kind) {
+            problems.push(`PROTECTED row for ${p.file} names \`${name}\` without its kind — add it to \`kinds\`.`);
+          } else if (!scopeNodes(f!.source, name).some((n) => isKind(n, kind))) {
+            problems.push(`\`${name}\` in ${p.file} is no longer a ${kind} — the guard was written for that shape; ` +
+              `check the change keeps the path async, then update \`kinds\`.`);
           }
         }
         for (const c of f!.calls) {
@@ -239,7 +306,7 @@ describe('main-process blocking calls (one allowlist, ratcheted)', () => {
           const roots = b.scope ? scopeNodes(f!.source, b.scope) : [f!.source];
           for (const r of roots) {
             eachDescendant(r, (d) => {
-              if (ts.isCallExpression(d) && b.re.test(norm(d.getText(f!.source)))) {
+              if (ts.isCallExpression(d) && callMatches(d, f!.source, b)) {
                 const line = f!.source.getLineAndCharacterOfPosition(d.getStart(f!.source)).line + 1;
                 problems.push(`${p.file}:${line} ${b.what} is banned here (${p.why}).`);
               }
@@ -259,13 +326,35 @@ describe('main-process blocking calls (one allowlist, ratcheted)', () => {
         if (p.requiredAwait) {
           let found = false;
           eachDescendant(f!.source, (d) => {
-            if (ts.isAwaitExpression(d) && norm(d.expression.getText(f!.source)) === p.requiredAwait!.text) found = true;
+            if (ts.isAwaitExpression(d) && printed(d.expression, f!.source) === p.requiredAwait!.text) found = true;
           });
           if (!found) problems.push(`${p.file} lost ${p.requiredAwait.what} (${p.why}).`);
         }
         expect(problems, `${problems.join('\n')}\n\nThis replaced ast-grep rule ${p.was}. ${HOW_TO_FIX}`).toEqual([]);
       });
     });
+
+  it('a banned call is found however it is spaced, wrapped or commented, and a lookalike is not', () => {
+    // Self-test for bannedCalls: they used to be matched as whitespace-collapsed
+    // text, so `fs.statSync( abs )` slipped past a ban on `fs.statSync(abs)`.
+    const src = [
+      'fs.statSync( abs );', 'fs.statSync(/* target */ abs);', 'fs\n  .statSync(\n    abs,\n  );',
+      'this.nativeHost . list( );', "deps.nativeHost['list']();", '(nativeHost as any).list();',
+      // Lookalikes — NOT the banned call:
+      'fs.statSync(other);', 'fs.statSync(abs, opts);', 'nativeHost.list(filter);', 'nativeHost.listAsync();',
+    ];
+    const statBan = { callee: /^fs\.statSync$/, args: ['abs'] };
+    const listBan = { callee: /nativeHost\.list$/, args: [] as string[] };
+    const hits = src.map((line) => {
+      const sf = ts.createSourceFile('probe.ts', line, ts.ScriptTarget.Latest, true);
+      let hit = false;
+      eachDescendant(sf, (d) => {
+        if (ts.isCallExpression(d) && (callMatches(d, sf, statBan) || callMatches(d, sf, listBan))) hit = true;
+      });
+      return hit;
+    });
+    expect(hits).toEqual([true, true, true, true, true, true, false, false, false, false]);
+  });
 
   it('the scanner catches every spelling of a blocking call and nothing else', () => {
     // Self-test in place of an ast-grep fixture: proves each import shape is
