@@ -811,4 +811,41 @@ describe('hidden terminals and theme switches', () => {
       expect(lastPauseVerdict()).toEqual({ isIntersecting: false });
     });
   });
+
+  describe('TerminalView backing change (E5)', () => {
+    function theme(background: any): ThemeDefinition {
+      return {
+        name: 'T', slug: 't', dark: true,
+        tokens: {
+          canvas: '#0D0F1A', panel: '#141726', inset: '#1F2440', well: '#0D0F1A',
+          accent: '#7C6AF7', 'on-accent': '#FFFFFF',
+          fg: '#C4BFFF', 'fg-2': '#9090C0', 'fg-dim': '#6060A0',
+          'fg-muted': '#404070', 'fg-faint': '#282848',
+          edge: '#2A2F55', 'edge-dim': '#2A2F5580',
+          'scrollbar-thumb': '#2A2F55', 'scrollbar-hover': '#3A3F70',
+        },
+        background,
+      };
+    }
+
+    it('flat -> wallpaper theme recolours the open terminal in place: no dispose, no second terminal', async () => {
+      const flat = theme(undefined);
+      applyThemeToDom(flat);
+      mockActiveTheme = flat;
+      const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+      expect(terminalInstances).toHaveLength(1);
+      const term = terminalInstances[0];
+      expect(terminalCtorArgs[0].theme.background).toBe('#0D0F1A'); // --canvas
+
+      const wallpaper = theme({ type: 'image', value: 'theme-asset://meadow/wallpaper.jpg' });
+      applyThemeToDom(wallpaper);
+      mockActiveTheme = wallpaper;
+      rerender(<TerminalView sessionId="s1" visible={true} />);
+
+      expect(terminalInstances).toHaveLength(1);
+      expect(term.dispose).not.toHaveBeenCalled();
+      // The theme effect recolours on the next frame, to the --panel backing.
+      await waitFor(() => expect(term.options.theme?.background).toBe('#141726'));
+    });
+  });
 });

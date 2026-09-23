@@ -82,6 +82,14 @@ export default function TerminalView({ sessionId, visible }: Props) {
   // theme); the workbench mock-ups override it for side-by-side shots only.
   const shippedBacking = computeTerminalSurface(bg).backing;
   const xtermBackground = backingStyle?.xtermBackground ?? shippedBacking;
+  // WHY: the mount effect reads the backing through a ref so a theme switch
+  // RECOLOURS the open terminals (the theme effect below) instead of disposing
+  // and rebuilding every one of them. A rebuild was never needed: xterm is
+  // always opaque (no allowTransparency — a constructor-only option we never
+  // set), so the backing is just `options.theme.background`, which xterm
+  // applies live. Rebuilding also cost each session its scrollback.
+  const xtermBackgroundRef = useRef(xtermBackground);
+  xtermBackgroundRef.current = xtermBackground;
   const hasWallpaper = bg?.type === 'image' && !!bg.value;
   const hasGradient = bg?.type === 'gradient' && !!bg.value;
   const hasBlur = !!(bg?.['panels-blur'] && bg['panels-blur'] > 0 && !reducedEffects);
@@ -135,7 +143,7 @@ export default function TerminalView({ sessionId, visible }: Props) {
       cursorInactiveStyle: 'none',
       fontSize: touch ? 12 : 14,
       fontFamily: TERMINAL_FONT,
-      theme: getXtermTheme(xtermBackground),
+      theme: getXtermTheme(xtermBackgroundRef.current),
       disableStdin: touch,
     });
 
@@ -478,7 +486,9 @@ export default function TerminalView({ sessionId, visible }: Props) {
       disposed = true;
       terminal.dispose();
     };
-  }, [sessionId, xtermBackground]);
+    // WHY only sessionId: see xtermBackgroundRef — a backing change recolours
+    // in place via the theme effect, it must not rebuild the terminal.
+  }, [sessionId]);
 
   // Pause drawing while hidden, resume (with one full repaint) when shown.
   // WHY a LAYOUT effect: it runs before the browser paints the now-visible
