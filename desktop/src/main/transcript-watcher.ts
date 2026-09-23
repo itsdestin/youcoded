@@ -959,8 +959,9 @@ export class TranscriptWatcher extends EventEmitter {
         }
         if (event.type === 'tool-result' && event.data.toolUseId) {
           // If this result completes a parent Agent tool call, that subagent
-          // is done writing — settle its file poll (fire-and-forget; no-op
-          // for non-Agent toolUseIds, fs.watch stays attached either way).
+          // is done writing — final read, then release its own watch + poll
+          // (fire-and-forget; no-op for non-Agent toolUseIds). A late write
+          // still arrives through the subagents directory watch.
           void session.subagentWatcher.settleByParent(event.data.toolUseId);
         }
       }
