@@ -158,4 +158,16 @@ describe('transformParams', () => {
     const out = transformParams(params);
     expect(out.maxOutputTokens).toBeUndefined();
   });
+
+  it('sends the session id as the session-id header the ChatGPT backend routes its cache by', () => {
+    const params = {
+      prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      headers: { 'x-existing': '1' },
+    } as unknown as LanguageModelV4CallOptions;
+    const out = transformParams(params, 'session-abc');
+    expect(out.headers).toEqual({ 'x-existing': '1', 'session-id': 'session-abc', 'x-client-request-id': 'session-abc' });
+    expect((out.providerOptions?.openai as Record<string, unknown>).promptCacheKey).toBe('session-abc');
+    // Without a session (e.g. the title feeder) no routing header is invented.
+    expect(transformParams(params).headers).toEqual({ 'x-existing': '1' });
+  });
 });
