@@ -230,12 +230,9 @@ function placeToolInCurrentGroup(
   currentGroupId: string | null;
   currentTurnId: string;
 } {
-  // WHY no up-front copies (perf, 2026-09-23): getOrCreateTurn hands back a
-  // fresh copy of the session's whole assistantTurns Map, and this function
-  // used to copy toolGroups too — but the common cases (a second tool joining
-  // an open group, a re-emitted tool-use already placed) change neither Map.
-  // Each Map is now copied only on the branch that writes to it, so an
-  // unchanged Map keeps its identity and nothing reading it re-renders.
+  // WHY no up-front copies (perf, 2026-09-23): a tool joining an open group or
+  // already placed changes neither assistantTurns nor toolGroups, so each Map is
+  // copied only on the branch that writes it — an unchanged Map keeps its identity.
   const turnExists = !!session.currentTurnId && session.assistantTurns.has(session.currentTurnId);
   const created = turnExists ? null : getOrCreateTurn(session);
   let assistantTurns = created ? created.assistantTurns : session.assistantTurns;
@@ -1740,14 +1737,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const existing = session.toolCalls.get(action.toolCallId);
-      // WHY checked before any copy (perf, 2026-09-23): this action streams once
-      // per argument chunk while the model composes a tool call. The two no-op
-      // exits (a clear of a card that is no longer preparing, a progress tick for
-      // a card the real tool-use already superseded) used to copy the whole
-      // toolCalls Map — and, for a clear, two more Maps — only to throw them
-      // away. removePreparingTool refuses exactly when `!existing?.preparing`,
-      // and the progress branch returns on `!existing.preparing`, so this is the
-      // same decision made earlier.
+      // WHY decided before any copy (perf, 2026-09-23): this streams per argument
+      // chunk, and its no-op exits (card no longer preparing / unknown clear) used
+      // to copy whole Maps only to discard them. Same tests removePreparingTool and
+      // the progress branch below apply, made earlier.
       if (existing && !existing.preparing) return state;
       if (action.cleared && !existing) return state;
       const toolCalls = new Map(session.toolCalls);
@@ -1984,9 +1977,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (!session) return state;
 
       const existing = session.toolCalls.get(action.toolUseId);
-      // WHY copied only when there is a card to update (perf, 2026-09-23): an
-      // orphan result (its tool-use never observed) changes no card, so the
-      // session keeps its own toolCalls Map instead of a needless full copy.
+      // WHY copied only when a card exists (perf, 2026-09-23): an orphan result
+      // changes nothing, so the session keeps its own toolCalls Map.
       let toolCalls = session.toolCalls;
       if (existing) {
         toolCalls = new Map(toolCalls);
@@ -2415,13 +2407,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // true: a card whose ask was overwritten keeps the requestId while
       // reverting to 'running', which is exactly the stale binding the loop
       // directly below detects and clears.)
-      //
-      // WHY this pre-scan (perf, 2026-09-23): the heartbeat below re-delivers
-      // every pending ask every few seconds, and nearly every delivery is the
-      // "already awaiting" no-op. Checking that BEFORE copying the session's
-      // whole toolCalls Map (which never shrinks) skips a wasted copy per
-      // heartbeat. Same outcome as the loop's own early return: any clears it
-      // made before returning were thrown away with the copy anyway.
+      // WHY this pre-scan (perf, 2026-09-23): nearly every heartbeat (below) is the
+      // "already awaiting" no-op, so decide it BEFORE copying the whole toolCalls
+      // Map. Same outcome as the loop's early return, whose clears were discarded.
       for (const tool of session.toolCalls.values()) {
         if (tool.requestId === action.requestId && tool.status === 'awaiting-approval') return state;
       }
