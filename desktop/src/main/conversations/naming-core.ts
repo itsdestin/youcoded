@@ -186,6 +186,8 @@ export function shortenPathTokens(text: string): string {
     return `\u0000${protectedTokens.length - 1}\u0000`;
   });
   return protectedText
+    // WHY: an explicit root identifies a path after one directory; unrooted
+    // slash compounds still need two directories to avoid prose like and/or.
     .replace(/(?:(?:[A-Za-z]:[\\/]|\.\.?[\\/]|\/)(?:[\w.-]+[\\/])+|(?:[\w.-]+[\\/]){2,})[\w.-]+(?:\.[A-Za-z0-9]+)?/g, (token, offset: number, whole: string) => {
       const start = offset;
       const end = offset + token.length;
