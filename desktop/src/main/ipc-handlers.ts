@@ -11,6 +11,7 @@ import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
 import { execFile } from 'child_process';
 import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
+import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
 import { HookRelay } from './hook-relay';
 import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
@@ -806,11 +807,13 @@ export function registerIpcHandlers(
 
   // Session CRUD
   ipcMain.handle(IPC.SESSION_CREATE, async (event, rawOpts) => {
-    // "No folder" (shared/no-folder.ts): the renderer's sentinel becomes the
-    // app-owned empty folder here, before the session manager or the native
-    // host sees a cwd.
+    // Resolve "No folder" to the app-owned folder before either runtime sees the cwd.
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
+    // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
+    const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
+      ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
     const info = sessionManager.createSession(opts);
+    if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
     // Assign the new session to the calling window so per-session events (transcript,
     // pty output, permission prompts) route here once Task 1.4 migrates the emits.
     //
@@ -1065,6 +1068,7 @@ export function registerIpcHandlers(
     // stops the transcript watcher. Closing the conversation is the point where
     // nothing can ask for its history again.
     pageSources.forget(sessionId);
+    resumePageBoundaries.delete(sessionId);
     const result = sessionManager.destroySession(sessionId);
     if (result) {
       // Explicit user-initiated destroy → treat as clean exit (0). The
@@ -2451,6 +2455,7 @@ export function registerIpcHandlers(
   // fall back on whenever the transcript watcher cannot say — see
   // transcript-page-source.ts for the three ordinary moments when it cannot.
   const pageSources = new TranscriptPageSources();
+  const resumePageBoundaries = new Map<string, { jsonlPath: string; offset: number }>();
 
   // Holder-side takeover (Plan 2b Task 8): when another device requests this
   // session, cleanly interrupt, flush the final turn to the space, release the
@@ -3169,6 +3174,7 @@ export function registerIpcHandlers(
     // Native sessions page over the merged event array; getHistoryPage returns
     // null for non-native ids, so CC's watcher stays the source for claude
     // sessions — the same discrimination the replay handler uses.
+    const idleBeforeRead = nativeHost.isLive(sessionId) && nativeHost.isIdle(sessionId);
     const nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null);
     if (nativePage !== null) {
       return {
@@ -3176,19 +3182,15 @@ export function registerIpcHandlers(
         // `offset` carries an ARRAY INDEX for native sources; opaque to the renderer.
         cursor: nativePage.hasMore ? { path: `native:${sessionId}`, offset: nativePage.nextIndex!, sizeAtRead: 0 } : null,
         hasMore: nativePage.hasMore,
+        reconcileInterrupted: shouldReconcileNativePage({ nativeIdle: idleBeforeRead && nativeHost.isIdle(sessionId), inherited, olderPage: !!beforeCursor }),
       };
     }
 
     let source: ResolvedPageSource | null = transcriptWatcher.pageSourceFor(sessionId);
     if (!source) {
-      // Not watched (a just-resumed CC session before CC's hook reports the
-      // transcript path; a session whose process has exited, which tears the
-      // watcher down; the buddy floater, which never watched one). Resolve from
-      // the ids the caller supplied, or from the ones an EARLIER request for
-      // this session supplied — only the FIRST page request carries them, and
-      // the scroll-up sentinel that follows it must not be told the
-      // conversation has no more history just because it has no ids to send.
-      // rememberLocator validates both before either shapes a path.
+      // No watcher yet (pre-hook resume), anymore (exit), or ever (buddy).
+      // Resolve from validated locator ids supplied now or on the first page;
+      // later scroll-up requests carry only the cursor, not those ids.
       pageSources.rememberLocator(sessionId, req.claudeSessionId, req.projectSlug);
       source = pageSources.get(sessionId);
       // NOT `empty`: "I cannot find the file" and "this is the beginning of the
@@ -3206,27 +3208,23 @@ export function registerIpcHandlers(
         return { ...empty, unresolved: true };
       }
     }
-    // The FIRST page ends where the live tailer started, so the page and the
-    // live stream cannot overlap (transcript-watcher startOffset, Task 4). A
-    // startOffset of 0 means the file didn't exist at watch time — read to EOF.
-    //
-    // EXCEPT for a window that INHERITED this session: "the live stream already
-    // delivered the rest" is only true of a window that was listening. A
-    // torn-off window received none of it, so stopping at startOffset showed a
-    // conversation frozen at the moment the session was resumed, with every
-    // message since missing (Destin, 2026-09-03). It reads to EOF instead; the
-    // reducer's HISTORY_PAGE_LOADED seeds its scratch replay from the live
-    // session's seenUuids, so any overlap with live events is deduped, not
-    // duplicated.
-    const endOffset = beforeCursor
-      ? beforeCursor.offset
-      : (inherited ? null : (source.startOffset || null));
-    return readTranscriptPage({
-      jsonlPath: source.jsonlPath,
-      sessionId,
-      endOffset,
-      subagentsDir: source.subagentsDir,
+    // The first page stops at the watcher cutoff; zero or an inherited window reads to EOF.
+    // HISTORY_PAGE_LOADED dedups any overlap against the live seenUuids.
+    const saved = resumePageBoundaries.get(sessionId);
+    const resumeOffset = saved?.jsonlPath === source.jsonlPath ? saved.offset : null;
+    const endOffset = beforeCursor ? beforeCursor.offset : (inherited ? null : (source.startOffset || null));
+    const page = await readTranscriptPage({
+      jsonlPath: source.jsonlPath, sessionId, endOffset, subagentsDir: source.subagentsDir,
     });
+    // Preserve the entire page (including new output before SessionStart), but
+    // reap ONLY tools that began before spawn. A watcher cutoff can be too late.
+    const entirelyOld = resumeOffset != null && !!beforeCursor && beforeCursor.offset <= resumeOffset;
+    const reconcile = resumeOffset != null && !entirelyOld;
+    const old = reconcile ? await readTranscriptPage({ jsonlPath: source.jsonlPath,
+      sessionId, endOffset: resumeOffset }) : null;
+    return { ...page, reconcileInterrupted: entirelyOld, reconcileInterruptedToolIds: old
+      ? [...new Set(old.events.filter(ev => ev.type === 'tool-use').map(ev => ev.data.toolUseId).filter((id): id is string => !!id))]
+      : undefined };
   });
 
   // Transcript replay: a window that just acquired a session asks for every

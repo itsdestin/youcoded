@@ -18,11 +18,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { FOLD_IDLE_MS } from '../src/renderer/hooks/use-entry-folding';
 
-const mocks = vi.hoisted(() => ({ state: {} as any }));
+const mocks = vi.hoisted(() => ({ state: {} as any, dispatch: vi.fn() }));
 
 vi.mock('../src/renderer/state/chat-context', () => ({
   useChatState: () => mocks.state,
-  useChatDispatch: () => vi.fn(),
+  useChatDispatch: () => mocks.dispatch,
 }));
 
 vi.mock('../src/renderer/state/theme-context', () => ({
@@ -49,6 +49,7 @@ class FoldIO {
 }
 
 beforeEach(() => {
+  mocks.dispatch.mockClear();
   FoldIO.instances = [];
   vi.stubGlobal('IntersectionObserver', FoldIO);
   // BubbleFeed owns its own IPC subscriptions (separate renderer from
@@ -114,6 +115,21 @@ function twoTurnState() {
     ]),
   });
 }
+
+describe('BubbleFeed paging', () => {
+  it('passes the first page’s interrupted tools to its own chat reducer', async () => {
+    mocks.state = sessionState({ history: { cursor: null, hasMore: false, loading: false } });
+    (window as any).claude.detach.requestTranscriptPage = vi.fn().mockResolvedValue({
+      events: [], cursor: null, hasMore: false, reconcileInterrupted: true,
+      reconcileInterruptedToolIds: ['pre-resume-tool'],
+    });
+    render(<BubbleFeed sessionId="s1" />);
+    await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'HISTORY_PAGE_LOADED', sessionId: 's1', reconcileInterrupted: true,
+      reconcileInterruptedToolIds: ['pre-resume-tool'],
+    })));
+  });
+});
 
 describe('BubbleFeed folding', () => {
   // (a) alone is a lookalike, per Task 6's own note on this pair — it passes

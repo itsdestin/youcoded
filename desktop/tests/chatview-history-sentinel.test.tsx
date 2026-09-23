@@ -83,6 +83,16 @@ describe('ChatView history sentinel', () => {
     ));
   });
 
+  it('forwards an older page’s interruption boundary to the reducer', async () => {
+    requestPage.mockResolvedValue({ events: [], cursor: null, hasMore: false,
+      reconcileInterrupted: true, reconcileInterruptedToolIds: ['pre-resume-tool'] });
+    renderWith({ cursor: { path: 'p', offset: 100, sizeAtRead: 900 }, hasMore: true, loading: false });
+    await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'HISTORY_PAGE_LOADED', sessionId: 's1', reconcileInterrupted: true,
+      reconcileInterruptedToolIds: ['pre-resume-tool'],
+    })));
+  });
+
   it('renders no sentinel once the beginning of the conversation is on screen', () => {
     const { container } = renderWith({ cursor: null, hasMore: false, loading: false });
     expect(container.querySelector('[data-history-sentinel]')).toBeNull();
