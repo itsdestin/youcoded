@@ -2085,7 +2085,7 @@ function AppInner() {
         // scroll-up sentinel (Destin, 2026-09-07). See first-page-retry.ts.
         const decision = decideFirstPage(page, attempt);
         if (decision === 'accept') {
-          dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+          dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
           return;
         }
         if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }

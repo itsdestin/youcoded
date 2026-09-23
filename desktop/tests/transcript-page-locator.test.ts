@@ -24,6 +24,9 @@ vi.mock('electron', () => {
 
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { WindowRegistry } from '../src/main/window-registry';
+import { TranscriptWatcher } from '../src/main/transcript-watcher';
+import { NativeSessionHost } from '../src/main/harness/native-session-host';
+import { shouldReconcileNativePage, snapshotResumeBoundary } from '../src/main/transcript-page-source';
 
 /**
  * Scroll-back on a just-resumed conversation.
@@ -56,6 +59,19 @@ function turnLines(i: number): string {
 const CC_ID = 'ccsession-1';
 const SLUG = '-home-destin-project';
 
+describe('history page interruption boundary', () => {
+  it('reconciles native history only when the host confirms the session is idle', () => {
+    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: false, olderPage: false })).toBe(true);
+    expect(shouldReconcileNativePage({ nativeIdle: false, inherited: false, olderPage: false })).toBe(false);
+  });
+
+  it('reconciles idle older pages, but never guesses that a busy or transferred page is stale', () => {
+    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: false, olderPage: true })).toBe(true);
+    expect(shouldReconcileNativePage({ nativeIdle: false, inherited: false, olderPage: true })).toBe(false);
+    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: true, olderPage: true })).toBe(false);
+  });
+});
+
 describe('transcript:page locator memory', () => {
   let tmpHome: string;
   let homedirSpy: ReturnType<typeof vi.spyOn>;
@@ -80,7 +96,7 @@ describe('transcript:page locator memory', () => {
     fs.writeFileSync(path.join(dir, `${ccId}.jsonl`), body);
   }
 
-  function pageHandler(windowRegistry?: WindowRegistry) {
+  function pageHandler(windowRegistry?: WindowRegistry, sessionManagerOverride?: any) {
     const mockSessionManager: any = {
       createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []),
       getSession: vi.fn(() => undefined),
@@ -94,14 +110,77 @@ describe('transcript:page locator memory', () => {
     };
     const mockCommandProvider: any = { list: vi.fn(() => []), refresh: vi.fn() };
     registerIpcHandlers(
-      mockIpcMain as any, mockSessionManager, mockWindow, mockSkillProvider, mockCommandProvider,
+      mockIpcMain as any, sessionManagerOverride ?? mockSessionManager, mockWindow, mockSkillProvider, mockCommandProvider,
       undefined, undefined, undefined, windowRegistry,
     );
-    const call = (mockIpcMain.handle as any).mock.calls.find((c: any) => c[0] === 'transcript:page');
+    const call = [...(mockIpcMain.handle as any).mock.calls].reverse().find((c: any) => c[0] === 'transcript:page');
     return call[1] as (evt: any, req: any) => Promise<any>;
   }
 
   const evt = { sender: { id: 1 } };
+
+  it('does not interrupt a native turn that starts while history is being read', async () => {
+    const history = vi.spyOn(NativeSessionHost.prototype, 'getHistoryPageAsync').mockResolvedValue({
+      events: [{ type: 'tool-use', sessionId: 'native-1', uuid: 'u1', timestamp: 1,
+        data: { toolUseId: 't1', toolName: 'Bash', toolInput: {} } }],
+      nextIndex: null, hasMore: false,
+    });
+    const live = vi.spyOn(NativeSessionHost.prototype, 'isLive').mockReturnValue(true);
+    const idle = vi.spyOn(NativeSessionHost.prototype, 'isIdle')
+      .mockReturnValueOnce(true).mockReturnValueOnce(false);
+    try {
+      const page = await pageHandler()(evt, { sessionId: 'native-1', beforeCursor: null });
+      expect(page.reconcileInterrupted).toBe(false);
+      expect(idle).toHaveBeenCalledTimes(2);
+    } finally {
+      history.mockRestore();
+      live.mockRestore();
+      idle.mockRestore();
+    }
+  });
+
+  it('snapshots the transcript size before a Claude Code resume can append', () => {
+    writeTranscript(2);
+    const boundary = snapshotResumeBoundary('/home/destin/project', CC_ID);
+    expect(boundary?.offset).toBeGreaterThan(0);
+    writeTranscript(3);
+    expect(boundary?.offset).toBeLessThan(fs.statSync(boundary!.jsonlPath).size);
+    expect(snapshotResumeBoundary('/home/destin/project', '../bad')).toBeNull();
+  });
+
+  it('bounds a just-resumed Claude Code fallback page before new transcript writes', async () => {
+    writeTranscript(2);
+    const file = path.join(tmpHome, '.claude', 'projects', SLUG, `${CC_ID}.jsonl`);
+    fs.appendFileSync(file, JSON.stringify({ type: 'assistant', uuid: 'old-tool-line',
+      timestamp: new Date(1_700_000_000_003).toISOString(),
+      message: { role: 'assistant', content: [{ type: 'tool_use', id: 'old-tool', name: 'Bash', input: {} }] },
+    }) + '\n');
+    const manager: any = {
+      createSession: vi.fn(() => ({ id: 'desktop-1', provider: 'claude', cwd: '/home/destin/project', status: 'active' })),
+      destroySession: vi.fn(), listSessions: vi.fn(() => []), getSession: vi.fn(),
+      sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn(),
+    };
+    const registry = new WindowRegistry();
+    const handler = pageHandler(registry, manager);
+    const create = [...(mockIpcMain.handle as any).mock.calls].reverse().find((c: any) => c[0] === 'session:create')[1];
+    await create(evt, { provider: 'claude', cwd: '/home/destin/project', resumeSessionId: CC_ID, name: 'Resuming' });
+    const oldEnd = fs.statSync(file).size;
+    fs.appendFileSync(file, turnLines(2)); // a live turn appended after the resume began
+    const page = await handler(evt, {
+      sessionId: 'desktop-1', beforeCursor: null, claudeSessionId: CC_ID, projectSlug: SLUG,
+    });
+    expect(page.reconcileInterruptedToolIds).toEqual(['old-tool']);
+    expect(page.events.some((e: any) => e.data?.text === 'prompt 2')).toBe(true);
+    registry.markInheritedByTransfer('desktop-1', 1);
+    const redocked = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
+    expect(redocked.reconcileInterruptedToolIds).toEqual(['old-tool']);
+    expect(redocked.events.some((e: any) => e.data?.text === 'prompt 2')).toBe(true);
+    // An older page wholly before the restart is historical even after the
+    // newest page has been redocked and a new turn has started.
+    const older = await handler(evt, { sessionId: 'desktop-1',
+      beforeCursor: { path: file, offset: oldEnd, sizeAtRead: fs.statSync(file).size } });
+    expect(older.reconcileInterrupted).toBe(true);
+  });
 
   it('a scroll-up request resolves the file the first page already located', async () => {
     writeTranscript(40);
@@ -112,10 +191,37 @@ describe('transcript:page locator memory', () => {
     });
     expect(first.hasMore).toBe(true);
     expect(first.cursor).not.toBeNull();
+    // Locator fallback reads to EOF, so it cannot distinguish pre-crash work
+    // from a newly running tool; do not claim that it has been interrupted.
+    expect(first.reconcileInterruptedToolIds).toBeUndefined();
 
     // The sentinel's request. ChatView has no locator to send — only the cursor.
     const older = await handler(evt, { sessionId: 'desktop-1', beforeCursor: first.cursor });
     expect(older.events.length).toBeGreaterThan(0);
+  });
+
+  it('does not mistake a late watcher cutoff for the pre-resume boundary', async () => {
+    writeTranscript(3);
+    const file = path.join(tmpHome, '.claude', 'projects', SLUG, `${CC_ID}.jsonl`);
+    const spy = vi.spyOn(TranscriptWatcher.prototype, 'pageSourceFor').mockReturnValue({
+      jsonlPath: file, subagentsDir: path.join(path.dirname(file), CC_ID, 'subagents'),
+      startOffset: fs.statSync(file).size,
+    });
+    try {
+      const handler = pageHandler();
+      const first = await handler(evt, { sessionId: 'desktop-1', beforeCursor: null });
+      expect(first.reconcileInterruptedToolIds).toBeUndefined();
+
+      const registry = new WindowRegistry();
+      const inheritedHandler = pageHandler(registry);
+      registry.markInheritedByTransfer('desktop-1', 1);
+      const consume = vi.spyOn(registry, 'consumeInheritedByTransfer');
+      const inherited = await inheritedHandler(evt, { sessionId: 'desktop-1', beforeCursor: null });
+      expect(consume).toHaveBeenCalledWith('desktop-1', 1);
+      expect(inherited.reconcileInterruptedToolIds).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('reports that it could not locate the transcript, rather than "no more history"', async () => {

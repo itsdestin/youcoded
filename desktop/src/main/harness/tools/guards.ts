@@ -26,6 +26,7 @@
 //      file (Task 13).
 import * as path from 'path';
 import * as os from 'os';
+import * as fs from 'fs';
 import { isSensitivePath, isUnderRoot } from '../../artifacts/read-binary-access';
 import { isCredentialPath } from './credential-paths';
 import { spillRoot } from './spill-paths';
@@ -47,6 +48,44 @@ export function canonicalize(p: string, cwd: string): string {
 export function resolveP(p: string, cwd: string): string {
   // Always resolve() so absolute-with-`..` inputs are normalized, not trusted.
   return path.resolve(cwd, p);
+}
+
+/** WHY: Luna's experiment-only tool restriction follows actual filesystem ancestry,
+ * including existing symlink ancestors; missing suffixes are checked against the
+ * realpath of their nearest existing ancestor so Writes cannot escape via a link. */
+export function lunaFixturePathAllowed(candidate: string, fixtureRoot: string): boolean {
+  try {
+    if (!fixtureRoot || !path.isAbsolute(fixtureRoot) || !path.isAbsolute(candidate)) return false;
+    const root = fs.realpathSync.native(fixtureRoot);
+    let probe = path.resolve(candidate);
+    const suffix: string[] = [];
+    while (true) {
+      try {
+        const actual = fs.realpathSync.native(probe);
+        const resolved = path.join(actual, ...suffix);
+        const rel = path.relative(root, resolved);
+        return rel === '' || (!path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`));
+      } catch (err: any) {
+        if (err?.code !== 'ENOENT' && err?.code !== 'ENOTDIR') return false;
+        // A dangling symlink is not a not-yet-created directory: refusing it
+        // avoids treating an unresolved link ancestor as an ordinary suffix.
+        try {
+          if (fs.lstatSync(probe).isSymbolicLink()) return false;
+        } catch { /* absent component; continue toward the nearest real ancestor */ }
+        const parent = path.dirname(probe);
+        if (parent === probe) return false;
+        suffix.unshift(path.basename(probe));
+        probe = parent;
+      }
+    }
+  } catch {
+    return false;
+  }
+}
+
+export function lunaPathRefused(candidate: string): boolean {
+  return process.env.YOUCODED_LUNA_EXPERIMENT === '1'
+    && !lunaFixturePathAllowed(candidate, process.env.LUNA_FIXTURE_ROOT ?? '');
 }
 
 /** Normalize a path for OUTPUT: backslashes → forward slashes, nothing else.

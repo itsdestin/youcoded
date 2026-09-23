@@ -216,9 +216,9 @@ Update this table when you re-run snapshots after a CC version bump. Anything th
 - **Break symptom:** If CC renames `promptId`/`timestamp` or changes the content-block shape, fallback titles degrade to "Untitled" and ordering falls back to file mtimes (graceful — never a wrong title, just a missing one). If CC changes its injected-wrapper tags to something not starting with `<`, plumbing text could leak into derived titles.
 
 ### JSONL transcript file location
-- **Files:** `desktop/src/main/transcript-watcher.ts`
-- **Depends on:** Transcript files written at `~/.claude/projects/<encoded-cwd-path>/*.jsonl` with CC's path-encoding scheme
-- **Break symptom:** Transcript watcher watches the wrong directory; chat UI silent for all sessions.
+- **Files:** `desktop/src/main/transcript-watcher.ts`, `desktop/src/main/transcript-page-source.ts` (`snapshotResumeBoundary`), `desktop/src/main/ipc-handlers.ts` (captures the file size before `claude --resume`)
+- **Depends on:** Transcript files written at `~/.claude/projects/<encoded-cwd-path>/*.jsonl` with CC's path-encoding scheme; `--resume` appends to the same file. The pre-spawn byte boundary separates interrupted history from a new turn even before SessionStart supplies a watcher.
+- **Break symptom:** Transcript watcher watches the wrong directory and chat stays silent; if the snapshot path changes, unfinished pre-crash tools remain visibly running instead of being labelled interrupted (fail-safe, never mislabel new work).
 
 ### CC built-in command list
 - **Files:** `desktop/src/main/cc-builtin-commands.ts`, `app/src/main/kotlin/com/youcoded/app/runtime/CommandProvider.kt` (the `CC_BUILTIN_COMMANDS` companion block)

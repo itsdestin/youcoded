@@ -175,7 +175,7 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
         open
         onClose={onClose}
         size="panel"
-        title={page === 'connections' ? 'Connected accounts' : 'Account'}
+        title={page === 'connections' ? 'Connected services' : 'Account'}
         onBack={page === 'connections' ? () => setPage('main') : undefined}
       >
             {page === 'connections' ? (
@@ -218,7 +218,7 @@ function AccountPopup({ onClose }: { onClose: () => void }) {
                         <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
                       </svg>
                     }
-                    title="Connected accounts"
+                    title="Connected services"
                     description={ghSummary}
                   />
                 )}

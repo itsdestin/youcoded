@@ -1,10 +1,22 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { WebSearchTool } from '../src/main/harness/tools/web-search';
 import { SearchUnavailableError } from '../src/main/harness/search/search-service';
 
 const ctxWith = (search: any) => ({ sessionId: 's', cwd: 'C:\\p', signal: new AbortController().signal, readRegistry: new Map(), todos: [] as any[], services: { search } });
 
 describe('WebSearch tool', () => {
+  it('refuses experiment web searches before calling the search service without changing tool metadata', async () => {
+    const metadata = { name: WebSearchTool.name, description: WebSearchTool.description };
+    const search = vi.fn(async () => ({ results: [], source: 'fake' }));
+    vi.stubEnv('YOUCODED_LUNA_EXPERIMENT', '1');
+    try {
+      const r = await WebSearchTool.execute({ query: 'synthetic' } as any, ctxWith({ search }) as any);
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(/experiment.*network/i);
+      expect(search).not.toHaveBeenCalled();
+      expect({ name: WebSearchTool.name, description: WebSearchTool.description }).toEqual(metadata);
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('formats results as a markdown list with the source', async () => {
     const r = await WebSearchTool.execute({ query: 'node lts' } as any, ctxWith({
       search: async () => ({ source: 'exa', results: [{ title: 'Node.js releases', url: 'https://nodejs.org/releases', snippet: 'LTS schedule' }] }),

@@ -37,18 +37,38 @@
 // (ScreenBand, shared with Project View), the pinned button lights instead of
 // the Pages icon, and the panel is simply not rendered; the Pages icon brings
 // it back with the page still open.
+// First-run refinement (2026-09-23): keep the quoted decision above for pages
+// that exist; with none, the frame carries the former Manage pages welcome card.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
 import { workbenchScreenFrame } from '../../workbench-mode';
 import { Button, LoadingState, ErrorState, Tooltip } from '../ui';
 import { ScreenBand } from '../ScreenBand';
-import type { PageDocument, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
+import type { PageDocument, PageFetchRequest, PageFetchResult, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
+import { PagesEmptyCard } from './PagesEmptyCard';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PAGE_KIT_CSS } from './page-kit';
-import { PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
+import { PageApproval, needsApproval } from './page-connections';
+import { PageFreshness } from './PageFreshness';
+import { PageCodeChanged } from './PageCodeChanged';
+import {
+  PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
+  PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss,
+} from './page-theme';
+
+function pagesBridge(): PagesBridge | undefined {
+  return (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
+}
+
+/** A page's own script wrote these, so nothing is assumed about them: only a
+ *  flat object of strings is forwarded as request headers (main allows three
+ *  of them through anyway — design §4 step 4). */
+function isStringMap(v: unknown): v is Record<string, string> {
+  return !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every((x) => typeof x === 'string');
+}
 
 
 interface PageHostProps {
@@ -73,6 +93,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   const pageId = state.openPageId;
   // Back to chat leaves pages altogether (the library over this view goes too).
   const backToChat = () => dispatch({ type: 'PAGE_VIEW_CLOSED' });
+  const managePages = () => dispatch({ type: 'PAGES_VIEW_OPENED' });
   useEscClose(open && !state.pagesViewOpen && !settingsOpen, backToChat);
   // Esc pressed INSIDE the page (the frame swallows the key) is forwarded by
   // the page's bootstrap; it dismisses whatever is on top exactly as the key
@@ -80,15 +101,29 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // (Before: ignored while Settings was open, so Settings could not be
   // closed by Esc with the page focused — Destin, 2026-09-17.)
   const dismissTop = useDismissTop();
-  const { pages } = usePages();
+  const { pages, loaded, failed } = usePages();
   const summary = pages.find((p) => p.id === pageId) ?? null;
   const pinnedCount = pages.filter((p) => p.pinned).length;
   // The frame reloads when page.html was rewritten (the stamp moves) and not
   // when the page saved its own data (it does not) — review F7.
   const htmlStamp = summary?.htmlStamp ?? 0;
 
+  // What the LIST says about this page's approvals. It is not what the gate
+  // reads (finding 17 — that is the loaded document, below), but a change to it
+  // means the answer on disk moved, so the document is read again: approving a
+  // line is what turns the approval screen back into the page.
+  const connSig = useMemo(
+    () => (summary?.connections ?? []).map((c) => `${c.id}:${c.approved ? 1 : 0}`).join('|'),
+    [summary],
+  );
+
   const [load, setLoad] = useState<Load>({ state: 'loading' });
+  // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
+  const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && pages.length === 0;
   const frameRef = useRef<HTMLIFrameElement>(null);
+  // The data the page in the frame is known to hold, so an outside change can
+  // be told apart from the echo of the page's own save (see the onData effect).
+  const frameDataRef = useRef<string>('null');
 
   // Fetch the working version when the open page changes or its document was
   // rewritten. The document is prepared ONCE here, with the theme and the
@@ -101,26 +136,35 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     if (pageId === null) { setLoad({ state: 'idle' }); return; }
     let cancelled = false;
     setLoad({ state: 'loading' });
-    const bridge = (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
+    const bridge = pagesBridge();
     if (!bridge) {
       setLoad({ state: 'failed', failure: { kind: 'unreadable', message: 'Pages are not available in this window.' } });
       return;
     }
     bridge.get(pageId).then((r) => {
       if (cancelled) return;
-      if (r.ok) setLoad({ state: 'ready', page: r.page, doc: prepareHostedDocument(r.page.html, readThemeCss(), PAGE_KIT_CSS, r.page.data) });
-      else setLoad({ state: 'failed', failure: r.failure });
+      if (r.ok) {
+        try { frameDataRef.current = JSON.stringify(r.page.data ?? null); } catch { frameDataRef.current = 'null'; }
+        // The policy the document carries is built from THIS page's connections
+        // (design §6), so a page that reaches nothing gets the tightest one.
+        setLoad({ state: 'ready', page: r.page, doc: prepareHostedDocument(r.page.html, readThemeCss(), PAGE_KIT_CSS, r.page.data, r.page.connections ?? []) });
+      } else setLoad({ state: 'failed', failure: r.failure });
     }, () => {
       if (!cancelled) setLoad({ state: 'failed', failure: { kind: 'unreadable', message: 'The page could not be read.' } });
     });
     return () => { cancelled = true; };
-  }, [open, pageId, htmlStamp]);
+  }, [open, pageId, htmlStamp, connSig]);
 
-  // Saves from the page. Only THIS frame may write this page's data: every
+  // Everything the page says to the host. Only THIS frame is heard: every
   // sandboxed frame in the app has origin 'null' (HtmlView's artifact previews
   // use the same sandbox), so a type-only filter would let a previewed file
-  // write page data — the check is e.source (review F4). Debounced so a page
-  // that saves on every keystroke writes once per pause; last write wins.
+  // write page data — the check is e.source (review F4), and an answer goes
+  // back to that same window and nowhere else.
+  //   · save  — debounced so a page that saves on every keystroke writes once
+  //             per pause; last write wins.
+  //   · fetch — forwarded to pages.fetch, which is where the approvals are
+  //             checked. The renderer never holds the credential (design §4),
+  //             and only the four known fields are passed on.
   useEffect(() => {
     if (load.state !== 'ready' || pageId === null) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -129,26 +173,73 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
       timer = null;
       if (pending === undefined) return;
       const data = pending; pending = undefined;
-      const bridge = (window as unknown as { claude?: { pages?: PagesBridge } }).claude?.pages;
-      void bridge?.setData(pageId, data);
+      void pagesBridge()?.setData(pageId, data);
     };
     const onMessage = (e: MessageEvent) => {
       if (e.source !== frameRef.current?.contentWindow) return;
-      const d = e.data as { type?: unknown; data?: unknown } | null;
+      const d = e.data as { type?: unknown; data?: unknown; id?: unknown; url?: unknown; method?: unknown; headers?: unknown; body?: unknown } | null;
       if (!d) return;
       // Esc inside the page = Esc on the view: leave, unless Settings or the
       // library is open over it (their own Esc handling owns the key then).
       if (d.type === PAGE_ESC_MESSAGE) { dismissTop(); return; }
+      if (d.type === PAGE_FETCH_MESSAGE) {
+        if (typeof d.id !== 'string') return;
+        const id = d.id;
+        const source = e.source as Window;
+        const answer = (result: PageFetchResult) => {
+          try { source.postMessage({ type: PAGE_FETCH_RESULT_MESSAGE, id, result }, '*'); } catch { /* the frame went away */ }
+        };
+        const bridge = pagesBridge();
+        if (!bridge?.fetch) {
+          // Not a guess about the network: this window simply has no such
+          // channel (an older host, or a platform that answers unsupported).
+          answer({ ok: false, reason: 'unsupported', message: 'This window cannot make requests for pages.' });
+          return;
+        }
+        const req: PageFetchRequest = {
+          url: typeof d.url === 'string' ? d.url : '',
+          ...(typeof d.method === 'string' ? { method: d.method } : {}),
+          ...(isStringMap(d.headers) ? { headers: d.headers } : {}),
+          ...(typeof d.body === 'string' ? { body: d.body } : {}),
+        };
+        bridge.fetch(pageId, req).then(answer, () => {
+          answer({ ok: false, reason: 'network', message: 'The request could not be completed.' });
+        });
+        return;
+      }
       if (d.type !== PAGE_DATA_SET_MESSAGE) return;
-      let size = 0;
-      try { size = JSON.stringify(d.data ?? null).length; } catch { return; }
-      if (size > MAX_PAGE_DATA_BYTES) return; // main refuses it too; no point posting
+      let json = '';
+      try { json = JSON.stringify(d.data ?? null); } catch { return; }
+      if (json.length > MAX_PAGE_DATA_BYTES) return; // main refuses it too; no point posting
+      frameDataRef.current = json;
       pending = d.data ?? null;
       if (timer === null) timer = setTimeout(flush, 500);
     };
     window.addEventListener('message', onMessage);
     return () => { window.removeEventListener('message', onMessage); if (timer !== null) { clearTimeout(timer); flush(); } };
   }, [load.state, pageId, dismissTop]);
+
+  // A page's data can change under it — the same page open in another window,
+  // or a sync arrival — and `youcoded.onData` is the page's way of hearing
+  // about it. Any pages:changed broadcast means a file under Pages/ moved, so
+  // the data is read again and posted in ONLY when it differs from what the
+  // frame already holds; the echo of the page's own save therefore posts
+  // nothing and cannot loop.
+  useEffect(() => {
+    if (load.state !== 'ready' || pageId === null) return;
+    const bridge = pagesBridge();
+    if (!bridge) return;
+    let cancelled = false;
+    bridge.get(pageId).then((r) => {
+      if (cancelled || !r.ok) return;
+      let json = '';
+      try { json = JSON.stringify(r.page.data ?? null); } catch { return; }
+      if (json === frameDataRef.current) return;
+      frameDataRef.current = json;
+      frameRef.current?.contentWindow?.postMessage({ type: PAGE_DATA_MESSAGE, data: r.page.data ?? null }, '*');
+    }, () => { /* the next broadcast tries again */ });
+    return () => { cancelled = true; };
+  }, [pages, load.state, pageId]);
 
   // Live theme: watch the host document and post the fresh tokens in.
   useEffect(() => {
@@ -159,6 +250,19 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   }, [load.state]);
 
   const title = useMemo(() => summary?.name ?? (load.state === 'ready' ? load.page.name : ''), [summary, load]);
+  // The gate reads the LOADED document, never the list summary (design review
+  // 1, finding 17): the list is a broadcast that can be a moment stale, and the
+  // page that would run is this one. The list is the fallback only before the
+  // document has been read, when nothing is running yet either way.
+  // Named loadedPage, not loaded: `loaded` is the list store's "has the list
+  // arrived" flag (first-run landing, merged from master 2026-09-23).
+  const loadedPage = load.state === 'ready' ? load.page : null;
+  const awaitingApproval = needsApproval(loadedPage ?? summary);
+  /** The band's refresh button is how a person asks the page for fresh
+   *  information; the page hears it through `youcoded.onRefresh` (§5). */
+  const askPageToRefresh = () => {
+    frameRef.current?.contentWindow?.postMessage({ type: PAGE_REFRESH_MESSAGE }, '*');
+  };
   if (!open) return null;
 
   const personal = pages.filter((p) => p.home.kind === 'personal');
@@ -190,6 +294,11 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         title={<>
           {summary && <PageGlyph icon={summary.icon} className="w-4 h-4 text-fg-muted shrink-0" />}
           <span className="truncate">{title || 'Pages'}</span>
+          {/* Freshness belongs to the app, not the page (deck Q-last-updated):
+              same place on every connected page, and true because the app made
+              the request. Hidden until the page is approved. */}
+          {summary && !awaitingApproval && <PageFreshness page={summary} onRefresh={askPageToRefresh} />}
+          {summary && !awaitingApproval && <PageCodeChanged page={summary} />}
         </>}
       />
 
@@ -197,7 +306,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
       <div className="screen-body flex-1 min-h-0 flex">
-        {!state.pageFocus && (
+        {!state.pageFocus && !emptyPages && (
         <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
           <div className="flex-1 overflow-y-auto p-2">
             {personal.length > 0 && (
@@ -216,15 +325,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
                 ))}
               </RailGroup>
             ))}
-            {pages.length === 0 && <div className="px-2 py-3 text-xs text-fg-muted">No pages yet. Create one below.</div>}
           </div>
           <div className="p-3 flex flex-col gap-2">
-            {/* The ONE primary in this view (G-4). */}
-            <Button variant="primary" onClick={onCreatePage} className="w-full justify-center rounded-full">
+            {/* The welcome card owns the primary action when the library is empty (G-4). */}
+            {pages.length > 0 && <Button variant="primary" onClick={onCreatePage} className="w-full justify-center rounded-full">
               <PlusGlyph />
               Create a page
-            </Button>
-            <Button variant="secondary" onClick={() => dispatch({ type: 'PAGES_VIEW_OPENED' })} className="w-full justify-center rounded-full">
+            </Button>}
+            <Button variant="secondary" onClick={managePages} className="w-full justify-center rounded-full">
               <PagesIcon className="w-3.5 h-3.5" />
               Manage pages
             </Button>
@@ -232,7 +340,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         </aside>
         )}
         <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
-          {load.state === 'idle' && (
+          {/* WHY: first-run belongs where the Pages button lands, not a second click into Manage pages. */}
+          {load.state === 'idle' && !loaded && <LoadingState what="pages" />}
+          {load.state === 'idle' && loaded && failed && <ErrorState message="The list of pages could not be read." onRetry={() => void refreshPages()} />}
+          {emptyPages && (
+            <div className="absolute inset-0 overflow-y-auto flex flex-col">
+              <PagesEmptyCard onMake={onCreatePage} />
+            </div>
+          )}
+          {load.state === 'idle' && loaded && !failed && pages.length > 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 select-none">
               <div className="text-sm font-medium text-fg-2">No page selected</div>
               <div className="text-xs text-fg-muted">Pick one from the list, or create a page.</div>
@@ -244,7 +360,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               <ErrorState message={load.failure.message} onRetry={() => { if (pageId !== null) dispatch({ type: 'PAGE_OPENED', pageId }); }} />
             </div>
           )}
-          {load.state === 'ready' && (
+          {/* A page with a line waiting for a yes stays closed: the approval
+              shows IN PLACE OF it, so nothing in the page runs first (decks
+              Q-own-pages, S-change). "Not now" leaves the page unselected — or, from
+              a pinned button (no panel to fall back to), goes back to chat. */}
+          {load.state === 'ready' && awaitingApproval && (
+            <PageApproval page={load.page} onNotNow={() => dispatch({ type: state.pageFocus ? 'PAGE_VIEW_CLOSED' : 'PAGE_CLOSED' })} />
+          )}
+          {load.state === 'ready' && !awaitingApproval && (
             <iframe
               ref={frameRef}
               srcDoc={load.doc}

@@ -53,6 +53,7 @@ vi.mock('../src/main/kwin-helper', () => ({
   installHelper: vi.fn(async () => ({ ok: true })),
   removeHelper: vi.fn(async () => ({ ok: true })),
   syncHelperOnLaunch: vi.fn(async () => {}),
+  setExperimentKwinDisabled: vi.fn(),
   helperPluginId: vi.fn(() => 'youcodedbuddyhelper-test'),
 }));
 

@@ -18,6 +18,7 @@ import { readFileHead } from './fs-read-head';
 // its stale-board cache (main/arcade-handlers.ts).
 import { getArcadeOps } from './arcade-handlers';
 import { getPagesService } from './pages/pages-service';
+import type { PageFetchRequest } from '../shared/pages-types';
 // Shared cap so a local folder's description (set via a remote browser client)
 // can't drift from the synced registry's limit — same constant project-registry.ts
 // and ipc-handlers.ts use.
@@ -2112,6 +2113,41 @@ export class RemoteServer {
           const svc = getPagesService();
           this.respond(client.ws, type, id, svc ? await svc.store.setData(String(payload?.id ?? ''), payload?.data) : { ok: false, message: 'Pages are not available on this host.' });
         } catch (err: any) { this.respond(client.ws, type, id, { ok: false, message: err?.message ?? String(err) }); }
+        break;
+      }
+      // Pages Phase 2. `remote: true` below is the enforcement point for "no
+      // keys on the phone" (design review 1, finding 13): it was a renderer
+      // rule, and a crafted socket message walked straight past it. Reusing a
+      // key already saved on this computer is still allowed. pages:fetch runs
+      // HERE, with this computer's credential; only the redacted answer travels.
+      case 'pages:approve': {
+        try { this.respond(client.ws, type, id, await getPagesService()?.approve(String(payload?.id ?? ''), (payload?.keys ?? {}) as Record<string, string>, { remote: true }) ?? { ok: false, message: 'Pages are not available on this host.' }); }
+        catch (err: any) { this.respond(client.ws, type, id, { ok: false, message: err?.message ?? String(err) }); }
+        break;
+      }
+      case 'pages:remove-connection': {
+        try { this.respond(client.ws, type, id, await getPagesService()?.removeConnection(String(payload?.id ?? ''), String(payload?.connectionId ?? '')) ?? []); }
+        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
+        break;
+      }
+      case 'pages:refresh': {
+        try { this.respond(client.ws, type, id, await getPagesService()?.refresh(String(payload?.id ?? '')) ?? []); }
+        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
+        break;
+      }
+      case 'pages:saved-keys': {
+        try { this.respond(client.ws, type, id, await getPagesService()?.savedKeys() ?? []); }
+        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
+        break;
+      }
+      case 'pages:delete-saved-key': {
+        try { this.respond(client.ws, type, id, await getPagesService()?.deleteSavedKey(String(payload?.service ?? ''), String(payload?.address ?? '')) ?? []); }
+        catch (err: any) { this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) }); }
+        break;
+      }
+      case 'pages:fetch': {
+        try { this.respond(client.ws, type, id, await getPagesService()?.fetch(String(payload?.id ?? ''), (payload?.request ?? { url: '' }) as PageFetchRequest) ?? { ok: false, reason: 'network', message: 'Pages are not available on this host.' }); }
+        catch (err: any) { this.respond(client.ws, type, id, { ok: false, reason: 'network', message: err?.message ?? String(err) }); }
         break;
       }
       case 'search:set-key': {
