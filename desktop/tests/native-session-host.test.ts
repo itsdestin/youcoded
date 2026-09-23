@@ -237,6 +237,21 @@ describe('NativeSessionHost', () => {
     expect(events[0].payload._requestId).toBe(emitted[0].payload._requestId);
   });
 
+  it('exposes only active root progress and forgets it when idle or destroyed', async () => {
+    await host.create({ sessionId: 's-progress', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const entry = (host as any).live.get('s-progress');
+    const progress = { type: 'assistant-thinking', sessionId: 's-progress', uuid: 'progress', timestamp: 100,
+      data: { usageProgress: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 } } };
+    entry.session._currentUsageProgress = progress;
+    expect(host.currentUsageProgressFor('s-progress')).toBeNull();
+    entry.inFlight = true;
+    expect(host.currentUsageProgressFor('s-progress')).toBe(progress);
+    entry.inFlight = false;
+    expect(host.currentUsageProgressFor('s-progress')).toBeNull();
+    await host.destroy('s-progress');
+    expect(host.currentUsageProgressFor('s-progress')).toBeNull();
+  });
+
   it('create → send → events forwarded AND persisted; getHistory replays them', async () => {
     const seen: any[] = [];
     host.on('transcript-event', (e) => seen.push(e));

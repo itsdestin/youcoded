@@ -24,6 +24,45 @@ import {
   NamingRecord, emptyNamingRecord, parseNamingRecord, mergeNamingRecords,
 } from './naming-core';
 
+/** Revalidate a proposed publication against the authoritative sidecar after
+ * the writer's await. A newer automatic review must be allowed to replace an
+ * older one, but the older writer must never project its stale result afterward. */
+export async function mayPublishAutomaticName(input: {
+  read: () => Promise<NamingRecord | null>;
+  hasTitle: () => Promise<boolean>;
+  name: string;
+  expectedAutoAt?: string;
+  opening?: boolean;
+  enabled: () => boolean;
+}): Promise<boolean> {
+  if (!input.enabled()) return false;
+  const rec = await input.read();
+  if (rec?.manual || (input.expectedAutoAt !== undefined &&
+      (!rec || rec.auto !== input.name || rec.autoAt !== input.expectedAutoAt))) return false;
+  // Only the opening placeholder refuses a legacy title. Scheduled AI reviews
+  // intentionally replace earlier automatic names; they must not use this gate.
+  if (input.opening && await input.hasTitle()) return false;
+  return input.enabled();
+}
+
+/** Per-process projection ordering; never holds the cross-process disk lock. */
+export function createTitleQueue() {
+  const pending = new Map<string, Promise<void>>();
+  return async <T>(key: string, work: () => Promise<T>): Promise<T> => {
+    const previous = pending.get(key);
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    pending.set(key, current);
+    try {
+      if (previous) await previous;
+      return await work();
+    } finally {
+      if (pending.get(key) === current) pending.delete(key);
+      release();
+    }
+  };
+}
+
 export interface NamingStore {
   get(provider: string, id: string): Promise<NamingRecord | null>;
   /** Read-modify-write one record under the cross-process lock. */
@@ -104,6 +143,9 @@ export function createNamingStore(namesRoot: string): NamingStore {
       const fold = foldConflicts(provider, id, existing);
       folded = fold.folded;
       result = fn(fold.rec);
+      // WHY: a conditional initial title that lost the lock must not rewrite
+      // an unchanged record. Still persist any conflict copies folded here.
+      if (result === fold.rec && !folded.length) return null;
       return JSON.stringify(result, null, 2);
     });
     if (!committed || !result) {

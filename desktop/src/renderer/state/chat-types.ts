@@ -61,6 +61,9 @@ export interface TurnUsage {
    *  step's prompt + its output). Drives the context pill; inputTokens cannot,
    *  because it sums across steps and re-counts history each time. */
   contextUsedTokens?: number;
+  /** Transient harness measurement, not a completed transcript. Missing context
+   *  cannot use the legacy in+out fallback on this cumulative progress. */
+  liveProgress?: true;
   /** Native runtime only: USD for THIS turn, priced in main at the model that
    *  ran it (spec §5). null = the model has no published price; ABSENT = no
    *  pricing information at all (a CC turn). Without this field a priced turn
@@ -254,6 +257,12 @@ export interface SessionChatState {
   toolGroups: Map<string, ToolGroupState>;
   assistantTurns: Map<string, AssistantTurn>;
   isThinking: boolean;
+  /** Live native request accounting only; never serialized or added to totals. */
+  inProgressUsage: TurnUsage | null;
+  /** Host event timestamp watermark for progress/terminal/heartbeat ordering. Infinity closes an unstamped terminal lane until a recorded new user turn. */
+  usageProgressAt: number;
+  /** Progress heartbeat identity is separate from durable transcript seenUuids. */
+  usageProgressUuid: string | null;
   streamingText: string;
   /** ID of the current tool group (tools are appended here until next message) */
   currentGroupId: string | null;
@@ -434,6 +443,9 @@ export function createSessionChatState(): SessionChatState {
     toolGroups: new Map(),
     assistantTurns: new Map(),
     isThinking: false,
+    inProgressUsage: null,
+    usageProgressAt: 0,
+    usageProgressUuid: null,
     streamingText: '',
     currentGroupId: null,
     currentTurnId: null,
@@ -552,6 +564,8 @@ export type ChatAction =
       type: 'NATIVE_SESSION_ERROR';
       sessionId: string;
       message: string;
+      /** Host event clock, when dispatched from a transcript event. */
+      timestamp?: number;
       /** The session-error event's optional `errorCode` (see SessionChatState). */
       errorCode?: string;
       /** The failing event's uuid, for the totals dedup in the reducer. Optional
@@ -599,6 +613,9 @@ export type ChatAction =
       // clears attentionState back to 'ok'.
       type: 'TRANSCRIPT_THINKING_HEARTBEAT';
       sessionId: string;
+      usageProgress?: TurnUsage;
+      uuid?: string;
+      timestamp?: number;
       // Native watchdog: present → the stream has stalled; drives the
       // ThinkingIndicator countdown. Absent → a normal heartbeat that CLEARS any
       // active stall warning (activity resumed).
@@ -860,6 +877,10 @@ export type ChatAction =
       sessionId: string;
       /** Parsed events for this page, oldest -> newest. */
       events: TranscriptEvent[];
+      /** Main confirmed that unfinished work on this history page is no longer live. */
+      reconcileInterrupted?: boolean;
+      /** Tool ids known to predate a resumed CC process (page may also have new work). */
+      reconcileInterruptedToolIds?: string[];
       /** Handle for the page OLDER than this one; null when hasMore is false. */
       cursor: PageCursor | null;
       hasMore: boolean;
@@ -1082,6 +1103,10 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       toolGroups: new Map(ser.toolGroups),
       assistantTurns: new Map(ser.assistantTurns),
       isThinking: ser.isThinking,
+      // WHY: remote hydration must not revive a request that may already have ended.
+      inProgressUsage: null,
+      usageProgressAt: 0,
+      usageProgressUuid: null,
       streamingText: ser.streamingText,
       currentGroupId: ser.currentGroupId,
       currentTurnId: ser.currentTurnId,

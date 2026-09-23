@@ -1559,6 +1559,11 @@ function AppInner() {
             batchTranscriptDispatch({
               type: 'TRANSCRIPT_THINKING_HEARTBEAT',
               sessionId: event.sessionId,
+              // WHY: use the source stamp/UUID so a late attach cannot undo
+              // a newer live measurement; this remains display-only.
+              usageProgress: event.data?.usageProgress,
+              uuid: event.uuid,
+              timestamp: event.timestamp,
               // Native watchdog: a stall-warning payload drives the countdown,
               // `stalled` parks the turn, a plain heartbeat clears both.
               // MUST mirror BubbleFeed.tsx.
@@ -1575,6 +1580,7 @@ function AppInner() {
           batchTranscriptDispatch({
             type: 'NATIVE_SESSION_ERROR',
             sessionId: event.sessionId,
+            timestamp: event.timestamp,
             message: event.data.text ?? 'The model request failed.',
             errorCode: event.data.errorCode,
             // Same reasoning as the interrupt above: a turn that died mid-flight
@@ -2077,7 +2083,7 @@ function AppInner() {
         // scroll-up sentinel (Destin, 2026-09-07). See first-page-retry.ts.
         const decision = decideFirstPage(page, attempt);
         if (decision === 'accept') {
-          dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+          dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId: sid, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
           return;
         }
         if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId: sid }); return; }

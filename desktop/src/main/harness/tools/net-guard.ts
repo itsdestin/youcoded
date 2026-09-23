@@ -81,12 +81,44 @@ export async function assertPublicHttpUrl(raw: string, lookup: LookupFn = defaul
 
 const MAX_REDIRECTS = 5;
 
+/** An allowHost answer. A refusal carries the sentence the caller shows; it is
+ *  never invented here, because only the caller knows what the host was asked
+ *  to reach (docs/error-message-standards.md). */
+export type HostDecision = { ok: true } | { ok: false; message: string };
+
 export interface GuardedFetchOpts {
   signal: AbortSignal;
   timeoutMs?: number;              // per-request; default 30s
   lookup?: LookupFn;               // test injection
   fetchImpl?: typeof fetch;        // test injection
   headers?: Record<string, string>;
+  /** Default GET. Anything else is the caller's business to authorise first. */
+  method?: string;
+  /** Sent with the first hop only; see the redirect rule in guardedFetch. */
+  body?: string;
+  /**
+   * Consulted BEFORE every hop's request, including the first. Refusing throws
+   * a NetGuardError carrying the message.
+   *
+   * WHY (design review 1, finding 4): this function followed redirects by hand
+   * and re-checked only that each hop was PUBLIC. A caller that attached a
+   * credential to `headers` had it spread into every hop, so one 302 handed a
+   * page's API key to whatever host the answer named. Public is not the same
+   * question as allowed.
+   */
+  allowHost?: (hostname: string, hop: number) => HostDecision;
+  /**
+   * Headers sent ONLY while the hop's host still equals hop 0's. A redirect to
+   * a different host keeps the request and loses these — the credential does
+   * not walk with it.
+   */
+  credentialHeaders?: Record<string, string>;
+  /**
+   * Query parameters carrying a credential (a key some services take in the
+   * URL). Stripped from the address on any off-host hop, for the same reason,
+   * and because the stripped address is what `finalUrl` reports.
+   */
+  credentialQueryParams?: readonly string[];
 }
 
 /** Fetch with MANUAL redirect following: every hop re-runs assertPublicHttpUrl.
@@ -100,22 +132,50 @@ export async function guardedFetch(rawUrl: string, opts: GuardedFetchOpts): Prom
   // inside would give 6 hops × 30s = up to 180s, defeating the cap.
   const deadline = AbortSignal.any([opts.signal, AbortSignal.timeout(opts.timeoutMs ?? 30_000)]);
   let current = rawUrl;
+  let originHost: string | null = null;
+  let method = (opts.method ?? 'GET').toUpperCase();
+  let body = opts.body;
   for (let hop = 0; ; hop++) {
     const url = await assertPublicHttpUrl(current, lookup);
-    const res = await fetchImpl(url.toString(), {
+    const host = url.hostname.toLowerCase();
+    if (originHost === null) originHost = host;
+    const decision = opts.allowHost?.(url.hostname, hop);
+    if (decision && !decision.ok) throw new NetGuardError(decision.message);
+    // Off-host: the request goes on, the credential does not. Both the header
+    // form and the in-the-URL form, because a service that redirects while
+    // preserving the query string would otherwise carry the key across.
+    const onOrigin = host === originHost;
+    if (!onOrigin) for (const p of opts.credentialQueryParams ?? []) url.searchParams.delete(p);
+    const target = url.toString();
+    const res = await fetchImpl(target, {
       redirect: 'manual',
-      headers: { 'User-Agent': 'YouCoded', accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8', ...opts.headers },
+      method,
+      ...(body !== undefined && method !== 'GET' && method !== 'HEAD' ? { body } : {}),
+      headers: {
+        'User-Agent': 'YouCoded', accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+        ...opts.headers,
+        ...(onOrigin ? opts.credentialHeaders : undefined),
+      },
       signal: deadline,
     });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get('location');
       if (!location) throw new NetGuardError(`${url.hostname} answered ${res.status} with no Location header.`);
-      if (hop >= MAX_REDIRECTS) throw new NetGuardError(`Gave up after ${MAX_REDIRECTS} redirects (last: ${current}).`);
+      if (hop >= MAX_REDIRECTS) throw new NetGuardError(`Gave up after ${MAX_REDIRECTS} redirects (last: ${target}).`);
+      // The redirect rule browsers use, written out because we follow by hand:
+      // 303 always becomes a GET, and 301/302 on a write becomes one too. Only
+      // 307/308 repeat the method and the body. Replaying a POST body to a
+      // redirect target nobody named is how a "harmless" follow becomes a
+      // second write.
+      if (res.status === 303 || ((res.status === 301 || res.status === 302) && method !== 'GET' && method !== 'HEAD')) {
+        method = 'GET';
+        body = undefined;
+      }
       current = new URL(location, url).toString(); // relative Location supported
       await res.body?.cancel().catch(() => { /* already closed */ }); // release the socket before the next hop
       continue;
     }
-    return { res, finalUrl: current };
+    return { res, finalUrl: target };
   }
 }
 

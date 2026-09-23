@@ -50,6 +50,21 @@ const fetchWith = async (body: string, url = 'https://example.com/deep') => {
 afterEach(() => __setWebFetchTestHooks({}));
 
 describe('WebFetch', () => {
+  it('refuses experiment web fetches before DNS or HTTP without changing tool metadata', async () => {
+    const metadata = { name: WebFetchTool.name, description: WebFetchTool.description };
+    const lookup = vi.fn(publicLookup);
+    const fetchImpl = vi.fn(async () => html('synthetic'));
+    __setWebFetchTestHooks({ lookup, fetchImpl });
+    vi.stubEnv('YOUCODED_LUNA_EXPERIMENT', '1');
+    try {
+      const r = await WebFetchTool.execute({ url: 'https://example.invalid/' } as any, ctx());
+      expect(r.isError).toBe(true);
+      expect(r.text).toMatch(/experiment.*network/i);
+      expect(lookup).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect({ name: WebFetchTool.name, description: WebFetchTool.description }).toEqual(metadata);
+    } finally { vi.unstubAllEnvs(); }
+  });
   it('extracts an article to markdown', async () => {
     __setWebFetchTestHooks({ lookup: publicLookup, fetchImpl: async () => html(
       '<html><head><title>Docs</title></head><body><nav>junk nav</nav><article><h1>API Guide</h1><p>' + 'Real content. '.repeat(40) + '</p></article></body></html>',

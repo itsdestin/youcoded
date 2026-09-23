@@ -176,6 +176,36 @@ export function sanitizeAutoName(raw: string): string {
   return t.replace(/\s+/g, ' ').trim().slice(0, AUTO_NAME_MAX);
 }
 
+/** Reduce filesystem path tokens to their basename without Node APIs, so this
+ *  pure helper is safe to share with browser-facing naming code. URLs and
+ *  incomplete paths ending in a separator are intentionally left unchanged. */
+export function shortenPathTokens(text: string): string {
+  const protectedTokens: string[] = [];
+  const protectedText = String(text ?? '').replace(/(?:[A-Za-z][A-Za-z0-9+.-]+:)[^\s]*/gi, (token) => {
+    protectedTokens.push(token);
+    return `\u0000${protectedTokens.length - 1}\u0000`;
+  });
+  return protectedText
+    // WHY: an explicit root identifies a path after one directory; unrooted
+    // slash compounds still need two directories to avoid prose like and/or.
+    .replace(/(?:(?:[A-Za-z]:[\\/]|\.\.?[\\/]|\/)(?:[\w.-]+[\\/])+|(?:[\w.-]+[\\/]){2,})[\w.-]+(?:\.[A-Za-z0-9]+)?/g, (token, offset: number, whole: string) => {
+      const start = offset;
+      const end = offset + token.length;
+      const left = whole[start - 1] ?? '';
+      const right = whole[end] ?? '';
+      // A path must be delimited from prose; slash compounds like and/or or
+      // input/output are not filesystem paths. Absolute paths are unambiguous.
+      const absolute = /^(?:[A-Za-z]:[\\/]|\/)/.test(token);
+      const drivePath = /^[A-Za-z]:[\\/]/.test(token);
+      // The regex can match the filename PREFIX of an incomplete path such as
+      // src/components/App.tsx/; the slash belongs to the same token.
+      if (right === '/' || right === '\\') return token;
+      if (!absolute && !drivePath && (/[\w.-]/.test(left) || /[\w.-]/.test(right))) return token;
+      return token.slice(Math.max(token.lastIndexOf('/'), token.lastIndexOf('\\')) + 1);
+    })
+    .replace(/\u0000(\d+)\u0000/g, (_marker, index) => protectedTokens[Number(index)]);
+}
+
 // How people open a request. Stripping these is what turns a quoted sentence
 // into something that reads like a name: "can you help me fix the scroll bug"
 // is a sentence about ME asking; "Fix the scroll bug" is what the conversation
@@ -232,7 +262,7 @@ const stripLeading = (text: string, phrases: readonly string[]): string => {
  * which is always better than a blank.
  */
 export function basicNameFrom(firstMessage: string): string {
-  const collapsed = String(firstMessage ?? '')
+  const collapsed = shortenPathTokens(String(firstMessage ?? ''))
     // Markdown marks are formatting, not words. A message that opens with a
     // heading or bold text would otherwise be named "## Source Extractor" —
     // which looks like the app is showing you its own plumbing.

@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import { ChatState, ChatAction, serializeChatState, deserializeChatState } from '../src/renderer/state/chat-types';
 import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
+import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
 import type { HookEvent } from '../src/shared/types';
 
 const SESSION = 'test-session';
@@ -14,6 +15,118 @@ function initState(): ChatState {
 function dispatch(state: ChatState, action: ChatAction): ChatState {
   return chatReducer(state, action);
 }
+
+describe('transient native usage progress', () => {
+  const usage = (inputTokens: number) => ({ inputTokens, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 });
+  const heartbeat = (sessionId: string, inputTokens: number, timestamp: number, uuid: string): ChatAction => ({
+    type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId, usageProgress: usage(inputTokens), timestamp, uuid,
+  });
+
+  it.each(['/compact', '/clear'] as const)('lets measured progress replace the %s context override, but preserves it for usage-silent progress', (command) => {
+    let s = dispatch(initState(), { type: 'NATIVE_HISTORY_REWRITTEN', sessionId: SESSION,
+      uuid: `rewrite-${command}`, contextUsedTokens: 0 });
+    const chips = () => selectNativeStatusChips(s.get(SESSION)!.inProgressUsage, 1000, s.get(SESSION)!.contextUsedOverride);
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, timestamp: 100, uuid: 'silent',
+      usageProgress: { ...usage(20), liveProgress: true } });
+    expect(s.get(SESSION)!.contextUsedOverride).toBe(0);
+    expect(chips()?.contextUsedTokens).toBe(0);
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, timestamp: 101, uuid: 'measured',
+      usageProgress: { ...usage(30), liveProgress: true, contextUsedTokens: 400 } });
+    expect(s.get(SESSION)!.contextUsedOverride).toBeNull();
+    expect(chips()?.contextUsedTokens).toBe(400);
+    expect(chips()?.contextPct).toBe(60);
+  });
+
+  it('keeps two sessions independent and replaces cumulative progress without durable totals', () => {
+    let s = dispatch(initState(), { type: 'SESSION_INIT', sessionId: 'other' });
+    s = dispatch(s, heartbeat(SESSION, 10, 100, 'p1'));
+    s = dispatch(s, heartbeat('other', 20, 101, 'p2'));
+    s = dispatch(s, heartbeat(SESSION, 30, 102, 'p3'));
+    expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(30));
+    expect(s.get('other')!.inProgressUsage).toEqual(usage(20));
+    expect(s.get(SESSION)!.totals).toEqual(initState().get(SESSION)!.totals);
+    expect(JSON.stringify(serializeChatState(s))).not.toContain('inProgressUsage');
+    expect(deserializeChatState(serializeChatState(s)).get(SESSION)!.inProgressUsage).toBeNull();
+  });
+
+  it('clears measured progress on completion interruption and error', () => {
+    for (const terminal of [
+      { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION, uuid: 'end', timestamp: 201, stopReason: null, model: null, anthropicRequestId: null, usage: null },
+      { type: 'TRANSCRIPT_INTERRUPT', sessionId: SESSION, uuid: 'end', timestamp: 201 },
+      { type: 'NATIVE_SESSION_ERROR', sessionId: SESSION, message: 'failed' },
+    ] as ChatAction[]) {
+      let s = dispatch(initState(), heartbeat(SESSION, 10, 100, 'p1'));
+      s = dispatch(s, terminal);
+      expect(s.get(SESSION)!.inProgressUsage).toBeNull();
+    }
+  });
+
+  it('clears confirmed idle replay but preserves progress for active replay', () => {
+    const live = dispatch(initState(), heartbeat(SESSION, 10, 100, 'p1'));
+    expect(dispatch(live, { type: 'TRANSCRIPT_REPLAY_COMPLETE', sessionId: SESSION, sessionIdle: false }).get(SESSION)!.inProgressUsage).toEqual(usage(10));
+    expect(dispatch(live, { type: 'TRANSCRIPT_REPLAY_COMPLETE', sessionId: SESSION, sessionIdle: true }).get(SESSION)!.inProgressUsage).toBeNull();
+  });
+
+  it('fences late attach by host terminal time even when the renderer clock is behind or ahead', () => {
+    for (const rendererTime of [1, 999_999]) {
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(rendererTime);
+      try {
+        let s = dispatch(initState(), heartbeat(SESSION, 10, 100, 'old'));
+        s = dispatch(s, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION,
+          uuid: 'end', timestamp: 110, stopReason: null, model: null, anthropicRequestId: null, usage: null });
+        expect(s.get(SESSION)!.usageProgressAt).toBe(110);
+        expect(dispatch(s, heartbeat(SESSION, 11, 105, 'late'))).toBe(s);
+        // A later host measurement in a new turn must not be blocked by the
+        // renderer's unrelated wall clock (even if it reads 999999).
+        s = dispatch(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SESSION,
+          uuid: `user-${rendererTime}`, timestamp: 120, text: 'next' });
+        s = dispatch(s, heartbeat(SESSION, 20, 130, 'next-progress'));
+        expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(20));
+      } finally {
+        clock.mockRestore();
+      }
+    }
+  });
+
+  it('fences attach after interrupted and failed turns using their host event stamps', () => {
+    for (const terminal of [
+      { type: 'TRANSCRIPT_INTERRUPT', sessionId: SESSION, uuid: 'interrupt', timestamp: 200, kind: 'plain' },
+      { type: 'NATIVE_SESSION_ERROR', sessionId: SESSION, message: 'failed', timestamp: 200 },
+    ] as ChatAction[]) {
+      let s = dispatch(initState(), heartbeat(SESSION, 10, 100, 'old'));
+      s = dispatch(s, terminal);
+      expect(s.get(SESSION)!.inProgressUsage).toBeNull();
+      expect(dispatch(s, heartbeat(SESSION, 10, 150, 'late'))).toBe(s);
+    }
+  });
+
+  it('does not let progress-only late attach dismiss a newer stall, but an ordinary heartbeat clears it', () => {
+    let s = dispatch(initState(), heartbeat(SESSION, 10, 100, 'old'));
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION,
+      timestamp: 200, uuid: 'stall', stalled: true, stallWarning: { retryInMs: 5000, willRetry: false } });
+    const stalled = s.get(SESSION)!;
+    expect(stalled.attentionState).toBe('stalled');
+    expect(dispatch(s, heartbeat(SESSION, 15, 150, 'attach'))).toBe(s);
+    expect(s.get(SESSION)).toBe(stalled);
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, timestamp: 210, uuid: 'resumed' });
+    expect(s.get(SESSION)!.attentionState).toBe('ok');
+    expect(s.get(SESSION)!.stallWarning).toBeNull();
+    expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(10));
+  });
+
+  it('rejects stale attach progress and duplicate UUID without changing references', () => {
+    let s = dispatch(initState(), heartbeat(SESSION, 30, 102, 'new'));
+    expect(dispatch(s, heartbeat(SESSION, 10, 100, 'old'))).toBe(s);
+    expect(dispatch(s, heartbeat(SESSION, 99, 103, 'new'))).toBe(s);
+    s = dispatch(s, heartbeat(SESSION, 40, 104, 'newer'));
+    expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(40));
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION });
+    expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(40));
+    s = dispatch(s, { type: 'TRANSCRIPT_TURN_COMPLETE', sessionId: SESSION,
+      uuid: 'end', timestamp: 105, stopReason: null, model: null, anthropicRequestId: null, usage: null });
+    expect(dispatch(s, heartbeat(SESSION, 30, 102, 'attach')).get(SESSION)!.inProgressUsage).toBeNull();
+  });
+});
 
 describe('TRANSCRIPT_TURN_COMPLETE metadata', () => {
   let state: ChatState;
