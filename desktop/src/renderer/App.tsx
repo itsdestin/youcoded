@@ -324,10 +324,7 @@ function AppInner() {
   const startArgsRef = useRef<unknown[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerSearchMode, setDrawerSearchMode] = useState(false);
-  // WHY a store, not useState: InputBar updates this on EVERY letter typed after
-  // "/", and as App state each letter re-rendered the entire App shell. Only the
-  // CommandDrawer subscribes to it now. `setDrawerFilter` is the store's stable
-  // setter, so every call site below reads exactly as before.
+  // WHY a store, not useState: as App state every letter typed after "/" re-rendered the whole shell; only CommandDrawer subscribes now.
   const [drawerFilterStore] = useState(createDrawerFilterStore);
   const setDrawerFilter = drawerFilterStore.set;
   const inputBarRef = useRef<InputBarHandle>(null);

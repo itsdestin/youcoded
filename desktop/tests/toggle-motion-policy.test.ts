@@ -47,9 +47,9 @@ describe('session drawer file-list motion policy', () => {
 
   it('snaps the file list width for the OS reduced-motion preference', () => {
     const blocks = css.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/g) ?? [];
-    const drawerBlock = blocks.find(block => /\.drawer-list\s*\{/.test(block));
+    const drawerBlock = blocks.find(block => /\.drawer-list[\s,]/.test(block));
     expect(drawerBlock, 'no prefers-reduced-motion block covers .drawer-list').toBeTruthy();
-    expect(drawerBlock).toMatch(/\.drawer-list\s*\{\s*transition-duration:\s*0ms/);
+    expect(drawerBlock).toMatch(/\.drawer-list,[^{}]*\{\s*transition-duration:\s*0ms/);
   });
 
   it('the file list still animates only width at the same duration', () => {
