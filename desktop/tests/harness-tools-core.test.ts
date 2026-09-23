@@ -29,6 +29,7 @@ import { GrepTool, resolveRgPath } from '../src/main/harness/tools/grep';
 import { TodoWriteTool } from '../src/main/harness/tools/todo-write';
 import { shellCwdMissHint, workspaceRootMissHint } from '../src/main/harness/tools/guards';
 import type { ToolContext } from '../src/main/harness/tools/types';
+import { defineTool, SEARCH_TIMEOUT_MS } from '../src/main/harness/tools/registry';
 
 // Each test gets a fresh tmp sandbox + fresh ToolContext (readRegistry/todos maps),
 // so read-before-edit state never leaks between cases.
@@ -1915,5 +1916,77 @@ describe('TodoWrite', () => {
     expect(ctx.todos.length).toBe(2);
     expect(ctx.todos[0].content).toBe('One');
     expect(r.text).toContain('2 items, 1 completed');
+  });
+});
+
+// The 2026-08-26 incident: one Grep from a home-folder conversation sat 4 hours
+// in a network-mounted Google Drive until Stop killed it. A search now has a
+// deadline that ends the SEARCH with an error the model can act on — never the
+// turn (the turn's own signal must stay un-aborted).
+describe('search deadline (Grep and Glob)', () => {
+  it('Grep and Glob both declare the shared search deadline', () => {
+    expect((GrepTool as any).caps?.timeoutMs).toBe(SEARCH_TIMEOUT_MS);
+    expect((GlobTool as any).caps?.timeoutMs).toBe(SEARCH_TIMEOUT_MS);
+  });
+
+  it('a tool that never finishes ends with a timed-out error, and the turn signal is not aborted', async () => {
+    let toolSignal: AbortSignal | undefined;
+    const stuck = defineTool<Record<string, never>>({
+      name: 'Stuck',
+      description: 'never resolves',
+      inputSchema: undefined as any,
+      caps: { maxChars: 1000, timeoutMs: 20 },
+      permissionSubject: () => undefined,
+      execute(_a, c) {
+        toolSignal = c.signal;
+        return new Promise(() => {});
+      },
+    });
+    const turn = new AbortController();
+    const r = await stuck.execute({}, makeCtx(dir, turn.signal));
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/Stuck timed out after/);
+    expect(toolSignal?.aborted).toBe(true); // the tool's own kill wiring fires
+    expect(turn.signal.aborted).toBe(false); // the conversation keeps going
+  });
+
+  it('a tool with no declared deadline is never given one, even by the test override', async () => {
+    const plain = defineTool<Record<string, never>>({
+      name: 'Plain',
+      description: 'resolves late',
+      inputSchema: undefined as any,
+      permissionSubject: () => undefined,
+      execute: () => new Promise((res) => setTimeout(() => res({ text: 'late' }), 30)),
+    });
+    const r = await plain.execute({}, { ...makeCtx(dir), toolTimeoutMs: 1 });
+    expect(r.text).toBe('late');
+  });
+
+  it('a user interrupt still reaches a tool that has a deadline', async () => {
+    const waits = defineTool<Record<string, never>>({
+      name: 'Waits',
+      description: 'ends on abort',
+      inputSchema: undefined as any,
+      caps: { maxChars: 1000, timeoutMs: 60_000 },
+      permissionSubject: () => undefined,
+      execute: (_a, c) => new Promise((res) => {
+        c.signal.addEventListener('abort', () => res({ text: 'stopped', isError: true }), { once: true });
+      }),
+    });
+    const turn = new AbortController();
+    const pending = waits.execute({}, makeCtx(dir, turn.signal));
+    turn.abort();
+    expect((await pending).text).toBe('stopped');
+  });
+
+  // POSIX-only: a FIFO nobody writes to makes ripgrep block on its read
+  // forever — a deterministic stand-in for a hung network mount.
+  it.skipIf(process.platform === 'win32')('a real Grep stuck on an unreadable file is stopped at the deadline', async () => {
+    childProcess.execFileSync('mkfifo', [path.join(dir, 'stuck-pipe')]);
+    const turn = new AbortController();
+    const r = await GrepTool.execute({ pattern: 'x', path: 'stuck-pipe' }, { ...makeCtx(dir, turn.signal), toolTimeoutMs: 200 });
+    expect(r.isError).toBe(true);
+    expect(r.text).toMatch(/Grep timed out after/);
+    expect(turn.signal.aborted).toBe(false);
   });
 });
