@@ -402,6 +402,7 @@ function endTurn(
   // spreading it over their `...session, assistantTurns` would silently discard
   // their edit — which is exactly how the interrupt footer lost 'Interrupted'.
   baseAssistantTurns?: Map<string, AssistantTurn>,
+  terminalTimestamp?: number,
 ): Partial<SessionChatState> {
   const toolCalls = new Map(session.toolCalls);
   const toolGroups = new Map(session.toolGroups);
@@ -425,6 +426,13 @@ function endTurn(
     toolGroups,
     assistantTurns,
     isThinking: false,
+    // Compare stamps from the SAME source (the host), never renderer wall time:
+    // remote clocks can differ. Unstamped local exits/idle replays close the
+    // progress lane until the next recorded user turn opens it again.
+    inProgressUsage: null,
+    usageProgressAt: terminalTimestamp === undefined
+      ? Infinity : Math.max(session.usageProgressAt, terminalTimestamp),
+    usageProgressUuid: null,
     // Prefill is over the moment the turn is. Leaving it set meant the next
     // generation pause longer than ThinkingIndicator's 2s streaming window
     // re-rendered the PREVIOUS turn's "Reading your prompt — N%" line while the
@@ -1128,7 +1136,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         seenUuids: totals === session.totals || !action.uuid
           ? session.seenUuids
           : markSeen(session, action.uuid),
-        ...endTurn(session, action.message),
+        ...endTurn(session, action.message, undefined, action.timestamp),
         attentionState: 'error',
         errorMessage: action.message,
         errorCode: action.errorCode ?? null,
@@ -1207,6 +1215,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'TRANSCRIPT_THINKING_HEARTBEAT': {
       const session = next.get(action.sessionId);
       if (!session) return state;
+      // WHY: the attach snapshot is sent after history, but may have been
+      // captured before a newer live push. UUID dedup is separate from the
+      // durable seenUuids set, and an ordinary heartbeat must preserve usage.
+      if (action.usageProgress && action.uuid && action.uuid === session.usageProgressUuid) return state;
+      const newerProgress = !!action.usageProgress && action.timestamp !== undefined
+        && action.timestamp > session.usageProgressAt;
+      if (action.usageProgress && !newerProgress) return state;
       // Three heartbeat shapes, in descending severity:
       //   stalled     → the turn is parked. RED dot, card on screen.
       //   stallWarning→ stage 1, "may be wrong, I don't know". AMBER dot.
@@ -1221,6 +1236,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         : 'ok';
       next.set(action.sessionId, {
         ...session,
+        // A stall (or plain host heartbeat) also fences an older progress-only
+        // attach; otherwise its implicit 'ok' would dismiss the newer warning.
+        ...(action.timestamp !== undefined && action.timestamp > session.usageProgressAt
+          ? { usageProgressAt: action.timestamp } : {}),
+        ...(newerProgress ? {
+          inProgressUsage: action.usageProgress!,
+          usageProgressUuid: action.uuid ?? null,
+          // A measured window from the new request supersedes the re-based
+          // /compact or /clear gauge. Cumulative-only progress does not.
+          ...(action.usageProgress!.contextUsedTokens != null ? { contextUsedOverride: null } : {}),
+        } : {}),
         lastActivityAt: Date.now(),
         attentionState,
         stallWarning: action.stallWarning ?? null,
@@ -1314,7 +1340,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // "message sent by the user" bubble. Mirrors the guard that
       // TRANSCRIPT_ASSISTANT_TEXT / TOOL_USE / TOOL_RESULT already have.
       if (action.parentAgentToolUseId) return state;
-      const session = next.get(action.sessionId);
+      let session = next.get(action.sessionId);
       if (!session) return state;
 
       // Replay/live dedup: a renderer-crash reload replays this session's
@@ -1322,6 +1348,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // already applied, drop it — otherwise it appends a duplicate bubble
       // (there is no pending match on the second delivery). See seenUuids.
       if (action.uuid && session.seenUuids.has(action.uuid)) return state;
+      // An unstamped local end closes the lane; only a recorded new user turn
+      // opens it, on the host's clock (never on the optimistic renderer clock).
+      if (session.usageProgressAt === Infinity) {
+        session = { ...session, usageProgressAt: action.timestamp };
+      }
       const seenUuids = action.uuid
         ? markSeen(session, action.uuid)
         : session.seenUuids;
@@ -1981,6 +2012,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         seenUuids: markSeen(session, action.uuid),
+        // Like a recorded user message, a skill starts a new turn on the host clock.
+        usageProgressAt: session.usageProgressAt === Infinity ? action.timestamp : session.usageProgressAt,
         // A skill invocation IS a turn start, so it must set the same state
         // TRANSCRIPT_USER_MESSAGE does — otherwise nothing tells the UI a turn
         // began and the thinking indicator, prompt-processing progress and stall
@@ -2128,7 +2161,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // override here rather than letting it outlive the measurement that
       // supersedes it. Written unconditionally: this is one assignment of null on
       // an object literal that is being rebuilt anyway.
-      next.set(action.sessionId, { ...session, timeline, seenUuids, totals, contextUsedOverride: null, ...endTurn(session, undefined, assistantTurns) });
+      next.set(action.sessionId, { ...session, timeline, seenUuids, totals, contextUsedOverride: null, ...endTurn(session, undefined, assistantTurns, action.timestamp) });
       return next;
     }
 
@@ -2218,7 +2251,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...session,
         totals,
         seenUuids: totals === session.totals ? session.seenUuids : markSeen(session, action.uuid),
-        ...endTurn(session, 'Turn interrupted', assistantTurns),
+        ...endTurn(session, 'Turn interrupted', assistantTurns, action.timestamp),
       });
       return next;
     }

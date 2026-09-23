@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   NAMING_SCHEMA_VERSION, emptyNamingRecord, parseNamingRecord, mergeNamingRecords,
-  effectiveName, isManuallyNamed, normalizeManualName, sanitizeAutoName, basicNameFrom,
+  effectiveName, isManuallyNamed, normalizeManualName, sanitizeAutoName, basicNameFrom, shortenPathTokens,
   nextReviewAt, isReviewDue, MANUAL_NAME_MAX, AUTO_NAME_MAX,
 } from '../src/main/conversations/naming-core';
 
@@ -109,6 +109,32 @@ describe('effectiveName', () => {
 });
 
 describe('name cleaning', () => {
+  it('shortens POSIX, relative and Windows path tokens while retaining punctuation', () => {
+    expect(shortenPathTokens('Open /home/destin/project/src/file.ts now')).toBe('Open file.ts now');
+    expect(shortenPathTokens('check src/components/App.tsx')).toBe('check App.tsx');
+    expect(shortenPathTokens('edit src/components/Button')).toBe('edit Button');
+    expect(shortenPathTokens('edit /home/user/project/src/components/Button')).toBe('edit Button');
+    expect(shortenPathTokens('edit C:\\Users\\d\\project\\src\\components\\Button')).toBe('edit Button');
+    expect(shortenPathTokens('edit C:\\Users\\d\\project\\main.kt!')).toBe('edit main.kt!');
+    expect(shortenPathTokens('(see ./one/two.md), please')).toBe('(see two.md), please');
+    expect(shortenPathTokens('Edit /tmp/README.md')).toBe('Edit README.md');
+    expect(shortenPathTokens('Edit C:\\src\\App.tsx')).toBe('Edit App.tsx');
+  });
+
+  it('leaves URLs, prose compounds, bare filenames and trailing separators intact', () => {
+    expect(shortenPathTokens('https://example.com/a/b?q=1 and file.ts')).toBe('https://example.com/a/b?q=1 and file.ts');
+    expect(shortenPathTokens('README.md and folder/')).toBe('README.md and folder/');
+    expect(shortenPathTokens('check src/components/App.tsx/ now')).toBe('check src/components/App.tsx/ now');
+    expect(shortenPathTokens('check C:\\Users\\d\\main.kt\\ now')).toBe('check C:\\Users\\d\\main.kt\\ now');
+    expect(shortenPathTokens('and/or input/output settings')).toBe('and/or input/output settings');
+    expect(shortenPathTokens('file:///home/user/a/b.txt mailto:name@example.com')).toBe('file:///home/user/a/b.txt mailto:name@example.com');
+    expect(shortenPathTokens('custom+thing.value:part/a/b.txt')).toBe('custom+thing.value:part/a/b.txt');
+  });
+
+  it('uses shortened path tokens in Basic names', () => {
+    expect(basicNameFrom('Fix the bug in src/components/App.tsx')).toBe('Fix the bug in App.tsx');
+  });
+
   it('normalizeManualName collapses whitespace and refuses a blank', () => {
     expect(normalizeManualName('  Biology   revision \n')).toBe('Biology revision');
     expect(normalizeManualName('   ')).toBe('');

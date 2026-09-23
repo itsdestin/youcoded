@@ -161,6 +161,20 @@ describe('SessionStore', () => {
     expect(events.map((e: any) => e.type)).toEqual(['user-message']);
   });
 
+  it('drops a usage progress heartbeat without flushing an open text part or writing JSONL', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'Hel', partId: 'p1' }, 'a1') as any);
+    await store.append(HEADER.cwd, ev('assistant-thinking', { usageProgress: {
+      inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0.01,
+    } }, 'progress') as any);
+    expect(fs.readFileSync(store.transcriptPath('s-1', HEADER.cwd), 'utf8')).not.toContain('progress');
+    expect(store.readEvents('s-1', HEADER.cwd)).toEqual([]);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'lo', partId: 'p1' }, 'a2') as any);
+    await store.append(HEADER.cwd, ev('turn-complete', { stopReason: 'end_turn' }, 't1') as any);
+    expect(store.readEvents('s-1', HEADER.cwd).map((e) => e.type)).toEqual(['assistant-text', 'turn-complete']);
+    expect(store.readEvents('s-1', HEADER.cwd)[0].data.text).toBe('Hello');
+  });
+
   // A watchdog heartbeat is display-only but — unlike session-error — is NOT a
   // turn boundary, so it must leave the open streaming part buffered (the stream
   // may resume the same partId), not flush it early.
@@ -277,6 +291,23 @@ describe('SessionStore', () => {
     const list = store.list();
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ sessionId: 's-1', cwd: 'C:/Users/x/proj', harnessId: 'chat' });
+  });
+
+  it('shortens path tokens in the raw 60-character excerpt but preserves header title precedence', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('user-message', { text: 'Please inspect src/components/SessionBrowser.tsx before continuing' }, 'u1') as any);
+    expect(store.list()[0].title).toBe('Please inspect SessionBrowser.tsx before continuing');
+
+    const long = 'x'.repeat(48) + ' src/components/SessionBrowser.tsx';
+    await store.create({ ...HEADER, sessionId: 's-2' });
+    await store.append(HEADER.cwd, { ...ev('user-message', { text: long }, 'u2'), sessionId: 's-2' } as any);
+    const excerpt = store.list().find((row) => row.sessionId === 's-2')!.title!;
+    expect(excerpt).toBe((long.replace('src/components/SessionBrowser.tsx', 'SessionBrowser.tsx')).slice(0, 60));
+    expect(excerpt).toHaveLength(60);
+
+    await store.create({ ...HEADER, sessionId: 's-3', title: 'Header wins' });
+    await store.append(HEADER.cwd, { ...ev('user-message', { text: 'src/internal.ts' }, 'u3'), sessionId: 's-3' } as any);
+    expect(store.list().find((row) => row.sessionId === 's-3')!.title).toBe('Header wins');
   });
 
   it('derives a title from the first user message when the header has none', async () => {

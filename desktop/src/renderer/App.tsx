@@ -1559,6 +1559,11 @@ function AppInner() {
             batchTranscriptDispatch({
               type: 'TRANSCRIPT_THINKING_HEARTBEAT',
               sessionId: event.sessionId,
+              // WHY: use the source stamp/UUID so a late attach cannot undo
+              // a newer live measurement; this remains display-only.
+              usageProgress: event.data?.usageProgress,
+              uuid: event.uuid,
+              timestamp: event.timestamp,
               // Native watchdog: a stall-warning payload drives the countdown,
               // `stalled` parks the turn, a plain heartbeat clears both.
               // MUST mirror BubbleFeed.tsx.
@@ -1575,6 +1580,7 @@ function AppInner() {
           batchTranscriptDispatch({
             type: 'NATIVE_SESSION_ERROR',
             sessionId: event.sessionId,
+            timestamp: event.timestamp,
             message: event.data.text ?? 'The model request failed.',
             errorCode: event.data.errorCode,
             // Same reasoning as the interrupt above: a turn that died mid-flight

@@ -14,6 +14,7 @@
 // so it can be pinned without rendering App.
 import { selectNativeStatusChips } from '../components/StatusBar';
 import type { SessionTotals } from './session-totals';
+import { nativeDisplayTotals } from './status-widgets';
 import type { TurnUsage, UsageSnapshot } from './chat-types';
 
 /** The Claude Code statusline's figures for one session. Minimal structural
@@ -89,6 +90,7 @@ export function pruneExpiredUsage(
 export interface UsageSnapshotSession {
   timeline: ReadonlyArray<{ kind: string; turnId?: string }>;
   assistantTurns: ReadonlyMap<string, { usage?: TurnUsage | null }>;
+  inProgressUsage?: TurnUsage | null;
   totals?: SessionTotals;
   /** Occupancy re-based by a /compact or /clear — see ChatSessionState's field.
    *  Read here for the same reason the bar reads it: without it the card would
@@ -116,11 +118,13 @@ export interface UsageSnapshotInput {
   session: UsageSnapshotSession | undefined;
 }
 
-/** The most recent completed assistant turn's usage, walking backward.
- *  Mirrors hooks/useNativeSessionUsage — the status bar's source for the same
- *  numbers — so the bar and the card cannot read different turns. */
-export function lastTurnUsage(session: UsageSnapshotSession | undefined): TurnUsage | null {
+/** WHY one selector: the bar and /usage must prefer the same transient request
+ * measurement and fall back to the same completed turn after it ends. Return
+ * store-owned objects, never a copy: the bar's external-store snapshot requires
+ * reference stability across unrelated dispatches. */
+export function selectNativeUsage(session: UsageSnapshotSession | undefined): TurnUsage | null {
   if (!session) return null;
+  if (session.inProgressUsage) return session.inProgressUsage;
   for (let i = session.timeline.length - 1; i >= 0; i--) {
     const entry = session.timeline[i];
     if (entry.kind !== 'assistant-turn' || !entry.turnId) continue;
@@ -145,9 +149,9 @@ export function buildUsageSnapshot(input: UsageSnapshotInput): UsageSnapshot | n
   // bar now sends people here for (it hides the 5h and 7d chips there, and the
   // Customize menu points at this card).
   //
-  // Same precedence as the bar: the statusline wins where it exists, session
-  // totals fill in where it doesn't, so the two surfaces cannot disagree about
-  // the same session.
+  // The native display totals include the current cumulative turn snapshot;
+  // completed work (including specialists) stays in the durable totals. CC's
+  // own statusline remains authoritative for its cost and context.
   //
   // Scoped to NATIVE sessions for exactly the same reason the bar scopes its
   // own totals that way (StatusBar.tsx: `useNativeSessionTotals(isNativeSession
@@ -160,11 +164,13 @@ export function buildUsageSnapshot(input: UsageSnapshotInput): UsageSnapshot | n
   // request of a turn (not only its last), those totals are real — where the
   // statusline's token fields describe one request. Ungated so the card and the
   // status bar read the same numbers; see the matching note in App.tsx.
-  const totals = session?.totals ?? null;
+  const totals = isNative
+    ? nativeDisplayTotals(session?.totals, session?.inProgressUsage)
+    : session?.totals ?? null;
   // Context, from the same selector the status bar's native pill uses, fed the
-  // same last-completed-turn usage. Two surfaces, one formula: a native session
-  // at 61% used to show a pill on the bar and NO context row on the card.
-  const nativeUsage = isNative ? lastTurnUsage(session) : null;
+  // same selected live-or-completed usage. Two surfaces, one formula: a native
+  // session at 61% used to show a pill on the bar and NO context row on the card.
+  const nativeUsage = isNative ? selectNativeUsage(session) : null;
   const nativeChips = selectNativeStatusChips(nativeUsage, nativeUsage?.contextLength, session?.contextUsedOverride);
 
   // `totals` is now present for EVERY session (it used to be native-only), and

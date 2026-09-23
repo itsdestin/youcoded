@@ -54,7 +54,8 @@ describe('HarnessSession — multi-step turn driver', () => {
     await session.send('go');
 
     expect(types(events)).toEqual([
-      'user-message', 'assistant-text', 'tool-use', 'tool-result', 'assistant-text', 'turn-complete',
+      'user-message', 'assistant-text', 'assistant-thinking', 'tool-use', 'tool-result',
+      'assistant-text', 'assistant-thinking', 'turn-complete',
     ]);
     // Distinct partIds per step's text bubble.
     const texts = events.filter((e) => e.type === 'assistant-text');
@@ -71,6 +72,180 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(res.data.toolResult).toBe('Read ran');
     // The tool actually executed.
     expect((read as any).calls).toHaveLength(1);
+  });
+
+  it('emits cumulative measured usage during a root turn', async () => {
+    const read = fakeTool('Read');
+    const first = stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }),
+      { ...finishChunk('tool-calls', 10, 2), providerMetadata: { openrouter: { costUsd: 12 } } });
+    const second = stream(...textChunks('b', 'done'), finishChunk('stop', 20, 3));
+    const model = scriptedModel([first, second]);
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW,
+      pricing: { in: 1_000_000, out: 2_000_000 }, contextLength: 100, free: false }), async () => model as any);
+    const events = collect(session);
+    expect(session.currentUsageProgress).toBeNull();
+    session.on('transcript-event', (e: TranscriptEvent) => {
+      if (e.data.usageProgress && e.data.usageProgress.inputTokens === 10) {
+        expect(session.currentUsageProgress).toBe(e);
+        session.setBinding({ providerId: 'openrouter', modelId: 'new' }, 200, undefined,
+          { in: 9_000_000, out: 9_000_000 }, true);
+      }
+    });
+    await session.send('go');
+    const progress = events.filter((e) => e.type === 'assistant-thinking' && e.data.usageProgress);
+    expect(progress).toHaveLength(2);
+    expect(progress[0].data).not.toHaveProperty('text');
+    expect(progress[0].data).not.toHaveProperty('partId');
+    expect(progress[0].data.usageProgress).toMatchObject({ inputTokens: 10, outputTokens: 2,
+      costUsd: 14, free: false, contextLength: 100, contextUsedTokens: 12, providerCostUsd: 12 });
+    expect(progress[1].data.usageProgress).toMatchObject({ inputTokens: 30, outputTokens: 5,
+      costUsd: 40, free: false, contextLength: 100, contextUsedTokens: 23 });
+    expect(progress[1].data.usageProgress).not.toHaveProperty('providerCostUsd');
+    expect(events.indexOf(progress[0])).toBeLessThan(events.findIndex((e) => e.type === 'tool-use'));
+    expect(events.indexOf(progress[1])).toBeLessThan(events.findIndex((e) => e.type === 'turn-complete'));
+    expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({ costUsd: 40, free: false, contextLength: 100 });
+    expect(session.currentUsageProgress).toBeNull();
+
+    const child = new HarnessSession(makeOpts({ isSpecialistChild: true }), async () => scriptedModel([second]) as any);
+    const childEvents = collect(child);
+    await child.send('go');
+    expect(childEvents.some((e) => e.data.usageProgress)).toBe(false);
+  });
+
+  it('keeps a usage-silent step estimate out of later measured live progress', async () => {
+    const first = stream(...textChunks('a', 'eight888'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }),
+      { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool-calls' }, usage: { inputTokens: {}, outputTokens: {} } });
+    const second = stream(...textChunks('b', 'done'), finishChunk('stop', 20, 3));
+    const session = new HarnessSession(makeOpts({ tools: [fakeTool('Read')], decide: async () => ALLOW,
+      pricing: { in: 1_000_000, out: 2_000_000 }, contextLength: 100 }),
+    async () => scriptedModel([first, second]) as any);
+    const events = collect(session);
+    await session.send('go');
+    const progress = events.filter((e) => e.data.usageProgress).map((e) => e.data.usageProgress!);
+    expect(progress).toHaveLength(1);
+    expect(progress[0]).toMatchObject({ inputTokens: 20, outputTokens: 3,
+      contextUsedTokens: 23, contextLength: 100, free: false });
+    expect(progress[0]).toHaveProperty('liveProgress', true);
+    expect(progress[0]).not.toHaveProperty('costUsd'); // known rate, but silent step's bill is unknown
+    expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({
+      inputTokens: 20, outputTokens: 5, costUsd: 30,
+    }); // final accounting still includes the first step's chars/4 estimate
+  });
+
+  it('withdraws live cost when a measured request is followed by a usage-silent request', async () => {
+    const first = stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }),
+      finishChunk('tool-calls', 10, 2));
+    const second = stream(...textChunks('b', 'done'),
+      { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: { inputTokens: {}, outputTokens: {} } });
+    const session = new HarnessSession(makeOpts({ tools: [fakeTool('Read')], decide: async () => ALLOW,
+      pricing: { in: 1_000_000, out: 2_000_000 } }),
+    async () => scriptedModel([first, second]) as any);
+    const events = collect(session);
+    await session.send('go');
+    const progress = events.filter((e) => e.data.usageProgress).map((e) => e.data.usageProgress!);
+    expect(progress).toHaveLength(2);
+    expect(progress[0]).toMatchObject({ inputTokens: 10, outputTokens: 2, costUsd: 14 });
+    expect(progress[1]).toMatchObject({ inputTokens: 10, outputTokens: 2, liveProgress: true });
+    expect(progress[1]).not.toHaveProperty('costUsd');
+  });
+
+  it('reports provider-metadata-only cache tokens without inventing output or cost', async () => {
+    const session = new HarnessSession(makeOpts({ pricing: { in: 1_000_000, out: 2_000_000, cacheRead: 500_000 },
+      contextLength: 100 }), async () => scriptedModel([
+      stream(...textChunks('a', 'done'), { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' },
+        providerMetadata: { local: { cacheReadTokens: 7 }, openrouter: { cacheWriteTokens: 5 } },
+        usage: { inputTokens: {}, outputTokens: {} } }),
+    ]) as any);
+    const events = collect(session);
+    await session.send('go');
+    const progress = events.filter((e) => e.data.usageProgress).map((e) => e.data.usageProgress!);
+    expect(progress).toHaveLength(1);
+    expect(progress[0]).toMatchObject({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 7,
+      cacheCreationTokens: 5, contextLength: 100 });
+    expect(progress[0]).not.toHaveProperty('contextUsedTokens');
+    expect(progress[0]).not.toHaveProperty('costUsd');
+    expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({
+      inputTokens: 0, outputTokens: 1, cacheReadTokens: 7, cacheCreationTokens: 5,
+    });
+  });
+
+  it('does not price or estimate completion/context for input-only provider usage', async () => {
+    const session = new HarnessSession(makeOpts({ pricing: { in: 1_000_000, out: 2_000_000 }, contextLength: 100 }),
+      async () => scriptedModel([stream(...textChunks('a', 'eight888'), {
+        type: 'finish', finishReason: { unified: 'stop', raw: 'stop' },
+        usage: { inputTokens: { total: 10 }, outputTokens: {} },
+      })]) as any);
+    const events = collect(session);
+    await session.send('go');
+    const progress = events.find((e) => e.data.usageProgress)!.data.usageProgress!;
+    expect(progress).toMatchObject({ inputTokens: 10, outputTokens: 0, liveProgress: true });
+    expect(progress).not.toHaveProperty('costUsd');
+    expect(progress).not.toHaveProperty('contextUsedTokens');
+    expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({
+      inputTokens: 10, outputTokens: 2, costUsd: 14,
+    });
+  });
+
+  it('retains the unpriced signal for a genuinely missing rate card', async () => {
+    const session = new HarnessSession(makeOpts({ pricing: null, free: false }),
+      async () => scriptedModel([stream(...textChunks('a', 'done'), finishChunk('stop', 10, 2))]) as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(events.find((e) => e.data.usageProgress)!.data.usageProgress).toMatchObject({ costUsd: null, free: false });
+  });
+
+  it('does not fabricate progress for absent usage and clears measured progress on interrupt', async () => {
+    const silent = new HarnessSession(makeOpts({}), async () => scriptedModel([
+      stream(...textChunks('a', 'done'), { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' } }),
+    ]) as any);
+    const silentEvents = collect(silent);
+    await silent.send('go');
+    expect(silentEvents.some((e) => e.data.usageProgress)).toBe(false);
+    expect(silent.currentUsageProgress).toBeNull();
+
+    const session = new HarnessSession(makeOpts({ tools: [fakeTool('Read')], decide: async () => ALLOW }),
+      async () => scriptedModel([stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }), finishChunk('tool-calls', 10, 2))]) as any);
+    const events = collect(session);
+    session.on('transcript-event', (e: TranscriptEvent) => {
+      if (e.type === 'tool-result') session.interrupt();
+    });
+    await session.send('go');
+    expect(events.some((e) => e.data.usageProgress)).toBe(true);
+    expect(events.some((e) => e.type === 'user-interrupt')).toBe(true);
+    expect(session.currentUsageProgress).toBeNull();
+  });
+
+  it('clears progress on error and destroy', async () => {
+    const read = fakeTool('Read');
+    const first = stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }), finishChunk('tool-calls', 10, 2));
+    const model = scriptedModel([first, stream({ type: 'error', error: new Error('provider unavailable') })]);
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(events.some((e) => e.data.usageProgress)).toBe(true);
+    expect(events.some((e) => e.type === 'session-error')).toBe(true);
+    expect(session.currentUsageProgress).toBeNull();
+
+    const next = new HarnessSession(makeOpts({}), async () => scriptedModel([stream(...textChunks('b', 'done'), finishChunk('stop', 1, 1))]) as any);
+    next.on('transcript-event', (e: TranscriptEvent) => {
+      if (e.type === 'assistant-thinking' && e.data.usageProgress) {
+        expect(next.currentUsageProgress).toBe(e);
+        next.destroy();
+        expect(next.currentUsageProgress).toBeNull();
+      }
+    });
+    await next.send('go');
+    expect(next.currentUsageProgress).toBeNull();
+  });
+
+  it('omits estimated context from progress when only output usage is measured', async () => {
+    const model = scriptedModel([stream(...textChunks('a', 'done'), finishChunk('stop', 0, 3))]);
+    const session = new HarnessSession(makeOpts({ contextLength: 100 }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const progress = events.find((e) => e.data.usageProgress)!.data.usageProgress!;
+    expect(progress).toMatchObject({ inputTokens: 0, outputTokens: 3, contextLength: 100 });
+    expect(progress).not.toHaveProperty('contextUsedTokens');
   });
 
   it('builds history: user / assistant(text+tool-call) / tool(result) / assistant(text)', async () => {
@@ -1266,7 +1441,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     const session = new HarnessSession(makeOpts({ decide, askUser }), async () => model as any); // no `tools`
     const events = collect(session);
     await session.send('hi');
-    expect(types(events)).toEqual(['user-message', 'assistant-text', 'turn-complete']);
+    expect(types(events)).toEqual(['user-message', 'assistant-text', 'assistant-thinking', 'turn-complete']);
     expect(events.some((e) => e.type === 'tool-use')).toBe(false);
     expect(decide).not.toHaveBeenCalled();
     expect(askUser).not.toHaveBeenCalled();
