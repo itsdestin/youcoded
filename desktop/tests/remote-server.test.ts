@@ -259,21 +259,23 @@ describe('RemoteServer and the shell provider', () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
     const order: string[] = [];
-    server.setSessionStarter(async (info: any, opts: any) => {
-      order.push(`start:${info.id}:${opts.provider}`);
+    server.setSessionCreator(async (opts: any) => {
+      order.push(`create+start:${opts.provider}`);
+      return { id: 'n1', provider: opts.provider };
     });
     const sent = await drive(server, { type: 'session:create', id: 'c4', payload: { name: 'x', cwd: '/tmp', skipPermissions: false, provider: 'native' } });
     order.push('answered');
-    expect(order).toEqual(['start:1:native', 'answered']);
-    expect(sent[0].payload).toMatchObject({ id: '1' });
+    expect(order).toEqual(['create+start:native', 'answered']);
+    expect(sent[0].payload).toMatchObject({ id: 'n1' });
+    expect(shellSessionManager.createSession).not.toHaveBeenCalled();   // the shared path creates it
   });
 
-  it('still answers the phone when starting the session throws', async () => {
+  it('answers the phone with the real reason when creating the session throws', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
-    server.setSessionStarter(async () => { throw new Error('engine gone'); });
+    server.setSessionCreator(async () => { throw new Error('engine gone'); });
     const sent = await drive(server, { type: 'session:create', id: 'c5', payload: { name: 'x', cwd: '/tmp', skipPermissions: false, provider: 'native' } });
-    expect(sent[0].payload).toMatchObject({ id: '1' });
+    expect(sent[0].payload).toEqual({ ok: false, error: 'engine gone' });
   });
 
   // Files attached to a phone's message in a YouCoded-runtime session were dropped:
