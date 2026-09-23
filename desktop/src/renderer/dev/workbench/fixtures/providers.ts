@@ -28,9 +28,25 @@ export function catalog(): CatalogRow[] {
     { id: 'gpt-5.6-sol', providerId: 'chatgpt', label: 'GPT-5.6 Sol' },
     { id: 'gpt-5.6-terra', providerId: 'chatgpt', label: 'GPT-5.6 Terra' },
     { id: 'gpt-5.6-luna', providerId: 'chatgpt', label: 'GPT-5.6 Luna' },
+    { id: 'gpt-5.6-astra', providerId: 'chatgpt', label: 'GPT-5.6 Astra' },
     { id: 'gpt-5.5', providerId: 'chatgpt', label: 'GPT-5.5' },
     { id: 'openai/gpt-5', providerId: 'pv-openrouter', label: 'GPT-5' },
     { id: 'x-ai/grok-4', providerId: 'pv-openrouter', label: 'Grok 4' },  // site row-1 skit switches to it
+    // The recommended OpenRouter set (src/shared/recommended-models.ts) — the
+    // ids the picker bands into the default view. Labels are OpenRouter's own
+    // published names for the alias rows; the `~` prefix is part of the id.
+    { id: '~deepseek/deepseek-pro-latest', providerId: 'pv-openrouter', label: 'DeepSeek: DeepSeek Pro Latest' },
+    { id: '~deepseek/deepseek-flash-latest', providerId: 'pv-openrouter', label: 'DeepSeek: DeepSeek Flash Latest' },
+    { id: '~z-ai/glm-flash-latest', providerId: 'pv-openrouter', label: 'Z.ai: GLM Flash Latest' },
+    { id: '~openai/gpt-luna-latest', providerId: 'pv-openrouter', label: 'OpenAI: GPT Luna Latest' },
+    { id: '~openai/gpt-terra-latest', providerId: 'pv-openrouter', label: 'OpenAI: GPT Terra Latest' },
+    { id: '~openai/gpt-sol-latest', providerId: 'pv-openrouter', label: 'OpenAI: GPT Sol Latest' },
+    { id: '~openai/gpt-astra-latest', providerId: 'pv-openrouter', label: 'OpenAI: GPT Astra Latest' },
+    { id: '~moonshotai/kimi-latest', providerId: 'pv-openrouter', label: 'MoonshotAI: Kimi Latest' },
+    { id: 'moonshotai/kimi-k3', providerId: 'pv-openrouter', label: 'MoonshotAI: Kimi K3' },
+    { id: '~x-ai/grok-latest', providerId: 'pv-openrouter', label: 'xAI: Grok Latest' },
+    { id: '~google/gemini-flash-latest', providerId: 'pv-openrouter', label: 'Google: Gemini Flash Latest' },
+    { id: '~google/gemini-pro-latest', providerId: 'pv-openrouter', label: 'Google: Gemini Pro Latest' },
     // Promo (model beat): two DeepSeek rows so the favourites list opens with
     // four different companies' models. Names + provider only — no prices,
     // costs or "free" tags anywhere in the picker (Destin: nothing faked there).

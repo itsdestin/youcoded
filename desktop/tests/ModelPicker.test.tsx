@@ -401,3 +401,301 @@ describe('ModelPicker selectable-first ordering', () => {
     });
   });
 });
+
+// ── Recommended-models bands ─────────────────────────────────────────────────
+// 2026-09-20: the default view used to be favourites-only, which opened EMPTY
+// on a fresh install. It now leads with favourites and carries three closed-set
+// bands below them — Claude Code's aliases, the ChatGPT plan's named families,
+// and a curated OpenRouter list — sorted to the bottom (Destin's words).
+//
+// The rules under test, from his answers that day:
+//   · a connected first-party plan REPLACES the plan-shaped recommendations it
+//     duplicates, family by family — never the other providers' rows;
+//   · every picker host gets the bands; a power user can hide them in
+//     Assistant settings → General ("Show recommended models");
+//   · search still reaches the whole catalogue either way — bands are
+//     default-view furniture, not a filter.
+describe('ModelPicker recommended-models bands', () => {
+  let providers: any[];
+  let catalog: any[];
+  let store: Record<string, string>;
+
+  const favoriteStorage = {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => { store[key] = value; },
+    removeItem: (key: string) => { delete store[key]; },
+    clear: () => { store = {}; },
+  };
+
+  function bridge() {
+    (globalThis as any).window.claude = {
+      providers: {
+        list: vi.fn(async () => providers),
+        catalog: vi.fn(async () => catalog),
+      },
+      models: { onDownloadProgress: () => () => {} },
+    };
+  }
+
+  function modelRows(): HTMLButtonElement[] {
+    const panel = document.querySelector('[data-model-picker-portal]') ?? document.body;
+    return [...panel.querySelectorAll('button')]
+      .filter((button) => button.textContent?.includes(' · ')) as HTMLButtonElement[];
+  }
+
+  function rowLabels(): string[] {
+    return modelRows().map((button) => button.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+  }
+
+  const OR = { id: 'or', type: 'openrouter', label: 'OpenRouter', ready: true };
+  const GPT_PLAN = { id: 'chatgpt', type: 'chatgpt', label: 'ChatGPT Plan', ready: true };
+
+  beforeEach(() => {
+    (globalThis as any).window = (globalThis as any).window ?? {};
+    Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: favoriteStorage });
+    store = {};
+    providers = [];
+    catalog = [];
+    bridge();
+  });
+
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it('bands plan models then recommendations below no favourites, in band order', async () => {
+    providers = [OR, GPT_PLAN];
+    catalog = [
+      { id: 'gpt-5.6-luna', providerId: 'chatgpt', label: 'GPT-5.6 Luna' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+      { id: 'openai/gpt-5', providerId: 'or', label: 'GPT-5' },
+    ];
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    // The ordinary catalogue row ("GPT-5") is absent — the bands are a closed
+    // set, never a second scrollable catalogue.
+    await waitFor(() => expect(rowLabels()).toEqual([
+      'GPT-5.6 Luna · ChatGPT Plan',
+      'DeepSeek: DeepSeek Pro Latest · OpenRouter',
+    ]));
+  });
+
+  it('keeps a starred ordinary model above every band', async () => {
+    providers = [OR, GPT_PLAN];
+    catalog = [
+      { id: 'gpt-5.6-luna', providerId: 'chatgpt', label: 'GPT-5.6 Luna' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+      { id: 'openai/gpt-5', providerId: 'or', label: 'GPT-5' },
+    ];
+    localStorage.setItem('youcoded-model-favorites', JSON.stringify(['or:openai/gpt-5']));
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    await waitFor(() => expect(rowLabels()).toEqual([
+      'GPT-5 · OpenRouter',
+      'GPT-5.6 Luna · ChatGPT Plan',
+      'DeepSeek: DeepSeek Pro Latest · OpenRouter',
+    ]));
+  });
+
+  it('lifts a starred banded row into the favourites group, above the other bands', async () => {
+    providers = [OR, GPT_PLAN];
+    catalog = [
+      { id: 'gpt-5.6-luna', providerId: 'chatgpt', label: 'GPT-5.6 Luna' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+    ];
+    localStorage.setItem('youcoded-model-favorites', JSON.stringify(['or:~deepseek/deepseek-pro-latest']));
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    // Destin's ladder is "below user FAVOURITES": a star promotes the row into
+    // the favourites group, ahead of the plan and recommended bands it would
+    // otherwise sit inside.
+    await waitFor(() => expect(rowLabels()).toEqual([
+      'DeepSeek: DeepSeek Pro Latest · OpenRouter',
+      'GPT-5.6 Luna · ChatGPT Plan',
+    ]));
+    const star = screen.getByRole('button', { name: 'Unfavourite DeepSeek: DeepSeek Pro Latest' });
+    expect(star.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('orders the whole ladder when Claude Code is included: aliases, plan, recommendations', async () => {
+    providers = [OR, GPT_PLAN];
+    catalog = [
+      { id: 'gpt-5.6-luna', providerId: 'chatgpt', label: 'GPT-5.6 Luna' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+    ];
+    render(<ModelPicker value={null} onSelect={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    await waitFor(() => expect(rowLabels()).toEqual([
+      'Haiku · Claude Code',
+      'Sonnet · Claude Code',
+      'Opus · Claude Code',
+      'Fable · Claude Code',
+      'GPT-5.6 Luna · ChatGPT Plan',
+      'DeepSeek: DeepSeek Pro Latest · OpenRouter',
+    ]));
+  });
+
+  it('the plan replaces only the gpt recommendations, family by family', async () => {
+    providers = [GPT_PLAN, OR];
+    catalog = [
+      { id: 'gpt-5.6-luna', providerId: 'chatgpt', label: 'GPT-5.6 Luna' },
+      { id: 'gpt-5.6-terra', providerId: 'chatgpt', label: 'GPT-5.6 Terra' },
+      { id: '~openai/gpt-luna-latest', providerId: 'or', label: 'OpenAI: GPT Luna Latest' },
+      { id: '~openai/gpt-terra-latest', providerId: 'or', label: 'OpenAI: GPT Terra Latest' },
+      { id: '~openai/gpt-sol-latest', providerId: 'or', label: 'OpenAI: GPT Sol Latest' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+    ];
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    // Luna and Terra stand down (the plan lists them); Sol has no plan row, so
+    // its OpenRouter endpoint stays; DeepSeek is not plan-shaped and stays.
+    await waitFor(() => expect(rowLabels()).toEqual([
+      'GPT-5.6 Luna · ChatGPT Plan',
+      'GPT-5.6 Terra · ChatGPT Plan',
+      'OpenAI: GPT Sol Latest · OpenRouter',
+      'DeepSeek: DeepSeek Pro Latest · OpenRouter',
+    ]));
+    expect(screen.queryByText('OpenAI: GPT Luna Latest · OpenRouter')).toBeNull();
+    expect(screen.queryByText('OpenAI: GPT Terra Latest · OpenRouter')).toBeNull();
+  });
+
+  it('a new plan generation replaces only its matching OpenRouter family', async () => {
+    providers = [GPT_PLAN, OR];
+    catalog = [
+      { id: 'gpt-6-luna', providerId: 'chatgpt', label: 'GPT-6 Luna' },
+      { id: 'gpt-6-sol', providerId: 'chatgpt', label: 'GPT-6 Sol' },
+      { id: 'gpt-console', providerId: 'chatgpt', label: 'GPT Console' },
+      { id: '~openai/gpt-luna-latest', providerId: 'or', label: 'GPT Luna Latest' },
+      { id: '~openai/gpt-sol-latest', providerId: 'or', label: 'GPT Sol Latest' },
+      { id: '~openai/gpt-terra-latest', providerId: 'or', label: 'GPT Terra Latest' },
+    ];
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    // WHY: new plan versions are live catalog data; substring lookalikes must
+    // not crowd the default band or suppress a different family's fallback.
+    await waitFor(() => expect(rowLabels()).toEqual([
+      'GPT-6 Luna · ChatGPT Plan',
+      'GPT-6 Sol · ChatGPT Plan',
+      'GPT Terra Latest · OpenRouter',
+    ]));
+  });
+
+  it('a plan family with no OpenRouter recommendation still appears in the plan band', async () => {
+    providers = [GPT_PLAN, OR];
+    catalog = [
+      { id: 'gpt-5.6-astra', providerId: 'chatgpt', label: 'GPT-5.6 Astra' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+    ];
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    await waitFor(() => expect(rowLabels()).toEqual([
+      'GPT-5.6 Astra · ChatGPT Plan',
+      'DeepSeek: DeepSeek Pro Latest · OpenRouter',
+    ]));
+  });
+
+  it('does not band OpenRouter claude rows either way — the curated list, not the family, decides', async () => {
+    providers = [OR];
+    catalog = [
+      { id: '~anthropic/claude-sonnet-latest', providerId: 'or', label: 'Anthropic: Claude Sonnet Latest' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+    ];
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    // Claude Code is not even signed in here (status never asked) — and the
+    // claude row is not curated, so no state of CC would band it. The status
+    // landing later cannot re-band it either: replacement removes, never adds.
+    await waitFor(() => expect(rowLabels()).toEqual([
+      'DeepSeek: DeepSeek Pro Latest · OpenRouter',
+    ]));
+    expect(screen.queryByText('Anthropic: Claude Sonnet Latest · OpenRouter')).toBeNull();
+  });
+
+  it('a provider this install does not have contributes no recommended rows', async () => {
+    providers = [GPT_PLAN];
+    catalog = [
+      { id: 'gpt-5.6-luna', providerId: 'chatgpt', label: 'GPT-5.6 Luna' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+    ];
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    await waitFor(() => expect(rowLabels()).toEqual([
+      'GPT-5.6 Luna · ChatGPT Plan',
+    ]));
+  });
+
+  it('the setting hides the bands but not favourites', async () => {
+    providers = [OR, GPT_PLAN];
+    catalog = [
+      { id: 'gpt-5.6-luna', providerId: 'chatgpt', label: 'GPT-5.6 Luna' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+      { id: 'openai/gpt-5', providerId: 'or', label: 'GPT-5' },
+    ];
+    localStorage.setItem('youcoded-model-favorites', JSON.stringify(['or:openai/gpt-5']));
+    localStorage.setItem('youcoded-recommended-models-hidden', '1');
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    await waitFor(() => expect(rowLabels()).toEqual(['GPT-5 · OpenRouter']));
+  });
+
+  it('reads the recommendation setting again when an already-mounted picker opens', async () => {
+    providers = [OR];
+    catalog = [
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek Pro Latest' },
+    ];
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    // Settings keeps this picker mounted while its neighbouring toggle writes
+    // the preference. Opening it must read the latest value, not its mount value.
+    localStorage.setItem('youcoded-recommended-models-hidden', '1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    expect(await screen.findByText('No favorites yet. Search for a model, then star it to keep it here.'))
+      .toBeInTheDocument();
+    expect(rowLabels()).toEqual([]);
+  });
+
+  it('search still reaches the full catalogue while the bands are hidden', async () => {
+    providers = [OR, GPT_PLAN];
+    catalog = [
+      { id: 'gpt-5.6-luna', providerId: 'chatgpt', label: 'GPT-5.6 Luna' },
+      { id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' },
+    ];
+    localStorage.setItem('youcoded-recommended-models-hidden', '1');
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+    fireEvent.change(await screen.findByPlaceholderText('Search all models…'), { target: { value: 'luna' } });
+
+    await waitFor(() => expect(rowLabels()).toEqual(['GPT-5.6 Luna · ChatGPT Plan']));
+  });
+
+  it('narrows the empty state to no rows at all when the bands are hidden', async () => {
+    providers = [OR];
+    catalog = [{ id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' }];
+    localStorage.setItem('youcoded-recommended-models-hidden', '1');
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    expect(await screen.findByText('No favorites yet. Search for a model, then star it to keep it here.'))
+      .toBeInTheDocument();
+    expect(screen.queryByText('DeepSeek: DeepSeek Pro Latest · OpenRouter')).toBeNull();
+  });
+
+  it('keeps the bands visible with the original empty message absent', async () => {
+    providers = [OR];
+    catalog = [{ id: '~deepseek/deepseek-pro-latest', providerId: 'or', label: 'DeepSeek: DeepSeek Pro Latest' }];
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Model' }));
+
+    await waitFor(() => expect(rowLabels()).toEqual(['DeepSeek: DeepSeek Pro Latest · OpenRouter']));
+    expect(screen.queryByText('No favorites yet. Search for a model, then star it to keep it here.'))
+      .toBeNull();
+  });
+});
