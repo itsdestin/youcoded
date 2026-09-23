@@ -805,6 +805,22 @@ body[data-mode="buddy-chat"] #theme-bg {
   }
 }
 
+/* The Files drawer's file list slides open/closed by animating `width`
+   (SessionDrawer, `.drawer-list` transition-[width] duration-200) — a layout
+   animation that relays out the drawer every frame. WHY here: it was the one
+   spatial drawer motion Reduced Effects and the OS reduced-motion preference did
+   not stop; they now snap it, gated the same way as the toggle above. Motion is
+   otherwise unchanged (moving it to transform would change how it looks).
+   Unlayered, so it beats Tailwind's @layer utilities duration-200. */
+[data-reduced-effects] .drawer-list {
+  transition-duration: 0ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .drawer-list {
+    transition-duration: 0ms;
+  }
+}
+
 /* Indeterminate progress bar (llama-server gives no load %). A highlight sweeps
    across the track. Reduced-effects users get a static filled track instead. */
 /* translateX, not `left` — `left` is not compositable and forces a layout pass
