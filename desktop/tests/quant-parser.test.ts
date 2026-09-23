@@ -285,3 +285,18 @@ describe('lowercase and double quants (Mungert)', () => {
     expect(parseGgufName('imatrix.gguf')).toBeNull();
   });
 });
+
+// Review finding F3 (2026-09-23): with dots accepted before the quant, an MTP
+// draft written with any separator parsed as an offerable quant.
+describe('MTP drafts are rejected whatever the separator', () => {
+  it.each([
+    'Model-mtp.Q8_0.gguf', 'Model.mtp.Q8_0.gguf', 'Model_mtp-Q8_0.gguf', 'mtp-Model-Q4_0.gguf',
+    'MTP/mtp-gemma-4-12B-it-Q4_0.gguf', 'RVN-IQ2_M-mtp.gguf', 'Model-MTP-Q8_0.gguf',
+  ])('%s', (name) => {
+    expect(parseGgufName(name)).toBeNull();
+  });
+  it('a name that merely contains the letters is still a model', () => {
+    expect(parseGgufName('smtp-helper-7b-Q4_K_M.gguf')?.quant).toBe('Q4_K_M');
+    expect(parseGgufName('model-mtpx-Q4_K_M.gguf')?.quant).toBe('Q4_K_M');
+  });
+});

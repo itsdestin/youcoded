@@ -32,8 +32,10 @@ export interface ParsedGgufName {
 // 1,568 files across 89 popular GGUF repos: no existing label changes. What it
 // adds beyond chat models is other whole model repos search already returns
 // (speech, embedding) whose UPPERCASE-named siblings were already offered — the
-// file name was never the chat/non-chat gate. Non-model files (projectors,
-// `-mtp` drafts, vocab, imatrix) still fail to match. The quant is returned
+// file name was never the chat/non-chat gate. Vocab and imatrix files still
+// fail to match; projectors and MTP drafts are rejected by the denylist below
+// BEFORE this pattern runs (the pattern alone would accept `Model-mtp.Q8_0.gguf`
+// once dots count as separators — the denylist is what stops it). The quant is returned
 // exactly as written, because manifests and backfill need Hugging Face's own
 // string.
 //
@@ -63,7 +65,13 @@ const NAME_RE = /^(.+?)[-.](UD-)?((?:(?:BF16|F16|F32)-)?(?:(?:I?Q\d+_[A-Z0-9_]+)
 // those straight onto the pick list AS A QUANT. On mradermacher/gemma-3-12b-it-GGUF
 // the 590 MB projector was the ONLY option the app offered, labelled 'Q8_0 —
 // highest quality quantization'; picking it downloaded a file that cannot load.
-const AUX_BASENAME_RE = /(^|[-_.])(mmproj|mtp-)/i;
+//
+// WHY `mtp` must be a whole separator-bounded token (2026-09-23 review): the
+// old `mtp-` form only caught `mtp-Model…`. With dots now accepted before the
+// quant, `Model-mtp.Q8_0.gguf` and `Model.mtp.Q8_0.gguf` parsed as offerable
+// quants. `mtp` between any two separators (or at an end) is a draft model;
+// a name merely containing the letters (`…smtp…`) is not.
+const AUX_BASENAME_RE = /(^|[-_.])(mmproj|mtp(?=[-_.]|$))/i;
 
 export function parseGgufName(fileName: string): ParsedGgufName | null {
   const base = fileName.split('/').pop() ?? fileName; // callers may pass repo-relative paths
