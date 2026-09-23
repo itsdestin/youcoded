@@ -327,4 +327,29 @@ describe('HookRelay — hooks from a nested claude', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(events.map((e) => e.payload.session_id)).toEqual(['ours', 'ours']);
   });
+
+  // WHY: the owner gate (bugfix-integrations) and the unowned-ask pass-through
+  // (plan-approval) were built on separate branches and meet only in the
+  // combined tree. Pin all three outcomes through one relay with both gates on.
+  it('with the session gate on too: nested ask ignored, unowned ask passed through, owned ask held', async () => {
+    relay.setSessionGate((sid) => sid === 'desk-1');
+    await relay.start();
+    const events: any[] = [];
+    relay.on('hook-event', (e) => events.push(e));
+    await send({ hook_event_name: 'SessionStart', session_id: 'ours', _desktop_session_id: 'desk-1', _claude_pid: '1000' });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const nested = await send({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', _desktop_session_id: 'desk-1', _claude_pid: '2000' }, true);
+    expect(await nested.closedWithoutReply).toBe(true);
+    const unowned = await send({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', _desktop_session_id: 'desk-9', _claude_pid: '3000' }, true);
+    expect(await unowned.closedWithoutReply).toBe(true);
+    expect(events.filter((e) => e.type === 'PermissionRequest')).toEqual([]);
+    expect((relay as any).holdTimers.size).toBe(0);
+
+    await send({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', _desktop_session_id: 'desk-1', _claude_pid: '1000' }, true);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(events.filter((e) => e.type === 'PermissionRequest')).toHaveLength(1);
+    expect(relay.hasPendingPermission('desk-1')).toBe(true);
+    expect((relay as any).holdTimers.size).toBe(1);
+  });
 });
