@@ -298,6 +298,12 @@ interface LiveEntry {
   // holds. Starts resolved; a failed append is logged but never breaks the
   // chain (a later append must still run).
   appendChain: Promise<void>;
+  // WHY: the chain deliberately recovers after an append failure, but that generation
+  // can never certify a complete final transcript even if dispose later succeeds.
+  handoffPersistenceFailed?: boolean;
+  // A specialist retains the actual parent generation, not a reusable session id.
+  handoffParentEntry?: LiveEntry;
+  handoffChildDrains?: Set<Promise<void>>;
   // M1 send queue: FIFO of user messages that arrived while a turn was in
   // flight. Drained one at a time by runTurns; dropped with the entry on destroy.
   // Task 11 (cancel/edit queued messages): each entry carries a host-minted id
@@ -3027,7 +3033,8 @@ export class NativeSessionHost extends EventEmitter {
         .then(() => this.store.append(cwd, event))
         .catch((err) => {
           // Swallow so one failed append can't wedge the chain — the next
-          // event's append must still run.
+          // event's append must still run. Handoff retains the failure on THIS entry.
+          entry.handoffPersistenceFailed = true;
           log('ERROR', 'NativeSessionHost', 'append failed', {
             sessionId, type: event.type, error: String(err),
           });
@@ -3458,6 +3465,7 @@ export class NativeSessionHost extends EventEmitter {
     const entry: LiveEntry = {
       session, cwd: workDir, appendChain: Promise.resolve(), queue: [], inFlight: false,
       parentSessionId: parentId,
+      handoffParentEntry: this.live.get(parentId),
     };
     this.live.set(childId, entry);
     this.retainModel(childId, binding.modelId);
@@ -3474,6 +3482,11 @@ export class NativeSessionHost extends EventEmitter {
       entry.appendChain = entry.appendChain
         .then(() => this.store.append(workDir, event))
         .catch((err) => {
+          // WHY: this chain recovers for later events, but neither this child nor
+          // its captured parent generation can certify a complete handoff again.
+          // Retain the parent latch after childrenOf deregisters completed children.
+          entry.handoffPersistenceFailed = true;
+          if (entry.handoffParentEntry) entry.handoffParentEntry.handoffPersistenceFailed = true;
           log('ERROR', 'NativeSessionHost', 'child append failed', {
             sessionId: childId, type: event.type, error: String(err),
           });
@@ -4655,8 +4668,25 @@ export class NativeSessionHost extends EventEmitter {
         this.ledger.updateUnlessCompleted(parentCwd, sessionId, childId, { status: 'interrupted', endedAt: Date.now() })
           .catch((e) => log('ERROR', 'NativeSessionHost', 'failed to record an interrupted delegation', { childId, parentId: sessionId, error: String(e) }));
       }
+      const child = this.live.get(childId);
       await this.destroy(childId);
+      // WHY: a child append failure can be swallowed by its own chain; the
+      // parent's handoff cannot certify a complete delegated run in that case.
+      if (child?.handoffPersistenceFailed && child.handoffParentEntry)
+        child.handoffParentEntry.handoffPersistenceFailed = true;
     }
+  }
+
+  /** Capture the generation and its actual store path before teardown removes it.
+   * Ordinary destroy is not evidence; only this captured generation can attest. */
+  captureHandoffWriter(sessionId: string): { transcriptPath: string; projectCwd: string; persisted: () => boolean } | null {
+    const entry = this.live.get(sessionId);
+    if (!entry) return null;
+    return {
+      transcriptPath: this.store.transcriptPath(sessionId, entry.cwd),
+      projectCwd: entry.cwd,
+      persisted: () => this.live.get(sessionId) !== entry && !entry.handoffPersistenceFailed,
+    };
   }
 
   /** Graceful teardown of one session. No-op for unknown ids (so the
@@ -4670,7 +4700,27 @@ export class NativeSessionHost extends EventEmitter {
    *   2. await the appendChain — drain appends already enqueued before step 1.
    *   3. store.dispose() — flush the buffered open streaming part.
    *   4. drop the map entry. */
-  async destroy(sessionId: string, opts: { keepShells?: boolean } = {}): Promise<void> {
+  private readonly destroying = new Map<string, Promise<void>>();
+  destroy(sessionId: string, opts: { keepShells?: boolean } = {}): Promise<void> {
+    // WHY: the explicit handoff stop and session-exit callback can race across
+    // destroyChildrenOf's await. Share one drain/dispose, never dispose twice.
+    const pending = this.destroying.get(sessionId);
+    if (pending) return pending;
+    const parentEntry = this.live.get(sessionId)?.handoffParentEntry;
+    const task = this.destroyEntry(sessionId, opts);
+    this.destroying.set(sessionId, task);
+    // WHY: deregistration precedes the child append drain. Parent teardown
+    // must still await that captured child generation before claiming proof.
+    if (parentEntry) {
+      const drains = parentEntry.handoffChildDrains ??= new Set();
+      drains.add(task);
+      void task.finally(() => drains.delete(task)).catch(() => {});
+    }
+    void task.finally(() => { if (this.destroying.get(sessionId) === task) this.destroying.delete(sessionId); }).catch(() => {});
+    return task;
+  }
+
+  private async destroyEntry(sessionId: string, opts: { keepShells?: boolean } = {}): Promise<void> {
     // Capture the entry SYNCHRONOUSLY, before the child cascade below awaits —
     // the MCP release at the bottom of this method depends on tearing down the
     // generation this call captured (see the comment there), and that property
@@ -4684,6 +4734,7 @@ export class NativeSessionHost extends EventEmitter {
     // parent's own entry is already gone (a double destroy, or a teardown
     // racing one).
     await this.destroyChildrenOf(sessionId);
+    if (entry?.handoffChildDrains?.size) await Promise.all([...entry.handoffChildDrains]);
     // G-1 (D2): closing the conversation kills its background commands and
     // says so on the card. The holder-takeover and session-exit paths pass
     // keepShells — the conversation is still open, just somewhere else — and
@@ -4716,7 +4767,14 @@ export class NativeSessionHost extends EventEmitter {
     const modelId = entry.session.binding.modelId; // capture before teardown
     entry.session.destroy();             // abort stream + remove our listener → no new appends
     await entry.appendChain;             // drain already-enqueued appends
-    await this.store.dispose(sessionId); // flush the buffered open part
+    try { await this.store.dispose(sessionId); } // flush the buffered open part
+    catch (error) {
+      // WHY: a completed child is already absent from childrenOf here. Carry
+      // its failed teardown into the captured parent generation before rethrow.
+      entry.handoffPersistenceFailed = true;
+      if (entry.handoffParentEntry) entry.handoffParentEntry.handoffPersistenceFailed = true;
+      throw error;
+    }
     this.live.delete(sessionId);
     // Fix (Task 4 fix pass 3): drop any in-memory fallback reports still
     // queued for this parent. They can only ever be delivered by THIS

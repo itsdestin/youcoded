@@ -5,6 +5,12 @@ import { describe, it, expect } from 'vitest';
 import { takeoverDialogCopy } from '../src/renderer/components/takeover-dialog-copy';
 
 describe('takeoverDialogCopy', () => {
+  it('claim denial reports the holder without inventing a move or offering an override', () => {
+    expect(takeoverDialogCopy('claim-denied', 'Laptop-B')).toEqual({
+      lead: 'This conversation is now active on Laptop-B.',
+    });
+  });
+
   it('confirm: single-paragraph ask, no consequence', () => {
     expect(takeoverDialogCopy('confirm', 'Laptop-B')).toEqual({
       lead: 'This session is active on Laptop-B — take over here?',

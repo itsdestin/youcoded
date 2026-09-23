@@ -11,6 +11,10 @@
 // JSX dependency), which splits `lead` on the device substring to wrap it.
 export type TakeoverDialogPhase = 'confirm' | 'force' | 'undeliverable' | 'claim-denied';
 
+// One explanation for the dialog's information tip and Backup & Sync: neither
+// may promise exclusive offline ownership or confuse a claim with fresh messages.
+export const HANDOFF_EXPLANATION = 'When you resume a conversation another computer is using, YouCoded asks it to stop and hand it over. Recent messages may still be syncing. If the handoff cannot be confirmed, you can still try to open it; conflicting updates may be kept as separate copies rather than combined. Live handoff works between computers, not in the phone app.';
+
 export interface TakeoverDialogCopy {
   // First paragraph. Always present.
   lead: string;
@@ -24,12 +28,9 @@ export function takeoverDialogCopy(phase: TakeoverDialogPhase, device: string): 
     case 'confirm':
       return { lead: `This session is active on ${device} — take over here?` };
     case 'claim-denied':
-      // Deck Q-2 (2026-09-21): the claim lost the race — the conversation moved
-      // to another device before this one could open it. Different ask from
-      // 'confirm' (which offers to take a live session over): this one offers
-      // Try again / Leave it. No consequence paragraph — the user has not been
-      // offered an override here, so there is no fork to warn about.
-      return { lead: `This conversation moved to ${device}.` };
+      // Q-2 is retry or leave, not consent to force. Denial proves the holder,
+      // not whether the conversation moved or was already active there.
+      return { lead: `This conversation is now active on ${device}.` };
     case 'undeliverable':
       // The hub had no delivery path — the other device was never asked. Do NOT
       // blame it for "not responding" (that's the 'force' phase, a different,

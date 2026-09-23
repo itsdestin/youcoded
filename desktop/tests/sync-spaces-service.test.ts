@@ -657,6 +657,10 @@ describe('sync-spaces service transition serialization', () => {
     const res = await svc.hubLeaseRequest('acquire', 's2', 'dev-a');
     expect(h.hub.request).toHaveBeenCalledWith('acquire', 's2', 'dev-a');
     expect(res).toMatchObject({ ok: true, op: 'acquire', sessionId: 's2' });
+    // WHY: the facade cannot silently discard a nonce before the socket sees it.
+    const nonce = '3db07e20-1244-4a1b-85bf-bde2db925e41';
+    await svc.hubLeaseRequest('takeover', 's2', 'dev-a', nonce);
+    expect(h.hub.request).toHaveBeenCalledWith('takeover', 's2', 'dev-a', nonce);
   });
 
   it('a hub lease-event reaches the registered lease-event listener', async () => {

@@ -932,6 +932,15 @@ class SessionService : Service() {
         msg: MessageRouter.ParsedMessage
     ) {
         when (msg.type) {
+            // WHY: Android-local has no desktop lease/receipt controller; never claim a pending transfer exists.
+            "handoff:begin", "handoff:status", "handoff:wait", "handoff:retry",
+            "handoff:saved-copy", "handoff:force", "handoff:cancel", "handoff:create-params" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                    put("ok", false)
+                    put("unsupported", true)
+                    put("error", "Handoff attempts are not supported on this phone.")
+                }) }
+            }
             "session:create" -> {
                 val cwd = msg.payload.optString("cwd", bootstrap?.homeDir?.absolutePath ?: "")
                 // Security note: skipPermissions is safe to read from the payload because
@@ -4315,11 +4324,6 @@ class SessionService : Service() {
             "syncspaces:lease-query",
             "syncspaces:lease-takeover",
             "syncspaces:lease-force",
-            // Claim-before-open (2026-09-21): desktop-only like its siblings —
-            // the phone stays outside live handoff by decision (lease-handoff
-            // deck Q-9). The shared gate degrades on these rejects and proceeds.
-            "syncspaces:lease-claim",
-            "syncspaces:lease-release",
             "syncspaces:list-devices",
             "syncspaces:rename-device",
             "syncspaces:remove-device",

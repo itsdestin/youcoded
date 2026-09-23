@@ -77,6 +77,24 @@ describe('IPC channel consistency', () => {
   const preloadIpc = ipcConstants(preloadSource, /const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
   const typesIpc = ipcConstants(typesSource, /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/);
 
+  test('handoff channels explicitly refuse Android-local while both desktop transports expose them', () => {
+    const kotlin = readSource('..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+    const host = readSource('src', 'main', 'remote-server.ts');
+    const shim = readSource('src', 'renderer', 'remote-shim.ts');
+    // WHY: a missing Android branch returns unsupported by default, but explicit refusal pins the intent.
+    for (const [name, action] of Object.entries({ HANDOFF_BEGIN: 'begin', HANDOFF_STATUS: 'status',
+      HANDOFF_WAIT: 'wait', HANDOFF_RETRY: 'retry', HANDOFF_SAVED_COPY: 'saved-copy', HANDOFF_FORCE: 'force',
+      HANDOFF_CANCEL: 'cancel', HANDOFF_CREATE_PARAMS: 'create-params' })) {
+      const channel = `handoff:${action}`;
+      expect(preloadIpc.get(name)).toBe(channel);
+      expect(typesIpc.get(name)).toBe(channel);
+      expect(kotlin).toContain(`"${channel}"`);
+      expect(host).toContain(`case '${channel}':`);
+      expect(shim).toContain(`invoke('${channel}'`);
+    }
+    expect(kotlin).toMatch(/"handoff:create-params"\s*->\s*\{[\s\S]*?put\("unsupported", true\)/);
+  });
+
   // Without this, every assertion below passes vacuously the moment one of the
   // two extractions stops matching — which has happened here before.
   test('both IPC maps were actually parsed', () => {
@@ -748,9 +766,6 @@ describe('syncspaces:* channel parity (desktop surfaces)', () => {
     ['syncspaces:lease-query', 'IPC.SYNC_SPACES_LEASE_QUERY'],
     ['syncspaces:lease-takeover', 'IPC.SYNC_SPACES_LEASE_TAKEOVER'],
     ['syncspaces:lease-force', 'IPC.SYNC_SPACES_LEASE_FORCE'],
-    // Claim-before-open (2026-09-21, deck Q-1/Q-2) + its failed-resume release.
-    ['syncspaces:lease-claim', 'IPC.SYNC_SPACES_LEASE_CLAIM'],
-    ['syncspaces:lease-release', 'IPC.SYNC_SPACES_LEASE_RELEASE'],
     ['syncspaces:list-devices', 'IPC.SYNC_SPACES_LIST_DEVICES'],
     ['syncspaces:rename-device', 'IPC.SYNC_SPACES_RENAME_DEVICE'],
     ['syncspaces:remove-device', 'IPC.SYNC_SPACES_REMOVE_DEVICE'],
@@ -780,10 +795,6 @@ describe('syncspaces:* channel parity (desktop surfaces)', () => {
     'syncspaces:lease-query',
     'syncspaces:lease-takeover',
     'syncspaces:lease-force',
-    // Claim-before-open (2026-09-21): desktop-only like its siblings — the phone
-    // stays outside live handoff by decision (lease-handoff deck Q-9).
-    'syncspaces:lease-claim',
-    'syncspaces:lease-release',
     'syncspaces:list-devices',
     'syncspaces:rename-device',
     'syncspaces:remove-device',

@@ -6,6 +6,8 @@ import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
 import { SessionTerminal } from './components/SessionTerminal';
 import ChatView from './components/ChatView';
+import PendingHandoffView from './components/PendingHandoffView';
+import { PendingHandoff, type PendingTab } from './state/pending-handoff';
 import HeaderBar, { BareHeaderBar } from './components/HeaderBar';
 import InputBar, { type InputBarHandle } from './components/InputBar';
 import StatusBar from './components/StatusBar';
@@ -19,7 +21,7 @@ import { useChatViewHandlers } from './hooks/use-chatview-handlers';
 import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
 import ViewToggleHint from './components/ViewToggleHint';
-import { takeoverDialogCopy } from './components/takeover-dialog-copy';
+import { takeoverDialogCopy, HANDOFF_EXPLANATION } from './components/takeover-dialog-copy';
 import { runLeaseTakeoverGate } from './state/resume-lease-gate';
 import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
@@ -325,6 +327,26 @@ function AppInner() {
   const [drawerSearchMode, setDrawerSearchMode] = useState(false);
   const [drawerFilter, setDrawerFilter] = useState<string | undefined>(undefined);
   const inputBarRef = useRef<InputBarHandle>(null);
+  const [pendingTab, setPendingTab] = useState<PendingTab | null>(null);
+  const pendingAdmitRef = useRef<(tabId: string, info: any, detach: boolean) => void>(() => {});
+  const pendingRef = useRef<PendingHandoff | null>(null);
+  // WHY: the backend announces a handoff's session before the admission reply
+  // rebinds the pending tab. Hold matching announcements until the wait ends so
+  // the strip never shows the same conversation twice; release them afterwards.
+  const deferredCreatedRef = useRef(new Map<string, any>());
+  if (!pendingRef.current) {
+    pendingRef.current = new PendingHandoff(window.claude.session.handoff,
+      (_result, tab) => {
+        setPendingTab(tab ? { ...tab } : null);
+        if (tab?.phase === 'waiting' || deferredCreatedRef.current.size === 0) return;
+        const held = [...deferredCreatedRef.current.values()];
+        deferredCreatedRef.current.clear();
+        setSessions((prev) => [...prev, ...held.filter((info) => !prev.some((s) => s.id === info.id))]);
+        for (const info of held) dispatch({ type: 'SESSION_INIT', sessionId: info.id });
+      },
+      (tabId, info, detach) => pendingAdmitRef.current(tabId, info, detach));
+  }
+  useEffect(() => () => pendingRef.current?.dispose(), []);
   const headerRef = useRef<HTMLDivElement>(null);
   const bottomBarRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -399,18 +421,11 @@ function AppInner() {
     movedSessionsRef.current = next;
     setMovedSessions(next);
   }, []);
-  // Conversation-lease takeover dialog (Plan 2b Task 9; 3-state redesign
-  // Destin sign-off 2026-07-23). When resuming a conversation held live on
-  // another device, we ask before yanking it here. The resume flow AWAITS the
-  // user's choice via a promise resolved by the dialog buttons
-  // (takeoverResolveRef), so handleResumeSession stays one linear async
-  // function instead of splitting across callbacks. phase 'confirm' is the
-  // first ask; 'force' is the "asked, but no answer" ask (a request WAS
-  // delivered to the holder); 'undeliverable' is the honest third state — the
-  // hub had no delivery path at all, so the holder was never asked (distinct
-  // from 'force': never claim a device ignored a request it never received).
+  // Await explicit handoff/retry consent. No lease is held while asking;
+  // ownership and failure cleanup belong to the backend's session creation.
   const [takeoverPrompt, setTakeoverPrompt] = useState<{ device: string; phase: 'confirm' | 'force' | 'undeliverable' | 'claim-denied' } | null>(null);
   const takeoverResolveRef = useRef<((choice: boolean) => void) | null>(null);
+  useEffect(() => () => { takeoverResolveRef.current?.(false); }, []);
   const askTakeover = useCallback((device: string, phase: 'confirm' | 'force' | 'undeliverable' | 'claim-denied') =>
     new Promise<boolean>((resolve) => {
       // Reentrancy guard: only one resolver slot exists. If a second resume opens
@@ -437,7 +452,7 @@ function AppInner() {
   // Nothing below is MovedGate-specific — this is the shared surface Task 9
   // reuses for that gate's resume affordance.
   const [pendingNativeResume, setPendingNativeResume] = useState<{
-    claudeSessionId: string; projectSlug: string; projectPath: string; launchInNewWindow?: boolean;
+    claudeSessionId: string; projectSlug: string; projectPath: string; launchInNewWindow?: boolean; savedName?: string;
   } | null>(null);
   const [pendingNativeBinding, setPendingNativeBinding] = useState<ModelBinding | null>(null);
   // True while the pre-resume picker's create is in flight — keeps the modal open
@@ -1205,14 +1220,18 @@ function AppInner() {
 
   useEffect(() => {
     const createdHandler = window.claude.on.sessionCreated((info) => {
-      setSessions((prev) => {
+      const waiting = pendingRef.current?.active;
+      if (waiting?.phase === 'waiting' && info.cwd === waiting.cwd && info.provider === waiting.provider)
+        deferredCreatedRef.current.set(info.id, info);
+      else setSessions((prev) => {
         // Deduplicate — replay buffers resend session:created for existing sessions
         if (prev.some((s) => s.id === info.id)) return prev;
         dispatch({ type: 'SESSION_INIT', sessionId: info.id });
         // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
         // client not before its place is decided: the restore sends every session as
         // session:created ahead of the hydrate.
-        if (mayAutoSelect()) setSessionId(info.id);
+        // WHY: a pending transfer selects its real writer only after the attempt's admission reply.
+        if (mayAutoSelect() && !pendingRef.current?.active) setSessionId(info.id);
         return [...prev, info];
       });
       // Native harness sessions (roadmap Phase 1+) are chat-first — they have
@@ -1779,6 +1798,21 @@ function AppInner() {
       // app's toggle moved the desktop and every other phone; it is ignored now,
       // like any other action without a reducer type.
       if (!action.type) return;
+      if (action.type === '_BUDDY_RESUME' && typeof action.sessionId === 'string') {
+        // WHY: resolve on this desktop rather than trusting buddy-supplied
+        // project paths; the normal main resume route chooses a native model
+        // before handoff and asks consent against the current holder again.
+        void window.claude.session.browse().then((rows: any[]) => {
+          const row = rows.find((s) => s.sessionId === action.sessionId);
+          if (row?.projectSlug && row?.projectPath && !row.missingProject) {
+            window.dispatchEvent(new CustomEvent('youcoded:resume-session', { detail: {
+              claudeSessionId: row.sessionId, projectSlug: row.projectSlug,
+              projectPath: row.projectPath, provider: row.provider,
+            } }));
+          } else setResumeRequested(true);
+        }).catch(() => setResumeRequested(true));
+        return;
+      }
       // Handle session initialization sync (not a chat reducer action)
       if (action.type === '_SESSION_INITIALIZED' && action.sessionId) {
         setInitializedSessions((prev) => {
@@ -2104,7 +2138,9 @@ function AppInner() {
     // here would silently deny it any history at all.
     const live = new Set(sessions.map((s) => s.id));
     for (const id of firstPageAsked.current) if (!live.has(id)) firstPageAsked.current.delete(id);
-    for (const s of sessions) void loadFirstPage(s.id);
+    // WHY: session:created may precede the attempt's admitted reply. Its
+    // unlocated first page must not consume the receiver's one locator read.
+    if (!pendingRef.current?.active) for (const s of sessions) if (!String(s.id).startsWith('pending-handoff:')) void loadFirstPage(s.id);
   }, [sessions, loadFirstPage, hydrateTick]);
 
   useEffect(() => {
@@ -2220,7 +2256,11 @@ function AppInner() {
         return;
       }
       setSessions((prev) => {
-        if (prev.some((s) => s.id === sid)) return prev;
+        // WHY: a boot-time list can race the queued ownership payload. Even if
+        // it listed the session first, retain the transferred unsent draft.
+        if (prev.some((s) => s.id === sid)) return 'initialAttachments' in sessionInfo
+          ? prev.map((s) => s.id === sid ? { ...s, initialInput: sessionInfo.initialInput,
+            initialAttachments: sessionInfo.initialAttachments } : s) : prev;
         return [...prev, sessionInfo];
       });
       dispatch({ type: 'SESSION_INIT', sessionId: sid });
@@ -2821,6 +2861,34 @@ function AppInner() {
     setSessionId(info.id);
   }, [dispatch]);
 
+  // WHY: a pending tab is renderer-only until the backend returns an admitted
+  // session. Rebind once, preserving the unsent draft; an earlier created push
+  // may already have listed the real session but cannot authorize this switch.
+  pendingAdmitRef.current = (tabId, info, detach) => {
+    const draft = inputBarRef.current?.readDraftPayload(tabId) ?? { text: '', attachments: [] };
+    inputBarRef.current?.transferDraft(tabId, info.id);
+    setSessions((prev) => {
+      const without = prev.filter((s) => s.id !== tabId && s.id !== info.id);
+      const at = prev.findIndex((s) => s.id === tabId);
+      const next = [...without];
+      next.splice(at < 0 ? next.length : Math.min(at, next.length), 0,
+        { ...info, initialInput: draft.text, initialAttachments: draft.attachments });
+      return next;
+    });
+    setSessionId((id) => id === tabId ? info.id : id);
+    setViewModes((prev) => new Map(prev).set(info.id, 'chat'));
+    setPermissionModes((prev) => new Map(prev).set(info.id, matchPermissionMode(info.permissionMode)));
+    setSessionModels((prev) => new Map(prev).set(info.id, matchModelAlias(info.model)));
+    if (info.provider === 'native') setInitializedSessions((prev) => new Set(prev).add(info.id));
+    dispatch({ type: 'SESSION_INIT', sessionId: info.id });
+    void loadFirstPage(info.id, info.provider === 'claude' && pendingTab ? {
+      claudeSessionId: pendingTab.conversationId, projectSlug: pendingTab.projectSlug,
+    } : undefined);
+    // WHY: only the admitted non-reused writer may move. Carry the unsent
+    // draft in the ownership payload before this source window can be closed.
+    if (detach) (window as any).claude?.detach?.openDetached?.({ sessionId: info.id, draft });
+  };
+
   // The page view blocks the chat's global shortcuts (Destin, 2026-09-17) —
   // except while Settings, the library or the create dialog is over it, when
   // those own the keyboard as they would over the chat. utils/shortcut-gate.ts.
@@ -2900,6 +2968,12 @@ function AppInner() {
     dispatch({ type: 'SESSION_REMOVE', sessionId: id });
     clearMoved(id);
   }, [dispatch, clearMoved]);
+  useEffect(() => {
+    // WHY: a remote reconnect has a NEW owner; the server already canceled
+    // the old connection's attempt. Do not offer a retry with its stale ID.
+    if (!isRemoteMode() || !pendingTab || (conversationStatus !== 'reconnecting' && conversationStatus !== 'restoring')) return;
+    if (pendingRef.current?.close(pendingTab.tabId)) removeSessionLocally(pendingTab.tabId);
+  }, [conversationStatus, pendingTab, removeSessionLocally]);
 
   // Returns whether a resume was actually launched (true), or was aborted / failed
   // / deferred to the pre-resume picker (false). Callers that own a modal or row
@@ -2907,38 +2981,8 @@ function AppInner() {
   // their UI open on false instead of closing over a silent failure (Task 6 review
   // — the create ack-gap: a create that never returned an id used to be a silent
   // `return`, leaving the user staring at nothing).
-  const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, projectPath: string, resumeModel?: string, resumeDangerous?: boolean, launchInNewWindow?: boolean, provider?: string, nativeBinding?: ModelBinding): Promise<boolean> => {
+  const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, projectPath: string, resumeModel?: string, resumeDangerous?: boolean, launchInNewWindow?: boolean, provider?: string, nativeBinding?: ModelBinding, savedName?: string): Promise<boolean> => {
     const cwd = projectPath;
-
-    // Plan 2b Task 9 — conversation-lease takeover gate. Before resuming, ask the
-    // hub whether this conversation is actively held on ANOTHER device. If so,
-    // offer to take over here (the holder hands off), falling back to a
-    // force-takeover if the holder doesn't respond. NEVER hard-blocks the resume:
-    // any lease error just proceeds (spec §3 never-block).
-    //
-    // Self-device decision: the query result's `self` flag is computed in the
-    // main process from the per-install deviceId (NOT the hostname label). We gate
-    // the dialog on "held AND not self" so a lease left over from OUR OWN install
-    // (e.g. after an unclean shutdown) resumes straight through instead of popping
-    // a confusing "active on <your-own-hostname>" takeover dialog.
-    // The gate itself now lives in state/resume-lease-gate.ts — the buddy
-    // floater's own resume list runs the SAME never-block / three-honest-states
-    // logic instead of re-deriving it slightly differently.
-    const proceed = await runLeaseTakeoverGate({
-      claudeSessionId,
-      askTakeover,
-      onWarn: (message) => setToast({ message, durationMs: 8000 }),
-      // Claim-before-open (deck Q-1/Q-2): acquire BEFORE any session exists.
-      // The dialog phase is Q-2's Try again / Leave it — same reentrancy-guarded
-      // promise plumbing as the takeover ask above.
-      claimLease: (id) => window.claude.syncSpaces?.leaseClaim?.(id) ?? null,
-      askClaimDenied: (device) => askTakeover(device, 'claim-denied'),
-      // A failed claim must not keep the lease: release it if this resume dies
-      // below (create returned nothing / picker path bailed). Fire-and-forget —
-      // the lease is idempotent and reconciles at the next renew either way.
-      onAbandon: () => { try { void window.claude.syncSpaces?.leaseRelease?.(claudeSessionId); } catch { /* best-effort */ } },
-    });
-    if (!proceed) return false; // "Never mind" / "Leave it" — abort the resume
 
     // Native-harness resume. Task 6 / Destin's ruling: NEVER auto-launch a
     // binding — the resume-time model selector is ALWAYS the source of the
@@ -2947,11 +2991,61 @@ function AppInner() {
     // stale, possibly entirely absent on this device) header binding.
     if (provider === 'native' && !nativeBinding) {
       setPendingNativeBinding(null);
-      setPendingNativeResume({ claudeSessionId, projectSlug, projectPath, launchInNewWindow });
-      return false; // deferred to the pre-resume picker — not launched yet
+      setPendingNativeResume({ claudeSessionId, projectSlug, projectPath, launchInNewWindow, savedName });
+      return false; // no claim or handoff while the model picker is open
     }
+    const resume = (args: ReturnType<typeof buildSessionCreateArgs>) => runLeaseTakeoverGate({
+      claudeSessionId,
+      askTakeover,
+      onHandoff: async () => {
+        if (getPlatform() === 'android' && !isRemoteMode()) {
+          setToast('Live handoff is available from a computer or a remote connection to one.');
+          return;
+        }
+        // WHY: explicit consent opens a read/draft tab immediately; only the
+        // backend attempt may later create a writer. No legacy lease-force here.
+        const attempt = pendingRef.current!;
+        if (attempt.active) return;
+        const started = attempt.begin(claudeSessionId, provider === 'native' ? 'native' : 'claude', {
+          ...args, resumeSessionId: claudeSessionId,
+        }, projectSlug, savedName, launchInNewWindow);
+        const tab = attempt.active as PendingTab | null;
+        if (tab) {
+          setSessions((prev) => [...prev, { id: tab.tabId, name: tab.name, cwd: tab.cwd, provider: tab.provider }]);
+          setSessionId(tab.tabId);
+          placeDecidedRef.current = true;
+          setViewModes((prev) => new Map(prev).set(tab.tabId, 'chat'));
+          setInitializedSessions((prev) => new Set(prev).add(tab.tabId));
+          setResumeRequested(false);
+          setPendingNativeResume(null);
+          if (!savedName) {
+            // WHY: moved/deep-link entry points have no selected row; look up
+            // its display name after opening the tab, never delay consent UI.
+            void window.claude.session.browse().then((rows: any[]) => {
+              const row = rows.find((entry) => entry.sessionId === claudeSessionId);
+              if (typeof row?.name === 'string' && row.name.trim() && attempt.active?.tabId === tab.tabId) {
+                attempt.rename(tab.tabId, row.name);
+                setSessions((prev) => prev.map((s) => s.id === tab.tabId ? { ...s, name: row.name } : s));
+              }
+            }).catch(() => {});
+          }
+        }
+        void started;
+      },
+      onWarn: (message) => setToast({ message, durationMs: 8000 }),
+      // WHY: creation and its claim are one backend operation, shared with remote.
+      open: () => window.claude.session.create(args),
+    }).then((info) => {
+      // Remote creation announcements do not select a conversation. The reply
+      // also covers reusing an existing writer, which emits no new announcement.
+      if (info && isRemoteMode()) adoptCreatedSession(info);
+      return info;
+    }).catch(() => {
+      setToast({ message: "Couldn't resume this conversation.", durationMs: 6000 });
+      return null;
+    });
     if (provider === 'native') {
-      const nativeSession = await (window.claude.session.create as any)(buildSessionCreateArgs({
+      const nativeSession = await resume(buildSessionCreateArgs({
         // WHY the constant: main's title feeder must be able to RECOGNIZE this
         // as a placeholder (shared/session-title.ts). A bare literal here is
         // what let it pass as a real title and block auto-titling on resume.
@@ -2961,15 +3055,7 @@ function AppInner() {
         resumeSessionId: claudeSessionId,
         binding: nativeBinding, // the selector's pick — becomes the live binding (native-session-host.ts resume() override)
       }));
-      if (!nativeSession?.id) {
-        // The create never acked (Task 6 review — was a silent return). Main also
-        // emits a session-error for the split not-synced / folder-missing / data-
-        // missing REFUSAL cases (those DO return an id, so they don't land here);
-        // this covers a create that returned nothing at all. Non-committal per
-        // error standards — the exact cause isn't known on this side.
-        setToast({ message: "Couldn't resume this conversation.", durationMs: 6000 });
-        return false;
-      }
+      if (!nativeSession) return false; // user declined the handoff / retry
       // I1 fix (resume path): same invoke-result patch as createSession — the
       // session:created event seeded this entry with harnessId=undefined (resume
       // can't seed it synchronously), so the live pill would read "Assistant" for
@@ -2977,7 +3063,9 @@ function AppInner() {
       if (nativeSession.harnessId) {
         setSessions((prev) => prev.map((s) => (s.id === nativeSession.id ? { ...s, harnessId: nativeSession.harnessId } : s)));
       }
-      if (launchInNewWindow) {
+      // A reused writer stays in its owner window; transferring from here
+      // would create an empty window before ownership validation refuses it.
+      if (launchInNewWindow && !nativeSession.reused) {
         (window as any).claude?.detach?.openDetached?.({ sessionId: nativeSession.id });
       }
       // Hydrate the chat view from disk — the most recent page only.
@@ -2990,7 +3078,7 @@ function AppInner() {
     const m = resumeModel || realModelAlias(currentModel);
 
     // Pass --resume flag so Claude Code boots directly into the resumed session
-    const newSession = await (window.claude.session.create as any)(buildSessionCreateArgs({
+    const newSession = await resume(buildSessionCreateArgs({
       name: RESUMING_CLAUDE, // see RESUMING_NATIVE above — different spelling, same contract
       cwd,
       runtime: 'claude',
@@ -2998,14 +3086,10 @@ function AppInner() {
       resumeSessionId: claudeSessionId,
       model: m,
     }));
-    if (!newSession?.id) {
-      // Honest failure instead of a silent return (Task 6 review — the CC ack-gap).
-      setToast({ message: "Couldn't resume this conversation.", durationMs: 6000 });
-      return false;
-    }
+    if (!newSession) return false; // user declined the handoff / retry
 
-    // Launch-in-new-window for resumed sessions — same peer-window spawn path.
-    if (launchInNewWindow) {
+    // As above, only a newly created writer can be detached from this window.
+    if (launchInNewWindow && !newSession.reused) {
       (window as any).claude?.detach?.openDetached?.({ sessionId: newSession.id });
     }
 
@@ -3014,7 +3098,7 @@ function AppInner() {
     // pass the locator the page handler can resolve the file from.
     void loadFirstPage(newSession.id, { claudeSessionId, projectSlug });
     return true;
-  }, [dispatch, currentModel, askTakeover, loadFirstPage]);
+  }, [currentModel, askTakeover, loadFirstPage, adoptCreatedSession]);
 
   // Cards deep in the chat tree ask for a resume by event — the same
   // deep-component→destination pattern as youcoded:open-library (~:397).
@@ -3075,7 +3159,7 @@ function AppInner() {
       if (!sessionId) return;
       // A shell session is terminal-only. The header hides its toggle, but Ctrl+`
       // still lands here, so refuse rather than trust the callers.
-      if (sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'shell') return;
+      if (sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'shell' || pendingRef.current?.active?.tabId === sessionId) return;
       setViewModes((prev) => new Map(prev).set(sessionId, mode));
       // Batch 2 (§5): no broadcast. This screen's switch is this screen's own —
       // the Android-only `switch-view` broadcast moved the desktop and every
@@ -3184,6 +3268,7 @@ function AppInner() {
   const onChatGptPlan = activeProviderType === 'chatgpt';
   // What the StatusBar model chip renders — see model-chip.ts for why native
   // sessions bypass the Claude Code alias matcher entirely.
+  const isPendingTab = String(sessionId).startsWith('pending-handoff:');
   const modelChip = useMemo(() => modelChipFor(currentSession, currentModel), [currentSession, currentModel]);
   // Native StatusBar chips (Plan C Task 12): the active native session's
   // most-recent completed-turn usage. MERGE RECONCILIATION — this was originally
@@ -3527,6 +3612,9 @@ function AppInner() {
     });
   }, []);
   const handleCloseSession = useCallback((id: string, name?: string) => {
+    // WHY: a pending tab is not a writer. Closing it invalidates admission
+    // synchronously; session:destroy and the ordinary close prompt are wrong here.
+    if (pendingRef.current?.close(id)) { removeSessionLocally(id); return; }
     // Skip prompt if the user has checked "Don't show again". In that case
     // destroy immediately without any flags — the user can still tag sessions
     // from the resume menu later. WHY: session:destroy is a global main-process
@@ -3538,7 +3626,7 @@ function AppInner() {
       setClosePromptName(name);
       setClosePromptFor(id);
     }
-  }, []);
+  }, [removeSessionLocally]);
   const handleReorderSessions = useCallback((fromIndex: number, toIndex: number) => {
     setSessions(prev => {
       const next = [...prev];
@@ -3692,7 +3780,15 @@ function AppInner() {
                   background covers it. Task 5 deletes the native renderer. */}
               {sessions.map((s) => (
                 <React.Fragment key={s.id}>
-                  <ErrorBoundary name="Chat">
+                  {pendingTab && pendingTab.tabId === s.id ? (
+                    <ErrorBoundary name="Chat"><PendingHandoffView tab={pendingTab} visible={s.id === sessionId}
+                      drawerOpen={s.id === sessionId && activeDrawerOpen} expanded={artifactState.drawerExpanded}
+                      gamePane={s.id === sessionId ? activeGamePane : null}
+                      onRetry={() => { void pendingRef.current?.retry(s.id); }}
+                      onContinue={() => { void pendingRef.current?.continueWithSavedCopy(s.id,
+                        (device) => askTakeover(device, 'force'),
+                        () => setToast({ message: "Couldn't take over from your other computer. Close the conversation there, then try again.", durationMs: 8000 })); }} /></ErrorBoundary>
+                  ) : <ErrorBoundary name="Chat">
                     <ChatView
                       sessionId={s.id}
                       // currentViewMode, not the raw map: a shell session FORCES
@@ -3720,14 +3816,15 @@ function AppInner() {
                       onEditQueued={handleEditQueued}
                       conversationStatus={conversationStatus}
                       onRefreshConversation={handleRefreshConversation}
+                      modelLoadingDemo={s.id === sessionId && new URLSearchParams(location.search).get('mode') === 'workbench' && new URLSearchParams(location.search).get('modelLoading') === '1'}
                     />
-                  </ErrorBoundary>
-                  <ErrorBoundary name="Terminal">
+                  </ErrorBoundary>}
+                  {!String(s.id).startsWith('pending-handoff:') && <ErrorBoundary name="Terminal">
                     {/* A native session's terminal mounts on its first switch to terminal view (audit W15). */}
                     <SessionTerminal sessionId={s.id} provider={s.provider}
                       visible={s.id === sessionId && currentViewMode === 'terminal'}
                     />
-                  </ErrorBoundary>
+                  </ErrorBoundary>}
                 </React.Fragment>
               ))}
               {/* Terminal-view right-slot panel (Bug #2): the artifact drawer +
@@ -3834,16 +3931,18 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Your assistant is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Your assistant is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} initialAttachments={currentSession?.initialAttachments} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={statusBarData}
                   onOpenSync={handleOpenSync}
                   onRunSync={handleRunSync}
-                  model={modelChip}
+                  // WHY: a pending handoff tab has no session yet; its model and
+                  // permission chips would read as red "Unknown" errors.
+                  model={isPendingTab ? undefined : modelChip}
                   modelProviderType={activeProviderType}
                   usagePlan={onChatGptPlan ? 'chatgpt' : 'claude'}
                   provider={isNativeSession ? 'native' : 'claude'}
-                  permissionMode={isNativeSession ? currentNativeMode : currentPermissionMode}
+                  permissionMode={isPendingTab ? undefined : isNativeSession ? currentNativeMode : currentPermissionMode}
                   onCyclePermission={isNativeSession ? cycleNativePermission : cyclePermission}
                   fast={fastMode}
                   effort={effortLevel}
@@ -4431,12 +4530,7 @@ function AppInner() {
         };
         const infoTip = (
           <AnchorTip label="How taking over works" title="Taking over a conversation" className="ml-1 -mb-px align-middle">
-            <p>A conversation runs on one device at a time.</p>
-            <p>Taking over asks the current device to stop, save everything, and hand off — nothing is lost.</p>
-            <p>Taking over <em>without</em> a confirmed handoff doesn&apos;t wait. When the other device reconnects, it stops and saves on its own — but anything it wrote in the meantime is kept as a separate copy, not added to this conversation.</p>
-            {/* WHY (deck Q-9, 2026-09-21): lease protection is desktop-only today — Android stubs
-                the takeover RPCs — so say so here rather than let the phone's silence read as a fault. */}
-            <p>This works between your computers. The phone app joins in when its rebuild lands.</p>
+            <p>{HANDOFF_EXPLANATION}</p>
           </AnchorTip>
         );
         return (
@@ -4533,7 +4627,7 @@ function AppInner() {
                   // has already surfaced the honest reason via a toast — so the user
                   // can retry or pick a different model instead of facing a blank pill.
                   setPendingNativeResuming(true);
-                  const ok = await handleResumeSession(p.claudeSessionId, p.projectSlug, p.projectPath, undefined, undefined, p.launchInNewWindow, 'native', binding);
+                  const ok = await handleResumeSession(p.claudeSessionId, p.projectSlug, p.projectPath, undefined, undefined, p.launchInNewWindow, 'native', binding, p.savedName);
                   setPendingNativeResuming(false);
                   if (ok) { setPendingNativeResume(null); setPendingNativeBinding(null); }
                 }}
@@ -4562,9 +4656,9 @@ function AppInner() {
 // getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
 import type { UsageSnapshot } from './state/chat-types';
 import type { SessionChatState } from './state/chat-types';
-const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; provider?: 'claude' | 'native' }>(
-  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, provider }, ref) {
-    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} provider={provider} />;
+const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; sendBlocked?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; initialAttachments?: string[]; provider?: 'claude' | 'native' }>(
+  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, sendBlocked, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, initialAttachments, provider }, ref) {
+    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} sendBlocked={sendBlocked} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} initialAttachments={initialAttachments} provider={provider} />;
   },
 );
 

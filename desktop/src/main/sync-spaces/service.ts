@@ -95,7 +95,7 @@ export function setSyncSpacesAuthStore(store: { getToken(): string | null } | nu
 
 // Route a lease op to the hub socket. Returns null when the hub is down (the
 // lease client treats null as "no answer" and falls back to its file / never-block).
-export function hubLeaseRequest(op: string, sessionId: string, deviceId: string): Promise<LeaseResult | null> {
+export function hubLeaseRequest(op: string, sessionId: string, deviceId: string, transferNonce?: string, expectedHolderId?: string): Promise<LeaseResult | null> {
   // Debug: takeover/lease failures are silent by design (never-block), which made
   // "takeover didn't happen" undiagnosable from logs (2026-07-23). Log every op +
   // whether the hub could answer — `null` here means the op had NO delivery path.
@@ -107,7 +107,12 @@ export function hubLeaseRequest(op: string, sessionId: string, deviceId: string)
     return Promise.resolve(null);
   }
   const startedAt = Date.now();
-  return hubSocket.request(op, sessionId, deviceId).then(
+  // WHY: the exact caller-provided transfer nonce must survive this facade; a
+  // socket reqId only correlates replies, not a final transcript snapshot.
+  return (expectedHolderId !== undefined
+    ? hubSocket.request(op, sessionId, deviceId, undefined, expectedHolderId)
+    : transferNonce === undefined ? hubSocket.request(op, sessionId, deviceId)
+    : hubSocket.request(op, sessionId, deviceId, transferNonce)).then(
     (r) => { console.log(`[lease] ${op} ${sessionId.slice(0, 8)}: ${r ? `ok=${r.ok} holder=${r.holder?.deviceId?.slice(0, 8) ?? 'none'}` : 'null (hub gave no answer)'} (${Date.now() - startedAt}ms)`); return r; },
     (e) => { console.warn(`[lease] ${op} ${sessionId.slice(0, 8)}: hub request failed after ${Date.now() - startedAt}ms: ${e?.message ?? e}`); throw e; },
   );

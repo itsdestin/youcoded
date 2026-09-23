@@ -28,6 +28,7 @@ import { latestUnresolvedError, deriveSyncBoxState, oversizeNotice, type SyncSta
 import { deviceActivityLabel, relativeMs } from './device-activity-label';
 import { summarizeSpaceSyncError } from './sync-space-error-summary';
 import { plainMessage } from '../utils/ipc-error';
+import { HANDOFF_EXPLANATION } from './takeover-dialog-copy';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -75,9 +76,7 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       // appeared was the takeover dialog itself — mid-task. Destin chose a
       // short paragraph here over a full section.
       heading: 'Using the same conversation on two devices',
-      paragraphs: [
-        'A conversation runs on one device at a time. If you open one your other computer is using, YouCoded asks that computer to hand it over, and it keeps a separate copy of anything it wrote — nothing is lost. This works between your computers; the phone app joins in when its rebuild lands.',
-      ],
+      paragraphs: [HANDOFF_EXPLANATION],
     },
     {
       heading: 'If something looks off',

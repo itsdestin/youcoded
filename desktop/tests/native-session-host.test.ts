@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
+import { EventEmitter } from 'node:events';
 import { NativeHome } from '../src/main/native-home';
 import { SessionStore } from '../src/main/harness/session-store';
 import { NativeSessionHost, SUBAGENT_DISPLAY_TYPES, mergeChildEvents } from '../src/main/harness/native-session-host';
@@ -216,6 +217,157 @@ describe('NativeSessionHost', () => {
     host = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null);
   });
   afterEach(async () => { await host.destroyAll(); rmHostRoot(root); });
+
+  it('refuses handoff evidence after a swallowed append failure even when destroy and dispose succeed', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    const append = store.append.bind(store);
+    let failed = false;
+    vi.spyOn(store, 'append').mockImplementation(async (cwd, event) => {
+      if (!failed) { failed = true; throw new Error('disk unavailable'); }
+      return append(cwd, event);
+    });
+    const dispose = vi.spyOn(store, 'dispose');
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('s-1');
+    expect(captured?.transcriptPath).toBe(store.transcriptPath('s-1', root));
+    host.send('s-1', 'hello');
+    await waitForTurnComplete(host, 1);
+    await host.drain('s-1');
+    await host.destroy('s-1');
+    expect(failed).toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(captured?.persisted()).toBe(false);
+  });
+
+  it('refuses native evidence if stream disposal rejects after successful appends', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    vi.spyOn(store, 'dispose').mockRejectedValueOnce(new Error('dispose failed'));
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('s-1');
+    await expect(host.destroy('s-1')).rejects.toThrow('dispose failed');
+    expect(captured?.persisted()).toBe(false);
+  });
+
+  it.each(['live', 'completed'])('a %s child append failure rejects parent handoff without wedging parent appends', async (phase) => {
+    const store = new SessionStore(new NativeHome(root));
+    const append = store.append.bind(store);
+    let parentAppended = false;
+    vi.spyOn(store, 'append').mockImplementation(async (cwd, event) => {
+      if (event.sessionId === 'child-1') throw new Error('child disk failure');
+      if (event.sessionId === 'root-1') parentAppended = true;
+      return append(cwd, event);
+    });
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('root-1');
+    const child = new EventEmitter() as any;
+    child.binding = { modelId: 'm' }; child.interrupt = vi.fn(); child.destroy = () => child.removeAllListeners();
+    (host as any).wireChildLive('root-1', 'child-1', root, child, { providerId: 'openrouter', modelId: 'm' }, 'tc-1');
+    child.emit('transcript-event', { sessionId: 'child-1', type: 'user-message', uuid: 'child-u', timestamp: Date.now(), data: { text: 'child' } });
+    await host.drain('child-1');
+    if (phase === 'completed') {
+      await host.destroy('child-1');
+      expect((host as any).childrenOf.get('root-1')?.has('child-1')).toBeFalsy();
+    }
+    (host as any).live.get('root-1').session.emit('transcript-event',
+      { sessionId: 'root-1', type: 'user-message', uuid: 'root-u', timestamp: Date.now(), data: { text: 'parent' } });
+    await host.drain('root-1');
+    expect(parentAppended).toBe(true);
+    await host.destroy('root-1');
+    expect(captured?.persisted()).toBe(false);
+    // A different generation with the same id must not inherit this failure.
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const resumed = host.captureHandoffWriter('root-1');
+    await host.destroy('root-1');
+    expect(resumed?.persisted()).toBe(true);
+  });
+
+  it('waits for a deregistered child still draining appends before certifying its parent', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    const append = store.append.bind(store);
+    const dispose = store.dispose.bind(store);
+    const order: string[] = [];
+    vi.spyOn(store, 'dispose').mockImplementation(async (id) => {
+      if (id === 'root-1') order.push('parent-dispose');
+      return dispose(id);
+    });
+    let started!: () => void, reject!: (e: Error) => void;
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const blocked = new Promise<void>((_resolve, fail) => { reject = fail; });
+    vi.spyOn(store, 'append').mockImplementation(async (cwd, event) => {
+      if (event.sessionId === 'child-1') {
+        started();
+        try { await blocked; } catch (error) { order.push('child-failed'); throw error; }
+      }
+      return append(cwd, event);
+    });
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('root-1');
+    const child = new EventEmitter() as any;
+    child.binding = { modelId: 'm' }; child.interrupt = vi.fn(); child.destroy = () => child.removeAllListeners();
+    (host as any).wireChildLive('root-1', 'child-1', root, child, { providerId: 'openrouter', modelId: 'm' }, 'tc-1');
+    child.emit('transcript-event', { sessionId: 'child-1', type: 'user-message', uuid: 'child-u', timestamp: Date.now(), data: { text: 'child' } });
+    await entered;
+    const childStop = host.destroy('child-1');
+    await vi.waitFor(() => expect((host as any).childrenOf.get('root-1')?.has('child-1')).toBeFalsy());
+    let enteredCascade!: () => void, releaseCascade!: () => void;
+    const cascadeEntered = new Promise<void>((resolve) => { enteredCascade = resolve; });
+    const cascadeGate = new Promise<void>((resolve) => { releaseCascade = resolve; });
+    const cascade = (host as any).destroyChildrenOf.bind(host);
+    vi.spyOn(host as any, 'destroyChildrenOf').mockImplementation(async (id: string) => {
+      await cascade(id);
+      if (id === 'root-1') { enteredCascade(); await cascadeGate; }
+    });
+    const parentStop = host.destroy('root-1');
+    await cascadeEntered;
+    releaseCascade();
+    // Let the cascade's microtasks run to the next event-loop phase. Without
+    // the fence, dispose begins here; with it, the parent is still awaiting child.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    reject(new Error('child write failed'));
+    await childStop;
+    await parentStop;
+    // Assert event ordering, not scheduler speed. A parent that didn't join the
+    // deregistered child could dispose before the child's append catches.
+    expect(order).toEqual(['child-failed', 'parent-dispose']);
+    expect(captured?.persisted()).toBe(false);
+  });
+
+  it('retains a failed child disposal on the parent after the child is deregistered', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    const dispose = store.dispose.bind(store);
+    let failed = false;
+    vi.spyOn(store, 'dispose').mockImplementation(async (id) => {
+      if (id === 'child-1' && !failed) { failed = true; throw new Error('child disposal failed'); }
+      return dispose(id);
+    });
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('root-1');
+    const child = new EventEmitter() as any;
+    child.binding = { modelId: 'm' }; child.interrupt = vi.fn(); child.destroy = () => child.removeAllListeners();
+    (host as any).wireChildLive('root-1', 'child-1', root, child, { providerId: 'openrouter', modelId: 'm' }, 'tc-1');
+    await expect(host.destroy('child-1')).rejects.toThrow('child disposal failed');
+    expect((host as any).childrenOf.get('root-1')?.has('child-1')).toBeFalsy();
+    await host.destroy('root-1');
+    expect(captured?.persisted()).toBe(false);
+    await host.destroy('child-1'); // failed child's retained entry is still cleanable
+  });
+
+  it('coalesces concurrent native teardown and certifies only its captured generation', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    const dispose = vi.spyOn(store, 'dispose');
+    host = new NativeSessionHost(store, factory, NO_CONTEXT, async () => null, async () => null);
+    await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const captured = host.captureHandoffWriter('s-1');
+    expect(captured?.persisted()).toBe(false);
+    await Promise.all([host.destroy('s-1'), host.destroy('s-1')]);
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(captured?.persisted()).toBe(true);
+  });
 
   it('pendingAskEventsFor delegates to the broker for one session', () => {
     // Task 0 (ROADMAP #permissions): TRANSCRIPT_REPLAY needs a host-level
