@@ -896,7 +896,29 @@ function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState)
   return { ...copy, timeline: carried.length ? [...copy.timeline, ...carried] : copy.timeline, queuedMessages };
 }
 
+/** A stall WARNING belongs to the amber 'stuck' state and nothing else.
+ *
+ *  WHY (roadmap: the amber "Still waiting" card and the "Retrying in 15s…"
+ *  countdown could flicker back and forth): only the heartbeat case writes
+ *  `stallWarning`, but a dozen cases write `attentionState: 'ok'` and leave it
+ *  set. ChatView shows ThinkingIndicator whenever the state is 'ok', and
+ *  ThinkingIndicator turns a leftover warning into the countdown — so an
+ *  unrelated update (a helper's permission card, a tool event) swapped the
+ *  amber card for a countdown the host never announced, and the next warning
+ *  swapped it back. Same shape as `stalledSince`: one rule at one place, not a
+ *  `stallWarning: null` line in every 'ok' writer (and the next one forgotten). */
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  const next = chatReducerCases(state, action);
+  const id = (action as { sessionId?: string }).sessionId;
+  if (next === state || !id) return next;
+  const s = next.get(id);
+  if (!s || !s.stallWarning || s.attentionState === 'stuck') return next;
+  const fixed = new Map(next);
+  fixed.set(id, { ...s, stallWarning: null });
+  return fixed;
+}
+
+function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
   const next = new Map(state);
 
   switch (action.type) {
