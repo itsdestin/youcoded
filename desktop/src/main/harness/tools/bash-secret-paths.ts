@@ -15,20 +15,29 @@
 // credential-paths.ts). Never add a second list here: the two would drift, and
 // a path the file tools refuse must never be one Bash can read without asking.
 //
-// What counts as a path reference: every word of the command (quotes removed,
-// `~` / `$HOME` expanded), plus the value after the first `=` in a word
-// (`--env-file=.env`, `KEY=~/.aws/credentials`). A word is resolved from the
-// shell's current folder and handed to the guard; a word that is not a secret
-// PATH — `printenv`, `env:check`, `.envrc-template` — does not match the list,
-// because the list is about path segments and file names, never substrings.
-// URLs are skipped: `https://host/.env.example` is not a file on this machine.
+// What counts as a path reference (reviewed 2026-09-23 for noise and misses):
+//  - every word that could be READ as a file: arguments, `--flag=value` values,
+//    `KEY=value` assignments, the command word itself, and input redirects
+//    (`cat <.env`, `$(<.env)` — substitutions are read as commands of their own);
+//  - NOT a word that is only text or a pattern: `echo`/`printf` arguments, the
+//    value of a message or pattern flag (`-m ".env"`, `--exclude=.env`,
+//    `find -name .env`), heredoc delimiters;
+//  - NOT a file that is only WRITTEN: an output redirect (`>> .gitignore`,
+//    `> .env`), `tee`/`touch` targets, and the destination of `cp`/`mv`/`ln`/
+//    `install`/`rsync`/`scp`. Writing a secret file exposes nothing; reading it
+//    does. `cp .env backup/` still asks — there `.env` is the source;
+//  - NOT a dotenv TEMPLATE (`.env.example`, `.sample`, `.template`, `.dist`):
+//    those are committed on purpose and hold no secrets. This exemption is the
+//    Bash check's only; the file tools' shared list is unchanged.
+// The list itself matches path segments and file names, never substrings, so
+// `printenv`, `env:check` and `.envrc-template` never match. URLs are skipped.
 //
 // NOT a sandbox: a command that builds the path at run time (variables, base64,
 // a script file) passes by construction. Same posture as guards.ts.
 import * as os from 'os';
 import * as path from 'path';
 import { checkPathGuard } from './guards';
-import { tokenize, expandHome, type Op, type Word } from './rm-target';
+import { tokenize, expandHome, commandIndex, stripHeredocBodies, type Op, type Word } from './shell-words';
 
 export interface SecretPathContext {
   /** The workspace (session) root. */
@@ -39,24 +48,226 @@ export interface SecretPathContext {
   home?: string;
 }
 
+/** Words that are text, not files. */
+const TEXT_COMMANDS = new Set(['echo', 'printf']);
+/** Commands that only ask whether a file exists, or show its name, size or
+ *  counts — never its contents. WHY (2026-09-23): the setup idiom
+ *  `[ -f .env ] || cp .env.example .env` forced a card on every run (and a
+ *  stop in Full auto) while protecting nothing. An explicit ALLOWLIST: any
+ *  command not named here is judged normally, so an unknown one falls toward
+ *  asking. `wc` is on it deliberately — a byte, word or line count is not the
+ *  secret. Judged per simple command, so `ls .env && cat .env` still asks. */
+const METADATA_ONLY = new Set(['ls', 'dir', 'test', '[', '[[', 'stat', 'wc', 'du']);
+/** Every argument is a file that is only written. */
+const WRITE_ALL = new Set(['tee', 'touch']);
+/** The LAST argument is a destination that is only written. */
+const DEST_LAST = new Set(['cp', 'mv', 'ln', 'install', 'rsync', 'scp']);
+/** Flags whose value is a message or a pattern, never a file to read. */
+const TEXT_VALUE_FLAGS = new Set([
+  '-m', '--message', '-name', '-iname', '-path', '-ipath', '-wholename', '-iwholename', '-regex', '-iregex',
+  '--exclude', '--include', '--exclude-dir', '--include-dir', '--exclude-from', '--ignore', '--glob', '--iglob', '-g',
+]);
+const DOTENV_TEMPLATE = /^\.env(rc)?(\..+)?\.(example|sample|template|dist|tpl)$/i;
+/** `>`, `>>`, `2>`, `&>`, `>|` — what follows is written. */
+const WRITE_REDIRECT = /^(\d*|&)(>>?|>\|)&?/;
+/** `<` — what follows is read. (`<<`/`<<<` are heredoc text, handled apart.) */
+const READ_REDIRECT = /^\d*<(?![<&])/;
+
+/** Commands that run a script given as the argument after `-c`. */
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
+/** Commands that run another command on names they read from their input. */
+const INPUT_RUNNERS = new Set(['xargs', 'parallel']);
+/** find actions that run a command, ended by `;` or `+`. */
+const FIND_EXEC = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+/** find actions that WRITE the listing to a file (the value is written, not read). */
+const FIND_WRITE = new Set(['-fprint', '-fprint0', '-fprintf', '-fls']);
+const FIND_NAME = new Set(['-name', '-iname']);
+const FIND_PATH = new Set(['-path', '-ipath', '-wholename', '-iwholename']);
+/** Secret file names and paths a find pattern is tested against, to tell
+ *  `-name '*.ts'` (can never match one) from `-name '.env*'` (can). */
+const SECRET_NAME_SAMPLES = ['.env', '.env.local', '.env.production', '.envrc', '.netrc', '_netrc', '.credentials.json', '.git-credentials', '.pgpass'];
+const SECRET_PATH_SAMPLES = [...SECRET_NAME_SAMPLES, '.ssh/id_rsa', '.ssh/config', '.aws/credentials', '.gnupg/secring.gpg', '.config/gh/hosts.yml'];
+
+/** fnmatch-style glob → regex (`*`, `?`, `[…]`), anchored. */
+function globRegex(pattern: string, caseless: boolean): RegExp {
+  let rx = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '*') rx += '.*';
+    else if (c === '?') rx += '.';
+    else if (c === '[') {
+      const close = pattern.indexOf(']', i + 1);
+      if (close === -1) { rx += '\\['; continue; }
+      rx += `[${pattern.slice(i + 1, close).replace(/^!/, '^').replace(/\\/g, '\\\\')}]`;
+      i = close;
+    } else rx += c.replace(/[.+^${}()|\\]/g, '\\$&');
+  }
+  return new RegExp(`^${rx}$`, caseless ? 'i' : '');
+}
+
+const plainWord = (value: string): Word => ({ value, glob: [...value].map(() => false), vars: [], subs: [], tilde: value.startsWith('~') });
+
 /** The first secret path `command` names, or null when it names none. */
 export function secretPathIn(command: string, ctx: SecretPathContext): string | null {
   const win = process.platform === 'win32';
   const home = ctx.home ?? os.homedir();
   const base = ctx.shellCwd ?? ctx.cwd;
-  for (const token of tokenize(command, !win)) {
-    if ((token as Op).op) continue;
-    const word = token as Word;
-    const candidates = [word.value];
-    const eq = word.value.indexOf('=');
-    if (eq > 0) candidates.push(word.value.slice(eq + 1));
-    for (const [i, raw] of candidates.entries()) {
-      if (!raw || raw.includes('://')) continue;
-      // `~` expands only at the very start of the word, as the shell does.
-      const expanded = expandHome(raw, i === 0 ? word.tilde : raw.startsWith('~'), home);
-      const verdict = checkPathGuard(path.resolve(base, expanded), ctx.cwd);
-      if (verdict.kind === 'deny') return raw;
+
+  const isSecret = (raw: string, tilde: boolean): boolean => {
+    if (!raw || raw.includes('://')) return false;
+    const expanded = expandHome(raw, tilde, home);
+    const abs = path.resolve(base, expanded);
+    if (checkPathGuard(abs, ctx.cwd).kind !== 'deny') return false;
+    return !DOTENV_TEMPLATE.test(path.basename(abs));
+  };
+
+  /** For a find command: a secret path its `{}` could stand for, or null when
+   *  its filters provably match none. Filters it cannot judge (no name filter,
+   *  `-regex`) count as "could be a secret" — falling toward asking. */
+  const findSecretMatch = (args: Word[]): string | null => {
+    const starts: string[] = [];
+    let i = 0;
+    for (; i < args.length && !/^[-(!]/.test(args[i].value); i++) starts.push(args[i].value);
+    if (starts.length === 0) starts.push('.');
+    for (const s of starts) if (isSecret(s, s.startsWith('~'))) return s;
+    let filtered = false;
+    let unjudgeable = false;
+    for (; i < args.length; i++) {
+      const flag = args[i].value;
+      const value = args[i + 1]?.value;
+      if (/^-i?regex$/.test(flag)) { unjudgeable = true; continue; }
+      if (value === undefined || !(FIND_NAME.has(flag) || FIND_PATH.has(flag))) continue;
+      filtered = true;
+      const rx = globRegex(value, flag.startsWith('-i'));
+      const samples = FIND_NAME.has(flag) ? SECRET_NAME_SAMPLES : SECRET_PATH_SAMPLES;
+      for (const sample of samples) {
+        const subject = FIND_NAME.has(flag) ? sample : `./${sample}`;
+        if (!rx.test(subject)) continue;
+        const candidate = path.join(starts[0], sample);
+        if (isSecret(candidate, candidate.startsWith('~'))) return candidate;
+      }
     }
+    if (!filtered || unjudgeable) return path.join(starts[0], '.env');
+    return null;
+  };
+
+  /** Does a command's OUTPUT name a secret file? Used for the left side of a
+   *  pipe feeding xargs/parallel: `find . -name .env | xargs cat`,
+   *  `ls ~/.ssh | xargs …`, `echo .env | xargs cat`. */
+  const namesSecret = (words: Word[]): string | null => {
+    const w = commandIndex(words);
+    if (w >= words.length) return null;
+    const name = path.basename(words[w].value).toLowerCase();
+    const args = words.slice(w + 1);
+    if (name === 'find') {
+      // Only when the find itself filters for secrets or starts in one; a bare
+      // `find . | xargs cat` is judged by what it runs, not flagged wholesale.
+      const hasFilter = args.some((a) => FIND_NAME.has(a.value) || FIND_PATH.has(a.value));
+      const firstStart = args[0] && !/^[-(!]/.test(args[0].value) ? args[0].value : '.';
+      const match = findSecretMatch(args);
+      return match && (hasFilter || isSecret(firstStart, firstStart.startsWith('~'))) ? match : null;
+    }
+    for (const a of args) if (!a.value.startsWith('-') && isSecret(a.value, a.tilde)) return a.value;
+    return null;
+  };
+
+  const commandHits = (words: Word[], pipedSecret: string | null = null): string | null => {
+    const w = commandIndex(words);
+    // Assignments before the command (`AWS_SHARED_CREDENTIALS_FILE=~/.aws/credentials aws …`).
+    for (const a of words.slice(0, w)) {
+      const value = a.value.slice(a.value.indexOf('=') + 1);
+      if (isSecret(value, value.startsWith('~'))) return value;
+    }
+    if (w >= words.length) return null;
+    const name = path.basename(words[w].value).toLowerCase();
+    const args = words.slice(w + 1);
+    // WHY (2026-09-23): `find -exec`, `xargs` and `sh -c` run a command the
+    // plain word scan never looked inside — an easy route around this check.
+    // Each wrapped command is judged exactly like a top-level one.
+    //
+    // xargs/parallel reading secret names from a pipe: the wrapped command
+    // receives them as arguments, so a reading command there reads secrets.
+    const runner = words.slice(0, w).some((x) => INPUT_RUNNERS.has(path.basename(x.value).toLowerCase()));
+    if (runner && pipedSecret && !METADATA_ONLY.has(name) && !TEXT_COMMANDS.has(name)) return pipedSecret;
+    if (METADATA_ONLY.has(name)) return null;
+    // `sh -c 'cat .env'`: the script is a command line of its own.
+    if (SHELLS.has(name)) {
+      const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a.value));
+      if (c !== -1 && args[c + 1]) return analyse(args[c + 1].value);
+    }
+    if (name === 'find') {
+      // A find that runs nothing only lists names — metadata, like ls. Each
+      // -exec/-execdir/-ok/-okdir command is judged with `{}` standing for a
+      // secret the filters could match (none when they provably match none).
+      const match = findSecretMatch(args);
+      for (let i = 0; i < args.length; i++) {
+        if (FIND_WRITE.has(args[i].value)) { i++; continue; } // writes the listing to a file
+        if (!FIND_EXEC.has(args[i].value)) continue;
+        const sub: Word[] = [];
+        for (i++; i < args.length && args[i].value !== ';' && args[i].value !== '+'; i++) {
+          const v = args[i].value;
+          sub.push(v.includes('{}') ? (match ? plainWord(v.split('{}').join(match)) : plainWord(v.split('{}').join('found-file'))) : args[i]);
+        }
+        const hit = sub.length ? commandHits(sub) : null;
+        if (hit) return hit;
+      }
+      return null;
+    }
+    let lastPlain = -1;
+    if (DEST_LAST.has(name)) args.forEach((a, i) => { if (!a.value.startsWith('-')) lastPlain = i; });
+    let skipNext: 'text' | 'write' | null = null;
+    // The command word itself counts (running a script kept in ~/.ssh).
+    const candidates: Array<{ raw: string; tilde: boolean }> = [];
+    const consider = (word: Word, index: number) => {
+      let raw = word.value;
+      if (skipNext) { skipNext = null; return; }
+      if (/^\d*<<<?/.test(raw)) { if (raw.replace(/^\d*<<<?-?/, '') === '') skipNext = 'text'; return; }
+      const write = raw.match(WRITE_REDIRECT);
+      if (write) { if (raw === write[0]) skipNext = 'write'; return; }
+      const read = raw.match(READ_REDIRECT);
+      if (read) {
+        raw = raw.slice(read[0].length);
+        if (raw === '') return; // the next word is read — it is checked on its own
+        candidates.push({ raw, tilde: raw.startsWith('~') });
+        return;
+      }
+      if (index < 0) { candidates.push({ raw, tilde: word.tilde }); return; }
+      if (TEXT_COMMANDS.has(name) || (WRITE_ALL.has(name) && !raw.startsWith('-'))) return;
+      if (DEST_LAST.has(name) && index === lastPlain && index > 0) return;
+      if (raw.startsWith('-')) {
+        const eq = raw.indexOf('=');
+        const flag = eq === -1 ? raw : raw.slice(0, eq);
+        if (TEXT_VALUE_FLAGS.has(flag)) { if (eq === -1) skipNext = 'text'; return; }
+        if (eq !== -1) candidates.push({ raw: raw.slice(eq + 1), tilde: raw[eq + 1] === '~' });
+        return;
+      }
+      candidates.push({ raw, tilde: word.tilde });
+    };
+    consider(words[w], -1);
+    args.forEach((a, i) => consider(a, i));
+    for (const c of candidates) if (isSecret(c.raw, c.tilde)) return c.raw;
+    return null;
+  };
+
+  function analyse(text: string): string | null {
+    const { tokens, nested } = tokenize(stripHeredocBodies(text), !win);
+    let words: Word[] = [];
+    // What the command on the left of a `|` names, for the one on its right.
+    let piped: string | null = null;
+    for (const tok of [...tokens, { op: 'end' } as Op]) {
+      const op = (tok as Op).op;
+      if (!op) { words.push(tok as Word); continue; }
+      const hit = words.length ? commandHits(words, piped) : null;
+      if (hit) return hit;
+      piped = op === '|' && words.length ? namesSecret(words) : null;
+      words = [];
+    }
+    for (const inner of nested) {
+      const hit = analyse(inner);
+      if (hit) return hit;
+    }
+    return null;
   }
-  return null;
+
+  return analyse(command);
 }

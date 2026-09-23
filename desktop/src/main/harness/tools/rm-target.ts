@@ -18,6 +18,7 @@
 // the target from a reader (a script file, `eval`, base64) passes it by
 // construction. Same posture as guards.ts — honest friction, not a boundary.
 import * as path from 'path';
+import { tokenize, expandHome, homeVariable, commandIndex, type Op, type Word } from './shell-words';
 
 export interface RmTargetContext {
   /** The workspace (session) root. Removing it or any folder above it is protected. */
@@ -29,84 +30,8 @@ export interface RmTargetContext {
   platform?: NodeJS.Platform;
 }
 
-/** One shell word, quotes removed, remembering what the shell would do to it. */
-export interface Word {
-  value: string;
-  /** Per character of `value`: true where an UNQUOTED glob character sits. */
-  glob: boolean[];
-  /** The word contains a `$…`/backtick expansion outside single quotes. */
-  expands: boolean;
-  /** The word STARTS with such an expansion (so an empty value lands on `/`). */
-  leadingExpansion: boolean;
-  /** The word starts with an unquoted `~`. */
-  tilde: boolean;
-  op?: undefined;
-}
-export interface Op { op: string }
-export type Token = Word | Op;
-
-const GLOB_CHARS = new Set(['*', '?', '[']);
-
-/** A small POSIX-ish tokenizer: quotes, backslash escapes, and the operators
- *  (shared with bash-secret-paths.ts, so both floors read a command alike)
- *  that separate one simple command from the next. `$(` and backticks open a
- *  nested command so an `rm` inside a substitution is still seen. */
-export function tokenize(command: string, backslashEscapes: boolean): Token[] {
-  const out: Token[] = [];
-  let cur: Word | null = null;
-  const start = (): Word => (cur ??= { value: '', glob: [], expands: false, leadingExpansion: false, tilde: false });
-  const push = (ch: string, isGlob = false) => { const w = start(); w.value += ch; w.glob.push(isGlob); };
-  const end = () => { if (cur) out.push(cur); cur = null; };
-  const markExpansion = () => { const w = start(); if (w.value.length === 0) w.leadingExpansion = true; w.expands = true; };
-  let i = 0;
-  while (i < command.length) {
-    const c = command[i];
-    if (c === ' ' || c === '\t') { end(); i++; continue; }
-    if (c === '\n' || c === ';' || c === '(' || c === ')' || c === '`') { end(); out.push({ op: c }); i++; continue; }
-    if (c === '&' || c === '|') {
-      end();
-      const two = command.slice(i, i + 2);
-      if (two === '&&' || two === '||') { out.push({ op: two }); i += 2; } else { out.push({ op: c }); i++; }
-      continue;
-    }
-    // Backslash escapes are POSIX; on Windows it is the path separator
-    // (PowerShell and cmd do not escape with it), so it stays literal there.
-    if (backslashEscapes && c === '\\' && i + 1 < command.length) { push(command[i + 1]); i += 2; continue; }
-    if (c === "'") {
-      start();
-      const close = command.indexOf("'", i + 1);
-      const body = close === -1 ? command.slice(i + 1) : command.slice(i + 1, close);
-      for (const ch of body) push(ch);
-      i = close === -1 ? command.length : close + 1;
-      continue;
-    }
-    if (c === '"') {
-      start();
-      i++;
-      while (i < command.length && command[i] !== '"') {
-        if (command[i] === '\\' && i + 1 < command.length) { push(command[i + 1]); i += 2; continue; }
-        if (command[i] === '$' || command[i] === '`') markExpansion();
-        push(command[i]);
-        i++;
-      }
-      i++;
-      continue;
-    }
-    if (c === '$' && command[i + 1] === '(') { end(); out.push({ op: '$(' }); i += 2; continue; }
-    if (c === '$') markExpansion();
-    if (c === '~' && !cur) { start().tilde = true; }
-    push(c, GLOB_CHARS.has(c));
-    i++;
-  }
-  end();
-  return out;
-}
-
-const WRAPPERS = new Set(['sudo', 'doas', 'command', 'builtin', 'exec', 'nohup', 'time', 'nice', 'env', 'xargs']);
-/** Wrapper flags that take a separate value (`sudo -u bob rm …`, `nice -n 5 rm …`). */
-const WRAPPER_VALUE_FLAGS = new Set(['-u', '-g', '-C', '-h', '-p', '-U', '-n', '-D']);
 const REMOVERS = new Set(['rm', 'remove-item', 'ri', 'del', 'erase', 'rd']);
-const CHANGE_DIR = new Set(['cd', 'pushd', 'chdir', 'set-location', 'sl']);
+const CHANGE_DIR = new Set(['cd', 'pushd', 'popd', 'chdir', 'set-location', 'sl']);
 
 const POSIX_SYSTEM_DIRS = [
   '/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib32', '/lib64', '/libx32', '/media', '/mnt',
@@ -122,16 +47,21 @@ const WINDOWS_SYSTEM_DIRS = [
  *  is NOT here — removing the logs in a folder is not removing the folder. */
 const WHOLE_CONTENTS = /^(\*+|\.\*|\*\.\*|\.\[!\.\]\*|\.\?\*)$/;
 
+/** POSIX rm's single-letter flags. A cluster made only of these (`-rf`,
+ *  `-rfvI`, `-dfrv`, any length) is POSIX; anything else single-dash is a
+ *  PowerShell word (`-Force`, `-Recurse`), where only -Recurse means it. */
+const RM_SHORT_FLAGS = /^-[rRfviIdP]+$/;
+
 function isRecursiveFlag(flag: string): boolean {
   const lower = flag.toLowerCase();
   if (lower === '--recursive' || lower === '/s') return true;
-  // A short cluster (-r, -rf, -fR, -rfv): POSIX rm. A longer single-dash word
-  // is PowerShell's (-Recurse, -Force), where only -Recurse (or -r) means it.
-  if (/^-[a-z]{1,3}$/i.test(flag)) return /r/i.test(flag);
+  if (RM_SHORT_FLAGS.test(flag)) return /r/i.test(flag);
   return lower.startsWith('-rec');
 }
 
-/** Why `command` would remove a protected directory, or null when it would not. */
+/** Why `command` would remove a protected directory, or null when it would not.
+ *  The text is shown as the reason for the card, so every branch states only
+ *  what the command text proves (docs/error-message-standards.md). */
 export function destructiveRmReason(command: string, ctx: RmTargetContext): string | null {
   const win = (ctx.platform ?? process.platform) === 'win32';
   const P = win ? path.win32 : path.posix;
@@ -153,93 +83,129 @@ export function destructiveRmReason(command: string, ctx: RmTargetContext): stri
     return null;
   };
 
-  // Where relative targets resolve: the shell's cwd, moved by any `cd` earlier
-  // in the same command line. null = moved somewhere a reader cannot know.
-  let base: string | null = ctx.shellCwd ?? ctx.cwd;
-  const tokens = tokenize(command, !win);
-  let i = 0;
-  while (i < tokens.length) {
-    // Collect one simple command.
-    const words: Word[] = [];
-    while (i < tokens.length && !(tokens[i] as Op).op) { words.push(tokens[i] as Word); i++; }
-    i++; // skip the operator
-    let w = 0;
-    while (w < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[w].value)) w++; // FOO=bar rm …
-    while (w < words.length && WRAPPERS.has(words[w].value)) {
-      w++;
-      while (w < words.length && (words[w].value.startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[w].value))) {
-        w += WRAPPER_VALUE_FLAGS.has(words[w].value) ? 2 : 1;
-      }
+  /** Judge one target as literally written (variables already resolved or
+   *  removed by the caller). `glob` marks unquoted glob characters. */
+  const judgeLiteral = (value: string, glob: boolean[], tilde: boolean, recursive: boolean, base: string | null): string | null => {
+    let raw = value;
+    let contentsOnly = false;
+    if (glob.includes(true)) {
+      const segs = value.split(win ? /[\\/]/ : '/');
+      const last = segs[segs.length - 1];
+      const prefixHasGlob = glob.slice(0, value.length - last.length).includes(true);
+      if (prefixHasGlob || !WHOLE_CONTENTS.test(last)) return null; // e.g. `*.log`, `src/*/dist`
+      raw = segs.slice(0, -1).join('/') || (value.startsWith('/') ? '/' : '.');
+      contentsOnly = true;
     }
-    if (w >= words.length) continue;
-    const name = P.basename(words[w].value).toLowerCase().replace(/\.exe$/, '');
-    const args = words.slice(w + 1);
-
-    if (CHANGE_DIR.has(name)) {
-      const dest = args.find((a) => !a.value.startsWith('-'));
-      if (!dest) base = ctx.home;
-      else {
-        const to = expandHome(dest.value, dest.tilde, ctx.home);
-        if (dest.expands && to === dest.value) base = null;
-        else if (base !== null || P.isAbsolute(to)) base = P.resolve(base ?? ctx.cwd, to);
-      }
-      continue;
+    const target = expandHome(raw, tilde, ctx.home);
+    // A folder without a recursive flag cannot be removed (rm refuses), so
+    // only the glob-contents shape counts there.
+    if (!recursive && !contentsOnly) return null;
+    if (base === null && !P.isAbsolute(target)) {
+      const onlyDots = target.split(/[\\/]/).every((s) => s === '.' || s === '..' || s === '');
+      return onlyDots ? `removes ${value} after changing to a folder that can't be known in advance` : null;
     }
-    if (!REMOVERS.has(name)) continue;
+    const why = protectedReason(P.resolve(base ?? ctx.cwd, target));
+    if (!why) return null;
+    return contentsOnly ? `removes everything inside ${why}` : `removes ${why}`;
+  };
 
-    let recursive = false;
-    let endOfFlags = false;
-    const targets: Word[] = [];
-    for (const a of args) {
-      if (!endOfFlags && a.value === '--') { endOfFlags = true; continue; }
-      if (!endOfFlags && (a.value.startsWith('-') || (win && /^\/[a-z]$/i.test(a.value)))) {
-        if (isRecursiveFlag(a.value)) recursive = true;
-        continue;
-      }
-      targets.push(a);
+  const judgeTarget = (t: Word, recursive: boolean, base: string | null): string | null => {
+    // A command's output (`rm -rf $(pwd)`) cannot be resolved by reading the
+    // text. Ask when it LEADS the path and the removal is recursive or wipes a
+    // folder's contents — `rm -f $(find …)` (plain files) stays quiet.
+    if (t.subs.some((s) => s.start === 0)) {
+      const last = t.value.split(/[\\/]/).pop() ?? '';
+      const wipes = t.glob.includes(true) && WHOLE_CONTENTS.test(last);
+      return recursive || wipes
+        ? `removes a path given by a command's output (${t.value}), which can't be checked before it runs`
+        : null;
     }
-
-    for (const t of targets) {
-      const substitutesHome = expandHome(t.value, t.tilde, ctx.home) !== t.value;
-      if (t.leadingExpansion && !substitutesHome) {
-        return `removes a path that starts with a variable (${t.value}); if it is empty the removal starts at the root of the disk`;
-      }
-      // Glob: judge the folder whose contents the pattern would match.
-      let raw = t.value;
-      let contentsOnly = false;
-      if (t.glob.includes(true)) {
-        const segs = t.value.split(win ? /[\\/]/ : '/');
-        const last = segs[segs.length - 1];
-        const prefixHasGlob = t.glob.slice(0, t.value.length - last.length).includes(true);
-        if (prefixHasGlob || !WHOLE_CONTENTS.test(last)) continue; // e.g. `*.log`, `src/*/dist`
-        raw = segs.slice(0, -1).join('/') || (t.value.startsWith('/') ? '/' : '.');
-        contentsOnly = true;
-      }
-      const target = expandHome(raw, t.tilde, ctx.home);
-      // A folder without a recursive flag cannot be removed (rm refuses), so
-      // only the glob-contents shape counts there.
-      if (!recursive && !contentsOnly) continue;
-      if (base === null && !P.isAbsolute(target)) {
-        const onlyDots = target.split(/[\\/]/).every((s) => s === '.' || s === '..' || s === '');
-        if (onlyDots) return `removes ${t.value} after changing to a folder that cannot be known in advance`;
-        continue;
-      }
-      const abs = P.resolve(base ?? ctx.cwd, target);
-      const why = protectedReason(abs);
-      if (why) return contentsOnly ? `removes everything inside ${why}` : `removes ${why}`;
+    // A leading $HOME / ${HOME} is the home folder, not an unknown.
+    const hv = homeVariable(t.value);
+    const unguarded = t.vars.filter((v) => !v.guarded && !(hv && v.start === 0));
+    if (unguarded.length === 0) return judgeLiteral(t.value, t.glob, t.tilde, recursive, base);
+    // A bare variable (`rm "$f"`, `rm -f -- "$@"`) removes NOTHING when empty,
+    // so it is never asked about. What is dangerous is text AFTER an empty
+    // variable: `"$DIR"/` becomes `/`, `$X*` becomes `*`. Judge that empty
+    // reading and, if it lands on a protected folder, say exactly that.
+    const only = unguarded.length === 1 && unguarded[0].start === 0 && unguarded[0].end === t.value.length;
+    if (only) return null;
+    let value = '';
+    const glob: boolean[] = [];
+    for (let i = 0; i < t.value.length; i++) {
+      if (unguarded.some((v) => i >= v.start && i < v.end)) continue;
+      value += t.value[i];
+      glob.push(t.glob[i]);
     }
-  }
-  return null;
-}
+    if (value === '') return null;
+    const why = judgeLiteral(value, glob, t.tilde, recursive, base);
+    if (!why) return null;
+    const names = unguarded.map((v) => t.value.slice(v.start, v.end)).join(' and ');
+    return `${why} if ${names} is empty (the command reads ${t.value})`;
+  };
 
-/** `$HOME`, `${HOME}`, `$env:USERPROFILE`, `%USERPROFILE%` at the start of a word. */
-function homeVariable(value: string): RegExpMatchArray | null {
-  return value.match(/^(\$HOME|\$\{HOME\}|\$env:USERPROFILE|\$env:HOME|%USERPROFILE%)(?=$|[\\/])/i);
-}
+  const analyse = (text: string, startBase: string | null): string | null => {
+    const { tokens, nested } = tokenize(text, !win);
+    // Where relative targets resolve: the shell's folder, moved by any `cd`
+    // earlier in the line. null = moved somewhere a reader cannot know.
+    // `( … )` is a subshell: a cd inside it does not outlive the `)`.
+    let base: string | null = startBase;
+    const stack: Array<string | null> = [];
+    let words: Word[] = [];
+    const runCommand = (): string | null => {
+      const cmd = words;
+      words = [];
+      const w = commandIndex(cmd);
+      if (w >= cmd.length) return null;
+      const name = P.basename(cmd[w].value).toLowerCase().replace(/\.exe$/, '');
+      const args = cmd.slice(w + 1);
+      if (CHANGE_DIR.has(name)) {
+        const dest = args.find((a) => !a.value.startsWith('-') || a.value === '-');
+        if (name === 'popd' || dest?.value === '-') base = null; // the previous folder is not in the text
+        else if (!dest) base = ctx.home;
+        else {
+          const to = expandHome(dest.value, dest.tilde, ctx.home);
+          const unknown = (dest.vars.length > 0 || dest.subs.length > 0) && to === dest.value;
+          if (unknown) base = null;
+          else if (base !== null || P.isAbsolute(to)) base = P.resolve(base ?? ctx.cwd, to);
+        }
+        return null;
+      }
+      if (!REMOVERS.has(name)) return null;
+      let recursive = false;
+      let endOfFlags = false;
+      const targets: Word[] = [];
+      for (const a of args) {
+        if (!endOfFlags && a.value === '--') { endOfFlags = true; continue; }
+        if (!endOfFlags && (a.value.startsWith('-') || (win && /^\/[a-z]$/i.test(a.value)))) {
+          if (isRecursiveFlag(a.value)) recursive = true;
+          continue;
+        }
+        targets.push(a);
+      }
+      for (const t of targets) {
+        const why = judgeTarget(t, recursive, base);
+        if (why) return why;
+      }
+      return null;
+    };
+    for (const tok of tokens) {
+      const op = (tok as Op).op;
+      if (!op) { words.push(tok as Word); continue; }
+      const why = runCommand();
+      if (why) return why;
+      if (op === '(') stack.push(base);
+      else if (op === ')' && stack.length) base = stack.pop()!;
+    }
+    const last = runCommand();
+    if (last) return last;
+    // Substitutions run as commands of their own, from the same folder.
+    for (const inner of nested) {
+      const why = analyse(inner, startBase);
+      if (why) return why;
+    }
+    return null;
+  };
 
-export function expandHome(value: string, tilde: boolean, home: string): string {
-  if (tilde && (value === '~' || value.startsWith('~/') || value.startsWith('~\\'))) return home + value.slice(1);
-  const m = homeVariable(value);
-  if (m) return home + value.slice(m[0].length);
-  return value;
+  return analyse(command, ctx.shellCwd ?? ctx.cwd);
 }

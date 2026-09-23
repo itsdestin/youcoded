@@ -44,6 +44,11 @@ export interface HolderTakeoverDeps {
   // transcript-event listener attached and keeps appending — a leaked model
   // ref-count, an un-aborted stream, and a second writer on the transcript.
   destroyNative: (desktopId: string) => Promise<void>;
+  // Lifts a native quiesce's send refusal (wired to nativeHost.endQuiesce). The
+  // refusal must last until destroy — a send during the flush or the lease
+  // release would otherwise run a whole turn here — so it is lifted ONLY when
+  // the handoff does not reach destroy and the session stays on this device.
+  endQuiesceNative?: (desktopId: string) => void;
 }
 
 // Returns the async handler wired to the lease client's onTakeoverRequest.
@@ -55,6 +60,7 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
     // sessionIdMap/getSession lookup itself throws — the handler is invoked
     // fire-and-forget (`void holderTakeover(...)`), so any escape would become an
     // unhandled rejection in Electron main.
+    const quiesced: string[] = [];
     try {
       // 1. Reverse-map the claude id to the LIVE desktop session(s) holding it. A
       //    stale map entry (missed exit) is filtered out by the getSession check.
@@ -90,6 +96,7 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
       for (const desktopId of liveDesktopIds) {
         try {
           if (deps.getProvider(desktopId) === 'native') {
+            quiesced.push(desktopId);
             await deps.quiesceNative(desktopId);
           } else {
             deps.sessionManager.sendInput(desktopId, '\x1b');
@@ -122,11 +129,19 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
         // then drop the SessionManager record. Awaited so the append chain drains
         // and the open streaming part flushes before we move on — an un-awaited
         // destroy would race the release below and could still lose the tail.
-        try { await deps.destroyNative(desktopId); } catch { /* best-effort */ }
+        try {
+          await deps.destroyNative(desktopId);
+          quiesced.splice(quiesced.indexOf(desktopId), 1);
+        } catch { /* best-effort — the finally below lifts its refusal */ }
         try { deps.sessionManager.destroySession(desktopId); } catch { /* best-effort */ }
       }
       console.log(`[takeover] holder ${claudeId.slice(0, 8)}: handoff complete`);
     } catch (e) { console.warn(`[takeover] holder ${claudeId.slice(0, 8)}: unexpected escape:`, e); /* never surface out of a fire-and-forget hub-event handler */ }
+    finally {
+      // A quiesced session this handoff did NOT destroy is staying here: give it
+      // its sends back, or it would refuse every message for the rest of its life.
+      for (const id of quiesced) { try { deps.endQuiesceNative?.(id); } catch { /* best-effort */ } }
+    }
   };
 }
 
