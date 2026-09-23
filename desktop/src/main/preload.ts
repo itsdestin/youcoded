@@ -1461,7 +1461,7 @@ contextBridge.exposeInMainWorld('claude', {
     // User-initiated /compact. Request-response, NOT fire-and-forget: the caller
     // needs the {ok, reason} result to tell the user why nothing happened when a
     // compaction is refused (turn in flight, nothing to compact, summary failed).
-    compact: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_COMPACT, { sessionId }),
+    compact: (sessionId: string, focus?: string) => ipcRenderer.invoke(IPC.NATIVE_COMPACT, { sessionId, focus }),
     // /clear as a context barrier — appends a marker, never erases the log.
     clear: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_CLEAR, { sessionId }),
     invokeSkill: (sessionId: string, skill: string, args?: string) => ipcRenderer.invoke(IPC.NATIVE_INVOKE_SKILL, { sessionId, skill, args }),

@@ -10,6 +10,8 @@
 // Companion files: native-context-occupancy.test.ts (the harness half),
 // statusbar-native-usage.test.ts (the rest of the chip selector).
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatState, ChatAction } from '../src/renderer/state/chat-types';
 import { selectNativeStatusChips } from '../src/renderer/components/StatusBar';
@@ -129,6 +131,52 @@ describe('the compaction marker can finally say what it freed', () => {
     });
     const marker = sess(state).timeline.find((e: any) => e.kind === 'system-marker') as any;
     expect(marker.marker.label).toBe('Compacted · freed 68,000 tokens');
+  });
+
+  it('auto compaction keeps an active native turn and its running tool alive, with one marker on replay', () => {
+    let state = init();
+    const current = sess(state);
+    state = new Map(state).set(SESSION, { ...current, isThinking: true,
+      activeTurnToolIds: new Set(['running-tool']), currentTurnId: 'turn-live',
+      toolCalls: new Map([['background-specialist', { status: 'running', name: 'Task' } as any]]),
+      timeline: [...current.timeline, { kind: 'compacting', id: 'spinner' } as any],
+    });
+    const action: ChatAction = { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
+      markerId: 'compact-1', auto: true, beforeContextTokens: 80_000,
+      afterContextTokens: 12_000, summary: 'summary' };
+    state = run(state, action);
+    expect(sess(state).isThinking).toBe(true);
+    expect(sess(state).currentTurnId).toBe('turn-live');
+    expect(sess(state).activeTurnToolIds.has('running-tool')).toBe(true);
+    expect(sess(state).toolCalls.get('background-specialist')?.status).toBe('running');
+    expect(sess(state).timeline.filter(e => e.kind === 'compacting')).toHaveLength(0);
+    expect(sess(state).timeline.filter(e => e.kind === 'system-marker' && e.marker.id === 'compact-1')).toHaveLength(1);
+    state = run(state, action);
+    expect(sess(state).timeline.filter(e => e.kind === 'system-marker' && e.marker.id === 'compact-1')).toHaveLength(1);
+  });
+
+  it('manual /compact and Claude Code completion still close the active turn', () => {
+    for (const native of [true, false]) {
+      let state = init();
+      const current = sess(state);
+      state = new Map(state).set(SESSION, { ...current, isThinking: true,
+        activeTurnToolIds: new Set(['tool']), currentTurnId: 'turn-live' });
+      state = run(state, { type: 'COMPACTION_PENDING', sessionId: SESSION, cardId: 'pending', beforeContextTokens: 80_000 });
+      state = run(state, { type: 'COMPACTION_COMPLETE', sessionId: SESSION,
+        markerId: native ? 'manual-native' : 'manual-cc', afterContextTokens: 12_000 });
+      expect(sess(state).isThinking).toBe(false);
+      expect(sess(state).currentTurnId).toBeNull();
+      expect(sess(state).activeTurnToolIds.size).toBe(0);
+    }
+  });
+
+  it('uses the transcript uuid as the marker id so the reducer can dedupe event replay', () => {
+    // WHY a cross-file source guard: the App transcript callback depends on live
+    // IPC wiring, while the reducer's replay test above alone cannot catch a
+    // fresh clock-based id minted by the event adapter on every delivery.
+    const source = readFileSync(fileURLToPath(new URL('../src/renderer/App.tsx', import.meta.url)), 'utf8');
+    const compactCase = source.split("case 'compact-summary': {")[1]?.split("case '")[0];
+    expect(compactCase).toMatch(/markerId:\s*`compact-done-\$\{event\.uuid\}`/);
   });
 
   it('still falls back to Claude Code’s own reading when the event carries none', () => {

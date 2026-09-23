@@ -125,6 +125,11 @@ function fileNameFromPath(p: string): string {
 // typed during startup is HELD and delivered rather than refused at all, so this
 // branch is only reached when ten are already waiting.
 function sendFailureCopy(result: NativeSendResult | undefined): string {
+  // WHY: the host refuses sends during manual compaction rather than falsely
+  // acknowledging one it cannot deliver; tell the user when to retry.
+  if (result?.status === 'failed' && result.reason === 'compacting') {
+    return 'Conversation is compacting. Wait for it to finish, then send your message.';
+  }
   if (result?.status === 'failed' && result.reason === 'queue-full') {
     return 'Send queue is full (10 messages waiting). Wait for the current turn to finish.';
   }

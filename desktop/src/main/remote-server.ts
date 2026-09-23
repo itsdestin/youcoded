@@ -1880,6 +1880,20 @@ export class RemoteServer {
         }
         break;
       }
+      case 'native:compact': {
+        // WHY: /compact with optional focus is shared by the desktop and remote
+        // renderer; answer from the same live host rather than silently rejecting
+        // the phone's request after it has already shown a compaction spinner.
+        try {
+          const result = this.nativeRuntime
+            ? await this.nativeRuntime.nativeHost.compact(payload.sessionId, payload.focus)
+            : { ok: false, reason: 'not-live' };
+          this.respond(client.ws, type, id, result);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, reason: 'error', detail: err?.message ?? String(err) });
+        }
+        break;
+      }
       case 'native:send': {
         // M1: mirrors the desktop invoke — never throw (transport-parity rule).
         const notLive = { status: 'failed', reason: 'not-live' } satisfies NativeSendResult;

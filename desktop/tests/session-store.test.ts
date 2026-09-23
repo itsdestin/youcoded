@@ -70,7 +70,22 @@ describe('SessionStore', () => {
         { eventUuid: 'a2', anchorUuid: 'a1', type: 'assistant-text', partId: 'p1', start: 3, end: 5 },
       ],
     });
-    expect(store.readEvents('s-1', HEADER.cwd)[0]).toMatchObject({ uuid: 'a1', data: { text: 'Hello' } });
+    expect(store.readEvents('s-1', HEADER.cwd)[0]).toMatchObject({ uuid: 'a1', data: { text: 'Hello', deltaReferences: [
+      { eventUuid: 'a1', start: 0, end: 3 },
+      { eventUuid: 'a2', start: 3, end: 5 },
+    ] } });
+  });
+
+  it('flushReferences resolves a coalesced tail endpoint only after its anchor is on disk', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'Hel', partId: 'p1' }, 'a1') as any);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'lo', partId: 'p1' }, 'a2') as any);
+    const refs = await store.flushReferences('s-1', ['a1', 'a2']);
+    expect(refs).toEqual({ ok: true, references: [
+      { eventUuid: 'a1', anchorUuid: 'a1', type: 'assistant-text', partId: 'p1', start: 0, end: 3 },
+      { eventUuid: 'a2', anchorUuid: 'a1', type: 'assistant-text', partId: 'p1', start: 3, end: 5 },
+    ] });
+    expect(fs.readFileSync(store.transcriptPath('s-1', HEADER.cwd), 'utf8').split('\n').filter(Boolean).filter(line => JSON.parse(line).uuid === 'a1')).toHaveLength(1);
   });
 
   it('transcriptPath names the file the store actually appended to', async () => {
@@ -94,12 +109,12 @@ describe('SessionStore', () => {
     await expect(reopened.flushReferences('s-1', ['u1', 'a1'])).resolves.toEqual({ ok: false, reason: 'unknown-reference' });
 
     reopened.hydrateReferences('s-1', reopened.readEvents('s-1', HEADER.cwd));
-    await expect(reopened.flushReferences('s-1', ['u1', 'a1'])).resolves.toEqual({
+    await expect(reopened.flushReferences('s-1', ['u1', 'a1', 'a2'])).resolves.toEqual({
       ok: true,
       references: [
         { eventUuid: 'u1', anchorUuid: 'u1', type: 'user-message', start: 0, end: JSON.stringify({ text: 'hi' }).length },
-        // The coalesced part tiles its WHOLE persisted text, not the first delta's range.
-        { eventUuid: 'a1', anchorUuid: 'a1', type: 'assistant-text', partId: 'p1', start: 0, end: 5 },
+        { eventUuid: 'a1', anchorUuid: 'a1', type: 'assistant-text', partId: 'p1', start: 0, end: 3 },
+        { eventUuid: 'a2', anchorUuid: 'a1', type: 'assistant-text', partId: 'p1', start: 3, end: 5 },
       ],
     });
     // A live append in THIS process still wins over the hydrated copy.
@@ -213,8 +228,9 @@ describe('SessionStore', () => {
     await store.append(HEADER.cwd, ev('assistant-text', { text: 'recovered', partId: 'p2' }, 'a2') as any);
     await store.append(HEADER.cwd, ev('turn-complete', { stopReason: 'end_turn' }, 't1') as any);
     const events = store.readEvents('s-1', HEADER.cwd);
-    expect(events.map((e: any) => e.type)).toEqual(['assistant-text', 'turn-complete']);
-    expect((events[0] as any).data).toMatchObject({ text: 'recovered', partId: 'p2' });
+    expect(events.map((e: any) => e.type)).toEqual(['assistant-thinking', 'assistant-text', 'turn-complete']);
+    expect((events[0] as any).data.dropPart).toEqual({ partIds: ['p1'] });
+    expect((events[1] as any).data).toMatchObject({ text: 'recovered', partId: 'p2' });
   });
 
   it('dropPart for a DIFFERENT partId leaves the open part alone', async () => {
@@ -223,8 +239,9 @@ describe('SessionStore', () => {
     await store.append(HEADER.cwd, ev('assistant-thinking', { dropPart: { partIds: ['other'] } }, 'd1') as any);
     await store.append(HEADER.cwd, ev('turn-complete', { stopReason: 'end_turn' }, 't1') as any);
     const events = store.readEvents('s-1', HEADER.cwd);
-    expect(events.map((e: any) => e.type)).toEqual(['assistant-text', 'turn-complete']);
-    expect((events[0] as any).data).toMatchObject({ text: 'keep me', partId: 'p1' });
+    expect(events.map((e: any) => e.type)).toEqual(['assistant-thinking', 'assistant-text', 'turn-complete']);
+    expect((events[0] as any).data.dropPart).toEqual({ partIds: ['other'] });
+    expect((events[1] as any).data).toMatchObject({ text: 'keep me', partId: 'p1' });
   });
 
   // Reproduces the LIVE defect verbatim: a manual Retry re-runs the stalled
@@ -243,8 +260,21 @@ describe('SessionStore', () => {
     await store.append(HEADER.cwd, ev('assistant-text', { text: 'recovered', partId: 'p1' }, 'a2') as any);
     await store.append(HEADER.cwd, ev('turn-complete', { stopReason: 'end_turn' }, 't1') as any);
     const events = store.readEvents('s-1', HEADER.cwd);
-    expect(events.map((e: any) => e.type)).toEqual(['assistant-text', 'turn-complete']);
-    expect((events[0] as any).data).toMatchObject({ text: 'recovered', partId: 'p1' });
+    expect(events.map((e: any) => e.type)).toEqual(['assistant-thinking', 'assistant-text', 'turn-complete']);
+    expect((events[0] as any).data.dropPart).toEqual({ partIds: ['p1'] });
+    expect((events[1] as any).data).toMatchObject({ text: 'recovered', partId: 'p1' });
+  });
+
+  it('persists a retry exclusion after the abandoned part already flushed to disk', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'abandoned', partId: 'p1' }, 'a1') as any);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'also abandoned', partId: 'p2' }, 'a2') as any);
+    await store.append(HEADER.cwd, ev('assistant-thinking', { dropPart: { partIds: ['p1', 'p2'] } }, 'drop') as any);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'replacement', partId: 'p1' }, 'a3') as any);
+    await store.append(HEADER.cwd, ev('turn-complete', {}, 'done') as any);
+    expect(store.readEvents('s-1', HEADER.cwd).map(e => [e.uuid, e.type]))
+      .toEqual([['a1', 'assistant-text'], ['drop', 'assistant-thinking'],
+        ['a3', 'assistant-text'], ['done', 'turn-complete']]);
   });
 
   it('never persists a toolPreparing heartbeat, and does not flush the open part', async () => {

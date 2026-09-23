@@ -35,10 +35,13 @@ describe('servedReads is forgotten wherever history is discarded or shrunk', () 
     expect(s.servedReads.size).toBe(0);
   });
 
-  it('automatic compaction (maybeCompact) clears it whenever it acts', async () => {
-    const s = seeded(makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
-    // 4,000 real input tokens > 75% of a 4,096 window → compaction acts (prune or summarize).
-    await s.maybeCompact(scriptModel([{ text: 'SUMMARY' }]), 4_000);
+  it('automatic compaction clears it when a complete summary retires old history', async () => {
+    const s = seeded(makeSession({ contextLength: 32_768, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
+    // WHY: 30k reported input crosses the legacy trigger in a window that
+    // still has room for the summary request and its output allowance.
+    s.abort = new AbortController(); // normally owned by send() around maybeCompact
+    try { await s.maybeCompact(scriptModel([{ text: 'SUMMARY' }]), 30_000, {}); }
+    finally { s.abort = null; }
     expect(s.servedReads.size).toBe(0);
   });
 
@@ -49,8 +52,8 @@ describe('servedReads is forgotten wherever history is discarded or shrunk', () 
   });
 
   it('manual compaction (compactNow) clears it', async () => {
-    const s = seeded(makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
-    await s.compactNow();
+    const s = seeded(makeSession({ contextLength: 32_768, model: scriptModel([{ text: 'SUMMARY' }]) }) as any);
+    expect(await s.compactNow()).toEqual({ ok: true });
     expect(s.servedReads.size).toBe(0);
   });
 });

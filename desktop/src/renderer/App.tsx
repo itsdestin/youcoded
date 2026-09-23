@@ -1664,7 +1664,9 @@ function AppInner() {
             dispatch({
               type: 'COMPACTION_COMPLETE',
               sessionId: event.sessionId,
-              markerId: `compact-done-${Date.now()}`,
+              // WHY: re-docking replays the same event. A stable event UUID lets
+              // the reducer discard its duplicate marker while keeping the turn.
+              markerId: `compact-done-${event.uuid}`,
               afterContextTokens: event.data.contextUsedAfter ?? contextTokens,
               beforeContextTokens: event.data.contextUsedBefore,
               // Forward the summary text so the SystemMarker can offer

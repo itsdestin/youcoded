@@ -77,7 +77,7 @@ export type NativeSendResult =
   // created, 'starting' is one that has not finished starting yet (a big local
   // model can take a minute to load). One code for both is what told Destin a
   // brand-new session was "no longer running" — see NativeSessionHost.startingSends.
-  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' };
+  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' | 'compacting' };
 
 export interface SessionInfo {
   id: string;
@@ -492,6 +492,18 @@ export interface TranscriptEvent {
      * unchanged.
      */
     autoCompaction?: boolean;
+    /** Persisted coalesced-part UUID/range witness; no duplicate text or private metadata. */
+    deltaReferences?: Array<{ eventUuid: string; start: number; end: number }>;
+    /** Native compact-summary portable checkpoint; references cite persisted parts. */
+    compactionRecord?: {
+      v: 1;
+      generation: number;
+      sourceRevision: number;
+      /** Hash of the source transcript plus the claimed cut; no copied text. */
+      sourceDigest?: string;
+      resumeFrom: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+      coveredThrough: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+    };
     /** `skill-invoked` only (M3 item 1). `skillId` is the resolved, qualified id
      *  (wecoded-themes-plugin:theme-builder); `body` is the SKILL.md text that
      *  enters model history on rebuild and is deliberately NOT rendered;

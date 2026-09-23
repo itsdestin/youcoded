@@ -339,7 +339,7 @@ declare global {
         // a bare boolean so a refusal can be explained to the user rather than
         // swallowed — `reason` is one of turn-in-flight | nothing-to-compact |
         // summary-failed | not-live | error.
-        compact: (sessionId: string) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
+        compact: (sessionId: string, focus?: string) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
         // M3 item 2: /clear as a context BARRIER — appends a marker so the model
         // stops seeing prior turns; the on-disk log is never rewritten.
         clear: (sessionId: string) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;

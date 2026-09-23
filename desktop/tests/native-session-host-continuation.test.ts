@@ -5,6 +5,7 @@ import { wrapLanguageModel } from 'ai';
 import { NativeHome } from '../src/main/native-home';
 import { SessionStore } from '../src/main/harness/session-store';
 import { NativeSessionHost } from '../src/main/harness/native-session-host';
+import { compactionSourceDigest } from '../src/main/harness/compaction-record';
 import { AcceptedHistoryStore, type AcceptedHistoryStoreHooks } from '../src/main/harness/accepted-history-store';
 import { SpecialistCatalog } from '../src/main/harness/specialists/catalog';
 import { resolveSpecialist } from '../src/main/harness/specialists/registry';
@@ -210,6 +211,42 @@ describe('NativeSessionHost durable continuation', () => {
     expect(reopenedBodies[0].input.filter((i: any) => i.role === 'assistant').map((i: any) => `${i.id}:${i.phase}`))
       .toEqual(['msg-commentary:commentary', 'msg-final:final_answer', 'msg-step-2:final_answer']);
   });
+  it.each([[false, false], [false, true], [true, true]])(
+    'portable record restores with sidecar option=%s and model switch=%s', async (withoutContinuation, switched) => {
+    const id = `portable-${withoutContinuation}-${switched}`;
+    const first = makeHost({ home, userData, withoutContinuation,
+      fetchImpl: scriptedFetch([], []) });
+    await first.host.create({ sessionId: id, cwd, binding: BINDING });
+    const event = (uuid: string, type: any, data: any) =>
+      ({ uuid, sessionId: id, timestamp: 1, type, data });
+    const old = event('old', 'user-message', { text: 'SECRET-retired' });
+    const tail = event('tail', 'user-message', { text: 'tail-only' });
+    const ref = (e: any) => ({ eventUuid: e.uuid, anchorUuid: e.uuid,
+      type: e.type, start: 0, end: JSON.stringify(e.data).length });
+    const record = { v: 1, generation: 1, sourceRevision: 2,
+      resumeFrom: ref(tail), coveredThrough: ref(old) };
+    for (const e of [old, tail, event('sum', 'compact-summary', {
+      summary: 'safe memory', compactionRecord: {
+        ...record, sourceDigest: compactionSourceDigest([old, tail], 'safe memory', record),
+      },
+    })]) await first.sessionStore.append(cwd, e);
+    await first.host.destroyAll();
+    const { body } = await reopenAndSend(id, { withoutContinuation,
+      ...(switched ? { bindingOverride: { providerId: 'chatgpt', modelId: 'another-model' } } : {}),
+    });
+    const input = JSON.stringify(body.input);
+    expect(input).toContain('safe memory');
+    expect(input).toContain('tail-only');
+    expect(input).not.toContain('SECRET-retired');
+    expect(input.match(/tail-only/g)).toHaveLength(1);
+    if (!withoutContinuation) {
+      expect(fs.existsSync(first.acceptedHistory.manifestPath(id))).toBe(true);
+      const manifest = fs.readFileSync(first.acceptedHistory.manifestPath(id), 'utf8');
+      expect(manifest).not.toContain('tail-only');
+      expect(manifest).not.toContain('SECRET-retired');
+    }
+  });
+
   it('a session with no sidecar rebuilds, and becomes durable at its very next publication', async () => {
     // First run publishes nothing: no continuation options at all.
     const plain = await firstRun('no-sidecar', { withoutContinuation: true });
@@ -399,6 +436,77 @@ describe('NativeSessionHost durable continuation', () => {
     expect(JSON.stringify(body.input)).toContain('answered');
   });
 
+  it('reopened history compacts durably without a private continuation sidecar', async () => {
+    const first = makeHost({ home, userData, withoutContinuation: true,
+      fetchImpl: scriptedFetch([], [textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('three', 'third answer')]) });
+    await first.host.create({ sessionId: 'public-reopen', cwd, binding: BINDING });
+    for (const text of ['first', 'second', 'third']) await turn(first.host, 'public-reopen', text);
+    await first.host.destroyAll();
+
+    const second = makeHost({ home, userData, withoutContinuation: true,
+      fetchImpl: scriptedFetch([], [textStep('sum', 'Compressed earlier messages.')]) });
+    expect(await second.host.resume('public-reopen', cwd)).toBe(true);
+    expect(await second.host.compact('public-reopen')).toEqual({ ok: true });
+    await second.host.drain('public-reopen');
+    expect(second.sessionStore.readEvents('public-reopen', cwd).filter(e =>
+      e.type === 'compact-summary' && e.data.compactionRecord?.v === 1)).toHaveLength(1);
+    await second.host.destroyAll();
+  });
+
+  it('reopened accepted history can compact while a pre-reopen turn remains in the tail', async () => {
+    const first = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
+      textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('three', 'third answer'),
+    ]) });
+    await first.host.create({ sessionId: 'private-reopen', cwd, binding: BINDING });
+    for (const text of ['first', 'second', 'third']) await turn(first.host, 'private-reopen', text);
+    await first.host.destroyAll();
+    const second = makeHost({ home, userData, fetchImpl: scriptedFetch([], [textStep('sum', 'Compressed earlier messages.')]) });
+    expect(await second.host.resume('private-reopen', cwd)).toBe(true);
+    const resumed = (second.host as any).live.get('private-reopen').session;
+    expect(resumed.firstEventForCut(resumed.compactionCut(true))).toBeTruthy();
+    expect(await second.host.compact('private-reopen')).toEqual({ ok: true });
+    await second.host.drain('private-reopen');
+    expect(second.sessionStore.readEvents('private-reopen', cwd).filter(e =>
+      e.type === 'compact-summary' && e.data.compactionRecord?.v === 1)).toHaveLength(1);
+    await second.host.destroyAll();
+  });
+
+  it('a reopened private reasoning turn does not block a later portable compaction', async () => {
+    const first = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
+      ...richTurn(), textStep('two', 'second answer'), textStep('three', 'third answer'),
+    ]) });
+    await first.host.create({ sessionId: 'reasoning-reopen', cwd, binding: BINDING });
+    for (const text of ['inspect', 'second', 'third']) await turn(first.host, 'reasoning-reopen', text);
+    await first.host.destroyAll();
+    const second = makeHost({ home, userData, fetchImpl: scriptedFetch([], [textStep('sum', 'Compressed earlier messages.')]) });
+    expect(await second.host.resume('reasoning-reopen', cwd)).toBe(true);
+    expect(await second.host.compact('reasoning-reopen')).toEqual({ ok: true });
+    await second.host.drain('reasoning-reopen');
+    expect(second.sessionStore.readEvents('reasoning-reopen', cwd).some(e =>
+      e.type === 'compact-summary' && e.data.compactionRecord?.v === 1)).toBe(true);
+    await second.host.destroyAll();
+  });
+
+  it('a repeated user message after compaction never cites its retired identical predecessor', async () => {
+    const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
+      textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('sum', 'Safe memory.'),
+    ]) });
+    await fx.host.create({ sessionId: 'repeat-cut', cwd, binding: BINDING });
+    for (const text of ['repeat', 'repeat']) await turn(fx.host, 'repeat-cut', text);
+    expect(await fx.host.compact('repeat-cut')).toEqual({ ok: true });
+    await fx.host.drain('repeat-cut');
+    const repeated = fx.sessionStore.readEvents('repeat-cut', cwd).filter(e =>
+      e.type === 'user-message' && e.data.text === 'repeat').map(e => e.uuid);
+    expect(repeated).toHaveLength(2);
+    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPath('repeat-cut'), 'utf8'));
+    expect(manifest.eventUuids).not.toContain(repeated[0]);
+    expect(manifest.eventUuids).toContain(repeated[1]);
+    const matched = manifest.messages.filter((m: any) => m.role === 'user' && m.content.kind === 'event' && m.content.field === 'user-text');
+    expect(matched.map((m: any) => m.content.uuid)).toContain(repeated[1]);
+    expect(matched.map((m: any) => m.content.uuid)).not.toContain(repeated[0]);
+    await fx.host.destroyAll();
+  });
+
   it('a summary compaction restores as the persisted receipt plus the retained suffix', async () => {
     const replies = [
       ...richTurn(),
@@ -429,6 +537,119 @@ describe('NativeSessionHost durable continuation', () => {
     expect(wire).toContain('Compressed history.');
     expect(wire).toContain('third answer');           // the retained suffix
     expect(wire).not.toContain('both files');         // the summarised span is gone
+  });
+
+  it('holds the summary marker and the next request until the portable record append resolves', async () => {
+    const bodies: any[] = [];
+    const fx = makeHost({ home, userData, fetchImpl: scriptedFetch(bodies, [
+      textStep('one', 'first answer'), textStep('two', 'second answer'),
+      textStep('three', 'third answer'), textStep('sum', 'Compressed history.'), textStep('four', 'fourth answer'),
+    ]) });
+    await fx.host.create({ sessionId: 'gate-commit', cwd, binding: BINDING });
+    for (const text of ['first', 'second', 'third']) await turn(fx.host, 'gate-commit', text);
+    const entered = deferred(); const release = deferred();
+    const original = fx.sessionStore.append.bind(fx.sessionStore);
+    (fx.sessionStore as any).append = async (dir: string, event: any) => {
+      if (event.type === 'compact-summary') { entered.resolve(); await release.promise; }
+      return original(dir, event);
+    };
+    const events: any[] = [];
+    fx.host.on('transcript-event', (event: any) => events.push(event));
+    const compact = fx.host.compact('gate-commit');
+    await entered.promise;
+    expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
+    expect(fx.host.send('gate-commit', 'fourth').status).toBe('failed');
+    expect(bodies).toHaveLength(4); // summary call, but no next request
+    release.resolve();
+    expect(await compact).toEqual({ ok: true });
+    await fx.host.drain('gate-commit');
+    expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
+    const lines = fs.readFileSync(fx.sessionStore.transcriptPath('gate-commit', cwd), 'utf8')
+      .split('\n').filter(Boolean).map(line => JSON.parse(line));
+    expect(lines.filter(line => line.type === 'compact-summary')).toHaveLength(1); // raw JSONL, not readEvents' UUID dedup
+    const record = fx.sessionStore.readEvents('gate-commit', cwd).filter(e => e.type === 'compact-summary');
+    expect(record).toHaveLength(1);
+    expect(record[0].uuid).toBe(events.find(e => e.type === 'compact-summary').uuid);
+    expect(record[0].data.compactionRecord).toMatchObject({ v: 1, sourceRevision: expect.any(Number), generation: expect.any(Number),
+      resumeFrom: { eventUuid: expect.any(String), anchorUuid: expect.any(String) },
+      coveredThrough: { eventUuid: expect.any(String), anchorUuid: expect.any(String) } });
+    const portable = record[0].data.compactionRecord!;
+    const refs = await fx.sessionStore.flushReferences('gate-commit', [portable.resumeFrom.eventUuid, portable.coveredThrough.eventUuid]);
+    expect(refs).toEqual({ ok: true, references: [portable.resumeFrom, portable.coveredThrough] });
+    await turn(fx.host, 'gate-commit', 'fourth');
+    expect(bodies).toHaveLength(5);
+    await fx.host.destroyAll();
+  });
+
+  it('an append rejection preserves full history, emits no marker, and leaves later appends working', async () => {
+    const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
+      textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('three', 'third answer'),
+      textStep('sum', 'Compressed history.'), textStep('four', 'fourth answer'),
+    ]) });
+    await fx.host.create({ sessionId: 'reject-commit', cwd, binding: BINDING });
+    for (const text of ['first', 'second', 'third']) await turn(fx.host, 'reject-commit', text);
+    const original = fx.sessionStore.append.bind(fx.sessionStore);
+    (fx.sessionStore as any).append = async (dir: string, event: any) => {
+      if (event.type === 'compact-summary') throw new Error('injected append failure');
+      return original(dir, event);
+    };
+    const events: any[] = [];
+    fx.host.on('transcript-event', (event: any) => events.push(event));
+    expect((await fx.host.compact('reject-commit')).ok).toBe(false);
+    expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
+    expect(fx.sessionStore.readEvents('reject-commit', cwd).filter(e => e.type === 'compact-summary')).toHaveLength(0);
+    await turn(fx.host, 'reject-commit', 'fourth');
+    await fx.host.drain('reject-commit');
+    expect(JSON.stringify(fx.sessionStore.readEvents('reject-commit', cwd))).toContain('fourth answer');
+    expect(JSON.stringify((fx.host as any).live.get('reject-commit').session.acceptedHistory().messages)).toContain('first answer');
+    await fx.host.destroyAll();
+  });
+
+  it('Stop before the append cancels the candidate; destroy after append starts waits for adoption', async () => {
+    const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
+      textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('three', 'third answer'),
+      textStep('sum-1', 'First summary.'), textStep('sum-2', 'Second summary.'),
+    ]) });
+    await fx.host.create({ sessionId: 'race-commit', cwd, binding: BINDING });
+    for (const text of ['first', 'second', 'third']) await turn(fx.host, 'race-commit', text);
+    const gate = gateFirstFlush(fx.sessionStore);
+    const canceled = fx.host.compact('race-commit');
+    await gate.entered.promise;
+    fx.host.interrupt('race-commit');
+    gate.release.resolve();
+    expect((await canceled).ok).toBe(false);
+    await fx.host.drain('race-commit');
+    expect(fx.sessionStore.readEvents('race-commit', cwd).filter(e => e.type === 'compact-summary')).toHaveLength(0);
+
+    const entered = deferred(); const release = deferred();
+    const original = fx.sessionStore.append.bind(fx.sessionStore);
+    (fx.sessionStore as any).append = async (dir: string, event: any) => {
+      if (event.type === 'compact-summary') { entered.resolve(); await release.promise; }
+      return original(dir, event);
+    };
+    const events: any[] = [];
+    fx.host.on('transcript-event', (e: any) => events.push(e));
+    const compact = fx.host.compact('race-commit');
+    await entered.promise;
+    const destroyed = fx.host.destroy('race-commit');
+    release.resolve();
+    expect(await compact).toEqual({ ok: true });
+    await destroyed;
+    expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
+    expect(fx.sessionStore.readEvents('race-commit', cwd).filter(e => e.type === 'compact-summary')).toHaveLength(1);
+  });
+
+  it('snapshot publication failure after durable compaction does not undo the record', async () => {
+    const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], [
+      textStep('one', 'first answer'), textStep('two', 'second answer'), textStep('three', 'third answer'), textStep('sum', 'Compressed history.'),
+    ]) });
+    await fx.host.create({ sessionId: 'snapshot-fail', cwd, binding: BINDING });
+    for (const text of ['first', 'second', 'third']) await turn(fx.host, 'snapshot-fail', text);
+    (fx.acceptedHistory as any).publish = async () => { throw new Error('snapshot failed'); };
+    expect(await fx.host.compact('snapshot-fail')).toEqual({ ok: true });
+    await fx.host.drain('snapshot-fail');
+    expect(fx.sessionStore.readEvents('snapshot-fail', cwd).filter(e => e.type === 'compact-summary')).toHaveLength(1);
+    await fx.host.destroyAll();
   });
 
   it('a history-only rule injection comes back as a private literal — a rebuild could not', async () => {
@@ -521,24 +742,31 @@ describe('NativeSessionHost durable continuation', () => {
     expect(JSON.stringify(body.input)).toContain('huge answer');
   });
 
-  it('a request-only context fit never becomes the durable accepted history', async () => {
-    const bodies: any[] = [];
-    const fx = makeHost({
-      home, userData, fetchImpl: scriptedFetch(bodies, [textStep('long', 'L'.repeat(6_000)), textStep('short', 'brief')]),
-      contextAndSlots: async () => ({ contextLength: 300, totalSlots: null }),
-    });
-    await fx.host.create({ sessionId: 'fitted', cwd, binding: BINDING });
-    await turn(fx.host, 'fitted', 'give me a long answer');
-    await turn(fx.host, 'fitted', 'now a short one');
-    // The SECOND request could not carry the long answer — that is the fit.
-    expect(JSON.stringify(bodies[1].input)).not.toContain('L'.repeat(6_000));
+  it('an unfit request errors explicitly instead of silently dropping accepted history', async () => {
+    // First accept a real turn at a usable window; only the reopened model has
+    // the impossible 300-token window. The old request-only fit test waited for
+    // turn-complete on a window too small even for the fixed system/tools cost.
+    const first = makeHost({ home, userData, fetchImpl: scriptedFetch([], [textStep('long', 'L'.repeat(6_000))]),
+      contextAndSlots: async () => ({ contextLength: 32_768, totalSlots: null }) });
+    await first.host.create({ sessionId: 'fitted', cwd, binding: BINDING });
+    await turn(first.host, 'fitted', 'give me a long answer');
+    const longUuid = first.host.getHistory('fitted')!.find((e: any) => e.data?.text?.startsWith('LLL'))!.uuid;
+    await first.host.destroy('fitted');
 
-    // The checkpoint still describes the whole history, including the message
-    // the request had to drop.
-    const longUuid = fx.host.getHistory('fitted')!.find((e: any) => e.data?.text?.startsWith('LLL'))!.uuid;
+    const bodies: any[] = [];
+    const fx = makeHost({ home, userData, fetchImpl: scriptedFetch(bodies, []),
+      contextAndSlots: async () => ({ contextLength: 300, totalSlots: null }) });
+    expect(await fx.host.resume('fitted', cwd)).toBe(true);
+    const events: any[] = [];
+    fx.host.on('transcript-event', (e: any) => events.push(e));
+    fx.host.send('fitted', 'now a short one');
+    await vi.waitFor(() => expect(events.some(e => e.type === 'session-error')).toBe(true));
+    await fx.host.drain('fitted');
+    expect(events.some(e => e.type === 'turn-complete')).toBe(false);
+    expect(bodies).toHaveLength(0); // No truncated request was sent.
+    expect(fx.host.getHistory('fitted')!.some((e: any) => e.uuid === longUuid)).toBe(true);
     const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPath('fitted'), 'utf8'));
     expect(manifest.eventUuids).toContain(longUuid);
-    expect(JSON.stringify(manifest.messages)).toContain(longUuid);
     await fx.host.destroyAll();
   });
   it('an unchanged attachment restores its bytes; a changed one invalidates the whole checkpoint', async () => {
@@ -601,7 +829,7 @@ describe('NativeSessionHost durable continuation', () => {
     expect(carriesCiphertext(bodies.at(-1))).toBe(true);
     await fx.host.destroyAll();
   });
-  it('a persistent prune restores its shortened tool output exactly, not the original', async () => {
+  it('a failed manual summary preserves the accepted tool result across reopen', async () => {
     fs.writeFileSync(path.join(cwd, 'big.txt'), 'q'.repeat(6_000));
     const readBig = [
       { type: 'response.created', response: { id: 'resp-big', model: 'gpt-test', created_at: 1 } },
@@ -611,11 +839,10 @@ describe('NativeSessionHost durable continuation', () => {
     ];
     const fx = makeHost({
       home, userData,
-      // No reply is scripted for /compact's summary call: it throws, the harness
-      // fails safe, and the PRUNED history is what stands — a prune with no
-      // summary, which is exactly the transformation under test.
+      // WHY: with no summary reply, /compact must not persist a partial prune
+      // or lose the original tool output when the session reopens.
       fetchImpl: scriptedFetch([], [readBig, textStep('after', 'read it'), textStep('turn-2', 'P'.repeat(2_000))]),
-      contextAndSlots: async () => ({ contextLength: 300, totalSlots: null }),
+      contextAndSlots: async () => ({ contextLength: 32_768, totalSlots: null }),
     });
     await fx.host.create({ sessionId: 'pruned', cwd, binding: BINDING });
     await turn(fx.host, 'pruned', 'read the big file');
@@ -623,16 +850,16 @@ describe('NativeSessionHost durable continuation', () => {
     await fx.host.compact('pruned');
     await fx.host.drain('pruned');
     const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPath('pruned'), 'utf8'));
-    expect(manifest.transformation).toEqual({ kind: 'pruned' });
-    // The shortened text is DESCRIBED (keepChars), never copied.
-    expect(JSON.stringify(manifest.messages)).toContain('"pruned":{"keepChars"');
-    expect(JSON.stringify(manifest.messages)).not.toContain('qqqq');
+    expect(manifest.transformation).not.toEqual({ kind: 'pruned' });
+    expect(JSON.stringify(manifest.messages)).not.toContain('"pruned":{"keepChars"');
     await fx.host.destroy('pruned');
 
     const { body } = await reopenAndSend('pruned');
+    expect(body.input.map((i: any) => i.type)).toContain('function_call_output');
     const output = body.input.find((i: any) => i.type === 'function_call_output');
-    expect(output.output).toContain('chars of tool output elided to fit context');
-    expect(output.output).not.toContain('q'.repeat(3_000));
+    expect(output).toEqual(expect.objectContaining({ output: expect.any(String) }));
+    expect((output.output.match(/q/g) ?? []).length).toBe(2_000); // Read's own page, not a later compaction prune
+    expect(output.output).not.toContain('chars of tool output elided to fit context');
   });
   it('closing between the last chunk and the turn boundary publishes nothing and still loses no visible text', async () => {
     // The crash window BEFORE the boundary flush: the model streamed, the app

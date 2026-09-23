@@ -183,6 +183,17 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
     });
   });
 
+  it('returns a message refused during manual compaction to the draft with an accurate reason', async () => {
+    (window as any).claude.native.send.mockResolvedValue({ status: 'failed', reason: 'compacting' });
+    const onToast = vi.fn();
+    render(<ChatProvider><SkillProvider><InputBar sessionId="sess-1" provider="native" onToast={onToast} /></SkillProvider></ChatProvider>);
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'keep this message' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(textarea.value).toBe('keep this message'));
+    expect(onToast).toHaveBeenCalledWith('Conversation is compacting. Wait for it to finish, then send your message.');
+  });
+
   it('does NOT clobber newer text the user typed during the ack round-trip', async () => {
     let resolveAck: (v: any) => void;
     const ack = new Promise((resolve) => { resolveAck = resolve; });

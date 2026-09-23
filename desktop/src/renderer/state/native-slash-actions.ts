@@ -24,11 +24,10 @@ const COMPACT_REFUSAL: Record<string, string> = {
     "Can't compact while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
   'nothing-to-compact':
     'Nothing to compact yet — there needs to be at least a couple of exchanges before there’s anything to summarize.',
-  // Deliberately NOT phrased as a total failure: compactNow prunes BEFORE it
-  // summarizes and keeps the pruned history on a summary failure, so the user
-  // really did get some space back.
+  // WHY: failed summaries no longer rewrite or prune accepted history; do not
+  // promise space was freed when the model's context remains unchanged.
   'summary-failed':
-    'The model couldn’t write a usable summary, so the conversation was left intact. Older tool output was still trimmed, which frees some space.',
+    'The model couldn’t write a usable summary, so the conversation was left intact. Try again later.',
   'not-live': "This session isn't running, so there's nothing to compact.",
 };
 
@@ -55,7 +54,7 @@ export async function runNativeSlashAction(
 
   let result: { ok: true } | { ok: false; reason: string; detail?: string };
   try {
-    result = await window.claude.native.compact(sessionId);
+    result = await window.claude.native.compact(sessionId, action.focus);
   } catch (err: any) {
     // Surface the REAL error text rather than inventing a cause.
     result = { ok: false, reason: 'error', detail: err?.message ?? String(err) };
