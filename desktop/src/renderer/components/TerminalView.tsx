@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -9,6 +9,7 @@ import { usePtyRawBytes } from '../hooks/usePtyRawBytes';
 import { usePtyReset } from '../hooks/usePtyReset';
 import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear } from '../hooks/terminal-registry';
 import { createTerminalKeyHandler } from './terminal-key-handler';
+import { attachRenderPause, type RenderPause } from './xterm-render-pause';
 import { useTheme } from '../state/theme-context';
 import { isTouchDevice } from '../platform';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
@@ -54,6 +55,9 @@ export default function TerminalView({ sessionId, visible }: Props) {
   // WebGL using the same construction + onContextLoss handler shape as the
   // mount effect (with the shared retry-cap counter).
   const attachWebglRef = useRef<(() => void) | null>(null);
+  // WHY: pauses this terminal's DRAWING (never its buffer) while hidden — see
+  // xterm-render-pause.ts. Null when the installed xterm lacks the hook.
+  const renderPauseRef = useRef<RenderPause | null>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   // Previous `visible`, updated only inside the visibility effect (NOT on every
@@ -78,6 +82,14 @@ export default function TerminalView({ sessionId, visible }: Props) {
   // theme); the workbench mock-ups override it for side-by-side shots only.
   const shippedBacking = computeTerminalSurface(bg).backing;
   const xtermBackground = backingStyle?.xtermBackground ?? shippedBacking;
+  // WHY: the mount effect reads the backing through a ref so a theme switch
+  // RECOLOURS the open terminals (the theme effect below) instead of disposing
+  // and rebuilding every one of them. A rebuild was never needed: xterm is
+  // always opaque (no allowTransparency — a constructor-only option we never
+  // set), so the backing is just `options.theme.background`, which xterm
+  // applies live. Rebuilding also cost each session its scrollback.
+  const xtermBackgroundRef = useRef(xtermBackground);
+  xtermBackgroundRef.current = xtermBackground;
   const hasWallpaper = bg?.type === 'image' && !!bg.value;
   const hasGradient = bg?.type === 'gradient' && !!bg.value;
   const hasBlur = !!(bg?.['panels-blur'] && bg['panels-blur'] > 0 && !reducedEffects);
@@ -131,7 +143,7 @@ export default function TerminalView({ sessionId, visible }: Props) {
       cursorInactiveStyle: 'none',
       fontSize: touch ? 12 : 14,
       fontFamily: TERMINAL_FONT,
-      theme: getXtermTheme(xtermBackground),
+      theme: getXtermTheme(xtermBackgroundRef.current),
       disableStdin: touch,
     });
 
@@ -141,6 +153,14 @@ export default function TerminalView({ sessionId, visible }: Props) {
     terminal.loadAddon(unicode11);
     terminal.unicode.activeVersion = '11';
     terminal.open(containerRef.current);
+
+    // WHY: a session mounted in the background (chat view, or not the active
+    // tab) starts with its drawing paused; the layout effect below flips it on
+    // every show/hide after this. Done before the WebGL addon attaches so a
+    // hidden terminal doesn't even draw its first frame until it is shown.
+    const renderPause = attachRenderPause(terminal);
+    renderPauseRef.current = renderPause;
+    if (!visibleRef.current) renderPause?.setHidden(true);
 
     // Overlay scrollbar — sized/positioned from the active xterm buffer.
     // Native scrollbar is hidden by `.terminal-overlay-scroll` CSS so xterm
@@ -461,10 +481,23 @@ export default function TerminalView({ sessionId, visible }: Props) {
       // the disposed terminal between unmount and remount.
       attachWebglRef.current = null;
       webglRef.current = null;
+      renderPause?.dispose();
+      renderPauseRef.current = null;
       disposed = true;
       terminal.dispose();
     };
-  }, [sessionId, xtermBackground]);
+    // WHY only sessionId: see xtermBackgroundRef — a backing change recolours
+    // in place via the theme effect, it must not rebuild the terminal.
+  }, [sessionId]);
+
+  // Pause drawing while hidden, resume (with one full repaint) when shown.
+  // WHY a LAYOUT effect: it runs before the browser paints the now-visible
+  // pane, so the repaint is queued for the very next frame and the user never
+  // sees the screen as it was when the pane was hidden. The buffer is never
+  // paused — writes below keep landing in it, which the prompt detector reads.
+  useLayoutEffect(() => {
+    renderPauseRef.current?.setHidden(!visible);
+  }, [visible]);
 
   // Visibility toggle side effects.
   // Fix: the ResizeObserver attached in the mount effect already fires a fit on
