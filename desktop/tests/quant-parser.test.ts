@@ -242,3 +242,46 @@ describe('dot before the quant (TheBloke, mradermacher)', () => {
     expect(opts[0].visionFile?.path).toBe('gemma-3-12b-it.mmproj-f16.gguf');
   });
 });
+
+// Cause 2 — lowercase quants, including Mungert's "double" quants (f16 output
+// tensors + q8_0 weights). Mungert/gemma-3-4b-it-gguf's real listing, verbatim
+// (2026-09-23): 24 .gguf files, 0 offered before this fix.
+describe('lowercase and double quants (Mungert)', () => {
+  const f = (path: string, size = 1) => ({ path, size, sha256: null });
+  const mungert = [
+    'gemma-3-4b-it-bf16-q8_0.gguf', 'gemma-3-4b-it-f16-q6_k.gguf', 'gemma-3-4b-it-f16-q8_0.gguf',
+    'google_gemma-3-4b-it-bf16-q8.gguf', 'google_gemma-3-4b-it-bf16.gguf', 'google_gemma-3-4b-it-f16-q8.gguf',
+    'google_gemma-3-4b-it-iq3_xs.gguf', 'google_gemma-3-4b-it-iq4_nl.gguf', 'google_gemma-3-4b-it-iq4_xs.gguf',
+    'google_gemma-3-4b-it-mmproj-bf16.gguf', 'google_gemma-3-4b-it-mmproj-f16.gguf', 'google_gemma-3-4b-it-mmproj-f32.gguf',
+    'google_gemma-3-4b-it-mmproj-q8.gguf', 'google_gemma-3-4b-it-q3_k_m.gguf', 'google_gemma-3-4b-it-q3_k_s.gguf',
+    'google_gemma-3-4b-it-q4_0.gguf', 'google_gemma-3-4b-it-q4_1.gguf', 'google_gemma-3-4b-it-q4_k_m.gguf',
+    'google_gemma-3-4b-it-q4_k_s.gguf', 'google_gemma-3-4b-it-q5_k_m.gguf', 'google_gemma-3-4b-it-q5_k_s.gguf',
+    'google_gemma-3-4b-it-q6_k_m.gguf', 'google_gemma-3-4b-it-q8.gguf', 'mmproj.gguf',
+  ];
+  it('keeps the quant exactly as the file writes it', () => {
+    expect(parseGgufName('google_gemma-3-4b-it-q4_k_m.gguf')).toEqual({
+      base: 'google_gemma-3-4b-it', quant: 'q4_k_m', dynamic: false, part: null,
+    });
+    expect(parseGgufName('gemma-3-4b-it-f16-q8_0.gguf')).toEqual({
+      base: 'gemma-3-4b-it', quant: 'f16-q8_0', dynamic: false, part: null,
+    });
+  });
+  it('offers all 19 model files as distinct options and none of the 5 projectors', () => {
+    const opts = groupQuantOptions(mungert.map((p) => f(p)));
+    expect(opts).toHaveLength(19);
+    expect(new Set(opts.map((o) => o.quant)).size).toBe(19);
+    expect(opts.some((o) => o.files.some((p) => /mmproj/.test(p)))).toBe(false);
+  });
+  it('describes a lowercase or double quant by its weight precision', () => {
+    expect(quantDescription('q4_k_m')).toBe(quantDescription('Q4_K_M'));
+    expect(quantDescription('f16-q8_0')).toBe(quantDescription('Q8_0'));
+    expect(quantDescription('bf16')).toBe(quantDescription('BF16'));
+    expect(quantDescription('iq3_xs')).toBe(quantDescription('IQ3_XS'));
+  });
+  it('still rejects files that are not model quants', () => {
+    expect(parseGgufName('mmproj.gguf')).toBeNull();
+    expect(parseGgufName('RVN-BF16-mtp.gguf')).toBeNull();
+    expect(parseGgufName('ggml-vocab-llama-bpe.gguf')).toBeNull();
+    expect(parseGgufName('imatrix.gguf')).toBeNull();
+  });
+});
