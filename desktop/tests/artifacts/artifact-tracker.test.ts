@@ -67,6 +67,24 @@ describe('artifactReducer', () => {
       expect(next.sessionArtifacts['s1'].some((a) => a.id === 'art_new')).toBe(true);
     });
 
+    it('lets go of an open file another window removed, once a refresh has listed it before', () => {
+      // Listed by a refresh, then gone from the next one: removed elsewhere.
+      let st = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [tracked, other] });
+      st = artifactReducer(st, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: 'art_9' });
+      const next = artifactReducer(st, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.sessionArtifacts['s1'].map((a) => a.id)).toEqual(['art_2']);
+    });
+
+    it('never swaps the open outside file for another with the same name', () => {
+      // An outside record's `path` is only its file name.
+      const mine: ArtifactRecord = { ...sampleArtifact, id: 'ext_A', kind: 'external', path: 'plan.md', absolutePath: '/a/plan.md' };
+      const theirs: ArtifactRecord = { ...sampleArtifact, id: 'ext_B', kind: 'external', path: 'plan.md', absolutePath: '/b/plan.md' };
+      let st = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [mine] });
+      st = artifactReducer(st, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: 'ext_A' });
+      const next = artifactReducer(st, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [theirs] });
+      expect(next.activeArtifactBySession['s1']).toBe('ext_A');
+    });
+
     it('is a plain replacement when nothing is open', () => {
       const s = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACT_UPSERTED', sessionId: 's1', artifact: discovered });
       const next = artifactReducer(s, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
