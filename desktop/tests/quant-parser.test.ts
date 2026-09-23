@@ -212,3 +212,33 @@ describe('quantDescription', () => {
     expect(quantDescription('MXFP4_MOE')).toMatch(/native/i);
   });
 });
+
+// Roadmap (local-models, 2026-09-05): whole publishers were invisible in search.
+// Cause 1 — a DOT before the quant. Real listings, verbatim, measured 2026-09-23:
+// TheBloke/Llama-2-7B-Chat-GGUF (12 files, 0 offered) and
+// mradermacher/gemma-3-12b-it-GGUF (13 files, 0 offered — its projectors stay off).
+describe('dot before the quant (TheBloke, mradermacher)', () => {
+  const f = (path: string, size = 1) => ({ path, size, sha256: null });
+  it('parses <name>.<QUANT>.gguf', () => {
+    expect(parseGgufName('llama-2-7b-chat.Q4_K_M.gguf')).toEqual({
+      base: 'llama-2-7b-chat', quant: 'Q4_K_M', dynamic: false, part: null,
+    });
+    expect(parseGgufName('gemma-3-12b-it.IQ4_XS.gguf')?.quant).toBe('IQ4_XS');
+    // A dot INSIDE the model name is not a separator for the quant.
+    expect(parseGgufName('Llama-3.1-8B-Instruct-Q4_K_M.gguf')?.base).toBe('Llama-3.1-8B-Instruct');
+  });
+  it('offers every TheBloke quant', () => {
+    const names = ['Q2_K', 'Q3_K_L', 'Q3_K_M', 'Q3_K_S', 'Q4_0', 'Q4_K_M', 'Q4_K_S', 'Q5_0', 'Q5_K_M', 'Q5_K_S', 'Q6_K', 'Q8_0'];
+    const opts = groupQuantOptions(names.map((q) => f(`llama-2-7b-chat.${q}.gguf`)));
+    expect(opts.map((o) => o.quant).sort()).toEqual([...names].sort());
+  });
+  it('offers mradermacher quants and still keeps its dotted projectors off the list', () => {
+    const files = ['IQ4_XS', 'Q2_K', 'Q3_K_L', 'Q3_K_M', 'Q3_K_S', 'Q4_K_M', 'Q4_K_S', 'Q5_K_M', 'Q5_K_S', 'Q6_K', 'Q8_0']
+      .map((q) => f(`gemma-3-12b-it.${q}.gguf`))
+      .concat([f('gemma-3-12b-it.mmproj-Q8_0.gguf'), f('gemma-3-12b-it.mmproj-f16.gguf')]);
+    const opts = groupQuantOptions(files);
+    expect(opts).toHaveLength(11);
+    expect(opts.every((o) => !o.files.some((p) => /mmproj/.test(p)))).toBe(true);
+    expect(opts[0].visionFile?.path).toBe('gemma-3-12b-it.mmproj-f16.gguf');
+  });
+});

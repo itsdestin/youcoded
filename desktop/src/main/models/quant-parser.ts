@@ -25,7 +25,13 @@ export interface ParsedGgufName {
 // separator and the .gguf extension so model names containing 'q4' mid-word
 // can't false-match. Case-sensitive on purpose (lowercase float tokens never
 // appear in real chat-model filenames).
-const NAME_RE = /^(.+?)-(UD-)?((?:I?Q\d+_[A-Z0-9_]+)|Q\d+|F16|F32|BF16|MXFP4_MOE|MXFP4)(?:-(\d{5})-of-(\d{5}))?\.gguf$/;
+// WHY '[-.]' and not just '-' (2026-09-23): TheBloke and mradermacher — two of
+// the largest GGUF publishers — write `<name>.Q4_K_M.gguf` with a DOT, so every
+// one of their repos offered nothing. A dot inside the model name ('Llama-3.1-…')
+// cannot false-match: the text after it must be a whole quant token running
+// to '.gguf'. Their dotted projectors ('…it.mmproj-Q8_0.gguf') are still caught
+// by the separator-anchored denylist below before this pattern runs.
+const NAME_RE = /^(.+?)[-.](UD-)?((?:I?Q\d+_[A-Z0-9_]+)|Q\d+|F16|F32|BF16|MXFP4_MOE|MXFP4)(?:-(\d{5})-of-(\d{5}))?\.gguf$/;
 
 // Aux-file denylist (Amendment 2026-07-14 E): vision projectors ('mmproj',
 // UPPERCASE in real repos) and MTP speculative-decode draft models ('mtp-',
