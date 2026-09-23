@@ -4,7 +4,7 @@
 import { truncateOutput, composeNotice, type TruncateOpts } from './truncate';
 import type { NativeTool, ToolContext, ToolResultPayload } from './types';
 
-const DEFAULT_CAPS: TruncateOpts = { maxChars: 30_000 };
+export const DEFAULT_CAPS: TruncateOpts = { maxChars: 30_000 };
 
 /** Grep's and Glob's deadline. 180 s is the search-scope spec's number
  *  (docs/active/specs/2026-08-17-search-scope-and-timeout-design.md): long
