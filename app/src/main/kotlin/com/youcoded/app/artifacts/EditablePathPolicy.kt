@@ -59,6 +59,29 @@ object EditablePathPolicy {
         return SENSITIVE_SUBPATHS.any { canonicalPath.contains(it) }
     }
 
+    // Mirror of editable-path-policy.ts privateForRecordTrust (review
+    // 2026-09-23, F1): the stricter check for a RECORDED `../` path nobody
+    // chose to open. Kept out of SENSITIVE_* so the viewer still opens your own
+    // .npmrc or shell history when you click it. Pinned by the shared fixture.
+    private val RECORD_PRIVATE_BASENAMES = setOf(
+        ".git-credentials", ".git-credentials-store", ".npmrc", ".pypirc", ".pgpass", ".claude.json",
+        ".bash_history", ".zsh_history", ".sh_history", ".history", "fish_history", ".python_history",
+        ".node_repl_history", ".psql_history", ".mysql_history", ".sqlite_history", ".irb_history", ".lesshst",
+    )
+    private val RECORD_PRIVATE_SUBPATHS = listOf(
+        "/.docker/config.json", "/.config/gcloud/", "/keyrings/", "/.password-store/",
+        "/.cargo/credentials", "/.gem/credentials", "/.config/hub", "/.config/git/credentials",
+        "/.terraform.d/credentials.tfrc.json", "/library/keychains/",
+    )
+
+    fun privateForRecordTrust(canonicalPath: String): Boolean {
+        if (editTier(canonicalPath) != EditTier.FREE) return true
+        val lower = canonicalPath.lowercase()
+        val base = lower.split('/').lastOrNull() ?: ""
+        if (base in RECORD_PRIVATE_BASENAMES) return true
+        return RECORD_PRIVATE_SUBPATHS.any { lower.contains(it) || lower.endsWith(it.trimEnd('/')) }
+    }
+
     /** Full sensitive check INCLUDING dotenv — the read-binary deny-list
      * (port of the desktop isSensitivePath; Kotlin read-binary previously had
      * NO guard at all — pre-existing gap closed 2026-07-22). */

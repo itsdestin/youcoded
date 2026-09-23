@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { tmpdir } from 'os';
+import { tmpdir, homedir } from 'os';
 import { appendVersion, writeSidecar } from '../../src/main/artifacts/artifact-store';
 import { SIDECAR_SCHEMA_VERSION } from '../../src/shared/artifacts/types';
 import { listSessionFiles, readArtifactText, checkArtifactExistence } from '../../src/main/artifacts/read-service';
@@ -46,7 +46,9 @@ describe('reading a ../ record', () => {
   let parent: string;
   let projectRoot: string;
   beforeEach(async () => {
-    parent = mkdtempSync(join(tmpdir(), 'rs-dotdot-'));
+    // Under the (sandboxed) home folder: only a project strictly below home can
+    // vouch for a `../` record (review 2026-09-23, F1).
+    parent = mkdtempSync(join(homedir(), 'rs-dotdot-'));
     projectRoot = join(parent, 'proj');
     mkdirSync(join(projectRoot, '.youcoded'), { recursive: true });
     mkdirSync(join(projectRoot, 'sub'), { recursive: true });
@@ -76,10 +78,14 @@ describe('reading a ../ record', () => {
     expect(await readArtifactText(projectRoot, 'inside')).toMatchObject({ ok: true, content: 'inside' });
   });
 
-  it('refuses one outside every project folder as exactly that, naming where it is', async () => {
-    const r = await readArtifactText(projectRoot, 'outside') as any;
-    expect(r).toMatchObject({ ok: false, error: 'outside-projects' });
-    expect(r.path).toMatch(/elsewhere[\\/]notes\.md$/);
+  it('refuses one outside every project folder as exactly that — without saying where it is', async () => {
+    // The answer also reaches remote browsers (F5): no location rides along.
+    expect(await readArtifactText(projectRoot, 'outside')).toEqual({ ok: false, error: 'outside-projects' });
+  });
+
+  it('hands the byte viewers the judged location of a trusted one', async () => {
+    const r = await readArtifactText(projectRoot, 'inside') as any;
+    expect(r.resolvedPath).toMatch(/\/proj\/here\.md$/);
   });
 
   it('refuses a planted record pointing at a secret as protected, without echoing its path', async () => {

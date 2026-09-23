@@ -97,7 +97,7 @@ export function useArtifactContent(
       if (cancelled) return;
       if (res && res.ok) {
         setContent(res.content ?? null);
-        setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes });
+        setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes, ...(typeof res.resolvedPath === 'string' ? { resolvedPath: res.resolvedPath } : {}) });
         // orphan:true is the handler's genuine not-found signal (ENOENT /
         // orphaned record) — the ONLY thing allowed to render "no longer on
         // disk". Everything else that resolved ok is ready.
@@ -105,7 +105,7 @@ export function useArtifactContent(
       } else {
         // Keep the handler's own code and the size beside the message: the
         // remote too-large answer needs both to render as a file card.
-        setContentState({ phase: 'error', message: describeReadError(res?.error), code: res?.error, sizeBytes: res?.sizeBytes, path: typeof res?.path === 'string' ? res.path : undefined });
+        setContentState({ phase: 'error', message: describeReadError(res?.error, res?.code), code: res?.error, sizeBytes: res?.sizeBytes });
       }
     }).catch((e: any) => {
       // A rejected invoke (e.g. EACCES thrown in the handler) is a read
@@ -145,7 +145,7 @@ export function useArtifactContent(
   const applyDiskRead = useCallback((res: any) => {
     if (!res || !res.ok || res.orphan) return;
     setContent(res.content ?? null);
-    setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes });
+    setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes, ...(typeof res.resolvedPath === 'string' ? { resolvedPath: res.resolvedPath } : {}) });
     setContentState({ phase: 'ready' });
   }, []);
 

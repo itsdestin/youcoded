@@ -364,26 +364,43 @@ describe('read lifecycle through useArtifactContent', () => {
       expect(utils.queryByText(LOADING_MSG)).toBeNull();
     });
 
-    it('says a file outside the project folders is refused for exactly that, and offers Show in folder', async () => {
+    it('says a file outside the project folders is refused for exactly that — no location, no promise', async () => {
       // A file the assistant wrote through `../`: it exists, so "no longer on
-      // disk" would be false. The host sends where it is; the pane offers the
-      // system file browser there.
-      const showItemInFolder = vi.fn();
-      (window as any).claude.shell = { showItemInFolder };
+      // disk" would be false. The host sends no location (it reaches remote
+      // browsers too), so the pane names none.
       const utils = render(<Host artifact={mdArtifact} />);
-      await settle(() => pending[0].resolve({ ok: false, error: 'outside-projects', path: '/home/u/elsewhere/notes.md' }));
+      await settle(() => pending[0].resolve({ ok: false, error: 'outside-projects' }));
       expect(utils.queryByText(MISSING_MSG)).toBeNull();
-      expect(utils.getByText('YouCoded won’t open this file because it’s outside your project folders. To open it here, add its folder as a project, then Retry.')).toBeTruthy();
-      await settle(() => { fireEvent.click(utils.getByText('Show in folder')); });
-      expect(showItemInFolder).toHaveBeenCalledWith('/home/u/elsewhere/notes.md');
+      expect(utils.getByText('YouCoded won’t open this file because it’s outside your project folders.')).toBeTruthy();
+      expect(utils.getByText('Retry')).toBeTruthy();
     });
 
-    it('offers nothing to reveal for a protected location', async () => {
-      (window as any).claude.shell = { showItemInFolder: vi.fn() };
+    it('hands an image recorded through ../ to the viewer at the location the host judged', async () => {
+      // The record still holds `../notes/shot.png`; reading that by path would
+      // resolve against the app's own folder (F3, review 2026-09-23).
+      const readBinary = vi.fn(() => new Promise(() => {}));
+      (window as any).claude.artifacts.readBinary = readBinary;
+      const shot = { id: 'img', kind: 'external', path: 'shot.png', absolutePath: '../notes/shot.png' } as any;
+      function ImgHost() {
+        const r = useArtifactContent('/proj', shot.id, contentPathFor(shot));
+        return <ActiveArtifactView artifact={shot} content={r.content} contentInfo={r.contentInfo} contentState={r.contentState}
+          onRetryRead={r.retryRead} projectRoot="/proj" projectId="p1" projectName="Proj" sessionId="s1" onContentChange={r.setContent} />;
+      }
+      render(<ImgHost />);
+      await settle(() => pending[0].resolve({ ok: true, content: null, orphan: false, binary: true, sizeBytes: 3, resolvedPath: '/home/u/notes/shot.png' }));
+      await waitFor(() => expect(readBinary).toHaveBeenCalledWith('/home/u/notes/shot.png'));
+    });
+
+    it('says the check failed, with the filesystem’s own reason', async () => {
+      const utils = render(<Host artifact={mdArtifact} />);
+      await settle(() => pending[0].resolve({ ok: false, error: 'record-unreadable', code: 'EACCES' }));
+      expect(utils.getByText('YouCoded couldn’t check this file (permission denied).')).toBeTruthy();
+    });
+
+    it('words a protected location plainly', async () => {
       const utils = render(<Host artifact={mdArtifact} />);
       await settle(() => pending[0].resolve({ ok: false, error: 'protected-path' }));
       expect(utils.getByText('YouCoded won’t open this file because it’s in a protected location (like saved passwords, keys or settings folders).')).toBeTruthy();
-      expect(utils.queryByText('Show in folder')).toBeNull();
     });
 
     it('surfaces a failed read as the real error with Retry — never as "no longer on disk"', async () => {

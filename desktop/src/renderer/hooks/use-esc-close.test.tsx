@@ -208,6 +208,26 @@ describe('useEscClose', () => {
     expect(after.defaultPrevented).toBe(false);
   });
 
+  it('a panel beside the chat takes one Escape while focus is elsewhere; peels only with focus inside', () => {
+    let inside = false;
+    const onBack = vi.fn();
+    function Panel() {
+      useEscClose(true, onBack, { layeredWhile: () => inside });
+      return null;
+    }
+    render(<EscCloseProvider><Panel /></EscCloseProvider>);
+    const press = () => {
+      const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      act(() => { window.dispatchEvent(ev); });
+      return ev.defaultPrevented;
+    };
+    expect([press(), press(), press()]).toEqual([true, false, false]);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    inside = true;
+    expect([press(), press()]).toEqual([true, true]);
+    expect(onBack).toHaveBeenCalledTimes(3);
+  });
+
   it('useDismissTop is a no-op when the stack is empty', () => {
     let dismiss: () => void = () => {};
     function Capturer() {

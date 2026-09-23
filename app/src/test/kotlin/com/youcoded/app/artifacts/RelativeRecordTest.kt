@@ -8,51 +8,62 @@ import kotlin.test.assertTrue
 
 // Mirror of desktop tests/artifacts/write-authorization.test.ts
 // "judgeRelativeRecord": a `../` record is trusted only inside a project folder
-// and outside the deny list — a planted record pointing at a secret stays refused.
+// strictly below home and outside the deny lists — a planted record pointing at
+// a secret stays refused, and a saved HOME folder vouches for nothing.
 class RelativeRecordTest {
-    private fun world(): Triple<File, File, File> {
-        val parent = Files.createTempDirectory("rr-").toFile()
-        val proj = File(parent, "proj").apply { mkdirs() }
-        val other = File(parent, "notes").apply { mkdirs() }
-        File(other, "plan.md").writeText("plan")
-        File(other, ".ssh").mkdirs(); File(other, ".ssh/id_rsa").writeText("PRIVATE")
-        File(proj, "sub").mkdirs(); File(proj, "here.md").writeText("here")
-        return Triple(parent, proj, other)
+    private class World(val home: File) {
+        val proj = File(home, "proj").apply { mkdirs() }
+        val notes = File(home, "notes").apply { mkdirs() }
+        fun put(rel: String, text: String = "x"): File = File(home, rel).apply { parentFile.mkdirs(); writeText(text) }
+        fun relFromProj(f: File): String = proj.toPath().relativize(f.toPath()).toString()
+    }
+
+    private fun <T> world(block: World.() -> T): T {
+        val home = Files.createTempDirectory("rr-home-").toFile().canonicalFile
+        try { return World(home).block() } finally { home.deleteRecursively() }
     }
 
     @Test
-    fun trustsAFileInsideASavedFolder() {
-        val (parent, proj, other) = world()
-        try {
-            val v = judgeRelativeRecord(proj.path, "../notes/plan.md", listOf(other.path))
-            assertTrue(v is RelativeRecordVerdict.Trusted)
-            assertEquals(File(other, "plan.md").canonicalPath, v.file.path)
-            assertTrue(judgeRelativeRecord(proj.path, "sub/../here.md", emptyList()) is RelativeRecordVerdict.Trusted)
-        } finally { parent.deleteRecursively() }
+    fun trustsAFileInsideASavedFolderBelowHome() = world {
+        val plan = put("notes/plan.md")
+        val v = judgeRelativeRecord(proj.path, relFromProj(plan), listOf(notes.path), home.path)
+        assertTrue(v is RelativeRecordVerdict.Trusted)
+        assertEquals(plan.canonicalPath, v.file.path)
+        put("proj/here.md")
+        assertTrue(judgeRelativeRecord(proj.path, "sub/../here.md".also { File(proj, "sub").mkdirs() }, emptyList(), home.path) is RelativeRecordVerdict.Trusted)
     }
 
     @Test
-    fun refusesAFileOutsideEveryProjectAsExactlyThat() {
-        val (parent, proj, other) = world()
-        try {
-            val v = judgeRelativeRecord(proj.path, "../notes/plan.md", emptyList())
-            assertEquals(RelativeRecordVerdict.OutsideProjects(File(other, "plan.md").canonicalPath), v)
-        } finally { parent.deleteRecursively() }
+    fun refusesAFileOutsideEveryProjectWithoutSayingWhere() = world {
+        val f = put("elsewhere/plan.md")
+        assertEquals(RelativeRecordVerdict.OutsideProjects, judgeRelativeRecord(proj.path, relFromProj(f), listOf(notes.path), home.path))
     }
 
     @Test
-    fun keepsAPlantedSecretRecordRefusedEvenInsideASavedFolder() {
-        val (parent, proj, other) = world()
-        try {
-            assertEquals(RelativeRecordVerdict.Protected, judgeRelativeRecord(proj.path, "../notes/.ssh/id_rsa", listOf(other.path)))
-        } finally { parent.deleteRecursively() }
+    fun aSavedHomeFolderOrAnAncestorOrRootVouchesForNothing() = world {
+        val f = put("Documents/todo.md")
+        for (saved in listOf(home.path, home.parentFile.path, "/")) {
+            assertEquals(RelativeRecordVerdict.OutsideProjects, judgeRelativeRecord(proj.path, relFromProj(f), listOf(saved), home.path), saved)
+        }
     }
 
     @Test
-    fun saysMissingOnlyWhenNothingIsThere() {
-        val (parent, proj, other) = world()
-        try {
-            assertEquals(RelativeRecordVerdict.Missing, judgeRelativeRecord(proj.path, "../notes/never.md", listOf(other.path)))
-        } finally { parent.deleteRecursively() }
+    fun keepsEveryPlantedCredentialRecordRefusedWithHomeSaved() = world {
+        val secrets = listOf(
+            ".git-credentials", ".claude.json", ".npmrc", ".pypirc", ".docker/config.json", ".pgpass",
+            ".bash_history", ".zsh_history", ".local/share/fish/fish_history",
+            ".config/gcloud/application_default_credentials.json", ".local/share/keyrings/login.keyring",
+            ".ssh/id_rsa", ".aws/credentials", ".netrc", ".config/gh/hosts.yml", "notes/.env", "notes/.npmrc",
+        )
+        for (s in secrets) {
+            val f = put(s, "PRIVATE")
+            assertEquals(RelativeRecordVerdict.Protected,
+                judgeRelativeRecord(proj.path, relFromProj(f), listOf(home.path, notes.path), home.path), s)
+        }
+    }
+
+    @Test
+    fun saysMissingOnlyWhenNothingIsThere() = world {
+        assertEquals(RelativeRecordVerdict.Missing, judgeRelativeRecord(proj.path, "../notes/never.md", listOf(notes.path), home.path))
     }
 }

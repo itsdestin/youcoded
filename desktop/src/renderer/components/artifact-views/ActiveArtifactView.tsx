@@ -11,9 +11,9 @@ import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-pat
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { LoadingState, ErrorState } from '../ui/states';
-import { Button } from '../ui/Button';
 import { RemoteFileCard } from './RemoteFileCard';
-import { isRemoteMode, getPlatform } from '../../platform';
+import { describeReadError } from './read-error-copy';
+import { isRemoteMode } from '../../platform';
 
 /** Absolute on-disk path of an artifact — the same join SessionDrawer and
  *  FilesTab make for Copy path, so Download asks the host for the same file. */
@@ -48,6 +48,8 @@ function saveErrorMessage(res: any): string {
   if (err === 'needs-confirm') {
     return 'Editing this file needs an explicit confirmation. Leave and re-enter edit mode to confirm.';
   }
+  // A `../` record refused at save time says the same as when it is opened.
+  if (err === 'outside-projects' || err === 'record-unreadable') return describeReadError(err, res?.code);
   return `Save failed: ${String(err ?? 'unknown error')}`;
 }
 
@@ -84,6 +86,10 @@ export interface ArtifactContentInfo {
    *  partial-view banner. Does NOT gate saving; size does (Stage 2B). */
   truncated?: boolean;
   sizeBytes?: number;
+  /** Where the host judged a `../` record to be (read-service.ts). The record
+   *  still holds a relative location until the repair rewrites it, and the
+   *  byte viewers read by absolute path — so they use this instead (F3). */
+  resolvedPath?: string;
 }
 
 /** Read-lifecycle state for the active artifact's content. Fix for the
@@ -105,9 +111,7 @@ export type ArtifactContentState =
   // rides with it: over remote access a too-large answer carries the file's real
   // size so the phone can show "24.0 MB · PDF" with a Download button rather
   // than a bare error (RemoteFileCard).
-  // `path`: where a refused file actually is (only for 'outside-projects', never
-  // for a protected one), so the pane can offer Show in folder.
-  | { phase: 'error'; message: string; code?: string; sizeBytes?: number; path?: string };
+  | { phase: 'error'; message: string; code?: string; sizeBytes?: number };
 
 export interface ActiveArtifactViewProps {
   artifact: ArtifactRecord;
@@ -150,9 +154,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // Resolve the absolute path depending on artifact kind. Forward slashes
   // throughout — a backslash projectRoot + '/' + relative path yields a mixed-
   // separator string that looks broken in copy-path/reveal on Windows.
-  const absolutePath = artifact.kind === 'internal'
+  const absolutePath = contentInfo?.resolvedPath ?? (artifact.kind === 'internal'
     ? `${projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${artifact.path.replace(/\\/g, '/')}`
-    : (artifact.absolutePath ?? artifact.path);
+    : (artifact.absolutePath ?? artifact.path));
 
   // Renderer MIRROR of the D5 write policy — main enforces the real boundary
   // in artifacts:save; this only hides the Edit affordance so the UI never
@@ -555,17 +559,6 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     return (
       <div className="p-4">
         <ErrorState message={readState.message} onRetry={onRetryRead ?? (() => {})} />
-        {/* WHY: a file refused for being outside the project folders is still a
-            real file; the one safe thing to offer is the system file browser
-            at it. Desktop only (a phone cannot open the computer's file browser),
-            and never for a protected location — the host sends no path then. */}
-        {readState.code === 'outside-projects' && readState.path && getPlatform() === 'electron' && !isRemoteMode() && (
-          <div className="flex justify-end mt-2">
-            <Button variant="secondary" size="sm" onClick={() => (window as any).claude.shell.showItemInFolder(readState.path)}>
-              Show in folder
-            </Button>
-          </div>
-        )}
       </div>
     );
   }

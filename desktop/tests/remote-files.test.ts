@@ -478,3 +478,59 @@ describe('live refresh over remote (R12)', () => {
     await overRemote('artifacts:unwatch-project', { projectRoot: root }, b);
   });
 });
+
+// A file the assistant wrote through `../` (review 2026-09-23, F3/F5): a record
+// that opens can also be SAVED — judged exactly as it is read — a planted one
+// is refused, and no refusal on either transport carries where the file is.
+describe('a ../ record through both transports', () => {
+  let world: string;
+  let proj: string;
+  let notes: string;
+  beforeAll(() => {
+    const home = process.env.HOME!;
+    world = fs.realpathSync(fs.mkdtempSync(path.join(home, 'yc-dotdot-')));
+    proj = path.join(world, 'proj');
+    notes = path.join(world, 'notes');
+    fs.mkdirSync(path.join(proj, '.youcoded'), { recursive: true });
+    fs.mkdirSync(notes, { recursive: true });
+    fs.writeFileSync(path.join(notes, 'plan.md'), 'old\n');
+    fs.writeFileSync(path.join(world, 'loose.md'), 'outside every project\n');
+    fs.writeFileSync(path.join(home, '.git-credentials'), 'https://u:t@github.com\n');
+    const rec = (id: string, rel: string) => ({
+      id, path: path.basename(rel), kind: 'external', absolutePath: rel,
+      lastModified: new Date().toISOString(), status: 'active', versions: [], comments: [], tags: [],
+    });
+    fs.writeFileSync(path.join(proj, '.youcoded', 'artifacts.json'), JSON.stringify({
+      $schema: SIDECAR_SCHEMA_VERSION, projectId: 'dotdot', name: 'proj',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      artifacts: [rec('plan', '../notes/plan.md'), rec('loose', '../loose.md'), rec('planted', path.relative(proj, path.join(home, '.git-credentials')))],
+      manualExcludes: [], manualIncludes: [],
+    }));
+    // The saved folders now include `notes` and — as on Destin's machine — HOME itself.
+    const file = path.join(home, '.claude', 'youcoded-folders.json');
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fs.writeFileSync(file, JSON.stringify([...saved,
+      { path: notes, nickname: 'notes', addedAt: Date.now() },
+      { path: home, nickname: 'home', addedAt: Date.now() },
+      { path: proj, nickname: 'proj', addedAt: Date.now() }]));
+  });
+  afterAll(() => fs.rmSync(world, { recursive: true, force: true, maxRetries: 3 }));
+
+  it('saves a trusted one at its real location', async () => {
+    const res = await overIpc('artifacts:save', proj, 'dotdot', 'proj', 'plan', 'new\n', 'sess-1', {});
+    expect(res).toMatchObject({ ok: true });
+    expect(fs.readFileSync(path.join(notes, 'plan.md'), 'utf8')).toBe('new\n');
+  });
+
+  it('refuses a planted credential on read and save, even with home saved as a folder', async () => {
+    expect(await overIpc('artifacts:get', proj, 'planted')).toEqual({ ok: false, error: 'protected-path' });
+    expect(await overIpc('artifacts:save', proj, 'dotdot', 'proj', 'planted', 'x', 'sess-1', {})).toEqual({ ok: false, error: 'protected-path' });
+    expect(fs.readFileSync(path.join(process.env.HOME!, '.git-credentials'), 'utf8')).toContain('github.com');
+  });
+
+  it('refuses one outside every project without naming where it is, on both transports', async () => {
+    expect(await overIpc('artifacts:get', proj, 'loose')).toEqual({ ok: false, error: 'outside-projects' });
+    const remote = await overRemote('artifacts:get', { projectRoot: proj, artifactId: 'loose' });
+    expect(remote).toEqual({ ok: false, error: 'outside-projects' });
+  });
+});
