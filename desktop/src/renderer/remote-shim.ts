@@ -404,18 +404,60 @@ export function onConnectionStateChange(cb: (state: RemoteConnectionState) => vo
   stateChangeCallback = cb;
 }
 
+/** The Android app's own on-device bridge. Port comes from the `bridgePort` query param
+ *  WebViewHost.kt injects so dev (9951) and release (9901) APKs can run side by side;
+ *  9901 keeps the legacy wiring working if a host forgets to inject it. */
+function localBridgeUrl(): string {
+  const port = new URLSearchParams(location.search).get('bridgePort') || '9901';
+  return `ws://localhost:${port}`;
+}
+
+/**
+ * Ask the Android app's own runtime one question while the app is paired to a computer.
+ *
+ * WHY: pairing points the app's ONE connection at the computer, but the list of saved
+ * computers (address + password) lives in the phone's runtime, which the computer cannot
+ * reach. The android.* pairing methods used to answer "done" without asking anyone, so
+ * removing a computer while connected left its saved pairing — still trusted — on the phone.
+ * A short second connection to the local bridge (same token the page loaded with) asks the
+ * runtime itself and closes; the connection to the computer is never touched.
+ */
+function invokeLocalBridge(type: string, payload?: unknown): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const token = new URLSearchParams(location.search).get('bridgeToken') ?? '';
+    const id = `local-${Date.now()}-${++messageId}`;
+    const socket = new WebSocket(localBridgeUrl());
+    let settled = false;
+    const finish = (settle: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { socket.close(); } catch { /* already closed */ }
+      settle();
+    };
+    const timer = setTimeout(() => finish(() => reject(new Error('The phone did not answer.'))), 10_000);
+    socket.onopen = () => socket.send(JSON.stringify({ type: 'auth', token }));
+    socket.onmessage = (event) => {
+      let msg: any;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      if (msg.type === 'auth:ok') { socket.send(JSON.stringify({ type, id, payload })); return; }
+      if (msg.type === `${type}:response` && msg.id === id) finish(() => resolve(msg.payload));
+    };
+    socket.onerror = () => finish(() => reject(new Error('Could not reach the phone’s own runtime.')));
+    socket.onclose = () => finish(() => reject(new Error('Could not reach the phone’s own runtime.')));
+  });
+}
+
+/** The Android app, paired to a computer: its own runtime is only reachable on a side connection. */
+function isAndroidPaired(): boolean {
+  return location.protocol === 'file:' && !!targetUrl;
+}
+
 function getWsUrl(): string {
   // If a remote host override is set, use it (connectToHost sets this)
   if (targetUrl) return targetUrl;
   // Android WebView loads from file:// — connect to local bridge server.
-  // Port comes from the `bridgePort` query param injected by WebViewHost.kt
-  // so dev (9951) and release (9901) APKs can run side-by-side without
-  // colliding on the same localhost socket. Default 9901 keeps the legacy
-  // wiring working if a host forgets to inject the param.
-  if (location.protocol === 'file:') {
-    const port = new URLSearchParams(location.search).get('bridgePort') || '9901';
-    return `ws://localhost:${port}`;
-  }
+  if (location.protocol === 'file:') return localBridgeUrl();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 }
@@ -2704,11 +2746,17 @@ export function installShim(): void {
       getTier: () => targetUrl ? Promise.resolve('CORE') : invoke('android:get-tier'),
       setTier: (tier: string) => targetUrl ? Promise.resolve() : invoke('android:set-tier', { tier }),
       getAbout: () => targetUrl ? Promise.resolve({ version: '', build: '' }) : invoke('android:get-about'),
-      getPairedDevices: () => targetUrl ? Promise.resolve([]) : invoke('android:get-paired-devices'),
+      // The saved computers live in the phone's runtime: while paired they are asked on a
+      // side connection (invokeLocalBridge — WHY there), never answered "done" unasked.
+      // A plain browser tab keeps its old answers; it has no such list.
+      getPairedDevices: () => isAndroidPaired() ? invokeLocalBridge('android:get-paired-devices')
+        : targetUrl ? Promise.resolve([]) : invoke('android:get-paired-devices'),
       savePairedDevice: (device: { name: string; host: string; port: number; password: string }) =>
-        targetUrl ? Promise.resolve() : invoke('android:save-paired-device', device),
+        isAndroidPaired() ? invokeLocalBridge('android:save-paired-device', device)
+          : targetUrl ? Promise.resolve() : invoke('android:save-paired-device', device),
       removePairedDevice: (host: string, port: number) =>
-        targetUrl ? Promise.resolve() : invoke('android:remove-paired-device', { host, port }),
+        isAndroidPaired() ? invokeLocalBridge('android:remove-paired-device', { host, port })
+          : targetUrl ? Promise.resolve() : invoke('android:remove-paired-device', { host, port }),
       scanQr: () => targetUrl ? Promise.resolve(null) : invoke('android:scan-qr'),
     },
     off: (channel: string, handler: Callback) => removeListener(channel, handler),
