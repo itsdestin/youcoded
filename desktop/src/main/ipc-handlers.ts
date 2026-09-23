@@ -13,7 +13,7 @@ import { execFile } from 'child_process';
 import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
 import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
 import { HookRelay } from './hook-relay';
-import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
+import { IPC, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { hasRealTitle } from '../shared/session-title';
 import { setPermissionOverrides, forgetSessionAttention } from './main';
@@ -134,6 +134,7 @@ import { SavedFolder, readFolders, writeFolders } from './saved-folders';
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
+import { readDefaults, writeDefaults, setPermissionOverridesSink } from './prefs-service';
 import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from './performance-config';
 import type { PerformanceConfigSnapshot, SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
@@ -1378,58 +1379,14 @@ export function registerIpcHandlers(
   });
 
   // --- Session defaults persistence ---
-  const DEFAULTS_INITIAL = {
-    skipPermissions: false,
-    model: 'sonnet',
-    projectFolder: '',
-    permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT },
-  };
-
-  // Load permission overrides into main.ts cache on startup
-  function syncPermissionOverrides(defaults: Record<string, any>) {
-    const overrides = defaults.permissionOverrides;
-    if (overrides && typeof overrides === 'object') {
-      setPermissionOverrides(overrides);
-    }
-  }
-
-  ipcMain.handle('defaults:get', async () => {
-    try {
-      const raw = fs.readFileSync(defaultsPrefPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      const result = { ...DEFAULTS_INITIAL, ...parsed,
-        permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT, ...parsed.permissionOverrides },
-      };
-      syncPermissionOverrides(result);
-      return result;
-    } catch {
-      return { ...DEFAULTS_INITIAL };
-    }
-  });
-
-  ipcMain.handle('defaults:set', async (_event, updates: Record<string, any>) => {
-    try {
-      let current: Record<string, any> = { ...DEFAULTS_INITIAL };
-      try {
-        const parsed = JSON.parse(fs.readFileSync(defaultsPrefPath, 'utf-8'));
-        current = { ...current, ...parsed,
-          permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT, ...parsed.permissionOverrides },
-        };
-      } catch {}
-      // Deep-merge permissionOverrides instead of replacing
-      const merged = { ...current, ...updates };
-      if (updates.permissionOverrides) {
-        merged.permissionOverrides = { ...current.permissionOverrides, ...updates.permissionOverrides };
-      }
-      fs.mkdirSync(path.dirname(defaultsPrefPath), { recursive: true });
-      fs.writeFileSync(defaultsPrefPath, JSON.stringify(merged, null, 2));
-      // Update in-memory cache so hook handler picks up changes immediately
-      syncPermissionOverrides(merged);
-      return merged;
-    } catch {
-      return null;
-    }
-  });
+  // Read/merge/write lives in prefs-service.ts, shared with remote-server.ts so a phone's
+  // read and save behave exactly like this window's. Every read and save also refreshes
+  // main.ts's in-memory override cache (the one the permission hook consults) through the
+  // sink registered here — for a save made from a phone too.
+  setPermissionOverridesSink(setPermissionOverrides);
+  ipcMain.handle('defaults:get', async () => readDefaults(defaultsPrefPath));
+  ipcMain.handle('defaults:set', async (_event, updates: Record<string, any>) =>
+    writeDefaults(updates && typeof updates === 'object' ? updates : {}, defaultsPrefPath));
 
   // --- Anonymous analytics opt-out (Phase 6) ---------------------------------
   // Getters and setters for the boolean gate analytics-service reads on launch.

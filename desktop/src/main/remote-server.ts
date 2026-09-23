@@ -23,6 +23,7 @@ import { getPagesService } from './pages/pages-service';
 // and ipc-handlers.ts use.
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
+import { readDefaults, writeDefaults, getFavorites, setFavorites, getIncognito, setIncognito } from './prefs-service';
 import { staticAssetPolicy } from './remote-static-policy';
 import fs from 'fs';
 import path from 'path';
@@ -1897,17 +1898,15 @@ export class RemoteServer {
         }
         break;
       }
+      // WHY attachments are passed: the shim sends them (host paths the phone's picker
+      // already uploaded here), and dropping them meant a phone's attached files never
+      // reached the assistant — only the text did. Same argument the desktop handler
+      // passes; anything that is not a string is ignored rather than handed to the host.
+      // M1: mirrors the desktop invoke — never throw (transport-parity rule).
       case 'native:send': {
-        // M1: mirrors the desktop invoke — never throw (transport-parity rule).
         const notLive = { status: 'failed', reason: 'not-live' } satisfies NativeSendResult;
-        // WHY attachments are passed: the shim sends them (host paths the phone's picker
-        // already uploaded here), and dropping them meant a phone's attached files never
-        // reached the assistant — only the text did. Same argument the desktop handler
-        // passes; anything that is not a string is ignored rather than handed to the host.
-        const attachments: string[] = Array.isArray(payload?.attachments)
-          ? payload.attachments.filter((a: unknown): a is string => typeof a === 'string')
-          : [];
-        const result = this.nativeRuntime ? this.nativeRuntime.nativeHost.send(payload.sessionId, payload.text, attachments) : notLive;
+        const files = (Array.isArray(payload?.attachments) ? payload.attachments : []).filter((a: unknown) => typeof a === 'string');
+        const result = this.nativeRuntime ? this.nativeRuntime.nativeHost.send(payload.sessionId, payload.text, files) : notLive;
         this.respond(client.ws, type, id, result);
         break;
       }
@@ -3057,29 +3056,15 @@ export class RemoteServer {
         }
         break;
       }
+      // Session defaults: the SAME functions the desktop handlers call (prefs-service.ts —
+      // WHY there: the copies that lived here had drifted, and a permission setting saved
+      // from a phone was not enforced until the desktop re-read the file).
       case 'defaults:get': {
-        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
-        const DEFAULTS_INITIAL = { skipPermissions: false, model: 'sonnet', projectFolder: '' };
-        try {
-          const raw = await fs.promises.readFile(defaultsPrefPath, 'utf8');
-          this.respond(client.ws, type, id, { ...DEFAULTS_INITIAL, ...JSON.parse(raw) });
-        } catch {
-          this.respond(client.ws, type, id, { ...DEFAULTS_INITIAL });
-        }
+        this.respond(client.ws, type, id, readDefaults());
         break;
       }
       case 'defaults:set': {
-        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
-        const DEFAULTS_INITIAL = { skipPermissions: false, model: 'sonnet', projectFolder: '' };
-        try {
-          let current = { ...DEFAULTS_INITIAL };
-          try { current = { ...current, ...JSON.parse(await fs.promises.readFile(defaultsPrefPath, 'utf8')) }; } catch {}
-          const merged = { ...current, ...payload };
-          await fs.promises.writeFile(defaultsPrefPath, JSON.stringify(merged, null, 2));
-          this.respond(client.ws, type, id, merged);
-        } catch {
-          this.respond(client.ws, type, id, null);
-        }
+        this.respond(client.ws, type, id, writeDefaults(payload && typeof payload === 'object' ? payload : {}));
         break;
       }
       case 'get-home-path': {
@@ -3161,42 +3146,22 @@ export class RemoteServer {
         catch { this.respond(client.ws, type, id, false); }
         break;
       }
+      // Game favorites + incognito: the same functions main.ts's handlers call
+      // (prefs-service.ts). favorites:get used to answer the whole file here but a list there.
       case 'favorites:get': {
-        const favPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        try {
-          const data = await fs.promises.readFile(favPath, 'utf8');
-          this.respond(client.ws, type, id, JSON.parse(data));
-        } catch {
-          this.respond(client.ws, type, id, { favorites: [] });
-        }
+        this.respond(client.ws, type, id, getFavorites());
         break;
       }
       case 'favorites:set': {
-        const favPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        let existing: Record<string, any> = {};
-        try { existing = JSON.parse(await fs.promises.readFile(favPath, 'utf8')); } catch {}
-        existing.favorites = payload.favorites ?? payload;
-        await fs.promises.writeFile(favPath, JSON.stringify(existing, null, 2));
-        this.respond(client.ws, type, id, { ok: true });
+        this.respond(client.ws, type, id, setFavorites(payload?.favorites ?? payload));
         break;
       }
       case 'game:getIncognito': {
-        const gPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        try {
-          const data = JSON.parse(await fs.promises.readFile(gPath, 'utf8'));
-          this.respond(client.ws, type, id, data.incognito ?? false);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        this.respond(client.ws, type, id, getIncognito());
         break;
       }
       case 'game:setIncognito': {
-        const gPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-        let existing: Record<string, any> = {};
-        try { existing = JSON.parse(await fs.promises.readFile(gPath, 'utf8')); } catch {}
-        existing.incognito = payload;
-        await fs.promises.writeFile(gPath, JSON.stringify(existing, null, 2));
-        this.respond(client.ws, type, id, { ok: true });
+        this.respond(client.ws, type, id, setIncognito(payload));
         break;
       }
       case 'transcript:read-meta': {

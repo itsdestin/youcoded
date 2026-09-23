@@ -289,6 +289,34 @@ describe('RemoteServer and the shell provider', () => {
     expect(send).toHaveBeenLastCalledWith('s1', 'no files', []);
   });
 
+  // A phone's settings read and write the same files the same way as the desktop's —
+  // the hand-copied remote versions had drifted (no override defaults, a replaced
+  // override block, and a saved permission the app did not enforce until a re-read).
+  it('reads and saves session defaults exactly as the desktop does, and the app enforces the save', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'remote-defaults-'));
+    const homedir = vi.spyOn(os, 'homedir').mockReturnValue(home);
+    try {
+      fs.mkdirSync(path.join(home, '.claude'));
+      fs.writeFileSync(path.join(home, '.claude', 'youcoded-defaults.json'), JSON.stringify({ permissionOverrides: { approveAll: true } }));
+      const { RemoteServer } = await import('../src/main/remote-server');
+      const { setPermissionOverridesSink } = await import('../src/main/prefs-service');
+      const enforced = vi.fn();
+      setPermissionOverridesSink(enforced);
+      const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+      const [got] = await drive(server, { type: 'defaults:get', id: 'd1' });
+      expect(got.payload.permissionOverrides).toMatchObject({ approveAll: true, protectedDirectories: false });
+      const [saved] = await drive(server, { type: 'defaults:set', id: 'd2', payload: { permissionOverrides: { protectedDirectories: true } } });
+      expect(saved.payload.permissionOverrides).toMatchObject({ approveAll: true, protectedDirectories: true });
+      expect(enforced).toHaveBeenLastCalledWith(expect.objectContaining({ approveAll: true, protectedDirectories: true }));
+      const [favs] = await drive(server, { type: 'favorites:get', id: 'd3' });
+      expect(favs.payload).toEqual([]);                  // a list, as on the desktop
+      setPermissionOverridesSink(() => {});
+    } finally {
+      homedir.mockRestore();
+      fs.rmSync(home, { recursive: true, force: true, maxRetries: 3 });
+    }
+  });
+
   it('refuses a run-in-terminal command carrying a carriage return', async () => {
     // The whole property: the app does not APPEND a carriage return, but a `\r`
     // already inside the string is the same keypress — measured on real bash,

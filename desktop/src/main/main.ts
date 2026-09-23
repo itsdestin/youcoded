@@ -28,6 +28,7 @@ import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
 import { registerIpcHandlers, buddyShowRefusal, cachedBuddyHelperStatus, refreshBuddyHelperStatus, setBuddyHelperLostHandler } from './ipc-handlers';
 import { RemoteServer } from './remote-server';
+import { getFavorites as getGameFavorites, setFavorites as setGameFavorites, getIncognito as getGameIncognito, setIncognito as setGameIncognito } from './prefs-service';
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
@@ -1849,32 +1850,12 @@ void app.whenReady().then(async () => {
   }
   perfMark('main:chore:remote-server:done');
 
-  const FAVORITES_PATH = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-
-  function readGamePrefs(): Record<string, any> {
-    try { return JSON.parse(fs.readFileSync(FAVORITES_PATH, 'utf8')); }
-    catch { return {}; }
-  }
-  function writeGamePrefs(data: Record<string, any>): boolean {
-    try { fs.writeFileSync(FAVORITES_PATH, JSON.stringify(data, null, 2)); return true; }
-    catch { return false; }
-  }
-
-  ipcMain.handle('favorites:get', async () => readGamePrefs().favorites ?? []);
-
-  ipcMain.handle('favorites:set', async (_event, favorites: string[]) => {
-    const data = readGamePrefs();
-    data.favorites = favorites;
-    return writeGamePrefs(data);
-  });
-
-  ipcMain.handle('game:getIncognito', async () => readGamePrefs().incognito ?? false);
-
-  ipcMain.handle('game:setIncognito', async (_event, incognito: boolean) => {
-    const data = readGamePrefs();
-    data.incognito = incognito;
-    return writeGamePrefs(data);
-  });
+  // Game favorites + presence incognito: prefs-service.ts owns the file, shared with
+  // remote-server.ts so a phone gets the same answers (its copy had drifted).
+  ipcMain.handle('favorites:get', async () => getGameFavorites());
+  ipcMain.handle('favorites:set', async (_event, favorites: string[]) => setGameFavorites(favorites));
+  ipcMain.handle('game:getIncognito', async () => getGameIncognito());
+  ipcMain.handle('game:setIncognito', async (_event, incognito: boolean) => setGameIncognito(incognito));
 
   // Expose the system home directory to the renderer (async to avoid blocking)
   ipcMain.handle('get-home-path', () => os.homedir());
@@ -1882,7 +1863,7 @@ void app.whenReady().then(async () => {
   // Remove the default menu bar (File, Edit, View, Window, Help)
   Menu.setApplicationMenu(null);
 
-  // Perf lab: the FAVORITES_PATH setup, the five game/favorites/home-path
+  // Perf lab: the five game/favorites/home-path
   // ipcMain.handle registrations above and Menu.setApplicationMenu(null) all sat
   // inside the theme-protocol chore's measured window (each chore is measured as
   // mark[n] − mark[n−1]). This mark separates them from registerThemeProtocol().
