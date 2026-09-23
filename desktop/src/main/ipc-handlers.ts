@@ -45,7 +45,7 @@ import { generateText } from 'ai';
 import type { ModelBinding } from '../shared/provider-types';
 import { createSessionNamer } from './session-namer';
 import { NamingSettings } from './naming-settings';
-import { reapplyStoredTitle, type ResumeTitleDeps } from './native-resume-title';
+import { reapplyStoredTitle, nameForTitleCheck, type ResumeTitleDeps } from './native-resume-title';
 import { ModelCatalog } from './providers/model-catalog';
 import { EngineManager } from './engine/engine-manager';
 // Faster-engine prerequisites (2026-09-05 §A5) — a pure-ish read of this
@@ -792,6 +792,14 @@ export function registerIpcHandlers(
   // updates when BOTH fire (sendForSession reaches the owning window's
   // App.tsx sessionRenamed handler; broadcastRename updates SessionInfo, the
   // remote clients, and the window directory).
+  // Opening-words names planted on a resumed, never-titled native session's pill
+  // (native-resume-title.ts), keyed by session id. They are there so the pill
+  // matches the Resume Browser row — NOT a title: both `hasTitle` checks below
+  // look through them via liveNameForTitleCheck, or the namer would read the
+  // raw first message as a real name and never generate one.
+  const provisionalResumeTitles = new Map<string, string>();
+  const liveNameForTitleCheck = (desktopId: string): string | undefined =>
+    nameForTitleCheck(sessionManager.getSession(desktopId)?.name, provisionalResumeTitles.get(desktopId));
   const resumeTitleDeps: ResumeTitleDeps = {
     // NOTE: getConversationStore() is null for the whole launch when the managed
     // roots are unavailable (conversations/service.ts sets storePhase
@@ -799,10 +807,12 @@ export function registerIpcHandlers(
     // the re-apply is a permanent no-op. That is survivable, not silent breakage
     // — the title feeder still generates a name at the next turn-complete.
     getStoredTitle: async (sessionId) => (await getConversationStore()?.get('native', sessionId))?.title,
-    onTitle: (sessionId, title) => {
+    onTitle: (sessionId, title, opts) => {
+      if (opts?.provisional) provisionalResumeTitles.set(sessionId, title);
       sendForSession(sessionId, IPC.SESSION_RENAMED, sessionId, title);
       broadcastRename(sessionId, title);
     },
+    getOpeningTitle: (sessionId) => nativeHost.openingTitle(sessionId),
   };
 
   // Session CRUD
@@ -2940,7 +2950,7 @@ export function registerIpcHandlers(
     const read = () => getNamingRecord(provider, storeId);
     const hasTitle = async () => {
       const rec = await getConversationStore()?.get(provider, storeId);
-      return hasRealTitle(rec?.title, sessionManager.getSession(desktopId)?.name);
+      return hasRealTitle(rec?.title, liveNameForTitleCheck(desktopId));
     };
     if (!await mayPublishAutomaticName({ read, hasTitle, name: title, expectedAutoAt, opening, enabled: eligible })) return false;
     let publicationStamp = expectedAutoAt;
@@ -3026,7 +3036,7 @@ export function registerIpcHandlers(
       const ident = namingIdentity(sessionId);
       if (!ident) return true; // unknown identity: assume named rather than overwrite
       const rec = await getConversationStore()?.get(ident.provider, ident.storeId);
-      return hasRealTitle(rec?.title, sessionManager.getSession(sessionId)?.name);
+      return hasRealTitle(rec?.title, liveNameForTitleCheck(sessionId));
     },
     publish: async (sessionId: string, name: string, expectedAutoAt: string, opening: boolean) => {
       const ident = namingIdentity(sessionId);

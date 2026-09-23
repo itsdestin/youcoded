@@ -4492,6 +4492,13 @@ export class NativeSessionHost extends EventEmitter {
     return true;
   }
 
+  /** The Resume Browser's name for a live session (header title, else its
+   *  opening words) — see SessionStore.openingTitle. */
+  async openingTitle(sessionId: string): Promise<string | undefined> {
+    const entry = this.live.get(sessionId);
+    return entry ? this.store.openingTitle(sessionId, entry.cwd) : undefined;
+  }
+
   getBinding(sessionId: string): ModelBinding | null {
     return this.live.get(sessionId)?.session.binding ?? null;
   }

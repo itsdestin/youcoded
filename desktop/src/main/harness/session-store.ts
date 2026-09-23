@@ -400,6 +400,16 @@ export class SessionStore {
     return sortNewestFirst(out);
   }
 
+  /** The name the Resume Browser shows for one session: its header title, else
+   *  its opening words. The resume-time title re-apply (native-resume-title.ts)
+   *  falls back to this so the header pill says what the row the user clicked
+   *  said, instead of 'Resuming…'. undefined when the file has neither. */
+  async openingTitle(sessionId: string, cwd: string): Promise<string | undefined> {
+    const slug = nativeStoreSlug(cwd);
+    const lines = await this.home.readSessionHeadAsync(slug, sessionId);
+    return this.listEntry({ slug, sessionId, mtimeMs: 0, sizeBytes: 0 }, lines, true)?.title;
+  }
+
   /** One Resume row from a session file's bounded head, or null when the file
    *  is not a listable native session. Shared by list() and listAsync(). */
   private listEntry(file: { slug: string; sessionId: string; mtimeMs: number; sizeBytes: number }, lines: unknown[], includeChildren: boolean): NativeSessionListEntry | null {
