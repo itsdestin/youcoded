@@ -514,6 +514,12 @@ export class SessionManager extends EventEmitter {
     return this.sessions.get(id)?.info;
   }
 
+  /** True when this id belongs to a live session — HookRelay's routability gate:
+   *  an ask for no live session gets a 60s hold instead of 2h (hook-relay.ts). */
+  hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
+  }
+
   destroyAll(): void {
     for (const [id] of this.sessions) {
       this.destroySession(id);

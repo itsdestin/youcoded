@@ -19,11 +19,26 @@ import java.util.concurrent.ConcurrentHashMap
  * structured decision back through it (blocking relay protocol).
  */
 class EventBridge(private val socketName: String) {
+    companion object {
+        /** Tier-1 app hold (2h) — the app owns the permission-ask clock, like
+         *  desktop hook-relay.ts APP_HOLD_MS. Must stay UNDER the relay asset's
+         *  2h30m and Bootstrap's 3h Claude Code hook timeout: if Claude Code's
+         *  timeout fires first it kills the hook with NO decision and
+         *  AskUserQuestion waits forever. Pinned by
+         *  desktop/tests/permission-timeout-margins.test.ts. */
+        const val PERMISSION_HOLD_MS = 7_200_000L
+    }
+
     private val _events = MutableSharedFlow<HookEvent>(extraBufferCapacity = 1000)
     val events: SharedFlow<HookEvent> = _events
 
     /** Sockets held open for blocking PermissionRequest responses. */
     private val pendingSockets = ConcurrentHashMap<String, LocalSocket>()
+
+    /** Tier-1 hold timers by requestId. Cancelled on every path that ends a
+     *  request (respond, closure monitor, stop) so a 2h coroutine never
+     *  outlives the socket it guards or emits a second expiry. */
+    private val holdJobs = ConcurrentHashMap<String, Job>()
 
     /** Maps mobile session IDs to Claude Code session IDs. */
     private val sessionIdMap = ConcurrentHashMap<String, String>()
@@ -119,6 +134,7 @@ class EventBridge(private val socketName: String) {
                     // hook-relay-blocking.js times out or Claude Code kills the hook.
                     // Desktop equivalent: hook-relay.ts socket.on('close') handler.
                     monitorSocketClosure(requestId, sessionId, client)
+                    armHold(requestId, sessionId)
                 } else {
                     pendingSockets.remove(requestId)
                     client.close()
@@ -142,8 +158,41 @@ class EventBridge(private val socketName: String) {
     }
 
     /**
+     * Tier-1 hold: after PERMISSION_HOLD_MS the app answers the ask itself with
+     * a labelled deny, so Claude Code moves on and the card can say what
+     * happened. No routability cap here (desktop has a 60s one): EventBridge is
+     * per-session, so an ask on this socket always belongs to a live session.
+     * Must emit explicitly — respond() removes the pending entry BEFORE closing,
+     * so the closure monitor stays silent for app-initiated endings.
+     */
+    private fun armHold(requestId: String, sessionId: String) {
+        monitorScope?.launch(Dispatchers.IO) {
+            delay(PERMISSION_HOLD_MS)
+            holdJobs.remove(requestId)
+            if (!pendingSockets.containsKey(requestId)) return@launch
+            val hours = PERMISSION_HOLD_MS / 3_600_000L
+            // Nested decision shape is load-bearing: the relay reads
+            // appDecision.decision. The message lands in the tool result the
+            // model reads. Same wording as desktop hook-relay.ts.
+            val deny = JSONObject().put("decision", JSONObject()
+                .put("behavior", "deny")
+                .put("message", "YouCoded auto-denied this request after $hours hour${if (hours == 1L) "" else "s"} with no response — ask again if it is still needed."))
+            // Only claim an auto-deny if it was written; a failed write has
+            // already emitted its own "delivery-failed" expiry (at most one per ask).
+            if (respond(requestId, deny)) {
+                _events.tryEmit(HookEvent.PermissionExpired(
+                    sessionId = sessionId,
+                    hookEventName = "PermissionExpired",
+                    requestId = requestId,
+                    reason = "app-timeout",
+                ))
+            }
+        }?.also { holdJobs[requestId] = it }
+    }
+
+    /**
      * Monitor a held PermissionRequest socket for remote closure.
-     * When hook-relay-blocking.js times out (120s) or Claude Code kills the hook
+     * When hook-relay-blocking.js times out (its 2h30m backstop) or Claude Code kills the hook
      * process, the socket closes. We detect this and emit PermissionExpired so
      * the React UI can clear the stale approval card.
      *
@@ -165,10 +214,15 @@ class EventBridge(private val socketName: String) {
             // responded to — emit PermissionExpired to clean up the React UI.
             if (pendingSockets.remove(requestId) != null) {
                 try { client.close() } catch (_: Exception) {}
+                // The far end went away first — not our hold firing. Cancel the
+                // hold so it cannot emit too; "hook-closed" tells React that
+                // Claude Code's own menu may still be up, so the card stays.
+                holdJobs.remove(requestId)?.cancel()
                 if (!_events.tryEmit(HookEvent.PermissionExpired(
                         sessionId = sessionId,
                         hookEventName = "PermissionExpired",
                         requestId = requestId,
+                        reason = "hook-closed",
                     ))) {
                     android.util.Log.e("EventBridge", "Event buffer full, dropped PermissionExpired")
                 }
@@ -176,18 +230,26 @@ class EventBridge(private val socketName: String) {
         }
     }
 
-    /** Send a decision back through a held PermissionRequest socket. */
-    fun respond(requestId: String, decision: JSONObject) {
+    /**
+     * Send a decision back through a held PermissionRequest socket.
+     * Returns true when the write succeeded; false when there was no such
+     * request or the write failed (the failure path has ALREADY emitted a
+     * "delivery-failed" expiry — callers must not emit another).
+     */
+    fun respond(requestId: String, decision: JSONObject): Boolean {
+        // A decision is going out (or being attempted): the hold is done.
+        holdJobs.remove(requestId)?.cancel()
         val socket = pendingSockets.remove(requestId)
         if (socket == null) {
             android.util.Log.e("EventBridge", "No pending socket for requestId=$requestId")
-            return
+            return false
         }
         try {
             val payload = decision.toString() + "\n"
             socket.outputStream.write(payload.toByteArray())
             socket.outputStream.flush()
             socket.close()
+            return true
         } catch (e: Exception) {
             // Response couldn't be delivered — permission effectively expired.
             // Emit PermissionExpired so React UI clears the stale approval card.
@@ -197,7 +259,9 @@ class EventBridge(private val socketName: String) {
                 sessionId = "",  // ManagedSession uses its own ID for broadcast
                 hookEventName = "PermissionExpired",
                 requestId = requestId,
+                reason = "delivery-failed",
             ))
+            return false
         }
     }
 
@@ -213,6 +277,9 @@ class EventBridge(private val socketName: String) {
     fun hasPendingPermission(): Boolean = pendingSockets.isNotEmpty()
 
     fun stop() {
+        // Cancel the hold timers first so none fires into a socket being closed.
+        holdJobs.values.forEach { it.cancel() }
+        holdJobs.clear()
         // Close all pending sockets
         for ((_, socket) in pendingSockets) {
             try { socket.close() } catch (_: Exception) {}
