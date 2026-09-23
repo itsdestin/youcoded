@@ -11,6 +11,8 @@ import type { RemoteBridge } from '../shared/bridge-types';
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT } from './remote-events';
+// The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
+import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
 import type { FirstRunState } from '../shared/first-run-types';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
@@ -402,50 +404,6 @@ function failRequestsCutOffByDrop(): void {
 
 export function onConnectionStateChange(cb: (state: RemoteConnectionState) => void) {
   stateChangeCallback = cb;
-}
-
-/** The Android app's own on-device bridge. Port comes from the `bridgePort` query param
- *  WebViewHost.kt injects so dev (9951) and release (9901) APKs can run side by side;
- *  9901 keeps the legacy wiring working if a host forgets to inject it. */
-function localBridgeUrl(): string {
-  const port = new URLSearchParams(location.search).get('bridgePort') || '9901';
-  return `ws://localhost:${port}`;
-}
-
-/**
- * Ask the Android app's own runtime one question while the app is paired to a computer.
- *
- * WHY: pairing points the app's ONE connection at the computer, but the list of saved
- * computers (address + password) lives in the phone's runtime, which the computer cannot
- * reach. The android.* pairing methods used to answer "done" without asking anyone, so
- * removing a computer while connected left its saved pairing — still trusted — on the phone.
- * A short second connection to the local bridge (same token the page loaded with) asks the
- * runtime itself and closes; the connection to the computer is never touched.
- */
-function invokeLocalBridge(type: string, payload?: unknown): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const token = new URLSearchParams(location.search).get('bridgeToken') ?? '';
-    const id = `local-${Date.now()}-${++messageId}`;
-    const socket = new WebSocket(localBridgeUrl());
-    let settled = false;
-    const finish = (settle: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      try { socket.close(); } catch { /* already closed */ }
-      settle();
-    };
-    const timer = setTimeout(() => finish(() => reject(new Error('The phone did not answer.'))), 10_000);
-    socket.onopen = () => socket.send(JSON.stringify({ type: 'auth', token }));
-    socket.onmessage = (event) => {
-      let msg: any;
-      try { msg = JSON.parse(event.data); } catch { return; }
-      if (msg.type === 'auth:ok') { socket.send(JSON.stringify({ type, id, payload })); return; }
-      if (msg.type === `${type}:response` && msg.id === id) finish(() => resolve(msg.payload));
-    };
-    socket.onerror = () => finish(() => reject(new Error('Could not reach the phone’s own runtime.')));
-    socket.onclose = () => finish(() => reject(new Error('Could not reach the phone’s own runtime.')));
-  });
 }
 
 /** A screen whose PRIMARY pointer is a finger (a phone or tablet). */

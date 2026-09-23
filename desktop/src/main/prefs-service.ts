@@ -17,7 +17,7 @@ import { PERMISSION_OVERRIDES_DEFAULT } from '../shared/types';
 
 // ─── Session defaults (~/.claude/youcoded-defaults.json) ─────────────────────
 
-export function defaultsFilePath(): string {
+function defaultsFilePath(): string {
   return path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
 }
 
@@ -86,7 +86,7 @@ export function writeDefaults(updates: Record<string, any>, file = defaultsFileP
 
 // ─── Game favorites + presence incognito (~/.claude/youcoded-favorites.json) ──
 
-export function gamePrefsFilePath(): string {
+function gamePrefsFilePath(): string {
   return path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
 }
 
