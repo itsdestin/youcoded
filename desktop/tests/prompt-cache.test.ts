@@ -16,6 +16,7 @@ import { NativeHome } from '../src/main/native-home';
 import { SecretsStore } from '../src/main/providers/secrets-store';
 import { ProviderRegistry } from '../src/main/providers/provider-registry';
 import { withChatGptRequest } from '../src/main/providers/chatgpt-request-diagnostics';
+import { ENV_OPEN } from '../src/main/harness/prompt-assembly';
 
 const ANTHROPIC_REPLY = {
   id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-5',
@@ -42,13 +43,13 @@ describe('prompt-cache request shaping', () => {
 
   /** One real generateText call against a stubbed network; returns the body the
    *  SDK actually put on the wire. */
-  async function sent(model: any, reply: unknown, run: (fn: () => Promise<unknown>) => Promise<unknown> = (fn) => fn()): Promise<any> {
+  async function sent(model: any, reply: unknown, run: (fn: () => Promise<unknown>) => Promise<unknown> = (fn) => fn(), system = 'You are the assistant.'): Promise<any> {
     let body: any;
     vi.stubGlobal('fetch', async (_url: any, init: any) => {
       body = JSON.parse(init.body);
       return new Response(JSON.stringify(reply), { status: 200, headers: { 'content-type': 'application/json' } });
     });
-    await run(() => generateText({ model, system: 'You are the assistant.', prompt: 'hi' }));
+    await run(() => generateText({ model, system, prompt: 'hi' }));
     return body;
   }
   const anthropic = (opts?: { cacheKey?: string }) => reg.languageModel({ providerId: anthropicId, modelId: 'claude-opus-5' }, opts);
@@ -68,6 +69,17 @@ describe('prompt-cache request shaping', () => {
       const body = await sent(await anthropic({ cacheKey: 's1' }), ANTHROPIC_REPLY, asSummary);
       expect(body.system[0].cache_control).toEqual({ type: 'ephemeral', ttl: '1h' });
       expect(body.cache_control).toBeUndefined();
+    });
+    // The <env> snapshot (date, git state) changes between sessions and sits LAST;
+    // the text above it is marked as its own block so the next conversation in the
+    // same folder can read it from cache even when its <env> differs.
+    it('splits the system prompt before <env> and marks both pieces, so other sessions reuse the stable part', async () => {
+      const env = `${ENV_OPEN}\nDate: Wed Sep 23 2026\n</env>`;
+      const body = await sent(await anthropic({ cacheKey: 's1' }), ANTHROPIC_REPLY, undefined, `STABLE PART\n\n${env}`);
+      expect(body.system).toEqual([
+        { type: 'text', text: 'STABLE PART', cache_control: { type: 'ephemeral', ttl: '1h' } },
+        { type: 'text', text: env, cache_control: { type: 'ephemeral', ttl: '1h' } },
+      ]);
     });
     it('a request without a cacheKey (session naming) carries no cache_control at all', async () => {
       const body = await sent(await anthropic(), ANTHROPIC_REPLY);
