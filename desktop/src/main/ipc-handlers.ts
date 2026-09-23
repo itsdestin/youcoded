@@ -84,7 +84,7 @@ import { exaBackend } from './harness/search/backends/exa';
 import { ddgBackend } from './harness/search/backends/ddg';
 import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
-import { resolveMappingAction } from './session-id-mapping';
+import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
 import { listPastSessions, loadHistory } from './session-browser';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
 import { readTranscriptMeta } from './transcript-utils';
@@ -809,6 +809,16 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.SESSION_CREATE, async (event, rawOpts) => {
     // Resolve "No folder" to the app-owned folder before either runtime sees the cwd.
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
+    // WHY: a conversation that is already open must not be resumed a second
+    // time — that made a second tab with the same name and two writers on one
+    // transcript. Answer with the open session instead; the renderer switches
+    // to it (handleResumeSession reads `alreadyOpen`). Checked before anything
+    // is spawned or snapshotted, so nothing about the open session changes.
+    if (opts?.resumeSessionId) {
+      const openId = findLiveSessionForConversation(opts.resumeSessionId, sessionManager.listSessions(), sessionIdMap);
+      const openInfo = openId ? sessionManager.listSessions().find((s) => s.id === openId) : undefined;
+      if (openInfo) return { ...openInfo, alreadyOpen: true };
+    }
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;

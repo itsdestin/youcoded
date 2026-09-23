@@ -2937,6 +2937,22 @@ function AppInner() {
     });
     if (!proceed) return false; // "Never mind" — abort the resume
 
+    // WHY: main answers a resume of a conversation that is already open with
+    // that open session (`alreadyOpen`) rather than spawning a second tab of
+    // the same name. Switch to it here; if another window owns it, say so
+    // instead of pulling it across. Counts as "handled" so the caller's
+    // browser/modal closes.
+    const landOnOpenSession = (created: any): boolean => {
+      if (!created?.alreadyOpen) return false;
+      if (sessionsRef.current.some((s) => s.id === created.id)) {
+        setSessionId(created.id);
+        (window as any).claude?.session?.switch?.(created.id);
+      } else {
+        setToast({ message: 'This conversation is already open in another window.', durationMs: 6000 });
+      }
+      return true;
+    };
+
     // Native-harness resume. Task 6 / Destin's ruling: NEVER auto-launch a
     // binding — the resume-time model selector is ALWAYS the source of the
     // binding this resume launches on, on any device. Without one in hand yet,
@@ -2958,6 +2974,7 @@ function AppInner() {
         resumeSessionId: claudeSessionId,
         binding: nativeBinding, // the selector's pick — becomes the live binding (native-session-host.ts resume() override)
       }));
+      if (landOnOpenSession(nativeSession)) return true;
       if (!nativeSession?.id) {
         // The create never acked (Task 6 review — was a silent return). Main also
         // emits a session-error for the split not-synced / folder-missing / data-
@@ -2995,6 +3012,7 @@ function AppInner() {
       resumeSessionId: claudeSessionId,
       model: m,
     }));
+    if (landOnOpenSession(newSession)) return true;
     if (!newSession?.id) {
       // Honest failure instead of a silent return (Task 6 review — the CC ack-gap).
       setToast({ message: "Couldn't resume this conversation.", durationMs: 6000 });

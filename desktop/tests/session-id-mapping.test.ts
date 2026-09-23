@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveMappingAction } from '../src/main/session-id-mapping';
+import { resolveMappingAction, findLiveSessionForConversation } from '../src/main/session-id-mapping';
 
 describe('resolveMappingAction', () => {
   it('adopts the first mapping from any hook event', () => {
@@ -63,5 +63,30 @@ describe('resolveMappingAction', () => {
   // the chat view permanently empty for every resumed conversation.
   it('adopts a first sighting even from a startup source', () => {
     expect(resolveMappingAction(undefined, 'claude-1', 'SessionStart', 'startup')).toBe('adopt');
+  });
+});
+
+describe('findLiveSessionForConversation', () => {
+  const live = [{ id: 'desk-1', status: 'active' }, { id: 'native-9', status: 'idle' }];
+
+  it('finds a live Claude Code session through the id map', () => {
+    expect(findLiveSessionForConversation('claude-A', live, new Map([['desk-1', 'claude-A']]))).toBe('desk-1');
+  });
+
+  it('finds a live native session by its own id', () => {
+    expect(findLiveSessionForConversation('native-9', live, new Map())).toBe('native-9');
+  });
+
+  it('ignores a map entry whose desktop session has exited', () => {
+    expect(findLiveSessionForConversation('claude-B', live, new Map([['desk-gone', 'claude-B']]))).toBeUndefined();
+  });
+
+  it('ignores a destroyed session', () => {
+    const withDead = [{ id: 'desk-1', status: 'destroyed' }];
+    expect(findLiveSessionForConversation('claude-A', withDead, new Map([['desk-1', 'claude-A']]))).toBeUndefined();
+  });
+
+  it('answers nothing for a conversation no session holds', () => {
+    expect(findLiveSessionForConversation('claude-Z', live, new Map([['desk-1', 'claude-A']]))).toBeUndefined();
   });
 });

@@ -241,6 +241,18 @@ describe('RemoteServer and the shell provider', () => {
     expect(shellSessionManager.createSession).toHaveBeenCalledTimes(1);
   });
 
+  it('answers a resume of a conversation already open with the open session, not a second one', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    shellSessionManager.listSessions = vi.fn(() => [{ id: 'desk-1', name: 'My chat', cwd: '/tmp', status: 'active' }]);
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    server.setSessionMetaWiring({ resolve: (sid: string) => (sid === 'desk-1' ? 'claude-A' : sid), canWrite: () => true });
+    const sent = await drive(server, {
+      type: 'session:create', id: 'c4', payload: { name: 'x', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'claude-A' },
+    });
+    expect(shellSessionManager.createSession).not.toHaveBeenCalled();
+    expect(sent[0].payload).toMatchObject({ id: 'desk-1', alreadyOpen: true });
+  });
+
   // 2026-09-16 (remote-access.md): the phone's create used to reach the session
   // manager with the "No folder" sentinel untouched, so such a session opened in
   // the home folder. main.ts hands the same rewrite the desktop's handler uses.

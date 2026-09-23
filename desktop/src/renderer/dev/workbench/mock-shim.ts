@@ -895,6 +895,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // phone beat takes a session over and has to land in its conversation.
       const resumedRow = (opts as any).resumeSessionId
         ? store.getState().past.find((p) => p.sessionId === (opts as any).resumeSessionId) : undefined;
+      // Mirrors main's session:create: a conversation already open in a tab
+      // answers with that tab (`alreadyOpen`) instead of a second copy.
+      if (resumedRow) {
+        const openId = [...resumedFrom].find(([sid, row]) => row === resumedRow.sessionId
+          && store.getState().sessions.some((x) => x.id === sid))?.[0];
+        const open = openId ? store.getState().sessions.find((x) => x.id === openId) : undefined;
+        if (open) return { ...open, alreadyOpen: true } as any;
+      }
       if (resumedRow) resumedFrom.set(id, resumedRow.sessionId);
       const created = {
         id,

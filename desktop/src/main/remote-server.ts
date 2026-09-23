@@ -83,6 +83,7 @@ import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import { getField, setField } from './claude-settings';
 import { resolveStaticFile } from './remote-static-path';
+import { findLiveSessionForConversation } from './session-id-mapping';
 
 // 4M UTF-16 units per session — enough for full conversation replay. Named for what it
 // counts (batch 2): JavaScript string length, not bytes.
@@ -1765,6 +1766,19 @@ export class RemoteServer {
         if (payload?.provider === 'shell') {
           this.respond(client.ws, type, id, { ok: false, error: 'A terminal session can only be opened from the app itself.' });
           break;
+        }
+        // Same guard as ipc-handlers' SESSION_CREATE: resuming a conversation
+        // that is already open answers with the open session (`alreadyOpen`)
+        // instead of a second tab on the same transcript. sessionMetaWiring's
+        // resolve IS the desktop→conversation id map (see session:browse below).
+        if (payload?.resumeSessionId) {
+          const resolve = this.sessionMetaWiring?.resolve ?? ((sid: string) => sid);
+          const live = this.sessionManager.listSessions();
+          const openId = findLiveSessionForConversation(
+            payload.resumeSessionId, live, new Map(live.map((s) => [s.id, resolve(s.id)])),
+          );
+          const openInfo = openId ? live.find((s) => s.id === openId) : undefined;
+          if (openInfo) { this.respond(client.ws, type, id, { ...openInfo, alreadyOpen: true }); break; }
         }
         const info = this.sessionManager.createSession(this.prepareCreate(payload));
         this.respond(client.ws, type, id, info);
