@@ -38,6 +38,7 @@ import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker'
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
+import { useSessionDefaults } from './hooks/useSessionDefaults';
 import { showFirstRunWelcome } from './first-run-screen';
 // Central slash-command router — also used by the drawer so drawer-initiated
 // slash commands behave the same as typed ones (otherwise drawer bypasses InputBar's intercept).
@@ -610,18 +611,6 @@ function AppInner() {
   // Zoom state + handlers extracted to useZoomControls (tranche 1).
   const { zoomPercent, zoomVisible, handleZoomIn, handleZoomOut, handleZoomReset } = useZoomControls();
 
-  // `startModel` is the saved default across EVERY provider (Assistant settings,
-  // Q-3a). The inferred shape had only the Claude alias, which is exactly why the
-  // setting was written, read back, and then ignored by every form that starts a
-  // conversation (contract R5).
-  const [sessionDefaults, setSessionDefaults] = useState<{
-    skipPermissions: boolean;
-    model: string;
-    projectFolder: string;
-    startModel?: ModelChoice;
-    startModelLabel?: { provider: string; model: string };
-  }>({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
-
   // Check first-run state with a 3-second safety timeout — never hang the app
   useEffect(() => {
     let resolved = false;
@@ -640,16 +629,10 @@ function AppInner() {
     return () => clearTimeout(timeout);
   }, []);
 
-  // Load session defaults on mount and whenever settings panel closes, and after a remote
-  // reconnect: one read lost during a drop left the new-session forms without the default
-  // project and model until Settings was opened and closed (2026-09-11 phone pass sweep).
-  const loadSessionDefaults = useCallback(() => {
-    (window as any).claude?.defaults?.get?.().then((defs: any) => {
-      if (defs) setSessionDefaults(defs);
-    }).catch(() => {});
-  }, []);
-  useEffect(() => { loadSessionDefaults(); }, [settingsOpen, loadSessionDefaults]);
-  useOnRemoteReconnect(loadSessionDefaults);
+  // The saved new-session defaults. Re-read around Settings, after a remote reconnect, and
+  // when this window regains focus — so a default saved in ANOTHER window shows here too
+  // (see useSessionDefaults for why).
+  const sessionDefaults = useSessionDefaults(settingsOpen);
 
   usePromptDetector();
   // Recovers chat→PTY submits that get lost on Windows ConPTY when Claude is
