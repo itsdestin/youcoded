@@ -222,17 +222,17 @@ export interface PageCursor {
 /** One page of conversation history, oldest -> newest within the page. */
 export interface TranscriptPageResult {
   events: TranscriptEvent[];
-  /** The handle for the NEXT (older) page; null when hasMore is false. */
-  cursor: PageCursor | null;
+  /** Handle for the next older page. */ cursor: PageCursor | null;
   hasMore: boolean;
+  /** Native page is idle. */ reconcileInterrupted?: boolean;
+  /** CC tool calls before the pre-spawn cutoff; new calls on this page stay live. */ reconcileInterruptedToolIds?: string[];
   /**
    * "I could not locate this session's transcript", as distinct from "you have
    * reached the beginning of the conversation" — which is what an empty page
    * with hasMore:false otherwise means, and which the renderer treats as final.
    *
    * These two were the same answer until 2026-09-07, so a transcript that was
-   * merely not locatable YET (a just-resumed CC session before its hook lands,
-   * a session whose process has exited, the buddy floater) permanently ended
+   * not locatable YET (resume before CC's hook, process exit, buddy) permanently ended
    * the conversation's scroll-back in that window. A caller must RETRY on this,
    * never record it. Absent means the answer is real.
    */

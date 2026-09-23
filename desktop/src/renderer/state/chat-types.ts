@@ -877,6 +877,10 @@ export type ChatAction =
       sessionId: string;
       /** Parsed events for this page, oldest -> newest. */
       events: TranscriptEvent[];
+      /** Main confirmed that unfinished work on this history page is no longer live. */
+      reconcileInterrupted?: boolean;
+      /** Tool ids known to predate a resumed CC process (page may also have new work). */
+      reconcileInterruptedToolIds?: string[];
       /** Handle for the page OLDER than this one; null when hasMore is false. */
       cursor: PageCursor | null;
       hasMore: boolean;

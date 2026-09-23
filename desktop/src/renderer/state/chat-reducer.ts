@@ -2777,19 +2777,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // counters that only ever increase), so a prepended page can never collide
       // with what is already on screen even though it is OLDER.
       let scratch: ChatState = new Map();
-      // Seed the scratch state's seenUuids from the LIVE session so the
-      // per-event handlers' existing uuid dedup fires during the replay.
-      // Without this a message that is already on screen — one the user sent a
-      // moment ago, now also present in the transcript the page was read from —
-      // is rebuilt on the empty scratch and PREPENDED as a second bubble.
-      // (Caught by the perf rig's native-chat screenshot: two identical prompts.)
+      // Seed from LIVE seenUuids so overlapping page and live events dedup;
+      // otherwise the scratch replay prepends a second copy of a prompt already on screen.
       scratch.set(action.sessionId, { ...createSessionChatState(), seenUuids: new Set(session.seenUuids) });
       for (const ev of action.events) {
         const pageAction = pageEventToAction(ev);
         if (pageAction) scratch = chatReducer(scratch, pageAction);
       }
-      const pageSess = scratch.get(action.sessionId)!;
-
+      // Reap on scratch BEFORE merging: live tool ids are not copied from history and must survive.
+      const replayed = scratch.get(action.sessionId)!;
+      const interrupted = action.reconcileInterrupted ? replayed.activeTurnToolIds : new Set(action.reconcileInterruptedToolIds ?? []);
+      const pageSess = interrupted.size
+        ? { ...replayed, ...endTurn({ ...replayed, activeTurnToolIds: interrupted }, 'Session was interrupted while this was running') }
+        : replayed;
       next.set(action.sessionId, {
         ...session,
         timeline: [...pageSess.timeline, ...session.timeline],

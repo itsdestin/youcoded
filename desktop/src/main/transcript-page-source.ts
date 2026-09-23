@@ -10,6 +10,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { SAFE_ID_RE } from './session-browser';
+import { ccProjectSlug } from './slug-encoding';
 
 /**
  * Where a session's transcript lives, for paged history, when the transcript
@@ -47,6 +48,27 @@ export interface RememberedPageSource {
  *  remembered file, so its first page must read all the way to EOF. */
 export interface ResolvedPageSource extends RememberedPageSource {
   startOffset: number;
+}
+
+/** A native page can reap ALL unfinished cards only when the host confirms
+ * idleness; a transferred window may include new live events from before dock. */
+export function shouldReconcileNativePage(opts: {
+  nativeIdle: boolean; inherited: boolean; olderPage: boolean;
+}): boolean {
+  return !opts.inherited && !opts.olderPage && opts.nativeIdle;
+}
+
+/** Capture the file boundary BEFORE spawning `claude --resume`. A later page
+ * may read to EOF (before its hook installs the watcher), but must never label
+ * newly appended tool calls as interrupted history. A mismatched slug/path
+ * cannot prove identity, so the page handler falls back to its normal source. */
+export function snapshotResumeBoundary(cwd: string, claudeSessionId: string): { jsonlPath: string; offset: number } | null {
+  if (!SAFE_ID_RE.test(claudeSessionId)) return null;
+  const jsonlPath = path.join(os.homedir(), '.claude', 'projects', ccProjectSlug(cwd), `${claudeSessionId}.jsonl`);
+  try {
+    const offset = fs.statSync(jsonlPath).size;
+    return offset > 0 ? { jsonlPath, offset } : null;
+  } catch { return null; }
 }
 
 export class TranscriptPageSources {
