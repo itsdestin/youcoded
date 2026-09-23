@@ -32,6 +32,7 @@ import { assistantName } from '../utils/assistant-name';
 import { ContentFindBar } from './ContentFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
+import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { StatusStrip, Button } from './ui';
@@ -1010,6 +1011,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // WHY: every open session's ChatView stays mounted, and waiting cards listen
     // for keys on `window` — only the chat on screen may answer them.
     <CardKeysLiveContext.Provider value={visible}>
+    {/* WHY: clocks inside this chat (thinking line, running-command seconds)
+        stand still while it is hidden — see on-screen-context.ts. */}
+    <OnScreenContext.Provider value={visible}>
     <div
       // Fix: previously toggled display:none/flex, which forced a full reflow of
       // both views on every chat↔terminal toggle (the #1 cause of visual jank
@@ -1519,6 +1523,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         sessionId={sessionId}
       />
     </div>
+    </OnScreenContext.Provider>
     </CardKeysLiveContext.Provider>
   );
 }
