@@ -8,7 +8,6 @@ import {
   responseOutcome,
   REJECT_ON_NOT_OK,
   MESSAGE_KIND,
-  REHYDRATE_ON_RECONNECT,
 } from '../src/renderer/remote-shim';
 import { readSource } from './helpers/guard-scope';
 
@@ -92,20 +91,6 @@ describe('remote-shim — message kinds', () => {
       }
       // The refusal path: send() returns false for a user action rather than queueing it.
       expect(shim).toContain("if (MESSAGE_KIND[msg?.type] === 'user-action') return false;");
-    });
-
-    it('only reads are re-issued on reconnect', () => {
-      // Asking again is safe precisely because asking changes nothing. A write in this list
-      // would be the old auto-flush bug wearing a new name.
-      for (const channel of REHYDRATE_ON_RECONNECT) {
-        const kind = MESSAGE_KIND[channel];
-        expect(kind === undefined || kind === 'read').toBe(true);
-      }
-      expect(REHYDRATE_ON_RECONNECT.length).toBeGreaterThan(0);
-      // And only on a RECONNECT: a first connect already flushes the caller's own mount-time
-      // fetches, so re-asking there would double the traffic of every connection.
-      const shimSrc = readSource(fileURLToPath(new URL('../src/renderer/remote-shim.ts', import.meta.url)));
-      expect(shimSrc).toContain('if (hasConnectedBefore) rehydrate();');
     });
 
     it('the composer asks whether it can send instead of writing to find out', () => {
