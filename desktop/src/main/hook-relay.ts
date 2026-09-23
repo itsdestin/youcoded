@@ -61,7 +61,10 @@ const APP_HOLD_MS = 7_200_000;
 const UNROUTABLE_HOLD_MS = 60_000;
 
 /** Why a held ask ended without a user decision (rides as payload._reason). */
-export type PermissionExpiryReason = 'app-timeout' | 'unroutable' | 'hook-closed';
+// WHY not exported: nothing outside this file imports it, and an unused exported
+// type trips the knip ratchet once the remote branch's lowered baseline (188)
+// lands beside it. It now types the reason armHold emits instead.
+type PermissionExpiryReason = 'app-timeout' | 'unroutable' | 'hook-closed';
 
 export class HookRelay extends EventEmitter {
   private server: net.Server | null = null;
@@ -124,7 +127,8 @@ export class HookRelay extends EventEmitter {
       // endings — they must emit their own reason. Only claim an auto-deny if
       // one was actually written (docs/error-message-standards.md).
       if (delivered) {
-        this.emit('permission-expired', sessionId, requestId, routable ? 'app-timeout' : 'unroutable');
+        const reason: PermissionExpiryReason = routable ? 'app-timeout' : 'unroutable';
+        this.emit('permission-expired', sessionId, requestId, reason);
       }
     }, holdMs));
   }
