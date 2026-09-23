@@ -11,6 +11,37 @@ const DEFAULT_PIPE_NAME = process.platform === 'win32'
   ? '\\\\.\\pipe\\claude-desktop-hooks'
   : path.join(os.tmpdir(), 'claude-desktop-hooks.sock');
 
+/**
+ * Which Claude Code process owns a session's hooks.
+ *
+ * WHY (2026-09-23, roadmap claude-code-integration, security): the session id
+ * the app hands Claude Code (CLAUDE_DESKTOP_SESSION_ID) is inherited by every
+ * process that session starts, so a `claude` launched from inside it — the
+ * Bash tool, a script, a background job — reported its hooks as OURS. That
+ * once repointed a live chat view at a foreign transcript, and a foreign
+ * permission request would show up as a card the user could approve.
+ *
+ * Claude Code writes its own process id into every hook's environment
+ * (CLAUDE_PID, checked on 2.1.281), and the relay forwards it. A desktop
+ * session runs exactly ONE Claude Code process for its whole life (no respawn
+ * under the same id), and that process fires SessionStart before it can run
+ * anything that could start another — so the first pid heard for a session is
+ * the owner, and any other pid is a nested process. /clear, /resume and
+ * subagents all stay inside the owner process. No pid (older Claude Code, an
+ * old relay script) fails OPEN, exactly as before.
+ */
+export class HookOwnerGate {
+  private owners = new Map<string, string>();
+
+  /** True when this event may be attributed to `sessionId`. */
+  accept(sessionId: string, claudePid: unknown): boolean {
+    if (!sessionId || typeof claudePid !== 'string' || !claudePid) return true;
+    const owner = this.owners.get(sessionId);
+    if (owner === undefined) { this.owners.set(sessionId, claudePid); return true; }
+    return owner === claudePid;
+  }
+}
+
 export class HookRelay extends EventEmitter {
   private server: net.Server | null = null;
   private running = false;
@@ -20,6 +51,8 @@ export class HookRelay extends EventEmitter {
   // a live permission/AskUserQuestion menu and must not be typed into.
   private pendingSockets = new Map<string, { socket: net.Socket; sessionId: string }>();
   private pipeName: string;
+  private owners = new HookOwnerGate();
+  private warnedForeign = new Set<string>();
 
   constructor(pipeName?: string) {
     super();
@@ -54,6 +87,23 @@ export class HookRelay extends EventEmitter {
         try {
           const parsed = JSON.parse(payload);
           const event = this.parseHookPayload(payload);
+
+          // A hook from a `claude` nested inside one of our sessions — see
+          // HookOwnerGate. Dropped before anything can map, watch or show it.
+          // Ending the socket with no reply lets a blocking relay exit cleanly,
+          // so the nested process falls back to its own permission prompt.
+          if (parsed._desktop_session_id && !this.owners.accept(parsed._desktop_session_id, parsed._claude_pid)) {
+            // Once per nested process, not per hook — a nested session fires many.
+            const key = `${parsed._desktop_session_id}:${parsed._claude_pid}`;
+            if (!this.warnedForeign.has(key)) {
+              this.warnedForeign.add(key);
+              log('WARN', 'HookRelay', 'ignoring hooks from a nested claude process', {
+                sessionId: parsed._desktop_session_id, event: parsed.hook_event_name, pid: parsed._claude_pid,
+              });
+            }
+            socket.end();
+            return;
+          }
 
           if (parsed.hook_event_name === 'PermissionRequest') {
             // Hold the socket open — relay-blocking.js is waiting for a response

@@ -112,3 +112,67 @@ describe('HookRelay', () => {
     });
   });
 });
+
+// Roadmap (claude-code-integration, security, 2026-07-26): the session id the
+// app hands Claude Code leaks into every process that session starts, so a
+// `claude` run from inside it reported its hooks under the parent's id. The
+// relay now forwards Claude Code's own CLAUDE_PID; only the first process
+// heard from owns the session.
+describe('HookOwnerGate', () => {
+  it('the first process to report owns the session; another pid is refused', async () => {
+    const { HookOwnerGate } = await import('../src/main/hook-relay');
+    const g = new HookOwnerGate();
+    expect(g.accept('desk-1', '1000')).toBe(true);
+    expect(g.accept('desk-1', '1000')).toBe(true);
+    expect(g.accept('desk-1', '2000')).toBe(false);
+    // Another session has its own owner.
+    expect(g.accept('desk-2', '2000')).toBe(true);
+  });
+  it('fails open with no pid (older Claude Code or relay)', async () => {
+    const { HookOwnerGate } = await import('../src/main/hook-relay');
+    const g = new HookOwnerGate();
+    expect(g.accept('desk-1', '1000')).toBe(true);
+    expect(g.accept('desk-1', undefined)).toBe(true);
+    expect(g.accept('desk-1', '')).toBe(true);
+  });
+});
+
+describe('HookRelay — hooks from a nested claude', () => {
+  let relay: HookRelay;
+  beforeEach(() => { relay = new HookRelay(`\\\\.\\pipe\\claude-desktop-hooks-test-${randomUUID()}`); });
+  afterEach(() => { relay.stop(); });
+
+  async function send(payload: object, keepOpen = false): Promise<{ closedWithoutReply: Promise<boolean> }> {
+    const net = await import('net');
+    const client = net.createConnection((relay as any).pipeName);
+    await new Promise<void>((resolve, reject) => { client.once('connect', () => resolve()); client.once('error', reject); });
+    let reply = '';
+    client.on('data', (d) => { reply += d; });
+    const closedWithoutReply = new Promise<boolean>((resolve) => client.on('close', () => resolve(reply === '')));
+    client.write(JSON.stringify(payload) + '\n');
+    if (!keepOpen) client.end();
+    return { closedWithoutReply };
+  }
+
+  it('drops a foreign process\'s events and ends its permission request with no decision', async () => {
+    await relay.start();
+    const events: any[] = [];
+    relay.on('hook-event', (e) => events.push(e));
+    // Our own claude (pid 1000) announces itself first.
+    await send({ hook_event_name: 'SessionStart', session_id: 'ours', source: 'startup', _desktop_session_id: 'desk-1', _claude_pid: '1000' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(events).toHaveLength(1);
+    // A nested `claude` (pid 2000) inherits desk-1 and asks for permission.
+    const { closedWithoutReply } = await send({
+      hook_event_name: 'PermissionRequest', session_id: 'nested', tool_name: 'Bash',
+      _desktop_session_id: 'desk-1', _claude_pid: '2000',
+    }, true);
+    expect(await closedWithoutReply).toBe(true);
+    expect(events).toHaveLength(1);
+    expect(relay.hasPendingPermission('desk-1')).toBe(false);
+    // Our own process is still heard.
+    await send({ hook_event_name: 'PostToolUse', session_id: 'ours', _desktop_session_id: 'desk-1', _claude_pid: '1000' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(events.map((e) => e.payload.session_id)).toEqual(['ours', 'ours']);
+  });
+});
