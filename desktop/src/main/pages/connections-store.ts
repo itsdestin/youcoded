@@ -48,6 +48,9 @@ export interface PageKeyRecord {
   in: 'header' | 'query';
   /** The header name or the query-parameter name. */
   param: string;
+  /** The word before the key in a header. Recorded at approval, like the
+   *  placement, because what was approved is what is sent. */
+  scheme: 'bearer' | 'token' | 'none';
 }
 
 interface ConnectionsFile {
@@ -130,13 +133,13 @@ export class PageConnectionsStore {
   /** Encrypt and remember one key. Throws with a showable message when the
    *  computer has no keychain — SecretsStore refuses a plaintext fallback by
    *  design, and the caller must then record NO approval (finding 11). */
-  async saveKey(service: string, address: string, plaintext: string, placement: { in: 'header' | 'query'; param: string }): Promise<PageKeyRecord> {
+  async saveKey(service: string, address: string, plaintext: string, placement: { in: 'header' | 'query'; param: string; scheme: 'bearer' | 'token' | 'none' }): Promise<PageKeyRecord> {
     const id = savedKeyId(service, address);
     // Reuse the existing ref when there is one, so replacing a key rotates it
     // in place and every page pointing at it keeps working.
     const existing = (await this.read()).keys[id];
     const secretRef = await this.secrets.set(plaintext, existing?.secretRef);
-    const record: PageKeyRecord = { secretRef, in: placement.in, param: placement.param };
+    const record: PageKeyRecord = { secretRef, in: placement.in, param: placement.param, scheme: placement.in === 'query' ? 'none' : placement.scheme };
     await this.mutate((cur) => { cur.keys[id] = record; return true; });
     return record;
   }
@@ -278,7 +281,11 @@ function cleanKeys(raw: unknown): Record<string, PageKeyRecord> {
   for (const [id, entry] of Object.entries(raw as Record<string, unknown>)) {
     const e = entry as Partial<PageKeyRecord> | null;
     if (!e || typeof e.secretRef !== 'string' || !e.secretRef || typeof e.param !== 'string' || !e.param) continue;
-    out[id] = { secretRef: e.secretRef, in: e.in === 'query' ? 'query' : 'header', param: e.param };
+    // A record written before schemes existed had none; only the query case
+    // was ever valid bare, so an older header record reads as 'none' (what it
+    // actually sent) rather than silently changing to Bearer.
+    const scheme = e.scheme === 'bearer' || e.scheme === 'token' ? e.scheme : 'none';
+    out[id] = { secretRef: e.secretRef, in: e.in === 'query' ? 'query' : 'header', param: e.param, scheme: e.in === 'query' ? 'none' : scheme };
   }
   return out;
 }

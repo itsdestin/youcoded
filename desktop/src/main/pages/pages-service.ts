@@ -9,7 +9,7 @@
 import path from 'node:path';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { PagesStore, PAGES_DIR, isUnderPagesDir, type PagesStoreDeps } from './pages-store';
-import { fingerprint, keyPlacement } from './page-connections';
+import { applyScheme, fingerprint, keyPlacement } from './page-connections';
 import { hashHtml, savedKeyId, splitSavedKeyId, type PageApproval } from './connections-store';
 import { PageRateGate, performPageFetch, type PageCredential } from './page-fetch';
 import type { ExternalChangeEvent } from '../artifacts/project-watcher';
@@ -301,7 +301,9 @@ class PagesService {
         const value = await store.keyValue(record).catch(() => null);
         // The RECORDED placement, not the manifest's current one: the recorded
         // one is what the person approved.
-        return value ? { in: record.in, param: record.param, value } : null;
+        // The raw key rides as `secret` too, so redaction also catches a service
+        // that echoes the bare key back without its "Bearer" word.
+        return value ? { in: record.in, param: record.param, value: record.in === 'header' ? applyScheme(record.scheme, value) : value, secret: value } : null;
       }
       case 'youcoded': {
         const token = await this.deps.youcodedToken?.();

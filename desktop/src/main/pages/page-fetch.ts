@@ -50,8 +50,8 @@ const REQUEST_HEADER_ALLOWLIST = ['accept', 'accept-language', 'content-type'];
 
 /** How a credential is attached, resolved by the caller from the approval. */
 export type PageCredential =
-  | { in: 'header'; param: string; value: string }
-  | { in: 'query'; param: string; value: string };
+  | { in: 'header'; param: string; value: string; secret?: string }
+  | { in: 'query'; param: string; value: string; secret?: string };
 
 export interface PageFetchContext {
   /** Every connection the page's manifest lists, already parsed. */
@@ -159,6 +159,9 @@ export async function performPageFetch(request: PageFetchRequest, ctx: PageFetch
   const secrets: string[] = [];
   if (credential) {
     secrets.push(credential.value);
+    // The bare key too, when the value wraps it ("Bearer <key>"): a service
+    // that echoes the key without the word must not hand it back to the page.
+    if (credential.secret && credential.secret !== credential.value) secrets.push(credential.secret);
     if (credential.in === 'header') credentialHeaders[credential.param] = credential.value;
     else { url.searchParams.set(credential.param, credential.value); credentialQueryParams.push(credential.param); }
   }

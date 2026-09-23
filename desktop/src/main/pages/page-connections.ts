@@ -15,20 +15,33 @@
 // An approval is recorded against a FINGERPRINT, not an id: widen the access or
 // change the address and the old approval no longer matches, so the page asks
 // again (deck S-change). Renaming the id alone does not re-ask.
-import type { PageAccess, PageConnection } from '../../shared/pages-types';
+import type { KeyScheme, PageAccess, PageConnection } from '../../shared/pages-types';
 
 /** Where a key connection's key is attached when the manifest does not say.
  *  A header is the common case and the safer one: a key in a query string is
  *  written into the service's own access logs. */
-const DEFAULT_KEY_PLACEMENT = { in: 'header', param: 'authorization' } as const;
+const DEFAULT_KEY_PLACEMENT = { in: 'header', param: 'authorization', scheme: 'bearer' } as const;
 
-export interface KeyPlacement { in: 'header' | 'query'; param: string; }
+export interface KeyPlacement { in: 'header' | 'query'; param: string; scheme: KeyScheme; }
 
-/** Where this connection wants its key. Always answers — an author who says
- *  nothing gets the header default. */
+/** Where this connection wants its key, and the word before it. Always
+ *  answers — an author who says nothing gets `Authorization: Bearer <key>`,
+ *  the most common shape (Todoist, OpenAI-style APIs, most modern services).
+ *  WHY a scheme at all: a bare key in an Authorization header is rejected by
+ *  most services, so without it the commonest kind of key never worked. */
 export function keyPlacement(c: PageConnection): KeyPlacement {
-  if (c.kind !== 'key' || !c.keyParam) return { ...DEFAULT_KEY_PLACEMENT };
-  return { in: c.keyIn === 'query' ? 'query' : 'header', param: c.keyParam };
+  if (c.kind !== 'key') return { ...DEFAULT_KEY_PLACEMENT };
+  const inQuery = !!c.keyParam && c.keyIn === 'query';
+  const param = c.keyParam ?? DEFAULT_KEY_PLACEMENT.param;
+  // A query parameter never carries a word; a header takes the author's word,
+  // else "Bearer" for Authorization and nothing for any other header.
+  const scheme: KeyScheme = inQuery ? 'none' : (c.keyScheme ?? (param === 'authorization' ? 'bearer' : 'none'));
+  return { in: inQuery ? 'query' : 'header', param, scheme };
+}
+
+/** The header value for a key under a scheme. */
+export function applyScheme(scheme: KeyScheme, key: string): string {
+  return scheme === 'bearer' ? `Bearer ${key}` : scheme === 'token' ? `token ${key}` : key;
 }
 
 /** Caps. A manifest is written by an assistant or a stranger, so every string
@@ -117,6 +130,7 @@ export function parseConnections(raw: unknown): PageConnection[] {
           // fails to authenticate — it does not leak the key somewhere else.
           const param = cleanParam(o.keyParam);
           if (param) { c.keyIn = o.keyIn === 'query' ? 'query' : 'header'; c.keyParam = param; }
+          if (o.keyScheme === 'bearer' || o.keyScheme === 'token' || o.keyScheme === 'none') c.keyScheme = o.keyScheme;
         }
         break;
       }

@@ -73,24 +73,24 @@ describe('reading a file this build does not understand', () => {
 
 describe('saving a key', () => {
   it('keeps only a pointer in the connections file; the key itself goes to the secrets store', async () => {
-    await store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-page-key-123', { in: 'query', param: 'appid' });
+    await store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-page-key-123', { in: 'query', param: 'appid', scheme: 'none' });
     const raw = readFileSync(path.join(dir, CONNECTIONS_FILE), 'utf8');
     expect(raw).not.toContain('sk-page-key-123');
     const record = await store.savedKey('OpenWeather', 'api.openweathermap.org');
-    expect(record).toMatchObject({ in: 'query', param: 'appid' });
+    expect(record).toMatchObject({ in: 'query', param: 'appid', scheme: 'none' });
     expect(await store.keyValue(record!)).toBe('sk-page-key-123');
   });
 
   it('rotates in place, so pages pointing at the key keep working', async () => {
-    const first = await store.saveKey('OpenWeather', 'api.openweathermap.org', 'old', { in: 'header', param: 'authorization' });
-    const second = await store.saveKey('OpenWeather', 'api.openweathermap.org', 'new', { in: 'header', param: 'authorization' });
+    const first = await store.saveKey('OpenWeather', 'api.openweathermap.org', 'old', { in: 'header', param: 'authorization', scheme: 'none' });
+    const second = await store.saveKey('OpenWeather', 'api.openweathermap.org', 'new', { in: 'header', param: 'authorization', scheme: 'none' });
     expect(second.secretRef).toBe(first.secretRef);
     expect(await store.keyValue(second)).toBe('new');
   });
 
   it('throws — and writes nothing — on a computer with no keychain', async () => {
     vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(false);
-    await expect(store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-x', { in: 'header', param: 'authorization' }))
+    await expect(store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-x', { in: 'header', param: 'authorization', scheme: 'none' }))
       .rejects.toThrow();
     expect(await store.savedKey('OpenWeather', 'api.openweathermap.org')).toBeNull();
   });
@@ -98,7 +98,7 @@ describe('saving a key', () => {
 
 describe('deleting a saved key', () => {
   it('takes the secret and every approval standing on it, so no page looks connected without one', async () => {
-    const record = await store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-x', { in: 'query', param: 'appid' });
+    const record = await store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-x', { in: 'query', param: 'appid', scheme: 'none' });
     await store.recordApprovals('personal:weather', {
       w: approval('key|OpenWeather|api.openweathermap.org|lookup'),
       f: approval('public|hnrss.org'),
@@ -113,7 +113,7 @@ describe('deleting a saved key', () => {
 
 describe('pruning what nothing points at', () => {
   it('drops a gone page\'s approvals, and the last user of a key takes its secret with it', async () => {
-    const record = await store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-x', { in: 'query', param: 'appid' });
+    const record = await store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-x', { in: 'query', param: 'appid', scheme: 'none' });
     await store.recordApprovals('personal:gone', { w: approval('key|OpenWeather|api.openweathermap.org|lookup') });
     await store.recordApprovals('personal:here', { f: approval('public|hnrss.org') });
 
@@ -126,7 +126,7 @@ describe('pruning what nothing points at', () => {
   });
 
   it('keeps a key another page still uses', async () => {
-    await store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-x', { in: 'query', param: 'appid' });
+    await store.saveKey('OpenWeather', 'api.openweathermap.org', 'sk-x', { in: 'query', param: 'appid', scheme: 'none' });
     await store.prune(new Set(), new Set([savedKeyId('OpenWeather', 'api.openweathermap.org')]));
     expect(await store.savedKey('OpenWeather', 'api.openweathermap.org')).not.toBeNull();
   });

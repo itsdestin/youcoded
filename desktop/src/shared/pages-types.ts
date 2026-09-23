@@ -28,6 +28,9 @@ export type PageIcon =
 /** `lookup`: the app sends look-up requests only and blocks the rest, so the
  *  approval can truthfully say "Cannot send changes". Never worded as
  *  "read-only" or "safe" for an outside service (deck Q-readonly). */
+/** The word a service expects before a key in a header. */
+export type KeyScheme = 'bearer' | 'token' | 'none';
+
 export type PageAccess = 'lookup' | 'full';
 
 export type PageConnection =
@@ -45,6 +48,9 @@ export type PageConnection =
        *  and main attaches it there. Default: the `Authorization` header. */
       keyIn?: 'header' | 'query';
       keyParam?: string;
+      /** What goes before the key in a header. Absent means the usual word for
+       *  an Authorization header ("Bearer") and nothing for any other header. */
+      keyScheme?: KeyScheme;
     }
   /** Public information: an approved address, nothing secret. */
   | { id: string; kind: 'public'; address: string }

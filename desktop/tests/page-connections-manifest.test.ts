@@ -1,7 +1,7 @@
 // The manifest is written by an assistant or a stranger, and what it says is
 // what the approval screen promises — so these pin the refusals.
 import { describe, expect, it } from 'vitest';
-import { covers, fingerprint, methodAllowed, parseConnections } from '../src/main/pages/page-connections';
+import { applyScheme, covers, fingerprint, keyPlacement, methodAllowed, parseConnections } from '../src/main/pages/page-connections';
 
 const key = { id: 'k', kind: 'key', service: 'OpenWeather', address: 'api.openweathermap.org', access: 'lookup' };
 
@@ -98,5 +98,24 @@ describe('methodAllowed', () => {
   it('holds public information and the YouCoded sign-in to look-ups', () => {
     expect(methodAllowed(parseConnections([{ id: 'p', kind: 'public', address: 'hnrss.org' }])[0], 'POST')).toBe(false);
     expect(methodAllowed(parseConnections([{ id: 'y', kind: 'youcoded' }])[0], 'POST')).toBe(false);
+  });
+});
+
+describe('keyPlacement', () => {
+  it('sends a key as "Authorization: Bearer <key>" when the manifest says nothing', () => {
+    const p = keyPlacement(parseConnections([key])[0]);
+    expect(p).toEqual({ in: 'header', param: 'authorization', scheme: 'bearer' });
+    expect(applyScheme(p.scheme, 'abc')).toBe('Bearer abc');
+  });
+  it('sends a key bare in any other header unless the author names a word', () => {
+    expect(keyPlacement(parseConnections([{ ...key, keyParam: 'x-api-key' }])[0]).scheme).toBe('none');
+    expect(keyPlacement(parseConnections([{ ...key, keyParam: 'authorization', keyScheme: 'token' }])[0]).scheme).toBe('token');
+  });
+  it('never puts a word before a key in a query parameter', () => {
+    const p = keyPlacement(parseConnections([{ ...key, keyIn: 'query', keyParam: 'appid', keyScheme: 'bearer' }])[0]);
+    expect(p).toEqual({ in: 'query', param: 'appid', scheme: 'none' });
+  });
+  it('ignores a scheme it does not know', () => {
+    expect(keyPlacement(parseConnections([{ ...key, keyScheme: 'Basic' }])[0]).scheme).toBe('bearer');
   });
 });
