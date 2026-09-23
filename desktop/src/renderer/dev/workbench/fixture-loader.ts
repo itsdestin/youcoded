@@ -289,6 +289,10 @@ export function loadFixture(
           // denyListed:true → the destructive-deny-list rule won; ToolCard
           // gates the "Always allow" strip behind a consequence warning.
           denyListed: parsed.denyListed === true,
+          // WHY: workbench reviews must exercise the same Full Auto stop as a
+          // live PermissionRequest, not silently downgrade it to generic Yes/No.
+          external: parsed.external === true,
+          permissionMode: parsed.permissionMode,
         };
         state = chatReducer(state, action);
         actions.push(action);

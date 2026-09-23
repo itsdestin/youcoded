@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_PushStop","name":"Bash","input":{"command":"git push origin main"}}
+{"type":"permission_request","tool_use_id":"toolu_PushStop","requestId":"native-fixture-push","permissionMode":"full-auto","denyListed":true}

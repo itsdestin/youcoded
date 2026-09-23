@@ -3426,6 +3426,7 @@ export class NativeSessionHost extends EventEmitter {
           // Task 6: carried through so a routed ask's `specialist` payload
           // lets the renderer nest the row under the right specialist card.
           parentToolCallId,
+          permissionMode: () => this.modeFor.get(parentId) ?? 'ask',
           remember: (rule) => this.rememberRule(parentId, parent.cwd, rule),
         }),
         ...(this.toolServices ? { toolServices: this.toolServices } : {}),
