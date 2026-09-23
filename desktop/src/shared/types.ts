@@ -2047,6 +2047,13 @@ export const IPC = {
   PAGES_SET_PINNED: 'pages:set-pinned',
   PAGES_SET_DATA: 'pages:set-data',
   PAGES_CHANGED: 'pages:changed',
+  // ---- Phase 2: connections, keys and the one door out of a page ----
+  PAGES_APPROVE: 'pages:approve',
+  PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
+  PAGES_REFRESH: 'pages:refresh',
+  PAGES_SAVED_KEYS: 'pages:saved-keys',
+  PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
+  PAGES_FETCH: 'pages:fetch',
   // ---- Remembered "Always allow" rules (M5 2a: permissions management UI) ----
   // list = every project's stored grants; remove/remove-project revoke them.
   // Keyed by PROJECT SLUG, not cwd — permissions.json never stored the cwd for

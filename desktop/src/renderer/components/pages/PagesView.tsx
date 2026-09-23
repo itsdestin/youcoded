@@ -12,7 +12,7 @@
 // Personal pages and project pages are grouped under eyebrows (G-7) rather
 // than filtered, so a person sees both at once and the project name on each
 // card says which folder owns it (scope §1: explicit source bindings).
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, CloseButton, LoadingState, ErrorState, Tooltip } from '../ui';
@@ -20,6 +20,7 @@ import type { PageSummary } from '../../../shared/pages-types';
 import { MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { EditGlyph, PageGlyph, PagesIcon, PinGlyph } from './page-icons';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
+import { PageConnectionsDialog } from './page-connections';
 
 interface PagesViewProps {
   /** Starts the creator: a new conversation that builds a page. Owned by
@@ -37,6 +38,7 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
   const { pages, loaded, failed } = usePages();
   // Fresh list on every open (see refreshPages).
   useEffect(() => { if (open) void refreshPages(); }, [open]);
+  const [connectionsFor, setConnectionsFor] = useState<string | null>(null);
   if (!open) return null;
 
   const close = () => dispatch({ type: 'PAGES_VIEW_CLOSED' });
@@ -50,6 +52,8 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
     byProject.set(p.home.name, list);
   }
   const pinnedCount = pages.filter((p) => p.pinned).length;
+  // By id, so the dialog follows the live list when a connection is removed.
+  const connectionsPage = pages.find((p) => p.id === connectionsFor) ?? null;
 
   return (
     // z-50: above the page view (z-40) it opens from.
@@ -91,19 +95,20 @@ export function PagesView({ onMakePage, onEditPage }: PagesViewProps) {
           {loaded && !failed && personal.length > 0 && (
             <Section label="Personal">
               {personal.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onConnections={() => setConnectionsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           )}
           {loaded && !failed && [...byProject.entries()].map(([name, list]) => (
             <Section key={name} label={name}>
               {list.map((p) => (
-                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
+                <PageCard key={p.id} page={p} onOpen={() => openPage(p.id)} onEdit={() => onEditPage(p)} onConnections={() => setConnectionsFor(p.id)} pinFull={pinnedCount >= MAX_PINNED_PAGES} />
               ))}
             </Section>
           ))}
         </div>
       </main>
+      <PageConnectionsDialog page={connectionsPage} onClose={() => setConnectionsFor(null)} onConnect={(id) => { setConnectionsFor(null); openPage(id); }} />
     </div>
   );
 }
@@ -117,11 +122,12 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function PageCard({ page, onOpen, onEdit, pinFull }: { page: PageSummary; onOpen: () => void; onEdit: () => void; pinFull: boolean }) {
+function PageCard({ page, onOpen, onEdit, onConnections, pinFull }: { page: PageSummary; onOpen: () => void; onEdit: () => void; onConnections: () => void; pinFull: boolean }) {
   // The card is one button (open); the pin is a second control INSIDE it, so
   // it stops propagation. The pin is always visible — unlike a theme card's
   // favourite star it sits on text, not on a picture (guide §4.4).
   const cannotPin = !page.pinned && pinFull;
+  const connectionCount = page.connections?.length ?? 0;
   return (
     <div
       role="button"
@@ -166,6 +172,21 @@ function PageCard({ page, onOpen, onEdit, pinFull }: { page: PageSummary; onOpen
         <span>{page.home.kind === 'personal' ? 'Personal' : page.home.name}</span>
         <span aria-hidden="true" className="text-fg-faint">·</span>
         <span>Updated {relative(page.updatedAt)}</span>
+        {/* A quiet line, only on pages that reach outside (deck Q-manage: the
+            library stays calm; no badge on every card — deck Q-levels). */}
+        {connectionCount > 0 && (
+          <>
+            <span aria-hidden="true" className="text-fg-faint">·</span>
+            <Button
+              variant="ghost"
+              size="sm"
+              data-page-connections-link
+              onClick={(e) => { e.stopPropagation(); onConnections(); }}
+            >
+              {connectionCount === 1 ? '1 connection' : `${connectionCount} connections`}
+            </Button>
+          </>
+        )}
       </div>
     </div>
   );

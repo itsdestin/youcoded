@@ -41,6 +41,12 @@ export function usePages(): Snapshot {
   return useSyncExternalStore(subscribe, () => snapshot, () => snapshot);
 }
 
+/** Publish a list the bridge just answered with (approve, remove, refresh):
+ *  the real host also fires onChanged, the workbench fake may not. */
+export function publishPages(pages: PageSummary[]): void {
+  publish({ pages, loaded: true, failed: false });
+}
+
 /** Ask the host for the list again. The library and the page view call this
  *  when they open: the first list happens at app start, and a page made since
  *  (or a project added since, whose Pages/ the host was not yet scanning) is

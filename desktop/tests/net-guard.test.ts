@@ -98,6 +98,96 @@ describe('guardedFetch', () => {
     expect(finalUrl).toBe('https://example.com/final');
   });
 
+  // The redirect hole design review 1 (finding 4) found: the guard used to
+  // spread the caller's headers into EVERY hop and re-check only that the hop
+  // was public, so one 302 handed a page's API key to whatever host answered.
+  describe('a credential does not walk to a redirect target', () => {
+    const redirectThen200 = (location: string) => vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location } }))
+      .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+
+    it('drops the credential header on a hop to a different host', async () => {
+      const fetchMock = redirectThen200('https://collector.test/steal');
+      await guardedFetch('https://api.example.com/v1', {
+        signal: new AbortController().signal, lookup: publicLookup, fetchImpl: fetchMock as unknown as typeof fetch,
+        headers: { accept: 'application/json' },
+        credentialHeaders: { authorization: 'Bearer sk-page-secret' },
+        allowHost: () => ({ ok: true }),
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0][1].headers.authorization).toBe('Bearer sk-page-secret');
+      expect(fetchMock.mock.calls[1][1].headers.authorization).toBeUndefined();
+      // The ordinary headers still ride along — the request survives, the key does not.
+      expect(fetchMock.mock.calls[1][1].headers.accept).toBe('application/json');
+    });
+
+    it('keeps the credential on a hop that stays on the same host', async () => {
+      const fetchMock = redirectThen200('https://api.example.com/v2');
+      await guardedFetch('https://api.example.com/v1', {
+        signal: new AbortController().signal, lookup: publicLookup, fetchImpl: fetchMock as unknown as typeof fetch,
+        credentialHeaders: { authorization: 'Bearer sk-page-secret' },
+      });
+      expect(fetchMock.mock.calls[1][1].headers.authorization).toBe('Bearer sk-page-secret');
+    });
+
+    it('strips a credential carried in the query string when the host changes', async () => {
+      const fetchMock = redirectThen200('https://collector.test/steal?appid=sk-in-the-url&q=x');
+      const { finalUrl } = await guardedFetch('https://api.example.com/v1?appid=sk-in-the-url', {
+        signal: new AbortController().signal, lookup: publicLookup, fetchImpl: fetchMock as unknown as typeof fetch,
+        credentialQueryParams: ['appid'],
+      });
+      expect(fetchMock.mock.calls[1][0]).toBe('https://collector.test/steal?q=x');
+      // finalUrl is the address actually requested, so it cannot echo the key back.
+      expect(finalUrl).not.toContain('sk-in-the-url');
+    });
+  });
+
+  describe('allowHost', () => {
+    it('is consulted before the very first request, not only before a redirect', async () => {
+      const fetchMock = vi.fn();
+      await expect(guardedFetch('https://api.example.com/v1', {
+        signal: new AbortController().signal, lookup: publicLookup, fetchImpl: fetchMock as unknown as typeof fetch,
+        allowHost: () => ({ ok: false, message: 'not allowed to reach api.example.com' }),
+      })).rejects.toThrow(/not allowed to reach/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses a hop to a host it does not cover, rather than following it', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 302, headers: { location: 'https://elsewhere.test/x' } }));
+      await expect(guardedFetch('https://api.example.com/v1', {
+        signal: new AbortController().signal, lookup: publicLookup, fetchImpl: fetchMock as unknown as typeof fetch,
+        allowHost: (host) => host === 'api.example.com' ? { ok: true } : { ok: false, message: `sent on to ${host}` },
+      })).rejects.toThrow(/sent on to elsewhere.test/);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('method and body on a redirect', () => {
+    it('turns a redirected POST into a GET and drops its body, as a browser would', async () => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: 'https://api.example.com/v2' } }))
+        .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+      await guardedFetch('https://api.example.com/v1', {
+        signal: new AbortController().signal, lookup: publicLookup, fetchImpl: fetchMock as unknown as typeof fetch,
+        method: 'POST', body: '{"a":1}',
+      });
+      expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', body: '{"a":1}' });
+      expect(fetchMock.mock.calls[1][1].method).toBe('GET');
+      expect(fetchMock.mock.calls[1][1].body).toBeUndefined();
+    });
+
+    it('repeats the write on a 307, which is what 307 means', async () => {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(new Response(null, { status: 307, headers: { location: 'https://api.example.com/v2' } }))
+        .mockResolvedValueOnce(new Response('ok', { status: 200 }));
+      await guardedFetch('https://api.example.com/v1', {
+        signal: new AbortController().signal, lookup: publicLookup, fetchImpl: fetchMock as unknown as typeof fetch,
+        method: 'POST', body: '{"a":1}',
+      });
+      expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST', body: '{"a":1}' });
+    });
+  });
+
   it('reads the body up to maxBytes and reports truncation', async () => {
     const big = 'x'.repeat(2048);
     const fetchMock = vi.fn().mockResolvedValue(new Response(big, { status: 200 }));
