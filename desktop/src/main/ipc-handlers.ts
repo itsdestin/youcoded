@@ -84,7 +84,7 @@ import { exaBackend } from './harness/search/backends/exa';
 import { ddgBackend } from './harness/search/backends/ddg';
 import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
-import { resolveMappingAction } from './session-id-mapping';
+import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
 import { listPastSessions, loadHistory } from './session-browser';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
 import { readTranscriptMeta } from './transcript-utils';
@@ -167,6 +167,7 @@ import {
 } from './git/git-service';
 import { initGitWatchers, watchGit, unwatchGit, dropGitSubscriber } from './git/git-watcher';
 import { resolveRepoRoot, invalidateRepoRootCache } from './git/git-exec';
+import { gitBranchLabel } from './git/git-branch-label';
 import { PROJECT_IPC } from './project/ipc-channels';
 // The artifact and Project View READ bodies, shared with remote-server.ts
 // (remote access batch 3) so a phone gets the desktop's own answers.
@@ -822,6 +823,12 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.SESSION_CREATE, async (event, rawOpts) => {
     // Resolve "No folder" to the app-owned folder before either runtime sees the cwd.
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
+    // WHY: resuming an already-open conversation made a second same-named tab
+    // (two writers on one transcript). Answer with the open session instead;
+    // the renderer switches to it. Checked before anything is spawned.
+    const openInfo = opts?.resumeSessionId
+      ? findLiveSessionForConversation(opts.resumeSessionId, sessionManager.listSessions(), (id) => sessionIdMap.get(id)) : undefined;
+    if (openInfo) return { ...openInfo, alreadyOpen: true };
     // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
     const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
       ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
@@ -2332,9 +2339,13 @@ export function registerIpcHandlers(
       readJsonFile(path.join(home, '.claude', 'backup-meta.json')),
       fs.promises.stat(path.join(home, '.claude', 'toolkit-state', '.sync-lock')).then((s) => s.isDirectory(), () => false),
       Promise.all([...sessionIdMap].map(async ([desktopId, claudeId]) => {
+        // WHY: .gitbranch is written by Claude Code's status line, which a native
+        // session lacks (empty chip in a repo) — read its branch from its folder.
+        const live = sessionManager.getSession(desktopId);
+        const nativeCwd = live?.provider === 'native' ? live.cwd : null;
         const [context, branch, stats] = await Promise.all([
           readTextFile(path.join(home, '.claude', `.context-${claudeId}`)),
-          readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
+          nativeCwd ? gitBranchLabel(nativeCwd) : readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
           readJsonFile(path.join(home, '.claude', `.session-stats-${claudeId}.json`)),
         ]);
         return { desktopId, context, branch, stats };
@@ -4711,6 +4722,12 @@ export function registerIpcHandlers(
   // write and one .gitignore read; appendVersion queues per project and applies
   // the whole burst in a few read/write cycles instead of a thousand, each of
   // which used to pin a parsed 4.4 MB sidecar in memory until the app OOM'd.
+  // A Claude Code session's conversation id when it differs from its desktop
+  // id (VersionEvent.conversationId); undefined for native / not yet mapped.
+  const conversationIdFor = (sessionId: string): string | undefined => {
+    const claudeId = sessionIdMap.get(sessionId);
+    return claudeId && claudeId !== sessionId ? claudeId : undefined;
+  };
   ipcMain.handle(ARTIFACT_IPC.APPEND_VERSION, async (
     _e,
     projectRoot: string,
@@ -4734,6 +4751,10 @@ export function registerIpcHandlers(
       type: args.type,
       author: args.author,
       toolUseId: typeof args.toolUseId === 'string' && args.toolUseId ? args.toolUseId : undefined,
+      // WHY: a Claude Code resume gets a fresh desktop id, so a files list
+      // keyed on it alone lost everything before the resume. Stamp the
+      // conversation's own id so LIST_SESSION can find these versions again.
+      conversationId: conversationIdFor(sessionId),
     });
     // AFTER the append resolves, not before it (2026-08-15 review): appendVersion
     // is queued now, so an invalidate issued before the call could be followed
@@ -4803,7 +4824,7 @@ export function registerIpcHandlers(
   // transports cannot drift on roots, denylist or shape. The legacy-record
   // repair each listing runs is inside the service.
   ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, sessionId: string, projectRoot: string) =>
-    listSessionFiles(sessionId, projectRoot));
+    listSessionFiles(sessionId, projectRoot, conversationIdFor(sessionId)));
 
   // Project View IPC — list project-scoped conversations, git repo info, and
   // the discovered context files (CLAUDE.md, rules, etc.). The reads go

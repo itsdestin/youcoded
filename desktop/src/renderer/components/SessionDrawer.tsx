@@ -22,7 +22,7 @@ import SessionPreviewPane from './SessionPreviewPane';
 // The A1/A2/A4 preview header (Resume + tag/note sheet) now uses COPY too, so
 // this import no longer goes away if that block is cut.
 import { COPY } from '../../shared/chatsearch-refs';
-import { useArtifactContent } from './artifact-views/useArtifactContent';
+import { useArtifactContent, contentPathFor } from './artifact-views/useArtifactContent';
 import { useUnsavedGuard } from './artifact-views/UnsavedChangesDialog';
 import { ContentFindBar } from './ContentFindBar';
 import { GitReviewView } from './git/GitReviewView';
@@ -371,7 +371,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // FilesTab used to carry duplicate effects that conflated "loading" with
   // "no longer on disk" (the flash bug).
   const { content, setContent, contentInfo, contentState, retryRead, applyDiskRead } =
-    useArtifactContent(projectRoot, active?.id ?? null, active?.path ?? null);
+    useArtifactContent(projectRoot, active?.id ?? null, contentPathFor(active));
 
   // ── B2 panel UI state ──
   // The list stays open once toggled; it closes on the ☰ toggle, on selecting an

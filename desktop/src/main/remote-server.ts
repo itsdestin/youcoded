@@ -84,6 +84,7 @@ import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import { getField, setField } from './claude-settings';
 import { resolveStaticFile } from './remote-static-path';
+import { findLiveSessionForConversation } from './session-id-mapping';
 
 // 4M UTF-16 units per session — enough for full conversation replay. Named for what it
 // counts (batch 2): JavaScript string length, not bytes.
@@ -1767,6 +1768,11 @@ export class RemoteServer {
           this.respond(client.ws, type, id, { ok: false, error: 'A terminal session can only be opened from the app itself.' });
           break;
         }
+        // Same guard as ipc-handlers' SESSION_CREATE (a conversation already open
+        // answers with its session); the wiring's resolve IS the desktop→conversation id map.
+        const openInfo = payload?.resumeSessionId ? findLiveSessionForConversation(payload.resumeSessionId,
+          this.sessionManager.listSessions(), (sid) => this.sessionMetaWiring?.resolve(sid)) : undefined;
+        if (openInfo) { this.respond(client.ws, type, id, { ...openInfo, alreadyOpen: true }); break; }
         const info = this.sessionManager.createSession(this.prepareCreate(payload));
         this.respond(client.ws, type, id, info);
         // session:created broadcast is handled by the onSessionCreated event listener
@@ -3930,7 +3936,10 @@ export class RemoteServer {
   private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
     'artifacts:list-session': async (p) => {
       if (typeof p.sessionId !== 'string') return { ok: false, error: 'bad-request' };
-      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot);
+      // Same conversation-id match as the desktop's LIST_SESSION (resolve = the id map).
+      const resolved = this.sessionMetaWiring?.resolve?.(p.sessionId);
+      const conversationId = resolved !== p.sessionId ? resolved : undefined;
+      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot, conversationId);
     },
     'artifacts:list-project': async (p) =>
       (await this.refuseUnknownProject(p.projectId, { records: true })) ?? listProjectFiles(p.projectId, p.opts),

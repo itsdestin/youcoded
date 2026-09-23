@@ -7,7 +7,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act, fireEvent, cleanup, renderHook, waitFor, within } from '@testing-library/react';
 import { ActiveArtifactView, type ActiveArtifactHandle } from '../src/renderer/components/artifact-views/ActiveArtifactView';
-import { useArtifactContent } from '../src/renderer/components/artifact-views/useArtifactContent';
+import { useArtifactContent, contentPathFor } from '../src/renderer/components/artifact-views/useArtifactContent';
 
 // Pins the D4-unlock safety behavior of ActiveArtifactView (plan step 4):
 // 1. THE §2.2 EMPTY-FILE GUARANTEE — while content is null (fetch transient /
@@ -364,6 +364,28 @@ describe('read lifecycle through useArtifactContent', () => {
       expect(utils.queryByText(LOADING_MSG)).toBeNull();
     });
 
+    it('says a file outside the project folders is refused for exactly that, and offers Show in folder', async () => {
+      // A file the assistant wrote through `../`: it exists, so "no longer on
+      // disk" would be false. The host sends where it is; the pane offers the
+      // system file browser there.
+      const showItemInFolder = vi.fn();
+      (window as any).claude.shell = { showItemInFolder };
+      const utils = render(<Host artifact={mdArtifact} />);
+      await settle(() => pending[0].resolve({ ok: false, error: 'outside-projects', path: '/home/u/elsewhere/notes.md' }));
+      expect(utils.queryByText(MISSING_MSG)).toBeNull();
+      expect(utils.getByText('YouCoded won’t open this file because it’s outside your project folders. To open it here, add its folder as a project, then Retry.')).toBeTruthy();
+      await settle(() => { fireEvent.click(utils.getByText('Show in folder')); });
+      expect(showItemInFolder).toHaveBeenCalledWith('/home/u/elsewhere/notes.md');
+    });
+
+    it('offers nothing to reveal for a protected location', async () => {
+      (window as any).claude.shell = { showItemInFolder: vi.fn() };
+      const utils = render(<Host artifact={mdArtifact} />);
+      await settle(() => pending[0].resolve({ ok: false, error: 'protected-path' }));
+      expect(utils.getByText('YouCoded won’t open this file because it’s in a protected location (like saved passwords, keys or settings folders).')).toBeTruthy();
+      expect(utils.queryByText('Show in folder')).toBeNull();
+    });
+
     it('surfaces a failed read as the real error with Retry — never as "no longer on disk"', async () => {
       const utils = render(<Host artifact={mdArtifact} />);
       await settle(() => pending[0].resolve({ ok: false, error: 'protected-path' }));
@@ -516,6 +538,19 @@ describe('read lifecycle through useArtifactContent', () => {
 
     it('still calls artifacts.get for svg, which is editable', async () => {
       renderHook(() => useArtifactContent('/proj', 'a2', 'logo.svg'));
+      await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    });
+
+    it('asks the host about an image recorded through ../ instead of reading it by a relative path', async () => {
+      // Unrepaired `../` record: the byte viewer would resolve it against the
+      // app's own folder and say "no longer exists on disk" for a file that is
+      // there. contentPathFor withholds the path so get() gives the real answer.
+      const rec = { kind: 'external', path: 'shot.png', absolutePath: '../elsewhere/shot.png' };
+      expect(contentPathFor(rec)).toBeNull();
+      expect(contentPathFor({ ...rec, absolutePath: '/home/u/elsewhere/shot.png' })).toBe('shot.png');
+      expect(contentPathFor({ ...rec, absolutePath: 'C:\\u\\shot.png' })).toBe('shot.png');
+      expect(contentPathFor({ kind: 'internal', path: 'a/shot.png', absolutePath: null })).toBe('a/shot.png');
+      renderHook(() => useArtifactContent('/proj', 'a4', contentPathFor(rec)));
       await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
     });
 

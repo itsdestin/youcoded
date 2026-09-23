@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { authorizeArtifactRead, authorizeArtifactWrite } from '../../src/main/artifacts/write-authorization';
+import { authorizeArtifactRead, authorizeArtifactWrite, judgeRelativeRecord } from '../../src/main/artifacts/write-authorization';
 
 let root: string;    // the project root
 let outside: string; // a directory OUTSIDE the root, holding sensitive targets
@@ -161,3 +161,49 @@ describe('authorizeArtifactRead', () => {
     expect(res).toEqual({ ok: false, error: 'artifact-not-found' });
   });
 });
+
+// Records the agent wrote through `../` hold a RELATIVE absolutePath. They are
+// trusted only inside a project folder and outside the deny list — the sidecar
+// lives in the project, so a copied folder can carry a planted record.
+describe('judgeRelativeRecord', () => {
+  const rel = (abs: string) => path.relative(root, abs);
+  async function mkOut(relp: string, content = 'x'): Promise<string> {
+    const p = path.join(outside, relp);
+    await fs.promises.mkdir(path.dirname(p), { recursive: true });
+    await fs.promises.writeFile(p, content);
+    return p;
+  }
+
+  it('trusts a ../ file inside another saved project folder', async () => {
+    const target = await mkOut('notes/plan.md');
+    const res = await judgeRelativeRecord(root, rel(target), [outside]);
+    expect(res).toEqual({ ok: true, realPath: await fs.promises.realpath(target) });
+  });
+
+  it('refuses a ../ file outside every project folder, and says where it is', async () => {
+    const target = await mkOut('notes/plan.md');
+    const res = await judgeRelativeRecord(root, rel(target), []);
+    expect(res).toEqual({ ok: false, reason: 'outside-projects', realPath: await fs.promises.realpath(target) });
+  });
+
+  it('keeps a PLANTED record pointing at a secret refused — even inside a saved folder', async () => {
+    // e.g. a copied project whose sidecar says `../../.ssh/id_rsa`.
+    const key = await mkOut('.ssh/id_rsa', 'PRIVATE');
+    const res = await judgeRelativeRecord(root, rel(key), [outside]);
+    expect(res).toEqual({ ok: false, reason: 'protected-path' });
+    const env = await mkOut('.env', 'TOKEN=1');
+    expect(await judgeRelativeRecord(root, rel(env), [outside])).toEqual({ ok: false, reason: 'protected-path' });
+  });
+
+  it('judges the RESOLVED target of a symlink, not the link', async () => {
+    const key = await mkOut('.aws/credentials', 'PRIVATE');
+    const link = path.join(outside, 'innocent.md');
+    try { await fs.promises.symlink(key, link); } catch { return; } // no symlink rights (Windows)
+    expect(await judgeRelativeRecord(root, rel(link), [outside])).toEqual({ ok: false, reason: 'protected-path' });
+  });
+
+  it('says missing only when nothing is on disk there', async () => {
+    expect(await judgeRelativeRecord(root, '../definitely-not-here/x.md', [outside])).toEqual({ ok: false, reason: 'missing' });
+  });
+});
+

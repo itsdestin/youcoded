@@ -122,3 +122,41 @@ fun applyGitTreatment(projectRoot: String) {
  * (which uses path.isAbsolute, platform-correct on both OSes).
  */
 fun isAbsoluteRecorded(p: String): Boolean = p.startsWith("/")
+
+/** Mirrors write-authorization.ts judgeRelativeRecord's answer. */
+sealed class RelativeRecordVerdict {
+    data class Trusted(val file: File) : RelativeRecordVerdict()
+    object Missing : RelativeRecordVerdict()
+    object Protected : RelativeRecordVerdict()
+    data class OutsideProjects(val path: String) : RelativeRecordVerdict()
+}
+
+/**
+ * A legacy external record whose absolutePath is RELATIVE — usually a file the
+ * agent wrote through `../`. Mirror of desktop write-authorization.ts
+ * judgeRelativeRecord (Destin, 2026-09-23, option A).
+ *
+ * WHY: such a record used to be answered "no longer on disk" whether or not the
+ * file was there. It may not simply be trusted: the sidecar lives inside the
+ * project, so a copied folder can carry a PLANTED record like
+ * `../../.ssh/id_rsa`. So it is resolved against the PROJECT ROOT (never the
+ * process cwd), symlinks resolved, and trusted only when it lands inside the
+ * project or a saved folder AND its tier is FREE (the existing deny list:
+ * credentials, .git/.youcoded, .claude, dotenv). The secret check runs first so
+ * a secret's location is never echoed back.
+ */
+fun judgeRelativeRecord(projectRoot: String, recorded: String, allowedRoots: List<String>): RelativeRecordVerdict {
+    val target = File(projectRoot, recorded)
+    val resolved = try { target.canonicalFile } catch (_: java.io.IOException) { return RelativeRecordVerdict.Missing }
+    if (!resolved.exists()) return RelativeRecordVerdict.Missing
+    if (EditablePathPolicy.editTier(canonicalize(resolved.path, null)) != EditablePathPolicy.EditTier.FREE) {
+        return RelativeRecordVerdict.Protected
+    }
+    for (root in (listOf(projectRoot) + allowedRoots).distinct()) {
+        val realRoot = try { File(root).canonicalFile.path } catch (_: java.io.IOException) { continue }
+        if (resolved.path == realRoot || resolved.path.startsWith(realRoot + File.separator)) {
+            return RelativeRecordVerdict.Trusted(resolved)
+        }
+    }
+    return RelativeRecordVerdict.OutsideProjects(resolved.path)
+}

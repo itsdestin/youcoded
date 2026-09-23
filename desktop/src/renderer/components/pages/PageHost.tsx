@@ -117,6 +117,17 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
     [summary],
   );
 
+  // WHY: a page deleted while it is open (through chat) used to stay in the
+  // frame until another page was picked — nothing told the view its id was
+  // gone. Every way of opening a page picks it FROM this list, so once a
+  // loaded, healthy list lacks the open id, the page no longer exists: fall
+  // back to "No page selected". A list that has not loaded or failed to proves
+  // nothing, so it is left alone.
+  const openPageMissing = open && pageId !== null && loaded && !failed && !summary;
+  useEffect(() => {
+    if (openPageMissing) dispatch({ type: 'PAGE_CLOSED' });
+  }, [openPageMissing, dispatch]);
+
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
   const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && pages.length === 0;
