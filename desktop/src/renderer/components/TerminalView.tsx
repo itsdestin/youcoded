@@ -43,7 +43,29 @@ interface Props {
   visible: boolean;
 }
 
-export default function TerminalView({ sessionId, visible }: Props) {
+// ONE window 'resize' listener shared by every mounted terminal.
+// WHY (2026-09-23, many-tabs perf): each TerminalView used to add its own, so
+// the window carried one listener per open Claude Code tab (a rule-2 leak —
+// global listeners must not grow with tab count). Behaviour is unchanged:
+// every terminal, hidden ones included, still re-fits on a window resize, in
+// the order they mounted — hidden terminals keep their PTY size current so
+// showing one never makes ConPTY reflow. Only the listener count is fixed.
+// Guard: tests/busy-app-render-budget.test.tsx ("of every other kind").
+const windowResizeHandlers = new Set<() => void>();
+function runWindowResizeHandlers(): void {
+  for (const handler of windowResizeHandlers) handler();
+}
+function onWindowResize(handler: () => void): () => void {
+  if (windowResizeHandlers.size === 0) window.addEventListener('resize', runWindowResizeHandlers);
+  windowResizeHandlers.add(handler);
+  return () => {
+    windowResizeHandlers.delete(handler);
+    if (windowResizeHandlers.size === 0) window.removeEventListener('resize', runWindowResizeHandlers);
+  };
+}
+
+// Memoised at the bottom of the file — see the WHY there.
+function TerminalView({ sessionId, visible }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   // Custom overlay scrollbar thumb — painted on top of xterm so the native
   // scrollbar gutter doesn't eat the rightmost terminal column.
@@ -454,8 +476,8 @@ export default function TerminalView({ sessionId, visible }: Props) {
       };
     }
 
-    // Resize handler
-    window.addEventListener('resize', fitAndSync);
+    // Resize handler (one shared window listener — see onWindowResize)
+    const offWindowResize = onWindowResize(fitAndSync);
 
     // Observe container size changes — throttled to one fitAndSync per frame
     let resizeRafId: number | null = null;
@@ -473,7 +495,7 @@ export default function TerminalView({ sessionId, visible }: Props) {
       clearTimeout(thumbInitTimer);
       if (debounceTimer !== null) clearTimeout(debounceTimer);
       if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
-      window.removeEventListener('resize', fitAndSync);
+      offWindowResize();
       resizeObserver.disconnect();
       touchScrollCleanup?.();
       unregisterTerminal(sessionId);
@@ -752,3 +774,18 @@ export default function TerminalView({ sessionId, visible }: Props) {
     </div>
   );
 }
+
+// WHY memo (2026-09-23, many-tabs perf): App renders a terminal for every open
+// Claude Code session and re-renders on a turn starting or ending, a slash
+// keystroke, a file write, every tab switch. Unmemoised, every hidden
+// terminal re-ran this whole component (and its effects' dependency checks)
+// each time — twice per reply in each of the other tabs. Its props are two
+// primitives, so memo lets only the terminal whose `visible` or session
+// actually changed redraw. Theme changes still reach it through useTheme.
+// Guard: tests/busy-app-render-budget.test.tsx.
+export default React.memo(TerminalView);
+
+// For tests of the view's OWN logic whose useTheme mock is a plain getter and
+// delivers "new theme" by re-rendering with identical props — what memo skips.
+// In the app the theme arrives through context, which memo never blocks.
+export { TerminalView as UnmemoizedTerminalView };

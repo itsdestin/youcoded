@@ -127,7 +127,11 @@ vi.mock('../src/renderer/hooks/usePtyRawBytes', () => ({
 
 import { join } from 'node:path';
 import { readSource } from './helpers/guard-scope';
-import TerminalView from '../src/renderer/components/TerminalView';
+// The UNMEMOISED component: this file's useTheme mock is a plain getter, and
+// the theme tests deliver a "new theme" by re-rendering with identical props —
+// exactly what memo exists to skip. In the app the theme arrives through
+// context, which memo never blocks (same arrangement as UnmemoizedChatView).
+import { UnmemoizedTerminalView as TerminalView } from '../src/renderer/components/TerminalView';
 import * as platform from '../src/renderer/platform';
 import { usePtyOutput } from '../src/renderer/hooks/useIpc';
 import { usePtyRawBytes } from '../src/renderer/hooks/usePtyRawBytes';
