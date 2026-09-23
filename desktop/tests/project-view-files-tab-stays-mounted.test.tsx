@@ -202,3 +202,24 @@ describe('opening a file from the Files tab', () => {
     expect(await view.findByTitle('Open with the default app')).toBeTruthy();
   });
 });
+
+// "+ Add file" over remote access uploaded the picked file to the computer, then the import
+// failed (the host has no import channel for a phone). The button is not offered there until
+// uploads are their own approved batch; the desktop keeps it.
+describe('"+ Add file" is offered on the computer only', () => {
+  it('shows on the desktop and is absent over remote access', async () => {
+    const { setConnectionMode } = await import('../src/renderer/platform');
+    const desk = render(<Harness />);
+    await desk.findByTitle('notes.md');
+    expect(desk.queryByRole('button', { name: '+ Add file' })).not.toBeNull();
+    desk.unmount();
+    setConnectionMode('remote');
+    try {
+      const phone = render(<Harness />);
+      await phone.findByTitle('notes.md');
+      expect(phone.queryByRole('button', { name: '+ Add file' })).toBeNull();
+    } finally {
+      setConnectionMode('local');
+    }
+  });
+});
