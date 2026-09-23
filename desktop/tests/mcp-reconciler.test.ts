@@ -245,27 +245,29 @@ describe('projection into ~/.claude.json', () => {
 // command was written literally wrong) and a `platforms` LIST of Node names
 // (never read, so the platform filter did nothing). Pure function, no real
 // ~/.claude.json anywhere.
+// The literal placeholder, spelled so no linter mistakes it for a template.
+const PKG = '$' + '{PACKAGE_DIR}';
 describe('plugin manifest scan (applyManifestEntries)', () => {
   const spotify: McpManifestEntry = {
     name: 'spotify-services', auto: true, platforms: ['darwin', 'win32'],
-    command: 'bash', args: ['${PACKAGE_DIR}/mcp-servers/spotify-services/launcher.sh'], env: {},
+    command: 'bash', args: [`${PKG}/mcp-servers/spotify-services/launcher.sh`], env: {},
   };
   const gmessages: McpManifestEntry = {
     name: 'gmessages', auto: true, platforms: ['darwin', 'linux', 'win32'],
-    command: '${PACKAGE_DIR}/mcp-servers/gmessages/gmessages', args: [], env: {},
+    command: `${PKG}/mcp-servers/gmessages/gmessages`, args: [], env: {},
   };
   const root = '/home/u/.claude/plugins/marketplaces/youcoded/plugins/p';
 
-  it('expands ${PACKAGE_DIR} to the plugin directory, like {{plugin_root}}', () => {
+  it('expands the PACKAGE_DIR placeholder to the plugin directory, like {{plugin_root}}', () => {
     const servers: Record<string, unknown> = {};
     const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });
     expect(r.added).toBe(1);
     expect(servers.gmessages).toEqual({ type: 'stdio', command: `${root}/mcp-servers/gmessages/gmessages`, args: [], env: {} });
-    expect(expandTokens('{{plugin_root}}/a ${PACKAGE_DIR}/b', '/r')).toBe('/r/a /r/b');
+    expect(expandTokens(`{{plugin_root}}/a ${PKG}/b`, '/r')).toBe('/r/a /r/b');
   });
 
   it('never reads a $ in the real path as a replacement pattern', () => {
-    expect(expandTokens('${PACKAGE_DIR}/x', '/tmp/$&odd')).toBe('/tmp/$&odd/x');
+    expect(expandTokens(`${PKG}/x`, '/tmp/$&odd')).toBe('/tmp/$&odd/x');
   });
 
   it('honours a platforms list written in Node names', () => {
@@ -285,12 +287,12 @@ describe('plugin manifest scan (applyManifestEntries)', () => {
     expect(platformMatches({}, 'windows')).toBe(true);
     expect(platformMatches({ platforms: ['all'] }, 'windows')).toBe(true);
     // An empty list falls back to the single field rather than hiding the server.
-    expect(platformMatches({ platforms: [], platform: 'windows' } as McpManifestEntry, 'windows')).toBe(true);
+    expect(platformMatches({ platforms: [], platform: 'windows' }, 'windows')).toBe(true);
   });
 
   it('repairs an untouched entry an older build wrote with the literal placeholder', () => {
     const servers: Record<string, unknown> = {
-      gmessages: { type: 'stdio', command: '${PACKAGE_DIR}/mcp-servers/gmessages/gmessages', args: [], env: {} },
+      gmessages: { type: 'stdio', command: `${PKG}/mcp-servers/gmessages/gmessages`, args: [], env: {} },
     };
     const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });
     expect(r).toMatchObject({ added: 0, repaired: 1, changed: true });
@@ -298,7 +300,7 @@ describe('plugin manifest scan (applyManifestEntries)', () => {
   });
 
   it('still never overwrites an entry the user changed, even one holding the placeholder', () => {
-    const custom = { type: 'stdio', command: '${PACKAGE_DIR}/mcp-servers/gmessages/gmessages', args: ['--verbose'], env: {} };
+    const custom = { type: 'stdio', command: `${PKG}/mcp-servers/gmessages/gmessages`, args: ['--verbose'], env: {} };
     const servers: Record<string, unknown> = { gmessages: { ...custom } };
     const r = applyManifestEntries(servers, [{ entries: [gmessages], pluginRoot: root }], { platform: 'linux', isWindows: false });
     expect(r).toMatchObject({ added: 0, repaired: 0, changed: false });

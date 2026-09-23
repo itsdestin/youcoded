@@ -123,7 +123,8 @@ export function platformMatches(
 // class (every community manifest that followed the publisher's guidance),
 // not just the two known ones.
 const PLUGIN_ROOT_TOKENS = /\{\{plugin_root\}\}|\$\{PACKAGE_DIR\}/g;
-const UNEXPANDED_PACKAGE_DIR = '${PACKAGE_DIR}';
+// Built by concatenation so it cannot be mistaken for a template string.
+const UNEXPANDED_PACKAGE_DIR = '$' + '{PACKAGE_DIR}';
 
 export function expandTokens(s: string, pluginRoot: string): string {
   // A replacer function, not a string, so a `$` in a real path is never read

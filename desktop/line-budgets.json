@@ -20,7 +20,7 @@
     "main/main.ts": 2536,
     "shared/types.ts": 2203,
     "renderer/components/SyncPanel.tsx": 2033,
-    "main/engine/engine-manager.ts": 2032,
+    "main/engine/engine-manager.ts": 2035,
     "renderer/components/ResumeBrowser.tsx": 1837,
     "main/preload.ts": 1874,
     "renderer/components/StatusBar.tsx": 1799,

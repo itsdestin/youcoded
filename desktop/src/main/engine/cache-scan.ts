@@ -207,10 +207,19 @@ function scanOneDir(dirAbs: string, subdir: string | null): LocalDownload[] {
 }
 
 /** Ids of COMPLETE models whose folder holds a published vision projector —
- *  what the router will load with `--mmproj`. Read by catalogModels so a
- *  session's "can it see?" answer never depends on whether the router has
- *  re-scanned since the download finished. A half-fetched projector does not
- *  count (`hasProjector` is published files only). */
+ *  what the router will load with `--mmproj`. A half-fetched projector does
+ *  not count (`hasProjector` is published files only).
+ *
+ *  WHY (2026-09-23, roadmap local-models): EngineManager.catalogModels reads
+ *  this beside the router's own answer. A vision model downloaded while the app
+ *  runs is paired with its projector only once the router re-scans, and that
+ *  re-scan is fire-and-forget. A session started in between got "don't know"
+ *  (or a stale text-only row), its profile was settled as text-only for good,
+ *  and an attached picture silently vanished while Local Models said "vision
+ *  ready". These files are exactly what the router pairs (and ensureServable
+ *  re-scans before the first send to a model it has not seen), so they are a
+ *  sound "yes". They never turn a router "yes" into a "no"; absent both, the
+ *  answer stays unset ("don't know"). */
 export function visionModelIdsOnDisk(cacheDir: string): Set<string> {
   return new Set(
     scanLocalDownloads(cacheDir).filter((d) => isComplete(d) && d.hasProjector).map((d) => d.modelId),
