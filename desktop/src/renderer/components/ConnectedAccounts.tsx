@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { Button, FieldError } from './ui';
 import ConnectGithubModal from './ConnectGithubModal';
+import { SavedPageKeys } from './pages/SavedPageKeys';
 
 // Connected-accounts sub-page INSIDE the Account popup (Destin feedback,
 // 2026-07-22: one "Account" card in Settings; external connections live on a
@@ -130,6 +131,11 @@ export function ConnectedAccountsBody({ status, refresh }: {
 
         {error && <FieldError as="p" size="2xs">{error}</FieldError>}
       </div>
+
+      {/* Keys pasted for pages live beside the other things YouCoded holds on
+          the person's behalf (Pages Phase 2, deck Q-manage). Renders nothing
+          when none are saved. */}
+      <SavedPageKeys />
 
       {showConnect && (
         <ConnectGithubModal

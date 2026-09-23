@@ -205,6 +205,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // carries the four rows. The fake keeps pin state for the tab's lifetime so the
   // header's pinned buttons follow the library's pin toggles.
   'pages.list', 'pages.get', 'pages.setPinned', 'pages.setData', 'pages.onChanged',
+  // Pages Phase 2 (connections) — designed ahead of the backend; rows in mock-only.ts.
+  'pages.approve', 'pages.removeConnection', 'pages.refresh', 'pages.savedKeys', 'pages.deleteSavedKey',
   'appearance.set', 'appearance.broadcast', 'appearance.onSync',
   'skills.listMarketplace', 'skills.list', 'skills.getFavorites', 'skills.setFavorite', 'skills.getFeatured',
   'marketplace.getPackages', 'theme.marketplace',
@@ -461,7 +463,7 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 import { seedPages } from './fixtures/pages';
-import type { PagesBridge, PageDocument, PageSummary } from '../../../shared/pages-types';
+import type { PagesBridge, PageDocument, PageSummary, SavedPageKey } from '../../../shared/pages-types';
 
 /** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
  *
@@ -3186,6 +3188,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {
   let pages: PageDocument[] = empty ? [] : seedPages();
+  // One key is saved from the start (Trip board uses it), so the Weather page
+  // can show "Uses your saved OpenWeather key".
+  const savedServices = new Map<string, string>(empty ? [] : [['OpenWeather', 'api.openweathermap.org']]);
   const subs = new Set<(p: PageSummary[]) => void>();
   const summaries = () => pages.map(({ html: _html, data: _data, ...rest }) => rest);
   const publish = () => subs.forEach((cb) => cb(summaries()));
@@ -3209,8 +3214,58 @@ function createPagesMock(empty: boolean): PagesBridge {
       pages = pages.map((p) => (p.id === id ? { ...p, data } : p));
       return { ok: true };
     },
+    // The workbench never reaches the network: every fixture page's numbers are
+    // baked in. The door still answers, so a page that calls it gets an honest
+    // refusal rather than a promise that never settles.
+    fetch: async () => ({ ok: false as const, reason: 'network' as const, message: 'The workbench has no network; this page shows saved numbers.' }),
     onChanged: (cb) => { subs.add(cb); return () => { subs.delete(cb); }; },
+    // ── Phase 2 (connections) — no backend yet; mock-only.ts carries the rows ──
+    // Allow: every waiting line becomes approved, a pasted key becomes a saved
+    // key, and the page gets its first "Updated just now".
+    approve: async (id, keys) => {
+      await delay();
+      pages = pages.map((p) => {
+        if (p.id !== id) return p;
+        for (const c of p.connections ?? []) {
+          if (c.kind === 'key' && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
+        }
+        // Allowing (or dismissing "code changed") records the current code too.
+        return { ...p, codeChanged: false, connections: (p.connections ?? []).map((c) => ({ ...c, approved: true, ...(c.kind === 'key' ? { savedKey: true } : {}) })), refresh: p.refresh ?? { at: new Date().toISOString(), failed: false } };
+      });
+      publish();
+      return { ok: true, pages: summaries() };
+    },
+    // Remove: the line stays listed but goes back to waiting, so the page asks
+    // again next time it opens (deck S-remove).
+    removeConnection: async (id, connectionId) => {
+      pages = pages.map((p) => (p.id !== id ? p : { ...p, refresh: undefined, connections: (p.connections ?? []).map((c) => (c.id === connectionId ? { ...c, approved: false } : c)) }));
+      publish();
+      return summaries();
+    },
+    // Refresh always succeeds here, so a failed page can be seen recovering.
+    refresh: async (id) => {
+      await delay(900);
+      pages = pages.map((p) => (p.id === id ? { ...p, refresh: { at: new Date().toISOString(), failed: false } } : p));
+      publish();
+      return summaries();
+    },
+    savedKeys: async () => listSavedKeys(),
+    // A key is service AND address, so the workbench deletes by both — the real
+    // store cannot offer one page's key to another page's host.
+    deleteSavedKey: async (service, address) => {
+      if (savedServices.get(service) === address) savedServices.delete(service);
+      pages = pages.map((p) => ({ ...p, refresh: p.connections?.some((c) => c.kind === 'key' && c.service === service) ? undefined : p.refresh, connections: p.connections?.map((c) => (c.kind === 'key' && c.service === service ? { ...c, approved: false, savedKey: false } : c)) }));
+      publish();
+      return listSavedKeys();
+    },
   };
+  function delay(ms = 350) { return new Promise((r) => setTimeout(r, ms)); }
+  function listSavedKeys(): SavedPageKey[] {
+    return [...savedServices.entries()].map(([service, address]) => ({
+      service, address,
+      usedBy: pages.filter((p) => p.connections?.some((c) => c.kind === 'key' && c.service === service && c.approved)).map((p) => ({ id: p.id, name: p.name })),
+    }));
+  }
 }
 
 const VOICE_SCRIPT = "Can you look at the budget spreadsheet I sent yesterday? Row 14 is wrong: it says $2,300 but Sarah's invoice was $2,030. Fix it and draft a short reply to her.".split(' ');

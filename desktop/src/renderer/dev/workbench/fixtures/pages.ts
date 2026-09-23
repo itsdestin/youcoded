@@ -307,8 +307,143 @@ const PAINT_HTML = `<!doctype html>
 </script>
 </body></html>`;
 
+
+// ── Phase 2: connected pages (questions decks, 2026-09-19) ────────────────
+// Seven pages that each reach something outside, so every approval state is
+// reviewable: a YouCoded sign-in, a saved key offered again, a fresh key with
+// full access, an edit that added a line, the whole internet, and GitHub.
+// Their numbers are baked in — the workbench makes no requests — and they are
+// what the page would show after the app fetched on its behalf.
+
+const ANALYTICS_HTML = `<!doctype html>
+<html><head><meta charset="utf-8"><title>YouCoded analytics</title>
+<style>
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
+  .tile b { display:block; font-size: 28px; font-weight: 600; line-height: 1.1; margin-top: 4px; }
+  .bars { display:flex; align-items:flex-end; gap:6px; height:140px; padding-top: 8px; }
+  .bars i { flex:1; background: var(--accent); border-radius: 4px 4px 0 0; opacity:.85; min-width: 6px; }
+  .bars i:last-child { opacity: 1; }
+  .two { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .meter { height:6px; border-radius:3px; background: var(--inset); overflow:hidden; flex:1; }
+  .meter > span { display:block; height:100%; background: var(--accent); }
+  @media (max-width: 720px) { .tiles { grid-template-columns: 1fr 1fr; } .two { grid-template-columns: 1fr; } }
+</style></head>
+<body>
+<div class="yc-page yc-stack">
+  <div class="yc-row yc-row--between">
+    <div><div class="yc-eyebrow">YouCoded</div><h1>Who is using the app</h1></div>
+    <div class="yc-row"><button class="yc-button yc-button--sm">7 days</button><button class="yc-button yc-button--sm yc-pill--on">30 days</button><button class="yc-button yc-button--sm">90 days</button></div>
+  </div>
+  <div class="tiles">
+    <div class="yc-card tile"><span class="yc-eyebrow">Today</span><b>412</b><span class="yc-muted yc-small">people</span></div>
+    <div class="yc-card tile"><span class="yc-eyebrow">This month</span><b>2,186</b><span class="yc-muted yc-small">people</span></div>
+    <div class="yc-card tile"><span class="yc-eyebrow">New this week</span><b>143</b><span class="yc-muted yc-small">installs</span></div>
+    <div class="yc-card tile"><span class="yc-eyebrow">On the newest version</span><b>71%</b><span class="yc-muted yc-small">of people today</span></div>
+  </div>
+  <div class="yc-card yc-stack" style="gap:8px">
+    <div class="yc-row yc-row--between"><span class="yc-title">People per day</span><span class="yc-muted yc-small">last 30 days</span></div>
+    <div class="bars" id="bars"></div>
+  </div>
+  <div class="two">
+    <div class="yc-card yc-stack" style="gap:10px"><span class="yc-title">Versions</span><div id="versions" class="yc-stack" style="gap:8px"></div></div>
+    <div class="yc-card yc-stack" style="gap:10px"><span class="yc-title">Where</span><div id="where" class="yc-stack" style="gap:8px"></div></div>
+  </div>
+</div>
+<script>
+  var d=[210,224,231,228,190,176,240,252,261,270,266,214,201,280,291,302,310,305,250,238,322,340,351,349,360,301,288,380,398,412];
+  var max=Math.max.apply(null,d); document.getElementById('bars').innerHTML=d.map(function(v){return '<i style="height:'+(100*v/max)+'%" title="'+v+'"></i>';}).join('');
+  function rows(id,list){ document.getElementById(id).innerHTML=list.map(function(r){ return '<div class="yc-row"><span style="width:96px" class="yc-small">'+r[0]+'</span><span class="meter"><span style="width:'+r[1]+'%"></span></span><span class="yc-muted yc-small" style="width:40px;text-align:right">'+r[1]+'%</span></div>'; }).join(''); }
+  rows('versions',[['1.3.2',71],['1.3.1',17],['1.3.0',8],['older',4]]);
+  rows('where',[['United States',46],['Germany',11],['United Kingdom',9],['Canada',7],['India',6]]);
+</script>
+</body></html>`;
+
+/** A plain kit-styled page for the other connected samples: a heading and a
+ *  list of rows. Enough to show the page opening after Allow. */
+function simplePage(eyebrow: string, title: string, rows: Array<[string, string]>): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title></head><body>
+<div class="yc-page yc-stack">
+  <div><div class="yc-eyebrow">${eyebrow}</div><h1>${title}</h1></div>
+  <div class="yc-card"><div class="yc-list">${rows.map(([a, b]) => `<div class="yc-list-row yc-row yc-row--between"><span>${a}</span><span class="yc-muted">${b}</span></div>`).join('')}</div></div>
+</div></body></html>`;
+}
+
+/** Minutes before "now", so the band's "Updated 2 min ago" is always 2 min. */
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+
+function connectedPages(): PageDocument[] {
+  const base = { home: { kind: 'personal' as const }, pinned: false, data: null };
+  return [
+    {
+      ...base, id: 'page-analytics', name: 'YouCoded analytics', icon: 'chart', pinned: true,
+      description: 'People using the app each day, new installs, versions and countries.',
+      updatedAt: '2026-09-18T16:00:00.000Z', htmlStamp: 1789747200000, html: ANALYTICS_HTML,
+      connections: [{ id: 'yc', kind: 'youcoded', approved: true }],
+      refresh: { at: minutesAgo(2), failed: false },
+    },
+    {
+      ...base, id: 'page-trip-board', name: 'Trip board', icon: 'calendar',
+      description: 'Lisbon in October: the forecast for each day beside what is booked.',
+      updatedAt: '2026-09-15T11:30:00.000Z', htmlStamp: 1789471800000,
+      html: simplePage('Lisbon · 3–9 October', 'Trip board', [['Fri 3', '24° clear · arrive 14:10'], ['Sat 4', '23° clear · Alfama walk'], ['Sun 5', '21° showers · Gulbenkian'], ['Mon 6', '22° cloud · Sintra train 09:41']]),
+      connections: [{ id: 'weather', kind: 'key', service: 'OpenWeather', address: 'api.openweathermap.org', access: 'lookup', approved: true, savedKey: true }],
+      // The failed state: the page keeps its last good numbers, the band says so.
+      refresh: { at: minutesAgo(190), failed: true },
+    },
+    {
+      ...base, id: 'page-weather', name: 'Weather', icon: 'page',
+      description: 'Today and the next five days for the places you care about.',
+      updatedAt: '2026-09-19T07:10:00.000Z', htmlStamp: 1789801800000,
+      html: simplePage('Phoenix', 'Weather', [['Now', '38° clear'], ['Tonight', '29°'], ['Sat', '39° clear'], ['Sun', '37° wind']]),
+      // First ask, and a key for this service is already saved: offered, still asks.
+      connections: [{ id: 'weather', kind: 'key', service: 'OpenWeather', address: 'api.openweathermap.org', access: 'lookup', approved: false, savedKey: true }],
+    },
+    {
+      ...base, id: 'page-task-board', name: 'Task board', icon: 'list',
+      description: 'Your Todoist tasks as a board you can drag between columns.',
+      updatedAt: '2026-09-19T06:40:00.000Z', htmlStamp: 1789800000000,
+      html: simplePage('Todoist', 'Task board', [['Draft fiscal note', 'Today'], ['Reply to Sarah', 'Today'], ['Renew domain', 'Mon']]),
+      // First ask, fresh key, FULL access: the blunter sentence and the key box.
+      connections: [{ id: 'todoist', kind: 'key', service: 'Todoist', address: 'api.todoist.com', access: 'full', approved: false, savedKey: false,
+        keyHelp: { steps: ['Open todoist.com and sign in.', 'Go to Settings, then Integrations, then Developer.', 'Copy the API token and paste it below.'] } }],
+    },
+    {
+      ...base, id: 'page-headlines', name: 'Headlines', icon: 'notes',
+      description: 'A front page built from the feeds you follow.',
+      updatedAt: '2026-09-19T05:00:00.000Z', htmlStamp: 1789794000000,
+      html: simplePage('This morning', 'Headlines', [['BBC News', '12 stories'], ['Hacker News', '30 stories']]),
+      // An edit added a second feed: one line approved, one New.
+      connections: [
+        { id: 'bbc', kind: 'public', address: 'feeds.bbci.co.uk', approved: true },
+        { id: 'hn', kind: 'public', address: 'hnrss.org', approved: false },
+      ],
+      refresh: { at: minutesAgo(12), failed: false },
+    },
+    {
+      ...base, id: 'page-link-reader', name: 'Link reader', icon: 'page',
+      description: 'Paste any link and read the article without the clutter.',
+      updatedAt: '2026-09-18T20:15:00.000Z', htmlStamp: 1789762500000,
+      html: simplePage('Reader', 'Link reader', [['Paste a link to begin', '']]),
+      // The whole internet: its own blunt approval, alone on the page.
+      connections: [{ id: 'open', kind: 'open', approved: false }],
+    },
+    {
+      ...base, id: 'page-release-board', name: 'Release board', icon: 'list',
+      home: { kind: 'project', path: '/home/destin/youcoded-dev/youcoded', name: 'youcoded' },
+      description: 'Open pull requests and the checks on each, for this project.',
+      updatedAt: '2026-09-17T13:00:00.000Z', htmlStamp: 1789650000000,
+      html: simplePage('itsdestin/youcoded', 'Release board', [['#541 Pages connections', 'checks running'], ['#538 Project files', 'ready']]),
+      connections: [{ id: 'gh', kind: 'github', access: 'lookup', approved: true }],
+      refresh: { at: minutesAgo(1), failed: false },
+      // Rewritten since it was allowed: the band shows the quiet note.
+      codeChanged: true,
+    },
+  ];
+}
+
 export function seedPages(): PageDocument[] {
   return [
+    ...connectedPages(),
     {
       id: 'page-focus-timer',
       name: 'Focus timer',
