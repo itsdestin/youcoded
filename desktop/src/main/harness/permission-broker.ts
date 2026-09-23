@@ -27,6 +27,13 @@ export interface AskRequest {
    *  anything for path-subject tool asks; budget gates never set it.
    *  See spec 2026-08-11 (permissions management UI), finding 3. */
   external?: boolean;
+  /** The ask was forced by the removal-target floor (tools/rm-target.ts): the
+   *  command would remove the workspace, home folder, disk root or a system
+   *  folder, and that check runs below every rule — so a remembered grant could
+   *  never skip it. Renderer hides "Always allow"; nothing is remembered.
+   *  Separate from `external` because a specialist's external ask is refused
+   *  outright with outside-the-folder copy, while this one goes to the person. */
+  noAlwaysAllow?: boolean;
   /** The session's permission mode at ask time. Full-auto + denyListed is the
    *  renderer's cue to swap the generic row for the safety-stop footer
    *  (spec 2026-08-12, M5 2b). Optional: CC-path asks never carry it. */
@@ -162,6 +169,8 @@ export class PermissionBroker extends EventEmitter {
           tool_input: req.toolInput,
           denyListed: req.denyListed,
           external: req.external === true,
+          // Spread-omitted like permissionMode below: absent unless the floor fired.
+          ...(req.noAlwaysAllow ? { noAlwaysAllow: true } : {}),
           ...(req.specialist ? { specialist: req.specialist } : {}),
           // Spread-omitted (not `undefined`-valued) so the CC-path payload
           // shape is byte-identical to before this field existed.

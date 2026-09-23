@@ -23,6 +23,9 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
       // every later call — so ToolCard must NOT offer "Always allow". Absent for
       // CC hook events. See spec 2026-08-11, finding 3.
       const external = payload.external as boolean | undefined;
+      // The removal-target floor's ask (permission-broker.ts `noAlwaysAllow`):
+      // also no "Always allow", for the same can-never-be-honoured reason.
+      const noAlwaysAllow = payload.noAlwaysAllow === true;
       // Validate against the union rather than trusting the wire — a remote
       // peer on an older/newer build must degrade to the generic row, never
       // to a mode-shaped string the safety-stop footer misreads.
@@ -55,6 +58,7 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
         permissionSuggestions: permissionSuggestions || undefined,
         denyListed: denyListed || undefined,
         external: external || undefined,
+        noAlwaysAllow: noAlwaysAllow || undefined,
         permissionMode,
         specialist,
       };

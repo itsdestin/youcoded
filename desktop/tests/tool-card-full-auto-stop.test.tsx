@@ -101,3 +101,21 @@ describe('full-auto safety stop', () => {
     expect(screen.getByText('Full auto still stops here.')).toBeTruthy();
   });
 });
+
+// The removal-target floor (harness rm-target.ts) forces a stop no saved grant
+// can skip, so the band must not offer a grant it could never honour.
+describe('full-auto stop for a removal the floor always asks about', () => {
+  it('shows Run it / Skip it and no Always Allow', () => {
+    renderCard(stopTool({ input: { command: 'rm -rf ~' }, noAlwaysAllow: true }));
+    expect(screen.getByRole('button', { name: 'Run it' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Skip it' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Always Allow' })).toBeNull();
+    expect(screen.getByText('Stopped before deleting files')).toBeTruthy();
+  });
+
+  it('the generic row hides Always allow for the same ask outside Full auto', () => {
+    renderCard(stopTool({ input: { command: 'rm -rf ~' }, noAlwaysAllow: true, permissionMode: 'ask' }));
+    expect(screen.getByRole('button', { name: /^yes$/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /always/i })).toBeNull();
+  });
+});

@@ -161,6 +161,25 @@ describe('childAskRouter', () => {
       });
     });
 
+    it('a removal the floor always asks about reaches the person, and an "always" answer stores nothing', async () => {
+      const broker = new PermissionBroker();
+      const emitted: any[] = [];
+      broker.on('hook-event', (e) => emitted.push(e));
+      const remember = vi.fn();
+      const router = childAskRouter({
+        broker, parentId: 'parent-1', childId: 'child-1', agentType: 'worker', title: 'W', parentToolCallId: 'tc-1', remember,
+      });
+      const p = router({
+        sessionId: 'child-1', toolName: 'Bash', toolInput: { command: 'rm -rf build/../..' },
+        denyListed: true, noAlwaysAllow: true, subject: 'rm -rf build/../..',
+      });
+      const payload = firstPayload(emitted);
+      expect(payload.noAlwaysAllow).toBe(true); // routed to the card, not refused like an external ask
+      expect(broker.respond(payload._requestId as string, { decision: { behavior: 'allow' }, updatedPermissions: [{ tool: 'Bash' }] })).toBe(true);
+      expect((await p).behavior).toBe('allow');
+      expect(remember).not.toHaveBeenCalled();
+    });
+
     it('a command with NO safe grant width is never remembered at all — the router used to remember it anyway', async () => {
       const broker = new PermissionBroker();
       const emitted: any[] = [];

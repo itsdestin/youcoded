@@ -37,6 +37,16 @@ describe('PermissionBroker', () => {
     expect(emitted[0].payload.permissionMode).toBe('full-auto');
   });
 
+  it('rides noAlwaysAllow along the payload only when the removal-target floor set it', () => {
+    const broker = new PermissionBroker();
+    const emitted: any[] = [];
+    broker.on('hook-event', (e) => emitted.push(e));
+    void broker.ask({ sessionId: 's1', toolName: 'Bash', toolInput: { command: 'rm -rf ~' }, denyListed: true, noAlwaysAllow: true });
+    void broker.ask({ sessionId: 's1', toolName: 'Bash', toolInput: { command: 'ls' }, denyListed: false });
+    expect(emitted[0].payload.noAlwaysAllow).toBe(true);
+    expect('noAlwaysAllow' in emitted[1].payload).toBe(false);
+  });
+
   it('omits permissionMode when the caller did not supply one (CC-path payload shape unchanged)', () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];

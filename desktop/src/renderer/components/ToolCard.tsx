@@ -662,7 +662,9 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     ? [
         () => handleRespond({ decision: { behavior: 'allow' } }),
         () => handleRespond({ decision: { behavior: 'deny' } }),
-        onAlwaysAllow,
+        // Hidden (and so not in the arrow-key walk) when the ask can never be
+        // remembered — the removal-target floor's stop is one.
+        ...(suppressAlwaysAllow ? [] : [onAlwaysAllow]),
       ]
     : [
         () => handleRespond({ decision: { behavior: 'allow' } }),
@@ -841,19 +843,21 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
           </button>
           {/* P-18: a real 1px divider instead of a typed "|" — takes the theme's
               edge colour and is silent to screen readers. */}
-          <span aria-hidden="true" className="w-px h-3.5 bg-edge shrink-0" />
+          {!suppressAlwaysAllow && <span aria-hidden="true" className="w-px h-3.5 bg-edge shrink-0" />}
           {/* Orange, not the generic row's blue: a fourth member of the status
               button set, distinct from the amber band behind it (compare R2·A).
               fullAutoStop implies a native deny-listed ask, so onAlwaysAllow
               always routes through the consequence confirm above. */}
-          <button
+          {/* Not offered when the ask can never be remembered (the removal-target
+              floor): a grant there would be a promise nothing keeps. */}
+          {!suppressAlwaysAllow && (<button
             ref={el => { buttonsRef.current[2] = el; }}
             disabled={responding}
             onClick={onAlwaysAllow}
             className={`px-3 ${pad} text-xs font-medium rounded-lg bg-red-400/60 hover:bg-red-400/80 text-orange-100 transition-colors disabled:opacity-50 ${focusIdx === 2 ? ring : ''}`}
           >
             Always Allow
-          </button>
+          </button>)}
         </div>
         {unconfirmedNote}
       </div>
@@ -1559,7 +1563,10 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             // lookup POSITIVELY resolves (never shown-then-hidden), and an
             // unresolved hire must never be offered a grant optimistically —
             // we would not know which width it was even asking for.
+            // `tool.noAlwaysAllow`: the removal-target floor forced this ask
+            // below every rule, so a grant could never skip it either.
             suppressAlwaysAllow={tool.toolName === 'max_steps' || tool.toolName === 'doom_loop' || tool.external === true
+              || tool.noAlwaysAllow === true
               || (tool.toolName === 'Task' && !!tool.input?.task_id)
               || (tool.toolName === 'Task' && !tool.input?.task_id && !hireDefinition)
               // A hire with no work_dir has NO permission subject at all

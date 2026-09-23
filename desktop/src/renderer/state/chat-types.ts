@@ -685,6 +685,9 @@ export type ChatAction =
       // folder → ToolCard HIDES "Always allow", because the engine skips the
       // rules on every later external call and could never honor the grant.
       external?: boolean;
+      // Native broker only: forced by the removal-target floor (rm-target.ts),
+      // which no stored rule can skip → ToolCard HIDES "Always allow" too.
+      noAlwaysAllow?: boolean;
       // Native broker only: the session's mode at ask time. 'full-auto' +
       // denyListed → ToolCard renders the safety-stop footer (spec 2026-08-12).
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';

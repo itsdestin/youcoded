@@ -585,6 +585,7 @@ export type SubagentSegment =
       requestId?: string;
       denyListed?: boolean;
       external?: boolean;
+      noAlwaysAllow?: boolean;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
@@ -757,6 +758,10 @@ export interface ToolCallState {
    *  every external path and never consults the stored rules there, so a
    *  remembered rule could not fire. Spec 2026-08-11, finding 3. */
   external?: boolean;
+  /** Native broker only: the ask was forced by the removal-target floor
+   *  (harness/tools/rm-target.ts), which no stored rule can skip → the
+   *  "Always allow" button is HIDDEN, for the same reason as `external`. */
+  noAlwaysAllow?: boolean;
   /** Native broker only: the session's permission mode when the ask fired.
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */

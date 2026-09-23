@@ -33,6 +33,8 @@ import type { PermissionDecision, PermissionRule } from '../../shared/permission
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
+import { destructiveRmReason } from './tools/rm-target';
+import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
 
 // Tools whose permission SUBJECT is not a filesystem path. Bash's is a command
@@ -3724,11 +3726,29 @@ export class HarnessSession extends EventEmitter {
       }
     }
 
+    // 3b. The removal-target floor (tools/rm-target.ts). A Bash command that
+    //     would remove the workspace, the home folder, the disk root or a system
+    //     folder is ALWAYS asked about — below every rule, so a remembered
+    //     "Always allow" cannot wave it through. It only ever turns an allow
+    //     into an ask: a deny rule still denies.
+    const rmFloor = call.toolName === 'Bash' && typeof subject === 'string'
+      ? destructiveRmReason(subject, { cwd: this.opts.cwd, shellCwd: this.shellCwd ?? undefined, home: os.homedir() })
+      : null;
+    if (rmFloor) log('INFO', 'HarnessSession', 'removal-target floor forced an ask', { sessionId: this.opts.sessionId, reason: rmFloor });
+
     // 4. Configured decision. An external-directory path forces 'ask' regardless
     //    of rules; otherwise consult decide() (default: ask — never silent-allow).
-    const decision: PermissionDecision = externalAsk
+    const configured: PermissionDecision = externalAsk
       ? { action: 'ask', denyListed: false }
       : await (this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
+    // denyListed: true so the card carries the destructive-command warning (and
+    // Full auto's "Stopped before deleting files" band) like any deny-list stop.
+    const decision: PermissionDecision = rmFloor && configured.action !== 'deny'
+      ? { action: 'ask', denyListed: true }
+      : configured;
+    // A forced ask never consults stored rules, so "Always allow" could never
+    // be honoured for it — the card hides the button and nothing is remembered.
+    const forcedAsk = externalAsk || rmFloor !== null;
     // A deny may carry its own model-facing reason (PermissionDecision.message):
     // the specialist caps (child-permissions.ts) refuse with "not available to
     // this specialist" / "read-only charter", which tells the model what to do
@@ -3747,7 +3767,7 @@ export class HarnessSession extends EventEmitter {
       // as `pattern` — threaded through so a routed CHILD ask (child-ask-
       // router.ts, which has no other way to reach it) can persist the exact
       // same rule a root session's own remember-rule listener would.
-      const d = await this.opts.askUser({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: decision.denyListed, external: externalAsk, subject });
+      const d = await this.opts.askUser({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: decision.denyListed, external: externalAsk, ...(rmFloor ? { noAlwaysAllow: true } : {}), subject });
       if (d.behavior === 'canceled') return 'interrupted';
       // Task 8: d.message carries specific copy for a deny that ISN'T a real
       // user decline — e.g. child-ask-router's outside-the-folder refusal for
@@ -3763,7 +3783,7 @@ export class HarnessSession extends EventEmitter {
       // path forced this ask and SKIPS decide() on every future call, so a stored
       // rule can never fire — recording one promises the user something the
       // engine will not honor. See spec 2026-08-11, finding 3.
-      if (d.always && !externalAsk) {
+      if (d.always && !forcedAsk) {
         // The card sent a width, not a pattern — rememberedRuleFor derives the
         // rule here, in main. null means this command may not be remembered at
         // any width, so nothing is emitted.
