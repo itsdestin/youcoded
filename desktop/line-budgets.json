@@ -9,7 +9,7 @@
   "budgets": {
     "main/ipc-handlers.ts": 5519,
     "main/harness/native-session-host.ts": 4883,
-    "renderer/App.tsx": 4877,
+    "renderer/App.tsx": 4882,
     "main/remote-server.ts": 4147,
     "main/harness/harness-session.ts": 3832,
     "renderer/components/SettingsPanel.tsx": 3195,
@@ -18,7 +18,7 @@
     "renderer/styles/globals.css": 2929,
     "renderer/components/SessionStrip.tsx": 2774,
     "main/main.ts": 2559,
-    "shared/types.ts": 2230,
+    "shared/types.ts": 2233,
     "renderer/components/SyncPanel.tsx": 2041,
     "main/engine/engine-manager.ts": 2032,
     "renderer/components/ResumeBrowser.tsx": 1837,

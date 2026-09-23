@@ -24,6 +24,7 @@ export class PendingHandoff {
     private readonly api: Api,
     private readonly changed: (result: HandoffAttemptResult | null, tab?: PendingTab) => void,
     private readonly admitted: (tabId: string, session: SessionInfo, detach: boolean) => void,
+    private readonly orphaned: (session: SessionInfo) => void = () => {},
   ) {}
 
   get active(): PendingTab | null { return this.current; }
@@ -76,7 +77,13 @@ export class PendingHandoff {
   }
 
   private accept(tab: NonNullable<typeof this.current>, result: HandoffAttemptResult, generation: number): void {
-    if (!this.live(tab, generation)) return;
+    if (!this.live(tab, generation)) {
+      // WHY: backend cancel refuses an attempt that already admitted, so a
+      // writer started just as the user closed the tab would keep running
+      // unseen. Close it; a reused pre-existing writer is not ours to close.
+      if (result.status === 'admitted' && !('reused' in result.session && result.session.reused)) this.orphaned(result.session);
+      return;
+    }
     if (result.status === 'admitted') {
       this.current = null;
       // WHY: a reused writer belongs to its original window, not a new one.

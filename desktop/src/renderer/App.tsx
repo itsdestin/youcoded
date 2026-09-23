@@ -336,15 +336,19 @@ function AppInner() {
   const deferredCreatedRef = useRef(new Map<string, any>());
   if (!pendingRef.current) {
     pendingRef.current = new PendingHandoff(window.claude.session.handoff,
-      (_result, tab) => {
+      (result, tab) => {
         setPendingTab(tab ? { ...tab } : null);
         if (tab?.phase === 'waiting' || deferredCreatedRef.current.size === 0) return;
         const held = [...deferredCreatedRef.current.values()];
         deferredCreatedRef.current.clear();
+        // WHY: a user close abandons the attempt; its writer (if any) is being
+        // torn down, so do not surface it as a tab the user just closed.
+        if (!tab && result?.status !== 'admitted') return;
         setSessions((prev) => [...prev, ...held.filter((info) => !prev.some((s) => s.id === info.id))]);
         for (const info of held) dispatch({ type: 'SESSION_INIT', sessionId: info.id });
       },
-      (tabId, info, detach) => pendingAdmitRef.current(tabId, info, detach));
+      (tabId, info, detach) => pendingAdmitRef.current(tabId, info, detach),
+      (info) => { void window.claude.session.destroy(info.id); });
   }
   useEffect(() => () => pendingRef.current?.dispose(), []);
   const headerRef = useRef<HTMLDivElement>(null);
@@ -1221,7 +1225,8 @@ function AppInner() {
   useEffect(() => {
     const createdHandler = window.claude.on.sessionCreated((info) => {
       const waiting = pendingRef.current?.active;
-      if (waiting?.phase === 'waiting' && info.cwd === waiting.cwd && info.provider === waiting.provider)
+      // Exact conversation match only: another conversation opened meanwhile must appear at once.
+      if (waiting?.phase === 'waiting' && (info.resumeSessionId ?? info.id) === waiting.conversationId)
         deferredCreatedRef.current.set(info.id, info);
       else setSessions((prev) => {
         // Deduplicate — replay buffers resend session:created for existing sessions

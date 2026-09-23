@@ -100,6 +100,9 @@ export interface SessionInfo {
   harnessId?: string;
   /** Model alias the session was started with (e.g. 'claude-sonnet-4-6') */
   model?: string;
+  /** The saved conversation this session resumed, when it resumed one. Lets a
+   *  pending handoff tab recognise its own session's creation push exactly. */
+  resumeSessionId?: string;
   /** Native runtime only: which KIND of provider the bound model runs on
    *  ('chatgpt' | 'openrouter' | 'local-engine' | …), as main already resolves
    *  it in conversations/portable-model.ts.

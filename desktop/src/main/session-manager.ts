@@ -301,6 +301,7 @@ export class SessionManager extends EventEmitter {
       // The shell's own name is how the strip and header label this session —
       // it has no model alias and no harness preset to label it with.
       ...(isShell ? { shellName: shellDisplayName(shellCommand) } : {}),
+      ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
     };
 
     const session: ManagedSession = { info, worker };

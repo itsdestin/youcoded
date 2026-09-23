@@ -17,8 +17,9 @@ function setup() {
   };
   const changes: (HandoffAttemptResult | null)[] = [];
   const admitted = vi.fn();
-  const pending = new PendingHandoff(api, (result) => changes.push(result), admitted);
-  return { api, changes, admitted, pending, finish: (result: HandoffAttemptResult) => finish(result) };
+  const orphaned = vi.fn();
+  const pending = new PendingHandoff(api, (result) => changes.push(result), admitted, orphaned);
+  return { api, changes, admitted, orphaned, pending, finish: (result: HandoffAttemptResult) => finish(result) };
 }
 const session = { id: 'real-session', provider: 'claude' as const, name: 'Saved', cwd: '/project', permissionMode: 'normal' as const, skipPermissions: false, status: 'active' as const, createdAt: Date.now() };
 
@@ -132,6 +133,8 @@ describe('pending handoff', () => {
     x.finish({ id: 'attempt-1', status: 'admitted', source: 'confirmed', session });
     await vi.waitFor(() => expect(x.api.cancel).toHaveBeenCalledWith('attempt-1'));
     expect(x.admitted).not.toHaveBeenCalled();
+    // The backend cannot cancel an admitted attempt; the closed tab's writer is closed instead.
+    await vi.waitFor(() => expect(x.orphaned).toHaveBeenCalledWith(session));
   });
 
   it('does not force on saved-copy denial until separate consent uses the expected holder id', async () => {

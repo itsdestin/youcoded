@@ -962,6 +962,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         provider: opts.provider ?? 'claude',
         harnessId: (opts as any).harnessId,
         model: opts.model,
+        ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
       };
       store.setState((s) => ({ ...s, sessions: [...s.sessions, created as any] }));
       // WHY emit: the renderer does not poll. App re-fetches on
