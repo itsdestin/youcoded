@@ -10,9 +10,10 @@ import React, {
 // Centralized dismissal stack. Overlays call useEscClose(open, onClose); a
 // LIFO stack tracks them. The stack is triggered from two sources:
 //   1. ESC keydown on the window (desktop primary input). The capture-phase
-//      listener pops the top of the stack and invokes its onClose.
+//      listener invokes the top entry's onClose (it leaves the stack when
+//      that overlay actually closes — see peekTop).
 //   2. useDismissTop() — imperative entry point used by the Android
-//      hardware-back bridge in App.tsx. Same popTop() body as the keydown
+//      hardware-back bridge in App.tsx. Same peekTop() body as the keydown
 //      listener; back press is NOT synthesized as a keyboard event.
 //
 // When the stack is empty, ESC falls through to the chat-passthrough handler
@@ -47,10 +48,17 @@ class EscStore {
     if (this.stack.length !== before) this.emit();
   }
 
-  popTop(): Closer | undefined {
-    const top = this.stack.pop();
-    if (top) this.emit();
-    return top;
+  // WHY peek, not pop: the entry belongs to the hook, and leaves the stack only
+  // when the hook's `open` goes false or it unmounts (the effect cleanup). A
+  // LAYERED overlay — the Resume browser closing its Organize sheet, then its
+  // expanded row, then itself — peels one layer per press and stays open; when
+  // this used to pop, that first press silently dropped the browser off the
+  // stack, so later presses did nothing to it and fell through to the chat,
+  // interrupting the assistant. An overlay that really closes still leaves the
+  // stack via its cleanup (React flushes a keypress's effects before the next
+  // keypress), so one press still closes exactly one thing.
+  peekTop(): Closer | undefined {
+    return this.stack[this.stack.length - 1];
   }
 
   get isEmpty(): boolean {
@@ -80,7 +88,7 @@ export function EscCloseProvider({ children }: { children: React.ReactNode }): R
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (store.isEmpty) return;
-      const top = store.popTop();
+      const top = store.peekTop();
       if (!top) return;
       e.preventDefault();
       e.stopPropagation();
@@ -128,10 +136,10 @@ export function useEscStackEmpty(): boolean {
   );
 }
 
-// Imperative dismissal trigger — pops the top of the stack and invokes its
+// Imperative dismissal trigger — invokes the top of the stack's
 // onClose. Used by the Android hardware-back bridge so back press doesn't
 // synthesize a keyboard event. ESC keydown listener and this hook share
-// the same popTop() body; behavior is identical regardless of trigger source.
+// the same peekTop() body; behavior is identical regardless of trigger source.
 //
 // The returned function is stable across renders (keyed only on the store
 // identity, which never changes within a provider). Callers can safely
@@ -140,7 +148,7 @@ export function useDismissTop(): () => void {
   const store = useContext(EscStoreContext);
   return useCallback(() => {
     if (!store) return;
-    const top = store.popTop();
+    const top = store.peekTop();
     if (!top) return;
     try {
       top.ref.current();
