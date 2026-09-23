@@ -390,10 +390,24 @@ describe('mount logic', () => {
     // order). On touch, the raw-bytes hook gets the real sessionId and the
     // string hook gets null (early-returns inside the hook). Asserting which
     // hook got the real sessionId is the meaningful check, not which got called.
-    it('passes sessionId to usePtyRawBytes and null to usePtyOutput', () => {
+    it('passes sessionId to usePtyRawBytes and null to usePtyOutput on the Android app', () => {
+      vi.mocked(platform.isAndroid).mockReturnValue(true);
+      try {
+        render(<TerminalView sessionId="s1" visible={true} />);
+        expect(usePtyRawBytes).toHaveBeenCalledWith('s1', expect.any(Function));
+        expect(usePtyOutput).toHaveBeenCalledWith(null, expect.any(Function));
+      } finally {
+        vi.mocked(platform.isAndroid).mockReturnValue(false);
+      }
+    });
+
+    // A phone BROWSER is a touch device too, but the computer it talks to sends the
+    // terminal as text and never as raw bytes — only the Android app's own runtime
+    // does. Listening for raw bytes there would draw a blank terminal.
+    it('a phone browser draws the text stream the computer sends', () => {
       render(<TerminalView sessionId="s1" visible={true} />);
-      expect(usePtyRawBytes).toHaveBeenCalledWith('s1', expect.any(Function));
-      expect(usePtyOutput).toHaveBeenCalledWith(null, expect.any(Function));
+      expect(usePtyOutput).toHaveBeenCalledWith('s1', expect.any(Function));
+      expect(usePtyRawBytes).toHaveBeenCalledWith(null, expect.any(Function));
     });
   });
 

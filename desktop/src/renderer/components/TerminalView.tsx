@@ -10,7 +10,7 @@ import { usePtyReset } from '../hooks/usePtyReset';
 import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear } from '../hooks/terminal-registry';
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { useTheme } from '../state/theme-context';
-import { isTouchDevice } from '../platform';
+import { isAndroid, isTouchDevice } from '../platform';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
 
@@ -530,13 +530,14 @@ export default function TerminalView({ sessionId, visible }: Props) {
   }, [visible, sessionId]);
 
   // Write PTY output to terminal; notify registry when buffer is updated.
-  // Touch platforms (Android, remote browser) consume pty:raw-bytes (Uint8Array)
-  // from the WebSocket bridge — Tier 2 of android-terminal-data-parity. Desktop
-  // continues to consume pty:output (string) from node-pty's UTF-8-decoded stream.
-  // isTouchDevice() is a stable platform constant, so calling different hooks
-  // based on it does not violate React's rules-of-hooks (the hook order is
-  // stable for the lifetime of the renderer).
-  const useRawBytes = isTouchDevice();
+  // The Android app consumes pty:raw-bytes (Uint8Array) from its own runtime —
+  // Tier 2 of android-terminal-data-parity. Everything else consumes pty:output
+  // (string), which is all a desktop host ever sends, to a window or a phone.
+  // WHY isAndroid() and not isTouchDevice(): a phone BROWSER is a touch device too
+  // (it now reports 'browser' — remote-shim auth:ok), but keying the stream on touch
+  // would have it wait for raw bytes no desktop emits and draw a blank terminal.
+  // Both hooks are called every render; only their argument depends on this.
+  const useRawBytes = isAndroid();
   // Remote access batch 2 (§7): the host could not continue this terminal from
   // where the phone left off (a host restart, or a session destroyed and
   // recreated), so it says "start over" and then sends the whole buffer. Clear

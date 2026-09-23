@@ -209,6 +209,38 @@ describe('session:create native resume — missing stored header', () => {
     expect(typeof errorCall![1].data.text).toBe('string');
     expect(errorCall![1].data.text.length).toBeGreaterThan(0);
   });
+
+  it('a session a phone creates runs the same native start: the remote host is handed it', async () => {
+    const mockIpcMain = { handle: vi.fn(), on: vi.fn() };
+    const mockSessionManager = {
+      createSession: vi.fn(), destroySession: vi.fn(() => true), listSessions: vi.fn(() => []),
+      sendInput: vi.fn(), resizeSession: vi.fn(), on: vi.fn(),
+    };
+    const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: () => false };
+    const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) } };
+    let starter: ((info: any, opts: any) => Promise<void>) | null = null;
+    const remoteServer = {
+      broadcast: vi.fn(),
+      setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
+      setSessionStarter: vi.fn((fn: any) => { starter = fn; }),
+      getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
+    };
+    registerIpcHandlers(
+      mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any,
+      undefined as any, undefined, undefined, remoteServer as any,
+    );
+    expect(starter).toBeTypeOf('function');
+    // The resume with no stored data and no binding: the start runs and says so to every screen.
+    await starter!(
+      { id: 'ghost-native-2', name: 'Resuming…', cwd: '/tmp', status: 'active', provider: 'native' },
+      { provider: 'native', resumeSessionId: 'ghost-native-2', cwd: '/tmp', name: 'Resuming…', skipPermissions: false },
+    );
+    await new Promise((resolve) => process.nextTick(resolve));
+    const pushed = remoteServer.broadcast.mock.calls.find(
+      (c: any[]) => c[0]?.type === 'transcript:event' && c[0]?.payload?.type === 'session-error',
+    );
+    expect(pushed?.[0].payload.sessionId).toBe('ghost-native-2');
+  });
 });
 
 // Task 5 gap (final review): TAGS_UPDATE and TAGS_DELETE denormalize into the
@@ -457,6 +489,7 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
       broadcast: vi.fn(),
       // Wiring the handlers hand a real server at boot; inert here.
       setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
+      setSessionStarter: vi.fn(),
     } : undefined;
     const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) }, getInstalled: vi.fn(() => []) };
     registerIpcHandlers(
