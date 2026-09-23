@@ -120,6 +120,8 @@ import { formatRelativeTime } from '../../../utils/format-time';
 // component search rows already share, reused rather than re-laid-out so the
 // "tags · project · date" composition can never drift between the two surfaces.
 import { ChatsearchMetaLine } from '../../../components/tool-views/ChatsearchMetaLine';
+// UI-only project plugin controls exploration; state is local to each pane.
+import { ProjectPluginControlsDemo } from '../mockups/ProjectPluginControls';
 import {
   CHATSEARCH_FIXTURE,
   CS_RESUMABLE,
@@ -7102,6 +7104,27 @@ export const COMPARE_SURFACES: CompareSurface[] = [
         ],
       },
     ],
+  },
+  {
+    id: 'project-plugin-controls',
+    label: 'Project plugin controls',
+    question: 'Which arrangement makes plugin availability and project-scoped setup clearest?',
+    frame: 'canvas', paneWidth: { min: 320, max: 820 },
+    rounds: [{ n: 1, candidates: [
+      { id: 'project-first-stacked', label: 'A · Fresh install, project first', note: 'Projects page chrome with a newly installed plugin and multiple project cards.', render: () => <ProjectPluginControlsDemo arrangement="fresh" /> },
+      { id: 'project-library', label: 'B · Project plugin library', note: 'One existing project focused on its plugin controls and setup state.', render: () => <ProjectPluginControlsDemo arrangement="library" /> },
+    ] }, { n: 2, basis: 'Destin review: use app chevrons and buttons; dull locked-on switches with hover hint', candidates: [
+      { id: 'project-first-stacked', label: 'A · Fresh install', note: 'Projects and items expand with the app controls.', render: () => <ProjectPluginControlsDemo arrangement="fresh" /> },
+      { id: 'project-library', label: 'B · Existing projects', note: 'Your Assistant bundled tools are visibly on but locked; hover for why.', render: () => <ProjectPluginControlsDemo arrangement="library" /> },
+    ] }, { n: 3, basis: 'Destin review: install flow should use existing settings rows, not nested custom cards', candidates: [
+      { id: 'project-first-stacked', label: 'Install setup · settings rows', note: 'Projects and item switches use the same SettingRow surface as other app settings.', render: () => <ProjectPluginControlsDemo arrangement="fresh" /> },
+    ] }, { n: 4, basis: 'Destin review: sub-options share the project container and equal margins', candidates: [
+      { id: 'project-first-stacked', label: 'One surface per project', note: 'All settings rows align within their parent project, without nested cards or stepped margins.', render: () => <ProjectPluginControlsDemo arrangement="fresh" /> },
+    ] }, { n: 5, basis: 'Destin clarification: project and plugin groups collapse; bottom-level options have attached cards', candidates: [
+      { id: 'project-first-stacked', label: 'Attached collapsible groups', note: 'Plugin and its leaf cards remain inside the project outline with aligned edges.', render: () => <ProjectPluginControlsDemo arrangement="fresh" /> },
+    ] }, { n: 6, basis: 'Use the app’s existing collapsible group anatomy, not ad-hoc nested borders', candidates: [
+      { id: 'project-first-stacked', label: 'Native grouped cards', note: 'Project and plugin each own a header and inset body; leaf options use the app’s SettingRow cards.', render: () => <ProjectPluginControlsDemo arrangement="fresh" /> },
+    ] }],
   },
   ...ALL_SURFACES.filter((s) => s.id === ACTIVE_FIRST),
   ...ALL_SURFACES.filter((s) => s.id !== ACTIVE_FIRST),
