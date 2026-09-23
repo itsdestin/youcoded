@@ -3,9 +3,19 @@
 // slow periodic tick) we walk ~/.claude/projects and upsert records for what
 // we find. The live path remains authoritative — the upsert merge keeps the
 // newest data, so re-scanning is always safe.
+//
+// WHY every disk call here is async (perf, 2026-09-23): this scan runs at
+// startup and every 30 minutes over EVERY transcript ever written, on the
+// main process. It used to readdir/lstat each one synchronously, freezing
+// every window for the whole walk — longer the more history you have. Each
+// file now costs one awaited lstat, so the event loop gets a turn between
+// files (typing, tab switches and chat updates are served mid-scan), and an
+// unchanged transcript's tail read is answered from the Resume Browser's
+// size+mtime cache instead of re-reading 64 KB. Guard: the
+// no-sync-fs-whole-file ast-grep rule lists this file.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readSessionTranscriptMeta } from '../session-browser';
+import { readSessionTranscriptMeta, readSessionTranscriptMetaCached } from '../session-browser';
 import { ccProjectSlug } from '../slug-encoding';
 import { transcriptSkipReason, MIN_TRANSCRIPT_BYTES } from './lane-guards';
 import type { ConversationStore } from './conversation-store';
@@ -42,15 +52,17 @@ export interface ReconcileOpts {
 // cross-device materialize gap (the record's projectKey never matches the peer's
 // managed project). Keys are lowercased so Windows case drift between a saved
 // folder path and CC's cwd can't miss the match.
-function buildSlugToName(knownFolders: string[] | undefined): Map<string, string> {
+async function buildSlugToName(knownFolders: string[] | undefined): Promise<Map<string, string>> {
   const m = new Map<string, string>();
   for (const folder of knownFolders ?? []) {
     try {
       // CC slugs realpath(cwd) (see slug-encoding.ts fixture "symlink resolves to
       // realpath"). Resolve the same way, falling back exactly as CC's Px() does,
       // so a symlinked project folder finds CC's real directory.
+      // fs.promises.realpath is the NATIVE realpath (same answer the old
+      // realpathSync.native gave), just off the main thread.
       let resolved: string;
-      try { resolved = fs.realpathSync.native(folder); } catch { resolved = folder; }
+      try { resolved = await fs.promises.realpath(folder); } catch { resolved = folder; }
       m.set(ccProjectSlug(resolved).toLowerCase(), path.basename(folder));
     }
     catch { /* unslugifiable path — skip */ }
@@ -84,9 +96,9 @@ function projectNameFromSlug(slug: string): string {
 // Topic-file title wins over the derived fallback (matches session-browser
 // precedence). Placeholders ('New Session' / 'Untitled') are treated as absent
 // so the derived fallback still applies.
-function readTopicTitle(topicsDir: string, sessionId: string): string {
+async function readTopicTitle(topicsDir: string, sessionId: string): Promise<string> {
   try {
-    const t = fs.readFileSync(path.join(topicsDir, `topic-${sessionId}`), 'utf8').trim();
+    const t = (await fs.promises.readFile(path.join(topicsDir, `topic-${sessionId}`), 'utf8')).trim();
     if (t && t !== 'New Session' && t !== 'Untitled') return t;
   } catch { /* no topic file */ }
   return '';
@@ -105,10 +117,10 @@ export async function reconcile(opts: ReconcileOpts): Promise<number> {
   let upserts = 0;
   let slugs: string[] = [];
   // No projects dir → nothing to reconcile.
-  try { slugs = fs.readdirSync(opts.projectsDir); } catch { return 0; }
+  try { slugs = await fs.promises.readdir(opts.projectsDir); } catch { return 0; }
 
   // Recover exact folder names for this device's known folders (see the helper).
-  const slugToName = buildSlugToName(opts.knownFolders);
+  const slugToName = await buildSlugToName(opts.knownFolders);
 
   // PERF (review fix): preload ALL existing records in ONE list() pass instead
   // of store.get() per transcript. get() runs heal(), which readdirs the whole
@@ -130,7 +142,7 @@ export async function reconcile(opts: ReconcileOpts): Promise<number> {
     const dir = path.join(opts.projectsDir, slug);
     let files: string[] = [];
     // A non-directory entry (or an unreadable dir) just yields no files.
-    try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
+    try { files = (await fs.promises.readdir(dir)).filter((f) => f.endsWith('.jsonl')); } catch { continue; }
     for (const file of files) {
       const sessionId = file.replace(/\.jsonl$/, '');
       // Malformed ids never become records (phantom-id guard).
@@ -154,14 +166,18 @@ export async function reconcile(opts: ReconcileOpts): Promise<number> {
         // Symlink + junk-size gate now lives in lane-guards.ts so the chatsearch
         // index builder and NativeHome share ONE implementation. lstat (not stat)
         // is load-bearing: it does not follow the link.
-        const st = fs.lstatSync(jsonlPath);
+        const st = await fs.promises.lstat(jsonlPath);
         if (transcriptSkipReason(st, MIN_TRANSCRIPT_BYTES)) continue;
 
         const existing = existingById.get(sessionId) ?? null;
         // Gate read: tail timestamp only (wantTitle=false). Computing the title
         // here wasted a 256KB head read on every fresh-but-untitled record each
         // scan — the title is only needed on the upsert branch below.
-        const gateMeta = await readSessionTranscriptMeta(jsonlPath, false);
+        // Cached on size+mtime (the lstat above — the file itself, never a
+        // link): an unchanged transcript gives the same tail answer, so a
+        // steady-state pass re-reads only the files that actually grew. Same
+        // cache and same assumption the Resume Browser already relies on.
+        const gateMeta = await readSessionTranscriptMetaCached(jsonlPath, st, false);
         // lastActive from the transcript's own content timestamp — mtimes lie
         // after any sync/restore (the 627-file rebump incident).
         const lastActive = gateMeta.lastTimestampMs ? new Date(gateMeta.lastTimestampMs).toISOString() : null;
@@ -186,7 +202,7 @@ export async function reconcile(opts: ReconcileOpts): Promise<number> {
         // derived first-user-message title via a second meta read with
         // wantTitle=true. The double tail-read on this branch is acceptable —
         // it only happens for records that actually upsert.
-        let title = readTopicTitle(opts.topicsDir, sessionId);
+        let title = await readTopicTitle(opts.topicsDir, sessionId);
         if (!title && !existing?.title) {
           title = (await readSessionTranscriptMeta(jsonlPath, true)).fallbackTitle || '';
         }
