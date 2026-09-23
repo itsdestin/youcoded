@@ -21,6 +21,7 @@ import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } fro
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy } from './components/takeover-dialog-copy';
 import { runLeaseTakeoverGate } from './state/resume-lease-gate';
+import { createDrawerFilterStore } from './state/drawer-filter-store';
 import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
@@ -324,7 +325,9 @@ function AppInner() {
   const startArgsRef = useRef<unknown[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerSearchMode, setDrawerSearchMode] = useState(false);
-  const [drawerFilter, setDrawerFilter] = useState<string | undefined>(undefined);
+  // WHY a store, not useState: as App state every letter typed after "/" re-rendered the whole shell; only CommandDrawer subscribes now.
+  const [drawerFilterStore] = useState(createDrawerFilterStore);
+  const setDrawerFilter = drawerFilterStore.set;
   const inputBarRef = useRef<InputBarHandle>(null);
   const headerRef = useRef<HTMLDivElement>(null);
   const bottomBarRef = useRef<HTMLDivElement>(null);
@@ -3797,7 +3800,7 @@ function AppInner() {
                 <CommandDrawer
                   open={drawerOpen}
                   searchMode={drawerSearchMode}
-                  externalFilter={drawerFilter}
+                  filterStore={drawerFilterStore}
                   onSelect={handleSelectSkill}
                   onSelectCommand={handleSelectCommand}
                   onClose={handleCloseDrawer}

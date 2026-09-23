@@ -796,14 +796,21 @@ body[data-mode="buddy-chat"] #theme-bg {
 [data-reduced-effects] .wide-view-toggle-label {
   transition-duration: 0ms;
 }
+/* WHY: the Files drawer's list (.drawer-list) slides by animating width, a layout
+   property; both gates now snap it too. Unlayered, so it beats Tailwind's duration-200. */
+[data-reduced-effects] .drawer-list {
+  transition-duration: 0ms;
+}
 @media (prefers-reduced-motion: reduce) {
   .wide-view-toggle-indicator {
     transition-duration: 0ms;
   }
+  .drawer-list,
   .wide-view-toggle-label {
     transition-duration: 0ms;
   }
 }
+
 
 /* Indeterminate progress bar (llama-server gives no load %). A highlight sweeps
    across the track. Reduced-effects users get a static filled track instead. */
