@@ -1304,6 +1304,10 @@ function AppInner() {
         return next;
       });
       dispatch({ type: 'SESSION_REMOVE', sessionId: id });
+      // WHY: a closed session's file-pane entries were never freed. Ids are
+      // fresh UUIDs, so nothing can read them again. (Not on ownership-lost:
+      // that session lives on in another window and may be dragged back here.)
+      dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
       setInitializedSessions((prev) => {
         if (!prev.has(id)) return prev;
         const next = new Set(prev);
@@ -2898,8 +2902,10 @@ function AppInner() {
     setSessionModels((prev) => { const n = new Map(prev); n.delete(id); return n; });
     setInitializedSessions((prev) => { if (!prev.has(id)) return prev; const n = new Set(prev); n.delete(id); return n; });
     dispatch({ type: 'SESSION_REMOVE', sessionId: id });
+    // WHY: drop the gone session's file-pane entries too (they were never freed).
+    dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
     clearMoved(id);
-  }, [dispatch, clearMoved]);
+  }, [dispatch, dispatchArtifact, clearMoved]);
 
   // Returns whether a resume was actually launched (true), or was aborted / failed
   // / deferred to the pre-resume picker (false). Callers that own a modal or row

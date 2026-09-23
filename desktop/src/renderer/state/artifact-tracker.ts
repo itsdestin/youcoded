@@ -188,6 +188,39 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
       const rest = prev.filter((r) => !(r.provider === a.ref.provider && r.id === a.ref.id));
       return { ...s, referencedSessionsBySession: { ...s.referencedSessionsBySession, [a.sessionId]: [a.ref, ...rest] } };
     }
+    // WHY (perf, 2026-09-23): nothing ever deleted a closed session's entries,
+    // so a long day of opening and closing tabs kept every closed session's file
+    // list (full artifact records) and drawer flags in memory until restart.
+    // Session ids are fresh UUIDs, never reused, so a removed id's entries can
+    // never be read again. Only KEYS are deleted: the entries inside other
+    // sessions' referencedSessionsBySession / activeSessionPreviewBySession name
+    // past CONVERSATIONS (provider + conversation id), not tabs, and stay
+    // previewable after the tab that made them closes. projectArtifacts is keyed
+    // by folder, not session, and is left alone.
+    case 'SESSION_REMOVED': {
+      const id = a.sessionId;
+      let changed = false;
+      const without = <T>(rec: Record<string, T>): Record<string, T> => {
+        if (!(id in rec)) return rec;
+        changed = true;
+        const { [id]: _removed, ...rest } = rec;
+        return rest;
+      };
+      const next: ArtifactState = {
+        ...s,
+        sessionArtifacts: without(s.sessionArtifacts),
+        sessionCwd: without(s.sessionCwd),
+        pillError: without(s.pillError),
+        pillPending: without(s.pillPending),
+        drawerOpenBySession: without(s.drawerOpenBySession),
+        activeArtifactBySession: without(s.activeArtifactBySession),
+        gitReviewBySession: without(s.gitReviewBySession),
+        activeSessionPreviewBySession: without(s.activeSessionPreviewBySession),
+        referencedSessionsBySession: without(s.referencedSessionsBySession),
+      };
+      // Same object back when the session had no entries, so no reader wakes.
+      return changed ? next : s;
+    }
     default:
       return s;
   }

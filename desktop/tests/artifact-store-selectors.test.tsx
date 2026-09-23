@@ -120,6 +120,9 @@ describe('the artifact store', () => {
     s.subscribe(heard);
     s.dispatch({ type: 'DRAWER_OPENED', sessionId: 'A' });
     expect(heard).toHaveBeenCalledTimes(1);
+    // Removing a session with no entries returns the same state — no wake-up.
+    s.dispatch({ type: 'SESSION_REMOVED', sessionId: 'never-seen' });
+    expect(heard).toHaveBeenCalledTimes(1);
     expect(s.dispatch).toBe(d);
   });
 });
