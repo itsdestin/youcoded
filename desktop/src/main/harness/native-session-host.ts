@@ -4518,6 +4518,13 @@ export class NativeSessionHost extends EventEmitter {
     return this.live.has(sessionId);
   }
 
+  /** WHY: only a live root turn can supply ephemeral measured request usage.
+   * Keep the event's timestamp and UUID intact for a late attach. */
+  currentUsageProgressFor(sessionId: string): TranscriptEvent | null {
+    const entry = this.live.get(sessionId);
+    return entry?.inFlight ? entry.session.currentUsageProgress : null;
+  }
+
   getHistory(sessionId: string): TranscriptEvent[] | null {
     const plan = this.historyPlan(sessionId);
     if (!plan) return null;

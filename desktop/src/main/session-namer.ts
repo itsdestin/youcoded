@@ -75,7 +75,7 @@ export interface SessionNamerDeps {
   hasTitle: (sessionId: string) => Promise<boolean>;
   /** Publish an automatic name: live pill, conversation record, remote. Called
    *  only after the ownership record has been written. */
-  publish: (sessionId: string, name: string) => Promise<void>;
+  publish: (sessionId: string, name: string, expectedAutoAt: string, opening: boolean) => Promise<void>;
 }
 
 interface SessionState {
@@ -135,6 +135,50 @@ export function createSessionNamer(deps: SessionNamerDeps): SessionNamer {
       sessions.set(sessionId, s);
     }
     return s;
+  }
+
+  /** Set the opening placeholder once, without consuming a completed reply. */
+  async function nameOpening(sessionId: string, state: SessionState, text: string): Promise<void> {
+    try {
+      const generation = state.generation;
+      if (deps.settings().mode === 'off') return;
+      const ident = deps.identify(sessionId);
+      if (!ident) return;
+      // WHY: a legacy title has no ownership record. Fail closed on read errors
+      // rather than replacing a title that might have been chosen by the user.
+      if (await deps.hasTitle(sessionId).catch(() => true)) return;
+      if (generation !== state.generation || deps.settings().mode === 'off') return;
+      const name = basicNameFrom(text);
+      if (!name) return;
+      const at = new Date().toISOString();
+      let wrote = false;
+      await deps.mutateNaming(ident.provider, ident.storeId, (cur) => {
+        // WHY: this callback runs under the store lock. The earlier title read
+        // cannot arbitrate two namers or a rename while waiting for the lock.
+        if (generation !== state.generation || deps.settings().mode === 'off' || cur.manual || cur.auto) return cur;
+        wrote = true;
+        return { ...cur, auto: name, autoAt: at };
+      });
+      if (!wrote) return;
+      // The sidecar write can complete after Off/invalidate, or after a title
+      // landed in the separate conversation store. Skipping publication alone
+      // leaves a ghost auto title on resume. Roll back only our exact write:
+      // a newer AI review or manual rename owns its slot independently.
+      const titlePresent = await deps.hasTitle(sessionId).catch(() => true);
+      if (titlePresent || generation !== state.generation || deps.settings().mode === 'off') {
+        await deps.mutateNaming(ident.provider, ident.storeId, (cur) => (
+          cur.auto === name && cur.autoAt === at && !cur.manual
+            // A synced copy may still carry this placeholder. Its clear must
+            // win the auto-slot merge even when both writes share a millisecond.
+            ? { ...cur, auto: '', autoAt: new Date(Math.max(Date.now(), Date.parse(at) + 1)).toISOString() }
+            : cur
+        ));
+        return;
+      }
+      await deps.publish(sessionId, name, at, true);
+    } catch {
+      // Naming is best-effort and must not interrupt a chat turn.
+    }
   }
 
   /**
@@ -275,15 +319,18 @@ export function createSessionNamer(deps: SessionNamerDeps): SessionNamer {
   ): Promise<void> {
     if (generation !== state.generation) return; // superseded by a rename/clear/mode change
     if (deps.settings().mode === 'off') return;
-    const at = new Date().toISOString();
-    const written = await deps.mutateNaming(ident.provider, ident.storeId, (cur) => (
+    const written = await deps.mutateNaming(ident.provider, ident.storeId, (cur) => {
       // Last word under the lock: a rename that landed while the model was
       // thinking wins outright, and its record is returned untouched.
-      cur.manual ? cur : { ...cur, auto: name, autoAt: at, reviewed: Math.max(cur.reviewed, cur.replies) }
-    ));
+      if (cur.manual) return cur;
+      // A rollback can stamp a tombstone one millisecond ahead of the wall
+      // clock. A subsequent AI name must beat that stamp in either merge order.
+      const at = new Date(Math.max(Date.now(), Date.parse(cur.autoAt) + 1)).toISOString();
+      return { ...cur, auto: name, autoAt: at, reviewed: Math.max(cur.reviewed, cur.replies) };
+    });
     if (written.manual) return;
     if (generation !== state.generation) return; // raced again during the write
-    await deps.publish(sessionId, name);
+    await deps.publish(sessionId, name, written.autoAt, false);
   }
 
   return {
@@ -293,7 +340,10 @@ export function createSessionNamer(deps: SessionNamerDeps): SessionNamer {
       if (ev.type === 'user-message') {
         const text = String((ev.data as { text?: unknown } | undefined)?.text ?? '');
         if (!text.trim()) return;
-        if (state.firstUserText === undefined) state.firstUserText = text;
+        if (state.firstUserText === undefined) {
+          state.firstUserText = text;
+          void nameOpening(ev.sessionId, state, text);
+        }
         state.recent.push(text);
         if (state.recent.length > RECENT_MESSAGES) state.recent.shift();
         return;

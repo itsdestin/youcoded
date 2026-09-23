@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createNamingStore } from '../src/main/conversations/naming-store';
+import { createNamingStore, createTitleQueue, mayPublishAutomaticName } from '../src/main/conversations/naming-store';
 import { emptyNamingRecord, NAMING_SCHEMA_VERSION } from '../src/main/conversations/naming-core';
 
 let root = '';
@@ -13,6 +13,71 @@ beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'naming-store-')
 afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
 
 const nameOf = (p: string, id: string) => path.join(root, p, `${id}.json`);
+
+describe('publication revalidation', () => {
+  it('orders a manual rename after a pending automatic projection, even when the automatic write awaits', async () => {
+    const queue = createTitleQueue();
+    const shown: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const writing = new Promise<void>((resolve) => { entered = resolve; });
+    const auto = queue('native/n1', async () => {
+      entered();
+      await gate;
+      shown.push('Automatic');
+    });
+    await writing;
+    const manual = queue('native/n1', async () => { shown.push('Manual'); });
+    // Another conversation is not blocked by this one's projection.
+    await queue('native/n2', async () => { shown.push('Other'); });
+    expect(shown).toEqual(['Other']);
+    release();
+    await Promise.all([auto, manual]);
+    expect(shown).toEqual(['Other', 'Automatic', 'Manual']);
+  });
+  it('rejects an opening writer after a newer AI review has replaced its sidecar', async () => {
+    const store = createNamingStore(root);
+    const opening = await store.mutate('native', 'n1', (cur) => ({ ...cur, auto: 'Opening', autoAt: '2026-09-09T10:00:00.000Z' }));
+    // The initial write finished first; AI finished before its publication.
+    await store.mutate('native', 'n1', (cur) => ({ ...cur, auto: 'AI review', autoAt: '2026-09-09T10:00:01.000Z' }));
+    const check = (name: string, expectedAutoAt: string, openingName: boolean) => mayPublishAutomaticName({
+      read: () => store.get('native', 'n1'), hasTitle: async () => false,
+      name, expectedAutoAt, opening: openingName, enabled: () => true,
+    });
+    expect(await check('Opening', opening.autoAt, true)).toBe(false);
+    expect(await check('AI review', '2026-09-09T10:00:01.000Z', false)).toBe(true);
+  });
+
+  it('rejects a legacy title arriving after the opening pre-lock check, but lets AI replace automatic names', async () => {
+    const store = createNamingStore(root);
+    const rec = await store.mutate('native', 'n1', (cur) => ({ ...cur, auto: 'Opening', autoAt: '2026-09-09T10:00:00.000Z' }));
+    let legacy = false;
+    const check = (opening: boolean) => mayPublishAutomaticName({
+      read: () => store.get('native', 'n1'), hasTitle: async () => legacy,
+      name: 'Opening', expectedAutoAt: rec.autoAt, opening, enabled: () => true,
+    });
+    expect(await check(true)).toBe(true);
+    legacy = true;
+    expect(await check(true)).toBe(false);
+    expect(await check(false)).toBe(true);
+  });
+
+  it('refuses a rename or Off between the sidecar write and publication', async () => {
+    const store = createNamingStore(root);
+    const rec = await store.mutate('native', 'n1', (cur) => ({ ...cur, auto: 'AI', autoAt: '2026-09-09T10:00:00.000Z' }));
+    let enabled = true;
+    const check = () => mayPublishAutomaticName({
+      read: () => store.get('native', 'n1'), hasTitle: async () => false,
+      name: rec.auto, expectedAutoAt: rec.autoAt, enabled: () => enabled,
+    });
+    enabled = false;
+    expect(await check()).toBe(false);
+    enabled = true;
+    await store.mutate('native', 'n1', (cur) => ({ ...cur, manual: 'Mine', manualAt: '2026-09-09T10:00:01.000Z' }));
+    expect(await check()).toBe(false);
+  });
+});
 
 describe('createNamingStore', () => {
   it('has no record until something is written', async () => {
@@ -25,6 +90,13 @@ describe('createNamingStore', () => {
     await store.mutate('claude', 'c1', (cur) => ({ ...cur, manual: 'Mine', manualAt: '2026-09-09T10:00:00.000Z' }));
     expect(fs.existsSync(nameOf('claude', 'c1'))).toBe(true);
     expect(await store.get('claude', 'c1')).toMatchObject({ manual: 'Mine', provider: 'claude', id: 'c1' });
+  });
+
+  it('does not rewrite a record when a conditional mutation returns the locked record', async () => {
+    const store = createNamingStore(root);
+    const returned = await store.mutate('native', 'n1', (cur) => cur);
+    expect(returned.auto).toBe('');
+    expect(fs.existsSync(nameOf('native', 'n1'))).toBe(false);
   });
 
   it('keeps native and claude ids in separate buckets', async () => {

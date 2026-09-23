@@ -177,13 +177,12 @@ import { listConversations, repoInfo, listContextFiles, readContext } from './pr
 import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded, noteTitleChanged,
   noteFlagChanged, noteSessionNote, noteModelUsed, getConversationStore, flushSessionToSpace,
   buildLocalProjectResolver, emitConversationMetaChanged,
-  noteAutomaticTitle,
   getNamingRecord,
   mutateNamingRecord,
-  isSessionNameOwned,
   resolveSessionName,
   setManualSessionName,
 } from './conversations/service';
+import { createTitleQueue, mayPublishAutomaticName } from './conversations/naming-store';
 import { requestChatsearchRefresh } from './chatsearch-index/index-service';
 // Task 4: resolves a native session's live model binding into the store's
 // portable {modelId, providerType, providerLabel} shape — see
@@ -2917,6 +2916,10 @@ export function registerIpcHandlers(
     return null;
   };
 
+  // Serialize local title projections with manual renames. This is NOT the
+  // cross-process sidecar lock: no filesystem lock is held across store awaits.
+  const queueTitle = createTitleQueue();
+
   /**
    * Publish an AUTOMATIC name: persist, then paint. Every generated title in
    * the app goes through here — the topic watcher below included — so the
@@ -2926,15 +2929,54 @@ export function registerIpcHandlers(
    */
   const applyAutomaticTitle = async (
     desktopId: string, storeId: string, provider: SessionProvider, title: string,
-  ): Promise<boolean> => {
-    // Checked BEFORE the broadcast, not only at the write: noteAutomaticTitle
-    // can refuse a disk write, but nothing can un-paint a session pill.
-    if (await isSessionNameOwned(provider, storeId)) return false;
-    await noteAutomaticTitle(storeId, title, provider);
+    expectedAutoAt?: string, opening = false,
+  ): Promise<boolean> => queueTitle(`${provider}/${storeId}`, async () => {
+    const eligible = () => namingSettings.read().mode !== 'off';
+    const read = () => getNamingRecord(provider, storeId);
+    const hasTitle = async () => {
+      const rec = await getConversationStore()?.get(provider, storeId);
+      return hasRealTitle(rec?.title, sessionManager.getSession(desktopId)?.name);
+    };
+    if (!await mayPublishAutomaticName({ read, hasTitle, name: title, expectedAutoAt, opening, enabled: eligible })) return false;
+    let publicationStamp = expectedAutoAt;
+    if (publicationStamp === undefined) {
+      // The CC hook has not yet written its sidecar. Refuse a newer review
+      // that wins the lock after our read rather than rolling it back.
+      const before = await read();
+      let wrote = false;
+      const at = new Date().toISOString();
+      const written = await mutateNamingRecord(provider, storeId, (cur) => {
+        if (cur.manual || cur.auto !== (before?.auto ?? '') ||
+            cur.autoAt !== (before?.autoAt ?? cur.autoAt)) return cur;
+        wrote = true;
+        return { ...cur, auto: title, autoAt: at };
+      });
+      if (!written || !wrote) return false;
+      publicationStamp = at;
+    }
+    // Namer writes already went through the sidecar lock; do NOT call
+    // noteAutomaticTitle again: it would re-write an older opening title over
+    // a newer AI review between the first write and this projection.
+    if (!await mayPublishAutomaticName({ read, hasTitle, name: title,
+      expectedAutoAt: publicationStamp, opening, enabled: eligible })) return false;
+    const previousTitle = (await getConversationStore()?.get(provider, storeId))?.title ?? '';
+    const result = await noteTitleChanged(storeId, title, provider);
+    if (!result.ok) return false;
+    if (!await mayPublishAutomaticName({ read, hasTitle: async () => false,
+      name: title, expectedAutoAt: publicationStamp, enabled: eligible })) {
+      // A rename/Off may have landed during the projection await. Restore the
+      // authority's name (or the prior title when Off) instead of leaving a
+      // stale compatibility projection for older readers. A queued local manual
+      // rename will subsequently make its own projection and broadcast.
+      const current = await read();
+      const restored = current?.manual || (eligible() ? current?.auto : previousTitle);
+      if (restored !== undefined && restored !== title) await noteTitleChanged(storeId, restored, provider);
+      return false;
+    }
     sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, title);
     broadcastRename(desktopId, title);
     return true;
-  };
+  });
 
   const sessionNamer = createSessionNamer({
     settings: () => namingSettings.read(),
@@ -2981,10 +3023,10 @@ export function registerIpcHandlers(
       const rec = await getConversationStore()?.get(ident.provider, ident.storeId);
       return hasRealTitle(rec?.title, sessionManager.getSession(sessionId)?.name);
     },
-    publish: async (sessionId: string, name: string) => {
+    publish: async (sessionId: string, name: string, expectedAutoAt: string, opening: boolean) => {
       const ident = namingIdentity(sessionId);
       if (!ident) return;
-      await applyAutomaticTitle(sessionId, ident.storeId, ident.provider as SessionProvider, name);
+      await applyAutomaticTitle(sessionId, ident.storeId, ident.provider as SessionProvider, name, expectedAutoAt, opening);
     },
   });
 
@@ -3255,6 +3297,13 @@ export function registerIpcHandlers(
       for (const run of nativeHost.shellRunsFor(sessionId)) {
         sender.send(IPC.NATIVE_SHELL_EVENT, { sessionId, run } satisfies ShellEvent);
       }
+    }
+    // WHY: progress never entered JSONL, so only the native host can restore it.
+    // Send after history and before the idle marker; the renderer compares stamps
+    // if a newer live heartbeat arrived while the asynchronous replay was read.
+    if (isNative) {
+      const progress = nativeHost.currentUsageProgressFor(sessionId);
+      if (progress) sender.send(IPC.TRANSCRIPT_EVENT, progress);
     }
     // sessionIdle gates the reap because this SAME state re-send fires when a
     // window re-docks a session that is genuinely mid-turn. Only the native
@@ -4292,20 +4341,22 @@ export function registerIpcHandlers(
     const resolved = sessionIdMap.get(sessionId) || sessionId;
     const desktopId = sessionIdMap.has(sessionId) ? sessionId : resolved;
     const provider = await sessionProviderFor(resolved);
-    try {
-      const res = await setManualSessionName(provider, resolved, String(title ?? ''));
-      if (!res.ok) return res;
-      // Stop work already in flight for this session BEFORE painting: a
-      // generation that returns after this must be discarded, not raced.
-      sessionNamer.invalidate(sessionId);
-      sessionNamer.invalidate(resolved);
-      sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, res.name);
-      broadcastRename(desktopId, res.name);
-      emitConversationMetaChanged();
-      return { ok: true, name: res.name };
-    } catch (e: any) {
-      return { ok: false, error: e?.message || 'The name was not saved.' };
-    }
+    // Invalidate before waiting for any earlier projection, not after its
+    // store await. The queue then makes the manual projection/broadcast last.
+    sessionNamer.invalidate(sessionId);
+    sessionNamer.invalidate(resolved);
+    return queueTitle(`${provider}/${resolved}`, async () => {
+      try {
+        const res = await setManualSessionName(provider, resolved, String(title ?? ''));
+        if (!res.ok) return res;
+        sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, res.name);
+        broadcastRename(desktopId, res.name);
+        emitConversationMetaChanged();
+        return { ok: true, name: res.name };
+      } catch (e: any) {
+        return { ok: false, error: e?.message || 'The name was not saved.' };
+      }
+    });
   };
 
   ipcMain.handle(IPC.SESSION_NAMING_GET, () => namingGet());
