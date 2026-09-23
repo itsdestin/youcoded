@@ -11,7 +11,7 @@
 // floor can decide to fail toward asking with a reason that is true.
 
 /** One `$NAME` / `${…}` expansion inside a word's value. */
-export interface VarSpan {
+interface VarSpan {
   /** Offsets into Word.value (end exclusive). The value keeps the raw text. */
   start: number;
   end: number;
@@ -35,7 +35,7 @@ export interface Word {
   op?: undefined;
 }
 export interface Op { op: string }
-export type Token = Word | Op;
+type Token = Word | Op;
 
 export interface Tokenized {
   tokens: Token[];
