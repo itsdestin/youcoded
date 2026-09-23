@@ -90,3 +90,20 @@ describe('particleSelectOptions', () => {
     expect(particleSelectOptions('')).toHaveLength(6);
   });
 });
+
+describe('particle Select renders an unlisted preset as selected', () => {
+  it('shows "sakura", not the empty "Select…" placeholder', async () => {
+    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
+    const { Select } = await import('../src/renderer/components/ui/Select');
+    render(<Select options={particleSelectOptions('sakura')} value="sakura" onChange={() => {}} aria-label="Particles" />);
+    const trigger = screen.getByLabelText('Particles');
+    expect(trigger.textContent).toContain('sakura');
+    expect(trigger.textContent).not.toContain('Select…');
+  });
+  it('before the fix (listed options only) the same value rendered as the placeholder', async () => {
+    const { particleSelectOptions } = await import('../src/renderer/components/ThemeScreen');
+    const { Select } = await import('../src/renderer/components/ui/Select');
+    render(<Select options={particleSelectOptions('snow')} value="sakura" onChange={() => {}} aria-label="Particles" />);
+    expect(screen.getByLabelText('Particles').textContent).toContain('Select…');
+  });
+});
