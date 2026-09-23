@@ -9,7 +9,7 @@
   "budgets": {
     "main/ipc-handlers.ts": 5366,
     "main/harness/native-session-host.ts": 4825,
-    "renderer/App.tsx": 4771,
+    "renderer/App.tsx": 4764,
     "main/remote-server.ts": 4084,
     "main/harness/harness-session.ts": 3832,
     "renderer/components/SettingsPanel.tsx": 3195,

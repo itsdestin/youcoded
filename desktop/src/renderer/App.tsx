@@ -97,6 +97,7 @@ import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
+import { detectPermissionMode, syncKeyedSubscriptions, clearKeyedSubscriptions } from './state/permission-mode-scan';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
 
@@ -2005,40 +2006,32 @@ function AppInner() {
   // instead (handled in the big effect above), so this effect is effectively
   // desktop-only. On Android the ptyOutputForSession call is still safe but
   // will never deliver data matching the mode strings.
+  //
+  // Perf (2026-09-23): subscriptions are kept per session id in a ref and
+  // DIFFED when the list changes (only added/removed sessions touch IPC), and
+  // each chunk is ruled out by one case-insensitive regex before any
+  // lower-cased copy is made — see state/permission-mode-scan.ts.
+  const permissionModeSubsRef = useRef<Map<string, () => void>>(new Map());
   useEffect(() => {
     const claudeOn = (window.claude.on as any);
     if (typeof claudeOn.ptyOutputForSession !== 'function') return;
-    const handles: Array<{ sid: string; remove: () => void }> = [];
-    for (const s of sessions) {
-      const remove = claudeOn.ptyOutputForSession(s.id, (data: string) => {
-        const lower = data.toLowerCase();
-        let mode: PermissionMode | null = null;
-        // CC v2.1.83+ auto mode banner reads "auto mode on (shift+tab to cycle)" —
-        // checked before "accept edits on" because the substring "auto mode" doesn't
-        // overlap, but order is preserved for symmetry with the off-list below.
-        if (lower.includes('bypass permissions on')) mode = 'bypass';
-        else if (lower.includes('auto mode on')) mode = 'auto';
-        else if (lower.includes('accept edits on')) mode = 'auto-accept';
-        else if (lower.includes('plan mode on')) mode = 'plan';
-        else if (lower.includes('bypass permissions off')
-              || lower.includes('auto mode off')
-              || lower.includes('accept edits off')
-              || lower.includes('plan mode off')) mode = 'normal';
+    syncKeyedSubscriptions(permissionModeSubsRef.current, sessions.map((s) => s.id), (sid) =>
+      claudeOn.ptyOutputForSession(sid, (data: string) => {
+        const mode = detectPermissionMode(data);
         if (mode) {
           setPermissionModes((prev) => {
-            if (prev.get(s.id) === mode) return prev;
-            return new Map(prev).set(s.id, mode!);
+            if (prev.get(sid) === mode) return prev;
+            return new Map(prev).set(sid, mode);
           });
         }
-      });
-      handles.push({ sid: s.id, remove });
-    }
-    return () => {
-      for (const h of handles) {
-        try { h.remove(); } catch { /* unsubscribe API may no-op */ }
-      }
-    };
+      }));
   }, [sessions]);
+  // Unmount only: drop every remaining per-session listener. Kept separate so
+  // a session-list change never tears down the listeners of sessions that stay.
+  useEffect(() => {
+    const subs = permissionModeSubsRef.current;
+    return () => clearKeyedSubscriptions(subs);
+  }, []);
 
   // Fetch session list on mount — catches sessions that existed before event handlers were registered
   // (e.g., remote browser reconnecting after the replay buffer events already fired, or a renderer
