@@ -53,6 +53,7 @@ import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PAGE_KIT_CSS } from './page-kit';
 import { PageApproval, needsApproval } from './page-connections';
 import { PageFreshness } from './PageFreshness';
+import { PageCodeChanged } from './PageCodeChanged';
 import {
   PAGE_DATA_MESSAGE, PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_FETCH_MESSAGE, PAGE_FETCH_RESULT_MESSAGE,
   PAGE_REFRESH_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss,
@@ -297,6 +298,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               same place on every connected page, and true because the app made
               the request. Hidden until the page is approved. */}
           {summary && !awaitingApproval && <PageFreshness page={summary} onRefresh={askPageToRefresh} />}
+          {summary && !awaitingApproval && <PageCodeChanged page={summary} />}
         </>}
       />
 

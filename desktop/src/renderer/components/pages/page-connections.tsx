@@ -5,7 +5,9 @@
 // the card's list and Settings can never describe the same access two ways.
 // The wording rules come from the decks and are load-bearing:
 //   - access is a plain sentence per thing reached, no levels or badges;
-//   - "look-up only" is enforced by the app, so "Cannot send changes" is true
+//   - "look-up only" is enforced by the app, so "Cannot change anything there"
+//     is true — and the second half says what it does NOT stop (deck 3,
+//     Q-lookup: a look-up can still carry what the page knows to that address)
 //     as written — but never "read-only" or "safe" for an outside service;
 //   - the whole internet is its own blunt line, never softened;
 //   - Remove "stops future use", never "revokes": the app cannot take back
@@ -33,19 +35,23 @@ export function keysEnteredHere(): boolean {
 
 /** The sentence for one connection. `what` is the main clause; `limit` is the
  *  quieter second sentence. Written to follow "This page can…". */
+/** Destin chose "both facts" (deck 3, Q-lookup) over the old "Cannot send
+ *  changes.", which read as "nothing about me leaves". */
+const LOOKUP_LIMIT = 'Cannot change anything there. The page decides what it sends to this address.';
+
 export function describeConnection(c: PageConnection): { what: string; limit: string } {
   switch (c.kind) {
     case 'youcoded':
-      return { what: "Look things up on YouCoded's own service using your YouCoded sign-in.", limit: 'Cannot send changes.' };
+      return { what: "Look things up on YouCoded's own service using your YouCoded sign-in.", limit: LOOKUP_LIMIT };
     case 'key':
       return c.access === 'lookup'
-        ? { what: `Look things up on ${c.address} using your ${c.service} key.`, limit: 'Cannot send changes.' }
+        ? { what: `Look things up on ${c.address} using your ${c.service} key.`, limit: LOOKUP_LIMIT }
         : { what: `Look up and change things on ${c.address} using your ${c.service} key.`, limit: 'It can do whatever that key allows.' };
     case 'public':
-      return { what: `Read public information from ${c.address}.`, limit: 'No key or sign-in is used.' };
+      return { what: `Read public information from ${c.address}.`, limit: 'No key or sign-in is used. The page decides what it sends to this address.' };
     case 'github':
       return c.access === 'lookup'
-        ? { what: 'Look things up on GitHub using your GitHub sign-in.', limit: 'Cannot send changes.' }
+        ? { what: 'Look things up on GitHub using your GitHub sign-in.', limit: LOOKUP_LIMIT }
         : { what: 'Look up and change things on GitHub using your GitHub sign-in.', limit: 'That includes your repositories.' };
     case 'open':
       return { what: 'Reach any website.', limit: 'Anything shown in this page, or typed into it, could be sent anywhere.' };
@@ -120,6 +126,10 @@ const OPEN_INTERNET_MEANS = [
   'It can load from, and send to, any site. There is no fixed list.',
   'Anything you type or paste into this page could be sent somewhere you did not choose.',
   'It still cannot see your files, your other pages, or your saved keys and sign-ins.',
+  // Deck 3, Q-home-network: the protection is real but can lose a timing race
+  // (net-guard.ts HONESTY LIMIT), so the line says what the app does, not a
+  // guarantee.
+  'YouCoded blocks it from reaching your router, your Pi and anything else on your home network.',
 ];
 
 /** No glyph beside the sentence (review round 1: "remove the key symbol",

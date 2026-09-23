@@ -138,6 +138,10 @@ export interface PageSummary {
   connections?: PageConnectionStatus[];
   /** Present only for a connected page that has been approved. */
   refresh?: PageRefreshState;
+  /** The page's code is not the code that was approved, while its connections
+   *  are. It still opens and still reaches only what was allowed; the band
+   *  says so quietly until the person dismisses it (deck 3, Q-code-change). */
+  codeChanged?: boolean;
 }
 
 /** A page's working version, ready to show. `html` is a complete document;

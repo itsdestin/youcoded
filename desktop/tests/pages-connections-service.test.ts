@@ -180,3 +180,42 @@ describe('managing saved keys', () => {
     expect(after.refresh).toBeUndefined();
   });
 });
+
+describe('a page whose code changed after it was allowed', () => {
+  const PUBLIC = { id: 'feed', kind: 'public', address: 'hnrss.org' };
+  async function rewrite(slug: string, body: string) {
+    const file = path.join(personal, 'Pages', slug, 'page.html');
+    await fs.writeFile(file, `<!doctype html><html><body>${body}</body></html>`);
+    // A distinct mtime, so the store's per-mtime hash cache cannot hide it.
+    const later = new Date(Date.now() + 60_000);
+    await fs.utimes(file, later, later);
+  }
+
+  it('says so, keeps its connections allowed, and clears when dismissed', async () => {
+    await writePage('feed', [PUBLIC]);
+    await service.approve('personal:feed', {}, { remote: false });
+    expect((await service.listAndWatch())[0].codeChanged).toBeUndefined();
+
+    await rewrite('feed', 'rewritten');
+    const changed = (await service.listAndWatch())[0];
+    expect(changed.codeChanged).toBe(true);
+    // Information, not a gate: what was allowed is still allowed.
+    expect(changed.connections).toMatchObject([{ id: 'feed', approved: true }]);
+
+    const dismissed = await service.approve('personal:feed', {}, { remote: false });
+    expect(dismissed.ok).toBe(true);
+    expect((await service.listAndWatch())[0].codeChanged).toBeUndefined();
+  });
+
+  it('cannot widen what a page reaches by dismissing', async () => {
+    await writePage('feed', [PUBLIC]);
+    await service.approve('personal:feed', {}, { remote: false });
+    // The page now also asks for a second address, and its code changed.
+    await writePage('feed', [PUBLIC, { id: 'more', kind: 'public', address: 'example.org' }]);
+    await rewrite('feed', 'asks for more');
+    const page = (await service.listAndWatch())[0];
+    // A page with a line waiting shows its approval card, not the quiet note.
+    expect(page.codeChanged).toBeUndefined();
+    expect(page.connections).toMatchObject([{ id: 'feed', approved: true }, { id: 'more', approved: false }]);
+  });
+});

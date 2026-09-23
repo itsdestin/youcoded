@@ -19,7 +19,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 import { fingerprint, parseConnections } from './page-connections';
-import { approvalKey, savedKeyId, type ConnectionsSnapshot, type PageConnectionsStore } from './connections-store';
+import { approvalKey, savedKeyId, type ConnectionsSnapshot, type PageConnectionsStore, hashHtml } from './connections-store';
 import type {
   PageConnection, PageConnectionStatus, PageDocument, PageHome, PageIcon,
   PageLoadFailure, PageRefreshState, PageSummary,
@@ -108,6 +108,8 @@ export class PagesStore {
         const updated = Math.max(htmlStat.mtimeMs, jsonStat?.mtimeMs ?? 0);
         next.set(id, { id, dir, slug: e.name, home: h.home });
         const approvals = saved.pages[approvalKey(h.home, e.name)] ?? {};
+        const allApproved = manifest.connections.length > 0
+          && manifest.connections.every((c) => approvals[c.id]?.fingerprint === fingerprint(c));
         const connections: PageConnectionStatus[] = manifest.connections.map((c) => ({
           ...c,
           approved: approvals[c.id]?.fingerprint === fingerprint(c),
@@ -125,8 +127,13 @@ export class PagesStore {
           ...(connections.length ? { connections } : {}),
           // The band only appears once the page can actually reach something:
           // a time beside a paused page would be a time for nothing.
-          ...(connections.length && connections.every((c) => c.approved)
+          ...(allApproved
             ? { refresh: this.deps.refreshState?.(id) ?? { at: null, failed: false } }
+            : {}),
+          // Only once everything is approved: a page still waiting for a yes
+          // is already showing its approval card, which says more.
+          ...(allApproved && await this.codeMovedSince(dir, htmlStat.mtimeMs, Object.values(approvals).map((a) => a.htmlHash))
+            ? { codeChanged: true }
             : {}),
         });
       }
@@ -134,6 +141,25 @@ export class PagesStore {
     this.byId = next;
     out.sort((a, b) => a.name.localeCompare(b.name));
     return out;
+  }
+
+  /** The page.html hash per folder, keyed by its mtime so a listing re-reads a
+   *  page only when it was actually rewritten. */
+  private htmlHashes = new Map<string, { mtime: number; hash: string }>();
+
+  /** Is the page's code different from the code recorded at ANY of its
+   *  approvals? A record from before hashes were kept ('' ) never counts. */
+  private async codeMovedSince(dir: string, mtime: number, recorded: string[]): Promise<boolean> {
+    const known = recorded.filter(Boolean);
+    if (known.length === 0) return false;
+    let entry = this.htmlHashes.get(dir);
+    if (!entry || entry.mtime !== mtime) {
+      const html = await fs.readFile(path.join(dir, 'page.html'), 'utf8').catch(() => null);
+      if (html === null) return false;
+      entry = { mtime, hash: hashHtml(html) };
+      this.htmlHashes.set(dir, entry);
+    }
+    return known.some((h) => h !== entry!.hash);
   }
 
   /** page.json, with conflict copies folded by their `updatedAt` stamp. Returns

@@ -23,8 +23,8 @@ describe('page connection wording', () => {
   it('says a look-up connection cannot send changes, and a full one does not', () => {
     for (const c of ALL) {
       const lookup = c.kind === 'youcoded' || ((c.kind === 'key' || c.kind === 'github') && c.access === 'lookup');
-      if (lookup) expect(sentence(c)).toContain('Cannot send changes.');
-      else expect(sentence(c)).not.toContain('Cannot send changes.');
+      if (lookup) expect(sentence(c)).toContain('Cannot change anything there. The page decides what it sends to this address.');
+      else expect(sentence(c)).not.toContain('Cannot change anything there.');
     }
   });
 

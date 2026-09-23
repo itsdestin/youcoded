@@ -151,7 +151,23 @@ class PagesService {
     try { recorded = await store.approvalsFor(pageKey); }
     catch (e) { return { ok: false, message: messageOf(e) }; }
     const waiting = info.connections.filter((c) => recorded[c.id]?.fingerprint !== fingerprint(c));
-    if (waiting.length === 0) return { ok: true, pages: await this.listAndWatch() };
+    if (waiting.length === 0) {
+      // Nothing waits for a yes, so this is the person dismissing "code changed
+      // since you allowed this" (deck 3, Q-code-change): the current code
+      // becomes the approved code. The fingerprints are untouched — this can
+      // never widen what the page reaches.
+      const htmlHash = hashHtml(info.html);
+      const restamped: Record<string, PageApproval> = {};
+      for (const c of info.connections) {
+        const r = recorded[c.id];
+        if (r && r.htmlHash !== htmlHash) restamped[c.id] = { ...r, htmlHash };
+      }
+      if (Object.keys(restamped).length > 0) {
+        try { await store.recordApprovals(pageKey, restamped); }
+        catch (e) { return { ok: false, message: messageOf(e) }; }
+      }
+      return { ok: true, pages: await this.listAndWatch() };
+    }
 
     for (const c of waiting) {
       if (c.kind !== 'key') continue;

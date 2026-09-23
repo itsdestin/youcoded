@@ -3229,7 +3229,8 @@ function createPagesMock(empty: boolean): PagesBridge {
         for (const c of p.connections ?? []) {
           if (c.kind === 'key' && keys[c.id] && keys[c.id] !== 'saved') savedServices.set(c.service, c.address);
         }
-        return { ...p, connections: (p.connections ?? []).map((c) => ({ ...c, approved: true, ...(c.kind === 'key' ? { savedKey: true } : {}) })), refresh: { at: new Date().toISOString(), failed: false } };
+        // Allowing (or dismissing "code changed") records the current code too.
+        return { ...p, codeChanged: false, connections: (p.connections ?? []).map((c) => ({ ...c, approved: true, ...(c.kind === 'key' ? { savedKey: true } : {}) })), refresh: p.refresh ?? { at: new Date().toISOString(), failed: false } };
       });
       publish();
       return { ok: true, pages: summaries() };

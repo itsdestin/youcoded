@@ -435,6 +435,8 @@ function connectedPages(): PageDocument[] {
       html: simplePage('itsdestin/youcoded', 'Release board', [['#541 Pages connections', 'checks running'], ['#538 Project files', 'ready']]),
       connections: [{ id: 'gh', kind: 'github', access: 'lookup', approved: true }],
       refresh: { at: minutesAgo(1), failed: false },
+      // Rewritten since it was allowed: the band shows the quiet note.
+      codeChanged: true,
     },
   ];
 }
