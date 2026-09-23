@@ -37,6 +37,8 @@
 // (ScreenBand, shared with Project View), the pinned button lights instead of
 // the Pages icon, and the panel is simply not rendered; the Pages icon brings
 // it back with the page still open.
+// First-run refinement (2026-09-23): keep the quoted decision above for pages
+// that exist; with none, the frame carries the former Manage pages welcome card.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useArtifact } from '../../state/ArtifactContext';
 import { useDismissTop, useEscClose } from '../../hooks/use-esc-close';
@@ -46,6 +48,7 @@ import { ScreenBand } from '../ScreenBand';
 import type { PageDocument, PageLoadFailure, PageSummary, PagesBridge } from '../../../shared/pages-types';
 import { MAX_PAGE_DATA_BYTES, MAX_PINNED_PAGES } from '../../../shared/pages-types';
 import { PageGlyph, PagesIcon, PinGlyph } from './page-icons';
+import { PagesEmptyCard } from './PagesEmptyCard';
 import { usePages, setPagePinned, refreshPages } from './use-pages';
 import { PAGE_KIT_CSS } from './page-kit';
 import { PAGE_DATA_SET_MESSAGE, PAGE_ESC_MESSAGE, PAGE_THEME_MESSAGE, prepareHostedDocument, readThemeCss, watchThemeCss } from './page-theme';
@@ -73,6 +76,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   const pageId = state.openPageId;
   // Back to chat leaves pages altogether (the library over this view goes too).
   const backToChat = () => dispatch({ type: 'PAGE_VIEW_CLOSED' });
+  const managePages = () => dispatch({ type: 'PAGES_VIEW_OPENED' });
   useEscClose(open && !state.pagesViewOpen && !settingsOpen, backToChat);
   // Esc pressed INSIDE the page (the frame swallows the key) is forwarded by
   // the page's bootstrap; it dismisses whatever is on top exactly as the key
@@ -80,7 +84,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // (Before: ignored while Settings was open, so Settings could not be
   // closed by Esc with the page focused — Destin, 2026-09-17.)
   const dismissTop = useDismissTop();
-  const { pages } = usePages();
+  const { pages, loaded, failed } = usePages();
   const summary = pages.find((p) => p.id === pageId) ?? null;
   const pinnedCount = pages.filter((p) => p.pinned).length;
   // The frame reloads when page.html was rewritten (the stamp moves) and not
@@ -88,6 +92,8 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   const htmlStamp = summary?.htmlStamp ?? 0;
 
   const [load, setLoad] = useState<Load>({ state: 'loading' });
+  // Only the confirmed first-run state replaces the rail, not loading, errors, or an open page.
+  const emptyPages = pageId === null && load.state === 'idle' && loaded && !failed && pages.length === 0;
   const frameRef = useRef<HTMLIFrameElement>(null);
 
   // Fetch the working version when the open page changes or its document was
@@ -197,7 +203,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
           pane, both inset by the frame edge, like the chat pane and the
           files/games pane are in a chat session. */}
       <div className="screen-body flex-1 min-h-0 flex">
-        {!state.pageFocus && (
+        {!state.pageFocus && !emptyPages && (
         <aside className="screen-pane screen-pane--panel w-60 shrink-0 flex flex-col select-none rounded-xl bg-canvas overflow-hidden">
           <div className="flex-1 overflow-y-auto p-2">
             {personal.length > 0 && (
@@ -216,15 +222,14 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
                 ))}
               </RailGroup>
             ))}
-            {pages.length === 0 && <div className="px-2 py-3 text-xs text-fg-muted">No pages yet. Create one below.</div>}
           </div>
           <div className="p-3 flex flex-col gap-2">
-            {/* The ONE primary in this view (G-4). */}
-            <Button variant="primary" onClick={onCreatePage} className="w-full justify-center rounded-full">
+            {/* The welcome card owns the primary action when the library is empty (G-4). */}
+            {pages.length > 0 && <Button variant="primary" onClick={onCreatePage} className="w-full justify-center rounded-full">
               <PlusGlyph />
               Create a page
-            </Button>
-            <Button variant="secondary" onClick={() => dispatch({ type: 'PAGES_VIEW_OPENED' })} className="w-full justify-center rounded-full">
+            </Button>}
+            <Button variant="secondary" onClick={managePages} className="w-full justify-center rounded-full">
               <PagesIcon className="w-3.5 h-3.5" />
               Manage pages
             </Button>
@@ -232,7 +237,15 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
         </aside>
         )}
         <div className="screen-pane screen-pane--frame relative flex-1 min-w-0 rounded-xl overflow-hidden bg-canvas">
-          {load.state === 'idle' && (
+          {/* WHY: first-run belongs where the Pages button lands, not a second click into Manage pages. */}
+          {load.state === 'idle' && !loaded && <LoadingState what="pages" />}
+          {load.state === 'idle' && loaded && failed && <ErrorState message="The list of pages could not be read." onRetry={() => void refreshPages()} />}
+          {emptyPages && (
+            <div className="absolute inset-0 overflow-y-auto flex flex-col">
+              <PagesEmptyCard onMake={onCreatePage} />
+            </div>
+          )}
+          {load.state === 'idle' && loaded && !failed && pages.length > 0 && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 select-none">
               <div className="text-sm font-medium text-fg-2">No page selected</div>
               <div className="text-xs text-fg-muted">Pick one from the list, or create a page.</div>
