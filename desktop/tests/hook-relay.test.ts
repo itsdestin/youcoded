@@ -145,17 +145,62 @@ describe('HookRelay', () => {
       client.destroy();
     });
 
-    it('holds an ask for no live session only for the short cap, reason unroutable', async () => {
-      const short = new HookRelay((relay as any).pipeName + '-unroutable', 60_000, 40);
-      short.setSessionGate(() => false);
-      await short.start();
-      const expired = new Promise<string | undefined>((resolve) => {
-        short.once('permission-expired', (_s, _r, reason) => resolve(reason));
+    it('an ask from a session this app does not own is handed straight back: socket ended with NOTHING written, no card, no hold', async () => {
+      const r = new HookRelay((relay as any).pipeName + '-unowned', 60_000);
+      r.setSessionGate((sid) => sid === 'ours');
+      await r.start();
+      const events: any[] = [];
+      r.on('hook-event', (e) => events.push(e));
+      const expiries: unknown[] = [];
+      r.on('permission-expired', (...a) => expiries.push(a));
+      const net = await import('net');
+      const client = net.createConnection((r as any).pipeName);
+      await new Promise<void>((res, rej) => { client.on('connect', res); client.on('error', rej); });
+      let received = '';
+      client.on('data', (c) => { received += c; });
+      const ended = new Promise<void>((res) => client.on('end', () => res()));
+      client.write(JSON.stringify({ hook_event_name: 'PermissionRequest', _desktop_session_id: 'someone-else', tool_name: 'AskUserQuestion' }) + '\n');
+      await ended;
+      // relay-blocking.js: 'end' with no data → exit 0, prints nothing → Claude
+      // Code shows its own prompt. Any written line would be read as a decision.
+      expect(received).toBe('');
+      expect(events.filter((e) => e.type === 'PermissionRequest')).toEqual([]);
+      expect(r.hasPendingPermission('someone-else')).toBe(false);
+      expect((r as any).holdTimers.size).toBe(0);
+      expect(expiries).toEqual([]);
+      r.stop();
+      client.destroy();
+    });
+
+    it('the real relay script exits 0 printing nothing for an unowned ask (Claude Code then prompts in its own terminal)', async () => {
+      const r = new HookRelay((relay as any).pipeName + '-relayproc', 60_000);
+      r.setSessionGate(() => false);
+      await r.start();
+      const { spawn } = await import('child_process');
+      const pathMod = await import('path');
+      const child = spawn(process.execPath, [pathMod.join(__dirname, '..', 'hook-scripts', 'relay-blocking.js')], {
+        env: { ...process.env, CLAUDE_DESKTOP_PIPE: (r as any).pipeName, CLAUDE_DESKTOP_SESSION_ID: 'not-ours' },
       });
-      const { client, received } = await connectAsk(short, 'ghost');
-      expect(await expired).toBe('unroutable');
-      expect(JSON.parse((await received).trim()).decision.message).toMatch(/could not show this request/);
-      short.stop();
+      let out = '';
+      child.stdout.on('data', (c) => { out += c; });
+      const code = await new Promise<number | null>((res) => {
+        child.on('exit', res);
+        child.stdin.end(JSON.stringify({ hook_event_name: 'PermissionRequest', session_id: 'cc-1', tool_name: 'Bash' }));
+      });
+      expect(code).toBe(0);
+      expect(out).toBe('');
+      r.stop();
+    });
+
+    it('an ask from a session this app owns is still held (card shown, hold armed)', async () => {
+      const r = new HookRelay((relay as any).pipeName + '-owned', 60_000);
+      r.setSessionGate((sid) => sid === 'ours');
+      await r.start();
+      const { client, event } = await connectAsk(r, 'ours');
+      expect(event.type).toBe('PermissionRequest');
+      expect(r.hasPendingPermission('ours')).toBe(true);
+      expect((r as any).holdTimers.size).toBe(1);
+      r.stop();
       client.destroy();
     });
 

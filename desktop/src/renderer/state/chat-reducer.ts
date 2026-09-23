@@ -2623,17 +2623,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           toolCalls.set(id, { ...tool, requestId: undefined, expired: true });
           break;
         }
-        if (heldHere && (action.reason === 'app-timeout' || action.reason === 'unroutable')) {
-          // The app's own hold answered with a deny — say exactly that.
+        if (heldHere && action.reason === 'app-timeout') {
+          // The app's own 2h hold answered with a deny — say exactly that.
           toolCalls.set(id, {
             ...tool,
             status: 'failed',
             requestId: undefined,
             answeredElsewhere: undefined,
             resolvedRequestId: undefined,
-            error: action.reason === 'unroutable'
-              ? "YouCoded couldn't show this request in any open conversation, so it declined it for you."
-              : 'No answer came in time, so YouCoded declined this request and Claude moved on.',
+            error: 'No answer came in time, so YouCoded declined this request and Claude moved on.',
           });
           break;
         }

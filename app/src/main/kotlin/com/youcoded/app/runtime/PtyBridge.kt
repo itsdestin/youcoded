@@ -106,7 +106,9 @@ class PtyBridge(
     fun startEventBridge(scope: CoroutineScope) {
         // Stop any existing bridge to release the socket before binding a new one
         eventBridge?.stop()
-        val bridge = EventBridge(socketPath)
+        // Knows its own session id so an ask from another session is passed
+        // back to Claude Code undecided instead of held (EventBridge.isForeignAsk).
+        val bridge = EventBridge(socketPath, mobileSessionId)
         bridge.startServer(scope)
         eventBridge = bridge
     }

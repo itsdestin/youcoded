@@ -698,7 +698,7 @@ export type ChatAction =
        *  keeping is the riskier behaviour, and the native broker and older
        *  remote clients never send a reason. Optional so older serialized
        *  actions still apply. */
-      reason?: 'app-timeout' | 'unroutable' | 'delivery-failed' | 'hook-closed';
+      reason?: 'app-timeout' | 'delivery-failed' | 'hook-closed';
     }
   | {
       /** Quiet settle of a KEPT (expired) card: its menu left the terminal, or

@@ -1397,7 +1397,7 @@ describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
   function withAsk(toolName = 'Bash'): ChatState {
     return dispatch(initState(), { type: 'PERMISSION_REQUEST', sessionId: SESSION, toolName, input: {}, requestId: 'r1' } as ChatAction);
   }
-  const expire = (s: ChatState, reason?: 'app-timeout' | 'unroutable' | 'delivery-failed' | 'hook-closed') =>
+  const expire = (s: ChatState, reason?: 'app-timeout' | 'delivery-failed' | 'hook-closed') =>
     dispatch(s, { type: 'PERMISSION_EXPIRED', sessionId: SESSION, requestId: 'r1', ...(reason ? { reason } : {}) } as ChatAction);
   const card = (s: ChatState, id = 'perm-r1') => s.get(SESSION)!.toolCalls.get(id)!;
 
@@ -1419,8 +1419,10 @@ describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
     expect(t.error).toMatch(/No answer came in time, so YouCoded declined this request/);
   });
 
-  it("'unroutable' fails the card and says it could not be shown", () => {
-    expect(card(expire(withAsk(), 'unroutable')).error).toMatch(/couldn't show this request in any open conversation/);
+  it("a reason this build does not know ('unroutable' from an older host) settles the card like no reason", () => {
+    const s = dispatch(withAsk(), { type: 'PERMISSION_EXPIRED', sessionId: SESSION, requestId: 'r1', reason: 'unroutable' } as unknown as ChatAction);
+    expect(card(s)).toMatchObject({ status: 'failed' });
+    expect(card(s).expired).toBeUndefined();
   });
 
   it("no reason (native broker, older client) and 'delivery-failed' settle the card, never keep it", () => {
