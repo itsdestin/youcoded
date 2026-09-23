@@ -34,7 +34,8 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
-import { Tooltip, StatusStrip, Button } from './ui';
+import { StatusStrip, Button } from './ui';
+import { TimelineEntryHint } from './TimelineEntryHint';
 import { helperAsksOf } from '../utils/specialist-cards';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
@@ -594,10 +595,20 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // turn restarted the fold idle timer so folding could never fire. It made the
   // measured numbers WORSE than doing nothing (2026-08-28).
   const registerFold = folding.registerEntry;
+  // Live entry element per key, for the archived-entry hint, which sits beside
+  // its entry rather than wrapping it (TimelineEntryHint.tsx says why).
+  const entryElsRef = useRef(new Map<string, HTMLElement>());
+  const getEntryEl = useCallback((key: string) => entryElsRef.current.get(key), []);
   const attachEntry = useCallback((el: HTMLDivElement | null) => {
     const releaseBlur = observeEntry(el);
     const releaseFold = registerFold(el);
-    return () => { releaseBlur(); releaseFold(); };
+    const key = el?.dataset.entryKey;
+    if (el && key) entryElsRef.current.set(key, el);
+    return () => {
+      releaseBlur();
+      releaseFold();
+      if (key && entryElsRef.current.get(key) === el) entryElsRef.current.delete(key);
+    };
   }, [observeEntry, registerFold]);
 
   // Arrow key scrolling with acceleration when not typing
@@ -1285,12 +1296,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               // `.timeline-entry` query all see an unchanged list.
               const folded = folding.isFolded(key!);
               const foldHeight = folded ? folding.heightOf(key!) : undefined;
+              // WHY the hint is a SIBLING, and only for archived entries: a
+              // wrapping <Tooltip> per entry ran its state and effects for every
+              // message on every streamed word, with empty text almost always.
+              // The entry element stays first in the keyed fragment either way,
+              // so archiving it never rebuilds it — see TimelineEntryHint.tsx.
               return (
-                <Tooltip key={key!} text={isPreCompaction
-                    ? (archiveKind === 'clear'
-                      ? 'Cleared — still here to read, but not in Claude\'s context'
-                      : 'Archived by compaction — not in Claude\'s active context')
-                    : ''}>
+                <React.Fragment key={key!}>
                 <div
                   ref={attachEntry}
                   data-entry-key={key!}
@@ -1299,7 +1311,16 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 >
                   {folded && foldHeight ? null : content}
                 </div>
-                </Tooltip>
+                {isPreCompaction && (
+                  <TimelineEntryHint
+                    entryKey={key!}
+                    getEntry={getEntryEl}
+                    text={archiveKind === 'clear'
+                      ? 'Cleared — still here to read, but not in Claude\'s context'
+                      : 'Archived by compaction — not in Claude\'s active context'}
+                  />
+                )}
+                </React.Fragment>
               );
               });
             })()}
