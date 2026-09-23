@@ -24,6 +24,7 @@
     "renderer/components/ResumeBrowser.tsx": 1837,
     "main/preload.ts": 1874,
     "renderer/components/StatusBar.tsx": 1799,
-    "renderer/components/ToolCard.tsx": 1600
+    "renderer/components/ToolCard.tsx": 1600,
+    "renderer/components/ChatView.tsx": 1543
   }
 }

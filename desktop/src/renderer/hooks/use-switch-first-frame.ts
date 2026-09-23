@@ -45,12 +45,22 @@ export function useSwitchFirstFrame(
     // long the conversation is.
     // Read everything, THEN write: a class change between two rect reads makes
     // the browser redo its layout for each one.
-    const entries = scroller.querySelectorAll<HTMLElement>('.timeline-entry');
+    //
+    // WHY siblings and not querySelectorAll (2026-09-23): the walk stopped
+    // early, but collecting the list it walked did not — querySelectorAll visits
+    // every element of the conversation (every message's whole markup) to build
+    // it, inside the click, ahead of the first frame. The entries are siblings,
+    // so find the first (it is near the top of the markup) and step backwards
+    // from its parent's last child: the same entries, visited in the same order.
+    const first = scroller.querySelector<HTMLElement>('.timeline-entry');
     const nowInView: HTMLElement[] = [];
-    for (let i = entries.length - 1; i >= 0; i--) {
-      const b = entries[i].getBoundingClientRect();
+    for (let el = first?.parentElement?.lastElementChild ?? null; el; el = el.previousElementSibling) {
+      // Not an entry (the thinking line, a pinned approval card): skipped, as
+      // the class query skipped it.
+      if (!el.classList.contains('timeline-entry')) continue;
+      const b = el.getBoundingClientRect();
       if (b.bottom < box.top - IN_VIEW_MARGIN_PX) break;
-      if (b.top <= box.bottom + IN_VIEW_MARGIN_PX) nowInView.push(entries[i]);
+      if (b.top <= box.bottom + IN_VIEW_MARGIN_PX) nowInView.push(el as HTMLElement);
     }
     for (const el of nowInView) el.classList.add('in-view');
   }, [visible, scrollerRef, stickToBottom, unfoldNearViewport]);

@@ -32,9 +32,11 @@ import { assistantName } from '../utils/assistant-name';
 import { ContentFindBar } from './ContentFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { CardKeysLiveContext } from '../state/card-keys-context';
+import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
-import { Tooltip, StatusStrip, Button } from './ui';
+import { StatusStrip, Button } from './ui';
+import { TimelineEntryHint } from './TimelineEntryHint';
 import { helperAsksOf } from '../utils/specialist-cards';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
@@ -594,15 +596,32 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // turn restarted the fold idle timer so folding could never fire. It made the
   // measured numbers WORSE than doing nothing (2026-08-28).
   const registerFold = folding.registerEntry;
+  // Live entry element per key, for the archived-entry hint, which sits beside
+  // its entry rather than wrapping it (TimelineEntryHint.tsx says why).
+  const entryElsRef = useRef(new Map<string, HTMLElement>());
+  const getEntryEl = useCallback((key: string) => entryElsRef.current.get(key), []);
   const attachEntry = useCallback((el: HTMLDivElement | null) => {
     const releaseBlur = observeEntry(el);
     const releaseFold = registerFold(el);
-    return () => { releaseBlur(); releaseFold(); };
+    const key = el?.dataset.entryKey;
+    if (el && key) entryElsRef.current.set(key, el);
+    return () => {
+      releaseBlur();
+      releaseFold();
+      if (key && entryElsRef.current.get(key) === el) entryElsRef.current.delete(key);
+    };
   }, [observeEntry, registerFold]);
 
   // Arrow key scrolling with acceleration when not typing
   const scrollSpeed = useRef(0);
   useEffect(() => {
+    // WHY gated on `visible` (2026-09-23): every open session keeps its ChatView
+    // mounted, and this listener sits on `window`, so ungated ONE ArrowUp ran it
+    // in every chat at once — scrolling each hidden chat and calling
+    // releaseStick() there, which un-pinned background chats from their newest
+    // message and re-rendered each of them for a button nobody could see. Only
+    // the chat on screen answers, the same rule as Ctrl+F below.
+    if (!visible) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(document.activeElement)) return;
       // A focused game board owns its own arrow keys. Without this the chat
@@ -642,8 +661,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);
+      // A key held while the pane goes away would otherwise start the next
+      // visit at the accelerated speed.
+      scrollSpeed.current = 0;
     };
-  }, [releaseStick]);
+  }, [visible, releaseStick]);
 
   // Ctrl/Cmd+F opens the chat-history find bar. Only the visible ChatView
   // responds (one per session is mounted). Defers to the artifact drawer's own
@@ -690,6 +712,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // event) never reaches flick velocity, so discrete mouse scrolling stays
   // snappy — only a fast multi-event trackpad flick coasts.
   useEffect(() => {
+    // WHY gated on `visible` (2026-09-23): the glide-cancel below listens on
+    // `window` for every click and key, and every open session's ChatView is
+    // mounted — so each keystroke anywhere ran it once per open chat. A hidden
+    // pane takes no wheel input (pointer-events:none, inert), so it has nothing
+    // to glide or cancel; the listeners come back with the pane. Leaving the pane
+    // mid-glide stops that glide (cleanup below), which nobody can see.
+    if (!visible) return;
     const container = scrollContainerRef.current;
     if (!container) return;
 
@@ -836,7 +865,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       window.removeEventListener('keydown', cancelOnInput, true);
       stopMomentum();
     };
-  }, []);
+  }, [visible]);
 
   const handlePromptSelect = useCallback(
     (promptId: string, button: PromptCardButton, label: string, promptTitle?: string) => {
@@ -982,6 +1011,9 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     // WHY: every open session's ChatView stays mounted, and waiting cards listen
     // for keys on `window` — only the chat on screen may answer them.
     <CardKeysLiveContext.Provider value={visible}>
+    {/* WHY: clocks inside this chat (thinking line, running-command seconds)
+        stand still while it is hidden — see on-screen-context.ts. */}
+    <OnScreenContext.Provider value={visible}>
     <div
       // Fix: previously toggled display:none/flex, which forced a full reflow of
       // both views on every chat↔terminal toggle (the #1 cause of visual jank
@@ -1268,12 +1300,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               // `.timeline-entry` query all see an unchanged list.
               const folded = folding.isFolded(key!);
               const foldHeight = folded ? folding.heightOf(key!) : undefined;
+              // WHY the hint is a SIBLING, and only for archived entries: a
+              // wrapping <Tooltip> per entry ran its state and effects for every
+              // message on every streamed word, with empty text almost always.
+              // The entry element stays first in the keyed fragment either way,
+              // so archiving it never rebuilds it — see TimelineEntryHint.tsx.
               return (
-                <Tooltip key={key!} text={isPreCompaction
-                    ? (archiveKind === 'clear'
-                      ? 'Cleared — still here to read, but not in Claude\'s context'
-                      : 'Archived by compaction — not in Claude\'s active context')
-                    : ''}>
+                <React.Fragment key={key!}>
                 <div
                   ref={attachEntry}
                   data-entry-key={key!}
@@ -1282,7 +1315,16 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
                 >
                   {folded && foldHeight ? null : content}
                 </div>
-                </Tooltip>
+                {isPreCompaction && (
+                  <TimelineEntryHint
+                    entryKey={key!}
+                    getEntry={getEntryEl}
+                    text={archiveKind === 'clear'
+                      ? 'Cleared — still here to read, but not in Claude\'s context'
+                      : 'Archived by compaction — not in Claude\'s active context'}
+                  />
+                )}
+                </React.Fragment>
               );
               });
             })()}
@@ -1481,6 +1523,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         sessionId={sessionId}
       />
     </div>
+    </OnScreenContext.Provider>
     </CardKeysLiveContext.Provider>
   );
 }
