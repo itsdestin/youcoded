@@ -2511,6 +2511,7 @@ export function registerIpcHandlers(
       // Idempotent + no-op for non-native ids, so the holder flow calls it
       // unconditionally without needing to know the provider.
       destroyNative: (id) => nativeHost.destroy(id),
+      endQuiesceNative: (id) => nativeHost.endQuiesce(id),
     });
     // Fire-and-forget from a hub event — the handler never throws (each step is
     // try/caught inside createHolderTakeover), so void is safe.

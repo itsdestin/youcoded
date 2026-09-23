@@ -293,8 +293,8 @@ interface LiveEntry {
   // is the same discipline McpLease applies inside the manager (where the
   // equivalent bug WAS reachable and is mutation-tested).
   mcpLease?: McpLease;
-  // True while quiesce() is winding the session down for a takeover. send()
-  // refuses in that window — see quiesce() step (0).
+  // True from quiesce() until the session is destroyed (or endQuiesce() after a
+  // takeover that did not go ahead). send() refuses meanwhile — see quiesce() (0).
   quiescing?: boolean;
   // The "What the assistant was given" record last pushed for this session, so a
   // model swap can re-push it with the new model's window (republishWindow).
@@ -4469,30 +4469,35 @@ export class NativeSessionHost extends EventEmitter {
   async quiesce(sessionId: string): Promise<void> {
     const entry = this.live.get(sessionId);
     if (!entry) return;
-    // (0) Refuse new sends until this resolves. WHY: every await below is a
-    // window in which a send() used to be accepted — an idle session dispatched
-    // a fresh turn, a busy one queued behind the interrupted turn — and ran a
-    // whole turn on this device after the takeover began (M2 final review). A
-    // send issued in the same tick BEFORE this call is unaffected: step (2)
-    // still catches and aborts it. Cleared at the end so a session whose
-    // takeover did not go ahead can be used again.
+    // (0) Refuse new sends from here until the session is DESTROYED. WHY: every
+    // await below — and the takeover's flush to the space and lease release
+    // after this returns — is a window in which a send() used to be accepted
+    // and ran a whole turn on this device after the handoff began (M2 final
+    // review; the flush-window half found by the 2026-09-23 review). A send
+    // issued in the same tick BEFORE this call is unaffected: step (2) still
+    // catches and aborts it. Only a takeover that does NOT go ahead lifts it,
+    // through endQuiesce().
     entry.quiescing = true;
-    try {
-      entry.queue.length = 0;                        // (1) no post-flush turn can start
-      // (1b) Tear down specialist children before quiescing this session: a
-      // running child keeps appending to ITS file and keeps the parent's Task call
-      // pending, both of which contradict what quiesce promises the caller (no
-      // further work for this session once it resolves). Safe to await here —
-      // the queue is already cleared, so nothing can start a new parent turn.
-      await this.destroyChildrenOf(sessionId);
-      await new Promise((r) => setImmediate(r));      // (2) let a same-tick send dispatch
-      this.broker.cancelSession(sessionId);           // (3) unwind a paused permission ask
-      entry.session.interrupt();                      //     abort the in-flight turn
-      try { await entry.running; } catch { /* runTurns never rejects; belt-and-suspenders */ } // (4)
-      await this.drain(sessionId);                    // (5) flush already-enqueued appends
-    } finally {
-      entry.quiescing = false;
-    }
+    entry.queue.length = 0;                        // (1) no post-flush turn can start
+    // (1b) Tear down specialist children before quiescing this session: a
+    // running child keeps appending to ITS file and keeps the parent's Task call
+    // pending, both of which contradict what quiesce promises the caller (no
+    // further work for this session once it resolves). Safe to await here —
+    // the queue is already cleared, so nothing can start a new parent turn.
+    await this.destroyChildrenOf(sessionId);
+    await new Promise((r) => setImmediate(r));      // (2) let a same-tick send dispatch
+    this.broker.cancelSession(sessionId);           // (3) unwind a paused permission ask
+    entry.session.interrupt();                      //     abort the in-flight turn
+    try { await entry.running; } catch { /* runTurns never rejects; belt-and-suspenders */ } // (4)
+    await this.drain(sessionId);                    // (5) flush already-enqueued appends
+  }
+
+  /** Lift quiesce()'s send refusal — ONLY for a takeover that did not finish
+   *  (the session is staying on this device after all). A completed takeover
+   *  destroys the session instead, so the refusal never needs lifting there. */
+  endQuiesce(sessionId: string): void {
+    const entry = this.live.get(sessionId);
+    if (entry) entry.quiescing = false;
   }
 
   /** Mid-session model swap (next turn uses the new binding). */

@@ -2036,7 +2036,7 @@ describe('NativeSessionHost', () => {
     // A send arriving WHILE quiesce is winding down (idle session, so it would
     // dispatch a fresh turn) used to run a whole turn on the old device before
     // the handoff. It is refused instead, and the renderer keeps the draft.
-    it('a send that arrives while quiesce is in progress is refused and starts no turn', async () => {
+    it('a send that arrives while quiesce is in progress, or after it, is refused until the takeover ends', async () => {
       const store = new SessionStore(new NativeHome(root));
       const qHost = new NativeSessionHost(store, delayedFactory, NO_CONTEXT, async () => null, async () => null);
       await qHost.create({ sessionId: 'qz3', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
@@ -2045,7 +2045,11 @@ describe('NativeSessionHost', () => {
       await quiesced;
       await new Promise((r) => setTimeout(r, 80));
       expect(store.readEvents('qz3', root).some((e) => e.type === 'user-message')).toBe(false);
-      // The session is usable again once quiesce has finished (e.g. a takeover that did not proceed).
+      // Still refused after quiesce returns: the takeover's flush and lease
+      // release come next, and only destroy ends the session.
+      expect(qHost.send('qz3', 'after')).toEqual({ status: 'failed', reason: 'not-live' });
+      // A takeover that did not go ahead lifts it.
+      qHost.endQuiesce('qz3');
       expect(qHost.send('qz3', 'after')).toEqual({ status: 'sent' });
       await qHost.destroyAll();
     });
