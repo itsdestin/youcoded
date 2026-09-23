@@ -71,8 +71,33 @@ export const initialArtifactState: ArtifactState = {
 
 export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactState {
   switch (a.type) {
-    case 'SESSION_ARTIFACTS_LOADED':
-      return { ...s, sessionArtifacts: { ...s.sessionArtifacts, [a.sessionId]: a.artifacts } };
+    case 'SESSION_ARTIFACTS_LOADED': {
+      // WHY this is not a plain replacement: the list is refreshed wholesale
+      // (after every burst of assistant file writes, on rename, on reopen), and
+      // the open file is held by ID. A file opened straight from a chat path is
+      // shown as an on-disk record keyed by its path, which the session's list
+      // does not contain — and its first write gives it a permanent id. Either
+      // way the replacement no longer had the open id, the drawer found nothing
+      // to show and fell back to the file list, and the git footer kept
+      // listening for the old id. The same race hit a reply's delivered file
+      // (auto-open selects a record the in-flight refresh predates).
+      // So: if the open record is missing from the refresh, follow it to a
+      // listed record at the same path (the new id), else keep it in the list.
+      const activeId = s.activeArtifactBySession[a.sessionId];
+      const prev = activeId ? (s.sessionArtifacts[a.sessionId] ?? []).find((x) => x.id === activeId) : undefined;
+      if (!prev || a.artifacts.some((x) => x.id === activeId)) {
+        return { ...s, sessionArtifacts: { ...s.sessionArtifacts, [a.sessionId]: a.artifacts } };
+      }
+      const moved = a.artifacts.find((x) => x.kind === prev.kind && x.path === prev.path);
+      if (moved) {
+        return {
+          ...s,
+          sessionArtifacts: { ...s.sessionArtifacts, [a.sessionId]: a.artifacts },
+          activeArtifactBySession: { ...s.activeArtifactBySession, [a.sessionId]: moved.id },
+        };
+      }
+      return { ...s, sessionArtifacts: { ...s.sessionArtifacts, [a.sessionId]: [...a.artifacts, prev] } };
+    }
     case 'SESSION_ARTIFACT_UPSERTED': {
       const existing = s.sessionArtifacts[a.sessionId] ?? [];
       const i = existing.findIndex((x) => x.id === a.artifact.id);

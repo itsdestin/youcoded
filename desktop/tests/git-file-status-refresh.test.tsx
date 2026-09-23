@@ -160,4 +160,20 @@ describe('useGitFileStatus refresh filter', () => {
     await settleDebounce();
     expect(fileStatus).toHaveBeenCalledTimes(2);
   });
+
+  it('re-asks when the open file gains a new id, without blanking the footer', async () => {
+    // A file opened from a chat path is known by its path until the
+    // assistant's first write gives it a permanent id — and that write's
+    // announcement carries the NEW id, which this footer does not know yet. The
+    // drawer then follows the file to its new id; the footer must re-ask at
+    // that moment, and keep showing what it had meanwhile (same file).
+    const { getByTestId, rerender } = render(<Probe artifactId={OPEN_REL} />);
+    await waitFor(() => expect(getByTestId('branch').textContent).toBe('main'));
+    fileStatus.mockResolvedValue({ ok: true, isRepo: true, branch: 'after-write', counts: null, hasHistory: true, staged: false, conflicted: false });
+    rerender(<Probe artifactId="art_new" />);
+    expect(getByTestId('branch').textContent).toBe('main');
+    await waitFor(() => expect(getByTestId('branch').textContent).toBe('after-write'));
+    expect(fileStatus).toHaveBeenCalledTimes(2);
+  });
 });
+
