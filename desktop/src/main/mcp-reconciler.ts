@@ -2,6 +2,7 @@ import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { isDeepStrictEqual } from 'util';
 import { listInstalledPluginDirs } from './claude-code-registry';
 import { NativeHome } from './native-home';
 import { SecretsStore } from './providers/secrets-store';
@@ -258,8 +259,10 @@ export function applyManifestEntries(
         // Never overwrite a user-configured entry — trust their customizations
         // (see the repair exception in this function's header).
         const legacy = buildServerConfig(entry, pluginRoot, isWindows, legacyExpand);
-        const legacyText = JSON.stringify(legacy);
-        if (legacyText.includes(UNEXPANDED_PACKAGE_DIR) && JSON.stringify(existing) === legacyText) {
+        // Structural, not text, equality: ~/.claude.json may have been rewritten
+        // by another tool with its keys in a different order (review 2026-09-23;
+        // Android's jsonEquals is the same rule).
+        if (JSON.stringify(legacy).includes(UNEXPANDED_PACKAGE_DIR) && isDeepStrictEqual(existing, legacy)) {
           servers[entry.name] = config;
           repaired++;
         }
