@@ -207,8 +207,10 @@ export function expandHome(value: string, tilde: boolean, home: string): string 
 }
 
 /** Leading shell keywords and grouping words that are not the command itself:
- *  `if x; then rm …`, `for …; do rm …`, `{ rm …; }`, `! rm …`. */
-export const SHELL_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '{', '!', 'time']);
+ *  `if x; then rm …`, `for …; do rm …`, `{ rm …; }`, `! rm …`.
+ *  WHY not exported: only commandIndex below reads it; the export tipped the
+ *  combined branches over the knip ratchet (combined-branch fix). */
+const SHELL_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '{', '!', 'time']);
 
 /** Commands that run another command given as their arguments, with the flags
  *  of each that take a separate value, and how many plain arguments come
