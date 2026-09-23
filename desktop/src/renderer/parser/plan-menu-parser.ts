@@ -114,6 +114,11 @@ export function parsePlanMenu(screenText: string | null | undefined): PlanMenuRe
   const raw: RawOption[] = [];
   for (let i = questionEnd + 1; i < lines.length; i++) {
     const line = lines[i];
+    // The gap Claude Code leaves between the question and the rows is a row of
+    // SPACES in the app's real xterm (drawn cells, so not trimmed away), unlike
+    // the headless replay where it vanishes. Found in the dev-instance run
+    // 2026-09-23: without this skip every plan read as "unreadable".
+    if (raw.length === 0 && !line.trim()) continue;
     const m = OPTION_LINE.exec(line);
     if (m) {
       const labelCol = line.length - m[5].length;

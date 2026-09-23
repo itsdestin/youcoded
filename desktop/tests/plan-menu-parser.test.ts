@@ -5,7 +5,9 @@
 // cannot be sure of comes back 'unreadable' instead of a guess.
 import { describe, it, expect, afterEach } from 'vitest';
 import { parsePlanMenu, PLAN_FEEDBACK_PLACEHOLDER, type PlanMenuRead } from '../src/renderer/parser/plan-menu-parser';
-import { FixtureTerminal, listPlanFixtures, loadPlanFixture, markIndex } from './helpers/plan-menu-fixtures';
+import fs from 'fs';
+import path from 'path';
+import { FixtureTerminal, listPlanFixtures, loadPlanFixture, markIndex, PLAN_FIXTURE_DIR } from './helpers/plan-menu-fixtures';
 
 const open: FixtureTerminal[] = [];
 afterEach(() => { while (open.length) open.pop()!.dispose(); });
@@ -168,6 +170,20 @@ describe('parsePlanMenu on real Claude Code 2.1.281 captures', () => {
       replay.dispose(); open.pop();
     }
   }, REPLAY_ALL_BUDGET_MS);
+});
+
+describe('parsePlanMenu on a screen read from the running app', () => {
+  it('reads the menu when a row of spaces separates the question from the rows', () => {
+    // Copied from the dev instance's own terminal (getScreenText), CC 2.1.281,
+    // 80 columns, clear-context setting on: the real xterm keeps the spacer
+    // row as spaces, which the headless replay drops.
+    const text = fs.readFileSync(path.join(PLAN_FIXTURE_DIR, 'app-screen-cc-2.1.281-clear-context-80col.txt'), 'utf8');
+    const m = ready(parsePlanMenu(text));
+    expect(m.options.map((o) => o.label)).toEqual([
+      'Yes, clear context (5% used) and auto-accept edits', 'Yes, auto-accept edits',
+      'Yes, manually approve edits', PLAN_FEEDBACK_PLACEHOLDER,
+    ]);
+  });
 });
 
 // Shapes we could not trigger on this machine, written from Claude Code
