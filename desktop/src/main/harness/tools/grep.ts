@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import { defineTool } from './registry';
-import { resolveP, toPosix, shellCwdMissHint } from './guards';
+import { resolveP, toPosix, shellCwdMissHint, lunaPathRefused } from './guards';
 import { CREDENTIAL_EXCLUDE_GLOBS } from './credential-paths';
 import type { ResultBounds } from './types';
 
@@ -320,6 +320,7 @@ export const GrepTool = defineTool({
     // Hoisted so the exit-2 error message (below) can name the exact path that
     // failed, instead of a context-free "ripgrep error".
     const resolvedTarget = resolveP(args.path ?? '.', ctx.cwd);
+    if (lunaPathRefused(resolvedTarget)) return { text: 'Grep rejected: path is outside the Luna experiment fixture.', isError: true };
     // WHY a relative target: rg echoes back whatever form it was given, so an
     // absolute target made Grep print absolute paths while Glob printed relative
     // ones — the same file, two shapes, unpipeable between tools (2026-08-01

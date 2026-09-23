@@ -1900,6 +1900,44 @@ describe('shellCwdMissHint / workspaceRootMissHint (path-resolution asymmetry hi
   });
 });
 
+describe('Luna experiment file path restriction', () => {
+  it('fails closed on outside targets across model-visible file tools', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-outside-'));
+    fs.writeFileSync(path.join(outside, 'secret.txt'), 'secret');
+    const link = path.join(dir, 'outside-link');
+    fs.symlinkSync(outside, link, 'dir');
+    vi.stubEnv('YOUCODED_LUNA_EXPERIMENT', '1');
+    vi.stubEnv('LUNA_FIXTURE_ROOT', dir);
+    try {
+      const results = await Promise.all([
+        ReadTool.execute({ file_path: path.join(link, 'secret.txt') }, ctx),
+        WriteTool.execute({ file_path: path.join(outside, 'new.txt'), content: 'bad' }, ctx),
+        EditTool.execute({ file_path: path.join(link, 'secret.txt'), old_string: 'secret', new_string: 'bad' }, ctx),
+        GlobTool.execute({ pattern: '*', path: link }, ctx),
+        GrepTool.execute({ pattern: 'secret', path: path.join(link, 'secret.txt') }, ctx),
+      ]);
+      expect(results.every((result) => result.isError)).toBe(true);
+      expect(fs.existsSync(path.join(outside, 'new.txt'))).toBe(false);
+      expect(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8')).toBe('secret');
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a new file under the fixture when the experiment is enabled', async () => {
+    vi.stubEnv('YOUCODED_LUNA_EXPERIMENT', '1');
+    vi.stubEnv('LUNA_FIXTURE_ROOT', dir);
+    try {
+      const r = await WriteTool.execute({ file_path: 'new/sub/file.txt', content: 'ok' }, ctx);
+      expect(r.isError).toBeFalsy();
+      expect(fs.readFileSync(path.join(dir, 'new/sub/file.txt'), 'utf8')).toBe('ok');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe('TodoWrite', () => {
   it('replaces the list in ctx', async () => {
     ctx.todos.push({ content: 'stale', status: 'pending', activeForm: 'Staling' });
