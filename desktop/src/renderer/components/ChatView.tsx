@@ -107,7 +107,7 @@ interface Props {
 
 // Memoised at the bottom of the file — see the WHY there.
 function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
-  const state = useChatState(sessionId);
+  const state = useChatState(sessionId, { paused: !visible }); // WHY paused: hidden, it redrew per streamed word; live again on show (see useChatState)
   const dispatch = useChatDispatch();
 
   // What the conversation strip shows: the live status, plus a 2.5 s "Up to
