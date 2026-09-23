@@ -252,8 +252,17 @@ function ToolRow({
       >
         {target}
       </span>
-      {/* Inline Allow / Deny / Always buttons only for awaiting-approval tools */}
-      {tool.status === 'awaiting-approval' && tool.requestId ? (
+      {/* A plan approval is Claude Code's own multi-row menu (clear context,
+          which mode to continue in, typed feedback) — not an allow/deny. Its
+          answer needs the session's terminal screen, which lives in the main
+          window, not this floater (PlanApprovalCard reads it). A hook "allow"
+          here would not approve anything: Claude Code ignores an allow for a
+          tool that needs the user's own input, so the card would clear while
+          the plan kept waiting. Point at the main window instead of offering
+          buttons that cannot do what they say. */}
+      {tool.status === 'awaiting-approval' && tool.toolName === 'ExitPlanMode' ? (
+        <span style={{ flexShrink: 0, color: 'var(--fg-dim)' }}>Review the plan in the main window</span>
+      ) : tool.status === 'awaiting-approval' && tool.requestId ? (
         <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
           <button
             disabled={responding}

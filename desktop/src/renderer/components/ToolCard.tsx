@@ -25,6 +25,7 @@ import { PERMISSION_DISPLAY } from './StatusBar';
 import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
 import { toolActionLabel } from '../utils/tool-group-summary';
+import { PlanApprovalCard } from './PlanApprovalCard';
 
 // --- Helpers for friendly display ---
 
@@ -914,61 +915,8 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
 }
 
 // --- ExitPlanMode UI ---
-// The CLI shows a 4-option Ink menu for plan approval, not a standard Yes/No
-// permission prompt. We render the real options and send PTY input (arrow keys
-// + Enter) to select the chosen option in the Ink menu, then close the hook
-// socket so the relay exits cleanly.
-
-const PLAN_INTENT_STYLES = {
-  accept: 'bg-green-600/60 hover:bg-green-600/80 text-green-100',
-  reject: 'bg-red-600/60 hover:bg-red-600/80 text-red-100',
-  neutral: 'bg-blue-600/60 hover:bg-blue-600/80 text-blue-100',
-};
-
-const PLAN_OPTIONS = [
-  { label: 'Yes, and bypass permissions', intent: 'accept' as const },
-  { label: 'Yes, manually approve edits', intent: 'accept' as const },
-  { label: 'No, refine plan', intent: 'reject' as const },
-  { label: 'Tell Claude what to change', intent: 'neutral' as const },
-];
-
-function PlanApprovalButtons({ requestId, sessionId, onResponded }: {
-  requestId: string;
-  sessionId: string;
-  onResponded?: () => void;
-}) {
-  const [responding, setResponding] = useState(false);
-  const DOWN = '\u001b[B';
-
-  const handleSelect = useCallback((optionIndex: number) => {
-    setResponding(true);
-    // Send arrow-down keys to navigate from option 1 (default) to the target,
-    // then Enter to confirm the selection in the Ink menu
-    const input = DOWN.repeat(optionIndex) + '\r';
-    window.claude.session.sendInput(sessionId, input);
-    // Close the hook socket — the Ink menu handles the decision, so we don't
-    // need to send a hook response. Closing prevents the relay from timing out.
-    (window as any).claude.session.respondToPermission(requestId, { decision: { behavior: 'deny' } }).catch(() => {});
-    if (onResponded) onResponded();
-  }, [requestId, sessionId, onResponded, DOWN]);
-
-  const pad = isAndroid() ? 'py-2' : 'py-1';
-
-  return (
-    <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-t border-edge bg-inset/30">
-      {PLAN_OPTIONS.map((opt, idx) => (
-        <button
-          key={opt.label}
-          disabled={responding}
-          onClick={() => handleSelect(idx)}
-          className={`px-3 ${pad} text-xs font-medium rounded-sm transition-colors disabled:opacity-50 ${PLAN_INTENT_STYLES[opt.intent]}`}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  );
-}
+// Lives in PlanApprovalCard.tsx: its buttons are read off Claude Code's real
+// menu, never a fixed list (the old fixed list could approve on "No").
 
 // --- AskUserQuestion UI ---
 // Claude Code's AskUserQuestion tool sends 1-4 multiple-choice questions.
@@ -1493,8 +1441,8 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
       {tool.status === 'awaiting-approval' && tool.requestId && (() => {
         // AskUserQuestion needs its own UI with option selection instead of Yes/No
         const isAskUser = tool.toolName === 'AskUserQuestion' && isValidQuestions(tool.input);
-        // ExitPlanMode has a 4-option Ink menu in the CLI (bypass/manual/refine/feedback),
-        // not a standard Yes/No permission — render the real options
+        // ExitPlanMode is Claude Code's own plan menu, not a Yes/No permission —
+        // PlanApprovalCard renders the rows that menu is actually showing.
         const isPlanApproval = tool.toolName === 'ExitPlanMode';
         const onRespondedCb = () => {
           if (sessionId && tool.requestId) {
@@ -1518,10 +1466,22 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             onFailed={onFailedCb}
           />
         ) : isPlanApproval && sessionId ? (
-          <PlanApprovalButtons
-            requestId={tool.requestId}
+          <PlanApprovalCard
             sessionId={sessionId}
-            onResponded={onRespondedCb}
+            onAnswered={() => {
+              // Claude Code took the answer through its menu. Resolve the card
+              // FIRST, so the socket release below cannot come back to this
+              // device as "answered elsewhere"…
+              onRespondedCb();
+              // …then release the hook's held socket with NO decision. The relay
+              // prints no decision and Claude Code ignores it (measured on
+              // 2.1.281: a decision-less hook answer leaves its own menu live and
+              // a late one changes nothing). Never a deny here: a deny that beat
+              // the keystroke would reject the plan the user just approved.
+              if (tool.requestId) {
+                (window as any).claude.session.respondToPermission(tool.requestId, {}).catch(() => {});
+              }
+            }}
           />
         ) : (
           <PermissionButtons

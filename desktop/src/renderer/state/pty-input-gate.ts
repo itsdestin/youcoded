@@ -7,14 +7,14 @@ import { HISTORY_EXPAND_PROMPT_ID } from './chat-types';
 // permission request, AskUserQuestion, or plan approval is pending, Claude
 // Code's native Ink select menu is LIVE in the PTY at the same time YouCoded
 // shows its chat card (the card answers via the hook socket, but the terminal
-// menu still listens for keystrokes — that's how PlanApprovalButtons drives
-// it with arrow keys). Any byte YouCoded writes to the PTY in that window is
-// menu input: a bare `\r` presses Enter on the highlighted option, silently
-// auto-answering the question or auto-approving the permission.
+// menu still listens for keystrokes — that's how PlanApprovalCard answers the
+// plan menu, by typing a row's number). Any byte YouCoded writes to the PTY in
+// that window is menu input: a bare `\r` presses Enter on the highlighted
+// option, silently auto-answering the question or auto-approving the permission.
 //
 // Every AUTOMATED PTY writer (submit-retry nudge, chat sends, command sends)
 // must consult these predicates first. Deliberate menu-driving writes
-// (ToolCard plan keys, TrustGate buttons, terminal-view keystrokes) must NOT
+// (PlanApprovalCard keys, TrustGate buttons, terminal-view keystrokes) must NOT
 // go through this gate — driving the menu is their whole purpose.
 
 /**
