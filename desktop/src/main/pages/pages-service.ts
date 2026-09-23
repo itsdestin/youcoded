@@ -259,7 +259,7 @@ class PagesService {
   /** `pages:fetch` — §4 in full. The caller is the host frame's postMessage
    *  bridge; the credential never travels back with the answer. */
   async fetch(id: string, request: PageFetchRequest): Promise<PageFetchResult> {
-    if (!this.gate.take(id)) {
+    if (!(await this.gate.acquire(id))) {
       return { ok: false, reason: 'too-many-requests', message: 'This page is asking for information faster than the app will allow. It will be able to try again shortly.' };
     }
     try {

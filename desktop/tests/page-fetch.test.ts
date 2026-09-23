@@ -5,7 +5,7 @@
 // screen makes: it reaches exactly what its approval lists, and nothing else —
 // and whatever comes back never carries the key that fetched it.
 import { describe, it, expect, vi } from 'vitest';
-import { performPageFetch, PageRateGate, MAX_PER_PAGE_PER_MINUTE, MAX_CONCURRENT_PER_PAGE, REDACTED, redact } from '../src/main/pages/page-fetch';
+import { performPageFetch, PageRateGate, MAX_PER_PAGE_PER_MINUTE, MAX_CONCURRENT_PER_PAGE, MAX_WAITING_PER_PAGE, REDACTED, redact } from '../src/main/pages/page-fetch';
 import { fingerprint, parseConnections } from '../src/main/pages/page-connections';
 import type { PageConnection, PageFetchRequest } from '../src/shared/pages-types';
 
@@ -164,24 +164,35 @@ describe('the key never comes back out', () => {
 });
 
 describe('the rate cap', () => {
-  it('refuses past 60 requests a minute for one page, and lets another page through', () => {
+  it('refuses past the per-minute cap for one page, and lets another page through', async () => {
     const gate = new PageRateGate();
     const now = 1_000_000;
     for (let i = 0; i < MAX_PER_PAGE_PER_MINUTE; i++) {
-      expect(gate.take('personal:weather', now), `request ${i}`).toBe(true);
+      expect(await gate.acquire('personal:weather', now), `request ${i}`).toBe(true);
       gate.release('personal:weather');
     }
-    expect(gate.take('personal:weather', now)).toBe(false);
-    expect(gate.take('personal:other', now)).toBe(true);
+    expect(await gate.acquire('personal:weather', now)).toBe(false);
+    expect(await gate.acquire('personal:other', now)).toBe(true);
     // A minute later the window has rolled and the page may ask again.
-    expect(gate.take('personal:weather', now + 60_001)).toBe(true);
+    expect(await gate.acquire('personal:weather', now + 60_001)).toBe(true);
   });
 
-  it('refuses past four requests in flight at once', () => {
+  it('makes requests past four at once WAIT for a slot rather than refusing them', async () => {
     const gate = new PageRateGate();
-    for (let i = 0; i < MAX_CONCURRENT_PER_PAGE; i++) expect(gate.take('personal:weather')).toBe(true);
-    expect(gate.take('personal:weather')).toBe(false);
-    gate.release('personal:weather');
-    expect(gate.take('personal:weather')).toBe(true);
+    for (let i = 0; i < MAX_CONCURRENT_PER_PAGE; i++) expect(await gate.acquire('personal:dash')).toBe(true);
+    let fifthGot: boolean | null = null;
+    const fifth = gate.acquire('personal:dash').then((ok) => { fifthGot = ok; });
+    await Promise.resolve();
+    expect(fifthGot).toBeNull();          // still waiting: four are in flight
+    gate.release('personal:dash');        // one finishes…
+    await fifth;
+    expect(fifthGot).toBe(true);          // …and the fifth goes
+  });
+
+  it('refuses once too many are already waiting', async () => {
+    const gate = new PageRateGate();
+    for (let i = 0; i < MAX_CONCURRENT_PER_PAGE; i++) await gate.acquire('personal:dash');
+    for (let i = 0; i < MAX_WAITING_PER_PAGE; i++) void gate.acquire('personal:dash');
+    expect(await gate.acquire('personal:dash')).toBe(false);
   });
 });

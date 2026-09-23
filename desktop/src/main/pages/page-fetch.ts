@@ -26,12 +26,19 @@ import {
 import { covers, fingerprint, methodAllowed } from './page-connections';
 import type { PageConnection, PageFetchRequest, PageFetchResult } from '../../shared/pages-types';
 
-/** Caps (design §4). Over any of them the answer is a refusal, never a queue,
- *  so a runaway page cannot spend a paid key while nobody is watching. */
+/** Caps (design §4). The per-minute cap REFUSES, so a runaway page cannot
+ *  spend a paid key while nobody is watching. The in-flight cap QUEUES: a
+ *  dashboard legitimately asks for a dozen things at once, and refusing all but
+ *  four of them broke the first real one (Destin's analytics page, 2026-09-23 —
+ *  "This page is asking for information faster than the app will allow").
+ *  The per-minute cap was 60; one refresh of that dashboard is 11 requests, so
+ *  60 allowed five filter changes a minute. 120 still stops a runaway loop. */
 const MAX_BODY_BYTES = 1_000_000;
 const REQUEST_TIMEOUT_MS = 30_000;
 export const MAX_CONCURRENT_PER_PAGE = 4;
-export const MAX_PER_PAGE_PER_MINUTE = 60;
+export const MAX_PER_PAGE_PER_MINUTE = 120;
+/** How many requests may wait for a slot before the rest are refused. */
+export const MAX_WAITING_PER_PAGE = 50;
 
 /** What the page sees instead of a credential. Short and obviously not a key,
  *  so a page author reading their own error text knows what happened. */
@@ -74,25 +81,32 @@ export interface PageFetchContext {
  * written to disk 60x a minute is the hot write path §3 keeps approvals out of.
  */
 export class PageRateGate {
-  private readonly state = new Map<string, { recent: number[]; inFlight: number }>();
+  private readonly state = new Map<string, { recent: number[]; inFlight: number; waiting: Array<() => void> }>();
 
-  /** True when this request may go. Call release() when it settles. */
-  take(pageId: string, now = Date.now()): boolean {
-    const s = this.state.get(pageId) ?? { recent: [], inFlight: 0 };
-    s.recent = s.recent.filter((t) => now - t < 60_000);
-    if (s.inFlight >= MAX_CONCURRENT_PER_PAGE || s.recent.length >= MAX_PER_PAGE_PER_MINUTE) {
-      this.state.set(pageId, s);
-      return false;
-    }
-    s.recent.push(now);
-    s.inFlight += 1;
+  /** Resolves true when the request may go (possibly after waiting for one of
+   *  the page's in-flight requests to finish), false when it is refused. A
+   *  request is counted against the minute WHEN IT IS ASKED, so a queue can
+   *  never let a page exceed the minute cap later. Call release() when it
+   *  settles — every true answer owes exactly one release. */
+  async acquire(pageId: string, now = Date.now()): Promise<boolean> {
+    const s = this.state.get(pageId) ?? { recent: [], inFlight: 0, waiting: [] };
     this.state.set(pageId, s);
+    s.recent = s.recent.filter((t) => now - t < 60_000);
+    if (s.recent.length >= MAX_PER_PAGE_PER_MINUTE || s.waiting.length >= MAX_WAITING_PER_PAGE) return false;
+    s.recent.push(now);
+    if (s.inFlight < MAX_CONCURRENT_PER_PAGE) { s.inFlight += 1; return true; }
+    // Wait for a slot. release() hands its slot straight to the next waiter,
+    // so inFlight never dips and a newcomer cannot jump the queue.
+    await new Promise<void>((resolve) => s.waiting.push(resolve));
     return true;
   }
 
   release(pageId: string): void {
     const s = this.state.get(pageId);
-    if (s) s.inFlight = Math.max(0, s.inFlight - 1);
+    if (!s) return;
+    const next = s.waiting.shift();
+    if (next) next();
+    else s.inFlight = Math.max(0, s.inFlight - 1);
   }
 }
 
