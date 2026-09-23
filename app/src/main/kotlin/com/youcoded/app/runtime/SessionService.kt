@@ -4245,6 +4245,14 @@ class SessionService : Service() {
             "pages:get",
             "pages:set-pinned",
             "pages:set-data",
+            // Phase 2 (connections) joins them by name rather than falling to the
+            // catch-all, so both halves of Pages answer the phone the same way.
+            "pages:approve",
+            "pages:remove-connection",
+            "pages:refresh",
+            "pages:saved-keys",
+            "pages:delete-saved-key",
+            "pages:fetch",
             // Remembered "Always allow" rules (M5 2a — permissions management UI).
             // These read/revoke the DESKTOP native harness's ~/.youcoded/permissions.json;
             // Android has no native harness to hold those grants until M8, which is

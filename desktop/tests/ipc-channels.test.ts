@@ -2186,3 +2186,55 @@ describe('Sign in with ChatGPT - the wiring that has no other guard', () => {
       .toContain('markSetupCompleted()');
   });
 });
+
+// YouCoded Pages Phase 2 — connections, keys and `pages:fetch`.
+//
+// A channel has FIVE surfaces (.claude/rules/ipc-bridge.md), and remote-server.ts
+// is the one that gets forgotten because everything else is exercised by simply
+// running the desktop app. A page's approval screen is reachable from a phone,
+// so a missing case there would leave Allow doing nothing at all over remote.
+describe('pages:* Phase 2 channel parity', () => {
+  const PHASE_2 = [
+    'pages:approve', 'pages:remove-connection', 'pages:refresh',
+    'pages:saved-keys', 'pages:delete-saved-key', 'pages:fetch',
+  ];
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+
+  it('every type is declared in shared/types.ts and preload.ts, which cannot import it', () => {
+    const shared = read('src', 'shared', 'types.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    for (const t of PHASE_2) {
+      expect(shared, t).toContain(`'${t}'`);
+      expect(preload, t).toContain(`'${t}'`);
+    }
+  });
+
+  it('every type is handled by the desktop IPC handlers', () => {
+    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    const preload = read('src', 'main', 'preload.ts');
+    for (const t of PHASE_2) {
+      // ipc-handlers registers through the IPC.* constant, so the constant NAME
+      // is what to look for — resolved from the spelling preload declares.
+      const name = new RegExp(`(PAGES_[A-Z_]+): '${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'`).exec(preload)?.[1];
+      expect(name, `no IPC constant is named for ${t}`).toBeTruthy();
+      expect(handlers, t).toContain(`IPC.${name}`);
+    }
+  });
+
+  it('every type is invoked by the remote shim AND answered by the remote host', () => {
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    const server = read('src', 'main', 'remote-server.ts');
+    for (const t of PHASE_2) {
+      expect(shim, t).toContain(`invoke('${t}'`);
+      expect(server, t).toContain(`case '${t}':`);
+    }
+  });
+
+  it('main, not the renderer, is where a pasted key from a phone is refused', () => {
+    // "No keys on the phone" was a renderer rule until design review 1 finding
+    // 13. The remote host must mark its caller remote, and the desktop handler
+    // must not — otherwise either every phone can paste a key, or no desktop can.
+    expect(read('src', 'main', 'remote-server.ts')).toMatch(/\.approve\([\s\S]{0,200}?remote: true/);
+    expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/pagesService\.approve\([\s\S]{0,200}?remote: false/);
+  });
+});

@@ -274,6 +274,11 @@ export function BubbleFeed({ sessionId }: Props) {
             batchDispatch({
               type: 'TRANSCRIPT_THINKING_HEARTBEAT',
               sessionId: event.sessionId,
+              // WHY: mirror App's stamped, display-only progress path so a
+              // delayed attach cannot replace a newer live measurement.
+              usageProgress: event.data?.usageProgress,
+              uuid: event.uuid,
+              timestamp: event.timestamp,
               // Native watchdog stall countdown + parked turn — payload sets,
               // absence clears. MUST mirror App.tsx or the two windows diverge.
               stallWarning: event.data?.stallWarning,
@@ -287,6 +292,7 @@ export function BubbleFeed({ sessionId }: Props) {
           batchDispatch({
             type: 'NATIVE_SESSION_ERROR',
             sessionId: event.sessionId,
+            timestamp: event.timestamp,
             message: event.data.text ?? 'The model request failed.',
             errorCode: event.data.errorCode,
           });
@@ -347,7 +353,9 @@ export function BubbleFeed({ sessionId }: Props) {
           if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
           const decision = decideFirstPage(page, attempt);
           if (decision === 'accept') {
-            dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+            // WHY: the buddy has its own reducer, so it must apply the same recovery verdict as App.
+            dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore,
+              reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
             return;
           }
           if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }

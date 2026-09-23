@@ -9,7 +9,8 @@
 // import-file-dialog.test.tsx). Swapped to RTL's own `fireEvent`, this repo's
 // existing convention; every assertion below is verbatim from the brief.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { render as rtlRender, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render as rtlRender, screen, fireEvent, cleanup, act } from '@testing-library/react';
+import { emptyTotals } from '../src/renderer/state/session-totals';
 import type { ReactElement } from 'react';
 import { makeStoreWrapper } from './helpers/chat-store-harness';
 import StatusBar from '../src/renderer/components/StatusBar';
@@ -133,6 +134,23 @@ describe('Always On section and announcement popup', () => {
 });
 
 describe('Customize Status Bar menu', () => {
+  it('keeps Cost switchable when live work is unpriced, and explains free live work', () => {
+    window.localStorage.setItem('youcoded-statusbar-widgets', JSON.stringify(['session-cost']));
+    const { wrapper, store } = makeStoreWrapper(['s1']);
+    rtlRender(<StatusBar statusData={statusData} provider="native" sessionId="s1" nativeTotals={emptyTotals()} />, { wrapper });
+    const progress = (free: boolean) => ({ inputTokens: 10, outputTokens: 1,
+      cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: null, free });
+    act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
+      usageProgress: progress(false), timestamp: 10, uuid: 'unpriced' }));
+    expect(screen.getByText('not listed')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /status bar widgets|customize/i }));
+    expect(screen.getByText('Session Cost').closest('button')?.disabled).toBe(false);
+    act(() => store.dispatch({ type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: 's1',
+      usageProgress: progress(true), timestamp: 11, uuid: 'free' }));
+    expect(screen.queryByText('not listed')).toBeNull();
+    expect(screen.getByText("Models on your own machine don't cost anything to run")).toBeTruthy();
+  });
+
   it('explains the subscription rows in a native session', async () => {
     await openMenu('native');
     expect(screen.getAllByText('Claude Code sessions only').length).toBe(2);

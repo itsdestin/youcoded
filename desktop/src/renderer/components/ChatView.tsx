@@ -435,10 +435,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       }
       if (page) {
         unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
-        // Captured HERE, one statement before the prepend — not before the await,
-        // where a round-trip's worth of streaming could have moved everything.
+        // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
-        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+        // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
+        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
       } else {
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }

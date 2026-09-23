@@ -139,7 +139,7 @@ export const SUBAGENT_DISPLAY_TYPES = new Set<TranscriptEvent['type']>(['tool-us
  * stallWarning countdown, or a toolPreparing notice all fail this — none
  * carries data.text — and stay child-only.
  */
-export function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
+function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
   return SUBAGENT_DISPLAY_TYPES.has(e.type)
     || (e.type === 'assistant-thinking' && typeof e.data.text === 'string' && e.data.text.length > 0);
 }
@@ -4529,6 +4529,13 @@ export class NativeSessionHost extends EventEmitter {
    *  child) to compute a boolean and threw it away. */
   isLive(sessionId: string): boolean {
     return this.live.has(sessionId);
+  }
+
+  /** WHY: only a live root turn can supply ephemeral measured request usage.
+   * Keep the event's timestamp and UUID intact for a late attach. */
+  currentUsageProgressFor(sessionId: string): TranscriptEvent | null {
+    const entry = this.live.get(sessionId);
+    return entry?.inFlight ? entry.session.currentUsageProgress : null;
   }
 
   getHistory(sessionId: string): TranscriptEvent[] | null {

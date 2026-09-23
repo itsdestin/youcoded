@@ -45,6 +45,7 @@ import {
 import { chatGptLimitMessage } from '../src/shared/chatgpt-types';
 import { ChatGptRequestDiagnostics, withChatGptRequest, bindChatGptRequest } from '../src/main/providers/chatgpt-request-diagnostics';
 import { chatGptMiddleware } from '../src/main/providers/chatgpt-model';
+import { createExperimentRequestGuard, experimentGuardForProfile } from '../src/main/providers/luna-request-guard';
 import { createOpenAI } from '@ai-sdk/openai';
 import { wrapLanguageModel, streamText } from 'ai';
 
@@ -1065,7 +1066,101 @@ describe('ChatGptAuth: accessToken', () => {
 // The credential-owning fetch (§4.1, §4.5, §4.6)
 // ---------------------------------------------------------------------------
 
+describe('experiment request guard', () => {
+  it('sends only a bodyless loopback reservation', async () => {
+    const fake = vi.fn(async () => new Response(null, { status: 204 })) as unknown as typeof fetch;
+    const reserve = createExperimentRequestGuard('http://127.0.0.1:32123', fake);
+    await reserve();
+    expect(fake).toHaveBeenCalledOnce();
+    expect(fake).toHaveBeenCalledWith('http://127.0.0.1:32123/reserve', {
+      method: 'POST', redirect: 'error', signal: expect.any(AbortSignal),
+    });
+  });
+
+  it('rejects a non-loopback or malformed guard address before dispatch', () => {
+    for (const url of ['', 'https://127.0.0.1:1234', 'http://127.0.0.1.evil:1234', 'http://127.0.0.1:1234/other']) {
+      expect(() => createExperimentRequestGuard(url)).toThrow();
+    }
+  });
+
+  it('only enables the experiment guard in an explicitly opted-in dev profile', () => {
+    expect(experimentGuardForProfile('luna-eval', false, undefined, undefined, undefined)).toBeUndefined();
+    expect(() => experimentGuardForProfile(undefined, false, '1', 'http://127.0.0.1:32123', vi.fn())).toThrow();
+    // The installed app ignores the opt-in rather than failing to launch.
+    expect(experimentGuardForProfile('luna-eval', true, '1', 'http://127.0.0.1:32123', vi.fn())).toBeUndefined();
+    expect(experimentGuardForProfile('x/../youcoded', true, '1', 'http://127.0.0.1:32123', vi.fn())).toBeUndefined();
+    expect(() => experimentGuardForProfile('luna-eval', false, '1', undefined, vi.fn())).toThrow();
+    expect(experimentGuardForProfile('luna-eval', false, '1', 'http://127.0.0.1:32123', vi.fn())).toBeTypeOf('function');
+    // A profile is a path component in main.ts: aliases and traversal must
+    // never resolve the experiment into the built app's state directory.
+    for (const unsafe of ['dev', 'x/../youcoded', '../youcoded', 'luna-eval/..', 'luna-eval\\..\\youcoded']) {
+      expect(() => experimentGuardForProfile(unsafe, false, '1', 'http://127.0.0.1:32123', vi.fn())).toThrow();
+    }
+  });
+
+  it('validates experiment profile before main can set Electron userData', () => {
+    const main = fs.readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+    const validation = main.indexOf('const LUNA_REQUEST_GUARD = experimentGuardForProfile(');
+    expect(validation).toBeGreaterThan(0);
+    expect(validation).toBeLessThan(main.indexOf("app.setPath('userData'"));
+    expect(validation).toBeLessThan(main.indexOf("const BUILT_APP_USER_DATA = app.getPath('userData')"));
+  });
+
+  it('clears the experiment variable unless the guard is active, so tool jails stay off in the installed app', () => {
+    const main = fs.readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+    const clear = main.indexOf('if (!LUNA_REQUEST_GUARD) delete process.env.YOUCODED_LUNA_EXPERIMENT;');
+    expect(clear).toBeGreaterThan(main.indexOf('const LUNA_REQUEST_GUARD = experimentGuardForProfile('));
+    expect(clear).toBeLessThan(main.indexOf('void app.whenReady().then('));
+  });
+
+  it('does not read the built app device identity in the experiment profile', () => {
+    const main = fs.readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+    expect(main).toContain('machineIdentity = LUNA_REQUEST_GUARD ? null : getMachineIdentity(BUILT_APP_USER_DATA)');
+  });
+
+  it('fails closed on quota refusal or unavailable guard', async () => {
+    const refused = createExperimentRequestGuard('http://127.0.0.1:32123',
+      vi.fn(async () => new Response(null, { status: 429 })) as unknown as typeof fetch);
+    const disconnected = createExperimentRequestGuard('http://127.0.0.1:32123',
+      vi.fn(async () => { throw new Error('PRIVATE_HEADER'); }) as unknown as typeof fetch);
+    await expect(refused()).rejects.toThrow(/ceiling/);
+    await expect(disconnected()).rejects.toThrow(/guard unavailable/);
+  });
+});
+
 describe('ChatGptAuth: fetch()', () => {
+  it.skipIf(process.env.LUNA_FAKE_INTEGRATION !== '1')('cross-process Luna transport fixture', async () => {
+    await h.seedSignedIn();
+    const auth = h.build({ pollUsage: false,
+      beforeModelRequest: createExperimentRequestGuard(process.env.LUNA_GUARD_URL ?? ''),
+    });
+    h.fetch.routes.push([CODEX_RESPONSES_URL, () => json(200, {})]);
+    const send = auth.fetch();
+    if (process.env.LUNA_FAKE_EXPECT === 'allow') {
+      const res = await send(CODEX_RESPONSES_URL, { method: 'POST', body: 'PRIVATE_PROMPT' });
+      expect(res.status).toBe(200);
+      expect(h.fetch.calls.filter(call => call.url === CODEX_RESPONSES_URL)).toHaveLength(1);
+    } else {
+      const failure = process.env.LUNA_FAKE_EXPECT === 'down' ? /guard unavailable/ : /ceiling reached/;
+      await expect(send(CODEX_RESPONSES_URL, { method: 'POST', body: 'PRIVATE_PROMPT' })).rejects.toThrow(failure);
+      expect(h.fetch.calls.filter(call => call.url === CODEX_RESPONSES_URL)).toHaveLength(0);
+    }
+  });
+
+  it('refuses an experiment request before model dispatch', async () => {
+    await h.seedSignedIn();
+    let reservations = 0;
+    const auth = h.build({ pollUsage: false, beforeModelRequest: async () => {
+      if (++reservations > 1) throw new Error('Experiment request ceiling reached');
+    } });
+    h.fetch.routes.push([CODEX_RESPONSES_URL, () => json(200, {})]);
+    const send = auth.fetch();
+    await send(CODEX_RESPONSES_URL, { method: 'POST', body: '{}' });
+    await expect(send(CODEX_RESPONSES_URL, { method: 'POST', body: '{}' })).rejects.toThrow('Experiment request ceiling reached');
+    expect(reservations).toBe(2);
+    expect(h.fetch.calls.filter(call => call.url === CODEX_RESPONSES_URL)).toHaveLength(1);
+  });
+
   const capture = (status = 200, body: unknown = { ok: true }, headers: Record<string, string> = {}) =>
     [CODEX_RESPONSES_URL, () => json(status, body, headers)] as [string, Route];
   const sentHeaders = (i: number) => h.fetch.calls.filter((c) => c.url === CODEX_RESPONSES_URL)[i].init.headers as Headers;
@@ -1103,6 +1198,19 @@ describe('ChatGptAuth: fetch()', () => {
       method: 'POST', headers: { authorization: 'Bearer chatgpt', 'chatgpt-account-id': expected.accountId }, body: '{}',
     })).rejects.toThrow(/account changed|Sign in with ChatGPT/);
     expect(h.fetch.calls.filter(call => call.url === CODEX_RESPONSES_URL)).toHaveLength(0);
+  });
+
+  it('reserves again before a 401 resend and refuses when the ceiling is reached', async () => {
+    await h.seedSignedIn();
+    let reservations = 0;
+    const auth = h.build({ pollUsage: false, beforeModelRequest: async () => {
+      if (++reservations > 1) throw new Error('Experiment request ceiling reached');
+    } });
+    h.fetch.routes.push([CODEX_RESPONSES_URL, () => json(401, {})]);
+    await expect(auth.fetch()(CODEX_RESPONSES_URL, { method: 'POST', body: '{}' }))
+      .rejects.toThrow('Experiment request ceiling reached');
+    expect(reservations).toBe(2);
+    expect(h.fetch.calls.filter(call => call.url === CODEX_RESPONSES_URL)).toHaveLength(1);
   });
 
   it('diagnoses actual 401 sends under one logical step without touching bytes', async () => {

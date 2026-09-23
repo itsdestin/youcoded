@@ -49,6 +49,7 @@ import type { FirstRunState } from '../shared/first-run-types';
 // file ipc-handlers' store uses (precedent: mcp-reconciler.ts) — one file, one
 // lock, two readers.
 import { ChatGptAuth } from './providers/chatgpt-auth';
+import { experimentGuardForProfile, openLunaAuthBrowser } from './providers/luna-request-guard';
 import { SecretsStore } from './providers/secrets-store';
 import { SyncService } from './sync-service';
 import { setSyncService, getSyncConfig } from './sync-state';
@@ -87,7 +88,7 @@ import { BuddyWindowManager } from './buddy-window-manager';
 import { BAR_SIZE, MASCOT_SIZE, CHAT_SIZE } from './buddy-bar-geometry';
 // The KDE script that lets the buddy move itself on a Wayland desktop, and
 // the lookup that asks KDE how much of the screen the taskbar has taken.
-import { syncHelperOnLaunch } from './kwin-helper';
+import { syncHelperOnLaunch, setExperimentKwinDisabled } from './kwin-helper';
 import { WorkAreaResolver } from './buddy-work-area';
 import { excludeFromCapture, nativeCaptureExclusionAvailable } from './window-exclude-capture';
 import { cleanupStaleDownloads } from './update-installer';
@@ -344,6 +345,14 @@ const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || `http://localhost:${VI
 // (dev2, feature-x, etc.) can't accidentally re-enable hook installation.
 // Must be called before app.whenReady().
 const DEV_PROFILE = process.env.YOUCODED_PROFILE;
+// WHY: reject unsafe experiment profiles before app.setPath or the built app's
+// userData lookup; doing this in createWindow would be too late to protect it.
+const LUNA_REQUEST_GUARD = experimentGuardForProfile(DEV_PROFILE, app.isPackaged,
+  process.env.YOUCODED_LUNA_EXPERIMENT, process.env.LUNA_GUARD_URL);
+// WHY: private HOME cannot isolate KWin's session bus, so the helper is off; and the tool
+// jails read this variable, so clear it unless the experiment is fully active (installed app).
+setExperimentKwinDisabled(Boolean(LUNA_REQUEST_GUARD));
+if (!LUNA_REQUEST_GUARD) delete process.env.YOUCODED_LUNA_EXPERIMENT;
 // Captured BEFORE the override below, so this is the BUILT app's userData dir even
 // in a dev instance — Electron derives it from the app name, so nothing here has to
 // hardcode 'youcoded' (a productName added to package.json would change it).
@@ -1024,9 +1033,10 @@ function createWindow(firstRunManager?: FirstRunManager) {
   deviceIdentity = getDeviceIdentity(app.getPath('userData'));
   // Per-MACHINE id for the device registry, from the BUILT app's userData — so a
   // dev profile heartbeats the machine's real row instead of minting its own.
-  // In the built app this resolves the id getDeviceIdentity just wrote; in a dev
-  // profile it reads across to the built app's dir.
-  machineIdentity = getMachineIdentity(BUILT_APP_USER_DATA);
+  // In the built app this resolves the id getDeviceIdentity just wrote; ordinary
+  // dev profiles read across to the built app's dir. WHY: an opted-in Luna
+  // experiment must not read that live file or register the real machine row.
+  machineIdentity = LUNA_REQUEST_GUARD ? null : getMachineIdentity(BUILT_APP_USER_DATA);
   leaseClient = createLeaseClient({
     deviceId: deviceIdentity.id,
     deviceName: os.hostname(),
@@ -1088,7 +1098,10 @@ function createWindow(firstRunManager?: FirstRunManager) {
     userDataDir: app.getPath('userData'),
     secrets: new SecretsStore(app.getPath('userData')),
     appVersion: app.getVersion(),
-    openExternal: (url) => shell.openExternal(url),
+    // WHY: this isolated experiment's request ceiling must refuse a model
+    // dispatch before the provider fetch; never enable it in the built app.
+    beforeModelRequest: LUNA_REQUEST_GUARD,
+    openExternal: (url) => LUNA_REQUEST_GUARD ? openLunaAuthBrowser(url, process.env.LUNA_HOST_BROWSER_HOME ?? '') : shell.openExternal(url),
     // The object still exists under the kill switch (the launch check reads the
     // account file through it), but it must not talk to OpenAI: the poll
     // refreshes the token, and a rejected refresh deletes the saved sign-in.

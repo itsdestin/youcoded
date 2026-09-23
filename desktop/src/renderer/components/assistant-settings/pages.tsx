@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CLOSE_PROMPT_SUPPRESS_KEY } from '../CloseSessionPrompt';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { unavailableReason, useAvailabilityData } from '../model/availability';
+import { RECOMMENDED_MODELS_HIDDEN_KEY } from '../../../shared/recommended-models';
 import PermissionsSection from '../PermissionsSection';
 import SpecialistsSection, { SPECIALISTS_EXPLAINER_INTRO, SPECIALISTS_EXPLAINER_SECTIONS } from '../SpecialistsSection';
 import { PERMISSIONS_EXPLAINER_INTRO, PERMISSIONS_EXPLAINER_SECTIONS } from '../permissions/permissions-explainer';
@@ -257,6 +258,11 @@ function GeneralPage(ctx: PageContext) {
   const [closePromptDisabled, setClosePromptDisabled] = useState(
     () => localStorage.getItem(CLOSE_PROMPT_SUPPRESS_KEY) === '1',
   );
+  // Same idiom, same reasoning: hiding the picker's recommended-models bands is
+  // a UI preference. Absent = shown (the normie default Destin wants).
+  const [recommendedDisabled, setRecommendedDisabled] = useState(
+    () => localStorage.getItem(RECOMMENDED_MODELS_HIDDEN_KEY) === '1',
+  );
 
   return (
     <div className="space-y-5">
@@ -304,6 +310,23 @@ function GeneralPage(ctx: PageContext) {
                 else localStorage.removeItem(CLOSE_PROMPT_SUPPRESS_KEY);
               }}
               aria-label="Close-session prompt"
+            />
+          }
+        />
+        <SettingRow
+          variant="item"
+          title="Show recommended models"
+          description="Suggest models at the bottom of the model picker"
+          control={
+            <Toggle
+              checked={!recommendedDisabled}
+              onChange={(show) => {
+                const next = !show;
+                setRecommendedDisabled(next);
+                if (next) localStorage.setItem(RECOMMENDED_MODELS_HIDDEN_KEY, '1');
+                else localStorage.removeItem(RECOMMENDED_MODELS_HIDDEN_KEY);
+              }}
+              aria-label="Show recommended models"
             />
           }
         />

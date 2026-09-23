@@ -2550,6 +2550,17 @@ export function installShim(): void {
         addListener('pages:changed', handler);
         return () => removeListener('pages:changed', handler);
       },
+      // Phase 2. Approving from here may only REUSE a key already saved on the
+      // desktop; the host refuses pasted key material from a remote caller, so
+      // the rule holds even if this file is bypassed entirely.
+      approve: (id: string, keys: Record<string, string>) => invoke('pages:approve', { id, keys }),
+      removeConnection: (id: string, connectionId: string) => invoke('pages:remove-connection', { id, connectionId }),
+      refresh: (id: string) => invoke('pages:refresh', { id }),
+      savedKeys: () => invoke('pages:saved-keys'),
+      deleteSavedKey: (service: string, address: string) => invoke('pages:delete-saved-key', { service, address }),
+      // The request runs on the desktop, with the desktop's credential; only
+      // the redacted answer crosses the socket.
+      fetch: (id: string, request: unknown) => invoke('pages:fetch', { id, request }),
     },
     git: {
       fileStatus: (projectRoot: string, relPath: string) =>

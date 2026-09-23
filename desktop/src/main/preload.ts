@@ -424,6 +424,13 @@ const IPC = {
   PAGES_SET_PINNED: 'pages:set-pinned',
   PAGES_SET_DATA: 'pages:set-data',
   PAGES_CHANGED: 'pages:changed',
+  // Pages Phase 2 — connections, keys and the one door out of a page.
+  PAGES_APPROVE: 'pages:approve',
+  PAGES_REMOVE_CONNECTION: 'pages:remove-connection',
+  PAGES_REFRESH: 'pages:refresh',
+  PAGES_SAVED_KEYS: 'pages:saved-keys',
+  PAGES_DELETE_SAVED_KEY: 'pages:delete-saved-key',
+  PAGES_FETCH: 'pages:fetch',
   // Claude Code's own sign-in, read live (2026-09-09) — mirrors shared/types.ts.
   CLAUDE_CODE_STATUS: 'claude-code:status',
   CLAUDE_CODE_INSTALL: 'claude-code:install',
@@ -1841,6 +1848,16 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.PAGES_CHANGED, handler);
       return () => ipcRenderer.removeListener(IPC.PAGES_CHANGED, handler);
     },
+    // Phase 2. `keys` carries a pasted key per key-connection id, or 'saved' to
+    // reuse the one already kept; main is the side that decides, so a pasted
+    // key from a phone is refused there rather than here.
+    approve: (id: string, keys: Record<string, string>) => ipcRenderer.invoke(IPC.PAGES_APPROVE, id, keys),
+    removeConnection: (id: string, connectionId: string) => ipcRenderer.invoke(IPC.PAGES_REMOVE_CONNECTION, id, connectionId),
+    refresh: (id: string) => ipcRenderer.invoke(IPC.PAGES_REFRESH, id),
+    savedKeys: () => ipcRenderer.invoke(IPC.PAGES_SAVED_KEYS),
+    // Both parts: a key is identified by service AND address.
+    deleteSavedKey: (service: string, address: string) => ipcRenderer.invoke(IPC.PAGES_DELETE_SAVED_KEY, service, address),
+    fetch: (id: string, req: unknown) => ipcRenderer.invoke(IPC.PAGES_FETCH, id, req),
   },
   git: {
     fileStatus: (projectRoot: string, relPath: string) =>
