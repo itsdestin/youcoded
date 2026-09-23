@@ -206,6 +206,17 @@ function scanOneDir(dirAbs: string, subdir: string | null): LocalDownload[] {
   return [primary];
 }
 
+/** Ids of COMPLETE models whose folder holds a published vision projector —
+ *  what the router will load with `--mmproj`. Read by catalogModels so a
+ *  session's "can it see?" answer never depends on whether the router has
+ *  re-scanned since the download finished. A half-fetched projector does not
+ *  count (`hasProjector` is published files only). */
+export function visionModelIdsOnDisk(cacheDir: string): Set<string> {
+  return new Set(
+    scanLocalDownloads(cacheDir).filter((d) => isComplete(d) && d.hasProjector).map((d) => d.modelId),
+  );
+}
+
 /** The engine-off view — complete downloads only.
  *
  *  INCOMPLETE SETS ARE OMITTED BY CONSTRUCTION. Everything downstream of this

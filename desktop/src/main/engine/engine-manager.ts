@@ -29,7 +29,7 @@ import { contextLengthFor } from '../models/fit-estimator';
 import { readManifest, removeManifest, markManifestComplete, isManifestComplete } from '../models/download-manifest';
 import { ManifestBackfill, defaultBackfillLookups, isStaleBackfillMiss } from '../models/manifest-backfill';
 import type { BackfillCandidate, BackfillLookups } from '../models/manifest-backfill';
-import { scanGgufCache, scanLocalDownloads, isComplete } from './cache-scan';
+import { scanGgufCache, scanLocalDownloads, isComplete, visionModelIdsOnDisk } from './cache-scan';
 import { parseGgufName, quantDescription } from '../models/quant-parser';
 import { stripSplitSuffix } from '../../shared/gguf-split';
 import { detectGpu, backendOptions, gpuDeviceName } from '../models/gpu-detector';
@@ -1423,6 +1423,16 @@ export class EngineManager extends EventEmitter {
     const cfg = readEngineConfig(this.home);
     await this.rebuildSupervisor(inst);
     const models = await this.supervisor!.listModels();
+    // WHY the disk is asked too (2026-09-23, roadmap local-models): a vision
+    // model downloaded while the app runs is only paired with its projector
+    // once the router re-scans, and that re-scan is fire-and-forget. A session
+    // started in between got "don't know" (or a stale text-only row) here, its
+    // profile was settled as text-only for good, and an attached picture
+    // silently vanished while Local Models said "vision ready". A complete
+    // download whose folder holds a published `mmproj*.gguf` is exactly what
+    // the router pairs with `--mmproj` (and ensureServable re-scans before the
+    // first send to a model it has not seen), so the files are a sound "yes".
+    const onDiskVision = visionModelIdsOnDisk(cfg.cacheDir);
     return models.map((m) => {
       const row: CatalogModel = {
         id: m.id,
@@ -1444,6 +1454,9 @@ export class EngineManager extends EventEmitter {
       // must stay undefined rather than become a `false` a caller would read as
       // "this model cannot see" and quietly drop the user's attachment.
       if (m.inputModalities) row.supportsVision = m.inputModalities.includes('image');
+      // Either source saying "yes" is a yes; the files never turn a router
+      // "yes" into a "no", and absent both the field stays unset ("don't know").
+      if (onDiskVision.has(m.id)) row.supportsVision = true;
       return row;
     });
   }
