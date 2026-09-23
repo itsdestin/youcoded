@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 import { defineTool } from './registry';
-import { canonicalize, resolveP } from './guards';
+import { canonicalize, resolveP, lunaPathRefused } from './guards';
 import { toHunks, preserveFormat } from './edit';
 import { fingerprintOf } from './file-fingerprint';
 import { withPathLock } from './path-lock';
@@ -69,6 +69,7 @@ export const WriteTool = defineTool({
   inputSchema: WRITE_INPUT,
   permissionSubject: (a) => a.file_path,
   async execute(args, ctx) {
+    if (lunaPathRefused(resolveP(args.file_path, ctx.cwd))) return { text: 'Write rejected: path is outside the Luna experiment fixture.', isError: true };
     // Per-file lock (2026-09-16 C4): the body reads, checks and writes with
     // fs.promises, so two parallel Writes of ONE file must queue — see path-lock.ts.
     return withPathLock(canonicalize(args.file_path, ctx.cwd), () => writeLocked(args, ctx));

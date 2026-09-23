@@ -1,11 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { checkPathGuard, canonicalize, toPosix, workspaceMatchFor } from '../src/main/harness/tools/guards';
+import { checkPathGuard, canonicalize, toPosix, workspaceMatchFor, lunaFixturePathAllowed } from '../src/main/harness/tools/guards';
 import { spillDirFor, spillRoot } from '../src/main/harness/tools/spill-paths';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
 const CWD = path.join(os.tmpdir(), 'guard-test-workspace');
+
+describe('Luna fixture path restriction', () => {
+  it('allows only real paths inside fixture, including not-yet-created descendants', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-root-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'luna-out-'));
+    const link = path.join(root, 'link');
+    try {
+      fs.symlinkSync(outside, link, 'dir');
+      expect(lunaFixturePathAllowed(path.join(root, 'new', 'file'), root)).toBe(true);
+      expect(lunaFixturePathAllowed(path.join(outside, 'secret'), root)).toBe(false);
+      expect(lunaFixturePathAllowed(path.join(link, 'secret'), root)).toBe(false);
+      expect(lunaFixturePathAllowed(path.join(root, 'missing', 'ancestor', 'x'), root)).toBe(true);
+      expect(lunaFixturePathAllowed(path.join(root, 'anything'), '')).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
 const HOME = os.homedir();
 const isWin = process.platform === 'win32';
 

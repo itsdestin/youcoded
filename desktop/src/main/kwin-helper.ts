@@ -648,6 +648,12 @@ export class KwinHelper {
 // --- the module-level contract (design §1's signatures) -------------------
 
 let instance: KwinHelper | null = null;
+let experimentKwinDisabled = false;
+
+/** Opted-in isolated Luna process only; called before app startup chores. */
+export function setExperimentKwinDisabled(disabled: boolean): void {
+  experimentKwinDisabled = disabled;
+}
 
 function readOzonePlatform(): string {
   // Electron resolves --ozone-platform itself even though we never pass it;
@@ -689,18 +695,24 @@ export function helperPluginId(): string {
 }
 
 export function helperStatus(): Promise<HelperStatus> {
+  // WHY: private HOME does not isolate the real session bus. Never even query
+  // the live compositor in the opt-in experiment, including buddy IPC paths.
+  if (experimentKwinDisabled) return Promise.resolve({ needed: false, supported: false, installed: false });
   return helper().status();
 }
 
 export function installHelper(): Promise<HelperResult> {
+  if (experimentKwinDisabled) return Promise.resolve({ ok: false, error: 'KWin helper is disabled in this experiment.' });
   return helper().install();
 }
 
 export function removeHelper(): Promise<HelperResult> {
+  if (experimentKwinDisabled) return Promise.resolve({ ok: false, error: 'KWin helper is disabled in this experiment.' });
   return helper().remove();
 }
 
 /** Orphan sweep + the R11 version check. Runs at launch, before the buddy. */
 export function syncHelperOnLaunch(): Promise<void> {
+  if (experimentKwinDisabled) return Promise.resolve();
   return helper().syncOnLaunch();
 }

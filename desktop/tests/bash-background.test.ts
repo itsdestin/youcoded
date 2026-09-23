@@ -35,6 +35,47 @@ function ctx(over: Partial<ToolContext> = {}): ToolContext {
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bash-bg-')); reg = new ShellRegistry(TEST_SESSION_ID); });
 afterEach(async () => { await reg.killAll('app-quit', { graceMs: 0 }); fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); });
 
+describe.skipIf(!posix)('Luna shell routing', () => {
+  it('refuses an opt-in shell when the wrapper or root is missing', async () => {
+    const old = process.env.YOUCODED_LUNA_EXPERIMENT;
+    const script = process.env.LUNA_SHELL_JAIL_SCRIPT;
+    process.env.YOUCODED_LUNA_EXPERIMENT = '1';
+    delete process.env.LUNA_SHELL_JAIL_SCRIPT;
+    try {
+      const result = await BashTool.execute({ command: 'echo UNSAFE' }, ctx());
+      expect(result.isError).toBe(true);
+      expect(result.text).not.toContain('UNSAFE');
+    } finally {
+      if (old === undefined) delete process.env.YOUCODED_LUNA_EXPERIMENT; else process.env.YOUCODED_LUNA_EXPERIMENT = old;
+      if (script === undefined) delete process.env.LUNA_SHELL_JAIL_SCRIPT; else process.env.LUNA_SHELL_JAIL_SCRIPT = script;
+    }
+  });
+
+  it('routes foreground and background through a private wrapper without changing tool metadata', async () => {
+    const wrapper = path.join(dir, 'synthetic-wrapper.cjs');
+    fs.writeFileSync(wrapper, `process.stdout.write('JAILED_ROUTE\\n')`);
+    const before = { name: BashTool.name, description: BashTool.description };
+    const previous = { opt: process.env.YOUCODED_LUNA_EXPERIMENT, script: process.env.LUNA_SHELL_JAIL_SCRIPT, root: process.env.LUNA_FIXTURE_ROOT };
+    process.env.YOUCODED_LUNA_EXPERIMENT = '1';
+    process.env.LUNA_SHELL_JAIL_SCRIPT = wrapper;
+    process.env.LUNA_FIXTURE_ROOT = dir;
+    try {
+      const foreground = await BashTool.execute({ command: 'echo MUST_NOT_RUN' }, ctx());
+      expect(foreground.text).toContain('JAILED_ROUTE');
+      expect(foreground.text).not.toContain('MUST_NOT_RUN');
+      const background = await BashTool.execute({ command: 'echo MUST_NOT_RUN', run_in_background: true }, ctx());
+      expect(background.isError).toBeFalsy();
+      await reg.list()[0].exited;
+      expect(reg.list()[0].tail.join('')).toContain('JAILED_ROUTE');
+      expect({ name: BashTool.name, description: BashTool.description }).toEqual(before);
+    } finally {
+      for (const [key, value] of Object.entries({ YOUCODED_LUNA_EXPERIMENT: previous.opt, LUNA_SHELL_JAIL_SCRIPT: previous.script, LUNA_FIXTURE_ROOT: previous.root })) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
+  });
+});
+
 describe.skipIf(!posix)('foreground interrupt kills the grandchild and still resolves immediately', () => {
   it('sleep 30 & wait — abort resolves at once, the grandchild is gone within the grace period', async () => {
     const ac = new AbortController();
