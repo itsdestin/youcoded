@@ -16,6 +16,7 @@ import { useTheme } from '../state/theme-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { Scrim } from './overlays/Overlay';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import AboutPopup from './AboutPopup';
 import { DevelopmentPopup } from './development/DevelopmentPopup';
 import { HelpPopup } from './HelpPopup';
@@ -2838,7 +2839,17 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     if (!claude?.remote) { setLoading(false); return; }
     // Fix: defer IPC calls until after the 300ms slide-in animation. detectTailscale
     // in particular blocks the main thread long enough to visibly stutter the panel.
-    const _deferTimer = setTimeout(() => {
+    const _deferTimer = setTimeout(loadRemotePanel, 350);
+    return () => clearTimeout(_deferTimer);
+  }, [open]);
+
+  // The panel's five reads. Its own function so a remote reconnect can repeat them while the
+  // panel is open. WHY (2026-09-11 phone pass sweep): they ran once per open, so one read
+  // lost during a phone's drop left the Remote Access panel empty or wrong until it was
+  // closed and reopened. The reconnect re-read leaves the setup steps where they are.
+  function loadRemotePanel() {
+    const claude = (window as any).claude;
+    if (!claude?.remote) return;
     Promise.all([
       claude.remote.getConfig(),
       claude.remote.detectTailscale(),
@@ -2853,9 +2864,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       setDefaults(defs);
       setLoading(false);
     }).catch(() => setLoading(false));
-    }, 350);
-    return () => clearTimeout(_deferTimer);
-  }, [open]);
+  }
+  useOnRemoteReconnect(() => { if (open) loadRemotePanel(); });
 
   const handleSetPassword = useCallback(async () => {
     if (!newPassword.trim()) return;

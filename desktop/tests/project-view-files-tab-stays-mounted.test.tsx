@@ -223,3 +223,38 @@ describe('"+ Add file" is offered on the computer only', () => {
     }
   });
 });
+
+// Project View read its project list once per open, and a project's conversations once per
+// project — so a read lost during a phone's drop left them empty until the view was closed
+// and reopened. A remote reconnect asks again, without moving off the chosen project.
+describe('Project View after a remote reconnect', () => {
+  const reconnect = async () => {
+    const { REMOTE_RECONNECTED_EVENT } = await import('../src/renderer/remote-events');
+    await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+  };
+
+  it('a project list that failed to load fills in', async () => {
+    const index = vi.fn()
+      .mockRejectedValueOnce(new Error('Lost the connection before the computer answered.'))
+      .mockResolvedValue({ ok: true, projects: [project] });
+    (window as any).claude.artifacts.listProjectsIndex = index;
+    const view = render(<Harness />);
+    await waitFor(() => expect(index).toHaveBeenCalledTimes(1));
+    expect(view.queryByTitle('notes.md')).toBeNull();
+    await reconnect();
+    expect(await view.findByTitle('notes.md')).toBeTruthy();
+  });
+
+  it('a conversation list that failed to load is read again', async () => {
+    const conversations = vi.fn()
+      .mockRejectedValueOnce(new Error('lost'))
+      .mockResolvedValue({ ok: true, conversations: [{ sessionId: 'c1', name: 'Plan', lastModified: Date.now(), projectSlug: 'x', size: 1 }] });
+    (window as any).claude.project.listConversations = conversations;
+    const view = render(<Harness />);
+    await view.findByTitle('notes.md');
+    await waitFor(() => expect(conversations).toHaveBeenCalledTimes(1));
+    await reconnect();
+    await waitFor(() => expect(conversations).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(view.getByRole('button', { name: /Conversations/ }).textContent).toContain('1'));
+  });
+});
