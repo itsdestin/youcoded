@@ -74,6 +74,13 @@ export function PlanApprovalCard({ sessionId, onAnswered }: {
 
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
+  // The LATEST onAnswered, not the one captured at click time: while the keys
+  // are being typed the card can change under us — Claude Code kills the hook
+  // on Esc or clear-context, so the card becomes a kept card with no request
+  // id, or its placeholder id is swapped for the real one. The completion must
+  // settle whatever the card is NOW (review 2026-09-23, F5).
+  const onAnsweredRef = useRef(onAnswered);
+  onAnsweredRef.current = onAnswered;
 
   const answer = useCallback(async (shown: PlanMenu, a: PlanAnswer) => {
     setSending(true);
@@ -88,12 +95,12 @@ export function PlanApprovalCard({ sessionId, onAnswered }: {
     });
     if (!mounted.current) return;
     if (res.ok) {
-      onAnswered();
+      onAnsweredRef.current();
       return; // the card is about to be replaced by the running tool
     }
     setSending(false);
     setError(FAILURE_COPY[res.reason]);
-  }, [sessionId, onAnswered]);
+  }, [sessionId]);
 
   const pad = isAndroid() ? 'py-2' : 'py-1';
   const wrap = 'px-3 py-2 border-t border-edge bg-inset/30 space-y-2';

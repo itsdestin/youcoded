@@ -154,7 +154,8 @@ describe('parsePlanMenu on real Claude Code 2.1.281 captures', () => {
     for (const file of listPlanFixtures()) {
       const fx = loadPlanFixture(file);
       const settledMark = fx.marks.find((m) => m.label === 'menu-settled');
-      if (!settledMark) continue;
+      // Captures of other prompts (the pass-through recordings) have no plan menu.
+      if (!settledMark || fx.flags.noPlan) continue;
       const t = new FixtureTerminal(fx);
       open.push(t);
       await t.advanceTo(settledMark.chunkIndex);
@@ -250,9 +251,19 @@ describe('parsePlanMenu on shapes that must be read or refused', () => {
     });
   }
 
+  it('refuses a menu with a row numbered 10 or more (typing "10" would pick row 1)', () => {
+    const rows = Array.from({ length: 9 }, (_, i) => `   ${i === 0 ? '❯' : ' '} ${i + 1}. Yes, option ${i + 1}`);
+    const read = parsePlanMenu([Q, ...rows, '     10. Tell Claude what to change', '         shift+tab to approve with this feedback'].join('\n'));
+    expect(read).toEqual({ status: 'unreadable', reason: 'two-digit-row' });
+  });
+
   it('calls the empty-plan "Exit plan mode?" prompt unreadable, not absent', () => {
     const read = parsePlanMenu(['   Exit plan mode?', '   Claude wants to exit plan mode', '   ❯ 1. Yes', '     2. No'].join('\n'));
     expect(read).toEqual({ status: 'unreadable', reason: 'empty-plan-variant' });
+  });
+
+  it('the empty-plan phrase without its live rows (the prompt already closed) is absent', () => {
+    expect(parsePlanMenu(['   Claude wants to exit plan mode', '   ⎿  User rejected the plan', '❯ ', '  ? for shortcuts'].join('\n')).status).toBe('absent');
   });
 
   it('reports absent when no plan question is on screen', () => {

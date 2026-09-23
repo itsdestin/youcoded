@@ -6,15 +6,20 @@
 // clicked row's own number, release the hook socket WITHOUT a decision once the
 // menu has gone, and show no buttons at all when the menu can't be read.
 import React from 'react';
+import fs from 'fs';
+import path from 'path';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import ToolCard from '../src/renderer/components/ToolCard';
 import { CompactToolStrip } from '../src/renderer/components/buddy/CompactToolStrip';
 import { ChatProvider } from '../src/renderer/state/chat-context';
 import type { ToolCallState } from '../src/shared/types';
-import { FixtureTerminal, loadPlanFixture, markIndex } from './helpers/plan-menu-fixtures';
+import { FixtureTerminal, loadPlanFixture, markIndex, PLAN_FIXTURE_DIR } from './helpers/plan-menu-fixtures';
 import { registerTerminal, unregisterTerminal } from '../src/renderer/hooks/terminal-registry';
 import { Terminal } from '@xterm/headless';
+import { act } from '@testing-library/react';
+import { makeStoreWrapper } from './helpers/chat-store-harness';
+import { useSessionToolCalls, type ChatStore } from '../src/renderer/state/chat-context';
 
 const terms: Array<{ dispose(): void }> = [];
 let sendInput: ReturnType<typeof vi.fn>;
@@ -137,26 +142,93 @@ describe('PlanApprovalCard', () => {
   });
 });
 
+// F5 (review 2026-09-23): Esc and clear-context make Claude Code kill the hook
+// the moment the key lands (fixture hookLog: SIGTERM ~0s after Esc), so the card
+// turns into a KEPT card while the driver is still waiting for the menu to
+// leave. The driver's success must settle the card anyway — not leave it on
+// "Sending to Claude Code…" waiting for some other path.
+describe('a plan card whose hook is killed while its answer is going in', () => {
+  function LiveCard({ sessionId }: { sessionId: string }) {
+    const tools = useSessionToolCalls(sessionId);
+    const tool = [...tools.values()].find((t) => t.toolName === 'ExitPlanMode');
+    return tool ? <div data-status={tool.status}><ToolCard tool={tool} sessionId={sessionId} /></div> : null;
+  }
+
+  for (const [label, file, key] of [
+    ["Don't proceed", 'cc-2.1.281-answer-esc-120x40.json', '\u001b'],
+    ['Yes, clear context (5% used) and auto-accept edits', 'cc-2.1.281-answer-clear1-120x40.json', '1'],
+  ] as const) {
+    it(`settles after "${label}" even though the card became a kept card mid-answer`, async () => {
+      const fx = loadPlanFixture(file);
+      const term = new FixtureTerminal(fx);
+      terms.push(term);
+      await term.advanceToMark('menu-settled');
+      const { wrapper: Wrapper, store } = makeStoreWrapper([term.id]);
+      const st = store as ChatStore;
+      sendInput.mockImplementation((_sid: string, data: string) => {
+        if (data !== key) return;
+        // Claude Code kills the hook as the key lands → PERMISSION_EXPIRED
+        // 'hook-closed' reaches the renderer BEFORE the menu has left the screen.
+        act(() => st.dispatch({ type: 'PERMISSION_EXPIRED', sessionId: term.id, requestId: 'req-1', reason: 'hook-closed' }));
+        void term.advanceTo(markIndex(fx, 'after-answer-6s'));
+      });
+      const { container } = render(<Wrapper><LiveCard sessionId={term.id} /></Wrapper>);
+      act(() => st.dispatch({ type: 'PERMISSION_REQUEST', sessionId: term.id, toolName: 'ExitPlanMode', input: { plan: 'x' }, requestId: 'req-1' } as never));
+      fireEvent.click(await screen.findByRole('button', { name: label }));
+      // Settled by the answer itself: the card leaves 'awaiting-approval'.
+      await waitFor(() => expect(container.querySelector('[data-status]')?.getAttribute('data-status')).toBe('complete'));
+      expect(screen.queryByText('Sending to Claude Code…')).toBeNull();
+      // The socket was already gone — nothing to release.
+      expect(respondToPermission).not.toHaveBeenCalled();
+    });
+  }
+});
+
 describe('a kept card that is not a plan', () => {
-  it('offers the live menu\'s own numbered rows and Dismiss; a row types only its number', async () => {
-    const t = new Terminal({ cols: 100, rows: 20, allowProposedApi: true });
-    registerTerminal('kept', t as never);
-    terms.push({ dispose: () => { unregisterTerminal('kept'); t.dispose(); } });
-    await new Promise<void>((r) => t.write(
-      ' Do you want to create hello.txt?\r\n ❯ 1. Yes\r\n   2. Yes, and don\'t ask again this session\r\n   3. No\r\n', r,
-    ));
-    mount('kept', planTool({ toolName: 'Bash', input: { command: 'touch hello.txt' }, requestId: undefined, expired: true } as Partial<ToolCallState>));
+  // The real Write prompt the dev instance showed (CC 2.1.281, 80 columns).
+  const WRITE_HELLO = fs.readFileSync(path.join(PLAN_FIXTURE_DIR, 'app-screen-cc-2.1.281-write-permission-80col.txt'), 'utf8');
+  const writeTool = (file: string) => planTool({ toolName: 'Write', input: { file_path: file, content: 'hi' }, requestId: undefined, expired: true } as Partial<ToolCallState>);
+
+  async function termWith(id: string, text: string) {
+    const t = new Terminal({ cols: 100, rows: 40, allowProposedApi: true });
+    registerTerminal(id, t as never);
+    terms.push({ dispose: () => { unregisterTerminal(id); t.dispose(); } });
+    await new Promise<void>((r) => t.write(text.replace(/\n/g, '\r\n'), r));
+    return t;
+  }
+
+  it("offers its OWN menu's numbered rows and Dismiss; a row types only its number", async () => {
+    await termWith('kept', WRITE_HELLO);
+    mount('kept', writeTool('/tmp/plan-e2e/a1/hello.txt'));
     fireEvent.click(await screen.findByRole('button', { name: 'No' }));
     expect(sendInput.mock.calls).toEqual([['kept', '3']]);
     expect(screen.getByRole('button', { name: 'Dismiss — I answered in the terminal' })).toBeTruthy();
     expect(respondToPermission).not.toHaveBeenCalled();
   });
 
+  it("two asks in a row: a card whose ask was answered shows NO buttons for the NEXT ask's menu", async () => {
+    // Card A (Write a.txt) was answered in the terminal; the screen now shows
+    // B's prompt (Write hello.txt). A's "Yes" must not be able to approve B.
+    await termWith('next', WRITE_HELLO);
+    mount('next', writeTool('/tmp/plan-e2e/a1/a.txt'));
+    await screen.findByText(/Answer it there, or dismiss this/);
+    expect(screen.queryByRole('button', { name: 'Yes' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'No' })).toBeNull();
+  });
+
+  it("re-reads the screen at click time: if the next ask's menu replaced its own, nothing is typed", async () => {
+    const t = await termWith('swap', WRITE_HELLO);
+    mount('swap', writeTool('/tmp/plan-e2e/a1/hello.txt'));
+    const yes = await screen.findByRole('button', { name: 'Yes' });
+    // Before the next 2s re-read, the terminal moves on to a different ask.
+    await new Promise<void>((r) => t.write('\x1b[2J\x1b[H' + WRITE_HELLO.replace(/hello\.txt/g, 'other.txt').replace(/\n/g, '\r\n'), r));
+    fireEvent.click(yes);
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toMatch(/menu changed before that went through, so nothing was sent/);
+  });
+
   it('an AskUserQuestion kept card gets Dismiss only — no rows are guessed', async () => {
-    const t = new Terminal({ cols: 100, rows: 20, allowProposedApi: true });
-    registerTerminal('ask', t as never);
-    terms.push({ dispose: () => { unregisterTerminal('ask'); t.dispose(); } });
-    await new Promise<void>((r) => t.write(' Pick one\r\n ❯ 1. Red\r\n   2. Blue\r\n', r));
+    await termWith('ask', ' Pick one\n ❯ 1. Red\n   2. Blue\n');
     mount('ask', planTool({ toolName: 'AskUserQuestion', input: { questions: [{ question: 'Pick one', header: 'Q', multiSelect: false, options: [{ label: 'Red' }, { label: 'Blue' }] }] }, requestId: undefined, expired: true } as Partial<ToolCallState>));
     await screen.findByRole('button', { name: 'Dismiss — I answered in the terminal' });
     expect(screen.queryByRole('button', { name: 'Red' })).toBeNull();

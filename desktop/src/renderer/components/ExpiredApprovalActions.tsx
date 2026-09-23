@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from './ui';
 import { getVisibleScreenText } from '../hooks/terminal-registry';
-import { parseInkSelect, rebindButtons, type PromptButton } from '../parser/ink-select-parser';
+import { keptCardButtons, type PromptButton } from '../parser/ink-select-parser';
 
 // --- Kept-card actions (a hook socket died, Claude Code's menu may be live) ---
 //
@@ -13,23 +13,32 @@ import { parseInkSelect, rebindButtons, type PromptButton } from '../parser/ink-
 // Otherwise say so and offer Dismiss. Resolution comes from the prompt
 // detector's menu-gone rule (or Dismiss), never from the click itself: nothing
 // here can confirm the keystroke landed.
+//
+// The menu must be THIS card's ask (keptCardButtons binds it to the call's
+// command/file/tool) — a card whose ask was already answered must never answer
+// the next one — and a click re-reads the screen and re-checks that binding
+// before typing, so a 2s-old read can never pick a row (review 2026-09-23, F1).
 const REBIND_POLL_MS = 2000;
 const REBIND_REARM_MS = 2000;
 
-export function ExpiredApprovalActions({ sessionId, toolName, onDismiss }: {
+export function ExpiredApprovalActions({ sessionId, toolName, input, onDismiss }: {
   sessionId?: string;
   toolName: string;
+  input: Record<string, unknown> | undefined;
   onDismiss: () => void;
 }) {
   const [buttons, setButtons] = useState<PromptButton[] | null>(null);
   const [clicked, setClicked] = useState(false);
+  const [changed, setChanged] = useState(false);
+  const inputRef = useRef(input);
+  inputRef.current = input;
   const rearm = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!sessionId) return;
     const read = () => {
       const screen = getVisibleScreenText(sessionId);
-      setButtons(rebindButtons(screen ? parseInkSelect(screen) : null, toolName));
+      setButtons(keptCardButtons(screen, toolName, inputRef.current));
     };
     read();
     const poll = setInterval(read, REBIND_POLL_MS);
@@ -39,6 +48,12 @@ export function ExpiredApprovalActions({ sessionId, toolName, onDismiss }: {
 
   const press = (b: PromptButton) => {
     if (!sessionId || clicked) return;
+    // Re-read NOW: the button came from a read up to REBIND_POLL_MS old.
+    const fresh = keptCardButtons(getVisibleScreenText(sessionId), toolName, inputRef.current);
+    const same = fresh?.find((f) => f.label === b.label && f.input === b.input);
+    setButtons(fresh);
+    if (!same) { setChanged(true); return; }
+    setChanged(false);
     setClicked(true);
     // A deliberate menu-driving write (pty-input-gate.ts header): a bare digit,
     // never arrows + Enter.
@@ -60,6 +75,11 @@ export function ExpiredApprovalActions({ sessionId, toolName, onDismiss }: {
             </Button>
           ))}
         </div>
+      )}
+      {changed && (
+        <p role="alert" className="text-3xs text-fg-muted leading-relaxed">
+          The terminal&apos;s menu changed before that went through, so nothing was sent.
+        </p>
       )}
       <Button variant="ghost" size="sm" onClick={onDismiss}>
         Dismiss — I answered in the terminal

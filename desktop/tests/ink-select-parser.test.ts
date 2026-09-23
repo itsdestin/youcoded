@@ -454,3 +454,33 @@ describe('parseInkSelect with a wrapped option label', () => {
     expect(menu.selectedIndex).toBe(1);
   });
 });
+
+describe('keptCardButtons binds a menu to the card\'s own ask', () => {
+  it('matches the Write prompt only for the same file, and only for Write', async () => {
+    const { keptCardButtons } = await import('../src/renderer/parser/ink-select-parser');
+    const fs = await import('fs');
+    const path = await import('path');
+    const text = fs.readFileSync(path.join(__dirname, 'fixtures', 'plan-menu', 'app-screen-cc-2.1.281-write-permission-80col.txt'), 'utf8');
+    expect(keptCardButtons(text, 'Write', { file_path: '/x/hello.txt' })?.map((b) => b.input)).toEqual(['1', '2', '3']);
+    expect(keptCardButtons(text, 'Write', { file_path: '/x/other.txt' })).toBeNull();
+    expect(keptCardButtons(text, 'Edit', { file_path: '/x/hello.txt' })).toBeNull();
+    expect(keptCardButtons(text, 'Bash', { command: 'touch hello.txt' })).toBeNull();
+    expect(keptCardButtons(text, 'Write', undefined)).toBeNull();
+  });
+
+  it('matches a Bash prompt by its command, even when Claude Code wraps it', async () => {
+    const { keptCardButtons } = await import('../src/renderer/parser/ink-select-parser');
+    const bash = [
+      '────────────────────────────────────────',
+      ' Bash command',
+      '   npm run build && npm test -- --reporter',
+      '   =dot',
+      '   Build and test',
+      ' Do you want to proceed?',
+      ' ❯ 1. Yes',
+      '   2. No',
+    ].join('\n');
+    expect(keptCardButtons(bash, 'Bash', { command: 'npm run build && npm test -- --reporter=dot' })).not.toBeNull();
+    expect(keptCardButtons(bash, 'Bash', { command: 'rm -rf dist' })).toBeNull();
+  });
+});

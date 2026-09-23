@@ -282,3 +282,102 @@ describe('answerPlanMenu safety on hand-written screens', () => {
     expect(sanitizeFeedback('  first line\nsecond\tline\r\n\u0007third  ')).toBe('first line second line third');
   });
 });
+
+// Each check the driver makes before typing, pinned so removing it fails a test
+// (review 2026-09-23, F4 — these were mutation-tested).
+describe('answerPlanMenu re-checks the screen before every key', () => {
+  /** read() walks through `screens` one call at a time, then stays on the last. */
+  function sequenceCC(screens: string[]) {
+    let i = 0;
+    const writes: string[] = [];
+    const c = clock();
+    const io: PlanDriverIO = {
+      read: () => screens[Math.min(i++, screens.length - 1)],
+      write: (d) => { writes.push(d); },
+      settle: async (ms) => { c.tick(ms); },
+      now: c.now,
+    };
+    return { io, writes };
+  }
+  const SHOWN = screen(1, OPTS);
+  // Same rows 1–2 with the same numbers and words — only a new row before the
+  // text box. The clicked row still "matches"; only the option-SET check sees it.
+  const GREW = screen(1, [...OPTS, 'No, refine with Ultraplan in a cloud session']);
+
+  it('choice: types nothing when the option set changed, even if the clicked row looks the same', async () => {
+    const { io, writes } = sequenceCC([GREW]);
+    const res = await answerPlanMenu(sig(SHOWN), { kind: 'choice', number: 2, label: OPTS[1] }, io);
+    expect(res).toMatchObject({ ok: false, reason: 'menu-changed' });
+    expect(writes).toEqual([]);
+  });
+
+  it('reject: does not press Esc when the option set changed', async () => {
+    const { io, writes } = sequenceCC([GREW]);
+    const res = await answerPlanMenu(sig(SHOWN), { kind: 'reject' }, io);
+    expect(res).toMatchObject({ ok: false, reason: 'menu-changed' });
+    expect(writes).toEqual([]);
+  });
+
+  it('feedback: types nothing when the option set changed', async () => {
+    const { io, writes } = sequenceCC([GREW]);
+    const res = await answerPlanMenu(sig(SHOWN), { kind: 'feedback', text: 'hi' }, io);
+    expect(res).toMatchObject({ ok: false, reason: 'menu-changed' });
+    expect(writes).toEqual([]);
+  });
+
+  it('choice: re-reads right before the digit — a menu that changed after the first read gets no digit', async () => {
+    const { io, writes } = sequenceCC([SHOWN, GREW]);
+    const res = await answerPlanMenu(sig(SHOWN), { kind: 'choice', number: 2, label: OPTS[1] }, io);
+    expect(res).toMatchObject({ ok: false, reason: 'menu-changed' });
+    expect(writes).toEqual([]);
+  });
+
+  it('choice: no digit when the cursor moved into the text box after the first read (it would be typed into the box)', async () => {
+    const { io, writes } = sequenceCC([SHOWN, screen(3, OPTS)]);
+    const res = await answerPlanMenu(sig(SHOWN), { kind: 'choice', number: 1, label: OPTS[0] }, io);
+    expect(res).toMatchObject({ ok: false, reason: 'not-taken' });
+    expect(writes).toEqual([]);
+  });
+
+  it('feedback: no text typed when the box re-check shows a different menu', async () => {
+    // Cursor already in the box (no focusing digit), then the menu changes.
+    const { io, writes } = sequenceCC([screen(3, OPTS), GREW]);
+    const res = await answerPlanMenu(sig(SHOWN), { kind: 'feedback', text: 'hi' }, io);
+    expect(res).toMatchObject({ ok: false, reason: 'menu-changed' });
+    expect(writes).toEqual([]);
+  });
+
+  it('refuses a two-digit row number outright', async () => {
+    const { io, writes } = sequenceCC([SHOWN]);
+    const res = await answerPlanMenu(sig(SHOWN), { kind: 'choice', number: 12, label: OPTS[0] }, io);
+    expect(res.ok).toBe(false);
+    expect(writes).toEqual([]);
+  });
+});
+
+describe('feedbackChunks', () => {
+  it('never splits a character: emoji, flags and accents stay whole', async () => {
+    const { feedbackChunks } = await import('../src/renderer/state/plan-menu-driver');
+    const text = 'a'.repeat(31) + '👍🏽' + ' café 🇬🇧 ' + 'x'.repeat(40) + '😀';
+    const chunks = feedbackChunks(text);
+    expect(chunks.join('')).toBe(text);
+    for (const c of chunks) {
+      expect(c.length).toBeLessThanOrEqual(PLAN_TIMING.chunk);
+      // No lone surrogate at either end of a chunk.
+      expect(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/.test(c)).toBe(false);
+    }
+    expect(chunks[0]).toBe('a'.repeat(31)); // the 4-unit emoji moved whole to the next chunk
+  });
+});
+
+describe('Claude Code 2.1.281 with a hook that exits 0 printing nothing (recorded)', () => {
+  // How the app now hands back an ask from a session it does not own.
+  for (const [file, tool] of [['cc-2.1.281-passthrough-write-120x40.json', 'Write'], ['cc-2.1.281-passthrough-ask-120x40.json', 'AskUserQuestion']] as const) {
+    it(`${tool}: Claude Code showed its own prompt and the terminal answer went through`, () => {
+      const o = loadPlanFixture(file).outcome as { hookLog: string; toolResults: Array<{ is_error: boolean; content: string }> };
+      expect(o.hookLog).toMatch(new RegExp(`start ${tool}\\n\\d+ passthrough`));
+      expect(o.toolResults).toHaveLength(1);
+      expect(o.toolResults[0].is_error).toBe(false);
+    });
+  }
+});
