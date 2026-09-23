@@ -1883,7 +1883,14 @@ export class RemoteServer {
       case 'native:send': {
         // M1: mirrors the desktop invoke — never throw (transport-parity rule).
         const notLive = { status: 'failed', reason: 'not-live' } satisfies NativeSendResult;
-        const result = this.nativeRuntime ? this.nativeRuntime.nativeHost.send(payload.sessionId, payload.text) : notLive;
+        // WHY attachments are passed: the shim sends them (host paths the phone's picker
+        // already uploaded here), and dropping them meant a phone's attached files never
+        // reached the assistant — only the text did. Same argument the desktop handler
+        // passes; anything that is not a string is ignored rather than handed to the host.
+        const attachments: string[] = Array.isArray(payload?.attachments)
+          ? payload.attachments.filter((a: unknown): a is string => typeof a === 'string')
+          : [];
+        const result = this.nativeRuntime ? this.nativeRuntime.nativeHost.send(payload.sessionId, payload.text, attachments) : notLive;
         this.respond(client.ws, type, id, result);
         break;
       }
