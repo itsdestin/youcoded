@@ -340,6 +340,27 @@ export function loadFixture(
         };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'permission_expired') {
+        // WHY: the KEPT card (PERMISSION_EXPIRED 'hook-closed') — the hook socket
+        // died but Claude Code's own menu may still be live, so the card stays
+        // awaiting-approval with `expired`, no requestId, and "Dismiss — I
+        // answered in the terminal". Nothing else in the workbench produces
+        // that state, so a fixture line has to. Follows a permission_request
+        // line for the same tool_use_id and swaps its block IN PLACE (the
+        // reducer returns a new tool object; the earlier block is a snapshot).
+        const action: ChatAction = {
+          type: 'PERMISSION_EXPIRED',
+          sessionId,
+          requestId: parsed.requestId,
+          reason: parsed.reason ?? 'hook-closed',
+        };
+        state = chatReducer(state, action);
+        actions.push(action);
+        const tool = state.get(sessionId)?.toolCalls.get(parsed.tool_use_id);
+        if (tool) {
+          const idx = blocks.findIndex((b) => b.kind === 'tool' && b.tool.toolUseId === parsed.tool_use_id);
+          if (idx !== -1) blocks[idx] = { kind: 'tool', tool };
+        }
       } else if (parsed.type === 'subagent_permission_request') {
         // Specialists 1c: a CHILD's routed ask. Nests under the parent Task
         // card (specialist.parentToolCallId) — the reducer binds it to the

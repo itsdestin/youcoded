@@ -49,7 +49,7 @@ import { GameProvider, useGameState, useGameDispatch } from './state/game-contex
 import { hookEventToAction } from './state/hook-dispatcher';
 import { buildUsageSnapshot, pruneExpiredUsage, type SubscriptionUsage } from './state/usage-snapshot';
 import { invalidateProviderTypeCache, resolveProviderType, useModelProviderType } from './hooks/use-provider-type';
-import { hasPendingInteraction, canPtySend } from './state/pty-input-gate';
+import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy, canPtySend } from './state/pty-input-gate';
 import { buildOutgoingMessage } from './components/outgoing-message';
 import type { SyncWarning } from '../main/sync-state';
 import { latestUnresolvedError, type SyncStatusData } from './components/sync-dot-state';
@@ -702,7 +702,8 @@ function AppInner() {
   const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
     const session = chatStateMapRef.current.get(sid);
     if (session && hasPendingInteraction(session)) {
-      setToast('Your assistant is waiting for your response — answer the prompt first.');
+      // Name the blocker — see pendingInteractionRefusalCopy.
+      setToast(pendingInteractionRefusalCopy(pendingInteractionKind(session)));
       return true;
     }
     return false;
@@ -3829,7 +3830,13 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Your assistant is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
+                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
+                  // Name the blocker so reaching for "Send anyway" is an informed
+                  // choice (it presses Esc into Claude Code first — which on a
+                  // live permission or plan menu DECLINES it).
+                  const blocked = chatStateMapRef.current.get(sessionId ?? '');
+                  setToast({ message: pendingInteractionRefusalCopy(blocked ? pendingInteractionKind(blocked) : null), durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } });
+                }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={statusBarData}
                   onOpenSync={handleOpenSync}

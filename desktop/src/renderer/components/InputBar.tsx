@@ -18,7 +18,7 @@ import { isTypingTarget } from '../utils/is-typing-target';
 import { dispatchSlashCommand, type ViewMode } from '../state/slash-command-dispatcher';
 import { runNativeSlashAction, routeSlashResult } from '../state/native-slash-actions';
 import type { UsageSnapshot } from '../state/chat-types';
-import { hasPendingInteraction } from '../state/pty-input-gate';
+import { hasPendingInteraction, pendingInteractionKind, pendingInteractionRefusalCopy } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
@@ -581,7 +581,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               sendRef.current(true);
             });
           } else {
-            onToast?.('Your assistant is waiting for your response — answer the prompt first.');
+            // Names the blocker (a card in the chat vs a terminal prompt) — one
+            // shared sentence with App.tsx's refusals (pty-input-gate.ts).
+            onToast?.(pendingInteractionRefusalCopy(pendingInteractionKind(session)));
           }
           return false;
         }

@@ -418,7 +418,12 @@ function endTurn(
       continue;
     }
     if (tool.status === 'running' || tool.status === 'awaiting-approval') {
-      toolCalls.set(id, { ...tool, status: 'failed', error: errorMessage });
+      // Also drop `expired`: a kept card (PERMISSION_EXPIRED 'hook-closed') is
+      // settled now, and a stale flag would let a later quiet
+      // PERMISSION_CARD_RESOLVED (Dismiss, the menu-gone rule) overwrite this
+      // real failure with 'complete'.
+      const { expired: _expired, ...rest } = tool;
+      toolCalls.set(id, { ...rest, status: 'failed', error: errorMessage });
     }
   }
   return {
@@ -1894,6 +1899,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             // Carried so the full-auto safety-stop footer survives the
             // synthetic→real tool-id handover (spec 2026-08-12, M5 2b).
             permissionMode: synTool.permissionMode,
+            // A kept card (hook closed, Claude Code's menu possibly still up)
+            // must stay kept across the handover — without it the card has no
+            // requestId AND no flag: unanswerable and unresolvable.
+            expired: synTool.expired,
           });
           // Update the tool group to reference the real ID
           const toolGroups = new Map(session.toolGroups);
@@ -1954,10 +1963,15 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // ask over exactly as the synthetic-reclaim branch above does; every
       // other superseded card (no ask yet) still becomes a plain running tool.
       const superseded = toolCalls.get(action.toolUseId);
-      const carriedAsk = superseded?.status === 'awaiting-approval' && superseded.requestId
+      // A KEPT card (awaiting-approval + expired, requestId already cleared —
+      // PERMISSION_EXPIRED 'hook-closed') is carried too: the watcher re-emits
+      // tool-use for a line Claude Code rewrites, and resetting it to 'running'
+      // would reopen the send gates while Claude Code's menu may still be live.
+      const carriedAsk = superseded?.status === 'awaiting-approval' && (superseded.requestId || superseded.expired)
         ? {
             status: 'awaiting-approval' as const,
             requestId: superseded.requestId,
+            expired: superseded.expired,
             permissionSuggestions: superseded.permissionSuggestions,
             denyListed: superseded.denyListed,
             external: superseded.external,
@@ -2017,14 +2031,19 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // Carry structuredPatch onto the tool state so DiffView can render
         // with absolute file line numbers (Claude Code ships it pre-computed).
         const patch = action.structuredPatch;
+        // A result settles the card, so `expired` goes: this is the normal way a
+        // KEPT card ends (the user answered Claude Code's menu in the terminal,
+        // the tool ran, its result landed here). A card is either kept
+        // (awaiting-approval + expired) or settled — never both.
+        const { expired: _settled, ...base } = existing;
         if (action.isError) {
           toolCalls.set(action.toolUseId, {
-            ...existing, status: 'failed', error: action.result,
+            ...base, status: 'failed', error: action.result,
             ...(patch ? { structuredPatch: patch } : {}),
           });
         } else {
           toolCalls.set(action.toolUseId, {
-            ...existing, status: 'complete', response: action.result,
+            ...base, status: 'complete', response: action.result,
             ...(patch ? { structuredPatch: patch } : {}),
           });
         }
@@ -2646,7 +2665,39 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         // Matched by the kept id alone: a desktop window clears a resolution silently (no
         // note), and the expiry must reach that card too.
         const clearedByResolution = tool.status === 'running' && tool.resolvedRequestId === action.requestId;
+        if (heldHere && action.reason === 'hook-closed') {
+          // The hook's far end went away first (the relay's backstop, Claude Code
+          // killing the hook) — but Claude Code's OWN menu may still be on screen
+          // waiting. KEEP the card: it stays awaiting-approval so the session dot
+          // stays "needs you" and the send gates keep refusing to type into that
+          // menu. It loses its dead requestId and gains `expired`; the prompt
+          // detector's menu-gone rule, the transcript result or Dismiss settles
+          // it. (2026-07-30 permission-ask-timeout spec §2/§2a — the reported
+          // bug was this card flipping to 'failed', so the session looked idle
+          // while Claude Code was still blocked.) The reducer never reads the
+          // terminal itself.
+          toolCalls.set(id, { ...tool, requestId: undefined, expired: true });
+          break;
+        }
+        if (heldHere && (action.reason === 'app-timeout' || action.reason === 'unroutable')) {
+          // The app's own hold answered with a deny — say exactly that.
+          toolCalls.set(id, {
+            ...tool,
+            status: 'failed',
+            requestId: undefined,
+            answeredElsewhere: undefined,
+            resolvedRequestId: undefined,
+            error: action.reason === 'unroutable'
+              ? "YouCoded couldn't show this request in any open conversation, so it declined it for you."
+              : 'No answer came in time, so YouCoded declined this request and Claude moved on.',
+          });
+          break;
+        }
         if (heldHere || clearedByResolution) {
+          // 'delivery-failed' or NO reason (the native broker's cancel, an older
+          // remote client): RESOLVE, never keep — native sessions have no
+          // terminal menu to fall back on, and a failed delivery means the
+          // socket is provably gone. Do not flip this default (spec §2c/§2d).
           toolCalls.set(id, {
             ...tool,
             status: 'failed',
@@ -2660,6 +2711,25 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         }
       }
 
+      next.set(action.sessionId, { ...session, toolCalls });
+      return next;
+    }
+
+    case 'PERMISSION_CARD_RESOLVED': {
+      // Quiet local settle of a KEPT card: its menu left the terminal (answered
+      // there, or through the plan card's keys) or the user clicked Dismiss.
+      // Only a still-awaiting kept card settles this way — a live ask goes
+      // through its buttons, and a card endTurn already failed must keep its
+      // real error.
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const tool = session.toolCalls.get(action.toolUseId);
+      if (!tool || !tool.expired || tool.status !== 'awaiting-approval') return state;
+      const toolCalls = new Map(session.toolCalls);
+      // 'complete' with no error: nothing failed. If the tool really runs, the
+      // transcript's result overwrites this with the true outcome.
+      const { expired: _resolved, ...rest } = tool;
+      toolCalls.set(action.toolUseId, { ...rest, status: 'complete' });
       next.set(action.sessionId, { ...session, toolCalls });
       return next;
     }

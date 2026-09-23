@@ -1015,9 +1015,11 @@ export class RemoteServer {
    *  so a reconnecting phone was replayed the dead ask as open. Purge it from the buffer
    *  (the same purge a resolution does) and tell connected clients it expired — for the
    *  relay, "socket closed before a response was sent" is literally what happened. */
-  private onPermissionExpired = (sessionId: string, requestId: string) => {
+  private onPermissionExpired = (sessionId: string, requestId: string, reason?: string) => {
     this.bufferHookEvent({ type: 'PermissionResolved', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent);
-    const expired = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent;
+    // _reason travels to phones too, so a 'hook-closed' ask stays answerable
+    // there exactly as it does on the computer (hook-relay.ts).
+    const expired = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId, _reason: reason }, timestamp: Date.now() } as HookEvent;
     // Buffered too, so a phone that was away hears "expired" on reconnect instead of a
     // replay-complete that would clear the card as answered (T2 re-review, 7).
     this.bufferHookEvent(expired);

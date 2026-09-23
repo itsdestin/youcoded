@@ -12,7 +12,7 @@ const FIXTURE_ROOT = join(__dirname, '../src/renderer/dev/workbench/fixtures');
  *  timeline with no error — which is exactly the failure this guards. */
 const KNOWN_KINDS = new Set([
   'text', 'user_message', 'turn_complete', 'assistant_text', 'tool_use', 'tool_result',
-  'permission_request',
+  'permission_request', 'permission_expired',
   // Specialists 1c: a child's stamped events, its routed ask, the run record
   // (a delivered steer rides on the run record's own `notes` — Task 10 — so
   // there is no separate line kind for it), and the folded background report.

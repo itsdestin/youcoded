@@ -250,6 +250,8 @@ const hookRelay = new HookRelay(pipeName);
 // live permission/AskUserQuestion menu — typing into that menu presses Enter
 // on the highlighted option and silently answers the prompt (stray-Enter fix).
 sessionManager.setReloadPluginsGate((sessionId) => hookRelay.hasPendingPermission(sessionId));
+// An ask for no live session can never show a card: hold it 60s, not 2h.
+hookRelay.setSessionGate((sessionId) => sessionManager.hasSession(sessionId));
 const remoteConfig = new RemoteConfig();
 const skillProvider = new LocalSkillProvider();
 skillProvider.ensureMigrated();
@@ -1270,12 +1272,18 @@ function createWindow(firstRunManager?: FirstRunManager) {
     }
   });
 
-  // Notify renderer when a permission request socket closes (timeout/killed)
-  hookRelay.on('permission-expired', (sessionId: string, requestId: string) => {
+  // Tell the renderer a held ask ended without a user decision, and WHY:
+  // 'app-timeout' / 'unroutable' (the app's own hold answered with a deny) or
+  // 'hook-closed' (the far end went away; Claude Code's own menu may still be
+  // on screen, so the card keeps waiting). See hook-relay.ts.
+  hookRelay.on('permission-expired', (sessionId: string, requestId: string, reason?: string) => {
     const evt = {
       type: 'PermissionExpired',
       sessionId,
-      payload: { _requestId: requestId },
+      // _reason rides INSIDE the payload — no channel shape change, and an
+      // older remote client simply ignores it (and resolves the card, the
+      // safe default in chat-reducer.ts).
+      payload: { _requestId: requestId, _reason: reason },
       timestamp: Date.now(),
     };
     const ownerId = windowRegistry.getOwner(sessionId);

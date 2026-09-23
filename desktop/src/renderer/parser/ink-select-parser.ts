@@ -196,15 +196,31 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
   const optionNumbers: (number | null)[] = [];
   let selectedIndex = 0;
 
-  // Walk backward to find options above the selector
+  // A long option label that Claude Code wrapped continues on the next line(s),
+  // indented DEEPER than the option numbers and carrying no number of its own:
+  //    2. Yes, and switch to accept edits (auto-approve file edits and common file
+  //       commands) for this session (shift+tab)
+  //    3. No
+  // Treating that line as the end of the menu cut the label short AND lost every
+  // option after it — found 2026-09-23 when a kept permission card offered
+  // "Yes" and half of option 2, with no "No" (CC 2.1.281, 80 columns).
+  const isContinuation = (line: string) =>
+    !!line.trim() && !/^\s*\d+[.:]\s+/.test(line) && !/^\s*[❯>]/.test(line)
+    && indentOf(line) > referenceIndent + 2;
+
+  // Walk backward to find options above the selector. Continuation lines met on
+  // the way up belong to the option found ABOVE them.
+  let carry: string[] = [];
   for (let i = selectorIdx - 1; i >= 0; i--) {
     const trimmed = lines[i].trim();
     if (!trimmed) break;
+    if (isContinuation(lines[i])) { carry.unshift(trimmed); continue; }
     if (!isOptionLine(lines[i], referenceIndent)) break;
     // Don't include lines that look like titles (end with ? or :)
     if (/[?:]$/.test(trimmed) && !/^\d+[.:]\s+/.test(trimmed)) break;
-    options.unshift(stripNumbering(trimmed));
+    options.unshift([stripNumbering(trimmed), ...carry].join(' '));
     optionNumbers.unshift(numberOf(trimmed));
+    carry = [];
   }
 
   // Insert the selected option
@@ -214,10 +230,12 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
   // from the raw line rather than from the already-stripped label.
   optionNumbers.push(numberOf(selectorLine.replace(/^\s*[❯>]\s*/, '').trim()));
 
-  // Walk forward to find options below the selector
+  // Walk forward to find options below the selector (continuations join the
+  // option just above them).
   for (let i = selectorIdx + 1; i < lines.length; i++) {
     const trimmed = lines[i].trim();
     if (!trimmed) break;
+    if (isContinuation(lines[i])) { options[options.length - 1] += ' ' + trimmed; continue; }
     if (!isOptionLine(lines[i], referenceIndent)) break;
     options.push(stripNumbering(trimmed));
     optionNumbers.push(numberOf(trimmed));
@@ -383,4 +401,25 @@ export function menuToButtons(menu: ParsedMenu): PromptButton[] {
     const steps = (((index - menu.selectedIndex) % count) + count) % count;
     return { label, input: DOWN.repeat(steps), submitInput: '\r' };
   });
+}
+
+/**
+ * Buttons for a KEPT card (its hook socket died while Claude Code's menu may
+ * still be live — ToolCard's ExpiredApprovalActions), or null when that is not
+ * safe. Ported from PR #278 (2026-07-30 permission-ask-timeout spec §3).
+ *
+ * Only when EVERY row carries a printed number: a digit picks its row with no
+ * dependence on the cursor, while the arrow fallback depends on a cursor
+ * position nobody is keeping current for a dead card. Labels always come from
+ * THIS parse of the live screen — never matched to the old card by position.
+ * AskUserQuestion never rebinds: Claude Code's own UI for it is sequential and
+ * multi-select with a free-text row this card does not model. ExitPlanMode
+ * never reaches here — PlanApprovalCard keeps answering it by typing.
+ */
+export function rebindButtons(menu: ParsedMenu | null, toolName: string): PromptButton[] | null {
+  if (!menu) return null;
+  if (toolName === 'AskUserQuestion' || toolName === 'ExitPlanMode') return null;
+  const buttons = menuToButtons(menu);
+  if (buttons.some((b) => b.submitInput !== undefined)) return null;
+  return buttons;
 }
