@@ -46,12 +46,11 @@ class LocalSkillProviderReconcileTest {
     fun `reconcile sweeps stale old and upgrade dirs but leaves real and unrelated dirs alone`() = runTest {
         val base = ".claude/plugins/marketplaces/youcoded/plugins"
 
-        // Pre-populate the marketplace index cache (fresh fetchedAt, well
-        // within the 24h TTL) so fetchIndex() returns instantly with no
-        // network call, and so every BundledPlugins.IDS entry is found —
-        // that avoids the "not in the marketplace index" invalidate+refetch
-        // branch, which would otherwise delete this same cache file and
-        // force a real network fetch. sourceType "none" makes install() hit
+        // Pre-populate the catalog cache (the FIRST fetchIndex() source, before
+        // index.json or network). Seeding only index.json let the Worker request
+        // stall for 30+ seconds and time out runTest under load. Include every
+        // bundled id so the missing-entry retry cannot contact the network.
+        // sourceType "none" makes install() hit
         // its "Unknown source type" branch immediately for every bundled id
         // (no git shell-out, no network) — irrelevant to what this test is
         // checking, which is the sweep that runs before any of that.
@@ -60,7 +59,7 @@ class LocalSkillProviderReconcileTest {
             indexEntries.put(JSONObject().put("id", id).put("sourceType", "none"))
         }
         write(
-            ".claude/youcoded-marketplace-cache/index.json",
+            ".claude/youcoded-marketplace-cache/catalog.json",
             JSONObject().put("fetchedAt", System.currentTimeMillis()).put("data", indexEntries.toString()).toString(),
         )
         // Pre-seed the marketplace CACHE REPO CLONE's own timestamp file

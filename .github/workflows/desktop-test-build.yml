@@ -6,16 +6,19 @@ on:
       base:
         description: >-
           Version PREFIX to stamp into the build. The build number is appended
-          automatically from this workflow's run counter (e.g. 1.3.0-beta.71),
+          automatically from this workflow's run counter (e.g. 1.3.1-beta.87),
           so leave this alone unless the release line changes — every beta
           then sorts above the previous one with nobody typing a number.
           The prefix MUST still sort ABOVE the latest published release, or the
           installed build will offer to "update" itself back to that release
           (compareVersions in update-manifest-verify.ts orders semver-style, so
           `1.2.4-beta.N` is LOWER than 1.2.4). Bump the minor and suffix, e.g.
-          1.3.0-beta, rather than patching the current version.
+          1.3.1-beta, rather than patching the current version.
+          The line moved 1.3.0-beta → 1.3.1-beta when 1.3.0 was released
+          (2026-09-20): the beta line always sits one patch AHEAD of the last
+          release, so a beta is never offered a downgrade to it.
         required: false
-        default: '1.3.0-beta'
+        default: '1.3.1-beta'
       skip_windows_tests:
         description: >-
           Skip `npm test` on the Windows leg only, so a Windows installer still gets built while

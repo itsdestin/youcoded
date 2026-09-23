@@ -86,6 +86,50 @@ describe('the buddy rig tint', () => {
   });
 });
 
+// ─── The cursor you drag him with ────────────────────────────────────────────
+//
+// Destin 2026-09-20: the cursor flipped to the grabby hand the instant it
+// touched the body, so a buddy you can plainly click (a click opens the chat)
+// read as a drag handle instead. A rest and a press keep the plain ARROW — the
+// finger ('pointer') read as a link, not as him (Destin, same day). The grip
+// closes only once a real drag has started, and reopens on release.
+describe("the mascot's cursor", () => {
+  const cursorOf = (el: HTMLElement) => el.style.cursor;
+
+  it('keeps the plain arrow while merely resting on or pressing him', () => {
+    const el = mascotEl();
+    expect(cursorOf(el)).toBe('default');
+    expect(el.classList.contains('mascot-grabbed')).toBe(false);
+    fireEvent.pointerDown(el, { pointerId: 1, clientX: 40, clientY: 40 });
+    expect(cursorOf(el)).toBe('default');
+    expect(el.classList.contains('mascot-grabbed')).toBe(false);
+  });
+
+  it('closes into the grip only once the press travels past the click threshold', () => {
+    const el = mascotEl();
+    fireEvent.pointerDown(el, { pointerId: 1, clientX: 40, clientY: 40 });
+    // Below DRAG_THRESHOLD_PX (4): still a click in the making.
+    move(el, { x: 42, y: 40 }, { x: 0, y: 0 });
+    expect(cursorOf(el)).toBe('default');
+    move(el, { x: 60, y: 40 }, { x: 0, y: 0 });
+    expect(cursorOf(el)).toBe('grabbing');
+    expect(el.classList.contains('mascot-grabbed')).toBe(true);
+  });
+
+  it('lets go of the grip on release, whether the press was a click or a drag', () => {
+    const el = mascotEl();
+    fireEvent.pointerDown(el, { pointerId: 1, clientX: 40, clientY: 40 });
+    fireEvent.pointerUp(el, { pointerId: 1, clientX: 40, clientY: 40 });
+    expect(cursorOf(el)).toBe('default');
+
+    fireEvent.pointerDown(el, { pointerId: 1, clientX: 40, clientY: 40 });
+    move(el, { x: 70, y: 40 }, { x: 0, y: 0 });
+    expect(cursorOf(el)).toBe('grabbing');
+    fireEvent.pointerUp(el, { pointerId: 1, clientX: 70, clientY: 40 });
+    expect(cursorOf(el)).toBe('default');
+  });
+});
+
 describe('the drag payload', () => {
   it('is how far the finger has moved from the pixel it grabbed, inside the window', () => {
     const el = mascotEl();

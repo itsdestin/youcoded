@@ -8,7 +8,7 @@ import { useMemo, useState, CSSProperties } from 'react';
 import type { ArtifactViewProps } from './types';
 import { colLetter } from './exceljs-cell';
 import { detectDelimiter, parseDelimited } from './csv-parse';
-import { PAPER, GUTTER_BG, GRID, GUTTER_FG, SEL, NOTE_FG, NOTE_BG } from './sheet-theme';
+import { PAPER, GUTTER_BG, GRID, GUTTER_FG, SEL, NOTE_FG, NOTE_BG, largeSheetNote } from './sheet-theme';
 
 const MAX_ROWS = 2000;
 // Safety cap — matches XlsxView (XlsxView.tsx:14-15). CSV rows have no upper
@@ -99,14 +99,10 @@ export function CsvView({ path, content }: ArtifactViewProps) {
           </tbody>
         </table>
         {grid.truncated && (
-          // Same wording XlsxView shows for its own row/column cap, so the two
-          // spreadsheet-style viewers read as one consistent behavior. WHY name
-          // only the limit hit: a 5,000-row, 4-column file is not missing any
-          // columns, and saying "× 100 columns" told the reader it was.
+          // Same wording XlsxView shows for its own row/column cap (one shared
+          // function), so the two spreadsheet-style viewers read as one behavior.
           <div style={{ padding: '8px 12px', fontSize: 12, color: NOTE_FG, background: NOTE_BG }}>
-            Large sheet — showing the first {grid.rowsTruncated && grid.colsTruncated
-              ? `${MAX_ROWS.toLocaleString()} rows × ${MAX_COLS} columns`
-              : grid.rowsTruncated ? `${MAX_ROWS.toLocaleString()} rows` : `${MAX_COLS} columns`}. Use “Open externally” for the full file.
+            {largeSheetNote(grid.rowsTruncated, grid.colsTruncated, MAX_ROWS, MAX_COLS)}
           </div>
         )}
       </div>

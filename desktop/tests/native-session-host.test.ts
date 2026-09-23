@@ -237,6 +237,21 @@ describe('NativeSessionHost', () => {
     expect(events[0].payload._requestId).toBe(emitted[0].payload._requestId);
   });
 
+  it('exposes only active root progress and forgets it when idle or destroyed', async () => {
+    await host.create({ sessionId: 's-progress', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const entry = (host as any).live.get('s-progress');
+    const progress = { type: 'assistant-thinking', sessionId: 's-progress', uuid: 'progress', timestamp: 100,
+      data: { usageProgress: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 0, cacheCreationTokens: 0 } } };
+    entry.session._currentUsageProgress = progress;
+    expect(host.currentUsageProgressFor('s-progress')).toBeNull();
+    entry.inFlight = true;
+    expect(host.currentUsageProgressFor('s-progress')).toBe(progress);
+    entry.inFlight = false;
+    expect(host.currentUsageProgressFor('s-progress')).toBeNull();
+    await host.destroy('s-progress');
+    expect(host.currentUsageProgressFor('s-progress')).toBeNull();
+  });
+
   it('create → send → events forwarded AND persisted; getHistory replays them', async () => {
     const seen: any[] = [];
     host.on('transcript-event', (e) => seen.push(e));
@@ -2832,23 +2847,28 @@ describe('NativeSessionHost', () => {
         rawReport: 'the real, already-finished report', delivered: false, owner: OWNER, missedSteers: [],
       });
 
+      // WHY spy on the guarded write: interruptSpecialist and destroyAll both
+      // start it fire-and-forget. Polling the row proved nothing — recordStart
+      // above already wrote it, so the poll passed before the guarded write
+      // had even run (the assertion could pass for the wrong reason), and the
+      // still-running write raced afterEach's folder removal into ENOTEMPTY on
+      // '.youcoded/sessions' (Linux CI, 2026-09-19). Awaiting the write itself
+      // is the signal.
+      const guarded = vi.spyOn((h as any).ledger, 'updateUnlessCompleted');
+      const settleWrites = () => Promise.allSettled(guarded.mock.results.map((r) => r.value));
+
       const result = h.interruptSpecialist('root-1', childId);
       expect(result.status).toBe('ok'); // the interrupt call itself still succeeds — only the ledger write is guarded
+      expect(guarded).toHaveBeenCalledTimes(1);
+      await settleWrites();
 
-      // The ledger write is fire-and-forget — poll for it, then assert it
-      // never actually clobbered the completed row. (The comment said "poll"
-      // and the code slept 30ms; a slow machine reached the assertion before
-      // the guarded write had run at all, which passes for the wrong reason.)
-      let rec: any;
-      await vi.waitFor(() => {
-        rec = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
-        expect(rec).toBeTruthy();
-      });
+      const rec = (h as any).ledger.listFor(root, 'root-1').find((r: any) => r.childId === childId);
       expect(rec?.status).toBe('completed');
       const claimed = await (h as any).ledger.claimUndelivered(root, 'root-1');
       expect(claimed?.childId).toBe(childId);
 
       await h.destroyAll();
+      await settleWrites();
     });
   });
 

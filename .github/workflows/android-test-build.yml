@@ -6,12 +6,13 @@ on:
       base:
         description: >-
           Version PREFIX to stamp into the dogfood APKs. This workflow's run
-          counter is appended automatically (e.g. 1.3.0-beta.12), and the build
+          counter is appended automatically (e.g. 1.3.1-beta.12), and the build
           type adds its own suffix on top, so the APKs report
-          1.3.0-beta.12-dev and 1.3.0-beta.12-releasetest. Leave it alone
-          unless the release line changes.
+          1.3.1-beta.12-dev and 1.3.1-beta.12-releasetest. Leave it alone
+          unless the release line changes (1.3.0-beta → 1.3.1-beta when 1.3.0
+          was released, 2026-09-20 — the beta line sits one patch ahead).
         required: false
-        default: '1.3.0-beta'
+        default: '1.3.1-beta'
 
 jobs:
   build:

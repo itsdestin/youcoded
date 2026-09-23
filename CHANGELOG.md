@@ -4,9 +4,15 @@ All notable changes to YouCoded are documented in this file.
 
 ## [Unreleased]
 
-## [1.3.0-beta] — 2026-09-11
+Betas run on the `1.3.1-beta` line; the next release after 1.3.0 is **1.3.1**.
 
-Everything between v1.2.4 (18 May) and the 1.3 beta: 3,119 commits.
+## [1.3.0] — 2026-09-20
+
+**Claude Code CLI baseline:** v2.1.278
+
+Everything between v1.2.4 (18 May) and this release: 3,200-odd commits. The body of this
+entry was written for the 2026-09-11 beta; **Since the beta** below covers the nine days
+of beta builds (1.3.0-beta.72 through 1.3.1-beta.87) that finished it.
 
 The headline is that YouCoded stopped being only a window onto Claude Code. It now has
 an assistant of its own that can run a conversation, use tools, ask permission, hire
@@ -294,6 +300,31 @@ first-run tour, and a security review whose fixes all landed before this build.
 - **Local models are freed less aggressively** — a model sleeps after 15 minutes idle (was 5)
   and the engine shuts down after 25 minutes without requests (was 10). The next message
   wakes either one.
+
+### Since the beta (11–20 September)
+
+- **Pages** — a Pages button beside Settings and Projects. Ask the assistant to build a page
+  (a tracker, a dashboard, a reference sheet), pin up to four, and open one edge to edge.
+  Desktop only.
+- **Project Files browses one folder at a time**, so a project of any size or depth opens
+  with no wait and no limit.
+- **Sign in with OpenRouter**, and a clear message when an OpenRouter key does not work.
+- **Get beta builds** (Settings → Development, and under the release notes in the version
+  pill) — an opt-in channel that offers pre-release builds. Off for a release build, on for
+  a beta build, until you choose.
+- **Speed** — long lists draw only what is on screen, tab switches no longer pop content in,
+  a streamed reply no longer redraws the window for every word, and background timers run
+  only while something is listening.
+- **Fixes** — the status bar's numbers stay right after a conversation is compacted;
+  ChatGPT-plan chats no longer claim "Claude Code sessions only"; the permission chip shows
+  the real mode and keeps it across a resume; a stray Enter cannot answer a card in a chat
+  you cannot see; sync refuses over-limit files honestly; Linux recovers sign-in when the
+  keychain unlocks late; expanding the file panel no longer blanks another chat; on Windows,
+  adding a file over one of the same name no longer silently did nothing.
+- **Release checks** — the installer launch check now confirms the app's window actually
+  renders (it had been watching for an unrelated log line, and could not catch a blank
+  window), and every build of this release ran its full test suite on Windows, macOS and
+  Linux.
 
 ## [1.2.4] — 2026-05-18
 

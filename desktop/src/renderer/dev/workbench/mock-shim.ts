@@ -3183,7 +3183,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
 }
 
 /** `window.claude.pages` for the workbench (Phase 1 shell). `empty` seeds no
- *  pages so the library's first-run card is reviewable; every other scenario
+ *  pages so the landing screen's first-run card is reviewable; every other scenario
  *  gets the three fixture pages. Pin toggles publish through onChanged the way
  *  the real host will, so the header and the library never disagree. */
 function createPagesMock(empty: boolean): PagesBridge {

@@ -35,6 +35,7 @@ import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionS
 import { VITE_DEV_PORT } from '../shared/ports';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
+import { isSmokeTest, reportWhenRendered } from './smoke-probe';
 import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
 import { isAppPageUrl } from './app-navigation';
@@ -1006,6 +1007,10 @@ function createWindow(firstRunManager?: FirstRunManager) {
   // its loadURL/loadFile promise can settle, so this listener is still attached
   // in the same tick as the load call and cannot miss the event.
   mainWindow.webContents.once('did-finish-load', () => perfMark('main:main-window:did-finish-load'));
+  // Installer launch check only (scripts/smoke-test.js): report whether the
+  // main window actually rendered. Registered here for the same reason as the
+  // perf mark above — the main window, not a detached or buddy window.
+  if (isSmokeTest()) reportWhenRendered(mainWindow.webContents);
 
   // Plan 2b Task 8: construct the conversation-lease client. Lazy accessors —
   // the hub socket + managed roots don't exist yet at this point (they're wired

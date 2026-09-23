@@ -284,4 +284,52 @@ describe('UpdatePanel — the update button after a failure', () => {
       expect(await screen.findByRole('button', { name: /launch failed/i })).toBeInTheDocument();
     });
   });
+
+  // A Linux system package (pacman/deb/rpm) is installed with an administrator
+  // password. When there is no dialog to ask with, or the install is refused,
+  // the one command that finishes it is on screen rather than a dead end.
+  describe('UpdatePanel — finishing a Linux package update by hand', () => {
+    const COMMAND = 'sudo pacman -U /home/u/.config/youcoded/update-cache/youcoded-1.3.0.pacman';
+
+    beforeEach(() => {
+      (window as any).claude.engine = { runInTerminal: vi.fn().mockResolvedValue(undefined) };
+    });
+
+    async function launchWith(result: unknown) {
+      (window as any).claude.update.launch = vi.fn().mockResolvedValue(result);
+      await clickUpdate();
+      fireEvent.click(await screen.findByRole('button', { name: /launch installer/i }));
+    }
+
+    it('shows the command, and runs it in the terminal on request', async () => {
+      await launchWith({ success: true, quitPending: false, fallback: 'manual', command: COMMAND, filePath: '/tmp/x.pacman' });
+
+      expect(await screen.findByText(COMMAND)).toBeInTheDocument();
+      expect(screen.getByText(/asks for your password/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /run in terminal/i }));
+      await waitFor(() => expect((window as any).claude.engine.runInTerminal).toHaveBeenCalledWith(COMMAND));
+    });
+
+    it('a dismissed password prompt offers Retry and the command, not a dead end', async () => {
+      await launchWith({ success: false, error: 'install-cancelled', command: COMMAND });
+
+      // Retry raises the password dialog again — dismissing it was a choice.
+      expect(await screen.findByRole('button', { name: /retry/i })).toBeEnabled();
+      expect(screen.getByText(COMMAND)).toBeInTheDocument();
+    });
+
+    it('a refused package install says so and still offers the command', async () => {
+      await launchWith({ success: false, error: 'install-failed', command: COMMAND });
+
+      expect(await screen.findByRole('button', { name: /launch failed/i })).toBeInTheDocument();
+      expect(screen.getByText(COMMAND)).toBeInTheDocument();
+    });
+
+    it('shows no command block on platforms that never send one', async () => {
+      await launchWith({ success: false, error: 'dmg-corrupt' });
+
+      expect(await screen.findByRole('button', { name: /launch failed/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /run in terminal/i })).toBeNull();
+    });
+  });
 });

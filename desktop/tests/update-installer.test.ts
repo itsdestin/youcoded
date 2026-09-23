@@ -506,20 +506,112 @@ describe('launchInstaller', () => {
     expect(opened).toEqual(['https://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.AppImage']);
   });
 
-  it('Linux .deb: shells out to browser, app keeps running', async () => {
-    const filePath = path.join(tmpDir, 'youcoded.deb');
-    fs.writeFileSync(filePath, 'x');
-    const opened: string[] = [];
-    const launch = makeLaunchInstaller({
-      platform: 'linux',
-      spawn: () => fakeChild(),
-      shellOpenExternal: async (url: string) => { opened.push(url); },
-      appRelaunch: () => {},
-      fallbackDownloadUrl: () => 'https://github.com/...deb',
-      envAppImage: '/does/not/matter.AppImage',
+  // A system package (pacman/deb/rpm) is installed over the running app through
+  // pkexec — the desktop's own password dialog. Before 2026-09-20 a .deb only
+  // opened a web page, and .pacman/.rpm were never even downloaded.
+  describe('Linux system packages', () => {
+    const PACKAGES: Array<{ file: string; argv: string[]; manual: RegExp }> = [
+      { file: 'youcoded-1.3.0.pacman', argv: ['pacman', '-U', '--noconfirm'], manual: /^sudo pacman -U / },
+      { file: 'youcoded_1.3.0_amd64.deb', argv: ['apt-get', 'install', '-y'], manual: /^sudo apt-get install -y / },
+      { file: 'youcoded-1.3.0.x86_64.rpm', argv: ['rpm', '-U', '--replacepkgs'], manual: /^sudo rpm -U / },
+    ];
+
+    function linuxLaunch(over: any = {}) {
+      return makeLaunchInstaller({
+        platform: 'linux',
+        spawn: () => fakeChild({ exitCode: 0 }),
+        shellOpenExternal: async () => {},
+        appRelaunch: () => {},
+        fallbackDownloadUrl: () => 'https://github.com/releases',
+        exists: () => true, // pkexec present
+        ...over,
+      });
+    }
+
+    for (const pkg of PACKAGES) {
+      it(`installs ${path.extname(pkg.file)} through pkexec, then relaunches`, async () => {
+        const filePath = path.join(tmpDir, pkg.file);
+        fs.writeFileSync(filePath, 'x');
+        const calls: any[] = [];
+        let relaunched = 0;
+        const launch = linuxLaunch({
+          spawn: (cmd: string, args: string[]) => { calls.push({ cmd, args }); return fakeChild({ exitCode: 0 }); },
+          appRelaunch: () => { relaunched += 1; },
+        });
+        const r = await launch({ jobId: 'j', filePath });
+        expect(r).toEqual({ success: true, quitPending: true });
+        expect(calls).toHaveLength(1);
+        expect(calls[0].cmd).toBe('/usr/bin/pkexec');
+        expect(calls[0].args).toEqual([...pkg.argv, filePath]);
+        expect(relaunched).toBe(1);
+      });
+    }
+
+    it('never downloads to the AppImage self-replace path', async () => {
+      // The 2026-09-20 report: a pacman install took the AppImage branch, found
+      // no running AppImage, and opened a web page after a 180 MB download.
+      const filePath = path.join(tmpDir, 'youcoded-1.3.0.pacman');
+      fs.writeFileSync(filePath, 'x');
+      const opened: string[] = [];
+      const launch = linuxLaunch({ shellOpenExternal: async (u: string) => { opened.push(u); } });
+      const r = await launch({ jobId: 'j', filePath });
+      expect(r).toMatchObject({ success: true, quitPending: true });
+      expect(opened).toEqual([]);
     });
-    const r = await launch({ jobId: 'j', filePath });
-    expect(r).toEqual({ success: true, quitPending: false, fallback: 'browser' });
-    expect(opened).toEqual(['https://github.com/...deb']);
+
+    it('with no pkexec, hands back the one command to run, and keeps the download', async () => {
+      const filePath = path.join(tmpDir, 'youcoded-1.3.0.pacman');
+      fs.writeFileSync(filePath, 'x');
+      const spawned: string[] = [];
+      const launch = linuxLaunch({
+        exists: () => false,
+        spawn: (cmd: string) => { spawned.push(cmd); return fakeChild({ exitCode: 0 }); },
+      });
+      const r = await launch({ jobId: 'j', filePath });
+      expect(r).toEqual({
+        success: true, quitPending: false, fallback: 'manual',
+        command: `sudo pacman -U ${filePath}`, filePath,
+      });
+      expect(spawned).toEqual([]); // nothing was attempted without a way to authorise it
+      expect(fs.existsSync(filePath)).toBe(true);
+    });
+
+    it('a dismissed password dialog is cancelled, not failed — and offers the same command', async () => {
+      const filePath = path.join(tmpDir, 'youcoded-1.3.0.pacman');
+      fs.writeFileSync(filePath, 'x');
+      let relaunched = 0;
+      const launch = linuxLaunch({
+        spawn: () => fakeChild({ exitCode: 126 }), // pkexec: dismissed / not authorised
+        appRelaunch: () => { relaunched += 1; },
+      });
+      const r = await launch({ jobId: 'j', filePath });
+      expect(r).toMatchObject({ success: false, error: 'install-cancelled' });
+      expect((r as any).command).toMatch(/^sudo pacman -U /);
+      expect(relaunched).toBe(0);
+    });
+
+    it('a package manager that refuses reports install-failed, never a relaunch', async () => {
+      const filePath = path.join(tmpDir, 'youcoded_1.3.0_amd64.deb');
+      fs.writeFileSync(filePath, 'x');
+      let relaunched = 0;
+      const launch = linuxLaunch({
+        spawn: () => fakeChild({ exitCode: 1 }),
+        appRelaunch: () => { relaunched += 1; },
+      });
+      const r = await launch({ jobId: 'j', filePath });
+      expect(r).toMatchObject({ success: false, error: 'install-failed' });
+      expect((r as any).command).toMatch(/^sudo apt-get install -y /);
+      expect(relaunched).toBe(0);
+    });
+
+    it('quotes a path with a space in the command it shows', async () => {
+      const dir = path.join(tmpDir, 'my downloads');
+      fs.mkdirSync(dir);
+      const filePath = path.join(dir, 'youcoded-1.3.0.pacman');
+      fs.writeFileSync(filePath, 'x');
+      const launch = linuxLaunch({ exists: () => false });
+      const r = await launch({ jobId: 'j', filePath });
+      expect((r as any).command).toBe(`sudo pacman -U '${filePath}'`);
+    });
   });
 });

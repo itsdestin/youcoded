@@ -129,6 +129,12 @@ export function BuddyMascot() {
   }, []);
 
   const [grabbed, setGrabbed] = useState(false);
+  // A press is a CLICK until it actually travels (same threshold that decides
+  // click vs drag on release). WHY (Destin 2026-09-20): the cursor used to flip
+  // straight to the grabby hand on pointerdown, so the body read as a drag
+  // handle and not as something you can click. It keeps the plain arrow under
+  // the finger and only closes into a grip once a real drag has begun.
+  const [dragging, setDragging] = useState(false);
 
   // A hop temporarily renders him as if he were docked: sink released, peek
   // pose dropped, grip mittens gone. Everything downstream reads `peeking`
@@ -158,7 +164,7 @@ export function BuddyMascot() {
     ? (dock.edge === 'left' ? 'peek-left' : dock.edge === 'right' ? 'peek-right' : 'peek')
     : showAttention
       ? 'shocked'
-      : grabbed
+      : dragging // a press alone must not change his face — that read as "drag handle" too
         ? 'pressed'
         : 'idle';
   const dragRef = useRef<DragState | null>(null);
@@ -207,6 +213,7 @@ export function BuddyMascot() {
     dragRef.current = null;
     motionRef.current = { vx: 0, vy: 0, dragging: false };
     setGrabbed(false);
+    setDragging(false);
     // Snap detection runs main-side against final window bounds (spec §6.1).
     if (notifyMain && wasDragging) window.claude?.buddy?.dragEnded?.();
   }, []);
@@ -255,6 +262,9 @@ export function BuddyMascot() {
     // Only start forwarding moves once we've crossed the click-vs-drag
     // threshold, so a jittery click doesn't nudge the window by a pixel.
     if (st.totalTravel > DRAG_THRESHOLD_PX) {
+      // First frame past the threshold: this is a drag now, not a click — the
+      // grip closes under the finger (and the pressed face comes out) only here.
+      setDragging(true);
       // Exponentially smoothed velocity in px/frame (16ms), normalized for
       // the limb springs (spec §5); decay while held runs in the rig's loop.
       const m = motionRef.current;
@@ -303,7 +313,7 @@ export function BuddyMascot() {
     <div
       className={[
         'mascot-wrap',
-        grabbed ? 'mascot-grabbed' : '',
+        dragging ? 'mascot-grabbed' : '',
         // Flat art has no rig-root idle loop — it breathes at the wrapper.
         // Rigs breathe internally (MascotRig motion-style loop); double-
         // breathing would compound the translate.
@@ -319,7 +329,11 @@ export function BuddyMascot() {
         // window dragging — pointerdown/up never reach React and the click
         // handler never fires. Instead we drive drag ourselves via the
         // buddy.moveMascot IPC (main-process setPosition with clamping).
-        cursor: grabbed ? 'grabbing' : 'grab',
+        // Destin 2026-09-20: resting hover and press use the plain ARROW —
+        // not the finger (a hand cursor read as a link, not as the buddy) and
+        // not the grabby hand (which read as "drag handle only"). The grip
+        // appears mid-drag only.
+        cursor: dragging ? 'grabbing' : 'default',
         background: 'transparent',
         // touchAction: 'none' lets us capture the pointer cleanly without
         // the browser's default scroll/pan gestures interfering.

@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import { readReleaseStatus, selectRelease, isPreRelease } from '../src/main/update-release-status';
+import type { LinuxInstallKind } from '../src/main/linux-install-kind';
 import { deriveDownloadFilename } from '../src/main/update-installer';
 import { verifyDownloadedUpdate } from '../src/main/update-manifest-verify';
 import { buildManifest, serializeManifest, signManifest } from '../scripts/generate-release-manifest.mjs';
@@ -39,17 +40,23 @@ const releaseWith = (names: string[]) => ({
 });
 const FULL_RELEASE = releaseWith([...Object.values(NAMES), ...MANIFEST_FILES]);
 
-const COMPUTERS: Array<{ label: string; platform: NodeJS.Platform; arch: string; file: string }> = [
+// Linux carries one row per INSTALL KIND, not one row for "Linux": an install
+// can only apply the package format it was installed from (linux-install-kind.ts).
+const COMPUTERS: Array<{ label: string; platform: NodeJS.Platform; arch: string; file: string; kind?: LinuxInstallKind }> = [
   { label: 'Windows', platform: 'win32', arch: 'x64', file: NAMES.win },
   { label: 'Apple silicon Mac', platform: 'darwin', arch: 'arm64', file: NAMES.macArm },
   { label: 'Intel Mac', platform: 'darwin', arch: 'x64', file: NAMES.macIntel },
-  { label: 'Linux', platform: 'linux', arch: 'x64', file: NAMES.appImage },
+  { label: 'Linux AppImage', platform: 'linux', arch: 'x64', file: NAMES.appImage, kind: 'appimage' },
+  { label: 'Linux pacman install', platform: 'linux', arch: 'x64', file: NAMES.pacman, kind: 'pacman' },
+  { label: 'Linux deb install', platform: 'linux', arch: 'x64', file: NAMES.deb, kind: 'deb' },
+  { label: 'Linux rpm install', platform: 'linux', arch: 'x64', file: NAMES.rpm, kind: 'rpm' },
+  { label: 'Linux dev checkout', platform: 'linux', arch: 'x64', file: NAMES.appImage, kind: 'unknown' },
 ];
 
 describe('readReleaseStatus — is there an update, and which file', () => {
   for (const c of COMPUTERS) {
     it(`offers 1.3.0 to a beta on ${c.label}, with that computer's installer`, () => {
-      const s = readReleaseStatus(FULL_RELEASE, BETA, c.platform, c.arch);
+      const s = readReleaseStatus(FULL_RELEASE, BETA, c.platform, c.arch, c.kind);
       expect(s).toMatchObject({
         current: BETA,
         latest: V,
@@ -233,5 +240,70 @@ describe('the beta channel — which release is offered', () => {
       expect(selectRelease(null, ON)).toBeNull();
       expect(selectRelease([null, 'nonsense', {}], ON)).toBeNull();
     });
+  });
+});
+
+describe('a Mac is only ever offered a build its chip can run', () => {
+  const ONLY_ARM = releaseWith([NAMES.macArm, ...MANIFEST_FILES]);
+  const ONLY_INTEL = releaseWith([NAMES.macIntel, ...MANIFEST_FILES]);
+
+  it('moves an Apple-silicon Mac running the Intel build onto the native build', () => {
+    // macOS emulates the Intel build, so process.arch reads 'x64' on an M-series
+    // Mac and the Intel build would keep updating to itself forever. Electron's
+    // runningUnderARM64Translation is the only thing that tells the two apart.
+    const s = readReleaseStatus(FULL_RELEASE, BETA, 'darwin', 'x64', undefined, true);
+    expect(s?.download_url).toBe(urlOf(NAMES.macArm));
+  });
+
+  it('leaves a real Intel Mac on the Intel build', () => {
+    expect(readReleaseStatus(FULL_RELEASE, BETA, 'darwin', 'x64', undefined, false)?.download_url)
+      .toBe(urlOf(NAMES.macIntel));
+  });
+
+  it('never offers an Intel Mac a build that will not open', () => {
+    // An arm64-only dmg does not run on Intel hardware, so "no installer for this
+    // computer" is the honest answer — the same rule the Linux packages follow.
+    const s = readReleaseStatus(ONLY_ARM, BETA, 'darwin', 'x64');
+    expect(s?.update_available).toBe(false);
+    expect(s?.download_url).toBe(HTML_URL);
+  });
+
+  it('never offers an Apple-silicon Mac the Intel-only build', () => {
+    const s = readReleaseStatus(ONLY_INTEL, BETA, 'darwin', 'arm64');
+    expect(s?.update_available).toBe(false);
+  });
+});
+
+// Reported 2026-09-20 on an Arch install (`youcoded 1.3.0_beta.80-1`): clicking
+// the update pill downloaded ~180 MB of AppImage, could not apply it — the
+// self-replace path needs a running AppImage — and opened the download page.
+describe('a Linux install is only ever offered its own package format', () => {
+  const KINDS: Array<[LinuxInstallKind, string]> = [
+    ['pacman', NAMES.pacman],
+    ['deb', NAMES.deb],
+    ['rpm', NAMES.rpm],
+    ['appimage', NAMES.appImage],
+  ];
+
+  for (const [kind, file] of KINDS) {
+    it(`hands a ${kind} install ${file}`, () => {
+      expect(readReleaseStatus(FULL_RELEASE, BETA, 'linux', 'x64', kind)?.download_url).toBe(urlOf(file));
+    });
+  }
+
+  it('never hands a system-package install the AppImage', () => {
+    for (const kind of ['pacman', 'deb', 'rpm'] as LinuxInstallKind[]) {
+      expect(readReleaseStatus(FULL_RELEASE, BETA, 'linux', 'x64', kind)?.download_url)
+        .not.toBe(urlOf(NAMES.appImage));
+    }
+  });
+
+  it('makes no offer when the release lacks this install’s package, and points at the release page', () => {
+    // Better than offering a file this computer cannot apply: the pill stays
+    // quiet and "Open in browser" still reaches the downloads.
+    const noPacman = releaseWith([NAMES.win, NAMES.appImage, NAMES.deb, ...MANIFEST_FILES]);
+    const s = readReleaseStatus(noPacman, BETA, 'linux', 'x64', 'pacman');
+    expect(s?.update_available).toBe(false);
+    expect(s?.download_url).toBe(HTML_URL);
   });
 });

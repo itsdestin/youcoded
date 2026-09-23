@@ -150,7 +150,8 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   useSessionPreviewListener(sessionId, sessionActive, artifactDispatch);
   // Drawer open/closed is per-session — read this session's flag (absent → closed).
   const drawerOpen = artifactState.drawerOpenBySession[sessionId] ?? false;
-  const drawerExpanded = artifactState.drawerExpanded;
+  // WHY drawerOpen &&: expand is app-wide, so ungated it hid every OTHER session's chat.
+  const drawerExpanded = drawerOpen && artifactState.drawerExpanded;
   // The game pane and artifact drawer share the framed-shell's right slot.
   // The game pane wins when both are somehow open (App also enforces mutual
   // exclusivity, so this is just a render-time safety net).
@@ -432,10 +433,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       }
       if (page) {
         unresolvedRetryRef.current = { attempts: 0, notBefore: 0 };
-        // Captured HERE, one statement before the prepend — not before the await,
-        // where a round-trip's worth of streaming could have moved everything.
+        // Capture just before prepend: streaming during the await may move the anchor.
         prependAnchorRef.current = captureScrollAnchor();
-        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+        // WHY: older pages can hold an orphaned tool; preserve main's recovery verdict.
+        dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore, reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
       } else {
         dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId });
       }
