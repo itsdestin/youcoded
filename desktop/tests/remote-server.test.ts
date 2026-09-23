@@ -253,6 +253,42 @@ describe('RemoteServer and the shell provider', () => {
     expect(shellSessionManager.createSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/private/no-folder' }));
   });
 
+  // A phone's YouCoded-runtime session used to be minted by the session manager
+  // alone — nothing started its runtime, so every message failed as not-live.
+  it('starts the new session the same way the desktop does, before answering the phone', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    const order: string[] = [];
+    server.setSessionStarter(async (info: any, opts: any) => {
+      order.push(`start:${info.id}:${opts.provider}`);
+    });
+    const sent = await drive(server, { type: 'session:create', id: 'c4', payload: { name: 'x', cwd: '/tmp', skipPermissions: false, provider: 'native' } });
+    order.push('answered');
+    expect(order).toEqual(['start:1:native', 'answered']);
+    expect(sent[0].payload).toMatchObject({ id: '1' });
+  });
+
+  it('still answers the phone when starting the session throws', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    server.setSessionStarter(async () => { throw new Error('engine gone'); });
+    const sent = await drive(server, { type: 'session:create', id: 'c5', payload: { name: 'x', cwd: '/tmp', skipPermissions: false, provider: 'native' } });
+    expect(sent[0].payload).toMatchObject({ id: '1' });
+  });
+
+  // Files attached to a phone's message in a YouCoded-runtime session were dropped:
+  // only the text reached the host.
+  it('passes a phone message’s attached files to the YouCoded runtime', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(shellSessionManager, shellHookRelay, shellConfig);
+    const send = vi.fn(() => ({ status: 'sent' }));
+    server.setNativeRuntime({ nativeHost: { send } });
+    await drive(server, { type: 'native:send', id: 'n1', payload: { sessionId: 's1', text: 'look /up/a.png', attachments: ['/up/a.png', 42] } });
+    expect(send).toHaveBeenCalledWith('s1', 'look /up/a.png', ['/up/a.png']);
+    await drive(server, { type: 'native:send', id: 'n2', payload: { sessionId: 's1', text: 'no files' } });
+    expect(send).toHaveBeenLastCalledWith('s1', 'no files', []);
+  });
+
   it('refuses a run-in-terminal command carrying a carriage return', async () => {
     // The whole property: the app does not APPEND a carriage return, but a `\r`
     // already inside the string is the same keypress — measured on real bash,

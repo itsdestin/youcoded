@@ -429,6 +429,16 @@ export class RemoteServer {
     this.nativeRuntime = rt;
   }
 
+  /** Injected by ipc-handlers: everything its own session:create does AFTER the session
+   *  manager mints the session (start or resume a YouCoded-runtime session, the Claude Code
+   *  context record). WHY: this host called createSession alone, so a phone's YouCoded-runtime
+   *  session had no live runtime behind it and every message failed as not-live. One function
+   *  shared with the desktop handler keeps the two from drifting again. */
+  setSessionStarter(start: (info: any, opts: any) => Promise<void>): void {
+    this.sessionStarter = start;
+  }
+  private sessionStarter: ((info: any, opts: any) => Promise<void>) | null = null;
+
   /** Task 5: which Conversation Store bucket a session's meta reads/writes
    *  belong to. 'native' when NativeSessionHost recognizes the id (live now,
    *  or a persisted ~/.youcoded/sessions file); 'claude' otherwise, including
@@ -1766,7 +1776,14 @@ export class RemoteServer {
           this.respond(client.ws, type, id, { ok: false, error: 'A terminal session can only be opened from the app itself.' });
           break;
         }
-        const info = this.sessionManager.createSession(this.prepareCreate(payload));
+        const createOpts = this.prepareCreate(payload);
+        const info = this.sessionManager.createSession(createOpts);
+        // Awaited before answering, as the desktop handler does, so the phone's first
+        // message finds the runtime started (and info carries what the start stamps on it).
+        // A failure is logged, never thrown: the session exists either way, and the
+        // desktop handler reports its own start failures into the chat.
+        try { await this.sessionStarter?.(info, createOpts); }
+        catch (err) { console.error('[remote-server] starting a session created from a remote device failed:', err); }
         this.respond(client.ws, type, id, info);
         // session:created broadcast is handled by the onSessionCreated event listener
         break;

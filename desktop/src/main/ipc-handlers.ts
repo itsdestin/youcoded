@@ -843,6 +843,16 @@ export function registerIpcHandlers(
       try { windowRegistry.assignSession(info.id, targetId); }
       catch (e) { log('WARN', 'IPC', 'assignSession failed', { error: String(e) }); }
     }
+    await startCreatedSession(info, opts);
+    return info;
+  });
+
+  // Everything session:create does after the session manager mints the session. Its own
+  // function so the remote host runs the SAME steps for a session a phone creates (injected
+  // below via setSessionStarter). WHY: the host used to call createSession alone, so a
+  // YouCoded-runtime session started from a phone had no runtime behind it and every message
+  // failed as not-live. Window ownership stays in the handler above — a phone owns no window.
+  async function startCreatedSession(info: SessionInfo, opts: any): Promise<void> {
     // Native sessions have no PTY worker — start (or resume) their HarnessSession
     // in the host now that createSession has minted the SessionInfo. The native
     // branch of createSession uses resumeSessionId AS the id, so info.id already
@@ -1044,8 +1054,8 @@ export function registerIpcHandlers(
         }
       });
     }
-    return info;
-  });
+  }
+  remoteServer?.setSessionStarter(startCreatedSession);
 
   // Pull-style directory snapshot — renderers call this on mount to avoid
   // racing the WINDOW_DIRECTORY_UPDATED push that fires before React subscribes.
