@@ -113,3 +113,48 @@ describe('secret-path floor: existence and metadata checks stay quiet', () => {
     expect(secretPathIn(cmd, ctx)).toBe(hit);
   });
 });
+
+// A command that RUNS another command — find -exec, xargs/parallel on piped
+// names, sh -c — used to be an easy route around the check: the wrapped
+// command is now judged like a top-level one (2026-09-23).
+describe('secret-path floor: commands run by find, xargs and sh -c', () => {
+  it.each([
+    'find . -name .env -exec cat {} \;',
+    "find . -name .env -exec cat {} ';'",
+    'find . -name .env -execdir cat {} +',
+    'find . -name .env -ok cat {} \;',
+    'find . -name .env -okdir head {} \;',
+    "find . -name '.env*' -exec cat {} +",
+    'find ~/.ssh -type f -exec cat {} +',
+    "find . -path '*/.aws/*' -exec cat {} +",
+    'find . -type f -exec cat {} +',               // no filter: can't be judged → asks
+    "find . -regex '.*' -exec cat {} +",           // -regex: can't be judged → asks
+    "find . -name .env -exec sh -c 'cat {}' \\;",
+    'find . -name .env | xargs cat',
+    'ls ~/.ssh | xargs -I{} cat ~/.ssh/{}',
+    'echo .env | xargs cat',
+    'find . -name .env | parallel cat',
+    "bash -c 'cat .env'",
+    "sh -c 'grep KEY ~/.aws/credentials'",
+  ])('%s asks', (cmd) => {
+    expect(secretPathIn(cmd, ctx)).not.toBeNull();
+  });
+
+  it.each([
+    'find . -name .env',
+    "find . -name '*.ts' -exec wc -l {} +",
+    "find . -name '*.ts' -exec cat {} +",          // '*.ts' can never match a secret file
+    'find . -name .env.example -exec cat {} +',    // a template holds no secrets
+    'find . -name .env -exec ls -la {} +',         // listing, not reading
+    'find ~/.ssh',                                 // names only, like ls
+    'find . -name .env -fprint list.txt',
+    'find . -name .env | xargs ls -la',
+    'find . -name .env | xargs',                   // xargs with no command just echoes names
+    "find . -name '*.log' | xargs cat",
+    'ls | xargs cat',
+    "bash -c 'npm test'",
+    "find . -name '*.ts' -exec sh -c 'cat {}' \\;",
+  ])('%s stays quiet', (cmd) => {
+    expect(secretPathIn(cmd, ctx)).toBeNull();
+  });
+});

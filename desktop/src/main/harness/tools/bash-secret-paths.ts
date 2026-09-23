@@ -73,6 +73,40 @@ const WRITE_REDIRECT = /^(\d*|&)(>>?|>\|)&?/;
 /** `<` — what follows is read. (`<<`/`<<<` are heredoc text, handled apart.) */
 const READ_REDIRECT = /^\d*<(?![<&])/;
 
+/** Commands that run a script given as the argument after `-c`. */
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh']);
+/** Commands that run another command on names they read from their input. */
+const INPUT_RUNNERS = new Set(['xargs', 'parallel']);
+/** find actions that run a command, ended by `;` or `+`. */
+const FIND_EXEC = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+/** find actions that WRITE the listing to a file (the value is written, not read). */
+const FIND_WRITE = new Set(['-fprint', '-fprint0', '-fprintf', '-fls']);
+const FIND_NAME = new Set(['-name', '-iname']);
+const FIND_PATH = new Set(['-path', '-ipath', '-wholename', '-iwholename']);
+/** Secret file names and paths a find pattern is tested against, to tell
+ *  `-name '*.ts'` (can never match one) from `-name '.env*'` (can). */
+const SECRET_NAME_SAMPLES = ['.env', '.env.local', '.env.production', '.envrc', '.netrc', '_netrc', '.credentials.json', '.git-credentials', '.pgpass'];
+const SECRET_PATH_SAMPLES = [...SECRET_NAME_SAMPLES, '.ssh/id_rsa', '.ssh/config', '.aws/credentials', '.gnupg/secring.gpg', '.config/gh/hosts.yml'];
+
+/** fnmatch-style glob → regex (`*`, `?`, `[…]`), anchored. */
+function globRegex(pattern: string, caseless: boolean): RegExp {
+  let rx = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '*') rx += '.*';
+    else if (c === '?') rx += '.';
+    else if (c === '[') {
+      const close = pattern.indexOf(']', i + 1);
+      if (close === -1) { rx += '\\['; continue; }
+      rx += `[${pattern.slice(i + 1, close).replace(/^!/, '^').replace(/\\/g, '\\\\')}]`;
+      i = close;
+    } else rx += c.replace(/[.+^${}()|\\]/g, '\\$&');
+  }
+  return new RegExp(`^${rx}$`, caseless ? 'i' : '');
+}
+
+const plainWord = (value: string): Word => ({ value, glob: [...value].map(() => false), vars: [], subs: [], tilde: value.startsWith('~') });
+
 /** The first secret path `command` names, or null when it names none. */
 export function secretPathIn(command: string, ctx: SecretPathContext): string | null {
   const win = process.platform === 'win32';
@@ -87,7 +121,57 @@ export function secretPathIn(command: string, ctx: SecretPathContext): string | 
     return !DOTENV_TEMPLATE.test(path.basename(abs));
   };
 
-  const commandHits = (words: Word[]): string | null => {
+  /** For a find command: a secret path its `{}` could stand for, or null when
+   *  its filters provably match none. Filters it cannot judge (no name filter,
+   *  `-regex`) count as "could be a secret" — falling toward asking. */
+  const findSecretMatch = (args: Word[]): string | null => {
+    const starts: string[] = [];
+    let i = 0;
+    for (; i < args.length && !/^[-(!]/.test(args[i].value); i++) starts.push(args[i].value);
+    if (starts.length === 0) starts.push('.');
+    for (const s of starts) if (isSecret(s, s.startsWith('~'))) return s;
+    let filtered = false;
+    let unjudgeable = false;
+    for (; i < args.length; i++) {
+      const flag = args[i].value;
+      const value = args[i + 1]?.value;
+      if (/^-i?regex$/.test(flag)) { unjudgeable = true; continue; }
+      if (value === undefined || !(FIND_NAME.has(flag) || FIND_PATH.has(flag))) continue;
+      filtered = true;
+      const rx = globRegex(value, flag.startsWith('-i'));
+      const samples = FIND_NAME.has(flag) ? SECRET_NAME_SAMPLES : SECRET_PATH_SAMPLES;
+      for (const sample of samples) {
+        const subject = FIND_NAME.has(flag) ? sample : `./${sample}`;
+        if (!rx.test(subject)) continue;
+        const candidate = path.join(starts[0], sample);
+        if (isSecret(candidate, candidate.startsWith('~'))) return candidate;
+      }
+    }
+    if (!filtered || unjudgeable) return path.join(starts[0], '.env');
+    return null;
+  };
+
+  /** Does a command's OUTPUT name a secret file? Used for the left side of a
+   *  pipe feeding xargs/parallel: `find . -name .env | xargs cat`,
+   *  `ls ~/.ssh | xargs …`, `echo .env | xargs cat`. */
+  const namesSecret = (words: Word[]): string | null => {
+    const w = commandIndex(words);
+    if (w >= words.length) return null;
+    const name = path.basename(words[w].value).toLowerCase();
+    const args = words.slice(w + 1);
+    if (name === 'find') {
+      // Only when the find itself filters for secrets or starts in one; a bare
+      // `find . | xargs cat` is judged by what it runs, not flagged wholesale.
+      const hasFilter = args.some((a) => FIND_NAME.has(a.value) || FIND_PATH.has(a.value));
+      const firstStart = args[0] && !/^[-(!]/.test(args[0].value) ? args[0].value : '.';
+      const match = findSecretMatch(args);
+      return match && (hasFilter || isSecret(firstStart, firstStart.startsWith('~'))) ? match : null;
+    }
+    for (const a of args) if (!a.value.startsWith('-') && isSecret(a.value, a.tilde)) return a.value;
+    return null;
+  };
+
+  const commandHits = (words: Word[], pipedSecret: string | null = null): string | null => {
     const w = commandIndex(words);
     // Assignments before the command (`AWS_SHARED_CREDENTIALS_FILE=~/.aws/credentials aws …`).
     for (const a of words.slice(0, w)) {
@@ -96,8 +180,39 @@ export function secretPathIn(command: string, ctx: SecretPathContext): string | 
     }
     if (w >= words.length) return null;
     const name = path.basename(words[w].value).toLowerCase();
-    if (METADATA_ONLY.has(name)) return null;
     const args = words.slice(w + 1);
+    // WHY (2026-09-23): `find -exec`, `xargs` and `sh -c` run a command the
+    // plain word scan never looked inside — an easy route around this check.
+    // Each wrapped command is judged exactly like a top-level one.
+    //
+    // xargs/parallel reading secret names from a pipe: the wrapped command
+    // receives them as arguments, so a reading command there reads secrets.
+    const runner = words.slice(0, w).some((x) => INPUT_RUNNERS.has(path.basename(x.value).toLowerCase()));
+    if (runner && pipedSecret && !METADATA_ONLY.has(name) && !TEXT_COMMANDS.has(name)) return pipedSecret;
+    if (METADATA_ONLY.has(name)) return null;
+    // `sh -c 'cat .env'`: the script is a command line of its own.
+    if (SHELLS.has(name)) {
+      const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a.value));
+      if (c !== -1 && args[c + 1]) return analyse(args[c + 1].value);
+    }
+    if (name === 'find') {
+      // A find that runs nothing only lists names — metadata, like ls. Each
+      // -exec/-execdir/-ok/-okdir command is judged with `{}` standing for a
+      // secret the filters could match (none when they provably match none).
+      const match = findSecretMatch(args);
+      for (let i = 0; i < args.length; i++) {
+        if (FIND_WRITE.has(args[i].value)) { i++; continue; } // writes the listing to a file
+        if (!FIND_EXEC.has(args[i].value)) continue;
+        const sub: Word[] = [];
+        for (i++; i < args.length && args[i].value !== ';' && args[i].value !== '+'; i++) {
+          const v = args[i].value;
+          sub.push(v.includes('{}') ? (match ? plainWord(v.split('{}').join(match)) : plainWord(v.split('{}').join('found-file'))) : args[i]);
+        }
+        const hit = sub.length ? commandHits(sub) : null;
+        if (hit) return hit;
+      }
+      return null;
+    }
     let lastPlain = -1;
     if (DEST_LAST.has(name)) args.forEach((a, i) => { if (!a.value.startsWith('-')) lastPlain = i; });
     let skipNext: 'text' | 'write' | null = null;
@@ -134,21 +249,25 @@ export function secretPathIn(command: string, ctx: SecretPathContext): string | 
     return null;
   };
 
-  const analyse = (text: string): string | null => {
+  function analyse(text: string): string | null {
     const { tokens, nested } = tokenize(stripHeredocBodies(text), !win);
     let words: Word[] = [];
+    // What the command on the left of a `|` names, for the one on its right.
+    let piped: string | null = null;
     for (const tok of [...tokens, { op: 'end' } as Op]) {
-      if (!(tok as Op).op) { words.push(tok as Word); continue; }
-      const hit = words.length ? commandHits(words) : null;
-      words = [];
+      const op = (tok as Op).op;
+      if (!op) { words.push(tok as Word); continue; }
+      const hit = words.length ? commandHits(words, piped) : null;
       if (hit) return hit;
+      piped = op === '|' && words.length ? namesSecret(words) : null;
+      words = [];
     }
     for (const inner of nested) {
       const hit = analyse(inner);
       if (hit) return hit;
     }
     return null;
-  };
+  }
 
   return analyse(command);
 }

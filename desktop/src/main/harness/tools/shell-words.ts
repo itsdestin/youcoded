@@ -227,6 +227,7 @@ const WRAPPERS: Record<string, { valueFlags: string[]; positionals?: number }> =
   env: { valueFlags: ['-u', '-C', '-S'] },
   timeout: { valueFlags: ['-s', '-k'], positionals: 1 },
   xargs: { valueFlags: ['-I', '-n', '-P', '-L', '-s', '-d', '-a', '-E', '-e'] },
+  parallel: { valueFlags: ['-j', '-S', '-a', '-I', '-d', '-N', '-n', '--jobs', '--sshlogin', '--arg-file', '--colsep'] },
 };
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
