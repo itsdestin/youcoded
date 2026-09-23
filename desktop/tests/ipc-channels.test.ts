@@ -919,7 +919,7 @@ describe('native runtime capability parity', () => {
 
 describe('native:*/provider:* channel parity', () => {
   const NEW_TYPES = [
-    'native:send', 'native:interrupt', 'native:set-binding', 'native:set-permission-mode',
+    'native:send', 'native:interrupt', 'native:set-binding', 'native:switch-model', 'native:set-permission-mode',
     // Task 14 — read-side mode fetch that seeds the chip on create/resume.
     'native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:sessions-list',
     'native:get-context-preferences', 'native:set-context-preferences',
@@ -932,6 +932,7 @@ describe('native:*/provider:* channel parity', () => {
   const CHANNEL_TO_CONST: Record<string, string> = {
     'native:send': 'IPC.NATIVE_SEND', 'native:interrupt': 'IPC.NATIVE_INTERRUPT',
     'native:set-binding': 'IPC.NATIVE_SET_BINDING', 'native:set-permission-mode': 'IPC.NATIVE_SET_PERMISSION_MODE',
+    'native:switch-model': 'IPC.NATIVE_SWITCH_MODEL',
     'native:get-permission-mode': 'IPC.NATIVE_GET_PERMISSION_MODE',
     'native:get-context-preferences': 'IPC.NATIVE_GET_CONTEXT_PREFERENCES',
     'native:set-context-preferences': 'IPC.NATIVE_SET_CONTEXT_PREFERENCES',
@@ -1338,6 +1339,7 @@ describe('native:* channel parity', () => {
     'native:clear',
     'native:invoke-skill',
     'native:set-binding',
+    'native:switch-model',
     'native:set-permission-mode',
     'native:get-permission-mode',
     'native:sessions-list',

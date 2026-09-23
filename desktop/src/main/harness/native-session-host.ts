@@ -16,7 +16,7 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
-import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
+import type { TranscriptEvent, NativeSendResult, NativeSwitchResult, NativeSwitchFailure, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, formatLongRunningNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
@@ -4361,7 +4361,7 @@ export class NativeSessionHost extends EventEmitter {
    *  turn would corrupt the tool-call/result pairing the whole driver depends on.
    *  The session's own re-entrancy guard is the backstop, but refusing here means
    *  the user gets a real explanation instead of a thrown error. */
-  async compact(sessionId: string, focus?: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  async compact(sessionId: string, focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: string }> {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
     if (entry.inFlight || entry.compacting || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
@@ -4370,7 +4370,7 @@ export class NativeSessionHost extends EventEmitter {
     // acknowledgement for a turn the session's re-entrancy guard will drop.
     entry.compacting = true;
     try {
-      const result = await entry.session.compactNow(focus);
+      const result = await entry.session.compactNow(focus, targetContextLength);
       // Failed candidates do not rewrite history or publish a checkpoint.
       if (result.ok) this.publishAcceptedHistory(sessionId, entry, 'compaction');
       return result;
@@ -4563,6 +4563,30 @@ export class NativeSessionHost extends EventEmitter {
   }
 
   /** Mid-session model swap (next turn uses the new binding). */
+  /**
+   * U11 — the model picker's switch. A chat that fits the chosen model switches
+   * exactly like setBinding. One that does not is NOT switched: the first call
+   * answers 'needs-summary' so the renderer can ask; a second call with
+   * `summarize` runs one summary on the CURRENT model, sized so the result fits
+   * the new one, and switches only if that commits. Every failure leaves the
+   * session on its current model with its history as it was.
+   */
+  async switchModel(sessionId: string, binding: ModelBinding, summarize = false): Promise<NativeSwitchResult> {
+    const entry = this.live.get(sessionId);
+    if (!entry) return { status: 'failed', reason: 'not-live' };
+    const { contextLength } = await this.resolveContextAndProfile(binding);
+    if (this.live.get(sessionId) !== entry) return { status: 'failed', reason: 'not-live' };
+    const fit = entry.session.fitForWindow(contextLength);
+    if (fit === 'too-small') return { status: 'failed', reason: 'too-small' };
+    if (fit === 'needs-summary') {
+      if (!summarize) return { status: 'needs-summary' };
+      const compacted = await this.compact(sessionId, undefined, contextLength ?? undefined);
+      if (!compacted.ok) return { status: 'failed', reason: compacted.reason as NativeSwitchFailure };
+      return (await this.setBinding(sessionId, binding)) ? { status: 'switched', summarized: true } : { status: 'failed', reason: 'not-live' };
+    }
+    return (await this.setBinding(sessionId, binding)) ? { status: 'switched' } : { status: 'failed', reason: 'not-live' };
+  }
+
   async setBinding(sessionId: string, binding: ModelBinding): Promise<boolean> {
     const entry = this.live.get(sessionId);
     if (!entry) return false;

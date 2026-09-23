@@ -349,6 +349,9 @@ declare global {
         // turn-in-flight | not-live | queue-full | error.
         invokeSkill: (sessionId: string, skill: string, args?: string) => Promise<{ ok: true } | { ok: false; reason: string; detail?: string }>;
         setBinding: (sessionId: string, binding: { providerId: string; modelId: string }) => Promise<boolean>;
+        // U11: switch only if the chat fits the chosen model; otherwise
+        // 'needs-summary' (nothing changed) until called with summarize=true.
+        switchModel: (sessionId: string, binding: { providerId: string; modelId: string }, summarize?: boolean) => Promise<import('../../shared/types').NativeSwitchResult>;
         // Per-session native permission mode (StatusBar chip, Task 13). Returns
         // the APPLIED mode — authoritative; the chip renders the return value.
         setPermissionMode: (sessionId: string, mode: 'ask' | 'auto-edit' | 'full-auto') => Promise<'ask' | 'auto-edit' | 'full-auto'>;

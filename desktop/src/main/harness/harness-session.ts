@@ -2042,12 +2042,36 @@ export class HarnessSession extends EventEmitter {
    *  interruptible via interrupt() exactly like a turn's, and makes a concurrent
    *  send() hit the existing re-entrancy guard instead of mutating history
    *  underneath us. Cleared in a finally so a throw can't brick the session. */
-  async compactNow(focus?: string): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' }> {
+  /** U11 — would this conversation fit a model with `contextLength`?
+   *  'fits' switches as today; 'needs-summary' asks first; 'too-small' means the
+   *  model cannot hold even this session's fixed prompt and a reply, so a summary
+   *  could not help. Measured with THIS session's prompt and tools; the ordinary
+   *  pre-request check still guards the first request on the new model. */
+  fitForWindow(contextLength: number | null | undefined): 'fits' | 'needs-summary' | 'too-small' {
+    // WHY: an unknown window would be planned as 32k and block chats that most
+    // likely fit. Don't block on a guess; the pre-request check still applies.
+    if (contextLength == null) return 'fits';
+    const base = { contextLength, fixedCost: this.requestFixedCost(),
+      summaryOverhead: Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN),
+      maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 };
+    if (planContextBudget(base).status === 'cannot-fit') return 'too-small';
+    const estimatedInput = requestOccupancy({ history: this.history, identity: this.requestSizingIdentity(),
+      revision: this.capture.revision, fixedCost: this.requestFixedCost(), anchor: this.usageAnchor }).tokens;
+    return planContextBudget({ ...base, estimatedInput }).status === 'fits' ? 'fits' : 'needs-summary';
+  }
+
+  /** `targetContextLength` (U11 Summarize and switch): the summary still runs on
+   *  the CURRENT model, but the kept tail and the post-compaction check are sized
+   *  for the smaller model about to take over, so success means it fits there. */
+  async compactNow(focus?: string, targetContextLength?: number): Promise<{ ok: true } | { ok: false; reason: 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed' | 'interrupted' | 'cannot-fit' }> {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     this.abort = new AbortController();
+    // Idle here (abort was null), so no turn owns this flag; a leftover from the
+    // last turn's Stop must not make this summary read as stopped.
+    this.interrupted = false;
     try {
       const contextUsedBefore = this._contextUsedTokens;
-      const cut = this.compactionCut(true, focus);
+      const cut = this.compactionCut(true, focus, targetContextLength);
       // Nothing before a safe retained group can be retired.
       if (cut <= 0) return { ok: false, reason: 'nothing-to-compact' };
       const keep = this.history.slice(cut);
@@ -2067,9 +2091,13 @@ export class HarnessSession extends EventEmitter {
         generated = { text: '' };
       }
       const summary = generated.text;
+      // WHY: Stop is not a model failure; say so, so the user is not told to
+      // retry. `interrupted`, not the abort signal: the stall timeout aborts too.
+      if (this.interrupted) return { ok: false, reason: 'interrupted' };
       // FAIL-SAFE: a failed or empty summary leaves history untouched.
-      if (!summary.trim() || !this.compactionCandidateFits(summary, keep, focus))
-        return { ok: false, reason: 'summary-failed' };
+      if (!summary.trim()) return { ok: false, reason: 'summary-failed' };
+      if (!this.compactionCandidateFits(summary, keep, focus, targetContextLength))
+        return { ok: false, reason: targetContextLength === undefined ? 'summary-failed' : 'cannot-fit' };
       // Commit the new history BEFORE announcing it, for the same reason as the
       // automatic path: the event carries the occupancy this rewrite leaves
       // behind, and emitEvent runs its listeners synchronously.
@@ -2149,8 +2177,8 @@ export class HarnessSession extends EventEmitter {
     return { ok: true };
   }
 
-  private compactionCandidateFits(summary: string, keep: ModelMessage[], focus?: string): boolean {
-    const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
+  private compactionCandidateFits(summary: string, keep: ModelMessage[], focus?: string, contextLength?: number): boolean {
+    const plan = planContextBudget({ contextLength: contextLength ?? this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(),
       summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
       maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
@@ -2163,13 +2191,15 @@ export class HarnessSession extends EventEmitter {
     return validateCompactionCandidate(plan, this.history, candidate) === 'fits';
   }
 
-  private compactionCut(manual = false, focus?: string): number {
-    const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
+  private compactionCut(manual = false, focus?: string, targetContextLength?: number): number {
+    const plan = planContextBudget({ contextLength: targetContextLength ?? this.opts.contextLength ?? null,
       fixedCost: this.requestFixedCost(), summaryOverhead: Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN),
       maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
     // Explicit manual compact may retire history below the automatic threshold;
-    // it still returns a no-op when no complete prefix can be retired.
-    const tail = manual ? Math.min(plan.tail, Math.floor(estimateTokens(this.history) / 2)) : plan.tail;
+    // it still returns a no-op when no complete prefix can be retired. A switch
+    // uses the target model's own tail allowance: it is already the smaller one.
+    const tail = manual && targetContextLength === undefined
+      ? Math.min(plan.tail, Math.floor(estimateTokens(this.history) / 2)) : plan.tail;
     return selectCompactionCut(this.history, tail);
   }
 

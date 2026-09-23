@@ -349,7 +349,7 @@ export interface SessionChatState {
    * Holds the pre-compaction contextTokens count so COMPACTION_COMPLETE can compute
    * how much was freed.
    */
-  compactionPending: { startedAt: number; beforeContextTokens: number | null } | null;
+  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean } | null;
   /**
    * Native sessions only. Tokens occupying the model's window after the last
    * HISTORY REWRITE that happened outside a turn — a /compact or a /clear.
@@ -922,7 +922,14 @@ export type ChatAction =
       sessionId: string;
       cardId: string;
       beforeContextTokens: number | null;
+      // Native: the IPC call's own answer ends this spinner (marker or refusal),
+      // so App's 3-minute "may have failed" watchdog must not guess instead —
+      // a slow local summary legitimately runs longer and its marker was lost.
+      awaitsResult?: boolean;
     }
+  // A native summary the user stopped (or a switch popup that gave up): drop the
+  // spinner with NO marker — nothing was compacted, and nothing "may have failed".
+  | { type: 'COMPACTION_CANCELLED'; sessionId: string }
   // Compaction finished — remove spinner, clear timeline, add marker with diff.
   // Triggered by transcript-shrink OR first turn-complete (resume-from-summary).
   | {
@@ -1013,7 +1020,7 @@ export interface SerializedSessionChatState {
   // makes the elapsed number approximate on remote; that is accepted.
   stalledSince?: number | null;
   lastBufferActivityAt: number;
-  compactionPending: { startedAt: number; beforeContextTokens: number | null } | null;
+  compactionPending: { startedAt: number; beforeContextTokens: number | null; awaitsResult?: boolean } | null;
   // Optional so a pre-field snapshot from an older host still deserializes.
   // Serialized because it is a fact about the SESSION's window, not about one
   // client's view: a phone that reconnects after the desktop compacted must see

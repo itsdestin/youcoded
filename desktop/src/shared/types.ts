@@ -79,6 +79,18 @@ export type NativeSendResult =
   // brand-new session was "no longer running" — see NativeSessionHost.startingSends.
   | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' | 'compacting' };
 
+/** U11 — the model picker's native switch (`native:switch-model`). 'needs-summary'
+ *  means nothing changed yet: the chat is too long for the chosen model and the
+ *  renderer asks before summarizing. Every failure leaves the current model. */
+export type NativeSwitchFailure =
+  | 'not-live' | 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed'
+  | 'interrupted' | 'cannot-fit' | 'too-small' | 'error';
+export type NativeSwitchResult =
+  // `summarized`: a summary committed first, so its marker ends the chat's card.
+  | { status: 'switched'; summarized?: true }
+  | { status: 'needs-summary' }
+  | { status: 'failed'; reason: NativeSwitchFailure; detail?: string };
+
 export interface SessionInfo {
   id: string;
   name: string;
@@ -2002,6 +2014,8 @@ export const IPC = {
   NATIVE_CLEAR: 'native:clear',
   NATIVE_INVOKE_SKILL: 'native:invoke-skill',
   NATIVE_SET_BINDING: 'native:set-binding',
+  // U11: fit-checked switch from the model picker (NativeSwitchResult).
+  NATIVE_SWITCH_MODEL: 'native:switch-model',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   // Read the session's current native permission mode. Seeds the StatusBar chip
   // on create/resume so a fresh Coder session shows AUTO EDIT (not the default ASK).

@@ -2840,7 +2840,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         timeline: [...filtered, { kind: 'compacting', id: action.cardId, startedAt }],
-        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens },
+        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens,
+          ...(action.awaitsResult ? { awaitsResult: true } : {}) },
+      });
+      return next;
+    }
+
+    case 'COMPACTION_CANCELLED': {
+      const session = next.get(action.sessionId);
+      if (!session || !session.compactionPending) return state;
+      next.set(action.sessionId, {
+        ...session,
+        timeline: session.timeline.filter((e) => e.kind !== 'compacting'),
+        compactionPending: null,
       });
       return next;
     }

@@ -160,6 +160,8 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
         sessionId: input.sessionId,
         cardId: `compact-${Date.now()}`,
         beforeContextTokens: snapshot?.contextTokens ?? null,
+        // Native: runNativeSlashAction ends the spinner from the call's answer.
+        ...(input.deferUiEffectsToRuntime ? { awaitsResult: true } : {}),
       });
       // Forward original command (with any optional focus args) to PTY.
       // Claude Code parses /compact [instructions] itself. A native session has

@@ -3390,6 +3390,20 @@ export function registerIpcHandlers(
       return { ok: false, reason: 'error', detail: err?.message ?? String(err) };
     }
   });
+  // U11: the picker's switch. Same model-used write-through as set-binding
+  // below, but only once the switch actually happened.
+  ipcMain.handle(IPC.NATIVE_SWITCH_MODEL, async (_e, { sessionId, binding, summarize }: { sessionId: string; binding: any; summarize?: boolean }) => {
+    try {
+      const result = await nativeHost.switchModel(sessionId, binding, summarize === true);
+      if (result.status === 'switched') {
+        const ref = await resolvePortableModel(sessionId);
+        if (ref) noteModelUsed(sessionId, ref);
+      }
+      return result;
+    } catch (err: any) {
+      return { status: 'failed', reason: 'error', detail: err?.message ?? String(err) };
+    }
+  });
   ipcMain.handle(IPC.NATIVE_SET_BINDING, async (_e, sessionId: string, binding: any) => {
     const ok = await nativeHost.setBinding(sessionId, binding);
     // Task 4: a successful mid-session model swap is exactly the "model may

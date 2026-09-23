@@ -317,7 +317,8 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
     const compact = session.compactNow();
     await new Promise((resolve) => setTimeout(resolve, 0));
     session.interrupt();
-    await expect(compact).resolves.toEqual({ ok: false, reason: 'summary-failed' });
+    // Stop is reported as a stop, not as a model failure.
+    await expect(compact).resolves.toEqual({ ok: false, reason: 'interrupted' });
     expect(events.find((e) => e.type === 'compact-summary')).toBeUndefined();
     expect((session as any).abort).toBeNull();
   });
@@ -350,7 +351,7 @@ describe('native /compact focus propagation', () => {
     const fake = { live: new Map([['s', { inFlight: false, queue: [], session: { compactNow } }]]), publishAcceptedHistory: vi.fn(), pendingDeliveryParents: new Set(), pendingHostNotices: new Map() };
     await NativeSessionHost.prototype.compact.call(fake as any, 's', 'remember tests');
     await NativeSessionHost.prototype.compact.call(fake as any, 's');
-    expect(compactNow.mock.calls).toEqual([['remember tests'], [undefined]]);
+    expect(compactNow.mock.calls).toEqual([['remember tests', undefined], [undefined, undefined]]);
   });
 
   it('explains a failed summary without claiming any history was trimmed', async () => {

@@ -29,6 +29,7 @@ const COMPACT_REFUSAL: Record<string, string> = {
   'summary-failed':
     'The model couldn’t write a usable summary, so the conversation was left intact. Try again later.',
   'not-live': "This session isn't running, so there's nothing to compact.",
+  'interrupted': 'Compaction stopped. The conversation was left as it was.',
 };
 
 export interface NativeActionDeps {
@@ -69,14 +70,17 @@ export async function runNativeSlashAction(
   }
 
   // Clear the spinner the dispatcher optimistically raised (COMPACTION_PENDING),
-  // otherwise a refused compaction leaves a card spinning forever.
-  dispatch({
-    type: 'COMPACTION_COMPLETE',
-    sessionId,
-    markerId: `compact-failed-${Date.now()}`,
-    afterContextTokens: null,
-    aborted: true,
-  });
+  // otherwise a refused compaction leaves a card spinning forever. A Stop drops
+  // it silently: "Compaction may have failed" would be false after a Stop.
+  dispatch(result.reason === 'interrupted'
+    ? { type: 'COMPACTION_CANCELLED', sessionId }
+    : {
+      type: 'COMPACTION_COMPLETE',
+      sessionId,
+      markerId: `compact-failed-${Date.now()}`,
+      afterContextTokens: null,
+      aborted: true,
+    });
 
   const known = COMPACT_REFUSAL[result.reason];
   onToast?.(

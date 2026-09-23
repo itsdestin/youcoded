@@ -849,13 +849,14 @@ function AppInner() {
       if (compactWatchdogs.current.size === 0) {
         let anyPending = false;
         for (const session of map.values()) {
-          if (session.compactionPending) { anyPending = true; break; }
+          if (session.compactionPending && !session.compactionPending.awaitsResult) { anyPending = true; break; }
         }
         if (!anyPending) return;
       }
       for (const [sid, session] of map) {
         const existing = compactWatchdogs.current.get(sid);
-        if (session.compactionPending) {
+        // A native compaction's IPC call reports its own end (awaitsResult).
+        if (session.compactionPending && !session.compactionPending.awaitsResult) {
           // Reset on every reducer tick while pending — if transcript events are
           // flowing for this session, the timer keeps bumping and never fires.
           if (existing) clearTimeout(existing);
@@ -4341,6 +4342,11 @@ function AppInner() {
           if (!sessionId) return;
           setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, model: modelId } : s)));
         }}
+        // U11 Summarize and switch: the chat's usual compacting card. The switch
+        // call's answer ends it (awaitsResult), never the 3-minute watchdog.
+        onNativeSummaryPending={(sid, pending) => dispatch(pending
+          ? { type: 'COMPACTION_PENDING', sessionId: sid, cardId: `compact-switch-${Date.now()}`, beforeContextTokens: null, awaitsResult: true }
+          : { type: 'COMPACTION_CANCELLED', sessionId: sid })}
       />
       {/* Open Tasks popup — rendered at App root so it escapes any inner stacking context.
           Reads from the single `openTasks` useSessionTasks instance declared in AppInner. */}

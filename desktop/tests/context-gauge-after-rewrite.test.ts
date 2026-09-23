@@ -9,7 +9,7 @@
 //
 // Companion files: native-context-occupancy.test.ts (the harness half),
 // statusbar-native-usage.test.ts (the rest of the chip selector).
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
@@ -166,6 +166,39 @@ describe('the compaction marker can finally say what it freed', () => {
     cc = run(cc, { type: 'COMPACTION_COMPLETE', sessionId: SESSION, markerId: 'cc', afterContextTokens: 1 });
     const marker = sess(cc).timeline.find((e: any) => e.kind === 'system-marker') as any;
     expect('retainedFromUuid' in marker.marker).toBe(false);
+  });
+
+  it('a stopped native summary drops its card with no marker; awaitsResult is kept for the watchdog', () => {
+    let state = run(init(), { type: 'COMPACTION_PENDING', sessionId: SESSION, cardId: 'p', beforeContextTokens: null, awaitsResult: true });
+    expect(sess(state).compactionPending?.awaitsResult).toBe(true);
+    state = run(state, { type: 'COMPACTION_CANCELLED', sessionId: SESSION });
+    expect(sess(state).compactionPending).toBeNull();
+    expect(sess(state).timeline.filter(e => e.kind === 'compacting' || e.kind === 'system-marker')).toHaveLength(0);
+    // Idempotent: nothing pending → same state object.
+    expect(run(state, { type: 'COMPACTION_CANCELLED', sessionId: SESSION })).toBe(state);
+  });
+
+  it('native /compact marks its card awaitsResult so the 3-minute watchdog never guesses; CC does not', async () => {
+    const { dispatchSlashCommand } = await import('../src/renderer/state/slash-command-dispatcher');
+    for (const native of [true, false]) {
+      const dispatch = vi.fn();
+      dispatchSlashCommand({ raw: '/compact', sessionId: SESSION, view: 'chat', files: [], dispatch, timeline: [],
+        callbacks: {}, deferUiEffectsToRuntime: native } as any);
+      const pending = dispatch.mock.calls.map(c => c[0]).find(a => a.type === 'COMPACTION_PENDING');
+      expect(pending.awaitsResult).toBe(native ? true : undefined);
+    }
+  });
+
+  it('a Stop during native /compact cancels the card instead of "Compaction may have failed"', async () => {
+    const { runNativeSlashAction } = await import('../src/renderer/state/native-slash-actions');
+    const dispatch = vi.fn();
+    const onToast = vi.fn();
+    (globalThis as any).window = { claude: { native: { compact: async () => ({ ok: false, reason: 'interrupted' }) } } };
+    try {
+      expect(await runNativeSlashAction({ kind: 'compact' }, { sessionId: SESSION, dispatch, onToast })).toBe(false);
+    } finally { delete (globalThis as any).window; }
+    expect(dispatch).toHaveBeenCalledWith({ type: 'COMPACTION_CANCELLED', sessionId: SESSION });
+    expect(onToast).toHaveBeenCalledWith('Compaction stopped. The conversation was left as it was.');
   });
 
   it('manual /compact and Claude Code completion still close the active turn', () => {
