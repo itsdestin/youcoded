@@ -196,6 +196,9 @@ export interface SystemMarker {
   // Optional long-form text the marker can reveal on click. Currently only
   // set on compact markers — the actual conversation summary CC produced.
   summary?: string;
+  // Native compaction only: the user message that opens the kept recent tail
+  // (null = unknown). Present → archive-boundary.ts dims only entries above it.
+  retainedFromUuid?: string | null;
 }
 
 // /copy [N] picker — shown inline when the Nth assistant turn has multiple
@@ -939,6 +942,8 @@ export type ChatAction =
       // compactionPending flag to satisfy the stale-event guard, so this bypasses
       // it to insert the marker. CC's paths never set it.
       auto?: boolean;
+      // Native compaction: the kept tail's first user message (see SystemMarker).
+      retainedFromUuid?: string | null;
     }
   // A native HISTORY REWRITE that ran outside a turn — /compact or /clear.
   //

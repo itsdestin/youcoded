@@ -1674,6 +1674,8 @@ function AppInner() {
               // affordance from CC's TUI, which never worked inside YouCoded).
               ...(event.data.summary ? { summary: event.data.summary } : {}),
               ...(event.data.autoCompaction ? { auto: true } : {}),
+              // Native only: where the kept tail starts, so only older messages dim.
+              ...(event.data.retainedFromUuid !== undefined ? { retainedFromUuid: event.data.retainedFromUuid } : {}),
             });
           }
           break;

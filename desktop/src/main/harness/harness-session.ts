@@ -757,6 +757,24 @@ export class HarnessSession extends EventEmitter {
         this.historyOrigins.slice(0, cut).some(previous => previous?.includes(first))) return null;
     return first;
   }
+  /** The user-role event that opens the kept tail's turn, for the chat's dimming.
+   *  WHY: the marker lands AFTER the kept tail, so "dim everything above the
+   *  marker" faded messages the model still sees. A tail that starts inside a
+   *  turn keeps that whole turn bright (the conservative side). null when that
+   *  turn's opener is the previous summary or not event-backed: the renderer
+   *  then leaves its previous fade line where it was rather than guess. */
+  retainedTurnStart(cut: number): string | null {
+    if (this.historyOrigins.length !== this.history.length) return null;
+    for (let i = Math.min(cut, this.history.length - 1); i >= 0; i--) {
+      const message = this.history[i];
+      if (message.role !== 'user') continue;
+      if (typeof message.content === 'string' && message.content.startsWith('[Earlier conversation summary]\n')) return null;
+      // A project-rule injection has no event and no chat entry — look past it.
+      const uuid = this.historyOrigins[i]?.[0];
+      if (uuid) return uuid;
+    }
+    return null;
+  }
   /** The most recent stream attempt, for the ONE acceptance decision that happens
    *  outside the turn loop: send()'s catch, which pushes in-flight partial text
    *  after the step threw and so never saw a StepResult. */
@@ -1844,7 +1862,7 @@ export class HarnessSession extends EventEmitter {
     const estimateBefore = this.rewriteBaseline();
     const contextUsedBefore = this._contextUsedTokens;
     const committed = await this.commitSummaryCandidate({
-      summary, autoCompaction: true,
+      summary, autoCompaction: true, retainedFromUuid: this.retainedTurnStart(cut),
       contextUsedAfter: this.previewReprojectedContext(estimateBefore, replacement),
       ...(contextUsedBefore === null ? {} : { contextUsedBefore }),
       ...(generated.usage ? { usage: this.priceSummaryUsage(generated.usage) } : {}),
@@ -2063,7 +2081,8 @@ export class HarnessSession extends EventEmitter {
       const estimateBeforeSummary = this.rewriteBaseline();
       const replacement = [markAppGenerated({ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage), ...keep];
       const committed = await this.commitSummaryCandidate({
-        summary, contextUsedAfter: this.previewReprojectedContext(estimateBeforeSummary, replacement),
+        summary, retainedFromUuid: this.retainedTurnStart(cut),
+        contextUsedAfter: this.previewReprojectedContext(estimateBeforeSummary, replacement),
         ...(contextUsedBefore === null ? {} : { contextUsedBefore }),
         ...(generated.usage ? { usage: this.priceSummaryUsage(generated.usage) } : {}),
       }, cut, sourceRevision);

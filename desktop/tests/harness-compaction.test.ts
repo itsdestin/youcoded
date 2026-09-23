@@ -396,3 +396,43 @@ describe('shown-image cache reset on summary', () => {
     expect(history[1]).toBe(filler);
   });
 });
+
+// WHY: the chat dims everything above the kept tail's first user message. A
+// wrong answer here fades messages the model still sees (or dims nothing).
+describe('retainedTurnStart — where the chat stops dimming', () => {
+  function withHistory(history: any[], origins: Array<string[] | null>) {
+    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) });
+    (session as any).history = history;
+    (session as any).historyOrigins = origins;
+    return session;
+  }
+  const user = (content: string) => ({ role: 'user', content });
+  const assistant = (content: string) => ({ role: 'assistant', content });
+
+  it('a tail that starts at a user message names that message', () => {
+    const s = withHistory([user('A'), assistant('a'), user('B'), assistant('b')], [['uA'], ['aa'], ['uB'], ['ab']]);
+    expect(s.retainedTurnStart(2)).toBe('uB');
+  });
+
+  it('a tail that starts inside a turn names the turn opener (keeps the whole turn bright)', () => {
+    const s = withHistory([user('A'), assistant('a1'), assistant('a2')], [['uA'], ['a1'], ['a2']]);
+    expect(s.retainedTurnStart(2)).toBe('uA');
+  });
+
+  it('looks past an event-less injected rule to the real opener', () => {
+    const s = withHistory([user('A'), markAppGenerated(user('<project-rule/>') as any), assistant('a')],
+      [['uA'], null, ['aa']]);
+    expect(s.retainedTurnStart(2)).toBe('uA');
+  });
+
+  it('stops at a previous summary: unknown, not a guess', () => {
+    const s = withHistory([markAppGenerated(user('[Earlier conversation summary]\nold') as any), assistant('a1'), assistant('a2')],
+      [['sum'], ['a1'], ['a2']]);
+    expect(s.retainedTurnStart(2)).toBeNull();
+  });
+
+  it('a misaligned origin map yields null', () => {
+    const s = withHistory([user('A'), assistant('a')], [['uA']]);
+    expect(s.retainedTurnStart(1)).toBeNull();
+  });
+});

@@ -155,6 +155,19 @@ describe('the compaction marker can finally say what it freed', () => {
     expect(sess(state).timeline.filter(e => e.kind === 'system-marker' && e.marker.id === 'compact-1')).toHaveLength(1);
   });
 
+  it('carries the kept tail\'s first user message onto the marker (null too); CC markers stay without it', () => {
+    for (const retainedFromUuid of ['u-kept', null] as const) {
+      const state = run(init(), { type: 'COMPACTION_COMPLETE', sessionId: SESSION, markerId: 'k', auto: true,
+        afterContextTokens: 1, retainedFromUuid });
+      const marker = sess(state).timeline.find((e: any) => e.kind === 'system-marker') as any;
+      expect(marker.marker.retainedFromUuid).toBe(retainedFromUuid);
+    }
+    let cc = run(init(), { type: 'COMPACTION_PENDING', sessionId: SESSION, cardId: 'p', beforeContextTokens: 1 });
+    cc = run(cc, { type: 'COMPACTION_COMPLETE', sessionId: SESSION, markerId: 'cc', afterContextTokens: 1 });
+    const marker = sess(cc).timeline.find((e: any) => e.kind === 'system-marker') as any;
+    expect('retainedFromUuid' in marker.marker).toBe(false);
+  });
+
   it('manual /compact and Claude Code completion still close the active turn', () => {
     for (const native of [true, false]) {
       let state = init();

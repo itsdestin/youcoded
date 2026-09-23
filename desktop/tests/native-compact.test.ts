@@ -92,6 +92,20 @@ describe('HarnessSession.compactNow — user-initiated /compact', () => {
     expect(events.filter(e => e.type === 'compact-summary')[0].uuid).toBe(candidate.event.uuid);
   });
 
+  it('names the kept tail\'s first user message so the chat dims only what was summarized', async () => {
+    const commit = vi.fn(async ({ event }: { event: TranscriptEvent }) => event);
+    const session = new HarnessSession({ ...OPTS, commitCompaction: commit } as any,
+      async () => textModel('short handoff'));
+    const events = collect(session);
+    for (let i = 0; i < 3; i++) await session.send(`question ${i} ${'x'.repeat(400)}`);
+    expect(await session.compactNow()).toEqual({ ok: true });
+    const marker = events.find(e => e.type === 'compact-summary')!;
+    const kept = (session as any).history[1];
+    const keptUser = events.filter(e => e.type === 'user-message').find(e => e.data.text === kept.content);
+    expect(keptUser).toBeTruthy();
+    expect(marker.data.retainedFromUuid).toBe(keptUser!.uuid);
+  });
+
   it('passes manual focus as non-authoritative guidance to the same summary request', async () => {
     const calls: any[] = [];
     const inner = textModel('Short handoff');

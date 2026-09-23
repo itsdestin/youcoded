@@ -492,6 +492,10 @@ export interface TranscriptEvent {
      * unchanged.
      */
     autoCompaction?: boolean;
+    /** Native compact-summary only: the user-message event opening the kept
+     *  tail's turn (null = unknown). Its PRESENCE tells the renderer this
+     *  compaction kept a tail, so only entries above that message dim. */
+    retainedFromUuid?: string | null;
     /** Persisted coalesced-part UUID/range witness; no duplicate text or private metadata. */
     deltaReferences?: Array<{ eventUuid: string; start: number; end: number }>;
     /** Native compact-summary portable checkpoint; references cite persisted parts. */

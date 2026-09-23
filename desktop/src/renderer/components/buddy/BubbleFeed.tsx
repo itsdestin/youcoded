@@ -16,6 +16,7 @@ import CompactingCard from '../CompactingCard';
 import ThinkingIndicator from '../ThinkingIndicator';
 import { useTheme } from '../../state/theme-context';
 import { useEntryFolding } from '../../hooks/use-entry-folding';
+import { findArchiveBoundary } from '../../state/archive-boundary';
 
 interface Props {
   sessionId: string | null;
@@ -312,6 +313,7 @@ export function BubbleFeed({ sessionId }: Props) {
               // Forward summary so buddy's marker matches main window's expandable behavior.
               ...(event.data.summary ? { summary: event.data.summary } : {}),
               ...(event.data.autoCompaction ? { auto: true } : {}),
+              ...(event.data.retainedFromUuid !== undefined ? { retainedFromUuid: event.data.retainedFromUuid } : {}),
             });
           }
           break;
@@ -526,14 +528,10 @@ export function BubbleFeed({ sessionId }: Props) {
           {(() => {
             // Fade entries above the most recent compaction marker — Claude's
             // context no longer includes them, consistent with main ChatView.
-            let lastCompactIdx = -1;
-            for (let i = state.timeline.length - 1; i >= 0; i--) {
-              const e = state.timeline[i];
-              if (e.kind === 'system-marker' && e.marker.variant === 'compact') {
-                lastCompactIdx = i;
-                break;
-              }
-            }
+            // WHY the shared helper: a native compaction keeps a recent tail
+            // above its marker, and only archive-boundary.ts knows to stop the
+            // fade there. Compact-only, as before: the buddy never faded /clear.
+            const lastCompactIdx = findArchiveBoundary(state.timeline, ['compact']).index;
             return state.timeline.map((entry, idx) => {
               const isPreCompaction = lastCompactIdx >= 0 && idx < lastCompactIdx;
               let key: string;

@@ -2900,6 +2900,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
               // marker can click-to-expand inline. Absent on aborted/watchdog
               // completions (no summary available).
               ...(action.summary ? { summary: action.summary } : {}),
+              // WHY: lets the fade stop at the kept tail instead of the marker.
+              ...(action.retainedFromUuid !== undefined ? { retainedFromUuid: action.retainedFromUuid } : {}),
             },
           },
         ],

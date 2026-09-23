@@ -50,4 +50,35 @@ describe('findArchiveBoundary', () => {
   it('an empty timeline is not a crash', () => {
     expect(findArchiveBoundary([])).toEqual({ index: -1, kind: null });
   });
+
+  // A native compaction keeps a recent tail ABOVE its marker (the marker is
+  // appended after the tail). Only the part above the tail's first user message
+  // is out of the model's context.
+  const u = (uuid: string) => ({ kind: 'user', uuid, message: { id: uuid, role: 'user', content: uuid, timestamp: 1 } }) as TimelineEntry;
+  const native = (retainedFromUuid: string | null) =>
+    ({ kind: 'system-marker', marker: { id: 'n', timestamp: 1, label: 'c', variant: 'compact', retainedFromUuid } }) as TimelineEntry;
+
+  it('native compaction fades only above the kept tail', () => {
+    expect(findArchiveBoundary([u('a'), u('b'), u('c'), native('b'), u('d')]))
+      .toEqual({ index: 1, kind: 'compact' });
+  });
+
+  it('native kept-tail message missing from the timeline: this marker dims nothing new', () => {
+    expect(findArchiveBoundary([u('c'), native('paged-out'), u('d')])).toEqual({ index: -1, kind: null });
+  });
+
+  it('native marker with an unknown tail falls back to the previous boundary', () => {
+    expect(findArchiveBoundary([u('a'), marker('clear'), u('b'), native(null)]))
+      .toEqual({ index: 1, kind: 'clear' });
+  });
+
+  it('a second native compaction moves the line to its own kept tail', () => {
+    expect(findArchiveBoundary([u('a'), u('b'), native('b'), u('c'), u('d'), native('d')]).index).toBe(4);
+  });
+
+  it('the buddy passes compact-only and ignores a later clear', () => {
+    expect(findArchiveBoundary([u('a'), marker('compact'), u('b'), marker('clear')], ['compact']))
+      .toEqual({ index: 1, kind: 'compact' });
+  });
 });
+
