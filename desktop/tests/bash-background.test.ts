@@ -51,7 +51,9 @@ describe.skipIf(!posix)('Luna shell routing', () => {
     }
   });
 
-  it('routes foreground and background through a private wrapper without changing tool metadata', async () => {
+  // WHY skipIf: the experiment wrapper launches through /usr/bin/node (Destin's machine);
+  // CI's Node lives elsewhere, and this route only ever runs in the local Luna rig.
+  it.skipIf(!fs.existsSync('/usr/bin/node'))('routes foreground and background through a private wrapper without changing tool metadata', async () => {
     const wrapper = path.join(dir, 'synthetic-wrapper.cjs');
     fs.writeFileSync(wrapper, `process.stdout.write('JAILED_ROUTE\\n')`);
     const before = { name: BashTool.name, description: BashTool.description };
