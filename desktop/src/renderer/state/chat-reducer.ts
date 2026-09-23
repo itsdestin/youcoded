@@ -230,8 +230,15 @@ function placeToolInCurrentGroup(
   currentGroupId: string | null;
   currentTurnId: string;
 } {
-  const { assistantTurns, timeline, currentTurnId } = getOrCreateTurn(session);
-  const toolGroups = new Map(session.toolGroups);
+  // WHY no up-front copies (perf, 2026-09-23): a tool joining an open group or
+  // already placed changes neither assistantTurns nor toolGroups, so each Map is
+  // copied only on the branch that writes it — an unchanged Map keeps its identity.
+  const turnExists = !!session.currentTurnId && session.assistantTurns.has(session.currentTurnId);
+  const created = turnExists ? null : getOrCreateTurn(session);
+  let assistantTurns = created ? created.assistantTurns : session.assistantTurns;
+  const timeline = created ? created.timeline : session.timeline;
+  const currentTurnId = created ? created.currentTurnId : session.currentTurnId!;
+  let toolGroups = session.toolGroups;
   let currentGroupId = session.currentGroupId;
 
   // The watcher deliberately re-emits tool-use on repeated uuids (CC rewrites
@@ -251,10 +258,15 @@ function placeToolInCurrentGroup(
     // Already placed by an earlier emit of this same tool.
   } else if (currentGroupId && toolGroups.has(currentGroupId)) {
     const group = toolGroups.get(currentGroupId)!;
+    toolGroups = new Map(toolGroups);
     toolGroups.set(currentGroupId, { ...group, toolIds: [...group.toolIds, toolUseId] });
   } else {
     currentGroupId = nextGroupId();
+    toolGroups = new Map(toolGroups);
     toolGroups.set(currentGroupId, { id: currentGroupId, toolIds: [toolUseId] });
+    // A just-created turn's Map is already a private copy; an existing one is
+    // the session's own and must be copied before writing.
+    if (!created) assistantTurns = new Map(assistantTurns);
     const turn = assistantTurns.get(currentTurnId)!;
     assistantTurns.set(currentTurnId, {
       ...turn,
@@ -1724,8 +1736,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'NATIVE_TOOL_PREPARING': {
       const session = next.get(action.sessionId);
       if (!session) return state;
+      const existing = session.toolCalls.get(action.toolCallId);
+      // WHY decided before any copy (perf, 2026-09-23): this streams per argument
+      // chunk, and its no-op exits (card no longer preparing / unknown clear) used
+      // to copy whole Maps only to discard them. Same tests removePreparingTool and
+      // the progress branch below apply, made earlier.
+      if (existing && !existing.preparing) return state;
+      if (action.cleared && !existing) return state;
       const toolCalls = new Map(session.toolCalls);
-      const existing = toolCalls.get(action.toolCallId);
 
       if (action.cleared) {
         // Withdraw a card the stall retry abandoned. No-op unless the entry is
@@ -1958,9 +1976,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
 
-      const toolCalls = new Map(session.toolCalls);
-      const existing = toolCalls.get(action.toolUseId);
+      const existing = session.toolCalls.get(action.toolUseId);
+      // WHY copied only when a card exists (perf, 2026-09-23): an orphan result
+      // changes nothing, so the session keeps its own toolCalls Map.
+      let toolCalls = session.toolCalls;
       if (existing) {
+        toolCalls = new Map(toolCalls);
         // Carry structuredPatch onto the tool state so DiffView can render
         // with absolute file line numbers (Claude Code ships it pre-computed).
         const patch = action.structuredPatch;
@@ -2386,6 +2407,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // true: a card whose ask was overwritten keeps the requestId while
       // reverting to 'running', which is exactly the stale binding the loop
       // directly below detects and clears.)
+      // WHY this pre-scan (perf, 2026-09-23): nearly every heartbeat (below) is the
+      // "already awaiting" no-op, so decide it BEFORE copying the whole toolCalls
+      // Map. Same outcome as the loop's early return, whose clears were discarded.
+      for (const tool of session.toolCalls.values()) {
+        if (tool.requestId === action.requestId && tool.status === 'awaiting-approval') return state;
+      }
       const toolCalls = new Map(session.toolCalls);
 
       // This action is REPEATABLE (2026-08-16): main re-announces every
