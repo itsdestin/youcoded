@@ -202,8 +202,11 @@ export class SubagentWatcher {
    * The session's DIRECTORY watch (which lives as long as the session) fires
    * for writes to any file inside it, and onDirEvent() drains a settled
    * helper's file when its name comes through — one stat + read per actual
-   * write, nothing while the file is quiet. The session's own close (stop())
-   * releases every entry, settled or not.
+   * write, nothing while the file is quiet. When the directory watch is NOT
+   * healthy (it failed and a directory poll stands in, or Windows' safety-net
+   * poll catches a dropped notification), that poll drains settled helpers
+   * too (drainSettled). The session's own close (stop()) releases every
+   * entry, settled or not.
    */
   async settleByParent(parentToolUseId: string): Promise<void> {
     for (const state of this.perFile.values()) {
@@ -313,7 +316,21 @@ export class SubagentWatcher {
     this.dirPollTimer = setInterval(() => {
       if (!this.started) return;
       this.scanDirectory();
+      this.drainSettled();
     }, 5000);
+  }
+
+  /** Read any late output from helpers that already SETTLED. WHY: a settled
+   *  helper has no watch of its own (settleByParent), and scanDirectory() skips
+   *  files it already tracks — so when this directory poll is running (the
+   *  directory watch failed, or it is Windows' safety net for dropped
+   *  notifications), this is the only thing that still reads a background
+   *  helper that keeps writing after its parent's tool result. readNewLines is
+   *  one async stat per helper and returns at once when the file hasn't grown. */
+  private drainSettled(): void {
+    for (const state of this.perFile.values()) {
+      if (state.settled) this.readNewLines(state).catch(() => undefined);
+    }
   }
 
   /** Age out pending buffered events every 5 s so a lingering unbound helper
