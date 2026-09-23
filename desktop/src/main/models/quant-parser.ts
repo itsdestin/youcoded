@@ -21,11 +21,34 @@ export interface ParsedGgufName {
 }
 
 // Quant token grammar: optional UD- prefix, then (I)Q<digit>_SUFFIX, a raw
-// float type, or MXFP4(_MOE) (gpt-oss / MoE native 4-bit). Anchored to a '-'
-// separator and the .gguf extension so model names containing 'q4' mid-word
-// can't false-match. Case-sensitive on purpose (lowercase float tokens never
-// appear in real chat-model filenames).
-const NAME_RE = /^(.+?)-(UD-)?((?:I?Q\d+_[A-Z0-9_]+)|Q\d+|F16|F32|BF16|MXFP4_MOE|MXFP4)(?:-(\d{5})-of-(\d{5}))?\.gguf$/;
+// float type, or MXFP4(_MOE) (gpt-oss / MoE native 4-bit), optionally led by a
+// float type for "double" quants (below). Anchored to a separator and the .gguf
+// extension so model names containing 'q4' mid-word can't false-match.
+//
+// WHY case-INsensitive (2026-09-23): an earlier comment here said lowercase
+// tokens never appear in real chat-model filenames — they do. Mungert
+// (`…-q4_k_m.gguf`), ggml-org (`gemma-3-1b-it-f16.gguf`), Google's own QAT repos
+// (`…-qat-q4_0.gguf`) and bartowski's bf16 files were all invisible. Measured on
+// 1,568 files across 89 popular GGUF repos: no existing label changes. What it
+// adds beyond chat models is other whole model repos search already returns
+// (speech, embedding) whose UPPERCASE-named siblings were already offered — the
+// file name was never the chat/non-chat gate. Non-model files (projectors,
+// `-mtp` drafts, vocab, imatrix) still fail to match. The quant is returned
+// exactly as written, because manifests and backfill need Hugging Face's own
+// string.
+//
+// WHY the optional leading float (Mungert's `gemma-3-4b-it-f16-q8_0.gguf` = f16
+// output tensors + q8_0 weights): without it the quant is just `q8_0`, and the
+// repo's bf16-q8_0 and f16-q8_0 files collide on one key and are dropped as an
+// "incomplete split set". The lazy base makes the longest quant win.
+//
+// WHY '[-.]' and not just '-' (2026-09-23): TheBloke and mradermacher — two of
+// the largest GGUF publishers — write `<name>.Q4_K_M.gguf` with a DOT, so every
+// one of their repos offered nothing. A dot inside the model name ('Llama-3.1-…')
+// cannot false-match: the text after it must be a whole quant token running
+// to '.gguf'. Their dotted projectors ('…it.mmproj-Q8_0.gguf') are still caught
+// by the separator-anchored denylist below before this pattern runs.
+const NAME_RE = /^(.+?)[-.](UD-)?((?:(?:BF16|F16|F32)-)?(?:(?:I?Q\d+_[A-Z0-9_]+)|Q\d+|F16|F32|BF16|MXFP4_MOE|MXFP4))(?:-(\d{5})-of-(\d{5}))?\.gguf$/i;
 
 // Aux-file denylist (Amendment 2026-07-14 E): vision projectors ('mmproj',
 // UPPERCASE in real repos) and MTP speculative-decode draft models ('mtp-',
@@ -50,14 +73,16 @@ export function parseGgufName(fileName: string): ParsedGgufName | null {
   return {
     base: m[1],
     quant: `${m[2] ?? ''}${m[3]}`,
-    dynamic: m[2] === 'UD-',
+    dynamic: m[2] !== undefined, // 'UD-' in either case (the pattern is case-insensitive)
     part: m[4] ? { index: Number(m[4]), of: Number(m[5]) } : null,
   };
 }
 
 /** Plain-language quality/size description per quant family (spec §4.2). */
 export function quantDescription(quant: string): string {
-  const q = quant.replace(/^UD-/, '');
+  // Case-folded and stripped of a double quant's leading float type, so
+  // `f16-q8_0` reads as the Q8_0 it mostly is and `q4_k_m` as Q4_K_M.
+  const q = quant.replace(/^UD-/i, '').replace(/^(BF16|F16|F32)-(?=.)/i, '').toUpperCase();
   if (/^MXFP4/.test(q)) return 'Native 4-bit — the format this model ships in, recommended';
   if (/^(F16|F32|BF16)$/.test(q)) return 'Original precision — largest download, no quality loss';
   if (/^Q8/.test(q)) return 'Highest quality quantization — near-original output';

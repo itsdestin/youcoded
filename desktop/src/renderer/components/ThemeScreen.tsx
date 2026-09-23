@@ -54,6 +54,21 @@ const PARTICLE_OPTIONS = ['none', 'rain', 'dust', 'ember', 'snow', 'custom'] as 
 // raw preset names so the visible text is unchanged from the old <option> list.
 const PARTICLE_SELECT_OPTIONS = PARTICLE_OPTIONS.map((p) => ({ value: p, label: p }));
 
+/** The particle choices to offer for a theme whose preset is `current`.
+ *
+ *  WHY (2026-09-23, roadmap themes, bug 5 of the 2026-07-19 input-migration
+ *  family): a theme file can carry a preset that is not in the list (hand-made,
+ *  built by Claude, or from a newer app). The dropdown then matched nothing and
+ *  showed the empty "Select…" placeholder, so it read as unset and the next
+ *  pick replaced it. The theme's own value is kept as an extra choice, exactly
+ *  as written, so it shows as selected and survives untouched unless the user
+ *  picks something else. */
+export function particleSelectOptions(current: unknown): { value: string; label: string }[] {
+  if (typeof current !== 'string' || !current.trim()) return PARTICLE_SELECT_OPTIONS;
+  if (PARTICLE_SELECT_OPTIONS.some((o) => o.value === current)) return PARTICLE_SELECT_OPTIONS;
+  return [...PARTICLE_SELECT_OPTIONS, { value: current, label: current }];
+}
+
 function roundnessToShape(value: number) {
   const sm  = Math.round(value * 8);
   const md  = Math.round(value * 16);
@@ -486,7 +501,7 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
               <div className="w-32 shrink-0">
                 <Select
                   size="sm"
-                  options={PARTICLE_SELECT_OPTIONS}
+                  options={particleSelectOptions(theme.effects?.particles)}
                   value={theme.effects?.particles ?? 'none'}
                   onChange={updateParticles}
                   aria-label="Particles"

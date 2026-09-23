@@ -31,6 +31,9 @@ class EventBridge(private val socketName: String) {
     /** Maps mobile session IDs to transcript file paths (extracted from hook events). */
     private val transcriptPathMap = ConcurrentHashMap<String, String>()
 
+    /** First Claude Code process heard per session (desktop hook-relay.ts mirror). */
+    private val owners = HookOwnerGate()
+
     /** Stored scope for launching socket-closure monitor coroutines. */
     private var monitorScope: CoroutineScope? = null
 
@@ -89,6 +92,16 @@ class EventBridge(private val socketName: String) {
             // Peek at event type to decide whether to hold the socket
             val json = try { JSONObject(line) } catch (_: Exception) { client.close(); return }
             val eventName = json.optString("hook_event_name", "")
+
+            // A hook from a `claude` nested inside this session (Bash tool,
+            // script) — see HookOwnerGate. Dropped before it can remap the
+            // session or show a card; closing with no reply lets a blocking
+            // relay exit so the nested process uses its own prompt.
+            val ownerSessionId = json.optString("mobileSessionId", "")
+            if (!owners.accept(ownerSessionId, json.optString("claudePid", ""))) {
+                client.close()
+                return
+            }
 
             // Extract session ID mapping if present
             val mobileSessionId = json.optString("mobileSessionId", "")
@@ -223,5 +236,27 @@ class EventBridge(private val socketName: String) {
         listenJob?.cancel()
         try { serverSocket?.close() } catch (_: Exception) {}
         serverSocket = null
+    }
+}
+
+/**
+ * Which Claude Code process owns a session's hooks — mirror of desktop
+ * `HookOwnerGate` in hook-relay.ts.
+ *
+ * WHY (2026-09-23, security): CLAUDE_MOBILE_SESSION_ID is inherited by every
+ * process the session starts, so a `claude` launched from inside it reported
+ * its hooks as this session's, overwriting the session-id map (which, unlike
+ * desktop, has no remap guard) and able to raise a permission card. Claude
+ * Code puts its own pid in every hook's env (CLAUDE_PID) and the relay
+ * forwards it as `claudePid`; a session runs one Claude Code process, which
+ * reports first, so the first pid is the owner. A missing pid fails open.
+ */
+class HookOwnerGate {
+    private val owners = ConcurrentHashMap<String, String>()
+
+    fun accept(sessionId: String, claudePid: String): Boolean {
+        if (sessionId.isBlank() || claudePid.isBlank()) return true
+        val owner = owners.putIfAbsent(sessionId, claudePid) ?: return true
+        return owner == claudePid
     }
 }

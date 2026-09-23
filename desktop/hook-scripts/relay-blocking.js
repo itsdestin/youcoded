@@ -30,6 +30,13 @@ process.stdin.on('end', () => {
     try {
       const parsed = JSON.parse(input);
       parsed._desktop_session_id = desktopSessionId;
+      // WHY (2026-09-23): CLAUDE_DESKTOP_SESSION_ID is inherited by EVERY
+      // process the session starts, so a `claude` run from inside it (Bash
+      // tool, script) reports its hooks under our id too. Claude Code puts its
+      // own process id in every hook's env as CLAUDE_PID; the app accepts only
+      // the first process it hears from for a session. Absent → not sent, and
+      // the app fails open (older Claude Code).
+      if (process.env.CLAUDE_PID) parsed._claude_pid = process.env.CLAUDE_PID;
       input = JSON.stringify(parsed);
     } catch {}
   }
