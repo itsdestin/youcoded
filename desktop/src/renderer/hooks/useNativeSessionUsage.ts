@@ -1,7 +1,7 @@
 import { useCallback, useRef, useSyncExternalStore } from 'react';
 import { useChatStore } from '../state/chat-context';
 import type { TurnUsage } from '../state/chat-types';
-import { selectNativeUsage } from '../state/usage-snapshot';
+import { selectNativeUsage, nativeContextWindow } from '../state/usage-snapshot';
 
 // Cached selector: transient measured progress, or the latest completed turn
 // in the ACTIVE session (or null — no measured usage). Feeds the StatusBar
@@ -37,6 +37,21 @@ export function useNativeSessionUsage(sessionId: string | null): TurnUsage | nul
     return selectNativeUsage(session);
   }, [store]);
 
+  const subscribe = useCallback((cb: () => void) => store.subscribeAll(cb), [store]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/** The window the context chip divides by — see nativeContextWindow for why it
+ *  is not simply the last turn's. A primitive, so the snapshot is stable. */
+export function useNativeContextWindow(sessionId: string | null): number | null {
+  const store = useChatStore();
+  const sidRef = useRef(sessionId);
+  sidRef.current = sessionId;
+  const getSnapshot = useCallback((): number | null => {
+    const sid = sidRef.current;
+    if (!sid) return null;
+    return nativeContextWindow(store.getState().get(sid));
+  }, [store]);
   const subscribe = useCallback((cb: () => void) => store.subscribeAll(cb), [store]);
   return useSyncExternalStore(subscribe, getSnapshot);
 }

@@ -986,6 +986,71 @@ describe('HarnessSession — multi-step turn driver', () => {
     });
   });
 
+  // A remembered grant beats the deny-list, so a wide enough saved approval let
+  // `rm -rf ~` run silently. The removal-target floor (tools/rm-target.ts) sits
+  // below every rule and only ever turns an allow into an ask.
+  describe('removal-target floor', () => {
+    const bashTool = () => fakeTool('Bash', {
+      schema: z.object({ command: z.string() }),
+      permissionSubject: (a: any) => a.command,
+    });
+    const oneBash = (command: string) => scriptedModel([
+      stream(toolCallChunk('c1', 'Bash', { command }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'ok'), finishChunk('stop')),
+    ]);
+    const run = async (command: string, decide: () => Promise<PermissionDecision>, answer: AskDecision = { behavior: 'allow', always: true }) => {
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => answer);
+      const session = new HarnessSession(makeOpts({ tools: [bash], decide, askUser }), async () => oneBash(command) as any);
+      const remembered: unknown[] = [];
+      session.on('remember-rule', (r) => remembered.push(r));
+      collect(session);
+      await session.send('go');
+      return { askUser, remembered, ran: (bash as any).calls.length };
+    };
+
+    it('asks before removing the home folder even when a saved grant allows the command', async () => {
+      const { askUser, remembered, ran } = await run('rm -rf ~', async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'removal', external: false });
+      expect(remembered).toEqual([]); // an answer of "always" stores nothing it could never honour
+      expect(ran).toBe(1);            // the person said yes, so it runs
+    });
+
+    it('a no from the person stops the removal', async () => {
+      const { ran } = await run('rm -rf ~', async () => ALLOW, { behavior: 'deny' });
+      expect(ran).toBe(0);
+    });
+
+    it('never turns a deny rule into an ask', async () => {
+      const { askUser, ran } = await run('rm -rf ~', async () => ({ action: 'deny', denyListed: false }));
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(0);
+    });
+
+    it('leaves an ordinary allowed removal alone', async () => {
+      const { askUser, ran } = await run('rm -rf build', async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(1);
+    });
+
+    // The secret-path floor (tools/bash-secret-paths.ts): the file tools refuse
+    // ~/.ssh and .env, so Bash reading them must at least ask — every time.
+    it('asks before a command that names a secret file even when a saved grant allows it', async () => {
+      const { askUser, remembered, ran } = await run('cat ~/.ssh/id_rsa', async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'secret-path', external: false });
+      expect(remembered).toEqual([]);
+      expect(ran).toBe(1);
+    });
+
+    it('leaves a command that only mentions a similar word alone', async () => {
+      const { askUser, ran } = await run('npm run env:check', async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(1);
+    });
+  });
+
   // M5 2c: the RENDERER never names a pattern — it sends a width selector and the
   // session re-derives from the tool call it already holds. A renderer that could
   // name its own pattern could grant itself anything, because remembered rules are

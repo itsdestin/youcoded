@@ -32,6 +32,7 @@ export function segmentToToolState(segment: ToolSegment): ToolCallState {
     requestId: segment.requestId,
     denyListed: segment.denyListed,
     external: segment.external,
+    floorStop: segment.floorStop,
     permissionMode: segment.permissionMode,
   };
 }

@@ -278,6 +278,36 @@ describe('rebuildHistory — the resume deep-equal contract', () => {
     ]);
   });
 
+  it('a whitespace-only step that is silently re-run rebuilds byte-identical to live (raw + through-store)', async () => {
+    // The live push skips a whitespace-only step and re-runs it once; its deltas
+    // still streamed. Same partId on both attempts (the common provider shape),
+    // so without the discard the store folds '\n  \n' into the retry's text.
+    const model = scriptedModel([
+      stream(...textChunks('t0', '\n  \n'), finishChunk('stop')),
+      stream(...textChunks('t0', 'recovered'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ decide: async () => ALLOW }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const live = (session as any).history as any[];
+    expect(live).toEqual([{ role: 'user', content: 'go' }, { role: 'assistant', content: [{ type: 'text', text: 'recovered' }] }]);
+    expect(rebuildHistory(await throughStore(events))).toEqual(live);
+  });
+
+  it('a turn that ends on two whitespace-only steps rebuilds with no blank assistant message', async () => {
+    const model = scriptedModel([
+      stream(...textChunks('t0', '\n'), finishChunk('stop')),
+      stream(...textChunks('t1', '  '), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(makeOpts({ decide: async () => ALLOW }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    const live = (session as any).history as any[];
+    expect(live).toEqual([{ role: 'user', content: 'go' }]);
+    expect(rebuildHistory(events)).toEqual(live);
+    expect(rebuildHistory(await throughStore(events))).toEqual(live);
+  });
+
   it('CRASH truncated tail: unpaired tool-use at end → synthetic tool-result back-filled (no dangling call)', async () => {
     // Process died after the tool-use line persisted but BEFORE its tool-result
     // (a wide window during Bash/Edit). The stream ends on an unpaired tool-use;

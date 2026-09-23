@@ -251,6 +251,10 @@ export interface ToolContext {
    *  shrunk (resume, /clear, compaction) — see harness-session.ts — because the
    *  notice claims the model still HAS the earlier content. */
   servedReads?: Map<string, ServedRead>;
+  /** Test-only: shortens the deadline a tool declares in `caps.timeoutMs`
+   *  (Grep, Glob) so a test can hit it in milliseconds. The driver never sets
+   *  it, and it never adds a deadline to a tool that declares none. */
+  toolTimeoutMs?: number;
   /** 1-based count of tool calls this session has dispatched, including this
    *  one — what lets Read say "N calls ago". Absent in test contexts. */
   toolCallIndex?: number;

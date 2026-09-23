@@ -2032,6 +2032,23 @@ describe('NativeSessionHost', () => {
       expect(types).not.toContain('turn-complete');
       await qHost.destroyAll();
     });
+
+    // A send arriving WHILE quiesce is winding down (idle session, so it would
+    // dispatch a fresh turn) used to run a whole turn on the old device before
+    // the handoff. It is refused instead, and the renderer keeps the draft.
+    it('a send that arrives while quiesce is in progress is refused and starts no turn', async () => {
+      const store = new SessionStore(new NativeHome(root));
+      const qHost = new NativeSessionHost(store, delayedFactory, NO_CONTEXT, async () => null, async () => null);
+      await qHost.create({ sessionId: 'qz3', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+      const quiesced = qHost.quiesce('qz3');
+      expect(qHost.send('qz3', 'mid-quiesce')).toEqual({ status: 'failed', reason: 'not-live' });
+      await quiesced;
+      await new Promise((r) => setTimeout(r, 80));
+      expect(store.readEvents('qz3', root).some((e) => e.type === 'user-message')).toBe(false);
+      // The session is usable again once quiesce has finished (e.g. a takeover that did not proceed).
+      expect(qHost.send('qz3', 'after')).toEqual({ status: 'sent' });
+      await qHost.destroyAll();
+    });
   });
 
   // ---- Specialists (plan 1a, Task 5): createChild mints a CHILD session —

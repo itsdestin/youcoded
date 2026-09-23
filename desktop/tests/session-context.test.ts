@@ -118,6 +118,27 @@ describe('what the assistant was given', () => {
     expect(host.sessionContextText('never-opened', 'project')).toEqual({ error: 'not-live' });
   });
 
+  // The chip and the panel's "Context window" row kept the OLD model's window
+  // after a swap until a turn finished on the new one.
+  it('a model swap re-pushes the record with the new model and its window, and nothing else', async () => {
+    const windowFor = async (b: any) => ({ contextLength: b.modelId === 'small' ? 8192 : 1_000_000, totalSlots: null });
+    const h = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, windowFor as any, async () => null, async () => null);
+    const pushed: any[] = [];
+    h.on('session-context', (e: any) => pushed.push(e.context));
+    await h.create({ sessionId: 's-swap', cwd: root, binding: { providerId: 'openrouter', modelId: 'big' } });
+    expect(pushed).toHaveLength(1);
+    expect(pushed[0].contextWindowTokens).toBe(1_000_000);
+
+    await h.setBinding('s-swap', { providerId: 'openrouter', modelId: 'small' });
+    expect(pushed).toHaveLength(2);
+    expect(pushed[1]).toEqual({ ...pushed[0], modelLabel: 'small', contextWindowTokens: 8192 });
+
+    // Re-applying the same model changes nothing, so nothing is re-pushed.
+    await h.setBinding('s-swap', { providerId: 'openrouter', modelId: 'small' });
+    expect(pushed).toHaveLength(2);
+    await h.destroyAll();
+  });
+
   it('a session still opens when the context cannot be described', async () => {
     // The record is an explanation; a chat that will not start is a broken app.
     // Proven by making the one thing that reads the disk throw.

@@ -101,3 +101,36 @@ describe('full-auto safety stop', () => {
     expect(screen.getByText('Full auto still stops here.')).toBeTruthy();
   });
 });
+
+// The removal-target floor (harness rm-target.ts) forces a stop no saved grant
+// can skip, so the band must not offer a grant it could never honour.
+describe('full-auto stop for a removal the floor always asks about', () => {
+  it('shows Run it / Skip it and no Always Allow', () => {
+    renderCard(stopTool({ input: { command: 'rm -rf ~' }, floorStop: 'removal' }));
+    expect(screen.getByRole('button', { name: 'Run it' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Skip it' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Always Allow' })).toBeNull();
+    expect(screen.getByText('Stopped before deleting files')).toBeTruthy();
+  });
+
+  it('the generic row hides Always allow for the same ask outside Full auto', () => {
+    renderCard(stopTool({ input: { command: 'rm -rf ~' }, floorStop: 'removal', permissionMode: 'ask' }));
+    expect(screen.getByRole('button', { name: /^yes$/i })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /always/i })).toBeNull();
+  });
+});
+
+describe('full-auto stop for a command that names a secret file', () => {
+  it('names the secret-file floor and offers no Always Allow', () => {
+    renderCard(stopTool({ input: { command: 'cat ~/.ssh/id_rsa' }, floorStop: 'secret-path' }));
+    expect(screen.getByText('Stopped before using a secret file')).toBeTruthy();
+    expect(screen.getByText('Full auto still stops here — this uses a file that holds passwords or keys.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Run it' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Always Allow' })).toBeNull();
+  });
+
+  it('a command the deny-list can name keeps the deny-list wording', () => {
+    renderCard(stopTool({ input: { command: 'rm ~/.ssh/old_key' }, floorStop: 'secret-path' }));
+    expect(screen.getByText('Stopped before deleting files')).toBeTruthy();
+  });
+});

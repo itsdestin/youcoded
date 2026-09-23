@@ -1,4 +1,4 @@
-import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
+import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -309,6 +309,11 @@ export interface SessionChatState {
    *  first `stalled` heartbeat and left alone by later ones, so the elapsed
    *  time never resets while the card is up. */
   stalledSince: number | null;
+  /** Helper run records that arrived before their card existed, keyed by the
+   *  helper's childId (latest record only). Applied the moment a matching card
+   *  appears — see chat-reducer.ts `applyParkedSpecialistRuns`. Transient:
+   *  never serialized; absent means nothing is waiting. */
+  parkedSpecialistRuns?: Map<string, SpecialistRunView>;
   /**
    * Native runtime: the model is READING the prompt (prefill), not hanging. Set
    * by a `promptProcessing`-bearing heartbeat and cleared the moment prefill ends
@@ -685,6 +690,9 @@ export type ChatAction =
       // folder → ToolCard HIDES "Always allow", because the engine skips the
       // rules on every later external call and could never honor the grant.
       external?: boolean;
+      // Native broker only: forced by the removal-target floor (rm-target.ts),
+      // which no stored rule can skip → ToolCard HIDES "Always allow" too.
+      floorStop?: FloorStop;
       // Native broker only: the session's mode at ask time. 'full-auto' +
       // denyListed → ToolCard renders the safety-stop footer (spec 2026-08-12).
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
@@ -707,8 +715,8 @@ export type ChatAction =
     }
   | {
       // Background Bash (G-1): the live shell-run record lands on its Bash card
-      // (chat-reducer.ts's SHELL_RUN_CHANGED case). Same contract as
-      // SPECIALIST_RUN_CHANGED — a record for an unknown card is dropped.
+      // (chat-reducer.ts's SHELL_RUN_CHANGED case). A record for an unknown
+      // card is dropped (SPECIALIST_RUN_CHANGED parks one instead).
       type: 'SHELL_RUN_CHANGED';
       sessionId: string;
       run: ShellRunView;

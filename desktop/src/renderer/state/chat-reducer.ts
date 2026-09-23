@@ -896,7 +896,58 @@ function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState)
   return { ...copy, timeline: carried.length ? [...copy.timeline, ...carried] : copy.timeline, queuedMessages };
 }
 
+/** A stall WARNING belongs to the amber 'stuck' state and nothing else.
+ *
+ *  WHY (roadmap: the amber "Still waiting" card and the "Retrying in 15s…"
+ *  countdown could flicker back and forth): only the heartbeat case writes
+ *  `stallWarning`, but a dozen cases write `attentionState: 'ok'` and leave it
+ *  set. ChatView shows ThinkingIndicator whenever the state is 'ok', and
+ *  ThinkingIndicator turns a leftover warning into the countdown — so an
+ *  unrelated update (a helper's permission card, a tool event) swapped the
+ *  amber card for a countdown the host never announced, and the next warning
+ *  swapped it back. Same shape as `stalledSince`: one rule at one place, not a
+ *  `stallWarning: null` line in every 'ok' writer (and the next one forgotten). */
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  let next = chatReducerCases(state, action);
+  const id = (action as { sessionId?: string }).sessionId;
+  if (next === state || !id) return next;
+  next = applyParkedSpecialistRuns(state, next, id);
+  const s = next.get(id);
+  if (!s || !s.stallWarning || s.attentionState === 'stuck') return next;
+  const fixed = new Map(next);
+  fixed.set(id, { ...s, stallWarning: null });
+  return fixed;
+}
+
+/** Hand every parked helper record whose card has now appeared to the normal
+ *  SPECIALIST_RUN_CHANGED case.
+ *
+ *  WHY (roadmap: after a reload a helper's card could come back with no notes):
+ *  a reload sends the history and the helper records separately, and the
+ *  history's tool events reach the reducer through a frame batcher while the
+ *  records are dispatched at once — so a record routinely arrived before the
+ *  Task card existed and was dropped. A finished helper never sends another,
+ *  so its notes and status never came back. The same happens when the card
+ *  sits on an older history page that loads later. Parking the record and
+ *  applying it when the card shows up closes both. Runs only when the
+ *  session's tool cards actually changed. */
+function applyParkedSpecialistRuns(prev: ChatState, next: ChatState, id: string): ChatState {
+  const s = next.get(id);
+  if (!s?.parkedSpecialistRuns?.size || prev.get(id)?.toolCalls === s.toolCalls) return next;
+  let out = next;
+  for (const [childId, run] of s.parkedSpecialistRuns) {
+    const current = out.get(id)!;
+    if (!findSpecialistCard(current.toolCalls, { parentToolCallId: run.parentToolCallId, childId })) continue;
+    const parked = new Map(current.parkedSpecialistRuns);
+    parked.delete(childId);
+    const unparked = new Map(out);
+    unparked.set(id, { ...current, parkedSpecialistRuns: parked.size ? parked : undefined });
+    out = chatReducerCases(unparked, { type: 'SPECIALIST_RUN_CHANGED', sessionId: id, run });
+  }
+  return out;
+}
+
+function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
   const next = new Map(state);
 
   switch (action.type) {
@@ -1839,6 +1890,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             // "Always allow" button on it, so losing it here would re-offer a
             // grant the engine can never honor.
             external: synTool.external,
+            floorStop: synTool.floorStop,
             // Carried so the full-auto safety-stop footer survives the
             // synthetic→real tool-id handover (spec 2026-08-12, M5 2b).
             permissionMode: synTool.permissionMode,
@@ -1909,6 +1961,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             permissionSuggestions: superseded.permissionSuggestions,
             denyListed: superseded.denyListed,
             external: superseded.external,
+            floorStop: superseded.floorStop,
             permissionMode: superseded.permissionMode,
           }
         : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
@@ -2330,6 +2383,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             requestId: action.requestId,
             denyListed: action.denyListed,
             external: action.external,
+            floorStop: action.floorStop,
             permissionMode: action.permissionMode,
           };
           const target = inputIdx >= 0 ? inputIdx : nameIdx;
@@ -2456,6 +2510,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           permissionSuggestions: action.permissionSuggestions,
           denyListed: action.denyListed,
           external: action.external,
+          floorStop: action.floorStop,
           permissionMode: action.permissionMode,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
@@ -2481,6 +2536,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           permissionSuggestions: action.permissionSuggestions,
           denyListed: action.denyListed,
           external: action.external,
+          floorStop: action.floorStop,
           permissionMode: action.permissionMode,
           ...(action.specialist ? { specialist: action.specialist } : {}),
         });
@@ -2679,16 +2735,24 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
     case 'SPECIALIST_RUN_CHANGED': {
       // Specialists 1c: the ledger record lands on the launching Task card.
-      // The card must already exist (the Task tool-use event precedes every
-      // ledger write, and replay splices child events after it) — a record for
-      // an unknown card is dropped, not parked, same as applySubagentEvent.
+      // A record for a card that is not on screen YET is PARKED (latest per
+      // helper) and applied when the card appears — see
+      // applyParkedSpecialistRuns for why dropping it lost a helper's notes.
       const session = next.get(action.sessionId);
       if (!session) return state;
       const cardId = findSpecialistCard(session.toolCalls, {
         parentToolCallId: action.run.parentToolCallId,
         childId: action.run.childId,
       });
-      if (!cardId) return state;
+      if (!cardId) {
+        const held = session.parkedSpecialistRuns?.get(action.run.childId);
+        // Same straggler rule as below: keep the newer of two stamped records.
+        if (held && held.seq !== undefined && action.run.seq !== undefined && action.run.seq <= held.seq) return state;
+        const parked = new Map(session.parkedSpecialistRuns);
+        parked.set(action.run.childId, action.run);
+        next.set(action.sessionId, { ...session, parkedSpecialistRuns: parked });
+        return next;
+      }
       const card = session.toolCalls.get(cardId)!;
       // Task 11 short-circuit: the delivery bookkeeping (claim / mark-
       // attempted / confirm / release) legitimately rewrites the ledger

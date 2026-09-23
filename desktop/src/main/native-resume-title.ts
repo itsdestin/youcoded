@@ -23,7 +23,11 @@ export interface ResumeTitleDeps {
   getStoredTitle: (sessionId: string) => Promise<string | undefined>;
   /** Pushes the name onto the live session — the same SESSION_RENAMED send +
    *  broadcastRename pair the title feeder's onTitle uses. */
-  onTitle: (sessionId: string, title: string) => void;
+  onTitle: (sessionId: string, title: string, opts?: { provisional: boolean }) => void;
+  /** The Resume Browser row's own name for this session — its opening words
+   *  when nothing better exists. Optional so a caller without a session store
+   *  keeps the old stored-title-only behaviour. */
+  getOpeningTitle?: (sessionId: string) => Promise<string | undefined>;
 }
 
 /**
@@ -47,12 +51,31 @@ export async function reapplyStoredTitle(
     const stored = await deps.getStoredTitle(sessionId);
     // Guardrail: only ever plant a REAL name. Broadcasting a placeholder here
     // would overwrite a good live name with 'Untitled' / 'New Session'.
-    if (!isRealSessionName(stored)) return null;
-
-    const title = stored!.trim();
-    deps.onTitle(sessionId, title);
+    if (isRealSessionName(stored)) {
+      const title = stored!.trim();
+      deps.onTitle(sessionId, title);
+      return title;
+    }
+    // No stored title (a conversation older than the title feeder, or every
+    // naming attempt failed offline). Destin, 2026-09-02: the pill shows the
+    // first message's opening words — the same name the Resume Browser row the
+    // user just clicked shows. PROVISIONAL: the caller must not let it count as
+    // a title, or the namer would never give this conversation a real one.
+    const opening = await deps.getOpeningTitle?.(sessionId);
+    if (!isRealSessionName(opening)) return null;
+    const title = opening!.trim();
+    deps.onTitle(sessionId, title, { provisional: true });
     return title;
   } catch {
     return null;
   }
+}
+
+/** The live session name a "does this conversation already have a title?"
+ *  check may use: the live name, unless it is still the provisional opening
+ *  words this module planted. WHY: those words are only there so the pill
+ *  matches the Resume Browser row; counting them as a title would stop the
+ *  namer from ever giving the conversation a real one. */
+export function nameForTitleCheck(liveName: string | undefined, provisional: string | undefined): string | undefined {
+  return liveName !== undefined && liveName === provisional ? undefined : liveName;
 }

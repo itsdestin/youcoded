@@ -316,6 +316,13 @@ describe('SessionStore', () => {
     expect(store.list()[0].title).toBe('explain quantum tunneling to me');
   });
 
+  it('openingTitle gives one session the same name its Resume row shows', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('user-message', { text: 'explain quantum tunneling to me' }, 'u1') as any);
+    expect(await store.openingTitle('s-1', HEADER.cwd)).toBe(store.list()[0].title);
+    expect(await store.openingTitle('no-such-session', HEADER.cwd)).toBeUndefined();
+  });
+
   it('dispose flushes the in-flight part and clears the open buffer', async () => {
     await store.create(HEADER);
     await store.append(HEADER.cwd, ev('assistant-text', { text: 'partial', partId: 'p1' }, 'a1') as any);

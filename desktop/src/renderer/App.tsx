@@ -62,7 +62,7 @@ import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
 import { useSessionAttention, mergePeerSessionStatuses } from './hooks/useSessionAttention';
 import { useAttentionSummary } from './hooks/useAttentionSummary';
 import { useActiveSessionModel } from './hooks/useActiveSessionModel';
-import { useNativeSessionUsage, useNativeContextOverride, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
+import { useNativeSessionUsage, useNativeContextOverride, useNativeContextWindow, useTurnsWithUsage } from './hooks/useNativeSessionUsage';
 import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
 import { useZoomControls } from './hooks/useZoomControls';
 import { useChromeMeasurements } from './hooks/useChromeMeasurements';
@@ -3193,6 +3193,9 @@ function AppInner() {
   // so the usage above stays at its PRE-rewrite reading until the next message.
   // selectNativeStatusChips prefers this; the next turn-complete clears it.
   const nativeContextOverride = useNativeContextOverride(isNativeSession ? sessionId : null);
+  // The CURRENT model's window (re-pushed on a swap), not the last turn's — see
+  // nativeContextWindow in usage-snapshot.ts.
+  const nativeContextWindow = useNativeContextWindow(isNativeSession ? sessionId : null);
   // NOT gated on isNativeSession — CC turns carry usage too (the transcript
   // watcher stamps it), and the reuse chip serves both runtimes.
   const turnsWithUsage = useTurnsWithUsage(sessionId);
@@ -3850,7 +3853,7 @@ function AppInner() {
                   openTasksCounts={openTasksCounts}
                   onOpenOpenTasks={openOpenTasksPopup}
                   nativeUsage={nativeStatusUsage}
-                  nativeContextLength={nativeStatusUsage?.contextLength ?? null}
+                  nativeContextLength={nativeContextWindow}
                   nativeContextOverride={nativeContextOverride}
                   turnsWithUsage={turnsWithUsage}
                   nativeTotals={sessionTotals}

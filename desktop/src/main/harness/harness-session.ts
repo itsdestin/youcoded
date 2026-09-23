@@ -26,13 +26,16 @@ import {
   type AcceptedHistoryTransformation,
   type AttemptId,
 } from './accepted-history-capture';
-import type { TranscriptEvent, InjectedMeta } from '../../shared/types';
+import type { TranscriptEvent, InjectedMeta, FloorStop } from '../../shared/types';
 import type { ModelBinding } from '../../shared/provider-types';
 import type { HarnessManifest } from '../../shared/harness-manifest';
 import type { PermissionDecision, PermissionRule } from '../../shared/permission-types';
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
+import { destructiveRmReason } from './tools/rm-target';
+import { secretPathIn } from './tools/bash-secret-paths';
+import * as os from 'os';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
 
 // Tools whose permission SUBJECT is not a filesystem path. Bash's is a command
@@ -350,6 +353,10 @@ interface StepResult {
    *  card would spin beside the retry's own cards until the turn ends (the
    *  same reason the manual-Retry and stall-retry paths withdraw theirs). */
   pendingPreparing: { toolCallId: string; toolName: string; chars: number }[];
+  /** The part ids this step's visible TEXT streamed under (reasoning excluded).
+   *  The empty-step retry discards them when the step's text was whitespace
+   *  only — see the dropPart emit at that retry for why. */
+  textPartIds?: string[];
 }
 
 // v7 stream parts carry the chunk in .text (verified against ai@7.0.22:
@@ -766,7 +773,8 @@ export class HarnessSession extends EventEmitter {
   /** Trigger ids already injected in this session. Survives across turns on
    *  purpose — a rule is a standing instruction, not a per-turn reminder. */
   private readonly injectedTriggerIds = new Set<string>();
-  /** Delivered-image dedupe: canonical path → mtimeMs at delivery. A model that
+  /** Delivered-image dedupe: canonical path → { mtimeMs at delivery, the tool
+   *  call whose result carried the image }. A model that
    *  re-Reads the SAME unchanged file gets "already visible" text, not a second
    *  ~1.6k-token copy; a CHANGED file (new mtime) is delivered again. Cleared on
    *  every site that DISCARDS entries from `this.history` itself — resume
@@ -783,7 +791,7 @@ export class HarnessSession extends EventEmitter {
    *  be sitting in surviving history — but that is the safe failure direction:
    *  over-delivery costs tokens, the bug it replaces cost correctness.
    *
-   *  KNOWN GAP (2026-08-11 review, deliberately NOT fixed in this pass): the
+   *  KNOWN GAP (2026-08-11 review; closed 2026-09-23, see the end of this block): the
    *  list above is every site that discards from `this.history`. It is NOT
    *  exhaustive over every way the MODEL's effective view of history can
    *  shrink — fitToContext trims oldest messages for the OUTGOING REQUEST
@@ -810,16 +818,16 @@ export class HarnessSession extends EventEmitter {
    *  vision model with a very small context window — do not read the old
    *  "narrow" framing off this comment when triaging it.
    *
-   *  Intended eventual fix (deferred, not this pass): re-key this map to
-   *  Map<path, { mtime, toolCallId }> and reconcile against the FITTED window
-   *  after fitToContext runs, so the cache can only vouch for what the model
-   *  actually just saw. Two narrower fixes were considered and rejected
-   *  because fitToContext runs on EVERY request, not just ones near budget: an
-   *  unconditional clear there defeats dedupe entirely, and a count-diff there
-   *  (mirroring the prune sites) latches permanently true the moment history
-   *  outgrows the context window, which is ordinary steady-state for a long
-   *  conversation. */
-  private shownImages = new Map<string, number>();
+   *  CLOSED (2026-09-23): each entry now remembers WHICH tool call carried the
+   *  image, and fitToContext ends by dropping every entry whose call is no
+   *  longer in the window it is about to send (`reconcileShownImages`). The
+   *  cache can therefore only vouch for what the model actually just saw. Two
+   *  narrower fixes were considered and rejected because fitToContext runs on
+   *  EVERY request, not just ones near budget: an unconditional clear there
+   *  defeats dedupe entirely, and a count-diff there (mirroring the prune
+   *  sites) latches permanently true the moment history outgrows the context
+   *  window, which is ordinary steady-state for a long conversation. */
+  private shownImages = new Map<string, { mtime: number; toolCallId: string }>();
   /** Read-only view of the resolved profile. The host needs the injection budget
    *  to size a /skill-name body, and re-resolving it there would risk drifting
    *  from what this session actually runs with (setBinding can have changed it). */
@@ -1551,9 +1559,9 @@ export class HarnessSession extends EventEmitter {
    *  newest user message; chars/4 is a deliberate estimate, not a tokenizer.
    *  WHY this matters for shownImages: this trims the OUTGOING REQUEST only —
    *  `this.history` itself is untouched — so an image can drop out of what the
-   *  model actually sees while the dedupe cache still vouches for it. See the
-   *  shownImages field comment's KNOWN GAP section for the reachability
-   *  analysis and why that isn't fixed here. */
+   *  model actually sees while the dedupe cache still vouches for it — so the
+   *  fitted window is reconciled against that cache before it is returned
+   *  (reconcileShownImages; the shownImages field comment has the history). */
   private fitToContext(messages: ModelMessage[]): ModelMessage[] {
     // The emergency floor. Since 2026-09-10 (cache follow-ups item 2) the
     // compaction trigger is derived from THIS budget and sits below it, so in
@@ -1603,8 +1611,28 @@ export class HarnessSession extends EventEmitter {
     // returned a 100 KB tool result (read.ts raises its own cap to 100_000 chars)
     // that exceeded the window on its own, and the turn died. Latent on master,
     // not introduced by Plan C — Plan C just made big local reads routine.
-    if (kept.length === 0) return this.salvageOversizedTail(messages, budgetTokens, total0);
-    return kept;
+    const fitted = kept.length === 0 ? this.salvageOversizedTail(messages, budgetTokens, total0) : kept;
+    this.reconcileShownImages(fitted);
+    return fitted;
+  }
+
+  /** Forget every delivered image whose carrying tool result is NOT in the
+   *  window about to be sent. WHY: fitToContext trims the outgoing request only,
+   *  so on a small window an image can scroll out of the model's view while the
+   *  dedupe cache still answers a re-Read with "already visible earlier" — a
+   *  false claim that also withholds the picture. Only calls that are gone are
+   *  dropped, so dedupe keeps working for everything still in view. */
+  private reconcileShownImages(fitted: ModelMessage[]): void {
+    if (this.shownImages.size === 0) return;
+    const inView = new Set<string>();
+    for (const m of fitted) {
+      if ((m as any).role !== 'tool' || !Array.isArray((m as any).content)) continue;
+      for (const part of (m as any).content) {
+        if (part?.type === 'tool-result' && part.output?.type === 'content' && Array.isArray(part.output.value)
+          && part.output.value.some((v: any) => v?.type === 'file')) inView.add(part.toolCallId);
+      }
+    }
+    for (const [p, shown] of this.shownImages) if (!inView.has(shown.toolCallId)) this.shownImages.delete(p);
   }
 
   /** Last resort for fitToContext: the newest exchange doesn't fit even alone.
@@ -2286,6 +2314,7 @@ export class HarnessSession extends EventEmitter {
   private resolveToolImages(
     payload: ToolResultPayload,
     budget: { count: number; bytes: number },
+    toolCallId: string,
   ): { text: string; images: Array<{ path: string; mediaType: string; data: Buffer; filename: string }> } {
     const paths = payload.images ?? [];
     if (!paths.length) return { text: payload.text, images: [] };
@@ -2302,7 +2331,7 @@ export class HarnessSession extends EventEmitter {
       try { st = fs.statSync(p); mtime = st.mtimeMs; } catch {
         text += `\n[image not attached: ${p} is no longer readable]`; continue;
       }
-      if (this.shownImages.get(p) === mtime) {
+      if (this.shownImages.get(p)?.mtime === mtime) {
         text += `\n[image not re-attached: ${p} is unchanged and already visible earlier in this conversation]`; continue;
       }
       if (budget.count >= MAX_IMAGES_PER_TURN) {
@@ -2331,7 +2360,7 @@ export class HarnessSession extends EventEmitter {
         text += `\n[image not attached: over the ${MAX_IMAGE_BYTES_PER_TURN / (1024 * 1024)} MB-per-turn image budget]`; continue;
       }
       budget.count += 1; budget.bytes += img.data.length;
-      this.shownImages.set(p, mtime);
+      this.shownImages.set(p, { mtime, toolCallId });
       // Fix 3 (2026-08-11 review): carry the file's own basename through so
       // toolResultPart can label the part with it instead of the tool's name —
       // see that method for why an unset filename defeats the point.
@@ -2686,6 +2715,16 @@ export class HarnessSession extends EventEmitter {
             // empty_response break below needs no withdrawal — the turn ends
             // there and endTurn reaps.)
             this.withdrawOrphanedPreparing(step.pendingPreparing);
+            // A whitespace-only step still STREAMED its '\n  \n' — on screen and
+            // into the store's open part. History skipped it, so erase it from
+            // the other two places too (the same dropPart the manual Retry
+            // uses). WHY: the retry usually reuses the same part id, so the
+            // store would otherwise fold the whitespace into the retry's text
+            // and a resumed session would see different bytes than the live one
+            // did. Reasoning parts are NOT dropped — the user saw that thinking.
+            if (step.textPartIds?.length) {
+              this.emitEvent('assistant-thinking', { dropPart: { partIds: step.textPartIds } });
+            }
             // One structured log line so the silent retry is diagnosable from
             // ~/.claude/desktop.log (console.error reaches nobody in a packaged
             // build) — deliberately NOT a transcript event (emit surface frozen).
@@ -2792,7 +2831,7 @@ export class HarnessSession extends EventEmitter {
           // Turn the tool's promised image paths into deliverable parts, charging
           // the per-turn budget/dedupe and amending the text with a named note
           // for every skip (Task 5 — the driver never promises silently).
-          const delivered = this.resolveToolImages(payload, imageBudget);
+          const delivered = this.resolveToolImages(payload, imageBudget, call.toolCallId);
           this.capture.recordEvent(this.emitEvent('tool-result', {
             toolUseId: call.toolCallId, toolName: call.toolName,
             toolResult: delivered.text, isError: payload.isError ?? false,
@@ -2956,7 +2995,10 @@ export class HarnessSession extends EventEmitter {
       // transient provider error before it lands here.
       // The attempt that produced this partial threw, so the loop never saw its
       // StepResult — this is the one acceptance decision made outside it.
-      if (partialAssistantText) {
+      // trim(): the same emptiness rule as every other assistant push (and as
+      // rebuildHistory), so a whitespace-only partial never becomes a blank
+      // assistant message live that a resume would then not reproduce.
+      if (partialAssistantText.trim()) {
         this.history.push({ role: 'assistant', content: partialAssistantText });
         if (this.lastAttempt !== undefined) this.capture.acceptAttemptText(this.lastAttempt);
       } else if (this.lastAttempt !== undefined) {
@@ -3231,6 +3273,7 @@ export class HarnessSession extends EventEmitter {
     // these to the renderer and the store so the abandoned text is removed
     // rather than appended to.
     const emittedPartIds = new Set<string>();
+    const textPartIds = new Set<string>();
 
     try {
       while (true) {
@@ -3347,6 +3390,7 @@ export class HarnessSession extends EventEmitter {
             // segment always separates consecutive text STEPS in the reducer, so a
             // repeated id across steps can't wrongly merge two bubbles.
             emittedPartIds.add(part.id ?? 'text-0');
+            textPartIds.add(part.id ?? 'text-0');
             this.capture.recordAttemptEvent(
               attempt, this.emitEvent('assistant-text', { text: t, partId: part.id ?? 'text-0' }), 'text');
             break;
@@ -3524,6 +3568,7 @@ export class HarnessSession extends EventEmitter {
       toolCalls,
       responseMessages,
       pendingPreparing,
+      textPartIds: [...textPartIds],
       usage: {
         inputTokens: usage?.inputTokens ?? 0,
         outputTokens: usage?.outputTokens ?? Math.ceil(outputChars / APPROX_CHARS_PER_TOKEN),
@@ -3682,11 +3727,34 @@ export class HarnessSession extends EventEmitter {
       }
     }
 
+    // 3b. The removal-target floor (tools/rm-target.ts). A Bash command that
+    //     would remove the workspace, the home folder, the disk root or a system
+    //     folder is ALWAYS asked about — below every rule, so a remembered
+    //     "Always allow" cannot wave it through. It only ever turns an allow
+    //     into an ask: a deny rule still denies.
+    //     The secret-path floor (tools/bash-secret-paths.ts) works the same way
+    //     for a command that names a file the file tools refuse (~/.ssh, .env…):
+    //     Bash used to read those with no card at all (Destin, 2026-09-23, option B).
+    const bashCtx = { cwd: this.opts.cwd, shellCwd: this.shellCwd ?? undefined, home: os.homedir() };
+    const isBash = call.toolName === 'Bash' && typeof subject === 'string';
+    const rmFloor = isBash ? destructiveRmReason(subject, bashCtx) : null;
+    const secretFloor = isBash && !rmFloor ? secretPathIn(subject, bashCtx) : null;
+    const floorStop: FloorStop | undefined = rmFloor ? 'removal' : secretFloor ? 'secret-path' : undefined;
+    if (floorStop) log('INFO', 'HarnessSession', 'a floor below the permission rules forced an ask', { sessionId: this.opts.sessionId, floor: floorStop, reason: rmFloor ?? `names ${secretFloor}` });
+
     // 4. Configured decision. An external-directory path forces 'ask' regardless
     //    of rules; otherwise consult decide() (default: ask — never silent-allow).
-    const decision: PermissionDecision = externalAsk
+    const configured: PermissionDecision = externalAsk
       ? { action: 'ask', denyListed: false }
       : await (this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
+    // denyListed: true so Full auto shows its stop band (worded per floorStop —
+    // deny-list-copy.ts) like any deny-list stop, instead of silently running.
+    const decision: PermissionDecision = floorStop && configured.action !== 'deny'
+      ? { action: 'ask', denyListed: true }
+      : configured;
+    // A forced ask never consults stored rules, so "Always allow" could never
+    // be honoured for it — the card hides the button and nothing is remembered.
+    const forcedAsk = externalAsk || floorStop !== undefined;
     // A deny may carry its own model-facing reason (PermissionDecision.message):
     // the specialist caps (child-permissions.ts) refuse with "not available to
     // this specialist" / "read-only charter", which tells the model what to do
@@ -3705,7 +3773,7 @@ export class HarnessSession extends EventEmitter {
       // as `pattern` — threaded through so a routed CHILD ask (child-ask-
       // router.ts, which has no other way to reach it) can persist the exact
       // same rule a root session's own remember-rule listener would.
-      const d = await this.opts.askUser({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: decision.denyListed, external: externalAsk, subject });
+      const d = await this.opts.askUser({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: decision.denyListed, external: externalAsk, ...(floorStop ? { floorStop } : {}), subject });
       if (d.behavior === 'canceled') return 'interrupted';
       // Task 8: d.message carries specific copy for a deny that ISN'T a real
       // user decline — e.g. child-ask-router's outside-the-folder refusal for
@@ -3721,7 +3789,7 @@ export class HarnessSession extends EventEmitter {
       // path forced this ask and SKIPS decide() on every future call, so a stored
       // rule can never fire — recording one promises the user something the
       // engine will not honor. See spec 2026-08-11, finding 3.
-      if (d.always && !externalAsk) {
+      if (d.always && !forcedAsk) {
         // The card sent a width, not a pattern — rememberedRuleFor derives the
         // rule here, in main. null means this command may not be remembered at
         // any width, so nothing is emitted.

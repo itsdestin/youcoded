@@ -114,6 +114,19 @@ describe('transient native usage progress', () => {
     expect(s.get(SESSION)!.inProgressUsage).toEqual(usage(10));
   });
 
+  it('an unrelated update that returns the chat to ok also drops the stall warning', () => {
+    let s = dispatch(initState(), { type: 'USER_PROMPT', sessionId: SESSION, content: 'hi', timestamp: 1 } as ChatAction);
+    s = dispatch(s, { type: 'TRANSCRIPT_THINKING_HEARTBEAT', sessionId: SESSION, stallWarning: { retryInMs: 15_000, willRetry: true } });
+    expect(s.get(SESSION)!.attentionState).toBe('stuck');
+    expect(s.get(SESSION)!.stallWarning).not.toBeNull();
+    // A tool event (e.g. a helper's) writes 'ok'. Keeping the warning there made
+    // ChatView swap the amber card for a "Retrying in 15s…" countdown.
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u-t1', toolUseId: 't1',
+      toolName: 'Read', toolInput: { file_path: 'a.ts' }, timestamp: 2 } as ChatAction);
+    expect(s.get(SESSION)!.attentionState).toBe('ok');
+    expect(s.get(SESSION)!.stallWarning).toBeNull();
+  });
+
   it('rejects stale attach progress and duplicate UUID without changing references', () => {
     let s = dispatch(initState(), heartbeat(SESSION, 30, 102, 'new'));
     expect(dispatch(s, heartbeat(SESSION, 10, 100, 'old'))).toBe(s);

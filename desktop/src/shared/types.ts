@@ -69,6 +69,14 @@ export interface PortableModelRef {
 // Task 11 (cancel/edit queued messages): the 'queued' arm carries the host-
 // minted queueId (NativeSessionHost.send()'s randomUUID()) so the renderer can
 // target this exact entry later with native:queue-remove.
+/** Why a native Bash ask was forced below every stored rule, so no saved grant
+ *  could ever skip it (and the card offers no "Always allow"):
+ *  - 'removal': the command would remove the workspace, home folder, disk root
+ *    or a system folder (harness/tools/rm-target.ts);
+ *  - 'secret-path': the command names a secret or credential file — the same
+ *    list the file tools refuse (harness/tools/bash-secret-paths.ts). */
+export type FloorStop = 'removal' | 'secret-path';
+
 export type NativeSendResult =
   | { status: 'sent' }
   | { status: 'queued'; queueId: string }
@@ -585,6 +593,7 @@ export type SubagentSegment =
       requestId?: string;
       denyListed?: boolean;
       external?: boolean;
+      floorStop?: FloorStop;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
@@ -757,6 +766,10 @@ export interface ToolCallState {
    *  every external path and never consults the stored rules there, so a
    *  remembered rule could not fire. Spec 2026-08-11, finding 3. */
   external?: boolean;
+  /** Native broker only: the ask was forced by a floor below every stored rule
+   *  → the "Always allow" button is HIDDEN (for the same reason as `external`)
+   *  and Full auto's stop band names which floor. See FloorStop. */
+  floorStop?: FloorStop;
   /** Native broker only: the session's permission mode when the ask fired.
    *  'full-auto' + denyListed swaps the generic button row for the safety-stop
    *  footer (spec 2026-08-12, M5 2b). Absent on CC asks. */

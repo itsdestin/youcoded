@@ -293,6 +293,12 @@ interface LiveEntry {
   // is the same discipline McpLease applies inside the manager (where the
   // equivalent bug WAS reachable and is mutation-tested).
   mcpLease?: McpLease;
+  // True while quiesce() is winding the session down for a takeover. send()
+  // refuses in that window — see quiesce() step (0).
+  quiescing?: boolean;
+  // The "What the assistant was given" record last pushed for this session, so a
+  // model swap can re-push it with the new model's window (republishWindow).
+  sessionContext?: SessionContext;
   // Per-session append serialization: each transcript event extends this chain
   // (append(prev).then(next)) so the SessionStore contract (serialized appends)
   // holds. Starts resolved; a failed append is logged but never breaks the
@@ -1576,6 +1582,9 @@ export class NativeSessionHost extends EventEmitter {
     // Held after Stop (see LiveEntry.holdDeliveries): the report stays queued
     // and rides in with the user's next message instead of waking the model.
     if (entry.holdDeliveries) return;
+    // Nor while a takeover winds the session down (quiesce): the report stays
+    // queued rather than waking the model past the flush.
+    if (entry.quiescing) return;
     entry.inFlight = true;
     entry.running = new Promise<void>((resolve) => {
       setImmediate(() => { void this.runTurns(parentId, entry, IDLE_PASS).then(resolve, resolve); });
@@ -2559,6 +2568,7 @@ export class NativeSessionHost extends EventEmitter {
       const windowUnchanged = r.contextLength === entry.session.contextWindowTokens;
       if (capUnchanged && windowUnchanged) return;
       entry.session.setBinding(binding, r.contextLength, r.profile, r.pricing, r.free);
+      this.republishWindow(sessionId, entry);
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'could not re-read the local engine\u2019s slot count after the turn — helper cap unchanged', { sessionId, error: String((err as any)?.message ?? err) });
     }
@@ -3045,7 +3055,8 @@ export class NativeSessionHost extends EventEmitter {
     // session must still open if either fails. A missing line is a missing
     // explanation; a thrown one is a chat that never starts.
     try {
-      this.emit('session-context', { sessionId, context: this.buildSessionContext(cwd, session) });
+      entry.sessionContext = this.buildSessionContext(cwd, session);
+      this.emit('session-context', { sessionId, context: entry.sessionContext });
     } catch (err) {
       log('ERROR', 'NativeSessionHost', 'could not describe the session context', { sessionId, error: String(err) });
     }
@@ -3105,6 +3116,29 @@ export class NativeSessionHost extends EventEmitter {
       tools: inv.toolNames,
       droppedMcpServers: inv.droppedMcpServers,
     };
+  }
+
+  /** Re-push the session-context record after a model swap, with the NEW
+   *  model's name and window.
+   *
+   *  WHY (roadmap: the context chip kept the OLD model's window after a swap or
+   *  resume): the record was pushed once at wire(), and the chip read its window
+   *  off the last finished turn — so swapping a 1M model for a small local one
+   *  left "97% remaining" on screen until a turn completed on the new model,
+   *  and the panel's "Context window" row and small-window warning never
+   *  updated at all. The renderer now reads the window from this record first.
+   *
+   *  Only the model and window are patched: everything else in the record
+   *  describes what the session was given AT START (the instruction file's fit
+   *  is fixed then — setBinding does not re-apply it), so rebuilding it here
+   *  would describe a trim that never happened. */
+  private republishWindow(sessionId: string, entry: LiveEntry): void {
+    const prev = entry.sessionContext;
+    if (!prev) return;
+    const next: SessionContext = { ...prev, modelLabel: entry.session.binding.modelId, contextWindowTokens: entry.session.contextWindowTokens };
+    if (next.modelLabel === prev.modelLabel && next.contextWindowTokens === prev.contextWindowTokens) return;
+    entry.sessionContext = next;
+    this.emit('session-context', { sessionId, context: next });
   }
 
   /** One file's text for the panel, fetched when the user opens its row.
@@ -3750,6 +3784,10 @@ export class NativeSessionHost extends EventEmitter {
       }
       return { status: 'failed', reason: 'not-live' };
     }
+    // A takeover is winding this session down (quiesce): a message now would run
+    // a whole turn here after the handoff began. 'not-live' because the session
+    // is being stopped on this device; the renderer keeps the draft.
+    if (entry.quiescing) return { status: 'failed', reason: 'not-live' };
     if (entry.inFlight) {
       if (entry.queue.length >= SEND_QUEUE_LIMIT) return { status: 'failed', reason: 'queue-full' };
       // Task 11: mint a stable id per queued entry so the renderer can target
@@ -4252,6 +4290,8 @@ export class NativeSessionHost extends EventEmitter {
   async compact(sessionId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
+    // Being wound down for a takeover (quiesce): would append past the flush.
+    if (entry.quiescing) return { ok: false, reason: 'not-live' };
     if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
     const result = await entry.session.compactNow();
     // Cache Stage 4: compaction is a history-only mutation — no new turn will
@@ -4269,6 +4309,8 @@ export class NativeSessionHost extends EventEmitter {
   clear(sessionId: string): { ok: true } | { ok: false; reason: string } {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
+    // Being wound down for a takeover (quiesce): would append past the flush.
+    if (entry.quiescing) return { ok: false, reason: 'not-live' };
     if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
     const result = entry.session.clearHistory();
     // Cache Stage 4: /clear is the sharpest history-only mutation there is —
@@ -4294,6 +4336,8 @@ export class NativeSessionHost extends EventEmitter {
   async invokeSkill(sessionId: string, skill: string, args?: string): Promise<{ ok: true } | { ok: false; reason: string; detail?: string }> {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
+    // Being wound down for a takeover (quiesce): a turn now would run past the flush.
+    if (entry.quiescing) return { ok: false, reason: 'not-live' };
     // Same refusal discipline as compact/clear: queueing this would land the
     // instructions after work that was started without them.
     if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
@@ -4425,18 +4469,30 @@ export class NativeSessionHost extends EventEmitter {
   async quiesce(sessionId: string): Promise<void> {
     const entry = this.live.get(sessionId);
     if (!entry) return;
-    entry.queue.length = 0;                        // (1) no post-flush turn can start
-    // (1b) Tear down specialist children before quiescing this session: a
-    // running child keeps appending to ITS file and keeps the parent's Task call
-    // pending, both of which contradict what quiesce promises the caller (no
-    // further work for this session once it resolves). Safe to await here —
-    // the queue is already cleared, so nothing can start a new parent turn.
-    await this.destroyChildrenOf(sessionId);
-    await new Promise((r) => setImmediate(r));      // (2) let a same-tick send dispatch
-    this.broker.cancelSession(sessionId);           // (3) unwind a paused permission ask
-    entry.session.interrupt();                      //     abort the in-flight turn
-    try { await entry.running; } catch { /* runTurns never rejects; belt-and-suspenders */ } // (4)
-    await this.drain(sessionId);                    // (5) flush already-enqueued appends
+    // (0) Refuse new sends until this resolves. WHY: every await below is a
+    // window in which a send() used to be accepted — an idle session dispatched
+    // a fresh turn, a busy one queued behind the interrupted turn — and ran a
+    // whole turn on this device after the takeover began (M2 final review). A
+    // send issued in the same tick BEFORE this call is unaffected: step (2)
+    // still catches and aborts it. Cleared at the end so a session whose
+    // takeover did not go ahead can be used again.
+    entry.quiescing = true;
+    try {
+      entry.queue.length = 0;                        // (1) no post-flush turn can start
+      // (1b) Tear down specialist children before quiescing this session: a
+      // running child keeps appending to ITS file and keeps the parent's Task call
+      // pending, both of which contradict what quiesce promises the caller (no
+      // further work for this session once it resolves). Safe to await here —
+      // the queue is already cleared, so nothing can start a new parent turn.
+      await this.destroyChildrenOf(sessionId);
+      await new Promise((r) => setImmediate(r));      // (2) let a same-tick send dispatch
+      this.broker.cancelSession(sessionId);           // (3) unwind a paused permission ask
+      entry.session.interrupt();                      //     abort the in-flight turn
+      try { await entry.running; } catch { /* runTurns never rejects; belt-and-suspenders */ } // (4)
+      await this.drain(sessionId);                    // (5) flush already-enqueued appends
+    } finally {
+      entry.quiescing = false;
+    }
   }
 
   /** Mid-session model swap (next turn uses the new binding). */
@@ -4450,6 +4506,7 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free, slotsUnknown } = await this.resolveContextAndProfile(binding);
     entry.session.setBinding(binding, contextLength, profile, pricing, free);
     entry.refreshSlotsAfterTurn = slotsUnknown;
+    this.republishWindow(sessionId, entry);
     // Cache Stage 4: a model swap changes the assembled prefix (and, for a
     // ChatGPT account swap, the identity the ciphertext was accepted under),
     // so the old checkpoint must be fenced now rather than left eligible.
@@ -4461,6 +4518,13 @@ export class NativeSessionHost extends EventEmitter {
       this.releaseModel(sessionId, oldModelId);
     }
     return true;
+  }
+
+  /** The Resume Browser's name for a live session (header title, else its
+   *  opening words) — see SessionStore.openingTitle. */
+  async openingTitle(sessionId: string): Promise<string | undefined> {
+    const entry = this.live.get(sessionId);
+    return entry ? this.store.openingTitle(sessionId, entry.cwd) : undefined;
   }
 
   getBinding(sessionId: string): ModelBinding | null {
