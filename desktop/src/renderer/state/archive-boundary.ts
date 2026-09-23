@@ -41,7 +41,10 @@ export function findArchiveBoundary(
     const retained = e.marker.retainedFromUuid;
     if (retained === undefined) return { index: i, kind: e.marker.variant };
     const start = retained === null ? -1
-      : timeline.findIndex((entry, j) => j < i && entry.kind === 'user' && entry.uuid === retained);
+      // A kept turn can open with a typed message OR a /skill (its card id is
+      // `skill-<event uuid>`, chat-reducer.ts); both are the user's turn start.
+      : timeline.findIndex((entry, j) => j < i && ((entry.kind === 'user' && entry.uuid === retained)
+        || (entry.kind === 'skill-invocation' && entry.id === `skill-${retained}`)));
     if (start >= 0) return { index: start, kind: e.marker.variant };
   }
   return { index: -1, kind: null };

@@ -3010,7 +3010,7 @@ export class HarnessSession extends EventEmitter {
           resultParts.push(this.toolResultPart(call, delivered.text, delivered.images));
         }
         this.history.push({ role: 'tool', content: resultParts });
-            this.historyOrigins.push([...resultOrigins]);
+        this.historyOrigins.push([...resultOrigins]);
         // Path-triggered content (M3 item 3): a project rule or a nested
         // AGENTS.md/CLAUDE.md governing a path this step just touched. Appended
         // AFTER the tool results so the model reads the rule alongside what it

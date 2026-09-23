@@ -2882,6 +2882,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // (playReply in sendInput above). Same attachment pattern as specialistEvent
   // below — Ns<'on'> doesn't carry these members.
   (on as any).transcriptEvent = (cb: (e: any) => void) => { subs.transcript.add(cb); return () => { subs.transcript.delete(cb); }; };
+  // Probe hook, same shape as __workbenchAppearanceSync: play one transcript
+  // event (e.g. a native compact-summary) into the renderer for a screenshot.
+  if (typeof window !== 'undefined') (window as any).__workbenchTranscript = (e: unknown) => { subs.transcript.forEach((f) => f(e)); return subs.transcript.size; };
   (on as any).hookEvent = (cb: (e: any) => void) => { subs.hook.add(cb); return () => { subs.hook.delete(cb); }; };
   // Specialists 1c: the delegation feed (run records + delivered notes). Not
   // on Ns<'on'> yet (no real channel) — attached separately so the typed

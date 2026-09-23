@@ -80,5 +80,9 @@ describe('findArchiveBoundary', () => {
     expect(findArchiveBoundary([u('a'), marker('compact'), u('b'), marker('clear')], ['compact']))
       .toEqual({ index: 1, kind: 'compact' });
   });
-});
 
+  it('a kept turn that opens with a /skill card fades above that card', () => {
+    const skill = { kind: 'skill-invocation', id: 'skill-s1', skillId: 'x', displayName: 'X', timestamp: 1 } as TimelineEntry;
+    expect(findArchiveBoundary([u('a'), skill, u('b'), native('s1')]).index).toBe(1);
+  });
+});

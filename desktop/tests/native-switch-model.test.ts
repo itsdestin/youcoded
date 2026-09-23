@@ -47,6 +47,29 @@ describe('HarnessSession.fitForWindow', () => {
   });
 });
 
+it('Stop during a switch summary: reported as stopped, nothing committed, history unchanged', async () => {
+  const { MockLanguageModelV4 } = await import('ai/test');
+  const stalled = new ReadableStream({ start(c) {
+    c.enqueue({ type: 'stream-start', warnings: [] });
+    c.enqueue({ type: 'text-start', id: 'p' });
+    c.enqueue({ type: 'text-delta', id: 'p', delta: 'partial handoff' });
+  } });
+  const s = makeSession({ contextLength: 200_000, model: new MockLanguageModelV4({ doStream: async () => ({ stream: stalled as any }) }) as any });
+  s.seedHistory(Array.from({ length: 40 }, (_, i) => ([
+    { role: 'user', content: `question ${i} ${'x'.repeat(2_000)}` },
+    { role: 'assistant', content: `answer ${i} ${'y'.repeat(2_000)}` },
+  ])).flat() as any);
+  const before = JSON.stringify((s as any).history);
+  const events: any[] = [];
+  s.on('transcript-event', (e: any) => events.push(e));
+  const compact = s.compactNow(undefined, 32_768);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  s.interrupt();
+  expect(await compact).toEqual({ ok: false, reason: 'interrupted' });
+  expect(events.some(e => e.type === 'compact-summary')).toBe(false);
+  expect(JSON.stringify((s as any).history)).toBe(before);
+});
+
 /** A host with only the pieces switchModel touches. */
 function fakeHost(fit: 'fits' | 'needs-summary' | 'too-small', compactResult: any = { ok: true }) {
   const entry = { session: { fitForWindow: vi.fn(() => fit) } };

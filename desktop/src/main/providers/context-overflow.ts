@@ -8,6 +8,14 @@ export function isContextOverflow(error: unknown, providerId: string): boolean {
   try { body = typeof e.responseBody === 'string' ? JSON.parse(e.responseBody) : e.data; }
   catch { return false; }
   if (!body || typeof body !== 'object') return false;
+  // Anthropic (a user's own API key; its provider id is user-chosen, so match
+  // the envelope, not the id). Its overflow has no code — only this documented
+  // 400 message, "prompt is too long: <n> tokens > <max> maximum". Anchored to
+  // that exact form so no other invalid_request_error can trigger a summary.
+  // Not yet confirmed against a captured live response (a paid call).
+  if (body.type === 'error' && body.error?.type === 'invalid_request_error'
+      && (e.statusCode ?? e.status) === 400
+      && /^prompt is too long: \d+ tokens > \d+ maximum$/.test(String(body.error?.message ?? ''))) return true;
   if (providerId === 'openrouter') return body.error?.metadata?.error_type === 'context_length_exceeded';
   if (providerId === 'local') return body.error?.type === 'exceed_context_size_error';
   // ChatGPT ordinary /responses only: do not accept a bare code without the

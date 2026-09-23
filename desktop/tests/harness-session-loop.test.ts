@@ -51,6 +51,10 @@ describe('HarnessSession — multi-step turn driver', () => {
     ['generic', { error: { code: 'context_length_exceeded' } }, false],
     ['openrouter', { error: { message: 'context_length_exceeded' } }, false],
     ['openrouter', { error: { metadata: { error_type: 'insufficient_quota' } } }, false],
+    // Anthropic via a user's own key: the id is user-chosen, so the envelope decides.
+    ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'prompt is too long: 208000 tokens > 200000 maximum' } }, true],
+    ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'messages: text content blocks must be non-empty' } }, false],
+    ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'The prompt is too long for this model, maybe' } }, false],
   ])('classifies structured overflow only for %s adapter', (provider, body, expected) => {
     expect(isContextOverflow({ statusCode: 400, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider)).toBe(expected);
     expect(isContextOverflow({ statusCode: 401, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider)).toBe(false);
