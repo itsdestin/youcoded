@@ -50,6 +50,14 @@ export interface SecretPathContext {
 
 /** Words that are text, not files. */
 const TEXT_COMMANDS = new Set(['echo', 'printf']);
+/** Commands that only ask whether a file exists, or show its name, size or
+ *  counts — never its contents. WHY (2026-09-23): the setup idiom
+ *  `[ -f .env ] || cp .env.example .env` forced a card on every run (and a
+ *  stop in Full auto) while protecting nothing. An explicit ALLOWLIST: any
+ *  command not named here is judged normally, so an unknown one falls toward
+ *  asking. `wc` is on it deliberately — a byte, word or line count is not the
+ *  secret. Judged per simple command, so `ls .env && cat .env` still asks. */
+const METADATA_ONLY = new Set(['ls', 'dir', 'test', '[', '[[', 'stat', 'wc', 'du']);
 /** Every argument is a file that is only written. */
 const WRITE_ALL = new Set(['tee', 'touch']);
 /** The LAST argument is a destination that is only written. */
@@ -88,6 +96,7 @@ export function secretPathIn(command: string, ctx: SecretPathContext): string | 
     }
     if (w >= words.length) return null;
     const name = path.basename(words[w].value).toLowerCase();
+    if (METADATA_ONLY.has(name)) return null;
     const args = words.slice(w + 1);
     let lastPlain = -1;
     if (DEST_LAST.has(name)) args.forEach((a, i) => { if (!a.value.startsWith('-')) lastPlain = i; });

@@ -15,7 +15,6 @@ describe('secret-path floor: commands that are always asked about', () => {
     ['ssh -i ~/.ssh/key host', '~/.ssh/key'],
     ['cat .env', '.env'],
     ['cat ~/.aws/credentials', '~/.aws/credentials'],
-    ['ls ~/.ssh', '~/.ssh'],
     ['cat "my secrets/.env"', 'my secrets/.env'],
     ["cat '/home/someone/.ssh/id_rsa'", '/home/someone/.ssh/id_rsa'],
     ['cat .env.local', '.env.local'],
@@ -77,5 +76,40 @@ describe('secret-path floor: commands that only look similar are left alone', ()
     'cp .env.template .env.local.dist',
   ])('%s', (cmd) => {
     expect(secretPathIn(cmd, ctx)).toBeNull();
+  });
+});
+
+// A command that only checks a secret file exists, or shows its name, size or
+// counts, reads nothing — so it stays quiet (Destin via coordinator, 2026-09-23).
+describe('secret-path floor: existence and metadata checks stay quiet', () => {
+  it.each([
+    'ls .env',
+    'ls -la .env',
+    'ls ~/.ssh',
+    'ls -la ~/.ssh',
+    'test -f .env',
+    '[ -f .env ]',
+    '[[ -e .env ]]',
+    '[ -f .env ] || cp .env.example .env',
+    'stat .env',
+    'wc -c .env',
+    'du -h ~/.ssh',
+    'find . -name .env',
+  ])('%s', (cmd) => {
+    expect(secretPathIn(cmd, ctx)).toBeNull();
+  });
+
+  it.each([
+    ['cat .env', '.env'],
+    ['ls .env && cat .env', '.env'],
+    ['[ -f .env ] && source .env', '.env'],
+    ['head .env', '.env'],
+    ['less .env', '.env'],
+    ['grep KEY .env', '.env'],
+    ['cp .env x', '.env'],
+    ['ssh -i ~/.ssh/key', '~/.ssh/key'],
+    ['cat ~/.ssh/id_rsa', '~/.ssh/id_rsa'],
+  ])('%s still asks', (cmd, hit) => {
+    expect(secretPathIn(cmd, ctx)).toBe(hit);
   });
 });
