@@ -16,6 +16,12 @@ const terminalCtorArgs: any[] = [];
 const onDataSpy = vi.fn();
 const writeSpy = vi.fn();
 const clearTextureAtlasSpy = vi.fn();
+// Every fake Terminal constructed, newest last — the render-pause and backing
+// sections read an instance's refresh / dispose / options.
+const terminalInstances: any[] = [];
+// Stands in for xterm's private RenderService._handleIntersectionChange — the
+// pause switch attachRenderPause drives (real-xterm pin: xterm-render-pause.test.ts).
+const handleIntersectionSpy = vi.fn();
 let termGrid: { cols?: number; rows: number } = { rows: 24 };
 
 // Mock factories use `function` (not arrow) so they're invokable as
@@ -26,6 +32,8 @@ vi.mock('@xterm/xterm', () => {
   return {
     Terminal: vi.fn(function (this: any, opts: any) {
       terminalCtorArgs.push(opts);
+      terminalInstances.push(this);
+      this._core = { _renderService: { _isPaused: false, _handleIntersectionChange: handleIntersectionSpy } };
       this.loadAddon = vi.fn();
       this.open = vi.fn();
       this.unicode = { activeVersion: '11' };
@@ -740,6 +748,67 @@ describe('workbench screen and terminal surface', () => {
       const css = readSource(join(__dirname, '../src/renderer/styles/globals.css'));
       const rule = css.slice(css.indexOf('.xterm-viewport {'));
       expect(rule).toMatch(/background-color:\s*var\(--terminal-backing,\s*var\(--canvas\)\)\s*!important/);
+    });
+  });
+});
+
+// Perf batch 2026-09-23. B1: a hidden terminal's DRAWING pauses (xterm's own
+// off-screen switch) while its buffer keeps receiving every write — the prompt
+// detector reads hidden sessions' buffers. E5: a theme switch that changes the
+// terminal backing recolours the open terminal instead of rebuilding it.
+describe('hidden terminals and theme switches', () => {
+  beforeEach(() => {
+    terminalInstances.length = 0;
+    terminalCtorArgs.length = 0;
+    handleIntersectionSpy.mockReset();
+    writeSpy.mockReset();
+    vi.mocked(usePtyOutput).mockReset();
+    (globalThis as any).window.claude = {
+      session: { signalReady: vi.fn(), sendInput: vi.fn(), resize: vi.fn() },
+    };
+  });
+  afterEach(() => {
+    cleanup();
+    document.documentElement.removeAttribute('style');
+    document.documentElement.removeAttribute('data-wallpaper');
+    delete (globalThis as any).window.claude;
+  });
+
+  const lastPauseVerdict = () => handleIntersectionSpy.mock.calls.at(-1)?.[0];
+  // The PTY output handler TerminalView registered (usePtyOutput is mocked).
+  const ptyOutput = () => vi.mocked(usePtyOutput).mock.calls.at(-1)![1] as (data: string) => void;
+
+  describe('TerminalView render pause (B1)', () => {
+    it('a terminal mounted hidden starts with drawing paused', () => {
+      render(<TerminalView sessionId="s1" visible={false} />);
+      expect(lastPauseVerdict()).toEqual({ isIntersecting: false });
+    });
+
+    it('a terminal mounted visible is left alone', () => {
+      render(<TerminalView sessionId="s1" visible={true} />);
+      expect(handleIntersectionSpy).not.toHaveBeenCalled();
+    });
+
+    it('PTY output still reaches the hidden terminal (its buffer stays current)', () => {
+      render(<TerminalView sessionId="s1" visible={false} />);
+      ptyOutput()('Do you trust the files in this folder?');
+      expect(writeSpy).toHaveBeenCalledWith('Do you trust the files in this folder?', expect.any(Function));
+    });
+
+    it('showing it resumes drawing and repaints the whole screen', () => {
+      const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+      const term = terminalInstances.at(-1);
+      term.refresh.mockClear();
+
+      rerender(<TerminalView sessionId="s1" visible={true} />);
+      expect(lastPauseVerdict()).toEqual({ isIntersecting: true });
+      expect(term.refresh).toHaveBeenCalledWith(0, 23);
+    });
+
+    it('hiding it again pauses drawing again', () => {
+      const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+      rerender(<TerminalView sessionId="s1" visible={false} />);
+      expect(lastPauseVerdict()).toEqual({ isIntersecting: false });
     });
   });
 });
