@@ -3908,7 +3908,11 @@ export class RemoteServer {
   private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
     'artifacts:list-session': async (p) => {
       if (typeof p.sessionId !== 'string') return { ok: false, error: 'bad-request' };
-      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot);
+      // Same conversation-id match as the desktop's LIST_SESSION — the wiring's
+      // resolve IS the desktop→conversation id map (identity when unmapped).
+      const resolved = this.sessionMetaWiring?.resolve?.(p.sessionId);
+      const conversationId = resolved && resolved !== p.sessionId ? resolved : undefined;
+      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot, conversationId);
     },
     'artifacts:list-project': async (p) =>
       (await this.refuseUnknownProject(p.projectId, { records: true })) ?? listProjectFiles(p.projectId, p.opts),

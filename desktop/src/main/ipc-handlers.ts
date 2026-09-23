@@ -4708,6 +4708,13 @@ export function registerIpcHandlers(
   // write and one .gitignore read; appendVersion queues per project and applies
   // the whole burst in a few read/write cycles instead of a thousand, each of
   // which used to pin a parsed 4.4 MB sidecar in memory until the app OOM'd.
+  // A Claude Code session's conversation id when it differs from its desktop
+  // id (see VersionEvent.conversationId); undefined for native sessions and
+  // before the first hook has mapped the session.
+  const conversationIdFor = (sessionId: string): string | undefined => {
+    const claudeId = sessionIdMap.get(sessionId);
+    return claudeId && claudeId !== sessionId ? claudeId : undefined;
+  };
   ipcMain.handle(ARTIFACT_IPC.APPEND_VERSION, async (
     _e,
     projectRoot: string,
@@ -4731,6 +4738,12 @@ export function registerIpcHandlers(
       type: args.type,
       author: args.author,
       toolUseId: typeof args.toolUseId === 'string' && args.toolUseId ? args.toolUseId : undefined,
+      // WHY: a Claude Code resume runs under a fresh desktop id, so the files
+      // list keyed on it alone lost everything from before the resume. Stamp
+      // the conversation's own id (Claude Code's, from the id map) so
+      // LIST_SESSION can find these versions again. Native ids already are
+      // the conversation id — nothing to add.
+      conversationId: conversationIdFor(sessionId),
     });
     // AFTER the append resolves, not before it (2026-08-15 review): appendVersion
     // is queued now, so an invalidate issued before the call could be followed
@@ -4800,7 +4813,7 @@ export function registerIpcHandlers(
   // transports cannot drift on roots, denylist or shape. The legacy-record
   // repair each listing runs is inside the service.
   ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, sessionId: string, projectRoot: string) =>
-    listSessionFiles(sessionId, projectRoot));
+    listSessionFiles(sessionId, projectRoot, conversationIdFor(sessionId)));
 
   // Project View IPC — list project-scoped conversations, git repo info, and
   // the discovered context files (CLAUDE.md, rules, etc.). The reads go

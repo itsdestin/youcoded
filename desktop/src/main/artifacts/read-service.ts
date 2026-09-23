@@ -70,13 +70,17 @@ async function repairSidecar(projectRoot: string): Promise<void> {
   if (migration.migrated) invalidateSidecarIdCache(projectRoot);
 }
 
-/** Tracked files a session touched — the Session Drawer's list. */
-export async function listSessionFiles(sessionId: string, projectRoot: string) {
+/** Tracked files a session touched — the Session Drawer's list.
+ *  `conversationId` (a Claude Code session's own id, resolved by the caller)
+ *  also matches versions an EARLIER desktop session of the same conversation
+ *  wrote — a resume runs under a new desktop id. */
+export async function listSessionFiles(sessionId: string, projectRoot: string, conversationId?: string) {
   await repairSidecar(projectRoot);
   const sidecar = await readSidecarShared(projectRoot);
   if (!sidecar || 'corrupted' in sidecar) return { ok: true, artifacts: [] };
   const result = sidecar.artifacts.filter((a) =>
-    a.versions.some((v) => v.sessionId === sessionId)
+    a.versions.some((v) => v.sessionId === sessionId
+      || (!!conversationId && v.conversationId === conversationId))
   );
   return { ok: true, artifacts: result };
 }

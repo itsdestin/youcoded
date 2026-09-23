@@ -250,6 +250,9 @@ export interface AppendVersionInput {
    *  no tool call behind them (manual include, tests) leave it unset and
    *  keep today's always-append behaviour. */
   toolUseId?: string;
+  /** The conversation id when it differs from `sessionId` (a Claude Code
+   *  session's own id) — see `VersionEvent.conversationId`. */
+  conversationId?: string;
 }
 
 export interface AppendVersionResult {
@@ -408,6 +411,7 @@ export async function appendVersionsDirect(
         type: input.type,
         author: input.author,
         ...(input.toolUseId ? { toolUseId: input.toolUseId } : {}),
+        ...(input.conversationId ? { conversationId: input.conversationId } : {}),
       };
       let artifactId: string;
       if (existing) {

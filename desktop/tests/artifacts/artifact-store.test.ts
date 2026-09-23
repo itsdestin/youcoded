@@ -306,6 +306,14 @@ describe('appendVersion', () => {
       expect(sidecar.artifacts[0].versions).toHaveLength(1);
     });
 
+    it('stamps the conversation id when the caller knows it, and omits it otherwise', async () => {
+      await appendVersion(projectRoot, sample.projectId, sample.name, { ...base, toolUseId: 'toolu_C', conversationId: 'claude-X' });
+      await appendVersion(projectRoot, sample.projectId, sample.name, { ...base, toolUseId: 'toolu_D' });
+      const sidecar = (await readSidecar(projectRoot)) as ProjectSidecar;
+      expect(sidecar.artifacts[0].versions[0].conversationId).toBe('claude-X');
+      expect(sidecar.artifacts[0].versions[1]).not.toHaveProperty('conversationId');
+    });
+
     it('callers with no toolUseId keep the old always-append behaviour', async () => {
       await appendVersion(projectRoot, sample.projectId, sample.name, base);
       await appendVersion(projectRoot, sample.projectId, sample.name, base);
