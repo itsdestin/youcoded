@@ -186,8 +186,11 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
     // page view too, and puts the library away.
     case 'PAGE_OPENED':
       return { ...s, openPageId: a.pageId, pageViewOpen: true, pagesViewOpen: false, projectViewOpen: false, pageFocus: !!a.focus };
+    // The open page is gone (deleted — PageHost notices the list no longer
+    // has it). The view stays, on "No page selected"; focus goes too, because
+    // a focused view hides the panel, which is now the only way on.
     case 'PAGE_CLOSED':
-      return { ...s, openPageId: null };
+      return { ...s, openPageId: null, pageFocus: false };
     case 'GIT_REVIEW_OPENED':
       return { ...s, gitReviewBySession: { ...s.gitReviewBySession, [a.sessionId]: true } };
     case 'GIT_REVIEW_CLOSED':
