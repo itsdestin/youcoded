@@ -16,9 +16,11 @@ import { log } from './logger';
  *
  *   1. Plugin manifests (~/.claude/plugins/ * /mcp-manifest.json) — the
  *      original, additive-only path. Only auto-registers `auto: true`
- *      entries, filtered by `platform`, expanding `{{plugin_root}}`. NEVER
- *      overwrites or removes an existing entry, owned or not — unchanged from
- *      before this task.
+ *      entries, filtered by `platform` / `platforms`, expanding
+ *      `{{plugin_root}}` and its alias `${PACKAGE_DIR}`. Never removes an
+ *      existing entry and never overwrites one, except an untouched entry an
+ *      older build wrote with a literal `${PACKAGE_DIR}` (see
+ *      applyManifestEntries).
  *   2. The YouCoded MCP registry (~/.youcoded/mcp.json, via McpRegistry) —
  *      new in Task 7. See `projectToClaudeJson`'s header comment for the
  *      ownership rule that governs this source, INCLUDING the collision
@@ -38,10 +40,17 @@ import { log } from './logger';
 
 const CLAUDE_JSON = path.join(os.homedir(), '.claude.json');
 
-interface McpManifestEntry {
+export interface McpManifestEntry {
   name: string;
   description?: string;
   platform?: 'macos' | 'windows' | 'linux' | 'all';
+  /** WHY: published marketplace manifests (spotify-services,
+   *  youcoded-messaging) — and the publisher skill that coaches authors —
+   *  write a LIST of Node platform names (`["darwin", "win32"]`), which the
+   *  single `platform` field cannot express. Reading only `platform` meant the
+   *  filter silently let those servers through everywhere. Both spellings and
+   *  both vocabularies are accepted; see platformMatches. */
+  platforms?: string[];
   type?: 'stdio' | 'http';
   command?: string;
   command_windows?: string; // platform-specific override
@@ -72,19 +81,54 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-function currentPlatform(): 'macos' | 'windows' | 'linux' {
+type ManifestPlatform = 'macos' | 'windows' | 'linux';
+
+function currentPlatform(): ManifestPlatform {
   if (process.platform === 'darwin') return 'macos';
   if (process.platform === 'win32') return 'windows';
   return 'linux';
 }
 
-function platformMatches(declared: McpManifestEntry['platform']): boolean {
-  if (!declared || declared === 'all') return true;
-  return declared === currentPlatform();
+// WHY: manifests in the wild use Node's names (darwin/win32) as well as the
+// app's own (macos/windows). Normalise both so neither vocabulary is silently
+// treated as "no match". Unknown words map to themselves and simply never match.
+function normalizePlatform(p: string): string {
+  const v = p.trim().toLowerCase();
+  if (v === 'darwin' || v === 'mac' || v === 'osx') return 'macos';
+  if (v === 'win32' || v === 'win') return 'windows';
+  return v;
 }
 
-function expandTokens(s: string, pluginRoot: string): string {
-  return s.replace(/\{\{plugin_root\}\}/g, pluginRoot);
+export function platformMatches(
+  entry: Pick<McpManifestEntry, 'platform' | 'platforms'>,
+  current: ManifestPlatform = currentPlatform(),
+): boolean {
+  // WHY: `platforms` (a list) wins when present because it is the more
+  // specific declaration; an empty or non-array value falls back to the
+  // single field so a malformed list never hides a server that also declares
+  // `platform`.
+  if (Array.isArray(entry.platforms) && entry.platforms.length > 0) {
+    const list = entry.platforms.filter((p): p is string => typeof p === 'string').map(normalizePlatform);
+    return list.includes('all') || list.includes(current);
+  }
+  const declared = entry.platform;
+  if (!declared || declared === 'all') return true;
+  return normalizePlatform(declared) === current;
+}
+
+// WHY: `${PACKAGE_DIR}` is the token the marketplace publisher skill and two
+// published manifests use; only `{{plugin_root}}` used to be expanded, so those
+// servers were written to ~/.claude.json with a literal placeholder and never
+// started. Treat both as the plugin's install directory — this fixes the whole
+// class (every community manifest that followed the publisher's guidance),
+// not just the two known ones.
+const PLUGIN_ROOT_TOKENS = /\{\{plugin_root\}\}|\$\{PACKAGE_DIR\}/g;
+const UNEXPANDED_PACKAGE_DIR = '${PACKAGE_DIR}';
+
+export function expandTokens(s: string, pluginRoot: string): string {
+  // A replacer function, not a string, so a `$` in a real path is never read
+  // as a replacement pattern.
+  return s.replace(PLUGIN_ROOT_TOKENS, () => pluginRoot);
 }
 
 function readManifest(pluginDir: string): { entries: McpManifestEntry[]; pluginRoot: string } | null {
@@ -148,23 +192,83 @@ function writeClaudeJsonAtomic(data: ClaudeJson): void {
 }
 
 /** Convert a manifest entry to the shape Claude Code expects in .claude.json. */
-function buildServerConfig(entry: McpManifestEntry, pluginRoot: string): Record<string, unknown> | null {
+function buildServerConfig(
+  entry: McpManifestEntry,
+  pluginRoot: string,
+  isWindows: boolean = process.platform === 'win32',
+  expand: (s: string, root: string) => string = expandTokens,
+): Record<string, unknown> | null {
   if (entry.type === 'http') {
     if (!entry.url) return null;
     return { type: 'http', url: entry.url };
   }
   // stdio (default)
-  const rawCommand = process.platform === 'win32' && entry.command_windows
+  const rawCommand = isWindows && entry.command_windows
     ? entry.command_windows
     : entry.command;
   if (!rawCommand) return null;
   const config: Record<string, unknown> = {
     type: 'stdio',
-    command: expandTokens(rawCommand, pluginRoot),
+    command: expand(rawCommand, pluginRoot),
   };
-  if (entry.args) config.args = entry.args.map(a => expandTokens(a, pluginRoot));
+  if (entry.args) config.args = entry.args.map(a => expand(a, pluginRoot));
   if (entry.env) config.env = entry.env;
   return config;
+}
+
+/** What older builds wrote for this entry: `{{plugin_root}}` expanded but
+ *  `${PACKAGE_DIR}` left literal. */
+function legacyExpand(s: string, root: string): string {
+  return s.replace(/\{\{plugin_root\}\}/g, () => root);
+}
+
+/**
+ * Pure manifest-scan step of reconcileMcp (exported for tests). Mutates
+ * `servers` in place and returns the counts.
+ *
+ * Additive-only, as before, with ONE narrow exception: an existing entry that
+ * is exactly what an older build wrote for this same manifest entry AND still
+ * carries the literal `${PACKAGE_DIR}` placeholder is replaced. WHY: that
+ * entry can never have worked (nothing expands the token), and without the
+ * repair every user who installed such a plugin before this fix would keep the
+ * broken entry forever because the scan never overwrites. The deep-equality
+ * check means an entry the user touched in any way is still left alone.
+ */
+export function applyManifestEntries(
+  servers: Record<string, unknown>,
+  manifests: Array<{ entries: McpManifestEntry[]; pluginRoot: string }>,
+  opts: { platform?: ManifestPlatform; isWindows?: boolean } = {},
+): { added: number; repaired: number; skippedPlatform: number; skippedManual: number; changed: boolean } {
+  const platform = opts.platform ?? currentPlatform();
+  const isWindows = opts.isWindows ?? process.platform === 'win32';
+  let added = 0;
+  let repaired = 0;
+  let skippedPlatform = 0;
+  let skippedManual = 0;
+  for (const { entries, pluginRoot } of manifests) {
+    for (const entry of entries) {
+      if (!entry || !entry.name) continue;
+      if (!platformMatches(entry, platform)) { skippedPlatform++; continue; }
+      if (!entry.auto) { skippedManual++; continue; }
+      const config = buildServerConfig(entry, pluginRoot, isWindows);
+      if (!config) continue;
+      const existing = servers[entry.name];
+      if (existing) {
+        // Never overwrite a user-configured entry — trust their customizations
+        // (see the repair exception in this function's header).
+        const legacy = buildServerConfig(entry, pluginRoot, isWindows, legacyExpand);
+        const legacyText = JSON.stringify(legacy);
+        if (legacyText.includes(UNEXPANDED_PACKAGE_DIR) && JSON.stringify(existing) === legacyText) {
+          servers[entry.name] = config;
+          repaired++;
+        }
+        continue;
+      }
+      servers[entry.name] = config;
+      added++;
+    }
+  }
+  return { added, repaired, skippedPlatform, skippedManual, changed: added + repaired > 0 };
 }
 
 /** Convert one RESOLVED registry server (secrets already decrypted) into the
@@ -317,31 +421,14 @@ export async function reconcileMcp(): Promise<ReconcileMcpResult> {
   }
   const servers = (claudeJson.mcpServers as Record<string, unknown>) || {};
 
-  let added = 0;
-  let skippedPlatform = 0;
-  let skippedManual = 0;
-  let manifestChanged = false;
-
-  // Legacy path (decomposition v3 §9.3), unchanged by this task: plugin-
-  // bundled servers declared in mcp-manifest.json. Additive-only — never
-  // overwritten, never removed, regardless of the ownership model below.
-  // Folding this into the registry (one ownership rule for both sources) was
-  // considered for this task and deliberately deferred — see task-7-report.md.
-  for (const { entries, pluginRoot } of manifests) {
-    for (const entry of entries) {
-      if (!entry.name) continue;
-      if (!platformMatches(entry.platform)) { skippedPlatform++; continue; }
-      if (!entry.auto) { skippedManual++; continue; }
-      // Never overwrite a user-configured entry — trust their customizations
-      if (servers[entry.name]) continue;
-
-      const config = buildServerConfig(entry, pluginRoot);
-      if (!config) continue;
-      servers[entry.name] = config;
-      added++;
-      manifestChanged = true;
-    }
-  }
+  // Legacy path (decomposition v3 §9.3): plugin-bundled servers declared in
+  // mcp-manifest.json. Additive-only — never removed, and never overwritten
+  // except the one never-worked `${PACKAGE_DIR}` repair documented on
+  // applyManifestEntries. Folding this into the registry (one ownership rule
+  // for both sources) was considered and deliberately deferred — see
+  // task-7-report.md.
+  const { added, skippedPlatform, skippedManual, changed: manifestChanged } =
+    applyManifestEntries(servers, manifests);
   claudeJson.mcpServers = servers;
 
   // New path (Task 7): project the YouCoded-owned MCP registry on top. A
