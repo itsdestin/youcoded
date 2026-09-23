@@ -253,8 +253,10 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
   // 1, finding 17): the list is a broadcast that can be a moment stale, and the
   // page that would run is this one. The list is the fallback only before the
   // document has been read, when nothing is running yet either way.
-  const loaded = load.state === 'ready' ? load.page : null;
-  const awaitingApproval = needsApproval(loaded ?? summary);
+  // Named loadedPage, not loaded: `loaded` is the list store's "has the list
+  // arrived" flag (first-run landing, merged from master 2026-09-23).
+  const loadedPage = load.state === 'ready' ? load.page : null;
+  const awaitingApproval = needsApproval(loadedPage ?? summary);
   /** The band's refresh button is how a person asks the page for fresh
    *  information; the page hears it through `youcoded.onRefresh` (§5). */
   const askPageToRefresh = () => {
