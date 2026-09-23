@@ -17,10 +17,10 @@
 // chat or terminal renders, or when anything under it commits. The shell count
 // is App.tsx's own DEV counter (AppInner commits).
 //
-// Tests marked `it.fails` are budgets master does NOT meet yet; each names the
-// fix it waits on and what was observed. When that fix lands, flip it to `it`.
-// (An `it.fails` also "passes" if the harness itself breaks — so the three
-// plain `it` controls at the bottom prove the probes can see renders at all.)
+// Every budget is met (2026-09-23, the many-tabs perf batch). Each test's
+// comment names the fix that met it and what master did before. A zero can
+// also "pass" because a probe went blind, so the three controls at the bottom
+// prove the probes can see renders at all.
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@xterm/xterm', async () => (await import('./helpers/busy-app-probes')).fakeXtermModule());
@@ -83,12 +83,12 @@ afterEach(() => {
 const zeros = (...except: string[]) => Object.fromEntries(app.sessionIds.filter((id) => !except.includes(id)).map((id) => [id, BUDGET.unrelatedTab]));
 
 describe('eight tabs open: a reply streaming', () => {
-  // Waits on: hidden terminals rendering. The turn starting flips "thinking",
-  // which re-renders App once (allowed); SessionTerminal/TerminalView are not
-  // memoised, so every Claude Code tab's terminal re-renders with it.
-  // Observed on master: 2 renders (turn opened, turn ended) in each of the 3
-  // other Claude Code tabs' terminals; 0 in every other tab's chat.
-  it.fails('into a hidden tab redraws no other tab', async () => {
+  // Met by: TerminalView is memoised. The turn starting flips "thinking",
+  // which re-renders App once (allowed); an unmemoised terminal re-rendered
+  // with it in every Claude Code tab.
+  // Before (master): 2 renders (turn opened, turn ended) in each of the 3
+  // other Claude Code tabs' terminals; 0 in every other tab's chat. Now: 0.
+  it('into a hidden tab redraws no other tab', async () => {
     const [visible, hidden] = app.sessionIds;
     const reply = await app.beginReply(hidden);
     await reply.words(WORDS / 2);
@@ -99,11 +99,11 @@ describe('eight tabs open: a reply streaming', () => {
     expect(app.visibleId()).toBe(visible);
   });
 
-  // NEW FINDING (no fix in flight as of 2026-09-23): ChatView reads its whole
-  // session with useChatState(sessionId) whether or not it is visible, so a
-  // hidden tab redraws its timeline once per streamed word.
-  // Observed on master: 45 renders for a 40-word reply with one tool call.
-  it.fails('into a hidden tab redraws that tab a few times, never once per word', async () => {
+  // Met by: a hidden ChatView reads useChatState(id, { paused: true }) and
+  // holds its last picture until shown (chat-state-paused.test.tsx pins that
+  // it is current on the first shown frame).
+  // Before (master): 45 renders for a 40-word reply with one tool call. Now: 0.
+  it('into a hidden tab redraws that tab a few times, never once per word', async () => {
     const hidden = app.sessionIds[1];
     const reply = await app.beginReply(hidden);
     await reply.words(WORDS / 2);
@@ -113,9 +113,9 @@ describe('eight tabs open: a reply streaming', () => {
     expect(app.chatRenders(hidden) + app.terminalRenders(hidden)).toBeLessThanOrEqual(BUDGET.hiddenTabWholeReply);
   });
 
-  // Waits on: hidden terminals rendering (same cause as the first test).
-  // Observed on master: 2 renders in each of the 3 hidden Claude Code terminals.
-  it.fails('into the visible tab redraws no hidden tab', async () => {
+  // Met by: TerminalView is memoised (same cause as the first test).
+  // Before (master): 2 renders in each of the 3 hidden Claude Code terminals. Now: 0.
+  it('into the visible tab redraws no hidden tab', async () => {
     const visible = app.visibleId();
     const reply = await app.beginReply(visible);
     await reply.words(WORDS);
@@ -141,22 +141,22 @@ describe('eight tabs open: typing in the composer', () => {
     expect(app.otherTabRenders(visible)).toEqual(zeros(visible));
   });
 
-  // Waits on: slash typing re-rendering App. Each character after "/" changes
-  // App state for the command drawer's filter.
-  // Observed on master: "/" → 0 shell renders, then 1 per character (3 for "/a", "/ab", "/abc").
-  it.fails('a slash command does not redraw the shell', async () => {
+  // Met by: the command drawer's filter lives in a small store only the drawer
+  // reads, not in App state.
+  // Before (master): "/" → 0 shell renders, then 1 per character (3 for "/a", "/ab", "/abc"). Now: 0.
+  it('a slash command does not redraw the shell', async () => {
     await app.type('/');
     app.resetCounts();
     for (const value of ['/a', '/ab', '/abc']) await app.type(value);
     expect(app.shellRenders()).toBe(BUDGET.shellPerSlashKeystroke * 3);
   });
 
-  // Waits on: slash typing re-rendering App AND hidden terminals rendering —
-  // either fix alone should make this pass (the App render is what reaches
-  // the hidden terminals).
-  // Observed on master: 5 renders in each hidden Claude Code terminal for
-  // typing "/" through "/abc"; 0 in hidden chats.
-  it.fails('a slash command redraws no hidden tab', async () => {
+  // Met by: the slash filter leaving App state AND TerminalView's memo. The
+  // "/" itself still opens the drawer through App (allowed), which reached the
+  // hidden terminals until the memo.
+  // Before (master): 5 renders in each hidden Claude Code terminal for typing
+  // "/" through "/abc" (2 with the slash fix alone); 0 in hidden chats. Now: 0.
+  it('a slash command redraws no hidden tab', async () => {
     const visible = app.visibleId();
     for (const value of ['/', '/a', '/ab', '/abc']) await app.type(value);
     expect(app.otherTabRenders(visible)).toEqual(zeros(visible));
@@ -164,12 +164,11 @@ describe('eight tabs open: typing in the composer', () => {
 });
 
 describe('eight tabs open: background events', () => {
-  // Waits on: ArtifactContext redrawing all tabs on any file change (and hidden
-  // terminals rendering). The file list lives in App's artifact state, and every
-  // tab's chat reads that context.
-  // Observed on master: after the list refresh, 1 render in every other tab's
-  // chat, plus 2 in each Claude Code tab's terminal (3 per Claude Code tab).
-  it.fails('a file written in a hidden tab redraws no other tab', async () => {
+  // Met by: chats read the artifact store through narrow selectors (not the
+  // whole context), and TerminalView's memo.
+  // Before (master): after the list refresh, 1 render in every other tab's
+  // chat, plus 2 in each Claude Code tab's terminal (3 per Claude Code tab). Now: 0.
+  it('a file written in a hidden tab redraws no other tab', async () => {
     const hidden = app.sessionIds[3];
     await app.writeFile(hidden, 'notes.md');
     await app.wait(3000); // the file list refresh is debounced
@@ -188,10 +187,10 @@ describe('eight tabs open: background events', () => {
     expect(app.otherTabRenders()).toEqual(zeros());
   });
 
-  // Waits on: ThinkingIndicator timers in hidden tabs. The indicator rotates
-  // its word every 2.5 s with a setInterval, mounted or not visible.
-  // Observed on master: 4 renders per hidden thinking tab per 10 s.
-  it.fails('hidden tabs that are thinking run no timer that redraws them', async () => {
+  // Met by: clocks read the on-screen context (state/on-screen-context.ts) and
+  // stand still while their chat is hidden.
+  // Before (master): 4 renders per hidden thinking tab per 10 s. Now: 0.
+  it('hidden tabs that are thinking run no timer that redraws them', async () => {
     const hidden = [app.sessionIds[1], app.sessionIds[2]];
     for (const id of hidden) await app.beginReply(id);
     await app.wait(3000); // past the "just started" window
@@ -203,10 +202,10 @@ describe('eight tabs open: background events', () => {
 });
 
 describe('eight tabs open: switching tabs', () => {
-  // Waits on: hidden terminals rendering. A switch re-renders App (allowed),
-  // which re-renders every Claude Code terminal.
-  // Observed on master: 1 render in each uninvolved Claude Code terminal per switch.
-  it.fails('redraws only the tab left and the tab opened', async () => {
+  // Met by: TerminalView's memo. A switch re-renders App (allowed), which
+  // re-rendered every Claude Code terminal.
+  // Before (master): 1 render in each uninvolved Claude Code terminal per switch. Now: 0.
+  it('redraws only the tab left and the tab opened', async () => {
     const [first, , , , , sixth] = app.sessionIds;
     await app.switchTo(sixth);
     expect(app.otherTabRenders(first, sixth)).toEqual(zeros(first, sixth));
@@ -231,24 +230,22 @@ describe('eight tabs open: global listeners', () => {
   const total = (g: Record<string, number>) => Object.values(g).reduce((a, b) => a + b, 0);
   const INPUT = new Set(['keydown', 'keyup', 'pointerdown']);
 
-  // Waits on: per-session window listeners in ChatView (capture-phase keydown,
-  // keyup and pointerdown on window, added by every mounted ChatView).
-  // Observed on master: +7 keyup, +7 pointerdown, +14 keydown for 7 more tabs.
-  it.fails('for keys and pointer do not grow with the number of tabs', () => {
+  // Met by: ChatView's window key/pointer listeners attach only while visible.
+  // Before (master): +7 keyup, +7 pointerdown, +14 keydown for 7 more tabs.
+  it('for keys and pointer do not grow with the number of tabs', () => {
     expect(total(growth((t) => INPUT.has(t)))).toBeLessThanOrEqual(BUDGET.listenersFor7MoreTabs);
   });
 
-  // NEW FINDING (no fix in flight as of 2026-09-23): every mounted
-  // TerminalView adds its own window 'resize' listener (TerminalView.tsx
-  // fitAndSync), hidden or not — one per Claude Code tab.
-  // Observed on master: +3 resize for 3 more Claude Code tabs.
-  it.fails('of every other kind do not grow with the number of tabs', () => {
+  // Met by: all terminals share ONE window 'resize' listener (TerminalView.tsx
+  // onWindowResize); each used to add its own, hidden or not.
+  // Before (master): +3 resize for 3 more Claude Code tabs. Now: 0.
+  it('of every other kind do not grow with the number of tabs', () => {
     expect(total(growth((t) => !INPUT.has(t)))).toBeLessThanOrEqual(BUDGET.listenersFor7MoreTabs);
   });
 });
 
 // Controls: each proves a probe the budgets above rely on can see a render at
-// all, so an `it.fails` above cannot be "passing" because the probe went blind.
+// all, so a zero above cannot be "passing" because the probe went blind.
 describe('the probes see real work', () => {
   it('a reply streaming into the visible tab redraws that tab per word', async () => {
     const visible = app.visibleId();
