@@ -56,6 +56,17 @@ describe('artifactReducer', () => {
       expect(next.sessionArtifacts['s1'].map((a) => a.id)).toEqual(['art_2', 'art_9']);
     });
 
+    it('keeps a just-delivered file selected when an older refresh lands after it', () => {
+      // A reply delivers a file: auto-open records and selects it while the
+      // tool tracker's debounced refresh — started before the record existed —
+      // is still in flight. That refresh used to orphan the selection, and the
+      // panel opened on the list instead of the file.
+      const delivered: ArtifactRecord = { ...sampleArtifact, id: 'art_new', path: 'out/report.html' };
+      const next = artifactReducer(opened(delivered), { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
+      expect(next.activeArtifactBySession['s1']).toBe('art_new');
+      expect(next.sessionArtifacts['s1'].some((a) => a.id === 'art_new')).toBe(true);
+    });
+
     it('is a plain replacement when nothing is open', () => {
       const s = artifactReducer(initialArtifactState, { type: 'SESSION_ARTIFACT_UPSERTED', sessionId: 's1', artifact: discovered });
       const next = artifactReducer(s, { type: 'SESSION_ARTIFACTS_LOADED', sessionId: 's1', artifacts: [other] });
