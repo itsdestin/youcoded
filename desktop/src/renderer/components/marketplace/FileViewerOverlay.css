@@ -1,0 +1,25 @@
+/* WHY: the file viewer is a nested Marketplace overlay, not Dialog. Destin
+   chose a one-line title and the Settings-style edge treatment on this shell
+   only, preserving its existing wide/narrow close controls and scrollbar. */
+[data-file-viewer-header] { position: relative; }
+[data-file-viewer-header]::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent);
+}
+@property --file-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --file-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+[data-file-viewer-scroll] {
+  mask-image:
+    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--file-fade-top) / 2), #000 var(--file-fade-top), #000 calc(100% - var(--file-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--file-fade-bottom) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
+  mask-composite: add;
+  transition: --file-fade-top 150ms ease-out, --file-fade-bottom 150ms ease-out;
+}
+[data-file-viewer-scroll][data-fade-top="true"] { --file-fade-top: 42px; }
+[data-file-viewer-scroll][data-fade-bottom="true"] { --file-fade-bottom: 42px; }

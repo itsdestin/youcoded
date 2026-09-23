@@ -1,0 +1,20 @@
+/* WHY: after Destin chose Matching, the proposed treatment lives in the real
+   ResumeBrowser. Restore only the OLD styling in the isolated Today pane so
+   the review deck continues to tell the truth without copying the new UI. */
+html[data-resume-review="today"] [data-resume-review-panel] [data-resume-review-header] h2 {
+  font-size: .875rem;
+  font-weight: 700;
+}
+html[data-resume-review="today"] [data-resume-review-panel] [data-resume-review-header]::after {
+  left: 0;
+  right: 0;
+  background: linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent);
+}
+html[data-resume-review="today"] [data-resume-review-panel] [data-resume-review-list] {
+  mask-image: none;
+  transition: none;
+}
+html[data-resume-review="today"] [data-resume-review-panel] [data-resume-review-list]::before,
+html[data-resume-review="today"] [data-resume-review-panel] [data-resume-review-list]::after {
+  content: '';
+}

@@ -2,10 +2,10 @@ declare const __APP_VERSION__: string;
 // Baked in by Vite from YOUCODED_BUILD_CHANNEL. '' for release builds, 'BETA'
 // for desktop-test-build.yml artifacts. See src/shared/version-line.ts.
 declare const __BUILD_CHANNEL__: string;
+import './SettingsDrawer.css';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
-
 import { QRCodeSVG } from 'qrcode.react';
 import { isAndroid } from '../platform';
 import { useCurrentPlatform } from '../state/platform';
@@ -340,8 +340,8 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
               because every other closer in the app went through that component in
               tranche 2 (change 76). It also gains a focus ring and an accessible
               name — the old one announced as just "✕". */}
-          <div className="settings-drawer-header shrink-0 flex items-center justify-between px-4 py-3 border-b border-edge">
-            <h2 className="text-sm font-bold text-fg">Settings</h2>
+          <div className="settings-drawer-header shrink-0 flex items-center justify-between px-4 py-3">
+            <h2 className="text-base font-medium text-fg">Settings</h2>
             <CloseButton
               onClick={onClose}
               label="Close settings"
@@ -349,7 +349,7 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
             />
           </div>
 
-          <div ref={outerScrollRef} className="scroll-fade flex-1 min-h-0">
+          <div ref={outerScrollRef} className="scroll-fade settings-drawer-scroll flex-1 min-h-0">
             {isAndroid() ? (
               <AndroidSettings open={open} onClose={onClose} onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenThemeMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} syncAutoOpen={syncAutoOpen} onSyncAutoOpenHandled={onSyncAutoOpenHandled} />
             ) : (

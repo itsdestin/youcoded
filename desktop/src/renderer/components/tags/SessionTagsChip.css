@@ -1,0 +1,25 @@
+/* WHY: this small Tags & note editor has its own header and scrolling body;
+   Destin selected the approved divider plus a conditional, unpainted fade.
+   Other tag menus and the shared Manage Tags Dialog are not changed here. */
+[data-tag-note-header] { position: relative; }
+[data-tag-note-header]::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent);
+}
+@property --tag-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --tag-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+[data-tag-note-scroll] {
+  mask-image:
+    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--tag-fade-top) / 2), #000 var(--tag-fade-top), #000 calc(100% - var(--tag-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--tag-fade-bottom) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
+  mask-composite: add;
+  transition: --tag-fade-top 150ms ease-out, --tag-fade-bottom 150ms ease-out;
+}
+[data-tag-note-scroll][data-fade-top="true"] { --tag-fade-top: 42px; }
+[data-tag-note-scroll][data-fade-bottom="true"] { --tag-fade-bottom: 42px; }

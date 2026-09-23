@@ -5,6 +5,8 @@
 
 import React, { useState } from "react";
 import { useEscClose } from "../../hooks/use-esc-close";
+import { useScrollFade } from "../../hooks/useScrollFade";
+import './MarketplaceDetailOverlay.css';
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import { useMarketplace, installTrackingKey } from "../../state/marketplace-context";
 import { useMarketplaceStats } from "../../state/marketplace-stats-context";
@@ -56,6 +58,9 @@ export default function MarketplaceDetailOverlay({
   const { theme: activeThemeSlug, setTheme } = useTheme();
 
   useEscClose(true, onClose);
+  // WHY: both skill and theme details share this scroll body. The selected
+  // content fade turns on only when more content exists past an edge.
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   // Lookup the target in the already-fetched context. No per-overlay fetch —
   // keeps the overlay snappy and avoids cache-invalidation questions.
@@ -143,8 +148,8 @@ export default function MarketplaceDetailOverlay({
         layer={2}
         className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
       >
-        <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
-          <h2 className="text-lg font-semibold text-fg">Details</h2>
+        <header data-marketplace-detail-header className="flex items-center justify-between p-3 sm:p-4">
+          <h2 className="text-base font-medium text-fg">Details</h2>
           {/* Wide: Esc-text hint. Narrow: bordered close-X matching the marketplace top bar. */}
           <button
             type="button"
@@ -161,7 +166,7 @@ export default function MarketplaceDetailOverlay({
             className="sm:hidden panel-glass bg-inset rounded-md border border-edge-dim hover:border-edge"
           />
         </header>
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6">{content}</div>
+        <div ref={scrollRef} data-marketplace-detail-scroll className="flex-1 overflow-y-auto p-3 sm:p-6">{content}</div>
       </OverlayPanel>
     </>
   );

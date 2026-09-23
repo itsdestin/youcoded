@@ -1,0 +1,29 @@
+/* WHY: Destin approved the Settings treatment on both a long About popup and
+   a shorter Development popup. Titled Dialog bodies own this treatment; the
+   separately reviewed Session Files list opts into the same header/scroll
+   classes. Other custom headers and the generic .scroll-fade keep their roles. */
+.dialog-header, [data-session-files-header] { position: relative; }
+.dialog-header::after, [data-session-files-header]::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent);
+}
+@property --dialog-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --dialog-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+.dialog-scroll, [data-session-files-scroll] {
+  mask-image:
+    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--dialog-fade-top) / 2), #000 var(--dialog-fade-top), #000 calc(100% - var(--dialog-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--dialog-fade-bottom) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
+  mask-composite: add;
+  transition: --dialog-fade-top 150ms ease-out, --dialog-fade-bottom 150ms ease-out;
+}
+.dialog-scroll[data-fade-top="true"], [data-session-files-scroll][data-fade-top="true"] { --dialog-fade-top: 42px; }
+.dialog-scroll[data-fade-bottom="true"], [data-session-files-scroll][data-fade-bottom="true"] { --dialog-fade-bottom: 42px; }
+.dialog-scroll::before, .dialog-scroll::after,
+[data-session-files-scroll]::before, [data-session-files-scroll]::after { display: none; }
+

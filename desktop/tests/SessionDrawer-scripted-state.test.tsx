@@ -50,6 +50,16 @@ vi.mock('../src/renderer/utils/format-time', async (importOriginal) => {
 
 import { SessionDrawer } from '../src/renderer/components/SessionDrawer';
 
+// WHY: Session Files now mounts lazy previews in every file row; jsdom does not
+// supply the browser visibility observer used to defer thumbnail reads.
+beforeEach(() => vi.stubGlobal('IntersectionObserver', class {
+  observe() {}
+  disconnect() {}
+  unobserve() {}
+  takeRecords() { return []; }
+}));
+afterEach(() => vi.unstubAllGlobals());
+
 // Perf cycle 2 regression guard.
 //
 // The session drawer's file list used to be loaded once by ChatView at session

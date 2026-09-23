@@ -36,11 +36,45 @@ import { previewPage } from './helpers/preview-page';
 // each started with a fresh useMissingArtifacts cache; resetting it keeps one
 // section's checks from leaking into the next.
 afterEach(() => { cleanup(); __resetMissingArtifactsCache(); });
+// WHY: previews observe visibility in browsers, while jsdom has no
+// IntersectionObserver. Structure tests keep thumbnails below the fetch gate.
+beforeAll(() => {
+  (window as any).IntersectionObserver = class {
+    observe() {}
+    disconnect() {}
+    unobserve() {}
+    takeRecords() { return []; }
+  };
+});
 
 // A file whose only version in THIS session is 'delivered' is labelled
 // "delivered" in the Session Drawer — not "viewed" (it is more than a view)
 // and not "created" (it was not modified). Spec 2026-08-25 §4.2.
 describe('SessionDrawer — delivered label', () => {
+  it('centers filename and status beside an 84×48 preview without hiding the remove action', async () => {
+    const artifact: ArtifactRecord = {
+      id: 'preview', path: 'out/chart.png', kind: 'internal', absolutePath: null,
+      lastModified: new Date().toISOString(), status: 'active',
+      versions: [{ id: 'v1', ts: new Date().toISOString(), sessionId: 'sess', type: 'delivered', author: 'agent' }],
+      comments: [], tags: [],
+    };
+    const state = { ...initialArtifactState, sessionArtifacts: { sess: [artifact] }, drawerOpenBySession: { sess: true }, activeArtifactBySession: {} };
+    (window as any).claude = { artifacts: { get: vi.fn(), checkExistence: vi.fn().mockResolvedValue({ ok: true, missingIds: [] }) } };
+    const { container } = render(<ArtifactContext.Provider value={{ state, dispatch: vi.fn() }}>
+      <SessionDrawer sessionId="sess" projectRoot="/home/u/proj" cwd="/home/u/proj" projectId="proj-1" projectName="proj" />
+    </ArtifactContext.Provider>);
+    const row = await screen.findByRole('button', { name: /^chart\.png/ });
+    const preview = row.querySelector('.w-21');
+    expect(preview).toBeTruthy();
+    expect(preview?.className).toContain('h-12');
+    expect(row.querySelector('.justify-center.gap-1')).toBeTruthy();
+    expect(container.querySelector('[data-session-files-scroll].scroll-fade')).toBeTruthy();
+    expect(container.querySelector('[data-session-files-header]')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^Remove chart\.png from this list/ })).toBeInTheDocument();
+    // A clipped card would shrink the remove button's coarse-pointer hit target.
+    expect(row.closest('.group')?.className).not.toContain('overflow-hidden');
+  });
+
   it('labels a delivered-only file "delivered"', async () => {
     const artifact: ArtifactRecord = {
       id: 'a1', path: 'out/chart.png', kind: 'internal', absolutePath: null,

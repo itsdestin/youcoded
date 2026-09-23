@@ -1,0 +1,10 @@
+/* WHY: production now carries Destin's selected Project treatment. Restore
+   the old header and bare scroll edge only in the Today pane so an answered
+   review still shows an honest Before/After without touching the real app. */
+.inline-block.bg-canvas:has(.project-popup-taper-demo) { background-color: transparent; }
+.project-popup-taper-demo #theme-bg,
+.project-popup-taper-demo #theme-pattern { z-index: 0; }
+.project-popup-taper-demo[data-variant='today'] [role='dialog'] > header { border-bottom: 1px solid var(--edge); }
+.project-popup-taper-demo[data-variant='today'] [role='dialog'] > header::after { display: none; }
+.project-popup-taper-demo[data-variant='today'] [role='dialog'] > header > span { font-weight: 600; }
+.project-popup-taper-demo[data-variant='today'] [role='dialog'] > .project-detail-scroll { mask-image: none; }

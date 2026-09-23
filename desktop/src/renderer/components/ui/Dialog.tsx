@@ -1,3 +1,4 @@
+import './Dialog.css';
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z, type OverlayLayer } from '../overlays/Overlay';
@@ -227,10 +228,12 @@ export function Dialog({
           }}
         >
           {title && (
+            // WHY: the four reviewed dialog widths share a 56px one-line header;
+            // callers with informative subtitles may grow beyond that minimum.
             // h2, matching SettingsPopup. Section labels inside the body are h3
             // (K1), so an h3 title would announce them as its siblings rather
             // than its children.
-            <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
+            <div className="dialog-header flex items-center justify-between min-h-14 px-4 py-3 shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 {onBack && (
                   <button
@@ -244,7 +247,7 @@ export function Dialog({
                   </button>
                 )}
                 <div className="min-w-0">
-                  <h2 className="text-sm font-bold text-fg truncate">{title}</h2>
+                  <h2 className="text-base font-semibold text-fg truncate">{title}</h2>
                   {subtitle && <p className="text-3xs text-fg-muted mt-0.5">{subtitle}</p>}
                 </div>
               </div>
@@ -255,9 +258,10 @@ export function Dialog({
             </div>
           )}
           {scrollBody ? (
-            // Unpadded scroll region so the fade pseudo-elements sit flush with
-            // the panel edge; padding lives on the inner track.
-            <div ref={scrollRef} className="scroll-fade flex-1">
+            // WHY: only a titled dialog has the approved header/body meeting.
+            // Titleless caller-owned surfaces retain their original painted
+            // scroll edges until their separate visual review.
+            <div ref={scrollRef} className={`scroll-fade${title ? ' dialog-scroll' : ''} flex-1`}>
               <div className="px-4 py-4 space-y-5">{children}</div>
             </div>
           ) : (

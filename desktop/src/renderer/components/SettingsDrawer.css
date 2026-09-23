@@ -1,0 +1,27 @@
+/* WHY: Settings alone uses the approved title divider and unpainted content
+   fade. The global .scroll-fade still paints --panel for other surfaces until
+   their own visual review; a mask lets this drawer's real wallpaper show through. */
+.settings-drawer-header { position: relative; }
+.settings-drawer-header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent);
+}
+@property --settings-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --settings-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+.settings-drawer-scroll {
+  mask-image:
+    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--settings-fade-top) / 2), #000 var(--settings-fade-top), #000 calc(100% - var(--settings-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--settings-fade-bottom) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
+  mask-composite: add;
+  transition: --settings-fade-top 150ms ease-out, --settings-fade-bottom 150ms ease-out;
+}
+.settings-drawer-scroll[data-fade-top="true"] { --settings-fade-top: 42px; }
+.settings-drawer-scroll[data-fade-bottom="true"] { --settings-fade-bottom: 42px; }
+.settings-drawer-scroll::before,
+.settings-drawer-scroll::after { display: none; }

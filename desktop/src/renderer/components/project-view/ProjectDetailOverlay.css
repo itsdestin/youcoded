@@ -1,0 +1,26 @@
+/* WHY: the Project detail shell is larger than a dialog, but Destin chose the
+   same 8% divider and 42px / 4%-side content fade on this specific surface.
+   Do not change the meta strip or other custom OverlayPanel callers. */
+.project-detail-header { position: relative; }
+.project-detail-header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent);
+}
+@property --project-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --project-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+.project-detail-scroll {
+  mask-image:
+    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--project-fade-top) / 2), #000 var(--project-fade-top), #000 calc(100% - var(--project-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--project-fade-bottom) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
+  mask-composite: add;
+  transition: --project-fade-top 150ms ease-out, --project-fade-bottom 150ms ease-out;
+}
+.project-detail-scroll[data-fade-top="true"] { --project-fade-top: 42px; }
+.project-detail-scroll[data-fade-bottom="true"] { --project-fade-bottom: 42px; }
+

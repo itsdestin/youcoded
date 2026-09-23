@@ -14,6 +14,47 @@ import {
   type TailscaleInfo,
 } from '../src/renderer/components/SettingsPanel';
 
+describe('SettingsPanel — drawer edges', () => {
+  const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const panel = read('../src/renderer/components/SettingsPanel.tsx');
+  const css = read('../src/renderer/components/SettingsDrawer.css');
+  const globalFade = read('../src/renderer/styles/globals.css');
+  // WHY: the scoped stylesheet must ship with the drawer, not just exist on disk.
+  expect(panel).toMatch(/import '\.\/SettingsDrawer\.css';/);
+  expect(globalFade).toMatch(/\.scroll-fade::before,\s*\.scroll-fade::after\s*\{/);
+
+  it('uses the selected title and a tapered divider without a full-width border', () => {
+    // WHY: the component class and CSS pseudo-element must agree; a CSS-only guard
+    // would pass even if the title kept its old font and border classes.
+    expect(panel).toMatch(/settings-drawer-header[^"\n]*\bpx-4\b[^"\n]*\bpy-3\b"/);
+    expect(panel).not.toMatch(/settings-drawer-header[^"\n]*\bborder-b\b/);
+    expect(panel).toMatch(/<h2 className="text-base font-medium text-fg">Settings<\/h2>/);
+    expect(css).toMatch(/\.settings-drawer-header::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*linear-gradient\(to right, transparent, var\(--edge\) 8%, var\(--edge\) 92%, transparent\)/);
+  });
+
+  it('preserves the unchanged Today pane of the visual comparison', () => {
+    // WHY: production now carries the selected style; without a scoped reset
+    // the earlier Today/Selected deck would silently compare two Selected panes.
+    const demo = read('../src/renderer/dev/workbench/mockups/SettingsTaperDemo.css');
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-header\s*\{[^}]*border-bottom:\s*1px solid var\(--edge\)/);
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-header::after\s*\{[^}]*display:\s*none/);
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-header h2\s*\{[^}]*font-size:\s*0\.875rem;[^}]*font-weight:\s*700/);
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-scroll\s*\{[^}]*mask-image:\s*none/);
+    expect(demo).toMatch(/\[data-taper='shipping'\] \.settings-drawer-scroll::before,[\s\S]*?\.settings-drawer-scroll::after\s*\{[^}]*display:\s*block/);
+  });
+
+  it('fades scroll content against the real drawer background at both ends', () => {
+    // WHY: the global painted fade must remain untouched for other scrolling surfaces.
+    expect(panel).toMatch(/ref=\{outerScrollRef\} className="scroll-fade settings-drawer-scroll/);
+    expect(css).toMatch(/\.settings-drawer-scroll\s*\{[^}]*mask-image:\s*linear-gradient\(to bottom,[^}]*mask-composite:\s*add;/);
+    expect(css).toMatch(/\.settings-drawer-scroll\s*\{[^}]*transparent 0px,[^}]*#000 var\(--settings-fade-top\)/);
+    expect(css).toMatch(/\.settings-drawer-scroll\s*\{[^}]*transparent 4%, transparent 96%, #000 100%/);
+    expect(css).toMatch(/\.settings-drawer-scroll\[data-fade-top="true"\]\s*\{\s*--settings-fade-top:\s*42px;/);
+    expect(css).toMatch(/\.settings-drawer-scroll\[data-fade-bottom="true"\]\s*\{\s*--settings-fade-bottom:\s*42px;/);
+    expect(css).toMatch(/\.settings-drawer-scroll::before,\s*\.settings-drawer-scroll::after\s*\{\s*display:\s*none;/);
+  });
+});
+
 describe('SettingsPanel — remote access panel', () => {
   afterEach(cleanup);
   const address = 'https://home-laptop.example-tailnet.ts.net';

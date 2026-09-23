@@ -21,6 +21,7 @@ import { COMPARE_SURFACES } from './compare/registry';
 import { CandidateBoundary } from './compare/CandidateBoundary';
 import { Frame, paneWidthRange } from './compare/Frame';
 import { findCandidate } from './compare/lookup';
+import { useTheme } from '../../state/theme-context';
 
 /** Origins allowed to drive this pane. The deck is served on a loopback port
  *  that is not knowable when this code is built, so the check is on the shape of
@@ -89,6 +90,15 @@ export function LiveCandidate() {
     [surfaceId, q.get('round'), q.get('candidate')],
   );
   const wrap = React.useRef<HTMLDivElement>(null);
+  const { theme: activeTheme, themeApplied } = useTheme();
+  React.useEffect(() => {
+    // WHY: the deck cannot certify a themed preview from the mount/size report:
+    // its first render may still wear the theme baked into the pane URL. This
+    // counter advances AFTER ThemeProvider writes the new theme to the DOM.
+    if (!found.ok || themeApplied === 0 || window.parent === window
+        || document.documentElement.getAttribute('data-theme') !== activeTheme) return;
+    window.parent.postMessage({ type: 'youcoded:pane-theme', theme: activeTheme, candidate: found.candidate.id }, '*');
+  }, [found, activeTheme, themeApplied]);
 
   // ── how wide the design is drawn ───────────────────────────────────────────
   // A fixed surface is its number. A FLUID surface starts at its `min` and is

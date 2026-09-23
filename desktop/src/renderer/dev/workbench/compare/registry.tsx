@@ -89,6 +89,12 @@ import { SessionStripMotionDemo } from '../mockups/SessionStripMotion';
 import { BuddySleepDemo } from '../mockups/BuddySleep';
 import { FriendlyMascots } from '../mockups/FriendlyMascots';
 import { RemoteSetupDemo } from '../mockups/RemoteSetup';
+import { SettingsTaperDemo } from '../mockups/SettingsTaperDemo';
+import { PopupTaperDemo } from '../mockups/PopupTaperDemo';
+import { ProjectPopupTaperDemo } from '../mockups/ProjectPopupTaperDemo';
+import { MarketplaceFileTaperDemo, TagEditorTaperDemo } from '../mockups/CustomPopupTaperDemo';
+import { MarketplaceDetailHeaderDemo } from '../mockups/MarketplaceDetailHeaderDemo';
+import { ResumeShellDemo } from '../mockups/ResumeShellDemo';
 // The REAL derivation the shipping card will use — a candidate that hardcoded
 // its options would be comparing wording against something that cannot happen.
 import { bashGrantOptions } from '../../../../shared/bash-grant-shapes';
@@ -4553,6 +4559,34 @@ function PresentRefTable() {
 
 const ALL_SURFACES: CompareSurface[] = [
   {
+    id: 'resume-shell',
+    label: 'Resume Session — popup header and list edge',
+    question: 'Should Resume Session match the approved popup treatment?',
+    frame: 'canvas',
+    paneWidth: { min: 730, max: 1060 },
+    rounds: [
+      { n: 1, basis: 'Actual ResumeBrowser with Workbench session fixture. Review-only proposed CSS scoped to its own shell; first real row selected to show the transcript pane.', candidates: [
+        { id: 'today', label: 'Today', note: '14px bold title, 14% divider taper, painted 36px list-edge fade.', render: () => <ResumeShellDemo treatment="today" /> },
+        { id: 'proposed', label: 'Matching', note: '16px medium title, 8% divider taper and conditional unpainted 42px/4%-side list fade.', render: () => <ResumeShellDemo treatment="proposed" /> },
+      ] },
+    ],
+  },
+  {
+    id: 'marketplace-detail-header',
+    label: 'Marketplace detail — shared outer header',
+    question: 'Should the outer Marketplace Details shell use the same edge treatment as approved popups, for skills and themes?',
+    frame: 'canvas',
+    paneWidth: { min: 620, max: 820 },
+    rounds: [
+      { n: 1, basis: 'Actual MarketplaceDetailOverlay + registry fixtures; Today restores the pre-change shell with dev-only CSS, while Proposed uses production styling selected for skills and themes.', candidates: [
+        { id: 'today-skill', label: 'Today · skill', note: 'Current 18px semibold Details title and full-width divider; real skill content.', render: () => <MarketplaceDetailHeaderDemo kind="skill" treatment="today" /> },
+        { id: 'proposed-skill', label: 'Proposed · skill', note: '16px medium Details title, 8% divider, and conditional 42px/4%-side content fade; real skill content.', render: () => <MarketplaceDetailHeaderDemo kind="skill" treatment="proposed" /> },
+        { id: 'today-theme', label: 'Today · theme', note: 'Current shared header over real theme content.', render: () => <MarketplaceDetailHeaderDemo kind="theme" treatment="today" /> },
+        { id: 'proposed-theme', label: 'Proposed · theme', note: '16px medium title, 8% divider, conditional content fade over real theme content.', render: () => <MarketplaceDetailHeaderDemo kind="theme" treatment="proposed" /> },
+      ] },
+    ],
+  },
+  {
     id: 'buddy-sleep',
     label: 'Buddy — falling asleep',
     question: 'After a few quiet minutes the buddy goes to sleep. Which way of going under reads best at his real size? — SETTLED 2026-09-05: R1 loaf, then R2 docked arms.',
@@ -7099,6 +7133,176 @@ export const COMPARE_SURFACES: CompareSurface[] = [
             note: 'What the tap shows on a computer with no microphone: the specific reason and a Check again.',
             render: () => <VoiceComposerDemo state="unavailable" />,
           },
+        ],
+      },
+    ],
+  },
+  // WHY: custom full-screen project overlays do not use the shared Dialog and
+  // have their own heading roles; compare them before extending popup styling.
+  {
+    id: 'project-popup-edge-calibration',
+    label: 'Project detail — header and scroll edge',
+    question: 'Does the approved compact-dialog treatment also fit a larger project detail overlay?',
+    frame: 'canvas',
+    paneWidth: { min: 600, max: 750 },
+    rounds: [{
+      n: 1,
+      basis: 'Review a real ProjectDetailOverlay with its existing 16px semibold title and bare scrolling body versus the Settings-style line and content fade.',
+      candidates: [
+        { id: 'today', label: 'Today', note: '16px semibold header, edge-to-edge structural border, plain scrolling body.', render: () => <ProjectPopupTaperDemo variant="today" /> },
+        { id: 'selected', label: 'Settings-style treatment', note: '16px medium title, quick 8% divider ends, 42px / 4% masked scroll edge.', render: () => <ProjectPopupTaperDemo variant="selected" /> },
+      ],
+    }],
+  },
+  // WHY: unlike Project or Dialog, file previews have a two-level identity and
+  // the little Tags editor often does not scroll. Show the REAL components and
+  // keep every candidate style in the dev-only mockup until Destin sees them.
+  {
+    id: 'custom-file-popup-edge',
+    label: 'Marketplace file — header and content edge',
+    question: 'Should the file preview keep its context above the filename?',
+    frame: 'canvas',
+    paneWidth: { min: 600, max: 750 },
+    rounds: [{ n: 1, basis: 'Actual FileViewerOverlay on a sample Markdown file: current header, two-line proposed header, compact one-line proposed header.',
+      candidates: [
+        { id: 'today', label: 'Today', note: 'File name beneath plugin/type, 18px semibold, full-width line, bare scroll.', render: () => <MarketplaceFileTaperDemo variant="today" /> },
+        { id: 'two-lines', label: 'Keep both lines', note: 'Keep plugin/type + file name, medium title, 8% divider and 42px content fade.', render: () => <MarketplaceFileTaperDemo variant="two-lines" /> },
+        { id: 'one-line', label: 'One compact line', note: 'File name only at 16px medium; plugin/type no longer shown in header, same divider and fade.', render: () => <MarketplaceFileTaperDemo variant="one-line" /> },
+      ],
+    }],
+  },
+  {
+    id: 'custom-tags-popup-edge',
+    label: 'Tags & note — compact editor header',
+    question: 'Should this small editor have the line, the fade, both or neither?',
+    frame: 'canvas',
+    paneWidth: { min: 600, max: 700 },
+    rounds: [{ n: 1, basis: 'Actual SessionTagsChip popup with the existing editor, cropped by real viewport height to show its scroll behavior.',
+      candidates: [
+        { id: 'today', label: 'Today', note: '14px bold title, full-width divider and bare scrolling content.', render: () => <TagEditorTaperDemo variant="today" /> },
+        { id: 'divider', label: 'Divider only', note: '16px medium title and 8% divider; bare content edge.', render: () => <TagEditorTaperDemo variant="divider" /> },
+        { id: 'fade', label: 'Divider and fade', note: '16px medium title, 8% divider and 42px content fade only when scrolling.', render: () => <TagEditorTaperDemo variant="fade" /> },
+      ],
+    }],
+  },
+  // WHY: popup dividers have different backdrops and sizes than Settings; review
+  // the real long About dialog before extending any Settings-specific CSS.
+  {
+    id: 'popup-header-fade-calibration',
+    label: 'Popup — header line and scrolling body',
+    question: 'Compare the real About popup at the top and while scrolling.',
+    frame: 'canvas',
+    paneWidth: { min: 600, max: 700 },
+    rounds: [{
+      n: 1,
+      basis: 'Compare today against the selected Settings treatment on a real scrolling popup without changing production Dialog.',
+      candidates: [
+        { id: 'today', label: 'Today', note: 'Unchanged About popup: 14px bold title, full-width divider and painted scroll edges.', render: () => <PopupTaperDemo variant="today" /> },
+        { id: 'selected', label: 'Settings treatment', note: '16px medium title, 8% tapered divider, 42px/4%-side content fade.', render: () => <PopupTaperDemo variant="selected" /> },
+      ],
+    }, {
+      n: 2,
+      basis: 'Check a shorter row-menu popup using the same real Dialog shell; scroll fade activates only when there is scroll room.',
+      candidates: [
+        { id: 'today', label: 'Today', note: 'Unchanged Development popup.', render: () => <PopupTaperDemo variant="today" kind="development" /> },
+        { id: 'selected', label: 'Settings treatment', note: 'Tapered header and title; content fade only if it scrolls.', render: () => <PopupTaperDemo variant="selected" kind="development" /> },
+      ],
+    }],
+  },
+  // WHY: a live, review-only rendering of the actual Settings drawer lets Destin
+  // scroll through the fade while choosing endpoints; no app-wide rule is shipped.
+  {
+    id: 'settings-taper-calibration',
+    label: 'Settings — header line and scroll edge',
+    question: 'Scroll the drawer to compare where its title line fades and how the top scroll fade meets it.',
+    frame: 'canvas',
+    paneWidth: { min: 660, max: 850 },
+    rounds: [
+      {
+        n: 1,
+        basis: 'Follow-up to ui-guide-calibration-1#C-2: Destin liked the taper but asked to tune its ends and check scrolling.',
+        candidates: [
+          { id: 'quick', label: 'Quick ends', note: 'The line reaches full strength after 8% of its width; the current scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="quick" /> },
+          { id: 'balanced', label: 'Moderate ends', note: 'A 20% taper between the quick and gradual versions; the current scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="balanced" /> },
+          { id: 'gradual', label: 'Gradual ends', note: 'The line reaches full strength after 32% of its width; the current scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="gradual" /> },
+        ],
+      },
+      {
+        n: 2,
+        basis: 'Keep a 20% taper in every pane so only the scroll-edge treatment changes.',
+        candidates: [
+          { id: 'current', label: 'Current top fade', note: 'The shipping 36px top gradient fades in over 150ms after scrolling.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="current" /> },
+          { id: 'quiet', label: 'Quieter top fade', note: 'The same gradient at 45% strength and 220ms; bottom fade unchanged.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="quiet" /> },
+          { id: 'none', label: 'No top fade', note: 'The title line stays; content clips at the top without a gradient. Bottom fade unchanged.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="none" /> },
+        ],
+      },
+      {
+        n: 3,
+        basis: 'Correction from Destin: the painted fade itself forms a flat full-width strip, and its opaque colour clashes with translucent themes. Hold the moderate line constant while testing content masking across themes.',
+        candidates: [
+          { id: 'painted', label: 'Today: painted strip', note: 'Current opaque overlay on the real Settings drawer. On wallpaper themes it changes the background colour and spans the full width.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="current" /> },
+          { id: 'backdrop', label: 'Content fades into the drawer', note: 'Real Settings content fades toward its own background, tapering the effect at the left and right; no new panel-coloured paint.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" /> },
+        ],
+      },
+      {
+        n: 4,
+        basis: 'Destin found the first content mask too faint and too narrow in coverage. Keep the 20% header-line taper fixed; compare only stronger masks on the same real drawer.',
+        candidates: [
+          { id: 'initial-mask', label: 'Earlier content fade', note: 'The 36px mask with a 20% side taper, for reference.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" /> },
+          { id: 'strong-mask', label: 'Stronger fade', note: '64px deep; the side taper narrows to 12% so the fade covers more of each row.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="strong" /> },
+          { id: 'deep-mask', label: 'Most coverage', note: '84px deep; just 8% is reserved for the side taper.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="deep" /> },
+        ],
+      },
+      {
+        n: 5,
+        basis: 'Destin requested 42px with slightly narrower side margins than option B (64px / 12%). Compare against B without changing the provisional header line.',
+        candidates: [
+          { id: 'reference-b', label: 'B: 64px / 12%', note: 'The previous stronger fade, for reference.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="strong" /> },
+          { id: 'requested-42', label: '42px / 10%', note: 'Destin’s requested shorter fade, with slightly more width covered than B.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" /> },
+        ],
+      },
+      {
+        n: 6,
+        basis: 'Destin asked for more aggressive concealment without extending the 42px depth or changing the 10% side taper. Change only the opacity curve inside that footprint.',
+        candidates: [
+          { id: 'curve-current', label: '42px: current curve', note: 'The previous 42px / 10% treatment, fading linearly.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" /> },
+          { id: 'curve-firmer', label: '42px: firmer', note: 'Same footprint, less row content visible through the middle of the fade.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="firmer" /> },
+          { id: 'curve-strongest', label: '42px: strongest', note: 'Same footprint, content disappears more sharply near the title and bottom edge.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="strongest" /> },
+        ],
+      },
+      {
+        n: 7,
+        basis: 'Destin wants the fade closer to the sides. Keep the 42px depth and a provisional firmer opacity curve unchanged while comparing horizontal coverage; the curve is not approved.',
+        candidates: [
+          { id: 'width-10', label: '10% sides', note: 'Same 42px depth and firmer curve; previous side reach for reference.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="firmer" /> },
+          { id: 'width-7', label: '7% sides', note: 'Same depth and curve, less untouched area at the left and right.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="firmer" maskWidth="wider" /> },
+          { id: 'width-4', label: '4% sides', note: 'Same depth and curve, reaching close to both drawer edges.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskCurve="firmer" maskWidth="widest" /> },
+        ],
+      },
+      {
+        n: 8,
+        basis: 'Destin selected the 4% side taper for this Settings comparison. Keep its 42px depth and width fixed and resolve the still-unselected fade intensity.',
+        candidates: [
+          { id: 'wide-linear', label: 'Steady fade', note: '42px / 4%; the original linear content-fade curve.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
+          { id: 'wide-firmer', label: 'A bit stronger', note: '42px / 4%; the firmer curve used during width selection.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" maskCurve="firmer" /> },
+          { id: 'wide-strongest', label: 'Much stronger', note: '42px / 4%; the stronger curve near the scrolling edges.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" maskCurve="strongest" /> },
+        ],
+      },
+      {
+        n: 9,
+        basis: 'Destin selected the steady 42px / 4%-side content fade for Settings. Keep that fade fixed and now revisit the open header-line taper endpoints against it.',
+        candidates: [
+          { id: 'line-quick', label: 'Quick line ends', note: 'The header line reaches full strength 8% in; the selected scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="quick" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
+          { id: 'line-moderate', label: 'Moderate line ends', note: 'The header line reaches full strength 20% in; the selected scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="balanced" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
+          { id: 'line-gradual', label: 'Gradual line ends', note: 'The header line reaches full strength 32% in; the selected scroll fade is unchanged.', render: () => <SettingsTaperDemo taper="gradual" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
+        ],
+      },
+      {
+        n: 10,
+        basis: 'Before changing production Settings styling, compare its actual unchanged header and painted scroll overlay with the full selected composition: 16px title, 8% title line, steady 42px / 4%-side content fade.',
+        candidates: [
+          { id: 'shipping-today', label: 'Today', note: 'Real shipping Settings header, title and opaque 36px scrolling overlay.', render: () => <SettingsTaperDemo taper="shipping" scrollEdge="current" /> },
+          { id: 'selected-composition', label: 'Your selected composition', note: '16px medium title, header line with quick 8% ends, steady 42px content fade tapered 4% at each side; no painted overlay.', render: () => <SettingsTaperDemo taper="quick" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
         ],
       },
     ],

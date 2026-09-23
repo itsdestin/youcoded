@@ -167,12 +167,16 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
       // view=compare documents: a candidate may borrow a real chat component and would
       // crash outside ChatProvider.
       if (__view === 'live') {
-        const [{ LiveCandidate }, { ThemeProvider }, { ChatProvider }] = await Promise.all([
+        // WHY: real popup candidates use the app's centralized Escape stack;
+        // without its provider the hook soft-fails and a live pane falsely
+        // reports that Escape cannot dismiss either popup.
+        const [{ LiveCandidate }, { ThemeProvider }, { ChatProvider }, { EscCloseProvider }] = await Promise.all([
           import('./dev/workbench/LiveCandidate'),
           import('./state/theme-context'),
           import('./state/chat-context'),
+          import('./hooks/use-esc-close'),
         ]);
-        __mount.render(<ThemeProvider><ChatProvider><LiveCandidate /></ChatProvider></ThemeProvider>);
+        __mount.render(<ThemeProvider><ChatProvider><EscCloseProvider><LiveCandidate /></EscCloseProvider></ChatProvider></ThemeProvider>);
         return;
       }
       // Attachment-chip page (dev/workbench/mockups/AttachmentChips.tsx) — the

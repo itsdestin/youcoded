@@ -6,6 +6,8 @@ import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useScrollFade } from '../../hooks/useScrollFade';
+import './SessionTagsChip.css';
 import { useTagRegistry } from '../../hooks/useTagRegistry';
 import { useSessionMeta } from '../../hooks/useSessionMeta';
 import type { TagRecord } from '../../../shared/tags';
@@ -23,6 +25,9 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
   const registry = useTagRegistry();
   const meta = useSessionMeta(sessionId);
   useEscClose(open, () => setOpen(false));
+  // WHY: the compact editor only needs its chosen fade when its real body
+  // overflows; a fitting list must not dim tag controls or the note field.
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   const appliedTags = [...meta.tags]
     .map((id) => registry.byId.get(id))
@@ -75,12 +80,12 @@ export function SessionTagsChip({ sessionId }: { sessionId: string | null }) {
               className="w-full max-w-[360px] max-h-[80vh] flex flex-col pointer-events-auto"
               style={{ position: 'relative', zIndex: 'auto' }}
             >
-              <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
-                <h2 className="text-sm font-bold text-fg">Tags &amp; note</h2>
+              <div data-tag-note-header className="flex items-center justify-between px-4 py-3">
+                <h2 className="text-base font-medium text-fg">Tags &amp; note</h2>
                 <button onClick={() => setOpen(false)}
                   className="text-fg-muted hover:text-fg-2 text-lg leading-none w-7 h-7 flex items-center justify-center rounded-sm hover:bg-inset">×</button>
               </div>
-              <div className="px-4 py-3 overflow-y-auto">
+              <div ref={scrollRef} data-tag-note-scroll className="px-4 py-3 overflow-y-auto">
                 {/* The SAME editor the close prompt uses, not a copy of its
                     styling — see TagNoteEditor's header for why that
                     distinction earned its own component on this branch.

@@ -22,6 +22,15 @@ describe('channels', () => {
     createMockShim(createStore(scenario)) as any;
 
   describe('workbench channels', () => {
+    it('serves a long sample file only to the review-only marketplace file viewer', async () => {
+      const c = shim();
+      const sample = await c.marketplace.readComponent({ pluginId: 'ui-guide-preview', kind: 'skill', name: 'sample' });
+      expect(sample.source).toBe('local');
+      expect(sample.content).toContain('End of file');
+      expect(sample.content.length).toBeGreaterThan(1000);
+      expect(await c.marketplace.readComponent({ pluginId: 'another-plugin', kind: 'skill', name: 'sample' })).toEqual([]);
+    });
+
     it('session.browse returns the seeded past sessions', async () => {
       expect((await shim().session.browse()).length).toBeGreaterThan(0);
     });

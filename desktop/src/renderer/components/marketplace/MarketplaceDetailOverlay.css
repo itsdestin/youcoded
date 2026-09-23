@@ -1,0 +1,24 @@
+/* WHY: Destin chose the same edge treatment for BOTH skill and theme Details
+   popups, not for every Marketplace overlay or for the larger entry names. */
+[data-marketplace-detail-header] { position: relative; }
+[data-marketplace-detail-header]::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent);
+}
+@property --detail-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --detail-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+[data-marketplace-detail-scroll] {
+  mask-image:
+    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--detail-fade-top) / 2), #000 var(--detail-fade-top), #000 calc(100% - var(--detail-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--detail-fade-bottom) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
+  mask-composite: add;
+  transition: --detail-fade-top 150ms ease-out, --detail-fade-bottom 150ms ease-out;
+}
+[data-marketplace-detail-scroll][data-fade-top="true"] { --detail-fade-top: 42px; }
+[data-marketplace-detail-scroll][data-fade-bottom="true"] { --detail-fade-bottom: 42px; }

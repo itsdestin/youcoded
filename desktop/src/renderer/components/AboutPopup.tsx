@@ -95,7 +95,10 @@ export default function AboutPopup({ open, onClose, platform, version, build, ch
 
   return createPortal(
     <>
-      <Dialog open onClose={onClose} title="About" subtitle={versionLine} size="panel">
+      <Dialog open onClose={onClose} title="About" size="panel">
+          {/* WHY: keep the chosen one-line header without dropping the version;
+              it appears first in the scrolling About body on both platforms. */}
+          <div className="text-3xs text-fg-muted">{versionLine}</div>
           {/* Disclaimer — identical on both platforms */}
           <section className="space-y-1.5">
             <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Disclaimer</h3>

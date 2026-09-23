@@ -9,6 +9,8 @@ import { useEffect, useState } from "react";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import MarkdownContent from "../MarkdownContent";
 import { useEscClose } from "../../hooks/use-esc-close";
+import { useScrollFade } from "../../hooks/useScrollFade";
+import './FileViewerOverlay.css';
 import { CloseButton, LoadingState } from "../ui";
 
 export type FileViewerTarget = {
@@ -59,6 +61,9 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
   }, [target.pluginId, target.kind, target.name]);
 
   const title = fileLabel(target);
+  // WHY: the document body scrolls under a fixed header; fade only edges with
+  // more file text, and clear the bottom fade at the last readable line.
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   return (
     <>
@@ -71,13 +76,10 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
         layer={3}
         className="fixed inset-2 sm:inset-12 md:inset-24 flex flex-col overflow-hidden"
       >
-        <header className="flex items-center justify-between gap-2 p-3 sm:p-4 border-b border-edge-dim">
-          <div className="min-w-0">
-            <p className="text-xs uppercase tracking-wide text-fg-dim">
-              {target.pluginName} · {kindLabel(target.kind)}
-            </p>
-            <h2 className="text-lg font-semibold text-fg truncate">{title}</h2>
-          </div>
+        <header data-file-viewer-header className="flex items-center justify-between gap-2 p-3 sm:p-4">
+          {/* WHY: Destin selected the single-line file identity, matching the
+              16px medium headings on the other reviewed popup shells. */}
+          <h2 className="text-base font-medium text-fg truncate min-w-0">{title}</h2>
           {/* Wide: Esc-text. Narrow: bordered close-X — matches the marketplace top bar. */}
           <button
             type="button"
@@ -95,7 +97,7 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
             className="sm:hidden shrink-0 rounded-md border border-edge-dim hover:border-edge"
           />
         </header>
-        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
+        <div ref={scrollRef} data-file-viewer-scroll className="flex-1 overflow-y-auto p-3 sm:p-6">
           {state.status === "loading" && (
             <LoadingState what="file" />
           )}
@@ -122,10 +124,4 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
 function fileLabel(t: FileViewerTarget): string {
   if (t.kind === "skill") return `${t.name}/SKILL.md`;
   return `${t.name}.md`;
-}
-
-function kindLabel(k: FileViewerTarget["kind"]): string {
-  if (k === "skill") return "Skill";
-  if (k === "command") return "Command";
-  return "Agent";
 }

@@ -1109,9 +1109,9 @@ body[data-mode="buddy-chat"] #theme-bg {
    - We tried reading the container's computed background so the fade color
      matched translucent surfaces in wallpaper themes. Made the fade so weak
      it was visually missing. Reverted.
-   The sticky panel-colored overlay is visible in every theme (opaque strip
-   against either opaque or translucent surrounds), and the slight color
-   mismatch on wallpaper themes is a better tradeoff than invisibility.
+   The painted overlay remains the generic fallback. ResumeBrowser now masks
+   only its list after short-height Workbench checks (2026-09-23); the other
+   panel failures above and Android WebView behavior remain unproven.
    Padding-compensation: sticky pseudos default to sticking at the content-box
    edge (inside padding). overflow clipping happens at the padding-box edge,
    so content scrolls visibly through the padding band. --scroll-fade-pad-*

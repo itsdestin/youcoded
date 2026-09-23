@@ -8,8 +8,10 @@
 // context editor (Task 4.4) — so it MUST NOT bake in any artifact-specific logic;
 // each consumer supplies its own `tools` / `meta` / body.
 import React from 'react';
+import './ProjectDetailOverlay.css';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useScrollFade } from '../../hooks/useScrollFade';
 import { CloseButton } from '../ui';
 
 interface ProjectDetailOverlayProps {
@@ -30,6 +32,9 @@ export function ProjectDetailOverlay({ title, onClose, tools, meta, children }: 
   // Routing). `true` because the overlay is only mounted while it should be
   // dismissible — mounting/unmounting is the open/close gate.
   useEscClose(true, onClose);
+  // WHY: the project body scrolls independently of its persistent header; track
+  // actual scroll room so the approved content mask disappears at either end.
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   return (
     <>
@@ -47,8 +52,8 @@ export function ProjectDetailOverlay({ title, onClose, tools, meta, children }: 
             to nothing AND the buttons still pushed the × off-panel, so the
             overlay could not be closed. CloseButton is deliberately outside
             the wrapping group so it stays reachable on the first line. */}
-        <header className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 sm:px-4 sm:py-3 border-b border-edge shrink-0">
-          <span className="text-base font-semibold text-fg truncate min-w-0 flex-1">{title}</span>
+        <header className="project-detail-header flex flex-wrap items-center justify-between gap-2 px-3 py-2 sm:px-4 sm:py-3 shrink-0">
+          <span className="text-base font-medium text-fg truncate min-w-0 flex-1">{title}</span>
           {/* order flips the close button: narrow keeps it on the title line
               (tools wrap underneath); sm+ restores the original title · tools ·
               close reading order. */}
@@ -66,7 +71,7 @@ export function ProjectDetailOverlay({ title, onClose, tools, meta, children }: 
         )}
 
         {/* Scrollable body slot */}
-        <div className="flex-1 overflow-auto min-h-0">{children}</div>
+        <div ref={scrollRef} className="project-detail-scroll flex-1 overflow-auto min-h-0">{children}</div>
       </OverlayPanel>
     </>
   );

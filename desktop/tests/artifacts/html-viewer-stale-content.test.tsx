@@ -105,6 +105,14 @@ describe('HTML artifact viewer — stale content across file switches', () => {
       // useTagRegistry() unconditionally on every render, file-viewing or not.
       tags: { list: vi.fn().mockResolvedValue([]) },
     };
+    // WHY: the Session Files list now mounts lazy thumbnails beside filenames;
+    // jsdom cannot observe their visibility, and the viewer test does not need to.
+    vi.stubGlobal('IntersectionObserver', class {
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+      takeRecords() { return []; }
+    });
     // jsdom has no matchMedia; the header's narrow-viewport collapse calls
     // useNarrowViewport() unconditionally too (same stub as
     // use-narrow-viewport.test.tsx).

@@ -2,6 +2,8 @@
 // desktop/tests/dialog-shell.test.tsx
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
+import { join } from 'node:path';
+import { readSource } from './helpers/guard-scope';
 import '@testing-library/jest-dom/vitest';
 import { Dialog, DIALOG_WIDTHS, DIALOG_MAX_HEIGHTS } from '../src/renderer/components/ui/Dialog';
 
@@ -66,6 +68,44 @@ describe('Dialog shell', () => {
     // would make them siblings of the dialog's own name.
     expect(heading.tagName).toBe('H2');
     expect(screen.getByRole('button', { name: /close/i })).toBeInTheDocument();
+  });
+
+  it('titled dialogs use the selected 16px title and contained 8% divider', () => {
+    render(<Dialog open onClose={() => {}} title="About">body</Dialog>);
+    const header = panel().firstElementChild as HTMLElement;
+    const title = screen.getByRole('heading', { name: 'About' });
+    expect(title.className).toContain('text-base font-semibold');
+    expect(header.className).toContain('min-h-14');
+    expect(header.className).toContain('dialog-header');
+    expect(header.className).not.toContain('border-b');
+    // WHY: CSS and the rendered hook must agree; jsdom cannot compute mask or
+    // gradient styles, so pin their exact shape alongside the real DOM classes.
+    const css = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'ui', 'Dialog.css'));
+    expect(css).toMatch(/\.dialog-header::after,\s*\[data-session-files-header\]::after\s*\{[^}]*left:\s*16px;[^}]*right:\s*16px;[^}]*var\(--edge\) 8%, var\(--edge\) 92%/);
+  });
+
+  it('only titled scrolling bodies mask content at both edges, leaving untitled bodies unchanged', () => {
+    const { rerender } = render(<Dialog open onClose={() => {}} title="About">body</Dialog>);
+    expect(panel().querySelector('.dialog-scroll')).toBeInTheDocument();
+    const css = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'ui', 'Dialog.css'));
+    expect(css).toMatch(/\.dialog-scroll,\s*\[data-session-files-scroll\]\s*\{[^}]*mask-image:\s*linear-gradient\(to bottom, transparent 0px,[^}]*transparent 100%\),\s*linear-gradient\(to right, #000 0%, transparent 4%, transparent 96%, #000 100%\);[^}]*mask-composite:\s*add/);
+    expect(css).toMatch(/\.dialog-scroll\[data-fade-top="true"\],\s*\[data-session-files-scroll\]\[data-fade-top="true"\]\s*\{\s*--dialog-fade-top:\s*42px;/);
+    expect(css).toMatch(/\.dialog-scroll\[data-fade-bottom="true"\],\s*\[data-session-files-scroll\]\[data-fade-bottom="true"\]\s*\{\s*--dialog-fade-bottom:\s*42px;/);
+    expect(css).toMatch(/\.dialog-scroll::before,\s*\.dialog-scroll::after,\s*\[data-session-files-scroll\]::before,\s*\[data-session-files-scroll\]::after\s*\{\s*display:\s*none;/);
+    rerender(<Dialog open onClose={() => {}}>untitled</Dialog>);
+    expect(panel().querySelector('.scroll-fade')).toBeInTheDocument();
+    expect(panel().querySelector('.dialog-scroll')).toBeNull();
+  });
+
+  it('keeps the review Today pane on the original full-width title and painted fade', () => {
+    // WHY: once the shared Dialog changes, the pre-approval comparison still
+    // needs to show the unchanged old popup rather than two identical panes.
+    const demo = readSource(join(__dirname, '..', 'src', 'renderer', 'dev', 'workbench', 'mockups', 'PopupTaperDemo.css'));
+    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-header\s*\{[^}]*border-bottom:\s*1px solid var\(--edge\)/);
+    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-header::after\s*\{[^}]*display:\s*none/);
+    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-header h2\s*\{[^}]*font-size:\s*0\.875rem;[^}]*font-weight:\s*700/);
+    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-scroll\s*\{[^}]*mask-image:\s*none/);
+    expect(demo).toMatch(/\[data-variant='today'\]\) \[role='dialog'\] > \.dialog-scroll::before,[\s\S]*?\.dialog-scroll::after\s*\{[^}]*display:\s*block/);
   });
 
   it('widths are named for what drives them, not t-shirt sizes', () => {

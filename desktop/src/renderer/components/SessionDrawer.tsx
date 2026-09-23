@@ -48,6 +48,9 @@ import { useResumeOptions, ResumeOptionsForm } from './ResumeOptions';
 import type { PastSession } from '../../shared/types';
 import { triggerTip } from './guide/tips';
 import { TagNoteEditor } from './tags/TagNoteEditor';
+import { ArtifactThumbnail } from './ArtifactThumbnail';
+import { useScrollFade } from '../hooks/useScrollFade';
+import './ui/Dialog.css';
 
 // 'type' removed 2026-07-23 — the Type FILTER supersedes sorting by type.
 type SortKey = 'recent' | 'name';
@@ -703,20 +706,23 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
   const dragRaf = useRef(0);
   const [dragging, setDragging] = useState(false);
+  // WHY: only fade the file list when files really continue past a scroll edge;
+  // hooks must stay above the early return so the drawer can open/close safely.
+  const listScrollRef = useScrollFade<HTMLDivElement>();
 
   if (!drawerOpen) return null;
 
   // ── List column (shared by the no-selection and push-sidebar layouts) ──
   const listInner = (
     <>
-      <div className="flex items-center justify-between px-3 py-2 border-b border-edge shrink-0">
+      <div data-session-files-header className="flex items-center justify-between min-h-14 px-4 py-3 shrink-0">
         {/* "Session Files" (Destin, 2026-07-23) — was "Session artifacts"
             (2026-07-20, which itself superseded reserving "Artifacts" for the
             Project View tab). "Files" is the plain word for what this actually
             lists; the "Session" qualifier still carries the distinction: this
             drawer is one session's activity log (created/edited/viewed all
             appear), vs the project-wide set in Project View. */}
-        <span className="font-semibold text-sm">Session Files{listSettling ? '' : ` (${listedArtifacts.length})`}</span>
+        <span className="text-base font-semibold text-fg">Session Files{listSettling ? '' : ` (${listedArtifacts.length})`}</span>
         {/* Only in the list-only shape (no artifact, no preview) — once
             either is showing, the top bar's own Close icon covers this, and
             showing both would be a redundant second close button. */}
@@ -734,7 +740,8 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           "if the goal is consistency, we should try to better match"). The
           click-outside listener stays here — the popover requires one ref around
           both trigger and popover, which the pill forwards. */}
-      <div className="px-2 py-1.5 border-b border-edge-dim shrink-0">
+      {/* WHY: the tapered header is the sole decorative divider; search has no second rule. */}
+      <div className="px-2 py-1.5 shrink-0">
         <SearchFilterPill
           ref={filterWrapRef}
           className="w-full"
@@ -763,7 +770,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           )}
         </SearchFilterPill>
       </div>
-      <div className="flex-1 overflow-y-auto">
+      <div ref={listScrollRef} data-session-files-scroll className="flex-1 overflow-y-auto scroll-fade min-h-0">
         {/* A pill click that couldn't resolve — shown INSTEAD of letting the
             generic empty state contradict the file the user just clicked. */}
         {/* break-words on both notes: a long unbroken file name otherwise forces
@@ -832,6 +839,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             <ArtifactListItem
               key={a.id}
               artifact={a}
+              projectRoot={projectRoot}
               isActive={activeArtifactId === a.id}
               isDeleted={a.status === 'deleted' || orphanIds.has(a.id)}
               sessionId={sessionId}
@@ -1344,6 +1352,7 @@ export function GitFooterEntry({
 
 interface ListItemProps {
   artifact: ArtifactRecord;
+  projectRoot: string;
   isActive: boolean;
   isDeleted: boolean;
   // WHY: the row's word/timestamp describe what THIS session did to the file,
@@ -1358,7 +1367,7 @@ interface ListItemProps {
   onRemoveId: (id: string) => void;
 }
 
-function ArtifactListItemImpl({ artifact, isActive, isDeleted, sessionId, onSelectId, onRemoveId }: ListItemProps) {
+function ArtifactListItemImpl({ artifact, projectRoot, isActive, isDeleted, sessionId, onSelectId, onRemoveId }: ListItemProps) {
   const statusWord = statusInfo(artifact, isDeleted, sessionId);
   const relTime = formatRelativeTime(lastModifiedInSession(artifact, sessionId));
   const fileName = artifact.path.split('/').pop() ?? artifact.path;
@@ -1372,19 +1381,25 @@ function ArtifactListItemImpl({ artifact, isActive, isDeleted, sessionId, onSele
   return (
     // group/relative wrapper hosts the hover-revealed remove × (a button can't
     // nest inside the select button) — same pattern as ProjectSwitcher rows.
-    <div className="group relative">
+    // WHY: keep the card unclipped so the remove button's 44px coarse-hit
+    // pseudo-element can extend into the row gutter on touch screens.
+    <div className="group relative mx-2 my-1.5 rounded-lg border border-edge-dim bg-inset">
       <Tooltip text={isDeleted ? 'Deleted (file is no longer on disk)' : ''}>
       <button
-        className={`w-full text-left px-2 py-2 ${canRemove ? 'pr-8' : ''} hover:bg-inset border-b border-edge-dim transition-colors ${
+        className={`w-full text-left rounded-lg px-2 py-2.5 ${canRemove ? 'pr-8' : ''} hover:bg-inset transition-colors ${
           isActive ? 'bg-inset' : ''
         } ${isDeleted ? 'opacity-50' : ''}`}
         onClick={() => onSelectId(artifact.id)}
       >
-        <div className="flex items-center gap-1 min-w-0">
-          <span className={`font-mono text-xs truncate flex-1 ${isDeleted ? 'line-through' : ''}`}>{fileName}</span>
+        {/* WHY: the real file preview identifies a row faster than another file-type word;
+            text centers against its 48px height; status remains a word, not a glyph. */}
+        <div className="flex items-center gap-2 min-w-0">
+          <ArtifactThumbnail artifact={artifact} projectPath={projectRoot} className="shrink-0 rounded border border-edge-dim w-21 h-12" bgClass="bg-canvas" />
+          <div className="min-w-0 flex-1 flex flex-col justify-center gap-1">
+            <span className={`font-medium text-xs truncate ${isDeleted ? 'line-through' : ''}`}>{fileName}</span>
+            <div className="text-3xs text-fg-muted">{statusWord} · {relTime}</div>
+          </div>
         </div>
-        {/* WHY: status shown as a word, not a ●◐○ glyph (user-disliked — see dislikes-status-glyphs memory). */}
-        <div className="text-3xs text-fg-muted ml-0.5">{statusWord} · {relTime}</div>
       </button>
       </Tooltip>
       {canRemove && (
@@ -1403,7 +1418,7 @@ function ArtifactListItemImpl({ artifact, isActive, isDeleted, sessionId, onSele
 }
 
 // Task 12 ("Side drawer rows memoised"): default shallow compare is safe
-// because every prop is now either DATA — artifact (same object reference
+// because every prop is DATA — projectRoot (stable), artifact (same object
 // across a `listedArtifacts` recompute: filter/slice/sort never clone
 // elements — see the useMemo above), isActive/isDeleted (primitives,
 // `===` per row), sessionId (this drawer's own session, constant while it

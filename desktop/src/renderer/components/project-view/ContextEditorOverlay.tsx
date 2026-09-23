@@ -200,8 +200,10 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
     </>
   );
 
-  // Meta strip: scope badge · load timing · size.
-  const meta = (
+  // WHY: the selected project-file view drops only its redundant metadata row;
+  // global/memory files keep their existing scope/timing/size presentation.
+  const showMeta = file.scope !== 'project';
+  const meta = showMeta ? (
     <>
       <span className="inline-flex items-center text-3xs uppercase tracking-wide font-medium text-fg-dim bg-inset border border-edge-dim rounded px-1.5 py-0.5">
         {SCOPE_LABEL[file.scope]}
@@ -215,7 +217,7 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
         </>
       )}
     </>
-  );
+  ) : undefined;
 
   return (
     <ProjectDetailOverlay title={file.label} onClose={onClose} tools={tools} meta={meta}>
@@ -232,7 +234,7 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
             works in every folder on this machine, not just this project.
           </div>
         ) : (
-          <div className="bg-inset border border-edge rounded-lg px-3 py-2 text-xs text-fg-2 shrink-0">
+          <div className={file.scope === 'project' ? 'py-1 text-xs text-fg-2 leading-relaxed shrink-0' : 'bg-inset border border-edge rounded-lg px-3 py-2 text-xs text-fg-2 shrink-0'}>
             <strong>Project instructions.</strong> Editing this changes how Claude behaves across
             every session in this project.
           </div>

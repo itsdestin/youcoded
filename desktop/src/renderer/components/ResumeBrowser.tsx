@@ -31,6 +31,7 @@ import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
 import { TagGlyph } from './tags/glyphs';
 import { NoteEditor } from './tags/NoteEditor';
 import { useResumeOptions, ResumeOptionsForm, type ResumeHandler } from './ResumeOptions';
+import './ResumeBrowser.css';
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
@@ -1580,15 +1581,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           : 'contents'}>
           <div className={previewOn ? 'w-[420px] flex flex-col h-full min-h-0' : 'contents'}>
           {/* Header */}
-          {/* No `border-b`: Destin, 2026-09-10, "there should be gaps
-              on the left/right side of the divider line where it doesn't
-              connect to the outer container but tapers off". A border cannot
-              fade, so the rule is a 1px gradient row instead — the same idiom
-              SessionStrip already uses for the divider between Resume and
-              + New Session. */}
-          <div className="px-4 pt-4 pb-3 shrink-0 relative">
+          {/* WHY: the 2026-09-23 Resume choice kept Destin's 2026-09-10
+              tapered-line request, but matched the approved 16px medium title
+              and 8%-within-inset divider. CSS scopes it to this list column;
+              the transcript pane and its cards are separate. */}
+          <div data-resume-header className="px-4 pt-4 pb-3 shrink-0 relative">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-bold text-fg">Resume Session</h2>
+              <h2 className="text-base font-medium text-fg">Resume Session</h2>
               {/* Show Complete — same toggle pattern as Skip Permissions
                   in SessionStrip, but accent-colored to signal "on" rather than "danger". */}
               <div className="flex items-center gap-2">
@@ -1651,13 +1650,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               document.body,
             )}
             {!narrow && chipsRow}
-            {/* Inset both ends so the line stops short of the panel edge and
-                fades out rather than butting into it. */}
-            <div
-              aria-hidden
-              className="absolute inset-x-0 bottom-0 h-px"
-              style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
-            />
           </div>
 
           {/* Session list */}
@@ -1665,11 +1657,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               flex-grow in Chromium. Using default flex: 0 1 auto lets flex-shrink
               clamp this div when content exceeds max-h so overflow-y: auto engages
               and the scroll-fade hook sees a real scroll. */}
-          {/* Padding lives on an inner wrapper so the scroll-fade element itself has
-              no padding. Sticky fade pseudos then sit flush with the scroll-fade's
-              outer edge, and the `overflow: hidden` on .layer-surface clips them to
-              the OverlayPanel's rounded corners. */}
-          <div ref={listRef} className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
+          {/* WHY: the hook's existing top/bottom flags now drive a content mask,
+              not a painted pseudo on glass. Keep the scroll container unpadded
+              and the inner wrapper padded so the fade meets the list edge. */}
+          <div ref={listRef} data-resume-list className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
             <div className="py-2">
               {loading ? (
                 <LoadingState what="sessions" />

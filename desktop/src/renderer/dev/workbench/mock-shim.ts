@@ -3012,6 +3012,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   };
   const marketplace = {
     getPackages: async () => (marketplaceEmpty ? {} : JSON.parse(JSON.stringify(installedPackages))),
+    // WHY: the real file viewer needs a scrolling file for visual review; this
+    // dev-only id is local to the fake backend and never reads or writes disk.
+    readComponent: async (target: { pluginId: string }) => target.pluginId === 'ui-guide-preview'
+      ? { source: 'local', content: ['# Using this skill', '', 'A sample file inside a Marketplace plugin.',
+        ...Array.from({ length: 18 }, (_, i) => `## Section ${i + 1}\nThis section has instructions and context. Scroll to compare the file text passing beneath the popup header and reaching the last line.`),
+        '## End of file', 'You have reached the last line of this sample file.'].join('\n\n') }
+      : [],
   };
 
   // Games arcade (Step 1). Maps the workbench's own scenario switch onto the

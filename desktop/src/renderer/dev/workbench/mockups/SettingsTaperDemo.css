@@ -1,0 +1,84 @@
+/* WHY: dev-only visual choices change the real drawer's divider without adding
+   unapproved rules to globals.css. The 16px title is the already-selected
+   calibration direction; the fade stops and scroll edge are the open questions. */
+/* The generic live-candidate wrapper paints canvas over the real wallpaper. Only
+   this candidate clears that paint so ThemeBg can show through its real scrim. */
+.inline-block.bg-canvas:has(.settings-taper-demo) { background-color: transparent; }
+.settings-taper-demo #theme-bg,
+.settings-taper-demo #theme-pattern { z-index: 0; }
+.settings-taper-demo[data-taper='quick'] { --audit-taper-stop: 8%; }
+.settings-taper-demo[data-taper='balanced'] { --audit-taper-stop: 20%; }
+.settings-taper-demo[data-taper='gradual'] { --audit-taper-stop: 32%; }
+/* WHY: production now uses the approved treatment; keep the earlier Today
+   pane genuinely unchanged when an older comparison deck is reopened. */
+.settings-taper-demo[data-taper='shipping'] .settings-drawer-header { border-bottom: 1px solid var(--edge); }
+.settings-taper-demo[data-taper='shipping'] .settings-drawer-header::after { display: none; }
+.settings-taper-demo[data-taper='shipping'] .settings-drawer-header h2 { font-size: 0.875rem; font-weight: 700; }
+.settings-taper-demo[data-taper='shipping'] .settings-drawer-scroll { mask-image: none; }
+.settings-taper-demo[data-taper='shipping'] .settings-drawer-scroll::before,
+.settings-taper-demo[data-taper='shipping'] .settings-drawer-scroll::after { display: block; }
+/* WHY: the final comparison needs an honest unchanged Settings header alongside
+   the selected title and tapered line, not an earlier provisional candidate. */
+.settings-taper-demo:not([data-taper='shipping']) .settings-drawer-header {
+  position: relative;
+  border-bottom: 0;
+}
+.settings-taper-demo:not([data-taper='shipping']) .settings-drawer-header h2 {
+  font-size: 1rem;
+  font-weight: 500;
+}
+.settings-taper-demo:not([data-taper='shipping']) .settings-drawer-header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge) var(--audit-taper-stop), var(--edge) calc(100% - var(--audit-taper-stop)), transparent);
+}
+
+/* WHY: preview a fade of CONTENT against the drawer's actual backing rather
+   than drawing an opaque --panel strip across translucent wallpaper. The second
+   mask layer tapers the fade at the sides. Strength options change only the
+   mask's depth and side reach, not the provisional header line or scroll hook;
+   registered distances preserve the existing 150ms transition. Dev-only. */
+@property --audit-top-room { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --audit-bottom-room { syntax: '<length>'; inherits: false; initial-value: 0px; }
+.settings-taper-demo { --audit-mask-depth: 36px; --audit-mask-side-stop: 20%; }
+.settings-taper-demo[data-fade-strength='strong'] { --audit-mask-depth: 64px; --audit-mask-side-stop: 12%; }
+/* WHY: Destin requested a shorter 42px fade with slightly less side margin than B. */
+.settings-taper-demo[data-fade-strength='requested'] { --audit-mask-depth: 42px; --audit-mask-side-stop: 10%; }
+.settings-taper-demo[data-fade-strength='deep'] { --audit-mask-depth: 84px; --audit-mask-side-stop: 8%; }
+/* WHY: widen only the concealed area near the sides after Destin asked for
+   less untouched space. Hold the 42px depth and provisional firmer curve fixed. */
+.settings-taper-demo[data-mask-width='wider'] { --audit-mask-side-stop: 7%; }
+.settings-taper-demo[data-mask-width='widest'] { --audit-mask-side-stop: 4%; }
+/* WHY: hold the 42px/10% footprint fixed while comparing how quickly content
+   disappears. Lower midpoint alpha means less row ink survives inside that footprint. */
+.settings-taper-demo { --audit-mask-mid-alpha: rgb(0 0 0 / 50%); }
+.settings-taper-demo[data-mask-curve='firmer'] { --audit-mask-mid-alpha: rgb(0 0 0 / 30%); }
+.settings-taper-demo[data-mask-curve='strongest'] { --audit-mask-mid-alpha: rgb(0 0 0 / 12%); }
+.settings-taper-demo[data-scroll-edge='surface'] .settings-drawer > .scroll-fade {
+  mask-image:
+    linear-gradient(to bottom, transparent 0px, var(--audit-mask-mid-alpha) calc(var(--audit-top-room) / 2), #000 var(--audit-top-room), #000 calc(100% - var(--audit-bottom-room)), var(--audit-mask-mid-alpha) calc(100% - var(--audit-bottom-room) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent var(--audit-mask-side-stop), transparent calc(100% - var(--audit-mask-side-stop)), #000 100%);
+  mask-composite: add;
+  transition: --audit-top-room 150ms ease-out, --audit-bottom-room 150ms ease-out;
+}
+.settings-taper-demo[data-scroll-edge='surface'] .settings-drawer > .scroll-fade[data-fade-top='true'] { --audit-top-room: var(--audit-mask-depth); }
+.settings-taper-demo[data-scroll-edge='surface'] .settings-drawer > .scroll-fade[data-fade-bottom='true'] { --audit-bottom-room: var(--audit-mask-depth); }
+.settings-taper-demo[data-scroll-edge='surface'] .settings-drawer > .scroll-fade::before,
+.settings-taper-demo[data-scroll-edge='surface'] .settings-drawer > .scroll-fade::after { display: none; }
+
+/* WHY: compare the EXISTING 150ms top-scroll affordance against two isolated
+   alternatives, while keeping its real hook, 36px gradient and bottom fade. */
+.settings-taper-demo[data-scroll-edge='quiet'] .settings-drawer .scroll-fade::before {
+  transition-duration: 220ms;
+}
+.settings-taper-demo[data-scroll-edge='quiet'] .settings-drawer .scroll-fade[data-fade-top='true']::before {
+  opacity: 0.45;
+}
+.settings-taper-demo[data-scroll-edge='none'] .settings-drawer .scroll-fade[data-fade-top='true']::before {
+  opacity: 0;
+}

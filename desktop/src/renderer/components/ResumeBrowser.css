@@ -1,0 +1,28 @@
+/* WHY: Destin chose Matching for Resume Session (R-1, 2026-09-23).
+   Scope the shared-looking treatment to the list-side outer header and scroll
+   container: it is not a rule for the transcript, nested pickers or other popups. */
+[data-resume-header]::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, var(--edge) 8%, var(--edge) 92%, transparent);
+}
+@property --resume-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --resume-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+[data-resume-list] {
+  mask-image:
+    linear-gradient(to bottom, transparent 0px, rgb(0 0 0 / 50%) calc(var(--resume-fade-top) / 2), #000 var(--resume-fade-top), #000 calc(100% - var(--resume-fade-bottom)), rgb(0 0 0 / 50%) calc(100% - var(--resume-fade-bottom) / 2), transparent 100%),
+    linear-gradient(to right, #000 0%, transparent 4%, transparent 96%, #000 100%);
+  mask-composite: add;
+  transition: --resume-fade-top 150ms ease-out, --resume-fade-bottom 150ms ease-out;
+}
+/* Preserve scroll-fade's overflow and flags, but suppress only this list's
+   opaque overlay. This prevents a pale strip over wallpaper-theme panels. */
+[data-resume-list]::before,
+[data-resume-list]::after { content: none; }
+[data-resume-list][data-fade-top="true"] { --resume-fade-top: 42px; }
+[data-resume-list][data-fade-bottom="true"] { --resume-fade-bottom: 42px; }
