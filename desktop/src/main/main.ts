@@ -346,8 +346,10 @@ const DEV_PROFILE = process.env.YOUCODED_PROFILE;
 // userData lookup; doing this in createWindow would be too late to protect it.
 const LUNA_REQUEST_GUARD = experimentGuardForProfile(DEV_PROFILE, app.isPackaged,
   process.env.YOUCODED_LUNA_EXPERIMENT, process.env.LUNA_GUARD_URL);
-// WHY: private HOME cannot isolate KWin's real session bus; disable helper IPC and launch chores.
+// WHY: private HOME cannot isolate KWin's session bus, so the helper is off; and the tool
+// jails read this variable, so clear it unless the experiment is fully active (installed app).
 setExperimentKwinDisabled(Boolean(LUNA_REQUEST_GUARD));
+if (!LUNA_REQUEST_GUARD) delete process.env.YOUCODED_LUNA_EXPERIMENT;
 // Captured BEFORE the override below, so this is the BUILT app's userData dir even
 // in a dev instance — Electron derives it from the app name, so nothing here has to
 // hardcode 'youcoded' (a productName added to package.json would change it).

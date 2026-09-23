@@ -1086,7 +1086,9 @@ describe('experiment request guard', () => {
   it('only enables the experiment guard in an explicitly opted-in dev profile', () => {
     expect(experimentGuardForProfile('luna-eval', false, undefined, undefined, undefined)).toBeUndefined();
     expect(() => experimentGuardForProfile(undefined, false, '1', 'http://127.0.0.1:32123', vi.fn())).toThrow();
-    expect(() => experimentGuardForProfile('luna-eval', true, '1', 'http://127.0.0.1:32123', vi.fn())).toThrow();
+    // The installed app ignores the opt-in rather than failing to launch.
+    expect(experimentGuardForProfile('luna-eval', true, '1', 'http://127.0.0.1:32123', vi.fn())).toBeUndefined();
+    expect(experimentGuardForProfile('x/../youcoded', true, '1', 'http://127.0.0.1:32123', vi.fn())).toBeUndefined();
     expect(() => experimentGuardForProfile('luna-eval', false, '1', undefined, vi.fn())).toThrow();
     expect(experimentGuardForProfile('luna-eval', false, '1', 'http://127.0.0.1:32123', vi.fn())).toBeTypeOf('function');
     // A profile is a path component in main.ts: aliases and traversal must
@@ -1102,6 +1104,13 @@ describe('experiment request guard', () => {
     expect(validation).toBeGreaterThan(0);
     expect(validation).toBeLessThan(main.indexOf("app.setPath('userData'"));
     expect(validation).toBeLessThan(main.indexOf("const BUILT_APP_USER_DATA = app.getPath('userData')"));
+  });
+
+  it('clears the experiment variable unless the guard is active, so tool jails stay off in the installed app', () => {
+    const main = fs.readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+    const clear = main.indexOf('if (!LUNA_REQUEST_GUARD) delete process.env.YOUCODED_LUNA_EXPERIMENT;');
+    expect(clear).toBeGreaterThan(main.indexOf('const LUNA_REQUEST_GUARD = experimentGuardForProfile('));
+    expect(clear).toBeLessThan(main.indexOf('void app.whenReady().then('));
   });
 
   it('does not read the built app device identity in the experiment profile', () => {

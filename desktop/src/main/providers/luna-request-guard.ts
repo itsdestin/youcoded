@@ -5,11 +5,13 @@ export function experimentGuardForProfile(
   profile: string | undefined, isPackaged: boolean, optIn: string | undefined,
   address: string | undefined, request?: typeof fetch,
 ): (() => Promise<void>) | undefined {
-  if (optIn !== '1') return undefined;
+  // WHY isPackaged returns (not throws): the installed app must IGNORE a stray
+  // YOUCODED_LUNA_EXPERIMENT in the user's environment, never crash on launch over it.
+  if (optIn !== '1' || isPackaged) return undefined;
   // WHY: main.ts uses the profile as a path component. An arbitrary nonempty
   // value can traverse back into the installed app's userData; require the one
   // experiment profile instead of trusting caller-provided path syntax.
-  if (profile !== 'luna-eval' || isPackaged) throw new Error('Luna experiment requires the dedicated dev profile.');
+  if (profile !== 'luna-eval') throw new Error('Luna experiment requires the dedicated dev profile.');
   return createExperimentRequestGuard(address ?? '', request);
 }
 
