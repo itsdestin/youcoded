@@ -862,6 +862,33 @@ describe('remote-shim — overlapping connections', () => {
     });
   });
 
+  // The computer tells every client `platform: 'desktop'`. A phone browser adopted it and so
+  // was never treated as a touch device: its terminal took typing through xterm's own hidden
+  // box (the soft keyboard and scrolling misbehaved). The DEVICE decides; the host's word
+  // stays for a mouse-first screen, so a laptop browser behaves as it always has.
+  describe('the platform a browser reports after signing in', () => {
+    async function signInWithPointer(coarse: boolean) {
+      await setup();
+      g.matchMedia = (q: string) => ({ matches: coarse && q === '(pointer: coarse)' });
+      delete g.__PLATFORM__;
+      const p = shim.connect('pw', false);
+      latest().open();
+      latest().receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+      await p;
+    }
+    afterEach(() => { delete g.matchMedia; delete g.__PLATFORM__; });
+
+    it('a phone (touch first) is a touch browser, not the computer it talks to', async () => {
+      await signInWithPointer(true);
+      expect(g.__PLATFORM__).toBe('browser');
+    });
+
+    it('a mouse-first browser keeps what the computer said', async () => {
+      await signInWithPointer(false);
+      expect(g.__PLATFORM__).toBe('desktop');
+    });
+  });
+
   describe('an older connection attempt cannot disturb a newer one', () => {
     it('"Enter password instead", then the old attempt gets through: still connected, still able to send', async () => {
       await setup();

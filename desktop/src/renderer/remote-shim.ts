@@ -448,6 +448,16 @@ function invokeLocalBridge(type: string, payload?: unknown): Promise<any> {
   });
 }
 
+/** A screen whose PRIMARY pointer is a finger (a phone or tablet). */
+function isTouchFirstDevice(): boolean {
+  try {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      && window.matchMedia('(pointer: coarse)').matches;
+  } catch {
+    return false;
+  }
+}
+
 /** The Android app, paired to a computer: its own runtime is only reachable on a side connection. */
 function isAndroidPaired(): boolean {
   return location.protocol === 'file:' && !!targetUrl;
@@ -1305,7 +1315,14 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
           // the desktop server responds with platform:"electron" but we're still on a phone
           if (!preservePlatform) {
-            const platform = msg.platform || 'browser';
+            // WHY the device decides first: the host tells EVERY client `platform: 'desktop'`
+            // (a fact about the computer), and adopting it made a phone browser a non-touch
+            // device — its terminal took typing through xterm's hidden box, so the soft
+            // keyboard and scrolling misbehaved. A touch-first screen is 'browser' (the
+            // Platform value isTouchDevice() means). A mouse-first browser keeps the host's
+            // answer, exactly as before; a touchscreen laptop reads as mouse-first here
+            // (narrow-viewport rule) and so is unchanged too.
+            const platform = isTouchFirstDevice() ? 'browser' : (msg.platform || 'browser');
             (window as any).__PLATFORM__ = platform;
           }
           // Naming capability, straight off the handshake — no extra round
