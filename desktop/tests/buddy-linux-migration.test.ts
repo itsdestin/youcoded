@@ -19,7 +19,7 @@
 //    worked. Hiding theirs would take away something that was fine, and the
 //    switch that brings it back would greet them with a consent card for a
 //    helper they do not need (design §4, revision 7).
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 // jsdom in this suite ships NO localStorage — `window.localStorage` is undefined
 // (the gap the retired tests/app-resume-session-listener.test.ts ran into), and on
@@ -94,6 +94,14 @@ async function loadApp(search = '') {
   vi.resetModules();
   return import('../src/renderer/App');
 }
+
+// The FIRST import of App.tsx transforms the whole renderer: measured 18.4 s
+// alone on 2026-09-23 (32 cores, load average 77 from parallel suites), and past
+// the suite's 30 s test budget inside a full run at that load. It is a one-time
+// cost, so it is paid here under its own budget; each test's loadApp re-imports
+// from the warm transform cache (~120 ms, same measurement).
+const APP_FIRST_IMPORT_BUDGET_MS = 120_000;
+beforeAll(async () => { await import('../src/renderer/App'); }, APP_FIRST_IMPORT_BUDGET_MS);
 
 beforeEach(() => {
   localStorage.clear();
