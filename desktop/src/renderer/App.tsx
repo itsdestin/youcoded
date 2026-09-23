@@ -1308,9 +1308,9 @@ function AppInner() {
         return next;
       });
       dispatch({ type: 'SESSION_REMOVE', sessionId: id });
-      // WHY: a closed session's file-pane entries were never freed. Ids are
-      // fresh UUIDs, so nothing can read them again. (Not on ownership-lost:
-      // that session lives on in another window and may be dragged back here.)
+      // WHY: free a closed session's file-pane entries. A resumed native chat reuses
+      // its id, but its ChatView remounts and re-lists its files. (Not on ownership-
+      // lost: that session lives on in another window and may be dragged back here.)
       dispatchArtifact({ type: 'SESSION_REMOVED', sessionId: id });
       setInitializedSessions((prev) => {
         if (!prev.has(id)) return prev;
