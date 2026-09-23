@@ -4348,7 +4348,7 @@ export class NativeSessionHost extends EventEmitter {
         body,
         // NOT passed to runSkill: frameSkillInvocation already placed them last
         // inside `body`. Passing them here too would repeat the user's words.
-        skillPath: loaded.file,
+        skillPath: loaded.file, cut: fitted.truncated, // a cut body must not count as loaded
       }));
     });
     return { ok: true };

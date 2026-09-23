@@ -11,7 +11,7 @@
     "main/harness/native-session-host.ts": 4883,
     "renderer/App.tsx": 4882,
     "main/remote-server.ts": 4147,
-    "main/harness/harness-session.ts": 3832,
+    "main/harness/harness-session.ts": 3839,
     "renderer/components/SettingsPanel.tsx": 3195,
     "renderer/remote-shim.ts": 3160,
     "renderer/state/chat-reducer.ts": 3024,
