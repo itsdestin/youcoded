@@ -251,6 +251,12 @@ export interface ToolContext {
    *  shrunk (resume, /clear, compaction) — see harness-session.ts — because the
    *  notice claims the model still HAS the earlier content. */
   servedReads?: Map<string, ServedRead>;
+  /** Skill ids whose instructions are already in this conversation — loaded by
+   *  the Skill tool or run by the user as /skill-name. A second Skill call for
+   *  one of them gets a short "already loaded" reply instead of the body again
+   *  (Destin, 2026-09-23). Same lifetime contract as servedReads: the session
+   *  clears it wherever history is discarded or shrunk. Absent → no guard. */
+  servedSkills?: Set<string>;
   /** 1-based count of tool calls this session has dispatched, including this
    *  one — what lets Read say "N calls ago". Absent in test contexts. */
   toolCallIndex?: number;

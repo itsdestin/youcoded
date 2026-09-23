@@ -23,8 +23,17 @@ async function invoke(args?: string) {
   const events: TranscriptEvent[] = [];
   session.on('transcript-event', (e: TranscriptEvent) => events.push(e));
   await session.runSkill({ skillId: 'p:theme-builder', displayName: 'Theme Builder', body: BODY, args, skillPath: '/x/SKILL.md' });
-  return { events, seen };
+  return { events, seen, session };
 }
+
+describe('user-invoked skill — repeat guard', () => {
+  // The body is now in history, so the model's own Skill call for the same
+  // skill must get "already loaded" rather than a second copy (2026-09-23).
+  it('marks the skill as loaded for the Skill tool', async () => {
+    const { session } = await invoke();
+    expect((session as any).servedSkills.has('p:theme-builder')).toBe(true);
+  });
+});
 
 describe('user-invoked skill — transcript', () => {
   it('emits skill-invoked, NOT user-message', async () => {
