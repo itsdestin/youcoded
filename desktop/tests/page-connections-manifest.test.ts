@@ -119,3 +119,24 @@ describe('keyPlacement', () => {
     expect(keyPlacement(parseConnections([{ ...key, keyScheme: 'Basic' }])[0]).scheme).toBe('bearer');
   });
 });
+
+describe('a YouCoded connection that may change things', () => {
+  const yc = (writePaths: unknown) => parseConnections([{ id: 'y', kind: 'youcoded', writePaths }])[0];
+  it('changes only at the places it names, at a / boundary', () => {
+    const c = yc(['/admin/analytics/website-campaigns']);
+    expect(methodAllowed(c, 'POST', '/admin/analytics/website-campaigns')).toBe(true);
+    expect(methodAllowed(c, 'DELETE', '/admin/analytics/website-campaigns/42')).toBe(true);
+    for (const p of ['/admin/analytics/website-campaigns-evil', '/account', '/admin', '/admin/analytics/website-campaigns%2F..%2Faccount'])
+      expect(methodAllowed(c, 'POST', p), p).toBe(false);
+    expect(methodAllowed(c, 'GET', '/anything')).toBe(true);
+  });
+  it('is look-up only when it names nowhere', () => {
+    for (const c of [yc(undefined), yc([]), yc(['../account', 'account', '/a?b', '/a%2e', 42])])
+      expect(methodAllowed(c, 'POST', '/account')).toBe(false);
+  });
+  it('asks again when a place is added, not when nothing changed', () => {
+    expect(fingerprint(yc(undefined))).toBe('youcoded');
+    expect(fingerprint(yc(['/b', '/a']))).toBe(fingerprint(yc(['/a', '/b'])));
+    expect(fingerprint(yc(['/a']))).not.toBe(fingerprint(yc(['/a', '/b'])));
+  });
+});

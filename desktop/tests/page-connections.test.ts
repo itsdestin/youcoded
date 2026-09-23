@@ -57,6 +57,13 @@ describe('reading an address', () => {
   });
 });
 
+describe('a YouCoded connection that may change things', () => {
+  it('names each place and says the rest of the account is out of reach', () => {
+    const w = describeConnection({ id: 'y', kind: 'youcoded', writePaths: ['/admin/analytics/website-campaigns'] });
+    expect(`${w.what} ${w.limit}`).toBe("Look things up on YouCoded's own service using your YouCoded sign-in, and make changes at /admin/analytics/website-campaigns. Nothing else on your account can be changed.");
+  });
+});
+
 describe('needsApproval', () => {
   const page = (connections?: PageSummary['connections']) => ({ connections }) as PageSummary;
   it('is false for a page that reaches nothing', () => {

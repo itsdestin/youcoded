@@ -35,7 +35,14 @@ export type PageAccess = 'lookup' | 'full';
 
 export type PageConnection =
   /** YouCoded's own service, as the signed-in person. */
-  | { id: string; kind: 'youcoded' }
+  | {
+      id: string; kind: 'youcoded';
+      /** Changes are allowed ONLY at these exact places on YouCoded's service
+       *  (for example `/admin/analytics/website-campaigns`); look-ups anywhere.
+       *  Absent or empty: look-ups only. There is deliberately no "change
+       *  anything" form — the sign-in controls the person's whole account. */
+      writePaths?: string[];
+    }
   /** A service that takes a pasted key. The key lives in the app, never the page. */
   | {
       id: string; kind: 'key'; service: string; address: string; access: PageAccess;

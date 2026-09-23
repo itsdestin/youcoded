@@ -96,6 +96,23 @@ function cleanSteps(raw: unknown): { steps: string[] } | undefined {
   return steps.length ? { steps } : undefined;
 }
 
+/** Places on YouCoded's own service where a page may make changes. Each is a
+ *  plain path — letters, digits, `-`, `_` and `/` only — so nothing encoded,
+ *  no `..`, no query. At most four, sorted, so their order never changes the
+ *  fingerprint. (A campaign builder needs one; Destin, 2026-09-23.) */
+function cleanWritePaths(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out = new Set<string>();
+  for (const p of raw) {
+    if (typeof p !== 'string') continue;
+    const path = p.trim().replace(/\/+$/, '');
+    if (!/^(\/[A-Za-z0-9_-]+)+$/.test(path) || path.length > 120) continue;
+    out.add(path);
+    if (out.size >= 4) break;
+  }
+  return [...out].sort();
+}
+
 /** Parse `connections` out of a page.json object. Never throws. An entry it
  *  cannot vouch for is dropped; a list that mixes `open` with a credentialled
  *  connection is dropped WHOLE (rule 2 above). */
@@ -110,7 +127,12 @@ export function parseConnections(raw: unknown): PageConnection[] {
     if (!id || ids.has(id)) continue;
     let c: PageConnection | null = null;
     switch (o.kind) {
-      case 'youcoded': c = { id, kind: 'youcoded' }; break;
+      case 'youcoded': {
+        c = { id, kind: 'youcoded' };
+        const writePaths = cleanWritePaths(o.writePaths);
+        if (writePaths.length) c.writePaths = writePaths;
+        break;
+      }
       case 'open': c = { id, kind: 'open' }; break;
       case 'github': c = { id, kind: 'github', access: cleanAccess(o.access) }; break;
       case 'public': {
@@ -152,7 +174,9 @@ export function parseConnections(raw: unknown): PageConnection[] {
  *  neither changes what the page can reach. */
 export function fingerprint(c: PageConnection): string {
   switch (c.kind) {
-    case 'youcoded': return 'youcoded';
+    // Adding or changing a place the page may make changes asks again; a
+    // look-up-only YouCoded connection keeps its original fingerprint.
+    case 'youcoded': return c.writePaths?.length ? `youcoded|write:${c.writePaths.join(',')}` : 'youcoded';
     case 'open': return 'open';
     case 'github': return `github|${c.access}`;
     case 'public': return `public|${c.address}`;
@@ -191,10 +215,18 @@ const YOUCODED_HOST = 'api.youcoded.ai';
 const GITHUB_HOST = 'api.github.com';
 
 /** Look-up only means the app sends look-ups only; this is the check that
- *  makes "Cannot send changes" true rather than decorative. */
-export function methodAllowed(c: PageConnection, method: string): boolean {
+ *  makes "Cannot change anything there" true rather than decorative.
+ *  `pathname` is the request's own (already dot-normalised by URL parsing):
+ *  a YouCoded connection may change things only at a path it listed, matched
+ *  exactly or at a `/` boundary, and never through an encoded path. */
+export function methodAllowed(c: PageConnection, method: string, pathname = '/'): boolean {
   const m = method.toUpperCase();
-  const lookupOnly = c.kind === 'public' || c.kind === 'youcoded'
+  if (c.kind === 'youcoded') {
+    if (m === 'GET' || m === 'HEAD') return true;
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(m) || pathname.includes('%')) return false;
+    return (c.writePaths ?? []).some((p) => pathname === p || pathname.startsWith(p + '/'));
+  }
+  const lookupOnly = c.kind === 'public'
     || ((c.kind === 'key' || c.kind === 'github') && c.access === 'lookup');
   if (!lookupOnly) return ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(m);
   return m === 'GET' || m === 'HEAD';

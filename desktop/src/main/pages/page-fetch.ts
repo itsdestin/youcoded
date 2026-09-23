@@ -139,8 +139,11 @@ export async function performPageFetch(request: PageFetchRequest, ctx: PageFetch
 
   // Step 3.
   const method = (typeof request.method === 'string' && request.method.trim() ? request.method.trim() : 'GET').toUpperCase();
-  if (!methodAllowed(connection, method)) {
-    return { ok: false, reason: 'method-not-allowed', message: `This page may only look things up at ${url.hostname}; it cannot send changes there.` };
+  if (!methodAllowed(connection, method, url.pathname)) {
+    const places = connection.kind === 'youcoded' && connection.writePaths?.length ? connection.writePaths.join(', ') : '';
+    return { ok: false, reason: 'method-not-allowed', message: places
+      ? `This page may only make changes at ${places} on ${url.hostname}.`
+      : `This page may only look things up at ${url.hostname}; it cannot send changes there.` };
   }
 
   // Step 4: strip the caller's headers to the allowlist, then attach the

@@ -42,6 +42,15 @@ const LOOKUP_LIMIT = 'Cannot change anything there. The page decides what it sen
 export function describeConnection(c: PageConnection): { what: string; limit: string } {
   switch (c.kind) {
     case 'youcoded':
+      // A page may change things on YouCoded only at places it names (a
+      // campaign builder: one place). The card names each one and says the
+      // rest of the account is out of reach, which main enforces.
+      if (c.writePaths?.length) {
+        return {
+          what: `Look things up on YouCoded's own service using your YouCoded sign-in, and make changes at ${c.writePaths.join(', ')}.`,
+          limit: 'Nothing else on your account can be changed.',
+        };
+      }
       return { what: "Look things up on YouCoded's own service using your YouCoded sign-in.", limit: LOOKUP_LIMIT };
     case 'key':
       return c.access === 'lookup'
