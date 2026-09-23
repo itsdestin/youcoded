@@ -159,19 +159,6 @@ export function assembleSystemPromptParts(i: PromptInputs): PromptPart[] {
       text: 'You are the YouCoded assistant, an agentic AI running inside the YouCoded app. You may be running on any model the user chose, cloud or local — Claude, GPT, Grok, Gemini, Qwen, Gemma and others.',
     },
     { id: 'preset', label: i.presetName ? `Its preset — ${i.presetName}` : 'Its preset', text: i.presetBody },
-    {
-      id: 'env',
-      label: 'This computer and folder',
-      text: [
-        '<env note="snapshot at session start — use tools (Bash, Read) for current state">',
-        `Working directory: ${i.cwd}`,
-        `Platform: ${process.platform} (${process.arch})`,
-        `Date: ${new Date().toDateString()}`,
-        i.gitSnapshot ?? gitSnapshot(i.cwd),
-        `YouCoded version: ${i.appVersion}`,
-        '</env>',
-      ].join('\n'),
-    },
     partOrNull('project', 'Your project instructions', projectInstructions(i.cwd, i.instructionBudgetTokens ?? DEFAULT_INSTRUCTION_BUDGET_TOKENS)),
     {
       id: 'doctrine',
@@ -189,18 +176,41 @@ export function assembleSystemPromptParts(i: PromptInputs): PromptPart[] {
         compact: i.promptVariant === 'local-small',
       }),
     },
-    // Capability-steering overlay, appended LAST: personality (preset body) and
+    // Capability-steering overlay, appended after the doctrine: personality (preset body) and
     // tool-calling steering (variant) are orthogonal axes composed by append. The
     // no-op variants return '' and are dropped by the empty-text filter below,
     // keeping default/anthropic/gpt byte-identical to a call with no variant. A
     // tool-less model skips it entirely (all overlays are tool-calling steering).
     partOrNull('steering', 'Extra steering for this model', hasTools ? variantOverlay(i.promptVariant) : ''),
+    // WHY <env> is LAST (2026-09-23): providers reuse cached input only while a
+    // new request starts with text they already stored. Its date and git line
+    // change between sessions started minutes apart; anywhere earlier, they
+    // stopped the next conversation in this folder from reusing the project
+    // instructions and doctrine after them. prompt-cache.ts splits at ENV_OPEN
+    // so Anthropic can cache everything above it on its own.
+    {
+      id: 'env',
+      label: 'This computer and folder',
+      text: [
+        ENV_OPEN,
+        `Working directory: ${i.cwd}`,
+        `Platform: ${process.platform} (${process.arch})`,
+        `Date: ${new Date().toDateString()}`,
+        i.gitSnapshot ?? gitSnapshot(i.cwd),
+        `YouCoded version: ${i.appVersion}`,
+        '</env>',
+      ].join('\n'),
+    },
   ];
   // The SAME filter the joined prompt has always applied — a null (no project
   // instructions file) or an empty string (no-op variant) contributes nothing and
   // must not leave a blank part behind, in the prompt OR in the panel.
   return parts.filter((p): p is PromptPart => p !== null && p.text !== '');
 }
+
+/** Opening line of the <env> part; prompt-cache.ts finds the stable/volatile
+ *  boundary by it, so change it in one place only. */
+export const ENV_OPEN = '<env note="snapshot at session start — use tools (Bash, Read) for current state">';
 
 function partOrNull(id: PromptPart['id'], label: string, text: string | null): PromptPart | null {
   return text === null || text === '' ? null : { id, label, text };
