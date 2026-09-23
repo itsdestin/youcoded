@@ -436,9 +436,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // Shift+Tab) and have no touch equivalent, so keeping focus costs nothing.
   //
   // Fix: this used to test isAndroid() alone, which missed a phone browser on
-  // remote access — the host sends platform:'desktop' in auth:ok, so the shim
-  // sets __PLATFORM__='desktop' and the device reports as neither 'android'
-  // nor 'browser'. Feature-detect a coarse pointer instead of trusting the
+  // remote access — at the time the shim adopted the host's platform:'desktop'
+  // from auth:ok, so the device reported as neither 'android' nor 'browser'
+  // (a touch-first browser reports 'browser' now; a mouse-first one still
+  // 'desktop'). Feature-detect a coarse pointer instead of trusting the
   // platform string: it's the actual question being asked, and it correctly
   // keeps idle-blur ON for a desktop browser connecting remotely (real
   // keyboard, shortcuts useful, no soft keyboard to dismiss).

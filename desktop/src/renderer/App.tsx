@@ -4665,8 +4665,9 @@ export async function bootBuddyOnLaunch(): Promise<void> {
   // effect and RootErrorBoundary replaced the whole app with "YouCoded failed
   // to start". Gate on window.claude.window, the Electron-only window-controls
   // surface the shim deliberately omits; getPlatform() is NOT usable here
-  // because the shim sets __PLATFORM__ to the host's 'desktop' on auth:ok, so
-  // a remote browser does not report as 'browser'.
+  // because a remote browser's platform is not one value: a touch-first phone
+  // reports 'browser', but a mouse-first browser keeps the host's 'desktop'
+  // (remote-shim auth:ok), and the paired Android app reports 'android'.
   if (!(window as any).claude?.window) return;
   await runBuddyLinuxHideMigration();
   if (localStorage.getItem('youcoded-buddy-enabled') !== '1') return;

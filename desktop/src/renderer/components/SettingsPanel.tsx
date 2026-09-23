@@ -858,7 +858,8 @@ function BuddyIcon() {
 // Rather than sprinkle try/catch over four call sites, don't render a
 // desktop-only control on clients that can't use it. window.claude.window is
 // the Electron-only surface the shim deliberately omits; getPlatform() is not
-// usable because the shim sets __PLATFORM__ to the host's 'desktop' on auth:ok.
+// usable because a remote client's platform varies ('browser' on a touch-first
+// phone, the host's 'desktop' on a mouse-first browser, 'android' when paired).
 const isDesktopShell = () => !!(window as any).claude?.window;
 
 // Exported for tests/buddy-helper-states.test.tsx, which drives design §4's
