@@ -3,7 +3,7 @@
 // 'ws' sockets. The fake models exactly the event-emitter surface the manager
 // consumes (on/send/close/readyState).
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createPresenceSocket, wakeEvidence, SUSPEND_GRACE_MS, type PresenceWebSocketLike } from '../src/main/presence-socket';
+import { createPresenceSocket, wakeEvidence, SUSPEND_GRACE_MS, HUMAN_INPUT_TYPES, type PresenceWebSocketLike } from '../src/main/presence-socket';
 
 class FakeSocket implements PresenceWebSocketLike {
   static instances: FakeSocket[] = [];
@@ -334,23 +334,31 @@ describe('presence self-healing', () => {
 
   describe('wakeEvidence', () => {
     const t0 = 1_000_000_000;
-    const base = { suspendedAt: t0, pollIntervalMs: 15_000 };
-    it('THE WEDGE: suspend, no resume ever, then fresh input → the latch clears', () => {
-      // Two minutes after the lid closed, the user typed 5 s ago.
-      expect(wakeEvidence({ ...base, now: t0 + 120_000, idleSeconds: 5, sinceLastTickMs: 15_000 })).toBe('input');
+    it('THE WEDGE: suspend, no resume ever, then a click in a YouCoded window → the latch clears', () => {
+      expect(wakeEvidence({ now: t0 + 120_000, suspendedAt: t0, lastAppInputAt: t0 + 110_000 })).toBe('app-input');
     });
-    it('input inside the grace window after suspend does NOT clear (a tick racing the OS freeze)', () => {
-      expect(wakeEvidence({ ...base, now: t0 + 10_000, idleSeconds: 0, sinceLastTickMs: 15_000 })).toBeNull();
-      expect(wakeEvidence({ ...base, now: t0 + SUSPEND_GRACE_MS + 1, idleSeconds: 0, sinceLastTickMs: 15_000 })).toBe('input');
+    // Review F1: macOS / Windows Modern Standby may pause or RESET the system
+    // idle clock across sleep. A lid-shut maintenance wake then reports
+    // idleSeconds 0 and a huge wall-clock gap — neither may release the latch.
+    it('an idle clock that reset across sleep, plus a clock gap, does NOT clear it', () => {
+      expect(wakeEvidence({
+        now: t0 + 3_600_000, suspendedAt: t0, lastAppInputAt: null, idleSeconds: 0, sinceLastTickMs: 3_600_000,
+      })).toBeNull();
+      // App input from before the lid closed does not count either.
+      expect(wakeEvidence({
+        now: t0 + 3_600_000, suspendedAt: t0, lastAppInputAt: t0 - 5_000, idleSeconds: 0, sinceLastTickMs: 3_600_000,
+      })).toBeNull();
     });
-    it('input from BEFORE the suspend is not evidence of a wake', () => {
-      // Idle since 10 s before the lid closed, 5 min later, no clock gap.
-      expect(wakeEvidence({ ...base, now: t0 + 300_000, idleSeconds: 310, sinceLastTickMs: 15_000 })).toBeNull();
+    it('input inside the grace window after suspend does not count (queued from before it)', () => {
+      expect(wakeEvidence({ now: t0 + 120_000, suspendedAt: t0, lastAppInputAt: t0 + 10_000 })).toBeNull();
+      expect(wakeEvidence({ now: t0 + 120_000, suspendedAt: t0, lastAppInputAt: t0 + SUSPEND_GRACE_MS })).toBe('app-input');
     });
-    it('a wall-clock jump (the process was frozen) clears it with no input at all', () => {
-      expect(wakeEvidence({ ...base, now: t0 + 3_600_000, idleSeconds: 4_000, sinceLastTickMs: 3_600_000 })).toBe('clock-gap');
-      expect(wakeEvidence({ ...base, now: t0 + 3_600_000, idleSeconds: 4_000, sinceLastTickMs: 44_000 })).toBeNull();
-      expect(wakeEvidence({ ...base, now: t0 + 3_600_000, idleSeconds: 4_000, sinceLastTickMs: null })).toBeNull();
+    it('only deliberate input types count — a resting cursor re-entering the window does not', () => {
+      expect(HUMAN_INPUT_TYPES.has('mouseDown')).toBe(true);
+      expect(HUMAN_INPUT_TYPES.has('keyDown')).toBe(true);
+      for (const t of ['mouseMove', 'mouseEnter', 'mouseLeave', 'pointerMove', 'pointerRawUpdate']) {
+        expect(HUMAN_INPUT_TYPES.has(t)).toBe(false);
+      }
     });
   });
 
@@ -360,7 +368,7 @@ describe('presence self-healing', () => {
     FakeSocket.instances[0].emit('open');
     sock.setSuspended(true);
     sock.setIdle(true);
-    sock.setSuspended(false); // what a clock-gap wake does
+    sock.setSuspended(false); // e.g. an unlock while the idle gate still holds
     expect(FakeSocket.instances).toHaveLength(1);
     sock.setIdle(false);      // real input
     expect(FakeSocket.instances).toHaveLength(2);
