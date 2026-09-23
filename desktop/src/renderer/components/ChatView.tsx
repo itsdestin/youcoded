@@ -603,6 +603,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // Arrow key scrolling with acceleration when not typing
   const scrollSpeed = useRef(0);
   useEffect(() => {
+    // WHY gated on `visible` (2026-09-23): every open session keeps its ChatView
+    // mounted, and this listener sits on `window`, so ungated ONE ArrowUp ran it
+    // in every chat at once — scrolling each hidden chat and calling
+    // releaseStick() there, which un-pinned background chats from their newest
+    // message and re-rendered each of them for a button nobody could see. Only
+    // the chat on screen answers, the same rule as Ctrl+F below.
+    if (!visible) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTypingTarget(document.activeElement)) return;
       // A focused game board owns its own arrow keys. Without this the chat
@@ -642,8 +649,11 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
     return () => {
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp, true);
+      // A key held while the pane goes away would otherwise start the next
+      // visit at the accelerated speed.
+      scrollSpeed.current = 0;
     };
-  }, [releaseStick]);
+  }, [visible, releaseStick]);
 
   // Ctrl/Cmd+F opens the chat-history find bar. Only the visible ChatView
   // responds (one per session is mounted). Defers to the artifact drawer's own
@@ -690,6 +700,13 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   // event) never reaches flick velocity, so discrete mouse scrolling stays
   // snappy — only a fast multi-event trackpad flick coasts.
   useEffect(() => {
+    // WHY gated on `visible` (2026-09-23): the glide-cancel below listens on
+    // `window` for every click and key, and every open session's ChatView is
+    // mounted — so each keystroke anywhere ran it once per open chat. A hidden
+    // pane takes no wheel input (pointer-events:none, inert), so it has nothing
+    // to glide or cancel; the listeners come back with the pane. Leaving the pane
+    // mid-glide stops that glide (cleanup below), which nobody can see.
+    if (!visible) return;
     const container = scrollContainerRef.current;
     if (!container) return;
 
@@ -836,7 +853,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
       window.removeEventListener('keydown', cancelOnInput, true);
       stopMomentum();
     };
-  }, []);
+  }, [visible]);
 
   const handlePromptSelect = useCallback(
     (promptId: string, button: PromptCardButton, label: string, promptTitle?: string) => {
