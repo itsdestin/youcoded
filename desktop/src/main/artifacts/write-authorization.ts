@@ -52,6 +52,49 @@ export function isAbsoluteRecorded(p: string): boolean {
   return path.isAbsolute(p);
 }
 
+/** Why a relative external record may not be opened (see judgeRelativeRecord). */
+export type RelativeRecordRefusal = 'missing' | 'protected-path' | 'outside-projects';
+
+/**
+ * Decide whether a legacy external record whose `absolutePath` is RELATIVE —
+ * typically a file the agent wrote through `../` — may be trusted.
+ *
+ * WHY this exists (Destin, 2026-09-23, option A): those records used to be
+ * refused on every platform as "no longer on disk", even when the file was
+ * right there. They cannot simply all be trusted: the sidecar lives inside
+ * the project (`.youcoded/artifacts.json`), so a folder copied from someone
+ * else can carry a PLANTED record like `../../.ssh/id_rsa`. So a record is
+ * trusted only when, with symlinks resolved, it lands:
+ *   1. inside the record's own project or one of the user's saved project
+ *      folders (`allowedRoots`), AND
+ *   2. in an ordinary location — `editTier(...) === 'free'`, the app's
+ *      existing deny list (credentials, .git/.youcoded internals, .claude and
+ *      dotenv all fail it). Deliberately stricter than protectedReadPath:
+ *      this is a record nobody chose to open by name.
+ * The relative path is resolved against the PROJECT ROOT (what the agent's
+ * tools resolved it against), never the process cwd.
+ */
+export async function judgeRelativeRecord(
+  projectRoot: string,
+  recordedPath: string,
+  allowedRoots: string[],
+): Promise<{ ok: true; realPath: string } | { ok: false; reason: RelativeRecordRefusal; realPath?: string }> {
+  let realPath: string;
+  try {
+    realPath = await fs.promises.realpath(path.resolve(projectRoot, recordedPath));
+  } catch (e: any) {
+    if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return { ok: false, reason: 'missing' };
+    throw e;
+  }
+  // Checked BEFORE the root test, so a secret never gets its location echoed
+  // back as an "outside your projects" path the renderer could reveal.
+  if (editTier(canonicalize(realPath, null)) !== 'free') return { ok: false, reason: 'protected-path' };
+  for (const root of new Set([projectRoot, ...allowedRoots])) {
+    if (root && await inRealRoot(root, realPath)) return { ok: true, realPath };
+  }
+  return { ok: false, reason: 'outside-projects', realPath };
+}
+
 async function inRealRoot(projectRoot: string, realPath: string): Promise<boolean> {
   const realRoot = await fs.promises.realpath(path.resolve(projectRoot)).catch(() => null);
   if (!realRoot) return false;

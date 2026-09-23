@@ -1,12 +1,13 @@
 import { promises as fs, constants as fsConstants } from 'fs';
-import { join, dirname, extname } from 'path';
+import { join, dirname, extname, basename, relative, isAbsolute } from 'path';
 import { ProjectSidecar } from '../../shared/artifacts/types';
 import { newArtifactId, newVersionId } from '../../shared/artifacts/ulid';
 import { SIDECAR_SCHEMA_VERSION } from '../../shared/artifacts/types';
 import { casWrite, CAS_REPLACE_ANY, type CasExpectation } from './cas-write';
 import { migrateRelativeExternals } from '../../shared/artifacts/migrate-relative-externals';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
-import { isAbsoluteRecorded } from './write-authorization';
+import { isAbsoluteRecorded, judgeRelativeRecord } from './write-authorization';
+import { readFolders } from '../saved-folders';
 import { pruneSidecarVersions } from '../../shared/artifacts/version-retention';
 
 const SIDECAR_RELATIVE = '.youcoded/artifacts.json';
@@ -527,6 +528,41 @@ function sleep(ms: number) {
 const migrationChecked = new Set<string>();
 
 /**
+ * Repair the records the pure migration deliberately leaves alone: externals
+ * whose `absolutePath` is still RELATIVE — files the agent wrote through `../`.
+ * Each is judged by judgeRelativeRecord (write-authorization.ts: inside this
+ * project or a saved project folder, symlinks resolved, and not on the deny
+ * list). A trusted one gets its real absolute path (or becomes internal when it
+ * lands back inside this project and no internal record holds that path);
+ * anything else is left exactly as it was — still refused, and the reader says
+ * why (read-service.ts). WHY not in the pure module: it needs the filesystem.
+ */
+export async function repairRelativeExternals(
+  sidecar: ProjectSidecar,
+  projectRoot: string,
+  savedRoots: string[],
+): Promise<{ sidecar: ProjectSidecar; repaired: { from: string; to: string }[] }> {
+  const repaired: { from: string; to: string }[] = [];
+  const internalPaths = new Set(sidecar.artifacts.filter((a) => a.kind === 'internal').map((a) => a.path));
+  const realRoot = await fs.realpath(projectRoot).catch(() => null);
+  const artifacts = [];
+  for (const a of sidecar.artifacts) {
+    if (a.kind !== 'external' || !a.absolutePath || isAbsoluteRecorded(a.absolutePath)) { artifacts.push(a); continue; }
+    const verdict = await judgeRelativeRecord(projectRoot, a.absolutePath, savedRoots).catch(() => null);
+    if (!verdict?.ok) { artifacts.push(a); continue; }
+    const inside = realRoot ? relative(realRoot, verdict.realPath) : '';
+    const rel = inside && !inside.startsWith('..') && !isAbsolute(inside) ? canonicalize(inside, null) : null;
+    const next = rel && !internalPaths.has(rel)
+      ? { ...a, kind: 'internal' as const, path: rel, absolutePath: null }
+      : { ...a, path: basename(verdict.realPath), absolutePath: canonicalize(verdict.realPath, null) };
+    if (next.kind === 'internal') internalPaths.add(next.path);
+    repaired.push({ from: a.absolutePath, to: next.absolutePath ?? next.path });
+    artifacts.push(next);
+  }
+  return { sidecar: repaired.length ? { ...sidecar, artifacts } : sidecar, repaired };
+}
+
+/**
  * One-time repair of relative-external records (see
  * shared/artifacts/migrate-relative-externals.ts).
  *
@@ -586,7 +622,9 @@ export async function runSidecarMigration(
       }
 
       const result = migrateRelativeExternals(current, projectRoot);
-      if (result.reclassified === 0) {
+      // `../` records the pure pass leaves external (see repairRelativeExternals).
+      const escaped = await repairRelativeExternals(result.sidecar, projectRoot, readFolders().map((f) => f.path));
+      if (result.reclassified === 0 && escaped.repaired.length === 0) {
         migrationChecked.add(key);   // nothing to do — don't re-scan this process
         return NOTHING;
       }
@@ -605,7 +643,7 @@ export async function runSidecarMigration(
 
       // CAS on the value we read: if another window wrote in between, re-read
       // and recompute rather than clobber.
-      const next: ProjectSidecar = result.sidecar;
+      const next: ProjectSidecar = escaped.sidecar;
       const { committed } = await writeSidecar(projectRoot, current.updatedAt, next);
       if (committed) {
         migrationChecked.add(key);
@@ -620,13 +658,15 @@ export async function runSidecarMigration(
           .map((r) => `    ${r.from} -> ${r.to}${r.merged ? ' (merged into existing record)' : ''}${r.wasAbsolute ? ' [cross-OS remap]' : ''}`)
           .join('\n');
         const more = result.reclassifiedFrom.length > LIST_CAP ? `\n    … and ${result.reclassifiedFrom.length - LIST_CAP} more` : '';
+        const escapedLines = escaped.repaired.slice(0, LIST_CAP).map((r) => `    ${r.from} -> ${r.to} [../ record, checked inside a project folder]`).join('\n');
         console.warn(
           `[artifact-store] sidecar repair in ${projectRoot}: ${result.reclassified} record(s) reclassified external -> internal`
           + ` (${result.merged} merged into an existing record, ${remapped} re-homed from an ABSOLUTE path — check those by eye).`
           + ` They now show in Project View. If any of them were never in this project, restore ${sidecarPath}.pre-migration.bak.\n`
-          + listed + more,
+          + listed + more
+          + (escaped.repaired.length ? `\n  ${escaped.repaired.length} ../ record(s) repaired:\n${escapedLines}` : ''),
         );
-        return { migrated: true, reclassified: result.reclassified, merged: result.merged };
+        return { migrated: true, reclassified: result.reclassified + escaped.repaired.length, merged: result.merged };
       }
     }
     return NOTHING;   // three conflicts — do NOT memo; the next call retries

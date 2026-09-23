@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, readdirSync, promises as fsPromises } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { readSidecar, writeSidecar, appendVersion, appendVersionsDirect, removeArtifactRecord, runSidecarMigration, renameArtifact } from '../../src/main/artifacts/artifact-store';
+import { readSidecar, writeSidecar, appendVersion, appendVersionsDirect, removeArtifactRecord, runSidecarMigration, renameArtifact, repairRelativeExternals } from '../../src/main/artifacts/artifact-store';
 import type { ProjectSidecar } from '../../src/shared/artifacts/types';
 import { SIDECAR_SCHEMA_VERSION } from '../../src/shared/artifacts/types';
 import sample from '../../../shared-fixtures/artifacts/sample-sidecar.json';
@@ -680,3 +680,62 @@ describe('writeSidecar — CAS check reads the timestamp without parsing the fil
     expect(res.committed).toBe(false);
   });
 });
+
+// Files the agent wrote through `../` (Destin, 2026-09-23, option A): repaired
+// only inside a project folder and outside the deny list; everything else is
+// left untouched, still refused.
+describe('repairRelativeExternals', () => {
+  let parent: string;
+  let projectRoot: string;
+  let sibling: string;
+  beforeEach(() => {
+    parent = mkdtempSync(join(tmpdir(), 'as-dotdot-'));
+    projectRoot = join(parent, 'proj');
+    sibling = join(parent, 'notes');
+    mkdirSync(join(projectRoot, '.youcoded'), { recursive: true });
+    mkdirSync(join(sibling, '.ssh'), { recursive: true });
+    writeFileSync(join(sibling, 'plan.md'), 'plan');
+    writeFileSync(join(sibling, '.ssh', 'id_rsa'), 'PRIVATE');
+    mkdirSync(join(projectRoot, 'sub'), { recursive: true });
+    writeFileSync(join(projectRoot, 'here.md'), 'here');
+  });
+  afterEach(() => rmSync(parent, { recursive: true, force: true, maxRetries: 3 }));
+
+  const rec = (id: string, rel: string) => ({
+    id, path: rel.split('/').pop()!, kind: 'external' as const, absolutePath: rel,
+    lastModified: '2026-08-13T00:00:00.000Z', status: 'active' as const, versions: [], comments: [], tags: [],
+  });
+  const sidecarOf = (...artifacts: any[]) => ({
+    $schema: SIDECAR_SCHEMA_VERSION, projectId: 'p', name: 'proj',
+    createdAt: '2026-07-01T00:00:00.000Z', updatedAt: '2026-07-01T00:00:00.000Z',
+    artifacts, manualExcludes: [], manualIncludes: [],
+  }) as any;
+
+  it('gives a ../ file in a saved project folder its real absolute path', async () => {
+    const { sidecar, repaired } = await repairRelativeExternals(sidecarOf(rec('a', '../notes/plan.md')), projectRoot, [sibling]);
+    expect(repaired).toHaveLength(1);
+    expect(sidecar.artifacts[0].kind).toBe('external');
+    expect(sidecar.artifacts[0].absolutePath).toMatch(/\/notes\/plan\.md$/);
+    expect(sidecar.artifacts[0].path).toBe('plan.md');
+  });
+
+  it('makes a ../ path that lands back inside the project internal', async () => {
+    const { sidecar } = await repairRelativeExternals(sidecarOf(rec('a', 'sub/../here.md')), projectRoot, []);
+    expect(sidecar.artifacts[0]).toMatchObject({ kind: 'internal', path: 'here.md', absolutePath: null });
+  });
+
+  it('leaves a ../ file outside every project folder untouched', async () => {
+    const input = sidecarOf(rec('a', '../notes/plan.md'));
+    const { sidecar, repaired } = await repairRelativeExternals(input, projectRoot, []);
+    expect(repaired).toEqual([]);
+    expect(sidecar.artifacts[0]).toEqual(input.artifacts[0]);
+  });
+
+  it('never repairs a PLANTED record that points at a secret, even inside a saved folder', async () => {
+    const input = sidecarOf(rec('evil', '../notes/.ssh/id_rsa'));
+    const { sidecar, repaired } = await repairRelativeExternals(input, projectRoot, [sibling]);
+    expect(repaired).toEqual([]);
+    expect(sidecar.artifacts[0].absolutePath).toBe('../notes/.ssh/id_rsa');
+  });
+});
+

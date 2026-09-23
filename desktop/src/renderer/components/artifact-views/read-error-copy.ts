@@ -8,7 +8,14 @@
 // rather than being replaced with a guessed cause (error-message-standards).
 export function describeReadError(error: unknown): string {
   if (error === 'protected-path') {
-    return 'This file is in a protected location (credential and system folders), so YouCoded won’t open it.';
+    return 'YouCoded won’t open this file because it’s in a protected location (like saved passwords, keys or settings folders).';
+  }
+  // A file the assistant wrote through `../` that lands outside every project
+  // folder (read-service.ts, judgeRelativeRecord). The file IS there — saying
+  // "missing" would be false — and saving its folder as a project is exactly
+  // what makes it open, so the sentence names that.
+  if (error === 'outside-projects') {
+    return 'YouCoded won’t open this file because it’s outside your project folders. To open it here, add its folder as a project, then Retry.';
   }
   if (error === 'artifact-not-found') {
     return 'This file could not be resolved inside the project.';

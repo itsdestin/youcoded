@@ -26,7 +26,7 @@ import { discoveredFileRecord } from './project-file-discovery';
 import { listProjects } from './central-index';
 import { countArtifacts, projectAllFiles, isGatedRoot } from './projects-index';
 import { evaluateBinaryRead } from './read-binary-access';
-import { authorizeArtifactRead, isAbsoluteRecorded } from './write-authorization';
+import { authorizeArtifactRead, isAbsoluteRecorded, judgeRelativeRecord } from './write-authorization';
 import { trackedArtifacts } from './visible-artifacts';
 import { invalidateSidecarIdCache } from './project-watcher';
 import { searchProjectContent } from './content-search';
@@ -35,6 +35,11 @@ import type { FolderPage, FolderSort } from '../../shared/artifacts/folder-page'
 import { readFolders } from '../saved-folders';
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+
+/** The user's saved project folders — where a `../` record may be trusted. */
+function savedProjectRoots(): string[] {
+  return readFolders().map((f) => f.path);
+}
 
 /** The phone's ceiling for one read; absent on the desktop's own transport. */
 export interface ReadCeiling {
@@ -284,7 +289,21 @@ export async function readArtifactText(
     : undefined;
 
   let fullPath: string;
-  if (artifact) {
+  if (artifact && artifact.kind !== 'internal' && artifact.absolutePath && !isAbsoluteRecorded(artifact.absolutePath)) {
+    // A file the agent wrote through `../` whose record was not repaired (yet).
+    // WHY judged here and not refused outright: it used to come back as
+    // "no longer on disk" while the file sat right there. It opens only where
+    // the repair would trust it (write-authorization.ts judgeRelativeRecord —
+    // live, so a folder saved as a project a minute ago counts); otherwise
+    // the answer names the real reason, never "missing" unless it is.
+    const verdict = await judgeRelativeRecord(projectRoot, artifact.absolutePath, savedProjectRoots());
+    if (!verdict.ok) {
+      if (verdict.reason === 'missing') return { ok: true, artifact, content: null, orphan: true };
+      if (verdict.reason === 'protected-path') return { ok: false, error: 'protected-path' };
+      return { ok: false, error: 'outside-projects', path: verdict.realPath };
+    }
+    fullPath = verdict.realPath;
+  } else if (artifact) {
     fullPath = artifact.kind === 'internal'
       ? path.join(projectRoot, artifact.path)
       : artifact.absolutePath!;
@@ -538,7 +557,13 @@ export async function checkArtifactExistence(projectRoot: string, artifactIds: s
         ? path.join(projectRoot, a.path)
         : a.absolutePath;
       if (!fullPath) return id;
-      if (a.kind !== 'internal' && !isAbsoluteRecorded(fullPath)) return id;
+      if (a.kind !== 'internal' && !isAbsoluteRecorded(fullPath)) {
+        // A `../` record: resolved against the project (never the process
+        // cwd). WHY: marking it missing drew an existing file as deleted; now
+        // only a file genuinely absent is, and opening a refused one says why.
+        const verdict = await judgeRelativeRecord(projectRoot, fullPath, savedProjectRoots()).catch(() => null);
+        return verdict && !verdict.ok && verdict.reason === 'missing' ? id : null;
+      }
       try {
         await fs.promises.access(fullPath);
         return null;

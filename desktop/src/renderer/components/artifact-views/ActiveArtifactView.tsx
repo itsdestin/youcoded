@@ -11,8 +11,9 @@ import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-pat
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { LoadingState, ErrorState } from '../ui/states';
+import { Button } from '../ui/Button';
 import { RemoteFileCard } from './RemoteFileCard';
-import { isRemoteMode } from '../../platform';
+import { isRemoteMode, getPlatform } from '../../platform';
 
 /** Absolute on-disk path of an artifact — the same join SessionDrawer and
  *  FilesTab make for Copy path, so Download asks the host for the same file. */
@@ -104,7 +105,9 @@ export type ArtifactContentState =
   // rides with it: over remote access a too-large answer carries the file's real
   // size so the phone can show "24.0 MB · PDF" with a Download button rather
   // than a bare error (RemoteFileCard).
-  | { phase: 'error'; message: string; code?: string; sizeBytes?: number };
+  // `path`: where a refused file actually is (only for 'outside-projects', never
+  // for a protected one), so the pane can offer Show in folder.
+  | { phase: 'error'; message: string; code?: string; sizeBytes?: number; path?: string };
 
 export interface ActiveArtifactViewProps {
   artifact: ArtifactRecord;
@@ -552,6 +555,17 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     return (
       <div className="p-4">
         <ErrorState message={readState.message} onRetry={onRetryRead ?? (() => {})} />
+        {/* WHY: a file refused for being outside the project folders is still a
+            real file; the one safe thing to offer is the system file browser
+            at it. Desktop only (a phone cannot open the computer's file browser),
+            and never for a protected location — the host sends no path then. */}
+        {readState.code === 'outside-projects' && readState.path && getPlatform() === 'electron' && !isRemoteMode() && (
+          <div className="flex justify-end mt-2">
+            <Button variant="secondary" size="sm" onClick={() => (window as any).claude.shell.showItemInFolder(readState.path)}>
+              Show in folder
+            </Button>
+          </div>
+        )}
       </div>
     );
   }

@@ -28,6 +28,23 @@ export interface UseArtifactContentResult {
   applyDiskRead: (res: any) => void;
 }
 
+/**
+ * The path to hand useArtifactContent for a record: its own path, or null when
+ * the record's location must be judged by the host first.
+ *
+ * WHY: a record the assistant wrote through `../` that was not repaired holds
+ * a RELATIVE absolutePath. The byte viewers (images, PDFs, Office files) read
+ * by absolute path and would resolve it against the app's own working folder —
+ * reporting "no longer exists on disk" for a file that is there. With null,
+ * the hook asks artifacts:get, whose answer says what really happened
+ * (outside your project folders / protected location / actually gone).
+ */
+export function contentPathFor(record: { kind: string; path: string; absolutePath: string | null } | undefined | null): string | null {
+  if (!record) return null;
+  if (record.kind !== 'internal' && record.absolutePath && !/^(?:[A-Za-z]:[\\/]|[\\/])/.test(record.absolutePath)) return null;
+  return record.path;
+}
+
 export function useArtifactContent(
   projectRoot: string,
   artifactId: string | null | undefined,
@@ -88,7 +105,7 @@ export function useArtifactContent(
       } else {
         // Keep the handler's own code and the size beside the message: the
         // remote too-large answer needs both to render as a file card.
-        setContentState({ phase: 'error', message: describeReadError(res?.error), code: res?.error, sizeBytes: res?.sizeBytes });
+        setContentState({ phase: 'error', message: describeReadError(res?.error), code: res?.error, sizeBytes: res?.sizeBytes, path: typeof res?.path === 'string' ? res.path : undefined });
       }
     }).catch((e: any) => {
       // A rejected invoke (e.g. EACCES thrown in the handler) is a read
