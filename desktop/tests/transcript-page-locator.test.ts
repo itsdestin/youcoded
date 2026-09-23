@@ -65,7 +65,11 @@ describe('history page interruption boundary', () => {
     expect(shouldReconcileNativePage({ nativeIdle: false, inherited: false, olderPage: false })).toBe(false);
   });
 
-
+  it('reconciles idle older pages, but never guesses that a busy or transferred page is stale', () => {
+    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: false, olderPage: true })).toBe(true);
+    expect(shouldReconcileNativePage({ nativeIdle: false, inherited: false, olderPage: true })).toBe(false);
+    expect(shouldReconcileNativePage({ nativeIdle: true, inherited: true, olderPage: true })).toBe(false);
+  });
 });
 
 describe('transcript:page locator memory', () => {

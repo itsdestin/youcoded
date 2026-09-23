@@ -50,12 +50,13 @@ export interface ResolvedPageSource extends RememberedPageSource {
   startOffset: number;
 }
 
-/** A native page can reap ALL unfinished cards only when the host confirms
- * idleness; a transferred window may include new live events from before dock. */
+/** Reconcile native history only when idle and not inherited. Older pages may
+ * also contain newly inserted specialist events, so a cursor alone cannot prove
+ * their unfinished tools have stopped. */
 export function shouldReconcileNativePage(opts: {
   nativeIdle: boolean; inherited: boolean; olderPage: boolean;
 }): boolean {
-  return !opts.inherited && !opts.olderPage && opts.nativeIdle;
+  return !opts.inherited && opts.nativeIdle;
 }
 
 /** Capture the file boundary BEFORE spawning `claude --resume`. A later page

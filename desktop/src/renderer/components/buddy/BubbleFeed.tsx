@@ -353,7 +353,9 @@ export function BubbleFeed({ sessionId }: Props) {
           if (!page) { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
           const decision = decideFirstPage(page, attempt);
           if (decision === 'accept') {
-            dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore });
+            // WHY: the buddy has its own reducer, so it must apply the same recovery verdict as App.
+            dispatch({ type: 'HISTORY_PAGE_LOADED', sessionId, events: page.events, cursor: page.cursor, hasMore: page.hasMore,
+              reconcileInterrupted: page.reconcileInterrupted === true, reconcileInterruptedToolIds: page.reconcileInterruptedToolIds });
             return;
           }
           if (decision === 'give-up') { dispatch({ type: 'HISTORY_PAGE_FAILED', sessionId }); return; }
