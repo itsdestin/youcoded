@@ -49,6 +49,15 @@ describe('native context chip — how FULL the window is', () => {
     expect(chips.contextPct).not.toBe(0);
   });
 
+  it('does not fabricate context or speed from cumulative live counters', () => {
+    const chips = selectNativeStatusChips({ inputTokens: 6000, outputTokens: 400, liveProgress: true }, 8192)!;
+    expect(chips.contextUsedTokens).toBeNull();
+    expect(chips.contextPct).toBeNull();
+    expect(chips.tokensPerSecond).toBeNull();
+    expect(chips.inputTokens).toBe(6000);
+    expect(selectNativeStatusChips({ inputTokens: 6000, outputTokens: 400, liveProgress: true }, 8192, 0)?.contextPct).toBe(100);
+  });
+
   it('falls back to in+out for records written before contextUsedTokens existed', () => {
     const chips = selectNativeStatusChips({ inputTokens: 6000, outputTokens: 400 }, 8192)!;
     expect(chips.contextUsedTokens).toBe(6400);

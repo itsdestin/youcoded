@@ -318,6 +318,10 @@ interface StepUsage { inputTokens: number; outputTokens: number; cacheReadTokens
 // What one consumed step returns to the loop.
 interface StepResult {
   text: string; toolCalls: ToolCall[]; usage: StepUsage;
+  /** Only provider-reported counters; never includes the output-char fallback in usage. */
+  measuredUsage?: StepUsage;
+  /** Both prompt and completion totals are known, so a priced total/context is meaningful. */
+  completeMeasuredUsage?: boolean;
   finishReason: string | undefined; interrupted: boolean;
   /** The stream attempt that produced this step, so the turn loop can tell the
    *  accepted-history capture what became of it. Module-private by construction
@@ -661,6 +665,11 @@ export class HarnessSession extends EventEmitter {
   private history: ModelMessage[] = [];
   private abort: AbortController | null = null;
   private interrupted = false;
+  private _currentUsageProgress: TranscriptEvent | null = null;
+  private lastUsageProgressTimestamp = 0;
+  /** Latest in-flight root-turn progress event for a late-attaching host window.
+   *  Null before a real measurement and after every terminal exit. */
+  get currentUsageProgress(): TranscriptEvent | null { return this._currentUsageProgress; }
   // Task 3 — queued mid-run course corrections (postSteer), drained as
   // history-only user messages at the top of the NEXT turn-loop iteration.
   // Anything left here when a turn ends (posted during the final step, too
@@ -1147,7 +1156,20 @@ export class HarnessSession extends EventEmitter {
    *  where that history came from (cache Stage 4). The public event shape is
    *  unchanged — this is a return value, not a new field. */
   private emitEvent(type: TranscriptEvent['type'], data: TranscriptEvent['data']): string {
-    const event: TranscriptEvent = { type, sessionId: this.opts.sessionId, uuid: randomUUID(), timestamp: Date.now(), data };
+    // WHY: two measured requests can finish in the same millisecond. Stamp
+    // progress strictly forward so a delayed attach cannot overwrite the newer
+    // reading; leave all other transcript timestamps on their usual clock.
+    const timestamp = type === 'assistant-thinking' && data.usageProgress
+      ? (this.lastUsageProgressTimestamp = Math.max(Date.now(), this.lastUsageProgressTimestamp + 1))
+      : Date.now();
+    if (type === 'turn-complete' || type === 'user-interrupt' || type === 'session-error') {
+      this.lastUsageProgressTimestamp = Math.max(this.lastUsageProgressTimestamp, timestamp);
+    }
+    const event: TranscriptEvent = { type, sessionId: this.opts.sessionId, uuid: randomUUID(), timestamp, data };
+    // WHY the accessor holds the exact event: late attach needs its timestamp and
+    // uuid as well as the payload, and must never replay a finished turn's state.
+    if (type === 'assistant-thinking' && data.usageProgress) this._currentUsageProgress = event;
+    if (type === 'turn-complete' || type === 'user-interrupt' || type === 'session-error') this._currentUsageProgress = null;
     this.emit('transcript-event', event);
     return event.uuid;
   }
@@ -2329,6 +2351,7 @@ export class HarnessSession extends EventEmitter {
       throw new Error('HarnessSession: a turn is already in flight — callers must serialize send()/runSkill() per session.');
     }
     this.interrupted = false;
+    this._currentUsageProgress = null;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
     // The uuid of the user-message / skill-invoked event this turn entered on —
     // recorded at the history push below, which is the mutation it accounts for.
@@ -2349,6 +2372,10 @@ export class HarnessSession extends EventEmitter {
 
     const startedAt = Date.now();
     const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, expectedRebuild: false };
+    // Display-only ledger: the final/abandoned ledger above still bills estimated
+    // output for silent steps. A live event must never present that as measured.
+    const measuredTurnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, expectedRebuild: false };
+    let allStepsMeasured = true;
     // Set the instant this turn's usage ships, so no second exit can report the
     // SAME tokens again — turn-complete's own emit can throw (a transcript-event
     // listener is the host's persistence wire), which lands in the catch below.
@@ -2529,12 +2556,41 @@ export class HarnessSession extends EventEmitter {
         turnUsage.outputTokens += step.usage.outputTokens;
         turnUsage.cacheReadTokens += step.usage.cacheReadTokens;
         turnUsage.cacheCreationTokens += step.usage.cacheCreationTokens;
+        if (step.measuredUsage) {
+          measuredTurnUsage.inputTokens += step.measuredUsage.inputTokens;
+          measuredTurnUsage.outputTokens += step.measuredUsage.outputTokens;
+          measuredTurnUsage.cacheReadTokens += step.measuredUsage.cacheReadTokens;
+          measuredTurnUsage.cacheCreationTokens += step.measuredUsage.cacheCreationTokens;
+        }
+        measuredTurnUsage.expectedRebuild = turnUsage.expectedRebuild;
+        if (!step.completeMeasuredUsage) allStepsMeasured = false;
         stepsCounted++;
         if (step.providerCostUsd !== undefined) {
           stepsWithProviderCost++;
           turnProviderCostUsd = (turnProviderCostUsd ?? 0) + step.providerCostUsd;
         }
         generationMs += step.generationMs;
+
+        // Only completed, provider-reported counters belong in live progress.
+        // Partial counters use zero for missing fields in the fixed event shape;
+        // neither a priced turn nor context occupancy can be inferred from them.
+        // Pricing remains bound to the model at turn start, never a later swap.
+        if (!this.opts.isSpecialistChild && !step.interrupted && step.measuredUsage) {
+          this.emitEvent('assistant-thinking', { usageProgress: {
+            ...measuredTurnUsage,
+            contextLength: turnContextLength ?? null,
+            liveProgress: true,
+            ...(step.completeMeasuredUsage && step.measuredUsage.inputTokens > 0
+              ? { contextUsedTokens: step.measuredUsage.inputTokens + step.measuredUsage.outputTokens } : {}),
+            // Incomplete counters with a known rate are not an unpriced model.
+            // Omit cost until all steps are measured; preserve null for truly
+            // unpriced and free models, whose pricing state IS known.
+            ...(!allStepsMeasured && !turnFree && turnPricing
+              ? {} : { costUsd: turnFree || !allStepsMeasured ? null : costForUsage(measuredTurnUsage, turnPricing) }),
+            free: turnFree ?? false,
+            ...(stepsWithProviderCost === stepsCounted ? { providerCostUsd: turnProviderCostUsd } : {}),
+          } });
+        }
 
         // v0 interrupt semantics: push the partial, emit user-interrupt, return.
         // (An interrupted turn NEVER completes as a normal turn-complete.)
@@ -2886,7 +2942,7 @@ export class HarnessSession extends EventEmitter {
           // published price" are different facts with different wording — see
           // the field comment in shared/types.ts. Defaults to false: never
           // claim a turn was free without having established it.
-          free: this.opts.free ?? false,
+          free: turnFree ?? false,
           // Spread, so a turn the provider said nothing about carries no key at
           // all. A `providerCostUsd: 0` would read as "the provider agrees this
           // was free", which is the exact confusion pricing.ts exists to
@@ -2915,6 +2971,7 @@ export class HarnessSession extends EventEmitter {
         this.emitEvent('session-error', { text: describeProviderError(err), ...(errorCode ? { errorCode } : {}), ...abandonedTurnUsage() });
       }
     } finally {
+      this._currentUsageProgress = null;
       this.abort = null;
     }
   }
@@ -3459,6 +3516,10 @@ export class HarnessSession extends EventEmitter {
     const pendingPreparing = [...preparing]
       .filter(([prepId]) => !toolCalls.some((c) => c.toolCallId === prepId))
       .map(([prepId, entry]) => ({ toolCallId: prepId, toolName: entry.toolName, chars: entry.chars }));
+    const cacheTokens = cacheTokensForStep(usage, providerMetadata);
+    const hasMeasuredUsage = usage?.inputTokens != null || usage?.outputTokens != null
+      || usage?.inputTokenDetails?.cacheReadTokens != null || usage?.inputTokenDetails?.cacheWriteTokens != null
+      || cacheTokens.cacheReadTokens > 0 || cacheTokens.cacheCreationTokens > 0;
     return {
       text: assistantText,
       toolCalls,
@@ -3470,8 +3531,14 @@ export class HarnessSession extends EventEmitter {
         // v7 LanguageModelUsage exposes cache tokens under inputTokenDetails;
         // llama.cpp's cache_n and OpenRouter's cache writes arrive as provider
         // metadata instead (cache-usage.ts).
-        ...cacheTokensForStep(usage, providerMetadata),
+        ...cacheTokens,
       },
+      ...(hasMeasuredUsage ? { measuredUsage: {
+        inputTokens: usage?.inputTokens ?? 0,
+        outputTokens: usage?.outputTokens ?? 0,
+        ...cacheTokens,
+      } } : {}),
+      completeMeasuredUsage: usage?.inputTokens != null && usage?.outputTokens != null,
       finishReason,
       interrupted: false,
       // Spread so a provider that reported nothing leaves the key ABSENT
@@ -3762,5 +3829,5 @@ export class HarnessSession extends EventEmitter {
     return this.pendingSteers.splice(0);
   }
 
-  destroy(): void { this.abort?.abort(); this.removeAllListeners(); }
+  destroy(): void { this._currentUsageProgress = null; this.abort?.abort(); this.removeAllListeners(); }
 }

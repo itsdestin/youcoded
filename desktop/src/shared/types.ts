@@ -326,6 +326,9 @@ export interface TranscriptEvent {
        *  last step's prompt plus its output. Distinct from inputTokens, which
        *  sums every step and therefore re-counts the history once per step. */
       contextUsedTokens?: number;
+      /** Transient native progress only: no legacy in+out context fallback.
+       *  Not set on completed turns (including old transcript records). */
+      liveProgress?: true;
       /** Native runtime only (cache follow-ups item 8, 2026-09-10): true when a
        *  request in this turn followed something the harness itself did to the
        *  prompt prefix — a prune commit, a summary compaction, a model swap — so
@@ -413,6 +416,10 @@ export interface TranscriptEvent {
      * warning.
      */
     stallWarning?: { retryInMs: number; willRetry: boolean };
+    /** Native root-turn measured, cumulative usage after a completed request.
+     *  Payload-less assistant-thinking only: transient, never a transcript line.
+     *  Unlike turn-complete, contextUsedTokens is absent without a measured prompt. */
+    usageProgress?: NonNullable<TranscriptEvent['data']['usage']>;
     /**
      * Native runtime only. The mid-stream watchdog gave up waiting and the turn
      * is now PARKED: the stream reader is still open, nothing has been torn
