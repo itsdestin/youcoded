@@ -20,7 +20,8 @@ import { wrap, makeClearSessionOn401 } from "./handler-utils";
 // Platform-owned presence socket (Task 6). The account session token and the
 // WebSocket live in the main process; the renderer only ever sees relayed
 // social:presence-event pushes and expresses desired connection state.
-import { createPresenceSocket, type PresenceSocket } from "./presence-socket";
+import { createPresenceSocket, wakeEvidence, type PresenceSocket } from "./presence-socket";
+import { log } from "./logger";
 import type { WindowRegistry } from "./window-registry";
 import type { RemoteServer } from "./remote-server";
 
@@ -35,6 +36,11 @@ let presenceSocket: PresenceSocket | null = null;
 // on a destroyed socket and could resurrect it via the engine).
 let onSuspend: (() => void) | null = null;
 let onResume: (() => void) | null = null;
+// When the OS last reported suspend, cleared on any wake signal. Module scope
+// so a hot-reload re-registration can't strand a stale value in a closure.
+let suspendedAt: number | null = null;
+// macOS/Windows "the user is back" signals that also clear the suspend latch.
+const WAKE_EVENTS = ["unlock-screen", "user-did-become-active"] as const;
 let idlePoller: NodeJS.Timeout | null = null;
 
 // Presence idle threshold: no system input AND no remote-client activity for
@@ -122,11 +128,29 @@ export function registerSocialHandlers(
   // wakes. Renderer intent (sign-in/incognito/leader) is preserved across the
   // sleep cycle by the setDesired/setSuspended split.
   if (onSuspend) powerMonitor.removeListener("suspend", onSuspend);
-  if (onResume) powerMonitor.removeListener("resume", onResume);
-  onSuspend = () => presence.setSuspended(true);
-  onResume = () => presence.setSuspended(false);
+  if (onResume) {
+    powerMonitor.removeListener("resume", onResume);
+    for (const ev of WAKE_EVENTS) powerMonitor.removeListener(ev as any, onResume);
+  }
+  suspendedAt = null;
+  onSuspend = () => {
+    suspendedAt = Date.now();
+    log("INFO", "Presence", "gate: suspend");
+    presence.setSuspended(true);
+  };
+  // WHY the extra wake events (2026-09-23, presence self-healing spec Part 1):
+  // 'resume' used to be the ONLY thing that could clear the suspend latch, and
+  // one missed delivery kept presence off until a relaunch. unlock-screen and
+  // user-did-become-active are the OS's own "the user is back" notices; the
+  // idle poller below adds evidence-based clearing that needs no OS event.
+  onResume = () => {
+    if (suspendedAt !== null) log("INFO", "Presence", "gate: resume");
+    suspendedAt = null;
+    presence.setSuspended(false);
+  };
   powerMonitor.on("suspend", onSuspend);
   powerMonitor.on("resume", onResume);
+  for (const ev of WAKE_EVENTS) powerMonitor.on(ev as any, onResume);
 
   // Idle gate poller (see IDLE_DISCONNECT_MS). Two activity sources, either
   // keeps presence alive: local keyboard/mouse (getSystemIdleTime — returns
@@ -144,14 +168,36 @@ export function registerSocialHandlers(
   // takes the socket DOWN when the user goes idle, so "stop on disconnect"
   // would have stopped the only thing able to notice them coming back.
   stopIdlePoller(); // hot-reload: never stack a second poller
+  let lastTickAt: number | null = null;
   const pollIdle = () => {
-    const localIdleMs = powerMonitor.getSystemIdleTime() * 1000;
+    const now = Date.now();
+    const idleSeconds = powerMonitor.getSystemIdleTime();
+    const localIdleMs = idleSeconds * 1000;
+    // Evidence-based escape from the suspend latch — see wakeEvidence().
+    if (suspendedAt !== null) {
+      const why = wakeEvidence({
+        now, suspendedAt, idleSeconds,
+        sinceLastTickMs: lastTickAt === null ? null : now - lastTickAt,
+        pollIntervalMs: IDLE_POLL_MS,
+      });
+      if (why) {
+        log("INFO", "Presence", "gate: wake-evidence", { why });
+        suspendedAt = null;
+        presence.setSuspended(false);
+      }
+    }
+    lastTickAt = now;
     const lastRemote = remoteServer?.getLastClientActivityMs() ?? 0;
-    const remoteIdleMs = lastRemote === 0 ? Number.POSITIVE_INFINITY : Date.now() - lastRemote;
+    const remoteIdleMs = lastRemote === 0 ? Number.POSITIVE_INFINITY : now - lastRemote;
     presence.setIdle(localIdleMs >= IDLE_DISCONNECT_MS && remoteIdleMs >= IDLE_DISCONNECT_MS);
+    // Part 2: a socket that is wanted, gone, and has no retry scheduled is
+    // wedged (e.g. the 'wait' no-token policy). Healthy or backing-off
+    // sockets are never touched, so this cannot defeat backoff.
+    if (presence.repairIfStalled()) log("INFO", "Presence", "gate: stall-repair");
   };
   const startIdlePoller = () => {
     stopIdlePoller();
+    lastTickAt = null;
     // WHY one synchronous poll first: the socket keeps `idle` as state that ONLY
     // this poller clears. After idle → intent off → intent on, setDesired(true)
     // would otherwise stay masked by `!idle` until the first 15 s tick, and the

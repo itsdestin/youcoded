@@ -33,8 +33,50 @@ export interface PresenceSocket {
   setIdle(idle: boolean): void;
   send(message: Record<string, unknown>): void;
   isConnected(): boolean;
+  /** Re-drive the connection ONLY if the engine is wedged (wanted on, no
+   *  socket, no retry scheduled) — e.g. the 'wait' no-token policy after the
+   *  token appeared with nothing to re-invoke. Never touches a healthy or
+   *  backing-off socket, so it cannot defeat backoff or spam replays. Returns
+   *  true when it started a connection. (Presence self-healing spec, Part 2.) */
+  repairIfStalled(): boolean;
   destroy(): void;
 }
+
+/** Evidence that a machine marked asleep is in fact awake (presence
+ *  self-healing spec, Part 1).
+ *
+ *  WHY (2026-09-23, roadmap other-features: "Last seen 7/26/2026" while the
+ *  friend was using the app): `suspended` was cleared ONLY by powerMonitor
+ *  'resume'. Miss that one OS event — a MacBook runs weeks of lid-close cycles
+ *  without a quit — and presence stayed off until a full quit-and-relaunch.
+ *  No gate may be clearable only by an OS event, so either of these clears it:
+ *   - input newer than the suspend (the system idle clock restarted after it);
+ *   - a wall-clock gap far longer than the poll interval (the process was
+ *     frozen, i.e. the machine slept and has woken).
+ *  Both wait out a grace period after the suspend so a tick racing the OS
+ *  freeze cannot reopen a socket that is about to go to sleep (a ghost).
+ *  Over-clearing is safe: `idle` is the real "a human is here" gate and still
+ *  has to pass before anything connects. */
+export function wakeEvidence(input: {
+  now: number;
+  suspendedAt: number;
+  idleSeconds: number;
+  /** ms since the previous poll tick, or null on the first tick. */
+  sinceLastTickMs: number | null;
+  pollIntervalMs: number;
+  graceMs?: number;
+}): 'input' | 'clock-gap' | null {
+  const grace = input.graceMs ?? SUSPEND_GRACE_MS;
+  if (input.now - input.suspendedAt < grace) return null;
+  const lastInputAt = input.now - input.idleSeconds * 1000;
+  if (lastInputAt > input.suspendedAt) return 'input';
+  if (input.sinceLastTickMs !== null && input.sinceLastTickMs > input.pollIntervalMs * 3) return 'clock-gap';
+  return null;
+}
+
+/** Real machines freeze within a second or two of the suspend event; a minute
+ *  is irrelevant on wake, where it has long expired. */
+export const SUSPEND_GRACE_MS = 60_000;
 
 export function createPresenceSocket(opts: {
   getToken: () => string | null;
@@ -134,6 +176,15 @@ export function createPresenceSocket(opts: {
     // presence-send handler return an honest failure instead of silently
     // dropping a frame with a success receipt.
     isConnected() { return engine.isOpen(); },
+    repairIfStalled() {
+      if (!engine.isStalled()) return false;
+      // desired is already true inside the engine; setDesired(true) on a
+      // desired-but-socketless engine is exactly its connect path.
+      engine.setDesired(true);
+      // Still stalled means there is still no token — nothing was sent, so
+      // report no action (keeps the caller's log to real reconnects).
+      return !engine.isStalled();
+    },
     destroy() { engine.destroy(); },
   };
 }
