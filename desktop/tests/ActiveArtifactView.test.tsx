@@ -179,6 +179,38 @@ describe('edit and save guards', () => {
       expect(utils.getByText(/changed on disk while you were editing/i)).toBeTruthy();
     });
 
+    // Typing in the editor used to unsubscribe and resubscribe the on-disk watcher
+    // on every keystroke. It now subscribes once per file — and an external change
+    // that lands after typing still compares against the LATEST draft.
+    it('keeps one change-watcher subscription while typing, and still flags an external change against the latest draft', async () => {
+      let subscribes = 0;
+      const onChanged = (window as any).claude.artifacts.onChanged;
+      (window as any).claude.artifacts.onChanged = (cb: any) => { subscribes++; return onChanged(cb); };
+      const { ref, utils } = mountView();
+      await act(async () => { ref.current!.startEdit(); });
+      await waitFor(() => expect(ref.current!.editing).toBe(true));
+      const before = subscribes;
+      const textarea = utils.container.querySelector('textarea')!;
+      for (const value of ['h', 'he', 'hel', 'hell', 'hello!']) {
+        await act(async () => { fireEvent.change(textarea, { target: { value } }); });
+      }
+      expect(ref.current!.dirty).toBe(true);
+      expect(subscribes).toBe(before);
+
+      // Disk now equals the latest draft: no conflict (a stale closure would compare
+      // against an older draft and raise one).
+      get.mockResolvedValue({ ok: true, content: 'hello!', orphan: false, mtimeMs: 50 });
+      await act(async () => { changedCb!({ projectRoot: '/proj', artifactId: 'a1', kind: 'change' }); });
+      await waitFor(() => expect(get).toHaveBeenLastCalledWith('/proj', 'a1'));
+      await act(async () => {});
+      expect(utils.queryByText(/changed on disk while you were editing/i)).toBeNull();
+
+      // Disk differs from the draft: the conflict banner appears.
+      get.mockResolvedValue({ ok: true, content: 'someone else', orphan: false, mtimeMs: 60 });
+      await act(async () => { changedCb!({ projectRoot: '/proj', artifactId: 'a1', kind: 'change' }); });
+      await waitFor(() => expect(utils.getByText(/changed on disk while you were editing/i)).toBeTruthy());
+    });
+
     // WHY: the conflict banner's "View diff" wraps UnifiedDiff in its own scroll
     // box (overflow-auto max-h-[40%]) — it must pass `fill` so that box stays the
     // ONLY scroller. A 20-line draft vs a one-line disk version produces >15 diff
