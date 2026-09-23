@@ -42,4 +42,22 @@ describe('useSessionDefaults', () => {
     expect(h.result.current).toMatchObject({ skipPermissions: true, model: 'opus', projectFolder: '/a' });
     h.unmount();
   });
+
+  it('a focus that finds nothing new does not redraw', async () => {
+    const same = { skipPermissions: false, model: 'sonnet', projectFolder: '/a' };
+    const get = vi.fn(async () => ({ ...same }));
+    (window as any).claude = { defaults: { get } };
+    const { useSessionDefaults } = await import('../src/renderer/hooks/useSessionDefaults');
+    let renders = 0;
+    const h = renderHook(() => { renders++; return useSessionDefaults(false); });
+    await flush();
+    const before = renders;
+    const shown = h.result.current;
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    await flush();
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(renders).toBe(before);
+    expect(h.result.current).toBe(shown);
+    h.unmount();
+  });
 });

@@ -218,23 +218,24 @@ describe('session:create native resume — missing stored header', () => {
     };
     const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: () => false };
     const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) } };
-    let starter: ((info: any, opts: any) => Promise<void>) | null = null;
+    let creator: ((opts: any) => Promise<any>) | null = null;
     const remoteServer = {
       broadcast: vi.fn(),
       setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
-      setSessionStarter: vi.fn((fn: any) => { starter = fn; }),
+      setSessionCreator: vi.fn((fn: any) => { creator = fn; }),
       getClientCount: vi.fn(() => 0), broadcastStatusData: vi.fn(), onStatusChange: vi.fn(() => () => {}),
     };
     registerIpcHandlers(
       mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any,
       undefined as any, undefined, undefined, remoteServer as any,
     );
-    expect(starter).toBeTypeOf('function');
+    expect(creator).toBeTypeOf('function');
+    mockSessionManager.createSession.mockReturnValue({ id: 'ghost-native-2', name: 'Resuming…', cwd: '/tmp', status: 'active', provider: 'native' });
     // The resume with no stored data and no binding: the start runs and says so to every screen.
-    await starter!(
-      { id: 'ghost-native-2', name: 'Resuming…', cwd: '/tmp', status: 'active', provider: 'native' },
+    const info = await creator!(
       { provider: 'native', resumeSessionId: 'ghost-native-2', cwd: '/tmp', name: 'Resuming…', skipPermissions: false },
     );
+    expect(info.id).toBe('ghost-native-2');
     await new Promise((resolve) => process.nextTick(resolve));
     const pushed = remoteServer.broadcast.mock.calls.find(
       (c: any[]) => c[0]?.type === 'transcript:event' && c[0]?.payload?.type === 'session-error',
@@ -489,7 +490,7 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
       broadcast: vi.fn(),
       // Wiring the handlers hand a real server at boot; inert here.
       setNativeRuntime: vi.fn(), setSessionMetaWiring: vi.fn(), setSessionNamingWiring: vi.fn(), setLastTopic: vi.fn(),
-      setSessionStarter: vi.fn(),
+      setSessionCreator: vi.fn(),
     } : undefined;
     const mockSkillProvider = { configStore: { getPackages: vi.fn(() => ({})) }, getInstalled: vi.fn(() => []) };
     registerIpcHandlers(

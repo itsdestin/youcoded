@@ -47,6 +47,7 @@ vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 vi.mock('../src/renderer/platform', () => ({
   isAndroid: vi.fn().mockReturnValue(false),
   isTouchDevice: vi.fn().mockReturnValue(false),
+  isRemoteMode: vi.fn().mockReturnValue(false),
   getPlatform: vi.fn().mockReturnValue('browser'),
 }));
 vi.mock('../src/renderer/state/theme-context', () => ({ useTheme: () => ({ activeTheme: null, reducedEffects: false }) }));

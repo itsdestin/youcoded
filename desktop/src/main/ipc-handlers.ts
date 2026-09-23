@@ -826,19 +826,15 @@ export function registerIpcHandlers(
     const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     // WHY: resuming an already-open conversation made a second same-named tab (two writers on one
     // transcript); answer with the open one. A resume awaiting its first hook: session manager (F7).
+    // Checked before createAndStartSession, so nothing is snapshotted or spawned for it.
     const openInfo = opts?.resumeSessionId ? findLiveSessionForConversation(opts.resumeSessionId,
       sessionManager.listSessions(), (id) => sessionIdMap.get(id) ?? sessionManager.resumedConversationOf?.(id)) : undefined;
     if (openInfo) return { ...openInfo, alreadyOpen: true };
-    // Snapshot BEFORE spawn: a fallback page can otherwise include new Claude Code turns.
-    const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
-      ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
-    const info = sessionManager.createSession(opts);
-    if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
     // Assign the new session to the calling window so per-session events (transcript,
     // pty output, permission prompts) route here once Task 1.4 migrates the emits.
     //
-    // MUST stay here — synchronously after createSession, BEFORE the native block's
-    // awaits. createSession emits 'session-created' synchronously, and the listener
+    // MUST run as createAndStartSession's onCreated — synchronously right after
+    // createSession, BEFORE the native block's awaits. createSession emits 'session-created' synchronously, and the listener
     // above defers the SESSION_CREATED forward by one process.nextTick precisely so
     // ownership is set first. But nextTick outranks the promise microtask queue, so
     // it drains the moment this handler suspends at its FIRST await — and the native
@@ -854,7 +850,8 @@ export function registerIpcHandlers(
     // switcher directory and shouldn't own sessions — otherwise the session
     // would be invisible to every main window's session list. The buddy still
     // sees the session via its subscribe() call in SessionPill.selectSession.
-    if (windowRegistry) {
+    function assignToCallingWindow(info: SessionInfo): void {
+      if (!windowRegistry) return;
       let targetId = event.sender.id;
       if (windowRegistry.getKind(event.sender.id) === 'buddy') {
         const leader = windowRegistry.getLeaderId();
@@ -863,15 +860,28 @@ export function registerIpcHandlers(
       try { windowRegistry.assignSession(info.id, targetId); }
       catch (e) { log('WARN', 'IPC', 'assignSession failed', { error: String(e) }); }
     }
-    await startCreatedSession(info, opts);
-    return info;
+    return createAndStartSession(opts, assignToCallingWindow);
   });
 
-  // Everything session:create does after the session manager mints the session. Its own
-  // function so the remote host runs the SAME steps for a session a phone creates (injected
-  // below via setSessionStarter). WHY: the host used to call createSession alone, so a
-  // YouCoded-runtime session started from a phone had no runtime behind it and every message
-  // failed as not-live. Window ownership stays in the handler above — a phone owns no window.
+  // Everything session:create does once the cwd is settled: the Claude Code resume snapshot
+  // (it must be taken BEFORE spawn — a fallback page can otherwise include new Claude Code
+  // turns), createSession, then the start steps below. Its own function so the remote host
+  // runs the SAME steps for a session a phone creates (injected below via setSessionCreator).
+  // WHY: the host used to call createSession alone, so a YouCoded-runtime session started from
+  // a phone had no runtime behind it and every message failed as not-live, and a Claude Code
+  // resume from a phone skipped the snapshot. `onCreated` runs synchronously right after
+  // createSession, before the first await — the window-ownership step above depends on that;
+  // a phone owns no window and passes nothing.
+  async function createAndStartSession(opts: any, onCreated?: (info: SessionInfo) => void): Promise<SessionInfo> {
+    const resumeBoundary = opts.provider === 'claude' && opts.resumeSessionId
+      ? snapshotResumeBoundary(opts.cwd, opts.resumeSessionId) : null;
+    const info = sessionManager.createSession(opts);
+    if (resumeBoundary) resumePageBoundaries.set(info.id, resumeBoundary);
+    onCreated?.(info);
+    await startCreatedSession(info, opts);
+    return info;
+  }
+
   async function startCreatedSession(info: SessionInfo, opts: any): Promise<void> {
     // Native sessions have no PTY worker — start (or resume) their HarnessSession
     // in the host now that createSession has minted the SessionInfo. The native
@@ -1075,7 +1085,7 @@ export function registerIpcHandlers(
       });
     }
   }
-  remoteServer?.setSessionStarter(startCreatedSession);
+  remoteServer?.setSessionCreator(createAndStartSession);
 
   // Pull-style directory snapshot — renderers call this on mount to avoid
   // racing the WINDOW_DIRECTORY_UPDATED push that fires before React subscribes.

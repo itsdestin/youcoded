@@ -432,15 +432,16 @@ export class RemoteServer {
     this.nativeRuntime = rt;
   }
 
-  /** Injected by ipc-handlers: everything its own session:create does AFTER the session
-   *  manager mints the session (start or resume a YouCoded-runtime session, the Claude Code
-   *  context record). WHY: this host called createSession alone, so a phone's YouCoded-runtime
-   *  session had no live runtime behind it and every message failed as not-live. One function
-   *  shared with the desktop handler keeps the two from drifting again. */
-  setSessionStarter(start: (info: any, opts: any) => Promise<void>): void {
-    this.sessionStarter = start;
+  /** Injected by ipc-handlers: its own session:create once the cwd is settled (the Claude
+   *  Code resume snapshot, createSession, then starting or resuming a YouCoded-runtime
+   *  session and the Claude Code context record). WHY: this host called createSession alone,
+   *  so a phone's YouCoded-runtime session had no live runtime behind it and every message
+   *  failed as not-live. One function shared with the desktop handler keeps the two from
+   *  drifting again. Absent (tests, early boot) → createSession alone. */
+  setSessionCreator(create: (opts: any) => Promise<any>): void {
+    this.sessionCreator = create;
   }
-  private sessionStarter: ((info: any, opts: any) => Promise<void>) | null = null;
+  private sessionCreator: ((opts: any) => Promise<any>) | null = null;
 
   /** Task 5: which Conversation Store bucket a session's meta reads/writes
    *  belong to. 'native' when NativeSessionHost recognizes the id (live now,
@@ -1787,13 +1788,18 @@ export class RemoteServer {
           this.sessionManager.listSessions(), (sid) => [this.sessionMetaWiring?.resolve(sid)].find((m) => m && m !== sid) ?? (this.sessionManager as any).resumedConversationOf?.(sid)) : undefined;
         if (openInfo) { this.respond(client.ws, type, id, { ...openInfo, alreadyOpen: true }); break; }
         const createOpts = this.prepareCreate(payload);
-        const info = this.sessionManager.createSession(createOpts);
         // Awaited before answering, as the desktop handler does, so the phone's first
         // message finds the runtime started (and info carries what the start stamps on it).
-        // A failure is logged, never thrown: the session exists either way, and the
-        // desktop handler reports its own start failures into the chat.
-        try { await this.sessionStarter?.(info, createOpts); }
-        catch (err) { console.error('[remote-server] starting a session created from a remote device failed:', err); }
+        // The start steps report their own failures into the chat; a throw here is answered
+        // with its real message rather than left to escape the socket handler.
+        let info: any;
+        try {
+          info = this.sessionCreator ? await this.sessionCreator(createOpts) : this.sessionManager.createSession(createOpts);
+        } catch (err: any) {
+          console.error('[remote-server] creating a session for a remote device failed:', err);
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+          break;
+        }
         this.respond(client.ws, type, id, info);
         // session:created broadcast is handled by the onSessionCreated event listener
         break;

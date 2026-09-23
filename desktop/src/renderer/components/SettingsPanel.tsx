@@ -858,7 +858,8 @@ function BuddyIcon() {
 // Rather than sprinkle try/catch over four call sites, don't render a
 // desktop-only control on clients that can't use it. window.claude.window is
 // the Electron-only surface the shim deliberately omits; getPlatform() is not
-// usable because the shim sets __PLATFORM__ to the host's 'desktop' on auth:ok.
+// usable because a remote client's platform varies ('browser' on a touch-first
+// phone, the host's 'desktop' on a mouse-first browser, 'android' when paired).
 const isDesktopShell = () => !!(window as any).claude?.window;
 
 // Exported for tests/buddy-helper-states.test.tsx, which drives design §4's
@@ -2254,13 +2255,17 @@ interface PairedDevice {
   password: string;
 }
 
-function ConnectToDesktopButton() {
+export function ConnectToDesktopButton() {
   const [open, setOpen] = useState(false);
   const [pairedDevices, setPairedDevices] = useState<PairedDevice[]>([]);
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [connectedDeviceName, setConnectedDeviceName] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // A saved computer that could not be saved or removed, with the action to try again.
+  // WHY: while paired, Save and Remove really ask the phone's own runtime now, and that can
+  // fail or time out; before, the failure went nowhere and the row just stayed.
+  const [deviceError, setDeviceError] = useState<{ message: string; retry: () => void } | null>(null);
   const [showConnectForm, setShowConnectForm] = useState(false);
   const [formName, setFormName] = useState('Desktop');
   const [formHost, setFormHost] = useState('');
@@ -2323,7 +2328,14 @@ function ConnectToDesktopButton() {
       port: parseInt(formPort) || 9900,
       password: formPassword,
     };
-    await claude.android?.savePairedDevice?.(device);
+    setDeviceError(null);
+    try {
+      await claude.android?.savePairedDevice?.(device);
+    } catch (err: any) {
+      // The runtime's own words (it did not answer / could not be reached) — no guessed cause.
+      setDeviceError({ message: `Couldn't save ${device.name}: ${err?.message || 'the phone gave no reason.'}`, retry: () => { void handleSaveDevice(); } });
+      return;
+    }
     setPairedDevices(prev => [...prev.filter(d => d.host !== device.host || d.port !== device.port), device]);
     setShowConnectForm(false);
     setFormName('Desktop');
@@ -2333,8 +2345,15 @@ function ConnectToDesktopButton() {
     await doConnect(device);
   }, [formName, formHost, formPort, formPassword, doConnect]);
 
-  const handleRemoveDevice = useCallback(async (device: PairedDevice) => {
-    await claude.android?.removePairedDevice?.(device.host, device.port);
+  const handleRemoveDevice = useCallback(async (device: PairedDevice): Promise<void> => {
+    setDeviceError(null);
+    try {
+      await claude.android?.removePairedDevice?.(device.host, device.port);
+    } catch (err: any) {
+      // The row stays: the computer is still saved on the phone, so saying otherwise would be false.
+      setDeviceError({ message: `Couldn't remove ${device.name}: ${err?.message || 'the phone gave no reason.'}`, retry: () => { void handleRemoveDevice(device); } });
+      return;
+    }
     setPairedDevices(prev => prev.filter(d => d.host !== device.host || d.port !== device.port));
   }, []);
 
@@ -2447,6 +2466,10 @@ function ConnectToDesktopButton() {
                 // they were. Change 17 moved the app's reds onto the token so
                 // theme packs can restyle them; this one survived that sweep.
                 <Callout tone="danger">{connectError}</Callout>
+              )}
+
+              {deviceError && (
+                <ErrorState mode="recoverable" message={deviceError.message} onRetry={deviceError.retry} variant="inline" />
               )}
 
               {/* Saved devices — always listed */}

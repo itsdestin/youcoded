@@ -1254,8 +1254,8 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
             // device — its terminal took typing through xterm's hidden box, so the soft
             // keyboard and scrolling misbehaved. A touch-first screen is 'browser' (the
             // Platform value isTouchDevice() means). A mouse-first browser keeps the host's
-            // answer, exactly as before; a touchscreen laptop reads as mouse-first here
-            // (narrow-viewport rule) and so is unchanged too.
+            // answer, as before. `(pointer: coarse)` is the PRIMARY pointer only, so a
+            // touchscreen laptop (primary pointer "fine") reads as mouse-first: unchanged too.
             const platform = isTouchFirstDevice() ? 'browser' : (msg.platform || 'browser');
             (window as any).__PLATFORM__ = platform;
           }

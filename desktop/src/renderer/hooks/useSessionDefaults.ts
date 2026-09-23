@@ -12,7 +12,7 @@
 // window is the moment its user can next start a session, so that is when it asks again. One
 // small file read per focus. A phone's browser tab gets the same behaviour when it is brought
 // back to the front.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 import type { ModelChoice } from '../components/model/ModelPicker';
 
@@ -31,10 +31,18 @@ const INITIAL: SessionDefaults = { skipPermissions: false, model: 'sonnet', proj
 
 export function useSessionDefaults(settingsOpen: boolean): SessionDefaults {
   const [defaults, setDefaults] = useState<SessionDefaults>(INITIAL);
+  const shownJson = useRef(JSON.stringify(INITIAL));
   // A failed read keeps what is shown: an unknown answer is not "no defaults".
   const load = useCallback(() => {
     (window as any).claude?.defaults?.get?.().then((defs: any) => {
-      if (defs) setDefaults(defs);
+      // Only a real change is stored. WHY: this runs on every window focus, and a fresh
+      // object with the same values would redraw the whole app on each switch back to it.
+      // The file is a few small JSON fields, so comparing their JSON is exact and cheap.
+      if (!defs) return;
+      const json = JSON.stringify(defs);
+      if (json === shownJson.current) return;
+      shownJson.current = json;
+      setDefaults(defs);
     }).catch(() => {});
   }, []);
   useEffect(() => { load(); }, [settingsOpen, load]);
