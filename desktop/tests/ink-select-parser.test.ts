@@ -424,3 +424,33 @@ Pick a follow-up:
     });
   });
 });
+
+describe('parseInkSelect with a wrapped option label', () => {
+  it('joins the wrapped line to its option and keeps the options after it', async () => {
+    // Real screen from the app's terminal (CC 2.1.281, 80 columns): option 2
+    // wraps onto a second line. Before the join, the menu ended at that line —
+    // "No" vanished and option 2 was cut mid-sentence.
+    const fs = await import('fs');
+    const path = await import('path');
+    const text = fs.readFileSync(path.join(__dirname, 'fixtures', 'plan-menu', 'app-screen-cc-2.1.281-write-permission-80col.txt'), 'utf8');
+    const menu = parseInkSelect(text)!;
+    expect(menu.options).toEqual([
+      'Yes',
+      'Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)',
+      'No',
+    ]);
+    expect(menu.optionNumbers).toEqual([1, 2, 3]);
+    expect(menuToButtons(menu).map((b) => b.input)).toEqual(['1', '2', '3']);
+  });
+
+  it('joins a wrapped option that sits ABOVE the cursor', () => {
+    const menu = parseInkSelect([
+      ' Do you want to proceed?',
+      '   1. Yes, and do the long thing that wraps onto',
+      '      a second line',
+      ' ❯ 2. No',
+    ].join('\n'))!;
+    expect(menu.options).toEqual(['Yes, and do the long thing that wraps onto a second line', 'No']);
+    expect(menu.selectedIndex).toBe(1);
+  });
+});
