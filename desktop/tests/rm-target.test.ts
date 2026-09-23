@@ -10,6 +10,7 @@ describe('removal-target floor: removals that are always asked about', () => {
     ['rm -rf ~', 'home folder'],
     ['rm -rf ~/', 'home folder'],
     ['rm -rf $HOME', 'home folder'],
+    // eslint-disable-next-line no-template-curly-in-string -- shell syntax under test, not a JS template
     ['rm -rf "${HOME}"', 'home folder'],
     ['rm -rf .', 'whole workspace'],
     ['rm -rf ..', 'home folder'],
@@ -33,6 +34,7 @@ describe('removal-target floor: removals that are always asked about', () => {
 
   it('a target that starts with a variable is asked about, because empty means the disk root', () => {
     expect(flagged('rm -rf "$BUILD_DIR"/')).toMatch(/starts with a variable/);
+    // eslint-disable-next-line no-template-curly-in-string -- shell syntax under test, not a JS template
     expect(flagged('rm -rf ${OUT}/*')).toMatch(/starts with a variable/);
   });
 
