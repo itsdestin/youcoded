@@ -16,13 +16,13 @@ import { makeOpts } from './helpers/harness-fakes';
 
 const BODY = '<skill-instructions name="p:theme-builder">\nBuild a theme.\n</skill-instructions>';
 
-async function invoke(args?: string) {
+async function invoke(args?: string, cut?: boolean) {
   const seen: any[] = [];
   const model = scriptedModel([stream(...textChunks('a', 'ok'), finishChunk('stop'))], seen);
   const session = new HarnessSession(makeOpts({}), async () => model as any);
   const events: TranscriptEvent[] = [];
   session.on('transcript-event', (e: TranscriptEvent) => events.push(e));
-  await session.runSkill({ skillId: 'p:theme-builder', displayName: 'Theme Builder', body: BODY, args, skillPath: '/x/SKILL.md' });
+  await session.runSkill({ skillId: 'p:theme-builder', displayName: 'Theme Builder', body: BODY, args, skillPath: '/x/SKILL.md', cut });
   return { events, seen, session };
 }
 
@@ -32,6 +32,11 @@ describe('user-invoked skill — repeat guard', () => {
   it('marks the skill as loaded for the Skill tool', async () => {
     const { session } = await invoke();
     expect((session as any).servedSkills.has('p:theme-builder')).toBe(true);
+  });
+
+  it('a body cut to fit the budget does not count as loaded', async () => {
+    const { session } = await invoke(undefined, true);
+    expect((session as any).servedSkills.has('p:theme-builder')).toBe(false);
   });
 });
 

@@ -63,6 +63,23 @@ describe('Skill tool repeat guard', () => {
     expect((await tool.execute({ skill: 'journal' }, c)).text).toContain('body');
   });
 
+  it('a skill too long to deliver whole is not remembered, so a later call still sends it', async () => {
+    // maxChars 100: the body is cut on delivery. Claiming "already loaded" after
+    // that would vouch for a middle the model never saw.
+    const tool = createSkillTool(catalogOf('x'.repeat(500)), 100);
+    const c = withSet();
+    await tool.execute({ skill: 'journal' }, c);
+    expect(c.servedSkills.size).toBe(0);
+    expect((await tool.execute({ skill: 'journal' }, c)).text).not.toBe(alreadyLoadedNotice('p:journal'));
+  });
+
+  it('a skill that fits the cap exactly is remembered', async () => {
+    const tool = createSkillTool(catalogOf('short'), 10_000);
+    const c = withSet();
+    await tool.execute({ skill: 'journal' }, c);
+    expect(c.servedSkills.has('p:journal')).toBe(true);
+  });
+
   it('a failed load is not remembered', async () => {
     const broken: SkillCatalog = { list: () => [], load: () => { throw new Error('gone'); } };
     const c = withSet();

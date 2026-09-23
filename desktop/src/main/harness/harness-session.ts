@@ -2180,8 +2180,8 @@ export class HarnessSession extends EventEmitter {
    *  model history on resume. Without it a resumed conversation would replay a
    *  turn whose opening move has no visible cause.
    */
-  async runSkill(inv: { skillId: string; displayName: string; body: string; args?: string; skillPath?: string }): Promise<void> {
-    this.servedSkills.add(inv.skillId); // the body is now in history: a model Skill call for it is a repeat
+  async runSkill(inv: { skillId: string; displayName: string; body: string; args?: string; skillPath?: string; cut?: boolean }): Promise<void> {
+    if (!inv.cut) this.servedSkills.add(inv.skillId); // a WHOLE body is now in history: a model Skill call for it is a repeat
     const historyText = inv.args ? `${inv.body}\n\n${inv.args}` : inv.body;
     return this.beginTurn(historyText, () => this.emitEvent('skill-invoked', {
       skillId: inv.skillId, displayName: inv.displayName, args: inv.args,

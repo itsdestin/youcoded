@@ -10,7 +10,8 @@
 // a question is absurd — and wrong here, because a skill's instructions can drive
 // real side effects, so this goes through decide() like every other tool.
 import { z } from 'zod';
-import { defineTool } from './registry';
+import { defineTool, DEFAULT_CAPS } from './registry';
+import { truncateOutput } from './truncate';
 import type { NativeTool, ToolContext, ToolResultPayload } from './types';
 import type { SkillCatalog } from '../skills/skill-catalog';
 
@@ -66,9 +67,10 @@ export function createSkillTool(catalog: SkillCatalog, maxChars?: number): Nativ
   // that only changes when the user installs something (which rebuilds the session's
   // tool set anyway).
   const installed = catalog.list();
+  const caps = maxChars != null ? { maxChars } : DEFAULT_CAPS;
 
   return defineTool<SkillArgs>({
-    ...(maxChars != null ? { caps: { maxChars } } : {}),
+    caps,
     name: 'Skill',
     // WHY the usage rules live HERE rather than in shared-doctrine.ts (Destin asked
     // for "our system instructions", 2026-09-23): this description is attached only
@@ -111,8 +113,14 @@ export function createSkillTool(catalog: SkillCatalog, maxChars?: number): Nativ
         if (ctx.servedSkills?.has(skill.id)) {
           return { text: alreadyLoadedNotice(skill.id) };
         }
-        ctx.servedSkills?.add(skill.id);
-        return { text: `<skill-instructions name="${skill.id}">\n${skill.body}\n</skill-instructions>` };
+        const text = `<skill-instructions name="${skill.id}">\n${skill.body}\n</skill-instructions>`;
+        // Only a WHOLE delivery counts as loaded. defineTool cuts this text to
+        // the same caps after we return, and a skill longer than the budget
+        // (several real ones exceed 24k chars on a mid-size local model) would
+        // otherwise be vouched for as "already loaded" while its middle was never
+        // shown — the one thing this notice must never claim.
+        if (!truncateOutput(text, caps).truncated) ctx.servedSkills?.add(skill.id);
+        return { text };
       } catch (err: any) {
         // RETURNED, not thrown: defineTool's catch would prefix "Skill failed:" and
         // bury the recovery information these errors carry — the list of skills that
