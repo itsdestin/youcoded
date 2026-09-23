@@ -384,3 +384,24 @@ export function menuToButtons(menu: ParsedMenu): PromptButton[] {
     return { label, input: DOWN.repeat(steps), submitInput: '\r' };
   });
 }
+
+/**
+ * Buttons for a KEPT card (its hook socket died while Claude Code's menu may
+ * still be live — ToolCard's ExpiredApprovalActions), or null when that is not
+ * safe. Ported from PR #278 (2026-07-30 permission-ask-timeout spec §3).
+ *
+ * Only when EVERY row carries a printed number: a digit picks its row with no
+ * dependence on the cursor, while the arrow fallback depends on a cursor
+ * position nobody is keeping current for a dead card. Labels always come from
+ * THIS parse of the live screen — never matched to the old card by position.
+ * AskUserQuestion never rebinds: Claude Code's own UI for it is sequential and
+ * multi-select with a free-text row this card does not model. ExitPlanMode
+ * never reaches here — PlanApprovalCard keeps answering it by typing.
+ */
+export function rebindButtons(menu: ParsedMenu | null, toolName: string): PromptButton[] | null {
+  if (!menu) return null;
+  if (toolName === 'AskUserQuestion' || toolName === 'ExitPlanMode') return null;
+  const buttons = menuToButtons(menu);
+  if (buttons.some((b) => b.submitInput !== undefined)) return null;
+  return buttons;
+}

@@ -121,6 +121,46 @@ describe('PlanApprovalCard', () => {
     expect(sendInput).not.toHaveBeenCalled();
   });
 
+  it('keeps the buttons working when the card is shown for an ask whose hook already closed', async () => {
+    // (No requestId: the socket is gone, but the terminal menu is still live.)
+    const term = await sessionFrom('cc-2.1.281-answer-digit2-120x40.json', { '2': 'after-answer-6s' });
+    mount(term.id, planTool({ requestId: undefined, expired: true } as Partial<ToolCallState>));
+    fireEvent.click(await screen.findByRole('button', { name: 'Yes, manually approve edits' }));
+    await waitFor(() => expect(sendInput).toHaveBeenCalledWith(term.id, '2'));
+    // (This harness passes the tool as a prop, so the settle's store update does
+    // not unmount the card; once the menu has been gone past the read grace the
+    // card says it cannot read one — by then the answer path has finished.)
+    await screen.findByText(/can't read Claude Code's plan options/, undefined, { timeout: 8000 });
+    // No socket exists to release — a kept card never calls the hook.
+    expect(respondToPermission).not.toHaveBeenCalled();
+    expect(sendInput.mock.calls).toEqual([[term.id, '2']]);
+  });
+});
+
+describe('a kept card that is not a plan', () => {
+  it('offers the live menu\'s own numbered rows and Dismiss; a row types only its number', async () => {
+    const t = new Terminal({ cols: 100, rows: 20, allowProposedApi: true });
+    registerTerminal('kept', t as never);
+    terms.push({ dispose: () => { unregisterTerminal('kept'); t.dispose(); } });
+    await new Promise<void>((r) => t.write(
+      ' Do you want to create hello.txt?\r\n ❯ 1. Yes\r\n   2. Yes, and don\'t ask again this session\r\n   3. No\r\n', r,
+    ));
+    mount('kept', planTool({ toolName: 'Bash', input: { command: 'touch hello.txt' }, requestId: undefined, expired: true } as Partial<ToolCallState>));
+    fireEvent.click(await screen.findByRole('button', { name: 'No' }));
+    expect(sendInput.mock.calls).toEqual([['kept', '3']]);
+    expect(screen.getByRole('button', { name: 'Dismiss — I answered in the terminal' })).toBeTruthy();
+    expect(respondToPermission).not.toHaveBeenCalled();
+  });
+
+  it('an AskUserQuestion kept card gets Dismiss only — no rows are guessed', async () => {
+    const t = new Terminal({ cols: 100, rows: 20, allowProposedApi: true });
+    registerTerminal('ask', t as never);
+    terms.push({ dispose: () => { unregisterTerminal('ask'); t.dispose(); } });
+    await new Promise<void>((r) => t.write(' Pick one\r\n ❯ 1. Red\r\n   2. Blue\r\n', r));
+    mount('ask', planTool({ toolName: 'AskUserQuestion', input: { questions: [{ question: 'Pick one', header: 'Q', multiSelect: false, options: [{ label: 'Red' }, { label: 'Blue' }] }] }, requestId: undefined, expired: true } as Partial<ToolCallState>));
+    await screen.findByRole('button', { name: 'Dismiss — I answered in the terminal' });
+    expect(screen.queryByRole('button', { name: 'Red' })).toBeNull();
+  });
 });
 
 describe('the buddy floater and a plan approval', () => {
@@ -133,5 +173,17 @@ describe('the buddy floater and a plan approval', () => {
     expect(screen.getByText('Review the plan in the main window')).toBeTruthy();
     expect(screen.queryByText(/Allow/)).toBeNull();
     expect(screen.queryByText(/Deny/)).toBeNull();
+  });
+});
+
+describe('the buddy floater and a kept card', () => {
+  it('offers only Dismiss, worded as the claim it is', () => {
+    render(
+      <ChatProvider>
+        <CompactToolStrip tools={[planTool({ toolName: 'Bash', input: { command: 'ls' }, requestId: undefined, expired: true } as Partial<ToolCallState>)]} sessionId="s1" />
+      </ChatProvider>,
+    );
+    expect(screen.getByText('Dismiss — I answered in the terminal')).toBeTruthy();
+    expect(screen.queryByText(/Allow/)).toBeNull();
   });
 });

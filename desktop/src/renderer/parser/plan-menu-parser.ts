@@ -33,11 +33,11 @@
 const ANSI = /\u001b\[[0-9;?<>=]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b./g;
 
 /** The closing question of the plan dialog — the anchor the option block hangs off. */
-export const PLAN_MENU_QUESTION = 'would you like to proceed?';
+const PLAN_MENU_QUESTION = 'would you like to proceed?';
 /** Placeholder Claude Code shows in the feedback row while it is empty. */
 export const PLAN_FEEDBACK_PLACEHOLDER = 'Tell Claude what to change';
 /** Dim hint Claude Code prints under the feedback row (absent when approvals are withheld). */
-export const PLAN_FEEDBACK_HINT = 'shift+tab to approve with this feedback';
+const PLAN_FEEDBACK_HINT = 'shift+tab to approve with this feedback';
 /** Body line of the EMPTY-plan variant ("Exit plan mode?" Yes/No). Recognised
  *  only so the card can say "answer in the terminal" instead of "no menu". */
 const EMPTY_PLAN_BODY = 'claude wants to exit plan mode';

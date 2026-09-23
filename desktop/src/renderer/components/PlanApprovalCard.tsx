@@ -138,7 +138,7 @@ export function PlanApprovalCard({ sessionId, onAnswered }: {
       <div className="flex items-center gap-2">
         <TextInput
           size="sm"
-          className="flex-1 min-w-0 text-xs"
+          className="flex-1 min-w-0"
           value={feedback}
           maxLength={PLAN_TIMING.maxFeedback}
           disabled={sending || draftInTerminal}
@@ -147,7 +147,7 @@ export function PlanApprovalCard({ sessionId, onAnswered }: {
           onChange={(e) => setFeedback(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFeedback(); } }}
         />
-        <Button size="sm" disabled={!canSend} onClick={sendFeedback} className={pad}>
+        <Button size="sm" disabled={!canSend} onClick={sendFeedback}>
           Send
         </Button>
       </div>
@@ -155,7 +155,7 @@ export function PlanApprovalCard({ sessionId, onAnswered }: {
         {/* Esc: Claude Code's own cancel. It has no row in the menu, so the label
             borrows Claude Code's words for the result ("The user doesn't want to
             proceed…" is what Claude is told). */}
-        <Button variant="ghost" size="sm" disabled={sending} onClick={() => void answer(menu, { kind: 'reject' })} className={pad}>
+        <Button variant="ghost" size="sm" disabled={sending} onClick={() => void answer(menu, { kind: 'reject' })}>
           Don&apos;t proceed
         </Button>
         {sending && <span className="text-3xs text-fg-muted">Sending to Claude Code…</span>}

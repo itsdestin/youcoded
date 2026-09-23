@@ -171,13 +171,16 @@ function ToolRow({
           decision,
         );
         if (delivered === false) {
-          // Fix: Socket already closed — mark expired so the UI unsticks.
-          // Reset responding so user can retry if needed.
+          // Fix: Socket already closed — resolve the card so the UI unsticks.
+          // reason 'delivery-failed': the socket is provably gone, so the
+          // reducer must RESOLVE, never keep (a kept card here would pin
+          // buttons that cannot work).
           setResponding(false);
           const action = {
             type: 'PERMISSION_EXPIRED' as const,
             sessionId,
             requestId: tool.requestId,
+            reason: 'delivery-failed' as const,
           };
           dispatch(action);
           (window as any).claude?.remote?.broadcastAction(action);
@@ -262,6 +265,23 @@ function ToolRow({
           buttons that cannot do what they say. */}
       {tool.status === 'awaiting-approval' && tool.toolName === 'ExitPlanMode' ? (
         <span style={{ flexShrink: 0, color: 'var(--fg-dim)' }}>Review the plan in the main window</span>
+      ) : tool.status === 'awaiting-approval' && tool.expired ? (
+        // A KEPT card: its hook socket died, Claude Code's menu may still be up
+        // in the main window's terminal. Nothing here can answer that menu, so
+        // offer only the same Dismiss the chat card has — worded as the claim it
+        // is ("I answered"), because dismissing reopens sending into that menu.
+        <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          <button
+            onClick={() => {
+              const action = { type: 'PERMISSION_CARD_RESOLVED' as const, sessionId, toolUseId: tool.toolUseId };
+              dispatch(action);
+              (window as any).claude?.remote?.broadcastAction?.(action);
+            }}
+            style={{ ...denyStyle, whiteSpace: 'normal', textAlign: 'center', lineHeight: 1.3 }}
+          >
+            Dismiss — I answered in the terminal
+          </button>
+        </span>
       ) : tool.status === 'awaiting-approval' && tool.requestId ? (
         <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
           <button

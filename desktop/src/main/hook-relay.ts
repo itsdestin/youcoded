@@ -23,11 +23,11 @@ const DEFAULT_PIPE_NAME = process.platform === 'win32'
 // tests/permission-timeout-margins.test.ts.
 // NOTE: setTimeout does not advance while the machine sleeps, so the hold can
 // stretch past 2h of wall-clock on a laptop — expected, not a bug.
-export const APP_HOLD_MS = 7_200_000;
+const APP_HOLD_MS = 7_200_000;
 // An ask whose session matches no live session can never render a card
 // anywhere; a 2h hold would be a 2h invisible hang. The old 5-minute timeout
 // was silently covering this case (spec §1a) — this restores it.
-export const UNROUTABLE_HOLD_MS = 60_000;
+const UNROUTABLE_HOLD_MS = 60_000;
 
 /** Why a held ask ended without a user decision (rides as payload._reason). */
 export type PermissionExpiryReason = 'app-timeout' | 'unroutable' | 'hook-closed';

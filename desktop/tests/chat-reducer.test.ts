@@ -1389,3 +1389,115 @@ describe('reducer session totals', () => {
     expect(back.get(SID)!.totals.inputTokens).toBe(0);
   });
 });
+
+// A Claude Code ask that ends without a user decision carries WHY
+// (hook-relay.ts / EventBridge.kt). Only 'hook-closed' — the hook's far end went
+// away while Claude Code's own menu may still be on screen — KEEPS the card.
+describe('PERMISSION_EXPIRED keeps or settles the card by reason', () => {
+  function withAsk(toolName = 'Bash'): ChatState {
+    return dispatch(initState(), { type: 'PERMISSION_REQUEST', sessionId: SESSION, toolName, input: {}, requestId: 'r1' } as ChatAction);
+  }
+  const expire = (s: ChatState, reason?: 'app-timeout' | 'unroutable' | 'delivery-failed' | 'hook-closed') =>
+    dispatch(s, { type: 'PERMISSION_EXPIRED', sessionId: SESSION, requestId: 'r1', ...(reason ? { reason } : {}) } as ChatAction);
+  const card = (s: ChatState, id = 'perm-r1') => s.get(SESSION)!.toolCalls.get(id)!;
+
+  it("'hook-closed' keeps the card waiting: awaiting-approval, expired, no requestId, no error", async () => {
+    const { hasPendingInteraction, canRetrySubmit } = await import('../src/renderer/state/pty-input-gate');
+    const s = expire(withAsk(), 'hook-closed');
+    expect(card(s)).toMatchObject({ status: 'awaiting-approval', expired: true });
+    expect(card(s).requestId).toBeUndefined();
+    expect(card(s).error).toBeUndefined();
+    // Still counts as pending: nothing may be typed into Claude Code's live menu.
+    expect(hasPendingInteraction(s.get(SESSION)!)).toBe(true);
+    expect(canRetrySubmit(s.get(SESSION)!)).toBe(false);
+  });
+
+  it("'app-timeout' fails the card and says YouCoded declined it", () => {
+    const t = card(expire(withAsk(), 'app-timeout'));
+    expect(t.status).toBe('failed');
+    expect(t.expired).toBeUndefined();
+    expect(t.error).toMatch(/No answer came in time, so YouCoded declined this request/);
+  });
+
+  it("'unroutable' fails the card and says it could not be shown", () => {
+    expect(card(expire(withAsk(), 'unroutable')).error).toMatch(/couldn't show this request in any open conversation/);
+  });
+
+  it("no reason (native broker, older client) and 'delivery-failed' settle the card, never keep it", () => {
+    for (const reason of [undefined, 'delivery-failed'] as const) {
+      const t = card(expire(withAsk(), reason));
+      expect(t.status).toBe('failed');
+      expect(t.expired).toBeUndefined();
+      expect(t.error).toMatch(/closed before an answer reached it/);
+    }
+  });
+
+  it('the hook dispatcher passes a known reason through and drops an unknown one', () => {
+    const evt = (r: unknown) => ({ type: 'PermissionExpired', sessionId: SESSION, payload: { _requestId: 'r1', _reason: r }, timestamp: 0 } as unknown as HookEvent);
+    expect(hookEventToAction(evt('hook-closed'))).toMatchObject({ type: 'PERMISSION_EXPIRED', reason: 'hook-closed' });
+    expect(hookEventToAction(evt('something-new'))).not.toHaveProperty('reason');
+    expect(hookEventToAction(evt(undefined))).not.toHaveProperty('reason');
+  });
+
+  it('PERMISSION_CARD_RESOLVED quietly completes a kept card, and leaves a live ask alone', () => {
+    const settled = dispatch(expire(withAsk(), 'hook-closed'), { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(settled)).toMatchObject({ status: 'complete' });
+    expect(card(settled).expired).toBeUndefined();
+    expect(card(settled).error).toBeUndefined();
+    const live = dispatch(withAsk(), { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(live).status).toBe('awaiting-approval');
+  });
+
+  it('a kept card the turn then fails keeps its failure — a late settle cannot erase it', () => {
+    let s = expire(withAsk(), 'hook-closed');
+    s = dispatch(s, { type: 'SESSION_PROCESS_EXITED', sessionId: SESSION, exitCode: 1 } as ChatAction);
+    expect(card(s)).toMatchObject({ status: 'failed' });
+    expect(card(s).expired).toBeUndefined();
+    const before = card(s).error;
+    s = dispatch(s, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(s)).toMatchObject({ status: 'failed', error: before });
+  });
+
+  it('PERMISSION_CARD_RESOLVED requires awaiting-approval, not just the flag', () => {
+    const s = withAsk();
+    const toolCalls = new Map(s.get(SESSION)!.toolCalls);
+    toolCalls.set('perm-r1', { ...toolCalls.get('perm-r1')!, status: 'failed', error: 'real failure', expired: true });
+    const stale = new Map(s); stale.set(SESSION, { ...s.get(SESSION)!, toolCalls });
+    const after = dispatch(stale, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'perm-r1' });
+    expect(card(after)).toMatchObject({ status: 'failed', error: 'real failure' });
+  });
+
+  it('a kept placeholder stays kept when the real tool-use replaces it, and can still be settled', () => {
+    let s = expire(withAsk(), 'hook-closed');
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    expect([...s.get(SESSION)!.toolCalls.keys()].filter((k) => k.startsWith('perm-'))).toEqual([]);
+    expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
+    s = dispatch(s, { type: 'PERMISSION_CARD_RESOLVED', sessionId: SESSION, toolUseId: 'toolu_1' });
+    expect(card(s, 'toolu_1').status).toBe('complete');
+  });
+
+  it('a re-emitted tool-use does not reset a kept card to running (the send gates must keep holding)', async () => {
+    const { hasPendingInteraction } = await import('../src/renderer/state/pty-input-gate');
+    let s = expire(withAsk(), 'hook-closed');
+    const use = { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction;
+    s = dispatch(dispatch(s, use), use);
+    expect(card(s, 'toolu_1')).toMatchObject({ status: 'awaiting-approval', expired: true });
+    expect(hasPendingInteraction(s.get(SESSION)!)).toBe(true);
+  });
+
+  it("the tool's own result settles a kept card and clears the flag (answered in the terminal)", () => {
+    let s = expire(withAsk(), 'hook-closed');
+    s = dispatch(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'u1', toolUseId: 'toolu_1', toolName: 'Bash', toolInput: {} } as ChatAction);
+    const ok = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u2', toolUseId: 'toolu_1', result: 'ok', isError: false } as ChatAction);
+    expect(card(ok, 'toolu_1')).toMatchObject({ status: 'complete' });
+    expect(card(ok, 'toolu_1').expired).toBeUndefined();
+    const bad = dispatch(s, { type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'u3', toolUseId: 'toolu_1', result: 'no', isError: true } as ChatAction);
+    expect(card(bad, 'toolu_1').expired).toBeUndefined();
+  });
+
+  it('a kept card survives the remote-client snapshot round trip', () => {
+    const s = expire(withAsk(), 'hook-closed');
+    const back = deserializeChatState(serializeChatState(s));
+    expect(back.get(SESSION)!.toolCalls.get('perm-r1')).toMatchObject({ status: 'awaiting-approval', expired: true });
+  });
+});

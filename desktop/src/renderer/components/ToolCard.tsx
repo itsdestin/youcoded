@@ -26,6 +26,7 @@ import { describeChatsearchCall, COPY } from '../../shared/chatsearch-refs';
 import { CLAUDE_CODE_LINK_TOOL, SEND_USER_LINK_TOOL } from '../../shared/send-user-link';
 import { toolActionLabel } from '../utils/tool-group-summary';
 import { PlanApprovalCard } from './PlanApprovalCard';
+import { ExpiredApprovalActions } from './ExpiredApprovalActions';
 
 // --- Helpers for friendly display ---
 
@@ -1438,12 +1439,29 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
       )}
 
       {/* Permission / AskUserQuestion / ExitPlanMode UI */}
-      {tool.status === 'awaiting-approval' && tool.requestId && (() => {
+      {tool.status === 'awaiting-approval' && (tool.requestId || tool.expired) && (() => {
         // AskUserQuestion needs its own UI with option selection instead of Yes/No
         const isAskUser = tool.toolName === 'AskUserQuestion' && isValidQuestions(tool.input);
         // ExitPlanMode is Claude Code's own plan menu, not a Yes/No permission —
         // PlanApprovalCard renders the rows that menu is actually showing.
         const isPlanApproval = tool.toolName === 'ExitPlanMode';
+        // A KEPT card (the hook socket died, requestId cleared) whose Claude Code
+        // menu may still be live. The plan card needs no socket — it answers by
+        // typing into the menu — so it keeps working unchanged and settles the
+        // card quietly. Every other kept card gets ExpiredApprovalActions.
+        // `expired` is only ever set on the Claude Code hook path ('hook-closed');
+        // native sessions have no terminal and never keep a card (chat-reducer).
+        if (tool.expired || !tool.requestId) {
+          const settle = () => {
+            if (!sessionId) return;
+            const action = { type: 'PERMISSION_CARD_RESOLVED' as const, sessionId, toolUseId: tool.toolUseId };
+            dispatch(action);
+            (window as any).claude?.remote?.broadcastAction?.(action);
+          };
+          return isPlanApproval && sessionId
+            ? <PlanApprovalCard sessionId={sessionId} onAnswered={settle} />
+            : <ExpiredApprovalActions sessionId={sessionId} toolName={tool.toolName} onDismiss={settle} />;
+        }
         const onRespondedCb = () => {
           if (sessionId && tool.requestId) {
             const action = { type: 'PERMISSION_RESPONDED' as const, sessionId, requestId: tool.requestId };
@@ -1453,7 +1471,13 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         };
         const onFailedCb = () => {
           if (sessionId && tool.requestId) {
-            const action = { type: 'PERMISSION_EXPIRED' as const, sessionId, requestId: tool.requestId };
+            // 'delivery-failed': the host confirmed the socket is gone, so this
+            // must RESOLVE the card — keeping it would pin buttons that cannot
+            // work (chat-reducer PERMISSION_EXPIRED).
+            const action = {
+              type: 'PERMISSION_EXPIRED' as const, sessionId,
+              requestId: tool.requestId, reason: 'delivery-failed' as const,
+            };
             dispatch(action);
             (window as any).claude?.remote?.broadcastAction(action);
           }

@@ -72,7 +72,11 @@ export function hookEventToAction(event: HookEvent): ChatAction | null {
     case 'PermissionExpired': {
       const requestId = payload._requestId as string;
       if (!requestId) return null;
-      return { type: 'PERMISSION_EXPIRED', sessionId, requestId };
+      // Why the ask ended (hook-relay.ts / EventBridge.kt). Unknown values are
+      // dropped so the reducer's safe default (resolve the card) applies.
+      const r = payload._reason;
+      const reason = r === 'app-timeout' || r === 'unroutable' || r === 'delivery-failed' || r === 'hook-closed' ? r : undefined;
+      return { type: 'PERMISSION_EXPIRED', sessionId, requestId, ...(reason ? { reason } : {}) };
     }
 
     default:

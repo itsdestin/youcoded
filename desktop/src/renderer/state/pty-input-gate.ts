@@ -51,6 +51,37 @@ export function hasPendingInteraction(session: SessionChatState): boolean {
 }
 
 /**
+ * WHICH kind of interaction is blocking sends — the send-refusal copy names it
+ * (2026-07-30 permission-ask-timeout spec §4). With the app now holding an
+ * unanswered ask for up to 2 hours, a generic "answer the prompt" reads as a
+ * mystery lock once it has sat a while; an 'approval' card is in the chat, so
+ * the copy points there. Same scan, same fields as hasPendingInteraction —
+ * kept parallel (not derived from its boolean) so the two cannot disagree.
+ */
+export function pendingInteractionKind(session: SessionChatState): 'approval' | 'prompt' | null {
+  for (const id of session.activeTurnToolIds) {
+    if (session.toolCalls.get(id)?.status === 'awaiting-approval') return 'approval';
+  }
+  for (const entry of session.timeline) {
+    if (entry.kind === 'prompt'
+        && entry.prompt.promptId !== HISTORY_EXPAND_PROMPT_ID
+        && !entry.prompt.completed) {
+      return 'prompt';
+    }
+  }
+  return null;
+}
+
+/** The one refusal sentence every send-refusal site reads, so they cannot drift.
+ *  "answer the card" is true of every card shape that blocks (permission, plan,
+ *  question, and a kept card with its Dismiss). */
+export function pendingInteractionRefusalCopy(kind: 'approval' | 'prompt' | null): string {
+  return kind === 'approval'
+    ? 'Your assistant is waiting for your response — answer the card in the chat first.'
+    : 'Your assistant is waiting for your response — answer the prompt first.';
+}
+
+/**
  * True only when the session is observably idle enough that a recovery `\r`
  * (useSubmitConfirmation) cannot land on anything but CC's empty input bar:
  *

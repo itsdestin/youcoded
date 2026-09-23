@@ -693,6 +693,19 @@ export type ChatAction =
       type: 'PERMISSION_EXPIRED';
       sessionId: string;
       requestId: string;
+      /** Why the ask ended. ONLY 'hook-closed' (the far end went away; Claude
+       *  Code's own menu may still be live) keeps the card. Absent = resolve:
+       *  keeping is the riskier behaviour, and the native broker and older
+       *  remote clients never send a reason. Optional so older serialized
+       *  actions still apply. */
+      reason?: 'app-timeout' | 'unroutable' | 'delivery-failed' | 'hook-closed';
+    }
+  | {
+      /** Quiet settle of a KEPT (expired) card: its menu left the terminal, or
+       *  the user clicked Dismiss. No error text — nothing failed. */
+      type: 'PERMISSION_CARD_RESOLVED';
+      sessionId: string;
+      toolUseId: string;
     }
   | {
       // Specialists 1c: the host's delegation ledger changed for one hire

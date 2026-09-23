@@ -752,6 +752,14 @@ export interface ToolCallState {
   /** Native broker only: winning rule came from the destructive deny-list →
    *  the "Always allow" button shows a consequence-gated confirm. Task 13. */
   denyListed?: boolean;
+  /** A Claude Code ask whose hook socket died while Claude Code's own menu may
+   *  still be on screen ('hook-closed' expiry). The card STAYS awaiting-approval
+   *  so the session dot and the send gates keep holding — the bug this fixes was
+   *  the card flipping to 'failed' so the session looked idle while Claude Code
+   *  was still blocked. requestId is cleared (the socket is gone). Settled by
+   *  the tool's transcript result, the prompt detector's menu-gone rule, or
+   *  Dismiss (PERMISSION_CARD_RESOLVED). */
+  expired?: true;
   /** Native broker only: the ask was forced by a path outside the session
    *  folder → the "Always allow" button is HIDDEN. The engine forces an ask on
    *  every external path and never consults the stored rules there, so a
