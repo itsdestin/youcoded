@@ -103,18 +103,40 @@ function useQuoteMarks(
  *  normal-flow children of the SAME scrolling ancestor, so plain
  *  getBoundingClientRect deltas stay correct at any scroll position without
  *  a scroll listener of our own. */
-function useAnchorTops(marks: Map<string, HTMLElement>, marginRef: React.RefObject<HTMLElement | null>): Map<string, number> {
+function useAnchorTops(
+  marks: Map<string, HTMLElement>,
+  marginRef: React.RefObject<HTMLElement | null>,
+  containerRef: React.RefObject<HTMLElement | null>,
+): Map<string, number> {
   const [tops, setTops] = useState<Map<string, number>>(new Map());
   useLayoutEffect(() => {
     const col = marginRef.current;
     if (!col) return;
-    const colTop = col.getBoundingClientRect().top;
-    const next = new Map<string, number>();
-    for (const [id, mark] of marks) {
-      next.set(id, Math.max(0, mark.getBoundingClientRect().top - colTop));
-    }
-    setTops(next);
-  }, [marks, marginRef]);
+    const measure = () => {
+      const colTop = col.getBoundingClientRect().top;
+      const next = new Map<string, number>();
+      for (const [id, mark] of marks) {
+        next.set(id, Math.max(0, mark.getBoundingClientRect().top - colTop));
+      }
+      setTops(next);
+    };
+    measure();
+    // WHY observe the CONTENT column, not (only) the margin: the narrow/wide
+    // switch (use-container-narrow.ts) resolves over SEVERAL frames of its
+    // own (ref-availability retry, then an async ResizeObserver callback),
+    // and each width change RE-WRAPS the document's text — its height
+    // changes, not the margin's (the margin's own height tracks the fixed
+    // viewport row, not the document). Found reviewing this mockup's
+    // screenshots: a marker's stored top was measured against a transient,
+    // still-wide layout and never corrected once the page settled into its
+    // final (narrower, more-wrapped) height, landing ~600px below the
+    // highlight it belonged to. A height change on the content column is
+    // exactly "the document reflowed" — re-measure whenever it fires.
+    const target = containerRef.current ?? col;
+    const ro = new ResizeObserver(measure);
+    ro.observe(target);
+    return () => ro.disconnect();
+  }, [marks, marginRef, containerRef]);
   return tops;
 }
 
@@ -148,7 +170,7 @@ export function CommentsMargin({ containerRef, path, narrow }: Props) {
   );
   const marginRef = useRef<HTMLDivElement>(null);
   const marks = useQuoteMarks(containerRef, visible);
-  const rawTops = useAnchorTops(marks, marginRef);
+  const rawTops = useAnchorTops(marks, marginRef, containerRef);
   const tops = useMemo(() => stackedTops(visible, rawTops, narrow), [visible, rawTops, narrow]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);

@@ -18,18 +18,41 @@ export function useContainerNarrow<T extends HTMLElement>(thresholdPx: number): 
 
 /** Existing-ref form: a host that already has its own root ref (e.g.
  *  ActiveArtifactView's rootRef) observes it directly instead of attaching a
- *  second ref to the same node. */
+ *  second ref to the same node.
+ *
+ * WHY the rAF retry (found reviewing this mockup's own screenshots, 2026-09-24):
+ * a host with an early-return loading state (ActiveArtifactView returns
+ * LoadingState before its `ref={rootRef}` div exists) mounts THIS hook on
+ * that first render, when `ref.current` is still null — a plain
+ * `useLayoutEffect(..., [thresholdPx])` bails out once and, because its deps
+ * never change again, never retries once the real div mounts a render later.
+ * The review bar stayed permanently "wide" (full "Send to assistant" text
+ * overflowing a squeezed pane) because narrow was never measured AT ALL, not
+ * because the threshold was wrong. Polling via rAF until the ref resolves
+ * costs at most a couple of frames, once, and then behaves exactly like a
+ * normal ResizeObserver. */
 export function useNarrowByRef<T extends HTMLElement>(ref: RefObject<T | null>, thresholdPx: number): boolean {
   const [narrow, setNarrow] = useState(false);
   useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width ?? 0;
-      if (width > 0) setNarrow(width < thresholdPx);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
+    let ro: ResizeObserver | null = null;
+    let raf = 0;
+    const tryAttach = () => {
+      const el = ref.current;
+      if (!el) {
+        raf = requestAnimationFrame(tryAttach);
+        return;
+      }
+      ro = new ResizeObserver((entries) => {
+        const width = entries[0]?.contentRect.width ?? 0;
+        if (width > 0) setNarrow(width < thresholdPx);
+      });
+      ro.observe(el);
+    };
+    tryAttach();
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      ro?.disconnect();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ref identity is stable
   }, [thresholdPx]);
   return narrow;
