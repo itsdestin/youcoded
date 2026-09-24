@@ -479,7 +479,15 @@ function mayStartPiece(content: string, floor: number): boolean {
  */
 function trimTrailingBlank(text: string): string {
   const m = /(?:\r\n|\r|\n)[ \t\r\n]*$/.exec(text);
-  return m ? text.slice(0, m.index) : text;
+  if (!m) return text;
+  const trimmed = text.slice(0, m.index);
+  // Raw HTML and a trailing definition line read differently at the very end of
+  // a document ("1. one\n<br>" is a list and an HTML block; with a line ending
+  // after it, one list item) — a render fuzz found it. Those groups keep their
+  // blank lines; a fuzz of 12,000 other endings drew the same either way.
+  if (/(?:^|[\r\n])[ \t>*+\-0-9.)]*</.test(trimmed)) return text;
+  if (/^[ \t>*+\-0-9.)]*\[/.test(trimmed.slice(lineStart(trimmed, trimmed.length)))) return text;
+  return trimmed;
 }
 
 const groupOf = (pieces: Piece[], last: boolean): DrawnGroup => {

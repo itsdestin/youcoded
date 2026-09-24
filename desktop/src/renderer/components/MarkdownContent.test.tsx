@@ -567,7 +567,9 @@ describe('MarkdownContent while a reply streams in', () => {
       '/tmp/file.txt', '- [ ] task', '***', '', '', '', '',
       // Whole disclosures spanning blank lines, so pairing across pieces is exercised.
       '<details>\n<summary>Sum</summary>\n\nInside **text**\n\n</details>', '<details open><summary>Two</summary>\n\n- in list\n\n</details>',
-      '<details>\n\n<summary>Apart</summary>\n\nBody\n\n</details>'];
+      '<details>\n\n<summary>Apart</summary>\n\nBody\n\n</details>',
+      // Definition runs with no blank lines, duplicate labels, titles on the next line.
+      '[a]: /u', '[A]: /v "t"', 'see [c] and [a][]', '   [c]: /c', '[d]:\n/dd', '[d] late', '"title"', '3. three', '2', '\t- tab'];
     let seed = 20260924;
     const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
     // A fixed count, not a time box (a time box would test less under load):
@@ -753,4 +755,70 @@ describe('MarkdownContent while a reply streams in', () => {
     expect(live.container.querySelector('a[href="https://example.com/more"]')).not.toBeNull();
     live.unmount();
   });
+
+  // Streams `prefixes` into a bubble opened at `mountAt` and into today's
+  // whole-message render side by side; after every update the pages must match
+  // and every element today's render kept must be kept too.
+  const streamMatchesToday = (prefixes: string[], mountAt: number, keepElements: boolean) => {
+    const live = render(<Bubble md={prefixes[mountAt]} incremental />);
+    const today = render(<Bubble md={prefixes[mountAt]} />);
+    let liveEls = elementsByPath(live.container);
+    let todayEls = elementsByPath(today.container);
+    for (const p of prefixes.slice(mountAt)) {
+      live.rerender(<Bubble md={p} incremental />);
+      today.rerender(<Bubble md={p} />);
+      expect(canonical(live.container), `mounted at ${mountAt}, after ${JSON.stringify(p)}`).toBe(canonical(today.container));
+      const nextLive = elementsByPath(live.container);
+      const nextToday = elementsByPath(today.container);
+      if (keepElements) {
+        for (const [path, el] of nextToday) {
+          if (todayEls.get(path) === el) expect(nextLive.get(path), `${path} after ${JSON.stringify(p)}`).toBe(liveEls.get(path));
+        }
+      }
+      liveEls = nextLive;
+      todayEls = nextToday;
+    }
+    live.unmount();
+    today.unmount();
+  };
+
+  // Cases where one block changes how another is drawn (definitions, their
+  // labels and duplicates, disclosures, blocks that span blank lines), streamed
+  // a character at a time from the start and from part-way in.
+  const CROSS_BLOCK: [string, string, boolean?][] = [
+    ['a setext heading after definitions', 'Para [a]\n\n[a]: /u\n\nTitle [a]\n===\n\nx'],
+    ['a label defined twice with different case', '[A]: /first\n\nx [a]\n\n[a]: /second\n\ny [A]'],
+    ['a definition long after its use', 'use [z] here\n\nmore\n\nmore2\n\nmore3\n\n[z]: /zz\n\nend [z]'],
+    ['a table naming a definition', '[a]: /u\n\n| x [a] |\n| - |\n| y |\n\nmore'],
+    ['a definition and a paragraph in one piece', '[a]: /u\nfoo [a]\n\nbar [a]'],
+    ['a label over two lines', '[a\nb]: /u\n\n[a b] x\n\ny'],
+    ['a stray closer, then a disclosure', '</details>\n\n<details><summary>S</summary>\n\nb\n\n</details>\n\nafter'],
+    ['a disclosure inside a disclosure', '<details><summary>A</summary>\n\n<details><summary>B</summary>\n\nx\n\n</details>\n\n</details>\n\nz'],
+    ['a summary after a definition', '<details>\n\n[a]: /u\n\n<summary>S</summary>\n\nx [a]\n\n</details>\n\ntail'],
+    ['a disclosure inside a list', '- item\n\n  <details><summary>S</summary>\n\n  body\n\n  </details>\n\nout'],
+    ['ordered lists split by a paragraph', '1. a\n\npara\n\n3. c\n4. d\n\n5. e'],
+    ['a comment spanning blank lines', '<!--\n\nhidden [a]\n\n-->\n\n[a]: /u\n\nvis [a]'],
+    ['a definition inside a code block', '```\n[a]: /u\n\n```\n\n[a] text\n\n[a]: /v'],
+    ['a picture by reference', '![a]\n\nmid\n\nmid2\n\n[a]: https://x.com/p.png\n\nend'],
+    ['emphasis around references', '*[a]*\n\n**[a]: /u**\n\n[a]: /real'],
+    ['definitions with CRLF', 'x [a]\r\n\r\n[a]: /u\r\n\r\ny [a]'],
+    ['a title on the next line', 'x [a]\n\n[a]: /u\n"tit\nle"\n\ny [a]'],
+    ['an item that could join the list above', '1. a\n\n2\n\n2. b\n\n-\n\n- c\n\n10\n\nend'],
+    ['a bare opener that never pairs', 'A\n\n<details>\n\nnot a summary\n\nB\n\nC\n\nD'],
+    // Raw HTML ending a finished block reads differently at the end of a
+    // document, so its blank lines are kept when it is drawn on its own.
+    ['raw HTML right under a list item', '1. one\n<br>\n\nNote\n\nmore\n\n- x\n<!--\n-->\n\nend'],
+    // A footnote switches to the whole-message render once (documented), so
+    // only the page is compared.
+    ['a footnote defined late', 'A[^1]\n\nb\n\nc\n\n[^1]: n\n\nd', false],
+    ['a definition inside a quote', 'A [q]\n\nb\n\n> [q]: /q\n\nd', false],
+  ];
+  for (const [name, md, keep] of CROSS_BLOCK) {
+    it(`draws ${name} exactly like the whole message, from the start and from part-way in`, () => {
+      const prefixes = Array.from({ length: md.length }, (_, i) => md.slice(0, i + 1));
+      for (const mountAt of [0, Math.floor(prefixes.length / 3), Math.floor((prefixes.length * 2) / 3)]) {
+        streamMatchesToday(prefixes, mountAt, keep ?? true);
+      }
+    });
+  }
 });
