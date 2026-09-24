@@ -1,0 +1,6 @@
+/* Design-guide review (2026-09-24): small section labels with a THIN LINE
+   under the whole row (not just the words). Stack after headings-plain.
+   Workbench-only: ?proposal=...,headings-plain,headings-underline-rule. */
+@layer proposal {
+.uppercase:is(.tracking-wider, .tracking-wide, [class*="tracking-"]):not([class*="rounded"], [class*="bg-"], [class*="border"]) { display: block !important; padding-bottom: 4px !important; border-bottom: 1px solid var(--edge-dim) !important; }
+}

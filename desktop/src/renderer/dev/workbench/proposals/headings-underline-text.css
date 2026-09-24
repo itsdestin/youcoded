@@ -1,0 +1,7 @@
+/* Design-guide review (2026-09-24): small section labels UNDERLINED (text only).
+   Destin: "maybe add underlines? for some headers, where it makes sense"
+   (ui-element-review-labels#L-2). Stack after headings-plain.
+   Workbench-only: ?proposal=...,headings-plain,headings-underline-text. */
+@layer proposal {
+.uppercase:is(.tracking-wider, .tracking-wide, [class*="tracking-"]):not([class*="rounded"], [class*="bg-"], [class*="border"]) { text-decoration: underline !important; text-underline-offset: 4px !important; text-decoration-color: var(--edge) !important; }
+}

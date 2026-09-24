@@ -21,8 +21,4 @@ button:is(.rounded-lg, .rounded-full, .rounded-xl, .rounded-md, .rounded, .\!rou
 .rounded-full:has(> input), .rounded-full:has(> div > input) {
   border-radius: var(--radius-control) !important;
 }
-[role=dialog] button.text-fg-dim.text-sm:not([class*="border"]) {
-  border: 1px solid var(--edge-dim) !important;
-  color: var(--fg-2) !important;
-}
 }

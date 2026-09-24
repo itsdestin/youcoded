@@ -1,0 +1,6 @@
+/* Design-guide review (2026-09-24): SECONDARY ACTIONS OUTLINED. Cancel-type
+   buttons that are bare text today (Add a project) get the outlined
+   secondary look. Workbench-only: ?proposal=...,secondary-outlined. */
+@layer proposal {
+[role=dialog] button.text-fg-dim.text-sm:not([class*="border"]) { border: 1px solid var(--edge-dim) !important; color: var(--fg-2) !important; }
+}
