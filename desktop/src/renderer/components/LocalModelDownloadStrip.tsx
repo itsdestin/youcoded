@@ -27,6 +27,9 @@ export interface SetupDownloadStatus {
   minutesLeft: number | null;
 }
 
+/** Seconds a showing band keeps polling through null answers before hiding. */
+const NULL_GRACE_READS = 3;
+
 export function LocalModelDownloadStrip({ sessionId }: { sessionId: string | null }) {
   const [status, setStatus] = useState<SetupDownloadStatus | null>(null);
 
@@ -40,6 +43,8 @@ export function LocalModelDownloadStrip({ sessionId }: { sessionId: string | nul
   // a null or "done" answer stops the clock. Coming back on screen re-reads
   // once, so a read that failed transiently is not final.
   const [polling, setPolling] = useState(true);
+  const shownRef = useRef(false);
+  const nullsRef = useRef(0);
   const [wake, setWake] = useState(0);
   const onScreen = useOnScreen();
   const tick = useSecondsTick(polling);
@@ -66,6 +71,21 @@ export function LocalModelDownloadStrip({ sessionId }: { sessionId: string | nul
     Promise.resolve(read(sessionId))
       .then((s: SetupDownloadStatus | null) => {
         if (!alive) return;
+        // WHY keep polling briefly after a null that follows a showing band
+        // (review F4, 2026-09-24): main also answers null when its read throws,
+        // without clearing the record, so one transient error used to hide a
+        // live download until the chat scrolled off and back. The band hides at
+        // once either way (a finished download disappears exactly as before);
+        // only the polling continues NULL_GRACE_READS more seconds, so a
+        // transient null recovers on its own. A null on the first read
+        // (everyone past setup) still stops at once.
+        if (!s && shownRef.current && nullsRef.current < NULL_GRACE_READS) {
+          nullsRef.current += 1;
+          setStatus(null);
+          return;
+        }
+        nullsRef.current = 0;
+        shownRef.current = !!s && s.state !== 'done';
         setStatus(s ?? null);
         setPolling(!!s && s.state !== 'done');
       })

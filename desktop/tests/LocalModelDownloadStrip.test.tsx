@@ -44,9 +44,22 @@ it('while a setup download is showing it polls every second, and stops once it f
   answer = null; // main answers null once the download is done
   await seconds(1);
   expect(view.container.textContent).toBe('');
+  // A few grace reads (a null can be a transient failure), then quiet for good.
+  await seconds(5);
   const calls = read.mock.calls.length;
+  expect(calls).toBeLessThanOrEqual(4 + 1 + 3);
   await seconds(5);
   expect(read).toHaveBeenCalledTimes(calls);
+});
+
+it('one failed read while a download shows does not hide it for good', async () => {
+  answer = downloading(10);
+  const view = render(strip()); await settle();
+  answer = null; // main answers null when its own read throws
+  await seconds(1);
+  answer = downloading(12);
+  await seconds(1);
+  expect(view.container.textContent).toContain('Downloading Qwen');
 });
 
 it('a stopped download keeps polling so Resume is noticed', async () => {
