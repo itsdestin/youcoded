@@ -142,6 +142,8 @@ export function parseTranscriptLine(
           ? parsed.toolUseResult.structuredPatch
           : undefined;
         const backgroundTaskId = backgroundLaunchId(parsed.toolUseResult);
+        const resumed = parsed.toolUseResult?.resumedAgentId;
+        const resumedTaskId = typeof resumed === 'string' && resumed ? resumed : undefined;
         for (const block of content) {
           if (block.type === 'tool_result') {
             events.push({
@@ -156,6 +158,7 @@ export function parseTranscriptLine(
                 recordedAt,
                 ...(structuredPatch ? { structuredPatch } : {}),
                 ...(backgroundTaskId ? { backgroundTaskId } : {}),
+                ...(resumedTaskId ? { resumedTaskId } : {}),
               },
             });
           }

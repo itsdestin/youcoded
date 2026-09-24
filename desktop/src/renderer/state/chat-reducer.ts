@@ -14,7 +14,7 @@ import {
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
-import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, stopRunningBackground } from './cc-background';
+import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -2098,6 +2098,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             // helper's first line binds (and even if it never does).
             ...(bg && existing.toolName === 'Agent' && !existing.agentId ? { agentId: action.backgroundTaskId } : {}),
           });
+          if (action.resumedTaskId) toolCalls = reopenResumedHelper(session, toolCalls, action.toolUseId, action.resumedTaskId);
         }
       }
 

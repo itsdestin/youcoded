@@ -331,6 +331,9 @@ export interface TranscriptEvent {
      *  `backgroundTaskId`), so the result is a launch receipt, not the outcome.
      *  The outcome arrives later as a 'background-task' event. */
     backgroundTaskId?: string;
+    /** Claude Code SendMessage tool-result only: the finished helper it resumed
+     *  (`toolUseResult.resumedAgentId`) — that helper's card works again. */
+    resumedTaskId?: string;
     /** 'background-task' only: which task(s) ended and how. `taskIds` is a list
      *  because Claude Code reports several orphaned commands in one notice on
      *  resume. `result` is a helper's final report; `summary` is Claude Code's

@@ -284,7 +284,7 @@ class ManagedSession(
                         is TranscriptEvent.UserMessage -> TranscriptSerializer.userMessage(event.sessionId, event.uuid, event.timestamp, event.text, event.slashCommand)
                         is TranscriptEvent.AssistantText -> TranscriptSerializer.assistantText(event.sessionId, event.uuid, event.timestamp, event.text, event.model, event.parentAgentToolUseId, event.agentId)
                         is TranscriptEvent.ToolUse -> TranscriptSerializer.toolUse(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.toolName, event.toolInput, event.parentAgentToolUseId, event.agentId)
-                        is TranscriptEvent.ToolResult -> TranscriptSerializer.toolResult(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.result, event.isError, event.parentAgentToolUseId, event.agentId, event.backgroundTaskId)
+                        is TranscriptEvent.ToolResult -> TranscriptSerializer.toolResult(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.result, event.isError, event.parentAgentToolUseId, event.agentId, event.backgroundTaskId, event.resumedTaskId)
                         is TranscriptEvent.BackgroundTask -> TranscriptSerializer.backgroundTask(event)
                         is TranscriptEvent.TurnComplete -> TranscriptSerializer.turnComplete(
                             event.sessionId, event.uuid, event.timestamp,

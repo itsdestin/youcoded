@@ -852,6 +852,8 @@ export type ChatAction =
       structuredPatch?: import('../../shared/types').StructuredPatchHunk[];
       /** Claude Code: the result is only a launch receipt — see ToolCallState.ccBackground. */
       backgroundTaskId?: string;
+      /** Claude Code SendMessage: the finished helper this call resumed. */
+      resumedTaskId?: string;
       parentAgentToolUseId?: string;
       agentId?: string;
     }

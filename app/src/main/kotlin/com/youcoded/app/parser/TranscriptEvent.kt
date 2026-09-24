@@ -67,6 +67,8 @@ sealed class TranscriptEvent {
         /** The result only LAUNCHED background work (an Agent's agentId, or a Bash
          *  backgroundTaskId); its end arrives as BackgroundTask. Desktop: shared/types.ts. */
         val backgroundTaskId: String? = null,
+        /** SendMessage: the finished helper this call resumed (toolUseResult.resumedAgentId). */
+        val resumedTaskId: String? = null,
     ) : TranscriptEvent()
 
     /** Claude Code background work a card launched ended — parsed from its

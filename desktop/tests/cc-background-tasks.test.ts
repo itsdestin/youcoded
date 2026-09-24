@@ -162,4 +162,30 @@ describe('chatReducer — Claude Code background runs', () => {
     const after = d(s, { type: 'TRANSCRIPT_BACKGROUND_TASK', sessionId: S, uuid: 'x', toolUseId: 'toolu_A', taskIds: ['a3ecf'], status: 'completed', parentAgentToolUseId: 'toolu_A' } as ChatAction);
     expect(after).toBe(s);
   });
+  // SendMessage to a finished helper resumes it (159 resumes measured); its
+  // next notice names the SendMessage call, not the Agent card.
+  const resume = (s: ChatState) => {
+    s = d(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: S, uuid: 'u2', toolUseId: 'toolu_SM', toolName: 'SendMessage', toolInput: { to: 'a3ecf', message: 'keep going' } } as ChatAction);
+    const line = JSON.stringify({ type: 'user', uuid: 'r9', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_SM', content: 'ok' }] }, toolUseResult: { success: true, message: 'Resuming agent a3ecf', resumedAgentId: 'a3ecf' } });
+    return d(s, toAction(ev(line)[0]));
+  };
+  const secondDone = noticeLine(notice('<task-id>a3ecf</task-id>\n<tool-use-id>toolu_SM</tool-use-id>\n<status>completed</status>\n<result>Second report</result>'), 'n2');
+  it('a resumed helper spins again, and its next notice updates the Agent card', () => {
+    let s = resume(d(launchAgent(init()), toAction(ev(noticeLine(agentDone))[0])));
+    expect(card(s).ccBackground?.status).toBe('running');
+    expect(card(s, 'toolu_SM').ccBackground).toBeUndefined();   // the SendMessage card does not spin
+    s = d(s, toAction(ev(secondDone)[0]));
+    expect(card(s).ccBackground).toMatchObject({ status: 'completed', result: 'Second report' });
+  });
+  it('on an older page, a resume whose end a newer page already read does not spin', () => {
+    let s = d(init(), toAction(ev(secondDone)[0]));
+    const older: TranscriptEvent[] = [
+      { type: 'tool-use', sessionId: S, uuid: 'u1', timestamp: 1, data: { toolUseId: 'toolu_A', toolName: 'Agent', toolInput: {} } },
+      ...ev(agentReceipt), ...ev(noticeLine(agentDone)),
+      { type: 'tool-use', sessionId: S, uuid: 'u2', timestamp: 2, data: { toolUseId: 'toolu_SM', toolName: 'SendMessage', toolInput: {} } },
+      ...ev(JSON.stringify({ type: 'user', uuid: 'r9', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_SM', content: 'ok' }] }, toolUseResult: { resumedAgentId: 'a3ecf' } })),
+    ];
+    s = d(s, { type: 'HISTORY_PAGE_LOADED', sessionId: S, events: older, cursor: null, hasMore: false } as ChatAction);
+    expect(card(s).ccBackground).toMatchObject({ status: 'completed', result: 'Second report' });
+  });
 });

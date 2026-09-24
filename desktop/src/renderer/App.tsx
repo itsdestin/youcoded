@@ -1472,6 +1472,7 @@ function AppInner() {
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
             backgroundTaskId: event.data.backgroundTaskId,
+            resumedTaskId: event.data.resumedTaskId,
             parentAgentToolUseId: event.data.parentAgentToolUseId,
             agentId: event.data.agentId,
           });

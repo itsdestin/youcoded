@@ -106,6 +106,7 @@ export function pageEventToAction(event: TranscriptEvent): ChatAction | null {
         isError: d.isError || false,
         structuredPatch: d.structuredPatch,
         backgroundTaskId: d.backgroundTaskId,
+        resumedTaskId: d.resumedTaskId,
         parentAgentToolUseId: d.parentAgentToolUseId,
         agentId: d.agentId,
       } as ChatAction;

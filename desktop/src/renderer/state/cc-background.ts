@@ -33,6 +33,27 @@ export function stopRunningBackground(
   return out;
 }
 
+/** A SendMessage that RESUMED a finished helper (`resumedAgentId` on its
+ *  result): the helper's Agent card is working again, so it spins again until
+ *  the next notice — which names this SendMessage call. When that notice was
+ *  already read (a newer history page), apply it instead, or the card would
+ *  spin forever. Returns the SAME map when nothing changed. */
+export function reopenResumedHelper(
+  session: SessionChatState, toolCalls: Map<string, ToolCallState>, sendMessageToolUseId: string, taskId: string,
+): Map<string, ToolCallState> {
+  const known = session.ccBackgroundOutcomes[sendMessageToolUseId];
+  let out = toolCalls;
+  for (const [id, card] of toolCalls) {
+    // Agent cards only: an earlier SendMessage card also carries this task id
+    // (its own notice settled it) and must not start spinning.
+    if (card.toolName !== 'Agent' || (card.ccBackground?.taskId ?? card.agentId) !== taskId) continue;
+    const next: CcBackgroundRun = known ? { ...known, taskId } : { ...(card.ccBackground ?? { taskId }), taskId, status: 'running' };
+    if (out === toolCalls) out = new Map(toolCalls);
+    out.set(id, { ...card, ccBackground: next });
+  }
+  return out;
+}
+
 /** TRANSCRIPT_BACKGROUND_TASK: background work a card launched has ended.
  *  Returns the updated session, or null when nothing applies. */
 export function applyBackgroundTaskEnd(
@@ -62,13 +83,15 @@ export function applyBackgroundTaskEnd(
     });
   };
   const byToolUse = action.toolUseId ? session.toolCalls.get(action.toolUseId) : undefined;
-  if (byToolUse) {
-    settle(action.toolUseId!, byToolUse);
-  } else if (action.taskIds.length > 0) {
-    // No tool-use id (a helper's notice sometimes omits it; the orphan
-    // summary on resume always does) — find the card by its task id. A
-    // scan, but these notices are rare: one per background task.
+  if (byToolUse) settle(action.toolUseId!, byToolUse);
+  // ALSO every card carrying one of these task ids, not only when the tool-use
+  // id is missing (orphan summaries omit it): after Claude resumes a finished
+  // helper with SendMessage, the helper's next notice names the SendMessage
+  // call (132 of 141 measured), yet the Agent card is where its work shows.
+  // A scan, but these notices are rare: one per background task end.
+  if (action.taskIds.length > 0) {
     for (const [cardId, card] of session.toolCalls) {
+      if (cardId === action.toolUseId) continue;
       const taskId = card.ccBackground?.taskId ?? card.agentId;
       if (taskId && action.taskIds.includes(taskId)) settle(cardId, card);
     }

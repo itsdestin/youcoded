@@ -182,6 +182,7 @@ export function BubbleFeed({ sessionId }: Props) {
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
             backgroundTaskId: event.data.backgroundTaskId,
+            resumedTaskId: event.data.resumedTaskId,
             // Route subagent tool_result into the parent Agent card's
             // subagentSegments — see assistant-text comment above.
             parentAgentToolUseId: event.data.parentAgentToolUseId,

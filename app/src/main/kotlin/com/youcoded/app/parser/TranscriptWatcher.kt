@@ -393,6 +393,7 @@ class TranscriptWatcher(
                         _events.tryEmit(TranscriptEvent.ToolResult(
                             sessionId, uuid, timestamp, toolUseId, resultText, isError,
                             backgroundTaskId = backgroundLaunchId(obj),
+                            resumedTaskId = obj.optJSONObject("toolUseResult")?.optString("resumedAgentId", "")?.ifEmpty { null },
                         ))
                     }
                 }
