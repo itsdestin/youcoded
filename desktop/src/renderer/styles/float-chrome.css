@@ -141,12 +141,16 @@
    Canvas behind it preserves a translucent wallpaper's original opacity. */
 .chat-edge-fade { display: none; }
 [data-chrome-style='float'] .chat-edge-fade {
-  /* How far down into the bottom controls a message stays visible before it is
-     fully faded: measured up from the top of the bottom controls' strip. 24px
-     hid messages just under the quick buttons; Destin (2026-09-24) wanted them
-     to "go further down the screen before disappearing", so they now pass
-     behind the quick buttons and fade out behind the message box. */
-  --float-fade-lift: 55px;
+  /* Where a message has fully faded, measured up from the window's bottom
+     edge: the 6px gap between the message box (bottom 35px up) and the status
+     buttons (top 29px up). Destin, 2026-09-24: messages should "fully
+     disappear right between the bottom of the input bar and top of the status
+     bar chips". Anchored to the bottom edge, NOT the top of the bottom
+     controls, so a message box that grows taller with typed lines does not
+     drag the fade up with it. The 12px fade runs over the message box's
+     lowest edge. Fixed pixels: the status row's height does not change on
+     desktop; the on-screen keyboard is covered by --vvp-offset. */
+  --float-fade-end: 32px;
   display: block;
   position: fixed;
   inset: 0;
@@ -154,20 +158,20 @@
   pointer-events: none;
   background: var(--canvas);
   -webkit-mask-image: linear-gradient(to bottom, black calc(var(--top-chrome-bottom, 40px) - 8px), transparent calc(var(--top-chrome-bottom, 40px) + 12px),
-    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift) - 16px),
-    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift)));
+    transparent calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end) - 12px),
+    black calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end)));
   mask-image: linear-gradient(to bottom, black calc(var(--top-chrome-bottom, 40px) - 8px), transparent calc(var(--top-chrome-bottom, 40px) + 12px),
-    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift) - 16px),
-    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift)));
+    transparent calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end) - 12px),
+    black calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end)));
 }
 [data-chrome-style='float'] .chat-edge-fade[data-below-find-row='true'] {
   /* The find/status lane already clears the header; it must not fade. */
   -webkit-mask-image: linear-gradient(to bottom, transparent 0,
-    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift) - 16px),
-    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift)));
+    transparent calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end) - 12px),
+    black calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end)));
   mask-image: linear-gradient(to bottom, transparent 0,
-    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift) - 16px),
-    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift)));
+    transparent calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end) - 12px),
+    black calc(100% - var(--vvp-offset, 0px) - var(--float-fade-end)));
 }
 [data-chrome-style='float'] .chat-edge-fade__wallpaper,
 [data-chrome-style='float'] .chat-edge-fade__pattern {

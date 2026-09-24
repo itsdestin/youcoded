@@ -153,8 +153,8 @@ describe('the approved float look', () => {
     expect(css).toMatch(/::-webkit-scrollbar-thumb \{\s*background: var\(--scrollbar-thumb\)/);
   });
 
-  it('lets messages pass behind the quick buttons before they fade', () => {
-    expect(floatCSS()).toContain('--float-fade-lift: 55px;');
+  it('fades messages out between the message box and the status buttons', () => {
+    expect(floatCSS()).toContain('--float-fade-end: 32px;');
   });
 
   it('the screen band shares the header ink without touching the chat\'s bottom controls', () => {
