@@ -33,11 +33,14 @@ import CompactingCard from './CompactingCard';
 import CopyPicker from './CopyPicker';
 import { TimelineEntryHint } from './TimelineEntryHint';
 import { archivedTooltip } from '../state/archive-boundary';
+import type { PromptAnswerResult } from '../state/prompt-input';
 
 /** What a row may call back into ChatView. Read through a ref at call time so
  *  a row that skipped rendering never holds a stale handler. */
 export interface TimelineRowActions {
-  promptSelect: (promptId: string, button: PromptCardButton, label: string, promptTitle?: string) => void;
+  // WHY it returns the answer's promise (merge with master 2026-09-24): PromptCard
+  // shows "Claude Code didn't take that" from it; dropping it here would hide failures.
+  promptSelect: (promptId: string, button: PromptCardButton, label: string, promptTitle?: string) => void | Promise<PromptAnswerResult> | undefined;
   dispatch: (action: ChatAction) => void;
 }
 

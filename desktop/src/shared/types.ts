@@ -145,6 +145,12 @@ export interface SessionInfo {
    *  Consumed once by InputBar on first render after session switch; cleared via
    *  a consumed-set ref so it never re-fires on re-renders. */
   initialInput?: string;
+  /** Claude Code session that has NOT yet run its first hook — it is still on
+   *  its startup dialogs (trust, bypass, MCP approval). The HOST knows this; a
+   *  window or phone that connects mid-startup must not assume "already
+   *  running" and open the chat box onto a live dialog (dev-instance finding,
+   *  2026-09-24). Absent = started (older hosts). */
+  awaitingStart?: boolean;
 }
 
 // A refused resume creates no session. Keep it distinct from both startup
@@ -1793,6 +1799,7 @@ export const IPC = {
   SESSION_HISTORY: 'session:history',
   // Mark/unmark a session flag (complete, priority, helpful, …)
   SESSION_SET_FLAG: 'session:set-flag',
+  SESSION_MENU_LOCK: 'session:menu-lock',
   // Broadcast when session metadata changes (carries a flag + value)
   SESSION_META_CHANGED: 'session:meta-changed',
   // Custom session tags (registry CRUD + application) and per-session notes.

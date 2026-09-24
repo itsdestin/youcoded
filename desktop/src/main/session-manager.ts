@@ -308,6 +308,9 @@ export class SessionManager extends EventEmitter {
       // it has no model alias and no harness preset to label it with.
       ...(isShell ? { shellName: shellDisplayName(shellCommand) } : {}),
       ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
+      // Until its first hook (markStarted), a Claude Code session is still on
+      // its startup dialogs — see SessionInfo.awaitingStart.
+      ...(provider === 'claude' ? { awaitingStart: true } : {}),
     };
 
     const session: ManagedSession = { info, worker, ...(opts.resumeSessionId ? { resumedConversation: opts.resumeSessionId } : {}) };
@@ -525,6 +528,12 @@ export class SessionManager extends EventEmitter {
     if (!session || !session.worker) return false; // native sessions have no PTY
     try { session.worker.send({ type: 'resize', cols, rows }); } catch { return false; }
     return true;
+  }
+
+  /** Claude Code ran its first hook for this session: its startup dialogs are behind it. */
+  markStarted(id: string): void {
+    const s = this.sessions.get(id);
+    if (s?.info.awaitingStart) delete s.info.awaitingStart;
   }
 
   listSessions(): SessionInfo[] {

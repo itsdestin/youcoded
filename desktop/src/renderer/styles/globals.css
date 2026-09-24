@@ -724,6 +724,10 @@ body[data-mode="buddy-chat"] #theme-bg {
 /* Bottom chrome (input + status bars) — mirrors header pattern.
    Absolutely positioned so chat messages scroll behind the chrome.
    React toggles .bottom-float based on view mode. */
+/* Touch terminal view: bottom chrome in the layout but above .chrome-glass, or
+   its key row is invisible in framed themes (2026-09-24; terminal-touch-bottom-chrome test). */
+.bottom-docked { position: relative; z-index: 20; }
+
 .bottom-float {
   position: absolute;
   bottom: 0;

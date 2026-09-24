@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { parseInkSelect, menuToButtons } from '../parser/ink-select-parser';
+import { parseInkSelect, menuToButtons, readStartupDialog, type ParsedMenu } from '../parser/ink-select-parser';
+import { setUnreadableStartupDialog } from '../state/startup-dialog-store';
 import { useChatDispatch, useChatStore } from '../state/chat-context';
 import { getVisibleScreenText, onBufferReady } from './terminal-registry';
 import { parsePlanMenu } from '../parser/plan-menu-parser';
@@ -28,7 +29,36 @@ const SETUP_PROMPT_TITLES = new Set([
   // was mislabeled 'Trust This Folder?' by the stale trust anchor and hijacked
   // TrustGate's full-screen takeover; now it gets its own card (2026-07-26).
   'Allow External Imports?',
+  // Project MCP-server approval (a folder with .mcp.json), CC 2.1.281.
+  'New MCP Server Found',
 ]);
+
+/**
+ * The card title for a menu the detector will show, or null to skip it.
+ *
+ * A known setup prompt keeps its canonical title. While the session is still
+ * STARTING (no hook event yet — Claude Code runs none until every startup
+ * dialog is answered), any menu that is plainly a live Claude Code dialog (its
+ * "Enter to confirm · Esc to cancel" footer under the options) is shown too,
+ * titled with the dialog's own heading: a dialog nobody has taught the app
+ * about must never again leave a new session on "Initializing session…"
+ * (2026-09-24). Outside startup the known-titles gate stays strict — there,
+ * permission menus belong to the hook cards and numbered lists in replies are
+ * not menus.
+ */
+function cardTitleFor(menu: ParsedMenu, starting: boolean): string | null {
+  if (SETUP_PROMPT_TITLES.has(menu.title)) return menu.title;
+  if (starting && menu.dialog) {
+    const heading = (menu.heading ?? '').replace(/:\s*$/, '').trim();
+    return heading || menu.title;
+  }
+  return null;
+}
+
+export interface PromptDetectorOptions {
+  /** True while this session has not started yet (App's init gate). */
+  isStarting?: (sessionId: string) => boolean;
+}
 
 // After a permission response (PERMISSION_RESPONDED/EXPIRED clears
 // awaiting-approval), suppress parser detection for this window. Prevents
@@ -41,6 +71,11 @@ const POST_PERMISSION_COOLDOWN_MS = 800;
 // duplicate detection, which would cause re-detection of the same menu.
 const DISMISS_DEBOUNCE_MS = 600;
 
+// How long an ANSWERED card's identical dialog must stay on screen before it is
+// treated as a new question and given a fresh card (review F5). Longer than a
+// digit answer's menu takes to leave, so a normal answer never re-shows.
+const REISSUE_MS = 1000;
+
 /**
  * Monitors xterm.js write completions (via terminal-registry) to detect
  * Ink select menus in the screen buffer.
@@ -52,9 +87,12 @@ const DISMISS_DEBOUNCE_MS = 600;
  * without a hook event (e.g., trust folder prompt, or hooks are down),
  * the PromptCard is shown as a fallback.
  */
-export function usePromptDetector() {
+export function usePromptDetector(options: PromptDetectorOptions = {}) {
   const dispatch = useChatDispatch();
   const store = useChatStore();
+  // Latest options without re-subscribing the buffer listener on every render.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   const lastMenuRef = useRef<Map<string, string>>(new Map());
   const pendingTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const dismissTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -63,6 +101,10 @@ export function usePromptDetector() {
   // streaming output) churn through ids up to ~60/s, and dispatching a no-op
   // DISMISS_PROMPT for each would run the reducer per buffer flush.
   const shownPromptRef = useRef<Map<string, string>>(new Map());
+  // The promptId of that shown card — the menu id, or `<id>~n` for a fresh card
+  // re-issued when an identical dialog followed an answered one (review F5).
+  const shownPromptIdRef = useRef<Map<string, string>>(new Map());
+  const reissueTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Track when awaiting-approval was last cleared per session, so the parser
   // can suppress re-detection during the post-permission cooldown window.
@@ -101,6 +143,101 @@ export function usePromptDetector() {
   }, [store]);
 
   useEffect(() => {
+    // Show a card for `menu` after the debounce, re-checking everything first.
+    const scheduleShow = (sid: string, menu: ParsedMenu, title: string, promptId: string = menu.id) => {
+      // Debounce: wait before showing, giving hook system time to arrive
+      const timer = setTimeout(() => {
+        pendingTimerRef.current.delete(sid);
+
+        // Re-check: if a PermissionRequest arrived during the debounce,
+        // a tool will be in awaiting-approval — don't show the prompt
+        const currentSession = store.getState().get(sid);
+        if (currentSession) {
+          for (const [, tool] of currentSession.toolCalls) {
+            // Same kept-card exemption as the top-of-flush bail.
+            if (tool.status === 'awaiting-approval' && !tool.expired) return;
+          }
+        }
+
+        // Re-check cooldown (permission may have been responded during debounce)
+        const cleared = lastPermissionClearedRef.current.get(sid);
+        if (cleared && Date.now() - cleared < POST_PERMISSION_COOLDOWN_MS) {
+          return;
+        }
+
+        // Re-check the menu is STILL on screen. `menu` was captured when the
+        // timer was scheduled; the PTY may have advanced past it during the
+        // debounce. Showing a card for a menu that's already gone strands a
+        // completed:false prompt entry whose ONLY clearer is a LATER buffer
+        // flush (the disappear branch below) — and an idle terminal produces
+        // none, so hasPendingInteraction() would then block every send with
+        // nothing live on screen. Re-parse now; bail if the menu left.
+        // (fix 2026-07-17 — the "SHOW fired for a vanished menu" race.)
+        const nowScreen = getVisibleScreenText(sid);
+        const nowMenu = nowScreen ? parseInkSelect(nowScreen) : null;
+        if (!nowMenu || nowMenu.id !== menu.id) return;
+
+        const buttons = menuToButtons(menu);
+        const verified = buttons.some((b) => b.pick);
+        shownPromptRef.current.set(sid, menu.id);
+        shownPromptIdRef.current.set(sid, promptId);
+        dispatch({
+          type: 'SHOW_PROMPT',
+          sessionId: sid,
+          promptId,
+          title,
+          description: menu.description,
+          buttons: buttons.map((b) => ({
+            label: b.label,
+            input: b.input,
+            ...(b.submitInput !== undefined ? { submitInput: b.submitInput } : {}),
+            ...(b.pick ? { pick: b.pick } : {}),
+          })),
+          // An unnumbered dialog is answered by moving Claude Code's own
+          // cursor, so the card starts where that cursor is ("No, exit").
+          ...(verified ? { defaultIndex: nowMenu.selectedIndex } : {}),
+        });
+      }, PROMPT_DEBOUNCE_MS);
+      pendingTimerRef.current.set(sid, timer);
+    };
+
+    // Review F5: a completed card whose identical dialog is still on screen
+    // REISSUE_MS later gets a fresh card (new promptId, so the answered one
+    // stays in the timeline as the record of the first answer). Guarded hard
+    // (second review F5/F8):
+    //  • only a card that was ANSWERED — an unanswered one is still the live
+    //    card for that dialog;
+    //  • only a card answered by verified navigation (`pick`): its driver
+    //    confirmed Claude Code redrew after the Enter. A digit answer completes
+    //    before anything is known, and a slow-to-leave menu would otherwise earn
+    //    a "~1" card for a question already answered;
+    //  • at most once per dialog, with a deterministic id (`<menu id>~1`) — the
+    //    same on every device, since each runs this detector and completions
+    //    are broadcast by promptId;
+    //  • re-checked when the timer fires: the same menu on screen, and the card
+    //    STILL answered (it may have been re-shown meanwhile).
+    const reissueIdFor = (menuId: string) => `${menuId}~1`;
+    const answeredCard = (sid: string, promptId: string) => {
+      const e = store.getState().get(sid)?.timeline.find((x) => x.kind === 'prompt' && x.prompt.promptId === promptId);
+      return e && e.kind === 'prompt' && e.prompt.completed ? e.prompt : null;
+    };
+    const checkReissue = (sid: string, menu: ParsedMenu, title: string) => {
+      if (reissueTimerRef.current.has(sid)) return;
+      const promptId = shownPromptIdRef.current.get(sid) ?? menu.id;
+      if (promptId === reissueIdFor(menu.id)) return; // already re-issued once
+      const answered = answeredCard(sid, promptId);
+      if (!answered) return;
+      if (!answered.buttons.some((b) => b.pick)) return;
+      reissueTimerRef.current.set(sid, setTimeout(() => {
+        reissueTimerRef.current.delete(sid);
+        const nowScreen = getVisibleScreenText(sid);
+        const nowMenu = nowScreen ? parseInkSelect(nowScreen) : null;
+        if (!nowMenu || nowMenu.id !== menu.id) return;
+        if (!answeredCard(sid, promptId)) return;
+        scheduleShow(sid, nowMenu, title, reissueIdFor(menu.id));
+      }, REISSUE_MS));
+    };
+
     const unsub = onBufferReady((sid: string) => {
       // Skip prompt detection when a PermissionRequest approval is active
       // (the hook-based UI is handling the permission flow)
@@ -155,6 +292,15 @@ export function usePromptDetector() {
 
       const menu = parseInkSelect(screen);
       const lastMenuId = lastMenuRef.current.get(sid) || null;
+      const starting = optionsRef.current.isStarting?.(sid) ?? false;
+
+      // Safety net: while the session is starting, a Claude Code dialog the
+      // parser cannot turn into buttons (a multi-select, a layout nobody has
+      // seen) is reported at once, so the Initializing screen can say "Claude
+      // Code is asking something — answer it in terminal view" instead of
+      // hanging silently. Cleared as soon as it is gone or readable.
+      const readable = !!menu && cardTitleFor(menu, starting) !== null;
+      setUnreadableStartupDialog(sid, starting && !readable ? readStartupDialog(screen) : null);
 
       if (menu) {
         // Cancel any pending dismiss — menu is (still) present
@@ -182,64 +328,32 @@ export function usePromptDetector() {
           }
           if (lastMenuId && shownPromptRef.current.get(sid) === lastMenuId) {
             shownPromptRef.current.delete(sid);
-            dispatch({ type: 'DISMISS_PROMPT', sessionId: sid, promptId: lastMenuId });
+            dispatch({ type: 'DISMISS_PROMPT', sessionId: sid, promptId: shownPromptIdRef.current.get(sid) ?? lastMenuId });
           }
+          clearTimeout(reissueTimerRef.current.get(sid));
+          reissueTimerRef.current.delete(sid);
           lastMenuRef.current.set(sid, menu.id);
 
           // Only show PromptCards for known setup prompts. Permission prompts
           // and false positives (numbered lists) are skipped — hooks handle
           // permissions, and numbered lists aren't real menus.
-          if (!SETUP_PROMPT_TITLES.has(menu.title)) return;
-
-          // Debounce: wait before showing, giving hook system time to arrive
-          const timer = setTimeout(() => {
-            pendingTimerRef.current.delete(sid);
-
-            // Re-check: if a PermissionRequest arrived during the debounce,
-            // a tool will be in awaiting-approval — don't show the prompt
-            const currentSession = store.getState().get(sid);
-            if (currentSession) {
-              for (const [, tool] of currentSession.toolCalls) {
-                // Same kept-card exemption as the top-of-flush bail.
-                if (tool.status === 'awaiting-approval' && !tool.expired) return;
-              }
-            }
-
-            // Re-check cooldown (permission may have been responded during debounce)
-            const cleared = lastPermissionClearedRef.current.get(sid);
-            if (cleared && Date.now() - cleared < POST_PERMISSION_COOLDOWN_MS) {
-              return;
-            }
-
-            // Re-check the menu is STILL on screen. `menu` was captured when the
-            // timer was scheduled; the PTY may have advanced past it during the
-            // debounce. Showing a card for a menu that's already gone strands a
-            // completed:false prompt entry whose ONLY clearer is a LATER buffer
-            // flush (the disappear branch below) — and an idle terminal produces
-            // none, so hasPendingInteraction() would then block every send with
-            // nothing live on screen. Re-parse now; bail if the menu left.
-            // (fix 2026-07-17 — the "SHOW fired for a vanished menu" race.)
-            const nowScreen = getVisibleScreenText(sid);
-            const nowMenu = nowScreen ? parseInkSelect(nowScreen) : null;
-            if (!nowMenu || nowMenu.id !== menu.id) return;
-
-            const buttons = menuToButtons(menu);
-            shownPromptRef.current.set(sid, menu.id);
-            dispatch({
-              type: 'SHOW_PROMPT',
-              sessionId: sid,
-              promptId: menu.id,
-              title: menu.title,
-              description: menu.description,
-              buttons: buttons.map((b) => ({
-                label: b.label,
-                input: b.input,
-                submitInput: b.submitInput,
-              })),
-            });
-          }, PROMPT_DEBOUNCE_MS);
-
-          pendingTimerRef.current.set(sid, timer);
+          const title = cardTitleFor(menu, starting);
+          if (title === null) return;
+          scheduleShow(sid, menu, title);
+        } else {
+          // SAME menu still (or again) on screen. Review F2 (2026-09-24): an
+          // unreadable frame inside the debounce cancelled the show timer, the
+          // menu came back under the same id, and nothing ever re-scheduled it —
+          // no card, and no safety net either (the menu reads fine). So: a
+          // readable menu with no card showing and none scheduled gets one now.
+          const title = cardTitleFor(menu, starting);
+          if (title !== null && shownPromptRef.current.get(sid) !== menu.id && !pendingTimerRef.current.has(sid)) {
+            scheduleShow(sid, menu, title);
+          }
+          // Review F5: its card was ANSWERED and an identical dialog is (still)
+          // there — Claude Code asked the same question again. Give it a fresh
+          // card rather than leaving the answered one in its place.
+          if (title !== null && shownPromptRef.current.get(sid) === menu.id) checkReissue(sid, menu, title);
         }
       } else if (lastMenuId) {
         // Menu disappeared — debounce the dismissal to avoid clearing
@@ -255,13 +369,14 @@ export function usePromptDetector() {
           const timer = setTimeout(() => {
             dismissTimerRef.current.delete(sid);
             // Menu has been gone long enough — truly dismiss
+            const shownId = shownPromptIdRef.current.get(sid) ?? lastMenuId;
             if (shownPromptRef.current.get(sid) === lastMenuId) {
               shownPromptRef.current.delete(sid);
             }
             dispatch({
               type: 'DISMISS_PROMPT',
               sessionId: sid,
-              promptId: lastMenuId,
+              promptId: shownId,
             });
             lastMenuRef.current.delete(sid);
           }, DISMISS_DEBOUNCE_MS);
@@ -282,6 +397,8 @@ export function usePromptDetector() {
         clearTimeout(timer);
       }
       dismissTimerRef.current.clear();
+      for (const timer of reissueTimerRef.current.values()) clearTimeout(timer);
+      reissueTimerRef.current.clear();
     };
   }, [dispatch]);
 }

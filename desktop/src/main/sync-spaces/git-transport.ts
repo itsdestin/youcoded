@@ -10,7 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { DEFAULT_IGNORES, MAX_SYNC_FILE_BYTES, conflictCopyName } from './guards';
+import { DEFAULT_IGNORES, MAX_SYNC_FILE_BYTES, conflictCopyName, isNeverSyncPath } from './guards';
 import { nextGcCounter } from './gc-policy';
 import { GITHUB_AUTH_ERROR_CODE } from '../github-client';
 import { matchGitCorruption, isNetworkFailureStderr, stderrTail, REPO_CORRUPT_ERROR_CODE } from '../sync-error-classifier';
@@ -112,6 +112,10 @@ const SIZE_WALK_MAX_ENTRIES = 200_000;
 const SIZE_WALK_MAX_DEPTH = 100;
 
 interface ExecResult { code: number; stdout: string; stderr: string; tokenUsed: boolean; }
+// Local files saved across a pull (holdUnmanaged), copied under `dir` at their
+// relative path — never held in memory. saved false = a held-back local
+// deletion of a never-sync file.
+interface HeldFiles { dir: string; files: { rel: string; saved: boolean; heldBack: boolean }[] }
 
 // Benign for local WRITE ops (add/commit/checkout — anything that takes a git
 // lock): a *.lock already held by a genuinely-live writer (a second app
@@ -310,17 +314,15 @@ export class GitTransport implements SyncTransport {
    *  checkout --theirs overwrite the file — if this buffer were smaller than
    *  the sync size cap, a big-but-legal local edit would come back null and be
    *  silently DROPPED with no conflict copy. */
-  private async showStage(space: SyncSpace, stage: 2 | 3, rel: string): Promise<Buffer | null> {
+  /** Throws on failure: the caller checked the stage exists, so a failed read
+   *  is an error, never "no version" (that dropped the conflict copy). */
+  private async showStage(space: SyncSpace, stage: 2 | 3, rel: string): Promise<Buffer> {
     const env = { ...process.env, GIT_DIR: this.gitDir(space), GIT_WORK_TREE: space.root };
-    try {
-      const { stdout } = await execFileAsync('git', ['show', `:${stage}:${rel}`], {
-        cwd: space.root, env, timeout: GIT_TIMEOUT,
-        encoding: 'buffer', maxBuffer: this.maxFileBytes + 1024 * 1024,
-      });
-      return stdout as unknown as Buffer;
-    } catch {
-      return null;
-    }
+    const { stdout } = await execFileAsync('git', ['show', `:${stage}:${rel}`], {
+      cwd: space.root, env, timeout: GIT_TIMEOUT,
+      encoding: 'buffer', maxBuffer: this.maxFileBytes + 1024 * 1024,
+    });
+    return stdout as unknown as Buffer;
   }
 
   async init(space: SyncSpace): Promise<void> {
@@ -366,7 +368,7 @@ export class GitTransport implements SyncTransport {
   /** Stage everything, unstage+exclude oversize files, commit, push. */
   async push(space: SyncSpace, message: string): Promise<PushResult> {
     this.reapStaleLocks(space); // heal an orphaned lock from a crashed prior write
-    const add = await this.git(space, ['add', '-A']);
+    const add = await this.stageAll(space);
     this.assertLocalOk(space, 'add', add, isLockContended);
     // Deliberately NO early return here on a lock-contended `add` (contrast
     // pull()'s add guard below, which DOES early-return): if
@@ -594,7 +596,7 @@ export class GitTransport implements SyncTransport {
   async pull(space: SyncSpace): Promise<PullResult> {
     this.reapStaleLocks(space); // heal an orphaned lock from a crashed prior write
     // Snapshot local changes first so merge never runs on a dirty tree.
-    const add = await this.git(space, ['add', '-A']);
+    const add = await this.stageAll(space);
     this.assertLocalOk(space, 'add', add, isLockContended);
     // `add` is the FIRST lock-taking op in pull(), so it is the one that loses
     // a live-writer race first. If it fails, there is no staged snapshot of
@@ -650,7 +652,39 @@ export class GitTransport implements SyncTransport {
     // what lets a second device actually receive the first device's push.
     const localMain = await this.git(space, ['rev-parse', '--verify', '--quiet', 'main']);
     this.throwIfCorrupt(space, 'rev-parse', localMain);
-    if (localMain.code !== 0) {
+    const hasMain = localMain.code === 0;
+    if (hasMain) {
+      const behind = await this.git(space, ['rev-list', '--count', 'main..origin/main']);
+      this.throwIfCorrupt(space, 'rev-list', behind);
+      if (behind.code !== 0 || behind.stdout.trim() === '0') return { updated: false, conflictCopies: [], contacted };
+    }
+    // WHY (sync-safety 2026-09-23): checkout and merge silently replace files
+    // git does not manage here — ignored untracked files (a fresh device's own
+    // .env was overwritten by the remote's) and never-sync edits stageAll held
+    // back. Save them before the remote lands, put them back after, on every
+    // exit including a throw.
+    const held = await this.holdUnmanaged(space, hasMain);
+    let result: PullResult;
+    try {
+      // Only now, with every file saved, reset held-back secret edits to their
+      // committed bytes so the merge does not refuse them.
+      for (const f of held.files) {
+        if (f.heldBack) this.assertLocalOk(space, 'checkout', await this.git(space, ['checkout', '--', f.rel]));
+      }
+      result = await this.applyOrigin(space, hasMain);
+    } catch (e) {
+      await this.restoreUnmanaged(space, held);
+      throw e;
+    }
+    const kept = await this.restoreUnmanaged(space, held);
+    return kept.length ? { ...result, conflictCopies: [...result.conflictCopies, ...kept] } : result;
+  }
+
+  /** Bring origin/main into the working tree: adopt it on a fresh device,
+   *  otherwise merge with convergent conflict copies. */
+  private async applyOrigin(space: SyncSpace, hasMain: boolean): Promise<PullResult> {
+    const contacted = true;
+    if (!hasMain) {
       const co = await this.git(space, ['checkout', '-B', 'main', 'origin/main']);
       // Used to return {updated:false} on failure — silent. A failed remote
       // adoption is a real error (corrupt local objects, unreadable remote tip).
@@ -668,9 +702,6 @@ export class GitTransport implements SyncTransport {
       // allowlist.
       return { updated: co.code === 0, conflictCopies: [], contacted };
     }
-    const behind = await this.git(space, ['rev-list', '--count', 'main..origin/main']);
-    this.throwIfCorrupt(space, 'rev-list', behind);
-    if (behind.code !== 0 || behind.stdout.trim() === '0') return { updated: false, conflictCopies: [], contacted };
 
     // Fix: --allow-unrelated-histories covers the mainline "second device" case —
     // a device that enables sync on a space that ALREADY has content (e.g. the
@@ -683,31 +714,63 @@ export class GitTransport implements SyncTransport {
     if (merge.code === 0) return { updated: true, conflictCopies: [], contacted };
 
     // Conflicts: resolve each convergently.
-    const conflicted = (await this.git(space, ['diff', '--name-only', '--diff-filter=U', '-z'])).stdout
-      .split('\0').filter(Boolean);
     const copies: string[] = [];
-    for (const rel of conflicted) {
-      // Stage 2 = ours (this device), stage 3 = theirs (remote). Content is
-      // read as raw bytes via showStage so binary and >1MB files survive the
-      // copy intact (utf8 strings would corrupt bytes; Node's 1MB default
-      // buffer would reject big files and silently skip the copy).
-      const ours = await this.showStage(space, 2, rel);
-      if (ours !== null) {
-        const copyRel = this.freeCopyName(space, rel);
-        fs.mkdirSync(path.dirname(path.join(space.root, copyRel)), { recursive: true });
-        fs.writeFileSync(path.join(space.root, copyRel), ours);
-        await this.git(space, ['add', copyRel]);
-        copies.push(copyRel);
+    const keepLocal: { rel: string; bytes: Buffer }[] = [];
+    try {
+      const list = await this.git(space, ['diff', '--name-only', '--diff-filter=U', '-z']);
+      this.assertLocalOk(space, 'diff', list);
+      for (const rel of list.stdout.split('\0').filter(Boolean)) {
+        // WHY: which sides have a version comes from the index in one checked
+        // read. A failed probe used to mean "remote deleted it" (a deletion
+        // pushed to every device) or "nothing of ours" (our copy dropped).
+        const staged = await this.git(space, ['ls-files', '-u', '-z', '--', rel]);
+        this.assertLocalOk(space, 'ls-files', staged);
+        const sides = new Set(staged.stdout.split('\0').filter(Boolean).map((e) => e.split(/\s+/)[2]));
+        if (sides.size === 0) throw new Error(`no conflict stages listed for ${rel}`);
+        if (isNeverSyncPath(rel)) {
+          // WHY: a "(from …)" copy of a secret would be a NEW file carrying
+          // this device's secret into the merge commit. The repo takes the
+          // remote side; the disk keeps this device's bytes (stageAll then
+          // holds them back), exactly like a held-back secret edit.
+          const ours = sides.has('2') ? await this.showStage(space, 2, rel) : null;
+          if (sides.has('3')) {
+            this.assertLocalOk(space, 'checkout', await this.git(space, ['checkout', '--theirs', '--', rel]));
+            this.assertLocalOk(space, 'add', await this.git(space, ['add', '-f', '--', rel]));
+          } else {
+            this.assertLocalOk(space, 'rm', await this.git(space, ['rm', '--cached', '-q', '--', rel]));
+          }
+          if (ours) keepLocal.push({ rel, bytes: ours });
+          continue;
+        }
+        // Stage 2 = ours (this device), stage 3 = theirs (remote). Content is
+        // read as raw bytes via showStage so binary and >1MB files survive the
+        // copy intact (utf8 strings would corrupt bytes; Node's 1MB default
+        // buffer would reject big files).
+        if (sides.has('2')) {
+          const ours = await this.showStage(space, 2, rel);
+          const copyRel = this.freeCopyName(space, rel);
+          await fs.promises.mkdir(path.dirname(path.join(space.root, copyRel)), { recursive: true });
+          await fs.promises.writeFile(path.join(space.root, copyRel), ours);
+          this.assertLocalOk(space, 'add', await this.git(space, ['add', '--', copyRel]));
+          copies.push(copyRel);
+        }
+        if (sides.has('3')) {
+          // git writes theirs itself, so the canonical stays byte-faithful.
+          this.assertLocalOk(space, 'checkout', await this.git(space, ['checkout', '--theirs', '--', rel]));
+          this.assertLocalOk(space, 'add', await this.git(space, ['add', '--', rel]));
+        } else {
+          // Deleted remotely → deletion wins canonical (ours survives as the copy).
+          this.assertLocalOk(space, 'rm', await this.git(space, ['rm', '--force', '--', rel]));
+        }
       }
-      // Cheap existence probe — the canonical restore stays checkout --theirs
-      // (git writes the content itself, so it's already byte-faithful).
-      const theirs = await this.git(space, ['cat-file', '-e', `:3:${rel}`]);
-      if (theirs.code === 0) {
-        await this.git(space, ['checkout', '--theirs', '--', rel]);
-        await this.git(space, ['add', rel]);
-      } else {
-        await this.git(space, ['rm', '--force', '--', rel]); // deleted remotely → deletion wins canonical
-      }
+    } catch (e) {
+      // WHY: a half-resolved merge leaves conflict markers in the user's files.
+      // Abort restores the pre-merge tree; the next sync retries from clean.
+      // Copies written so far are removed too — the retry writes them again,
+      // and leaving them would pile up duplicates.
+      await this.git(space, ['merge', '--abort']);
+      for (const c of copies) await fs.promises.rm(path.join(space.root, c), { force: true });
+      throw e;
     }
     const commit = await this.git(space, ['commit', '--no-edit']);
     if (commit.code !== 0) {
@@ -724,7 +787,125 @@ export class GitTransport implements SyncTransport {
       await this.git(space, ['merge', '--abort']);
       throw new Error(`Sync merge could not complete for ${space.id}: ${commit.stderr.trim() || 'git commit failed'}`);
     }
+    for (const { rel, bytes } of keepLocal) await fs.promises.writeFile(path.join(space.root, rel), bytes);
     return { updated: true, conflictCopies: copies, contacted };
+  }
+
+  /** After Tier 1 pointed main at origin/main, make the disk match it without
+   *  losing anything: a tracked file that differs keeps its local bytes as a
+   *  "(from …)" copy, a missing one is restored (no deletion is inferred).
+   *  Untracked files stay as they are and sync as new files. Never-sync files
+   *  are left alone (stageAll keeps them frozen). Returns the copies made. */
+  private async adoptTreeKeepingLocal(space: SyncSpace): Promise<string[]> {
+    this.assertLocalOk(space, 'reset', await this.git(space, ['reset', '-q']));
+    const diff = await this.git(space, ['diff', '--name-only', '-z', '--no-renames']);
+    this.assertLocalOk(space, 'diff', diff);
+    const copies: string[] = [];
+    for (const rel of diff.stdout.split('\0').filter(Boolean)) {
+      if (isNeverSyncPath(rel)) continue;
+      let bytes: Buffer | null = null;
+      try { bytes = await fs.promises.readFile(path.join(space.root, rel)); } catch { /* missing — restored below */ }
+      if (bytes) {
+        const copyRel = this.freeCopyName(space, rel);
+        await fs.promises.writeFile(path.join(space.root, copyRel), bytes);
+        copies.push(copyRel);
+      }
+      this.assertLocalOk(space, 'checkout', await this.git(space, ['checkout', '--', rel]));
+    }
+    return copies;
+  }
+
+  /** `add -A`, then take never-sync paths (secrets) back out of the index.
+   *  WHY: info/exclude hides them only until a project's own .gitignore says
+   *  `!.env`. `reset` (not `rm --cached`) returns each to its last committed
+   *  state: a new secret stays untracked, and one an older version already
+   *  published stays published but frozen — its edits, and its local deletion,
+   *  never go out (a propagated deletion would erase it on other devices). */
+  private async stageAll(space: SyncSpace): Promise<ExecResult> {
+    const add = await this.git(space, ['add', '-A']);
+    if (add.code !== 0) return add;
+    const staged = await this.git(space, ['diff', '--cached', '--name-only', '-z', '--no-renames']);
+    this.assertLocalOk(space, 'diff', staged);
+    const secret = staged.stdout.split('\0').filter((rel) => rel && isNeverSyncPath(rel));
+    if (secret.length) {
+      const reset = await this.git(space, ['reset', '-q', '--', ...secret]);
+      // Not lock-benign: a lost race here would let the secret into the commit.
+      this.assertLocalOk(space, 'reset', reset);
+    }
+    return add;
+  }
+
+  /** Save every local file the incoming remote could replace without git
+   *  treating it as a local change: untracked files (ignored ones — stageAll
+   *  staged the rest) and held-back never-sync edits (pull resets those to
+   *  their committed bytes after this returns, so the merge does not refuse).
+   *  Copies go under the git dir, so a crash mid-merge cannot lose them, and
+   *  nothing in the tree changes here — a failed save stops the pull first. */
+  private async holdUnmanaged(space: SyncSpace, hasMain: boolean): Promise<HeldFiles> {
+    const names = async (args: string[]) => {
+      const r = await this.git(space, args);
+      this.assertLocalOk(space, args[0], r);
+      return r.stdout.split('\0').filter(Boolean);
+    };
+    const dir = path.join(this.gitDir(space), 'youcoded-held', `${Date.now()}-${process.pid}`);
+    const incoming = hasMain
+      ? await names(['diff', '--name-only', '-z', '--no-renames', 'HEAD', 'origin/main'])
+      : await names(['ls-tree', '-r', '--name-only', '-z', 'origin/main']);
+    if (incoming.length === 0) return { dir, files: [] };
+    const tracked = new Set(await names(['ls-files', '-z']));
+    const edited = new Set(await names(['diff', '--name-only', '-z', '--no-renames']));
+    const files: HeldFiles['files'] = [];
+    for (const rel of incoming) {
+      const heldBack = tracked.has(rel) && edited.has(rel) && isNeverSyncPath(rel);
+      if (tracked.has(rel) && !heldBack) continue;
+      const full = path.join(space.root, rel);
+      let saved = false;
+      try {
+        if (!(await fs.promises.lstat(full)).isFile()) continue; // a folder or link: git refuses, nothing replaced
+        await fs.promises.mkdir(path.dirname(path.join(dir, rel)), { recursive: true });
+        await fs.promises.copyFile(full, path.join(dir, rel));
+        saved = true;
+      } catch (e: any) {
+        if (e?.code !== 'ENOENT') throw e; // could not save it: do not let the remote land
+        if (!heldBack) continue; // absent — nothing to keep
+        // A held-back local DELETION: remember it so the file stays deleted.
+      }
+      files.push({ rel, saved, heldBack });
+    }
+    return { dir, files };
+  }
+
+  /** Put held files back after the remote landed. A secret keeps this
+   *  device's bytes at its own name (a copy would be a second secret file);
+   *  anything else follows the conflict rule — remote keeps the name, local
+   *  becomes a "(from …)" copy. Returns the copies made. The saved copies are
+   *  deleted only when every file was put back. */
+  private async restoreUnmanaged(space: SyncSpace, held: HeldFiles): Promise<string[]> {
+    const copies: string[] = [];
+    let intact = true;
+    for (const { rel, saved } of held.files) {
+      const full = path.join(space.root, rel);
+      try {
+        const bytes = saved ? await fs.promises.readFile(path.join(held.dir, rel)) : null;
+        let now: Buffer | null = null;
+        try { now = await fs.promises.readFile(full); } catch { /* absent */ }
+        if (bytes === null) { if (now !== null) await fs.promises.rm(full); continue; }
+        if (now !== null && now.equals(bytes)) continue;
+        let target = full;
+        if (now !== null && !isNeverSyncPath(rel)) {
+          const copyRel = this.freeCopyName(space, rel);
+          copies.push(copyRel);
+          target = path.join(space.root, copyRel);
+        }
+        await fs.promises.mkdir(path.dirname(target), { recursive: true });
+        await fs.promises.writeFile(target, bytes);
+      } catch (e) {
+        intact = false;
+        this.log(`sync-spaces: ${space.id}: could not put back ${rel}; a saved copy stays in ${held.dir}: ${(e as Error).message}`);
+      }
+    }
+    if (intact) await fs.promises.rm(held.dir, { recursive: true, force: true });
+    return copies;
   }
 
   private freeCopyName(space: SyncSpace, rel: string): string {
@@ -820,14 +1001,25 @@ export class GitTransport implements SyncTransport {
         const commitOk = (await this.git(space, ['cat-file', 'commit', sha])).code === 0;
         const treeOk = (await this.git(space, ['cat-file', '-p', `${sha}^{tree}`])).code === 0;
         if (commitOk && treeOk) {
-          const upd = await this.git(space, ['update-ref', 'refs/heads/main', sha]);
+          // WHY (sync-safety 2026-09-23): the worktree matches THIS device's
+          // last commit, not origin/main — a crash after a fetch but before
+          // its merge leaves origin/main ahead of the disk. Resetting main to
+          // origin/main then made the next add -A push that lag as edits: a
+          // peer's new file deleted everywhere, a peer's deletion undone. Keep
+          // a readable local tip so the next pull merges normally; only an
+          // unreadable one is replaced, and then adoptTreeKeepingLocal below.
+          const local = await this.git(space, ['rev-parse', '--verify', '--quiet', 'refs/heads/main']);
+          const localSha = local.code === 0 ? local.stdout.trim() : '';
+          const localOk = !!localSha
+            && (await this.git(space, ['cat-file', 'commit', localSha])).code === 0
+            && (await this.git(space, ['cat-file', '-p', `${localSha}^{tree}`])).code === 0;
+          const upd = localOk ? local : await this.git(space, ['update-ref', 'refs/heads/main', sha]);
           // Delete the index: it may reference the just-deleted poison hashes.
-          // add -A rebuilds it from the worktree — files are the source of truth.
           try { fs.rmSync(path.join(gd, 'index'), { force: true }); } catch { /* rebuilt anyway */ }
           const probe = await this.git(space, ['rev-parse', '--verify', 'HEAD']);
           if (upd.code === 0 && probe.code === 0) {
-            // Healed — local changes re-commit on the next cycle.
-            this.log(`sync-spaces: repair(${space.id}) tier=1 healed — main reset to origin/main ${sha.slice(0, 8)}, ${zeroByteObjectsDeleted} zero-byte object(s) deleted`);
+            const copies = localOk ? [] : await this.adoptTreeKeepingLocal(space);
+            this.log(`sync-spaces: repair(${space.id}) tier=1 healed — ${localOk ? `kept local main ${localSha.slice(0, 8)}` : `main reset to origin/main ${sha.slice(0, 8)}, ${copies.length} differing file(s) kept as copies`}, ${zeroByteObjectsDeleted} zero-byte object(s) deleted`);
             return { tier: 1, zeroByteObjectsDeleted };
           }
           tier1Failure = `update-ref/HEAD probe failed (update-ref exit ${upd.code}, probe exit ${probe.code})`;

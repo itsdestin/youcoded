@@ -129,6 +129,7 @@ const IPC = {
   SESSION_HISTORY: 'session:history',
   // Mark/unmark a session flag (complete, priority, helpful, …)
   SESSION_SET_FLAG: 'session:set-flag',
+  SESSION_MENU_LOCK: 'session:menu-lock',
   // Pushed when session metadata (a flag value) changes so open browsers refresh
   SESSION_META_CHANGED: 'session:meta-changed',
   // Session tags + note (custom user tags, freeform note)
@@ -552,6 +553,10 @@ contextBridge.exposeInMainWorld('claude', {
     // The desktop talks over IPC, so there is no connection to be down. Present on both
     // bridges so the composer can ask without knowing which one it has.
     canSend: () => true,
+    // One device at a time answers a menu by verified navigation — the lock
+    // lives in main (menu-answer-lock.ts), shared with the remote host.
+    menuLock: (sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.SESSION_MENU_LOCK, sessionId, holder, action),
     sendInput: (sessionId: string, text: string) =>
       ipcRenderer.send(IPC.SESSION_INPUT, sessionId, text),
     resize: (sessionId: string, cols: number, rows: number) =>
