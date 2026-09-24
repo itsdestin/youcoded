@@ -277,3 +277,108 @@ describe('usePromptDetector settles kept cards when the menu is gone', () => {
     expect(mocks.dispatch.mock.calls.some((c) => c[0].type === 'SHOW_PROMPT')).toBe(true);
   });
 });
+
+// ---- the startup safety net -------------------------------------------------
+import { getUnreadableStartupDialog } from '../src/renderer/state/startup-dialog-store';
+
+const RULE = '─'.repeat(80);
+const NEW_DIALOG = [
+  RULE,
+  '  Something Claude Code has never asked before',
+  '',
+  '  Some body text explaining it.',
+  '',
+  '  ❯ Keep going',
+  '    Stop here',
+  '',
+  '  Enter to confirm · Esc to cancel',
+].join('\n');
+const TRUST_2_1_281 = [
+  RULE,
+  ' Accessing workspace:',
+  '',
+  ' /home/someone/project',
+  '',
+  " Claude Code'll be able to read, edit, and execute files here.",
+  '',
+  ' Security guide',
+  '',
+  ' ❯ No, exit',
+  '   Yes, I trust this folder',
+  '',
+  ' Enter to confirm · Esc to cancel',
+].join('\n');
+const MULTI_SELECT = [
+  RULE,
+  '  2 new MCP servers found in this project',
+  '  Select any you wish to enable.',
+  '',
+  '  ❯ [✔] demo',
+  '    [✔] other',
+  '       Enable selected',
+  ' Space to select · Esc to reject all',
+].join('\n');
+
+describe('usePromptDetector startup safety net', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.dispatch.mockClear();
+    mocks.callbacks.length = 0;
+    mocks.screen.text = '';
+    mocks.sessions.clear();
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const shows = () => mocks.dispatch.mock.calls.filter((c) => c[0].type === 'SHOW_PROMPT').map((c) => c[0]);
+
+  it('shows the 2.1.281 trust dialog with verified-navigation buttons, starting on "No, exit"', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = TRUST_2_1_281;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    const [show] = shows();
+    expect(show.title).toBe('Trust This Folder?');
+    expect(show.buttons.map((b: any) => b.label)).toEqual(['No, exit', 'Yes, I trust this folder']);
+    expect(show.buttons.every((b: any) => b.pick && b.input === '')).toBe(true);
+    expect(show.defaultIndex).toBe(0);
+  });
+
+  it('while starting, shows a dialog nobody taught it about — titled with its own heading', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = NEW_DIALOG;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    const [show] = shows();
+    expect(show.title).toBe('Something Claude Code has never asked before');
+    expect(show.buttons.map((b: any) => b.label)).toEqual(['Keep going', 'Stop here']);
+    expect(show.defaultIndex).toBe(0);
+  });
+
+  it('once started, the same unknown menu is left alone (permission menus belong to the hook cards)', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => false }));
+    mocks.screen.text = NEW_DIALOG;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(shows()).toEqual([]);
+    expect(getUnreadableStartupDialog('s1')).toBeNull();
+  });
+
+  it('never turns a numbered list in a reply into a card, even while starting', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = UNRECOGNIZED_MENU;
+    fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(shows()).toEqual([]);
+  });
+
+  it('reports a dialog it cannot turn into buttons at once, and clears it when it goes', () => {
+    renderHook(() => usePromptDetector({ isStarting: () => true }));
+    mocks.screen.text = MULTI_SELECT;
+    fireBuffer('s1');
+    expect(getUnreadableStartupDialog('s1')).toEqual({ heading: '2 new MCP servers found in this project' });
+    expect(shows()).toEqual([]);
+    mocks.screen.text = '❯ \n? for shortcuts';
+    fireBuffer('s1');
+    expect(getUnreadableStartupDialog('s1')).toBeNull();
+  });
+});

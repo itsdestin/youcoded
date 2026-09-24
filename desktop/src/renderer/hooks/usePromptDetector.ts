@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { parseInkSelect, menuToButtons } from '../parser/ink-select-parser';
+import { parseInkSelect, menuToButtons, readStartupDialog, type ParsedMenu } from '../parser/ink-select-parser';
+import { setUnreadableStartupDialog } from '../state/startup-dialog-store';
 import { useChatDispatch, useChatStore } from '../state/chat-context';
 import { getVisibleScreenText, onBufferReady } from './terminal-registry';
 import { parsePlanMenu } from '../parser/plan-menu-parser';
@@ -28,7 +29,36 @@ const SETUP_PROMPT_TITLES = new Set([
   // was mislabeled 'Trust This Folder?' by the stale trust anchor and hijacked
   // TrustGate's full-screen takeover; now it gets its own card (2026-07-26).
   'Allow External Imports?',
+  // Project MCP-server approval (a folder with .mcp.json), CC 2.1.281.
+  'New MCP Server Found',
 ]);
+
+/**
+ * The card title for a menu the detector will show, or null to skip it.
+ *
+ * A known setup prompt keeps its canonical title. While the session is still
+ * STARTING (no hook event yet — Claude Code runs none until every startup
+ * dialog is answered), any menu that is plainly a live Claude Code dialog (its
+ * "Enter to confirm · Esc to cancel" footer under the options) is shown too,
+ * titled with the dialog's own heading: a dialog nobody has taught the app
+ * about must never again leave a new session on "Initializing session…"
+ * (2026-09-24). Outside startup the known-titles gate stays strict — there,
+ * permission menus belong to the hook cards and numbered lists in replies are
+ * not menus.
+ */
+export function cardTitleFor(menu: ParsedMenu, starting: boolean): string | null {
+  if (SETUP_PROMPT_TITLES.has(menu.title)) return menu.title;
+  if (starting && menu.dialog) {
+    const heading = (menu.heading ?? '').replace(/:\s*$/, '').trim();
+    return heading || menu.title;
+  }
+  return null;
+}
+
+export interface PromptDetectorOptions {
+  /** True while this session has not started yet (App's init gate). */
+  isStarting?: (sessionId: string) => boolean;
+}
 
 // After a permission response (PERMISSION_RESPONDED/EXPIRED clears
 // awaiting-approval), suppress parser detection for this window. Prevents
@@ -52,9 +82,12 @@ const DISMISS_DEBOUNCE_MS = 600;
  * without a hook event (e.g., trust folder prompt, or hooks are down),
  * the PromptCard is shown as a fallback.
  */
-export function usePromptDetector() {
+export function usePromptDetector(options: PromptDetectorOptions = {}) {
   const dispatch = useChatDispatch();
   const store = useChatStore();
+  // Latest options without re-subscribing the buffer listener on every render.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   const lastMenuRef = useRef<Map<string, string>>(new Map());
   const pendingTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const dismissTimerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -155,6 +188,15 @@ export function usePromptDetector() {
 
       const menu = parseInkSelect(screen);
       const lastMenuId = lastMenuRef.current.get(sid) || null;
+      const starting = optionsRef.current.isStarting?.(sid) ?? false;
+
+      // Safety net: while the session is starting, a Claude Code dialog the
+      // parser cannot turn into buttons (a multi-select, a layout nobody has
+      // seen) is reported at once, so the Initializing screen can say "Claude
+      // Code is asking something — answer it in terminal view" instead of
+      // hanging silently. Cleared as soon as it is gone or readable.
+      const readable = !!menu && cardTitleFor(menu, starting) !== null;
+      setUnreadableStartupDialog(sid, starting && !readable ? readStartupDialog(screen) : null);
 
       if (menu) {
         // Cancel any pending dismiss — menu is (still) present
@@ -189,7 +231,8 @@ export function usePromptDetector() {
           // Only show PromptCards for known setup prompts. Permission prompts
           // and false positives (numbered lists) are skipped — hooks handle
           // permissions, and numbered lists aren't real menus.
-          if (!SETUP_PROMPT_TITLES.has(menu.title)) return;
+          const title = cardTitleFor(menu, starting);
+          if (title === null) return;
 
           // Debounce: wait before showing, giving hook system time to arrive
           const timer = setTimeout(() => {
@@ -224,18 +267,23 @@ export function usePromptDetector() {
             if (!nowMenu || nowMenu.id !== menu.id) return;
 
             const buttons = menuToButtons(menu);
+            const verified = buttons.some((b) => b.pick);
             shownPromptRef.current.set(sid, menu.id);
             dispatch({
               type: 'SHOW_PROMPT',
               sessionId: sid,
               promptId: menu.id,
-              title: menu.title,
+              title,
               description: menu.description,
               buttons: buttons.map((b) => ({
                 label: b.label,
                 input: b.input,
-                submitInput: b.submitInput,
+                ...(b.submitInput !== undefined ? { submitInput: b.submitInput } : {}),
+                ...(b.pick ? { pick: b.pick } : {}),
               })),
+              // An unnumbered dialog is answered by moving Claude Code's own
+              // cursor, so the card starts where that cursor is ("No, exit").
+              ...(verified ? { defaultIndex: nowMenu.selectedIndex } : {}),
             });
           }, PROMPT_DEBOUNCE_MS);
 

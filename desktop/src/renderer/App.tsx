@@ -73,7 +73,8 @@ import { broadcastExpandAll, broadcastCollapseAll, isInExpandAllMode } from './h
 import { AppIcon, WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
-import TrustGate, { useTrustGateActive } from './components/TrustGate';
+import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
+import { useUnreadableStartupDialog } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
@@ -656,7 +657,13 @@ function AppInner() {
   // (see useSessionDefaults for why).
   const sessionDefaults = useSessionDefaults(settingsOpen);
 
-  usePromptDetector();
+  // The detector's startup safety net needs "is this session still starting?"
+  // — the same answer the Initializing screen uses. Read through a ref so the
+  // detector's buffer listener is not re-subscribed on every render.
+  const initializedRef = useRef(initializedSessions);
+  initializedRef.current = initializedSessions;
+  const isStarting = useCallback((sid: string) => !initializedRef.current.has(sid), []);
+  usePromptDetector({ isStarting });
   // Recovers chat→PTY submits that get lost on Windows ConPTY when Claude is
   // busy — see useSubmitConfirmation for the full mechanism. Pass active
   // session + its view mode so the hook can suppress the `\r` retry while the
@@ -3413,20 +3420,16 @@ function AppInner() {
 
   const trustGateActive = useTrustGateActive(sessionId);
 
-  // Once trust gate activates, permanently mark the session as initialized
-  // so the "Initializing" overlay doesn't reappear after trust is completed
-  // (there's a gap between trust completion and the first hook event).
-  useEffect(() => {
-    if (trustGateActive && sessionId) {
-      setInitializedSessions((prev) => {
-        if (prev.has(sessionId)) return prev;
-        const next = new Set(prev);
-        next.add(sessionId);
-        (window as any).claude?.remote?.broadcastAction({ type: '_SESSION_INITIALIZED', sessionId });
-        return next;
-      });
-    }
-  }, [trustGateActive, sessionId]);
+  // WHY there is no longer a "trust gate = initialized" shortcut here: it
+  // marked the session started the moment the trust dialog appeared, which
+  // switched the startup safety net off for every dialog AFTER trust (the
+  // bypass warning, an MCP server's approval) — they were then never shown,
+  // and the Initializing cover hid their cards anyway (2026-09-24). The cover
+  // now steps aside whenever a prompt card is waiting instead, and the session
+  // counts as started on its first real hook event, which Claude Code sends
+  // only once every startup dialog is answered.
+  const pendingPromptActive = usePendingPromptActive(sessionId);
+  const unreadableStartupDialog = useUnreadableStartupDialog(sessionId);
 
   const sessionInitialized = sessionId ? initializedSessions.has(sessionId) : true;
   // Plan 2b Moved Gate: when the active session was taken over by another device,
@@ -3847,13 +3850,30 @@ function AppInner() {
               {/* Initializing overlay — shown before Claude is ready, but only in chat view.
                  Terminal view must stay accessible during init so the user can interact there.
                  z-10: must stay below glassmorphism chrome (z-20) so header/bottom bars remain accessible */}
-              {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && (
+              {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && !pendingPromptActive && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
                   <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
                   {/* select-none: a status line, not content. Ctrl+A must not
                       paint it (Destin, 2026-09-10). */}
+                  {unreadableStartupDialog ? (
+                    // Safety net (2026-09-24): Claude Code is showing a startup
+                    // dialog the app can't turn into buttons. Say so NOW, name
+                    // it in Claude Code's own words, and offer the one place it
+                    // can be answered — never a silent "Initializing…".
+                    <div className="text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2" data-testid="startup-dialog-unreadable">
+                      <p className="text-sm text-fg-dim font-medium select-none">Claude Code is asking something</p>
+                      {unreadableStartupDialog.heading && (
+                        <p className="text-fg-2">&ldquo;{unreadableStartupDialog.heading}&rdquo;</p>
+                      )}
+                      <p>YouCoded can&rsquo;t show these options here. Answer it in terminal view.</p>
+                      <Button variant="secondary" size="sm" onClick={() => { setBackToChatHint(true); handleToggleView('terminal'); }}>
+                        Answer in terminal view
+                      </Button>
+                    </div>
+                  ) : (
                   <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>
-                  {initSlowWarning && (
+                  )}
+                  {initSlowWarning && !unreadableStartupDialog && (
                     <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
                       <p>Something may be wrong. The terminal may show what it is waiting on.</p>
                       {/* Fix: the old copy told the user to go find the chat/terminal toggle
