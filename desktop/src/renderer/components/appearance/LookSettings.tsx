@@ -74,18 +74,21 @@ function MiniLayout({ style }: { style: ChromeStyle }) {
   const chip = 'bg-panel border border-edge-dim';
   return (
     <Mini>
-      <div className="absolute inset-x-3 top-3.5 flex flex-col gap-0.5">
+      {/* Framed: the chrome is one continuous frame (header, sides, message box) with the
+          chat set INTO it as a rounded pane — drawn as a panel-coloured window with a
+          canvas pane cut in. WHY (review-6 AR6-1): four separate strips read as "just two
+          top bars", not the real framed shell. */}
+      {style === 'default' && (
+        <div className="absolute inset-0 bg-panel">
+          <div className="absolute left-1 right-1 top-2 bottom-3 rounded-sm bg-canvas border border-edge" />
+          <div className="absolute left-2 right-2 bottom-1 h-1.5 rounded-full bg-inset" />
+        </div>
+      )}
+      {/* The chat, drawn after the frame so it sits on top of it. */}
+      <div className={`absolute inset-x-3 ${style === 'default' ? 'top-3' : 'top-3.5'} flex flex-col gap-0.5`}>
         <div className="self-end w-1/2 h-1.5 rounded-sm bg-accent" />
         <div className="self-start w-3/5 h-1.5 rounded-sm bg-inset" />
       </div>
-      {style === 'default' && (
-        <>
-          <div className="absolute inset-x-0 top-0 h-2.5 bg-panel border-b border-edge" />
-          <div className="absolute inset-x-0 bottom-0 h-3 bg-panel border-t border-edge" />
-          <div className="absolute left-0 top-2.5 bottom-3 w-1 bg-panel" />
-          <div className="absolute right-0 top-2.5 bottom-3 w-1 bg-panel" />
-        </>
-      )}
       {style === 'floating' && (
         <>
           <div className={`absolute inset-x-1.5 top-1 h-2 rounded-full ${chip}`} />

@@ -216,20 +216,6 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
     // it was one unlabelled column, and the new Look settings would have made it a
     // long list with no signposts. Layout leads (appearance-panel-review AR-1).
     <div className="space-y-5">
-      <section>
-        {/* WHY no intro line (redesign round, 2026-09-24): Layout and Look each carried a
-            "applies to every theme" sentence, the same point twice. The (i) explainer says it
-            once, and the "Auto" tile already shows what the theme itself uses. */}
-        <h3 className={SECTION_LABEL}>Layout</h3>
-        <LayoutSettings />
-        {/* WHY here, not its own section (Destin, appearance-panel-review-5 AR5-2: "put
-            this right under frames and label the card 'Additional Customizations'"): the
-            rest of the Look sits with the layout it refines, above the themes. */}
-        <div className="mt-2">
-          <LookSettings />
-        </div>
-      </section>
-
       <section className="space-y-2">
         <h3 className={SECTION_LABEL}>Themes</h3>
         {/* The themes box (Destin, appearance-panel-review-3 AR3-2): "doesn't feel like a
@@ -362,6 +348,22 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
           ✦ Build New Theme
         </Button>
           </div>
+        </div>
+      </section>
+
+      <section>
+        {/* WHY below Themes (Destin, appearance-panel-review-6 AR6-1: "put layout section
+            below themes section"): picking a theme is the panel's main job, so it leads. */}
+        {/* WHY no intro line (redesign round, 2026-09-24): Layout and Look each carried a
+            "applies to every theme" sentence, the same point twice. The (i) explainer says it
+            once, and the "Auto" tile already shows what the theme itself uses. */}
+        <h3 className={SECTION_LABEL}>Layout</h3>
+        <LayoutSettings />
+        {/* WHY here, not its own section (Destin, appearance-panel-review-5 AR5-2: "put
+            this right under frames and label the card 'Additional Customizations'"): the
+            rest of the Look sits with the layout it refines, above the themes. */}
+        <div className="mt-2">
+          <LookSettings />
         </div>
       </section>
 
