@@ -336,3 +336,47 @@ describe('the unnumbered reader refuses what it cannot be sure of', () => {
     expect(menuToButtons(menu!).some((b) => b.pick)).toBe(false);
   });
 });
+
+// ---- Android parity ---------------------------------------------------------
+// Android parses Claude Code's screen natively (app/.../parser/InkSelectParser.kt)
+// and its buttons are answered by THIS renderer's driver, which refuses unless
+// its own parse's signature matches the Kotlin one. So both parsers must read
+// every capture identically. This writes/checks the screens and the desktop
+// verdicts the Kotlin test (InkSelectParserStartupTest) replays. After a new
+// capture: UPDATE_ANDROID_STARTUP_SCREENS=1 npx vitest run tests/startup-dialogs.test.ts
+import fs from 'fs';
+import path from 'path';
+
+const ANDROID_DIR = path.join(__dirname, '..', '..', 'app', 'src', 'test', 'resources', 'startup-dialogs');
+
+describe('Android parity screens', () => {
+  it('app/src/test/resources/startup-dialogs matches what the desktop parser reads', async () => {
+    const want = new Map<string, string>();
+    for (const file of FILES) {
+      const fx = load(file);
+      for (const m of fx.marks.filter((x) => /^dialog-\d+-visible$/.test(x.label))) {
+        const t = new FixtureTerminal(fx);
+        open.push(t);
+        await t.advanceToMark(m.label);
+        const screen = t.androidScreen();
+        const menu = parseInkSelect(screen);
+        const expected = menu && menu.dialog ? {
+          title: menu.title, options: menu.options, selectedIndex: menu.selectedIndex,
+          signature: menu.signature, heading: menu.heading ?? null,
+          picks: menuToButtons(menu).every((b) => !!b.pick),
+        } : null;
+        want.set(`${fx.key}-${m.label}.json`, JSON.stringify({ screen, expected }, null, 1) + '\n');
+      }
+    }
+    if (process.env.UPDATE_ANDROID_STARTUP_SCREENS) {
+      fs.rmSync(ANDROID_DIR, { recursive: true, force: true, maxRetries: 3 });
+      fs.mkdirSync(ANDROID_DIR, { recursive: true });
+      for (const [name, body] of want) fs.writeFileSync(path.join(ANDROID_DIR, name), body);
+    }
+    const have = fs.existsSync(ANDROID_DIR) ? fs.readdirSync(ANDROID_DIR).sort() : [];
+    expect(have).toEqual([...want.keys()].sort());
+    for (const [name, body] of want) {
+      expect(fs.readFileSync(path.join(ANDROID_DIR, name), 'utf8').replace(/\r/g, ''), name).toBe(body);
+    }
+  });
+});

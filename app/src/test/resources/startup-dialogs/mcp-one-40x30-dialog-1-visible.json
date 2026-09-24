@@ -1,0 +1,14 @@
+{
+ "screen": "                                        \n────────────────────────────────────────\n Accessing workspace:                   \n                                        \n /tmp/startup-mcp-one-cqCgwU/project    \n                                        \n Quick safety check: Is this a project  \n you created or one you trust? (Like    \n your own code, a well-known open       \n source project, or work from your      \n team). If not, take a moment to review \n what's in this folder first.           \n                                        \n Claude Code'll be able to read, edit,  \n and execute files here.                \n                                        \n Security guide                         \n                                        \n ❯ No, exit                             \n   Yes, I trust this folder             \n                                        \n Enter to confirm · Esc to cancel       \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n                                        \n",
+ "expected": {
+  "title": "Trust This Folder?",
+  "options": [
+   "No, exit",
+   "Yes, I trust this folder"
+  ],
+  "selectedIndex": 0,
+  "signature": "No, exit␞Yes, I trust this folder",
+  "heading": "Accessing workspace:",
+  "picks": true
+ }
+}

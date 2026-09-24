@@ -1848,7 +1848,7 @@ function AppInner() {
         promptId: payload.promptId,
         title: payload.title,
         description: payload.description,
-        buttons: payload.buttons || [],
+        buttons: payload.buttons || [], defaultIndex: payload.defaultIndex,
       });
     });
     const promptDismissHandler = (window.claude.on as any).promptDismiss?.((payload: any) => {

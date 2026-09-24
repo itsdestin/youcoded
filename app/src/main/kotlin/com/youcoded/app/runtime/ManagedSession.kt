@@ -409,6 +409,10 @@ class ManagedSession(
         // Startup dialog when CLAUDE.md imports files outside the cwd. Previously it was
         // mislabeled "Trust This Folder?" by the stale trust anchor (2026-07-26).
         "Allow External Imports?",
+        // CC 2.1.281: the bypass warning (was a hardcoded handler) and the project
+        // MCP-server approval. Both unnumbered — answered by verified navigation.
+        "Skip Permissions Warning",
+        "New MCP Server Found",
     )
 
     /** Detect permission mode from visible screen only (not raw buffer).
@@ -480,35 +484,11 @@ class ManagedSession(
             }
         }
 
-        // --- Hardcoded: Bypass permissions warning ---
-        // Two-option menu: "No, exit" (index 0, default selected) and
-        // "Yes, accept" (index 1). This one is hardcoded rather than parsed, so we
-        // don't know whether CC numbers its options — it therefore uses the arrow
-        // FALLBACK: one DOWN, then the Enter as a SEPARATE write. Arrows and "\r"
-        // in the same write are not both honoured (CC drops the arrows and acts on
-        // the Enter alone, which here would pick "No, exit"). Exit still sends ESC.
-        if ("bypass permission" in screenLower && "enter to confirm" in screenLower) {
-            absentPollCounts.remove("bypass_warning")
-            if ("bypass_warning" !in activePrompts && "bypass_warning" !in completedPromptIds) {
-                activePrompts.add("bypass_warning")
-                val down = "\u001b[B"
-                broadcastPrompt("bypass_warning",
-                    "Bypass Permissions Mode — Claude will run tools without asking for approval.",
-                    listOf(
-                        PromptButton("Accept the Risks", input = down, submitInput = "\r"),
-                        PromptButton("Exit", "\u001b"),
-                    ))
-            }
-            return
-        } else if ("bypass_warning" in activePrompts) {
-            val count = absentPollCounts.getOrDefault("bypass_warning", 0) + 1
-            absentPollCounts["bypass_warning"] = count
-            if (count >= DISMISS_THRESHOLD) {
-                activePrompts.remove("bypass_warning")
-                broadcastPromptDismiss("bypass_warning")
-                absentPollCounts.remove("bypass_warning")
-            }
-        }
+        // (The bypass-permissions warning used to be a hardcoded handler here that
+        // typed a blind "DOWN, then Enter". Since 2026-09-24 it goes through the
+        // generic parser below as "Skip Permissions Warning": CC 2.1.281 draws it
+        // unnumbered, "No, exit" first, and its buttons are answered by the
+        // renderer's verified navigation.)
 
         // --- Generic Ink Select menu detection ---
         // Only broadcast menus that are known setup prompts. Permission prompts
@@ -530,8 +510,10 @@ class ManagedSession(
                     absentPollCounts.remove(stale)
                 }
                 activePrompts.add(parsed.id)
-                broadcastPrompt(parsed.id, parsed.title,
-                    InkSelectParser.toPromptButtons(parsed), parsed.description)
+                val buttons = InkSelectParser.toPromptButtons(parsed)
+                // An unnumbered dialog starts on Claude Code's own cursor ("No, exit").
+                broadcastPrompt(parsed.id, parsed.title, buttons, parsed.description,
+                    defaultIndex = if (buttons.any { it.pick != null }) parsed.selectedIndex else null)
             }
         } else {
             val staleMenus = activePrompts.filter { it.startsWith("menu_") }
@@ -601,7 +583,13 @@ class ManagedSession(
     }
 
     /** Broadcast a prompt event to the React UI via bridge server. */
-    private fun broadcastPrompt(promptId: String, title: String, buttons: List<PromptButton>, description: String? = null) {
+    private fun broadcastPrompt(
+        promptId: String,
+        title: String,
+        buttons: List<PromptButton>,
+        description: String? = null,
+        defaultIndex: Int? = null,
+    ) {
         bridgeServer?.broadcast(JSONObject().apply {
             put("type", "prompt:show")
             put("payload", JSONObject().apply {
@@ -610,6 +598,7 @@ class ManagedSession(
                 put("title", title)
                 // Include description when present (e.g., resume session trade-off text)
                 if (description != null) put("description", description)
+                if (defaultIndex != null) put("defaultIndex", defaultIndex)
                 put("buttons", org.json.JSONArray().also { arr ->
                     buttons.forEach { btn ->
                         arr.put(JSONObject().apply {
@@ -618,6 +607,13 @@ class ManagedSession(
                             // Second write for the arrow fallback only — arrows and
                             // "\r" must never share one pty write (see InkSelectParser).
                             btn.submitInput?.let { put("submitInput", it) }
+                            // Verified navigation (renderer: state/ink-menu-driver.ts).
+                            btn.pick?.let { p ->
+                                put("pick", JSONObject().apply {
+                                    put("signature", p.signature)
+                                    put("index", p.index)
+                                })
+                            }
                         })
                     }
                 })

@@ -80,6 +80,17 @@ export class FixtureTerminal {
     return getVisibleScreenText(this.id) ?? '';
   }
 
+  /** The visible rows padded to the terminal width — the shape Android's
+   *  PtyBridge.readScreenText hands its parser (every cell, one row per line). */
+  androidScreen(): string {
+    const b = this.term.buffer.active;
+    const out: string[] = [];
+    for (let i = b.viewportY; i < b.viewportY + this.term.rows; i++) {
+      out.push((b.getLine(i)?.translateToString(true) ?? '').padEnd(this.term.cols, ' '));
+    }
+    return out.join('\n') + '\n';
+  }
+
   dispose(): void {
     unregisterTerminal(this.id);
     this.term.dispose();
