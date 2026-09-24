@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import type { SkillEntry, CommandEntry } from '../../shared/types';
-import SkillCard from './SkillCard';
+import SkillCard, { AvailabilityPreviewChip } from './SkillCard';
 import { useSkills } from '../state/skill-context';
 import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { isAndroid } from '../platform';
+import { isWorkbenchMode } from '../workbench-mode';
 import { EmptyState, ErrorState, FilterChip } from './ui';
 
 interface Props {
@@ -180,6 +181,8 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
         }
       : undefined;
 
+    // WHY: a few fixture statuses let Destin judge the drawer in context without
+    // asserting any real project's policy or changing an installed skill.
     return (
       <SkillCard
         key={skill.id}
@@ -187,6 +190,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
         onClick={onSelect}
         favorite={{ filled: isFav, onToggle: () => setFavorite(favId, !isFav) }}
         pluginBadge={pluginBadge}
+        availabilityPreview={isWorkbenchMode() ? (['Brainstorming', 'Theme Builder'].includes(skill.displayName) ? 'manual' : 'automatic') : undefined}
       />
     );
   };
@@ -330,6 +334,9 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
                   ★ Favorites only
                 </FilterChip>
               </div>
+              {isWorkbenchMode() && <div className="mx-3 mt-2 flex flex-wrap gap-x-4 gap-y-1 text-2xs text-fg-muted" role="note">
+                <span>Automatic: assistant may choose</span><span>Manual use: type / to choose</span>
+              </div>}
 
               {/* Favorites section. Hosts "Add Skills" only when it is the last
                   section on screen (favorites-only on, or nothing else installed). */}
@@ -338,6 +345,16 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
                   <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 px-1">Favorites</h3>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
                     {favsSorted.map(renderSkillCard)}
+                    {/* WHY: a missing skill cannot be invoked, but clicking its
+                        greyed card can lead to the right project's setup page. */}
+                    {isWorkbenchMode() && <button type="button" className="group rounded-lg border border-edge-dim bg-panel p-3 text-left text-fg-muted opacity-75 flex flex-col hover:opacity-100 hover:border-edge focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent"
+                      aria-label="Writing helper unavailable on this device; open project setup"
+                      title="Open Projects to add Writing helper locally"
+                      onClick={() => { onClose(); window.dispatchEvent(new Event('workbench:open-project-skills')); }}>
+                      <span className="text-sm font-medium">Writing helper</span>
+                      <span className="mt-1 text-2xs flex-1">Choice saved for this project; skill file missing here</span>
+                      <span className="mt-2 flex w-full flex-wrap items-center justify-between gap-1"><span className="text-4xs">Personal skill</span><span className="group-hover:brightness-125 group-focus-visible:brightness-125"><AvailabilityPreviewChip kind="unavailable" /></span></span>
+                    </button>}
                     {addSkillsIn === 'favorites' && <AddSkillsCard onClick={openMarketplace} />}
                   </div>
                 </section>

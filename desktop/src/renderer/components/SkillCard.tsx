@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import type { SkillEntry } from '../../shared/types';
 import FavoriteStar from './marketplace/FavoriteStar';
+import { STATUS_DOT_BG, STATUS_PILL_TONE } from './status-color-palette';
 
 interface FavoriteProps {
   filled: boolean;
@@ -22,6 +23,8 @@ interface Props {
    *  Clicking routes the user to that plugin's detail page. Skills with
    *  no matching marketplace plugin fall back to the source tag. */
   pluginBadge?: PluginBadgeProps;
+  /** Workbench-only preview until project availability has a real source of truth. */
+  availabilityPreview?: 'automatic' | 'manual';
 }
 
 // Change 23: every badge this card renders is an IDENTITY badge — "YC",
@@ -32,6 +35,21 @@ interface Props {
 // only reason they differed before was that the map grew one key at a time.
 const IDENTITY_BADGE =
   'bg-accent/15 text-accent border border-accent/30';
+
+// WHY: match the SessionStrip status pill's tinted border + neutral word +
+// colored dot, instead of making the status WORD low-contrast in light themes.
+// This is a preview vocabulary only; live availability needs native policy.
+const AVAILABILITY_PREVIEW = {
+  automatic: { tone: 'green', label: 'Automatic' },
+  manual: { tone: 'amber', label: 'Manual use' },
+  unavailable: { tone: 'red', label: 'Unavailable' },
+} as const;
+export function AvailabilityPreviewChip({ kind }: { kind: keyof typeof AVAILABILITY_PREVIEW }) {
+  const { tone, label } = AVAILABILITY_PREVIEW[kind];
+  return <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border pl-1 pr-1.5 py-[1px] text-2xs leading-none text-fg-2 ${STATUS_PILL_TONE[tone]}`}>
+    <span className={`h-2 w-2 rounded-full ${STATUS_DOT_BG[tone]}`} aria-hidden="true" />{label}
+  </span>;
+}
 
 const typeLabels: Record<string, string> = {
   prompt: 'Prompt',
@@ -119,13 +137,14 @@ type Handlers = {
 // refreshed by the OUTER SkillCard below on every one of ITS renders, and the
 // outer component is never memoized, so it runs on every CommandDrawer
 // render even when this inner one is skipped.
-function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPluginBadge, pluginName }: {
+function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPluginBadge, pluginName, availabilityPreview }: {
   skill: SkillEntry;
   handlersRef: React.RefObject<Handlers>;
   hasFavorite: boolean;
   favoriteFilled: boolean;
   hasPluginBadge: boolean;
   pluginName?: string;
+  availabilityPreview?: 'automatic' | 'manual';
 }) {
   const onCardClick = () => handlersRef.current.onClick(skill);
   const onPluginClick = () => handlersRef.current.onPluginClick?.();
@@ -161,7 +180,9 @@ function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPlu
       )}
       <span className="text-sm font-medium text-fg leading-tight">{skill.displayName}</span>
       <span className="text-2xs text-fg-muted mt-1 leading-snug line-clamp-2 flex-1">{skill.description}</span>
-      <div className="mt-2 self-start">{badge}</div>
+      <div className="mt-2 flex w-full flex-wrap items-center gap-1.5">{badge}
+        {availabilityPreview && <span className="ml-auto"><AvailabilityPreviewChip kind={availabilityPreview} /></span>}
+      </div>
     </div>
   );
 }
@@ -176,7 +197,7 @@ const SkillCardMemo = React.memo(SkillCardImpl);
 // (like ResumeBrowser itself, which owns rowActions.current). Its only job is
 // keeping handlersRef current so SkillCardMemo can skip re-rendering on data
 // alone without ever risking a stale click handler.
-function SkillCard({ skill, onClick, favorite, pluginBadge }: Props) {
+function SkillCard({ skill, onClick, favorite, pluginBadge, availabilityPreview }: Props) {
   const handlersRef = useRef<Handlers>({ onClick, onToggle: favorite?.onToggle, onPluginClick: pluginBadge?.onClick });
   handlersRef.current = { onClick, onToggle: favorite?.onToggle, onPluginClick: pluginBadge?.onClick };
   return (
@@ -187,6 +208,7 @@ function SkillCard({ skill, onClick, favorite, pluginBadge }: Props) {
       favoriteFilled={favorite?.filled ?? false}
       hasPluginBadge={pluginBadge != null}
       pluginName={pluginBadge?.name}
+      availabilityPreview={availabilityPreview}
     />
   );
 }

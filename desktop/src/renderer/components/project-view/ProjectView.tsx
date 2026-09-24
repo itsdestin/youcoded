@@ -20,7 +20,8 @@ import { useArtifact } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
-import { workbenchScreenFrame } from '../../workbench-mode';
+import { isWorkbenchMode, workbenchScreenFrame } from '../../workbench-mode';
+import { ProjectSkillsTabDemo } from '../../dev/workbench/mockups/ProjectPluginControls';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
 import type { PastSession } from '../../../shared/types';
@@ -49,7 +50,8 @@ import { ContextEditorOverlay } from './ContextEditorOverlay';
 // 2026-07-23: the Artifacts tab merged into Files. Artifacts was not a subset of
 // All files, so the merge moved externals into their own section inside this tab
 // rather than deleting them — see the file-merge spec.
-type TabId = 'files' | 'conversations' | 'context';
+// WHY: the new tab exists only in the isolated workbench until the UI and behavior are approved.
+type TabId = 'files' | 'conversations' | 'context' | 'skills';
 
 // Live hero stats, computed from the project:* / artifacts:* IPC (not the stale
 // stats.artifactCount). null repo means the project folder has no git remote.
@@ -182,6 +184,25 @@ export function ProjectView(props: ProjectViewProps) {
   const activeCwdRef = useRef(props.activeSessionCwd);
   activeCwdRef.current = props.activeSessionCwd;
   const [tab, setTab] = useState<TabId>('files');
+  const [previewNeedsSetup, setPreviewNeedsSetup] = useState(false);
+  useEffect(() => {
+    if (!isWorkbenchMode()) return;
+    // WHY: only the workbench's unavailable sample needs a real navigation
+    // target before project availability has storage or a route in production.
+    const openPreview = () => { dispatch({ type: 'PROJECT_VIEW_OPENED' }); setTab('skills'); setPreviewNeedsSetup(true); };
+    window.addEventListener('workbench:open-project-skills', openPreview);
+    return () => window.removeEventListener('workbench:open-project-skills', openPreview);
+  }, [dispatch]);
+  useEffect(() => {
+    if (!isWorkbenchMode() || !previewNeedsSetup || !state.projectViewOpen || !activeProject || tab !== 'skills') return;
+    // WHY: navigation from a missing skill lands on the actionable section,
+    // not just the Projects shell; wait for the selected project to render.
+    const frame = requestAnimationFrame(() => {
+      document.getElementById('project-tools-needing-setup')?.scrollIntoView({ block: 'center' });
+      setPreviewNeedsSetup(false);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [previewNeedsSetup, state.projectViewOpen, activeProject, tab]);
   // Artifacts search query (lifted out of FilesTab so it can sit on the
   // shared seg-row next to the segmented control, matching the design).
   const [artifactSearch, setArtifactSearch] = useState('');
@@ -701,6 +722,9 @@ export function ProjectView(props: ProjectViewProps) {
     // (CLAUDE.md/AGENTS.md/rules) and memories — and "instructions" is the term
     // the product uses everywhere else a non-technical user meets this concept.
     { id: 'context', label: 'Instructions & Memories', icon: <DocIcon />, count: String(heroStats.contextFiles) },
+    // WHY: show the proposal in the REAL Projects shell without a production entry point.
+    ...(isWorkbenchMode() && new URLSearchParams(location.search).get('pluginControlsBefore') !== '1'
+      ? [{ id: 'skills' as const, label: 'Skills & tools', icon: <DocIcon />, count: '' }] : []),
   ];
 
   // Per-active-project sync props for the hero. `dot` is null when syncStatus is
@@ -806,7 +830,8 @@ export function ProjectView(props: ProjectViewProps) {
                     console.warn('post-rename project list refresh failed', err);
                   }
                 }}
-                canRemove={!heroSpace}
+                canRemove={!heroSpace && !(isWorkbenchMode() && activeProject.name === 'Your Assistant')}
+                builtInPreview={isWorkbenchMode() && activeProject.name === 'Your Assistant'}
                 onRemove={() => setDeletingProject(activeProject)}
               />
             ) : (
@@ -978,6 +1003,9 @@ export function ProjectView(props: ProjectViewProps) {
                 onEditFile={setEditingContext}
                 onOpenInfo={setInfoScope}
               />
+            )}
+            {activeProject && tab === 'skills' && isWorkbenchMode() && (
+              <ProjectSkillsTabDemo key={activeProject.path} projectName={activeProject.name} />
             )}
             {/* How-context-works teaching popup. Map the clicked scope to an
                 initial tab: memory → Memory page, project/global → Overview

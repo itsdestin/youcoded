@@ -2458,6 +2458,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const withRemoteRows = <T extends { id: string }>(rows: T[]): T[] =>
     isRemoteMode() ? [...rows, REMOTE_BIG_PDF as unknown as T] : rows;
 
+  // WHY: Your Assistant is still a planned project; opt-in sample entry lets
+  // its locked bundled controls be reviewed inside the real Projects shell.
+  const assistantProjectPreview = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('projectAssistantPreview') === '1';
+  const assistantProjectSample: ReturnType<typeof artifactProjects>[number] = {
+    id: '/workbench/your-assistant', name: 'Your Assistant', path: '/workbench/your-assistant',
+    lastIndexed: '', lastSession: null, contentTypes: [], stats: { artifactCount: 0 },
+    description: 'The built-in project for conversations with your assistant.',
+    fileCount: 0, conversationCount: 0,
+  };
   const artifacts = {
     listProjectsIndex: async (opts?: { withCounts?: boolean }) => ({
       ok: true,
@@ -2466,6 +2476,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       projects: noProjectsSwitch ? [] : (studentSwitch
         ? (opts?.withCounts ? studentProjectsWithCounts((path) => conversationsIn(path).length) : studentProjects())
         : (opts?.withCounts ? projectsWithCounts() : artifactProjects()))
+        .concat(assistantProjectPreview ? [assistantProjectSample] : [])
         .map((p) => ({ ...p, description: descriptionFor(p.path, p.description) })),
     }),
     // Student mode: every session's drawer lists the Econ 201 session's files

@@ -26,6 +26,8 @@ import FileViewerOverlay, { type FileViewerTarget } from "./FileViewerOverlay";
 // was uninstall-then-reinstall (ROADMAP:736 for themes).
 import UpdateButton from "./UpdateButton";
 import { Button, CloseButton, Callout } from "../ui";
+import { isWorkbenchMode } from '../../workbench-mode';
+import { ProjectPluginControlsDemo } from '../../dev/workbench/mockups/ProjectPluginControls';
 // Task 3: `longDescription` is markdown and used to be printed verbatim, so a
 // listing that wrote "**Heading**" showed the asterisks.
 import MarkdownContent from "../MarkdownContent";
@@ -52,6 +54,7 @@ export default function MarketplaceDetailOverlay({
   target, onClose, onOpenShareSheet, onOpenThemeShare, onNavigate,
 }: Props) {
   const mp = useMarketplace();
+  const [setupPreview, setSetupPreview] = useState(false);
   // Needed for Apply action and isActive check in ThemeBody
   const { theme: activeThemeSlug, setTheme } = useTheme();
 
@@ -99,7 +102,11 @@ export default function MarketplaceDetailOverlay({
           updateAvailable={!!mp.updateAvailable[target.id]}
           onNavigate={onNavigate}
           memberId={memberId}
-          onInstall={() => mp.installSkill(entry.id).catch(() => undefined)}
+          onInstall={() => mp.installSkill(entry.id).then(() => {
+            // WHY: demonstrate the next step only after the workbench's fake install succeeds;
+            // the real installer and every production route remain untouched.
+            if (isWorkbenchMode() && entry.id === 'youcoded-inbox') setSetupPreview(true);
+          }).catch(() => undefined)}
           onUninstall={() => mp.uninstallSkill(entry.id).catch(() => undefined)}
           onToggleFavorite={() => mp.setFavorite(entry.id, !favorited).catch(() => undefined)}
           onShare={onOpenShareSheet ? () => onOpenShareSheet(entry.id) : undefined}
@@ -134,6 +141,13 @@ export default function MarketplaceDetailOverlay({
     }
   }
 
+  if (isWorkbenchMode() && setupPreview && target.kind === 'skill' && target.id === 'youcoded-inbox') {
+    content = <div data-project-install-preview>
+      <ProjectPluginControlsDemo arrangement="fresh" titleInParent previewPlugin={{ name: 'Inbox', defaultOn: false, parts: [{ name: 'Process inbox', kind: 'Skill' }] }} previewProjects={['youcoded', 'wecoded-themes', 'recipes']} />
+      <div className="mx-auto max-w-[820px] px-4 pb-4 flex justify-end"><Button variant="primary" onClick={onClose}>Done</Button></div>
+    </div>;
+  }
+
   return (
     <>
       <Scrim layer={2} onClick={onClose} />
@@ -144,7 +158,7 @@ export default function MarketplaceDetailOverlay({
         className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
       >
         <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
-          <h2 className="text-lg font-semibold text-fg">Details</h2>
+          <h2 className="text-lg font-semibold text-fg">{setupPreview ? 'Set up Inbox' : 'Details'}</h2>
           {/* Wide: Esc-text hint. Narrow: bordered close-X matching the marketplace top bar. */}
           <button
             type="button"
