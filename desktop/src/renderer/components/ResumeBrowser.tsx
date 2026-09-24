@@ -273,7 +273,7 @@ interface Props {
  *  their last model is not set up on this device — reported by the resume itself
  *  so the status line never depends on the earlier (asynchronous) needs-model
  *  check having finished before the press. */
-export interface WelcomeBackResumeResult { launched: string[]; needModel: string[] }
+interface WelcomeBackResumeResult { launched: string[]; needModel: string[] }
 
 /** The Welcome back screen (questions deck 2026-09-24, welcome-back-questions).
  *  WHY the Resume browser and not a new screen: Destin, Q-actions — "this surface
