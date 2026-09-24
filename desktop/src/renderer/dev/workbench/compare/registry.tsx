@@ -7317,7 +7317,7 @@ export const COMPARE_SURFACES: CompareSurface[] = [
     label: 'Button placement',
     question: 'Where do the buttons go?',
     frame: 'canvas',
-    paneWidth: { min: 460, max: 600 },
+    paneWidth: { min: 460, max: 760 },
     rounds: [
       { n: 1, basis: 'A popup with a main action and Cancel.', candidates: [
         { id: 'today', label: 'Today', note: 'Bare-text Cancel on the left, the filled button stretched across the rest.', render: () => <PairDialogDemo layout="today" /> },
@@ -7341,6 +7341,15 @@ export const COMPARE_SURFACES: CompareSurface[] = [
       { n: 5, basis: 'The permission row in the chat.', candidates: [
         { id: 'today', label: 'Today', note: 'Yes · Always Allow · No from the left.', render: () => <PermissionRowDemo layout="today" /> },
         { id: 'flipped', label: 'Mirrored', note: 'No · Always Allow · Yes at the right edge, so the yes ends on the right like popups.', render: () => <PermissionRowDemo layout="flipped" /> },
+      ] },
+      // Follow-up to Destin's BP-1: stacked in narrow popups, side by side in wide ones.
+      { n: 6, basis: 'A WIDE popup with a main action and Cancel.', candidates: [
+        { id: 'right', label: 'Pair on the right', note: 'Outlined Cancel directly left of the filled button, at the right edge.', render: () => <PairDialogDemo layout="right" size="document" /> },
+        { id: 'halves', label: 'Equal halves', note: 'Both share the full width, filled on the right.', render: () => <PairDialogDemo layout="halves" size="document" /> },
+      ] },
+      { n: 7, basis: 'A NARROW popup, stacked: which button on top?', candidates: [
+        { id: 'filled-top', label: 'Main on top', note: 'The filled button first, Cancel under it.', render: () => <PairDialogDemo layout="stacked" size="prompt" /> },
+        { id: 'filled-bottom', label: 'Main at the bottom', note: 'Cancel first, the filled button last — nearest the thumb on a phone.', render: () => <PairDialogDemo layout="stacked-bottom" size="prompt" /> },
       ] },
     ],
   },

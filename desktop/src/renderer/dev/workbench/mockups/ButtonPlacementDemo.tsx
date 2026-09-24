@@ -9,7 +9,7 @@ import { ThemeBg } from '../../../components/ThemeBg';
  *  shared <Dialog> with real <Button>s; only the ARRANGEMENT of the action row
  *  differs between candidates. Dev-only (compare registry → live panes). */
 
-export type PairLayout = 'today' | 'right' | 'halves' | 'stacked';
+export type PairLayout = 'today' | 'right' | 'halves' | 'stacked' | 'stacked-bottom';
 export type SingleLayout = 'full' | 'right' | 'center';
 export type DangerLayout = 'danger-right' | 'danger-left';
 export type CardLayout = 'today' | 'flipped';
@@ -49,20 +49,21 @@ function PairRow({ layout, cancel, main }: { layout: PairLayout; cancel: string;
       </div>
     );
   }
+  const filled = <Button key="m" variant="primary" size="lg" className="w-full py-1.5">{main}</Button>;
+  const outlined = <Button key="c" variant="secondary" size="lg" className="w-full py-1.5">{cancel}</Button>;
   return (
     <div className="flex flex-col gap-2 pt-2">
-      <Button variant="primary" size="lg" className="w-full py-1.5">{main}</Button>
-      <Button variant="secondary" size="lg" className="w-full py-1.5">{cancel}</Button>
+      {layout === 'stacked-bottom' ? [outlined, filled] : [filled, outlined]}
     </div>
   );
 }
 
-export function PairDialogDemo({ layout }: { layout: PairLayout }) {
+export function PairDialogDemo({ layout, size = 'panel' }: { layout: PairLayout; size?: 'prompt' | 'panel' | 'document' }) {
   const [open, setOpen] = React.useState(true);
   return (
     <Frame>
       <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>Open popup</Button>
-      <Dialog open={open} onClose={() => setOpen(false)} title="Create a page" size="panel">
+      <Dialog open={open} onClose={() => setOpen(false)} title="Create a page" size={size}>
         <div className="space-y-3">
           <p className="text-xs text-fg-muted">Describe what the page should do and the assistant builds it.</p>
           <TextInput className="w-full" placeholder="Page name" defaultValue="Week planner" aria-label="Page name" />
