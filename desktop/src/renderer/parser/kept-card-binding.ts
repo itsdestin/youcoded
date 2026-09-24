@@ -100,8 +100,10 @@ function mcpMatches(lines: string[], toolName: string, input: Record<string, unk
   return true;
 }
 
-/** Does the menu's own prompt box show THIS tool call? */
-export function promptShowsCall(
+/** Does the menu's own prompt box show THIS tool call?
+ *  WHY not exported: only keptCardButtons below calls it; the export tipped the
+ *  combined branches over the knip ratchet (combined-branch fix). */
+function promptShowsCall(
   lines: string[],
   toolName: string,
   input: Record<string, unknown> | undefined,

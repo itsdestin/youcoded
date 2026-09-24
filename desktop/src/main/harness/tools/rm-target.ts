@@ -63,8 +63,10 @@ function isRecursiveFlag(flag: string): boolean {
 /** How sure the floor is — the card's one line is chosen from this so it is
  *  always true (review N11): 'removal' = the text proves it; 'removal-if-empty'
  *  = only if a variable is empty; 'removal-unknown' = the folder is a command's
- *  output or reached by a cd the text cannot follow. */
-export type RmFloorKind = 'removal' | 'removal-if-empty' | 'removal-unknown';
+ *  output or reached by a cd the text cannot follow.
+ *  WHY not exported: only RmVerdict below names it; the export tipped the
+ *  combined branches over the knip ratchet (combined-branch fix). */
+type RmFloorKind = 'removal' | 'removal-if-empty' | 'removal-unknown';
 export interface RmVerdict { reason: string; kind: RmFloorKind }
 
 /** Why `command` would remove a protected directory, or null when it would not.

@@ -429,10 +429,8 @@ export function menuToButtons(menu: ParsedMenu): PromptButton[] {
  * AskUserQuestion never rebinds: Claude Code's own UI for it is sequential and
  * multi-select with a free-text row this card does not model. ExitPlanMode
  * never reaches here — PlanApprovalCard keeps answering it by typing.
- * WHY not exported: only the kept-card check below calls it; the export tipped
- * the combined branches over the knip ratchet (combined-branch fix).
  */
-function rebindButtons(menu: ParsedMenu | null, toolName: string): PromptButton[] | null {
+export function rebindButtons(menu: ParsedMenu | null, toolName: string): PromptButton[] | null {
   if (!menu) return null;
   if (toolName === 'AskUserQuestion' || toolName === 'ExitPlanMode') return null;
   const buttons = menuToButtons(menu);
