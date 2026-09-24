@@ -141,6 +141,12 @@
    Canvas behind it preserves a translucent wallpaper's original opacity. */
 .chat-edge-fade { display: none; }
 [data-chrome-style='float'] .chat-edge-fade {
+  /* How far down into the bottom controls a message stays visible before it is
+     fully faded: measured up from the top of the bottom controls' strip. 24px
+     hid messages just under the quick buttons; Destin (2026-09-24) wanted them
+     to "go further down the screen before disappearing", so they now pass
+     behind the quick buttons and fade out behind the message box. */
+  --float-fade-lift: 55px;
   display: block;
   position: fixed;
   inset: 0;
@@ -148,20 +154,20 @@
   pointer-events: none;
   background: var(--canvas);
   -webkit-mask-image: linear-gradient(to bottom, black calc(var(--top-chrome-bottom, 40px) - 8px), transparent calc(var(--top-chrome-bottom, 40px) + 12px),
-    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + 8px),
-    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + 24px));
+    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift) - 16px),
+    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift)));
   mask-image: linear-gradient(to bottom, black calc(var(--top-chrome-bottom, 40px) - 8px), transparent calc(var(--top-chrome-bottom, 40px) + 12px),
-    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + 8px),
-    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + 24px));
+    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift) - 16px),
+    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift)));
 }
 [data-chrome-style='float'] .chat-edge-fade[data-below-find-row='true'] {
   /* The find/status lane already clears the header; it must not fade. */
   -webkit-mask-image: linear-gradient(to bottom, transparent 0,
-    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + 8px),
-    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + 24px));
+    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift) - 16px),
+    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift)));
   mask-image: linear-gradient(to bottom, transparent 0,
-    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + 8px),
-    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + 24px));
+    transparent calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift) - 16px),
+    black calc(100% - var(--bottom-chrome-height, 5rem) - var(--queued-strip-height, 0px) - var(--vvp-offset, 0px) + var(--float-fade-lift)));
 }
 [data-chrome-style='float'] .chat-edge-fade__wallpaper,
 [data-chrome-style='float'] .chat-edge-fade__pattern {
@@ -383,6 +389,46 @@
 }
 [data-chrome-style='float'] .input-bar-container form[data-bottom-ink] textarea::placeholder {
   color: color-mix(in srgb, var(--control-ink) 70%, transparent) !important;
+}
+
+/* ── Session menu and scroll bars ─────────────────────────────────────────────
+   Destin, 2026-09-24: the session menu should have "the opacity and such" of
+   the session switcher and header buttons, and the scroll bars should match.
+   The menu takes the switcher's exact surface; the class is its own
+   (SessionStrip.tsx) so the app's other pop-up menus keep theirs. */
+[data-chrome-style='float'] .session-menu.glass-overlay {
+  background-color: color-mix(in srgb, var(--inset) 16%, transparent) !important;
+  border-color: transparent !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--edge) 40%, transparent), 0 8px 24px -10px rgba(0, 0, 0, .3) !important;
+}
+/* !important: the theme engine injects the theme's own (heavier) overlay blur,
+   unlayered, after this file. */
+[data-wallpaper] [data-chrome-style='float'] .session-menu.glass-overlay {
+  backdrop-filter: blur(6px) saturate(1.1) !important;
+  -webkit-backdrop-filter: blur(6px) saturate(1.1) !important;
+}
+/* Overlays make their inner fills opaque so wallpaper cannot leak through;
+   here the wallpaper IS the look, so the selected row matches the switcher's
+   selected session instead. */
+[data-chrome-style='float'] .session-menu :is(.bg-inset, .bg-panel) {
+  background-color: color-mix(in srgb, var(--panel) 26%, transparent) !important;
+}
+/* Scroll bars: the same light see-through fill with a hairline edge, instead of
+   the theme's solid grey bar. Tokens, so every scroll bar (including the
+   terminal's drawn thumb) follows. */
+[data-chrome-style='float'] {
+  --scrollbar-thumb: color-mix(in srgb, var(--inset) 45%, transparent);
+  --scrollbar-hover: color-mix(in srgb, var(--inset) 70%, transparent);
+}
+/* The fill is restated (not just the tokens): a theme's own custom_css can
+   paint the thumb directly — Golden Sunbreak draws a solid gold bar. The
+   float selector outranks a bare ::-webkit-scrollbar-thumb. */
+[data-chrome-style='float'] ::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--edge) 55%, transparent);
+}
+[data-chrome-style='float'] ::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
 }
 
 /* ═══ Beyond the chat: side pane, Projects, Pages, terminal ════════════════

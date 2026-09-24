@@ -142,6 +142,18 @@ describe('the approved float look', () => {
     expect(css).toMatch(/html\[data-platform="electron"\] \[data-chrome-style='float'\] \.terminal-overlay-scroll \{/);
   });
 
+  it('gives the session menu the switcher\'s surface and restyles every scroll bar', () => {
+    const css = floatCSS();
+    expect(css).toMatch(/\.session-menu\.glass-overlay \{\s*background-color: color-mix\(in srgb, var\(--inset\) 16%/);
+    expect(readSource(join(RENDERER, 'components/SessionStrip.tsx'))).toContain('className="session-menu glass-overlay');
+    // WHY the fill is restated: Golden Sunbreak's custom_css paints its own gold thumb.
+    expect(css).toMatch(/::-webkit-scrollbar-thumb \{\s*background: var\(--scrollbar-thumb\)/);
+  });
+
+  it('lets messages pass behind the quick buttons before they fade', () => {
+    expect(floatCSS()).toContain('--float-fade-lift: 55px;');
+  });
+
   it('the screen band shares the header ink without touching the chat\'s bottom controls', () => {
     expect(readSource(join(RENDERER, 'components/ScreenBand.tsx'))).toContain('useWallpaperHeaderInk(headerRef, { inkBottom: false });');
     expect(readSource(join(RENDERER, 'hooks/use-wallpaper-header-ink.ts'))).toContain('if (inkBottom) for (const element of');
