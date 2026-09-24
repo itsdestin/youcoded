@@ -127,7 +127,7 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           with its submit inside it (TagPicker's Create is the same shape).
           Enter still sends. */}
       {!isDraft && (
-        <InputGroup size="sm" className="mt-2 w-full">
+        <InputGroup size="sm" className="mt-2 w-full pr-1.5">
           <InputGroup.Field
             aria-label="Reply"
             value={replyText}
@@ -141,9 +141,11 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
               filling the field, not sitting in it. icon-sm (20px) leaves an
               even 4px on every side, matching InputGroup's own 4px right
               inset; the glyph is the composer send button's arrow, so it
-              reads as "send" at a glance. */}
-          <Button size="icon-sm" aria-label="Send reply" disabled={!replyText.trim()} onClick={sendReply}>
-            <svg className="w-3 h-3 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
+              reads as "send" at a glance. Round 14 ("gets too close to edges
+              of the outer container"): icon-xs (16px) with the group's right
+              inset raised to 6px, so ~6px of air on every side. */}
+          <Button size="icon-xs" aria-label="Send reply" disabled={!replyText.trim()} onClick={sendReply}>
+            <svg className="w-2.5 h-2.5 text-on-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
             </svg>
           </Button>
