@@ -201,14 +201,14 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
             container, just an outline" → a filled, rounded box. It shows about 1.5 theme cards,
             and Browse / Build sit INSIDE it at the bottom with the cards scrolling under them,
             faded by the masked edge (.scroll-mask) rather than the painted band.
-            max-h-56 = 224px: 8px top padding + one 96px card + the gap + ~half the next row
-            above the button zone (pb-12 keeps the last card 8px clear of the buttons).
+            max-h-64 = 256px: 8px top padding + one ~124px card (16:9 picture + slim strip) + the gap
+            + ~half the next row above the button zone (pb-12 keeps the last card 8px clear of the buttons).
             data-guide-anchor: the first-run tour's "make it yours" stop rings the grid. */}
         <div className="relative rounded-xl border border-edge bg-inset/50 overflow-hidden">
           <div
             ref={favBoxRef}
             onWheel={markFavsTouched} onPointerDown={markFavsTouched} onTouchStart={markFavsTouched}
-            className="scroll-mask max-h-56 overscroll-contain p-2 pb-12"
+            className="scroll-mask max-h-64 overscroll-contain p-2 pb-12"
             // 40 = the buttons' top edge (8px padding + a 32px button). pb-12 (48) leaves the
             // last card 8px above them — the same gap as between cards (review-4 AR4-1).
             style={{ ['--scroll-mask-under' as string]: '40px' }}
