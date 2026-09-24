@@ -84,7 +84,8 @@ function ReasoningSection({ content }: { content: string }) {
       </button>
       {expanded && (
         <div className="mt-1 pl-2 border-l-2 border-edge-dim text-xs text-fg-dim">
-          <MarkdownContent content={content} />
+          {/* Reasoning streams in too (before the reply) — same per-word saving. */}
+          <MarkdownContent content={content} incremental />
         </div>
       )}
     </div>
@@ -538,7 +539,9 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                 // conversation, an artifact) it stays plain text — ids from
                 // another device would resolve to a block of dead rows.
                 <SessionRefsEnabled.Provider value={true}>
-                  <MarkdownContent content={bubble.text.content} sessionId={sessionId} />
+                  {/* incremental: this text grows while the reply streams, so finished
+                      blocks are drawn once instead of re-parsed per word (sweep A5). */}
+                  <MarkdownContent content={bubble.text.content} sessionId={sessionId} incremental />
                 </SessionRefsEnabled.Provider>
               )}
               {bubble.plan && (
