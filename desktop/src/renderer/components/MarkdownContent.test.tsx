@@ -468,10 +468,136 @@ describe('MarkdownContent while a reply streams in', () => {
     live.unmount();
   });
 
+  // Review F2: a raw-HTML block near the top (a comment, a <br>) used to hold
+  // everything below it live, so every word re-parsed the whole reply twice.
+  it('re-draws only the unfinished paragraph when raw HTML sits near the top', () => {
+    const body = '<!-- note -->\n\nTop <br> line\n\n<br>\n\n' + MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md.repeat(2);
+    const live = render(<Bubble md="<!--" incremental />);
+    let md = body;
+    live.rerender(<Bubble md={md} incremental />);
+    md += '\n\nClosing';
+    live.rerender(<Bubble md={md} incremental />);
+    markdownRenders.length = 0;
+    const words = tokenDeltas(' words that keep arriving one at a time');
+    for (const word of words) {
+      md += word;
+      live.rerender(<Bubble md={md} incremental />);
+    }
+    expect(markdownRenders).toHaveLength(words.length);
+    for (const source of markdownRenders) expect(source.startsWith('Closing')).toBe(true);
+    expect(canonical(live.container)).toBe(wholeHtml(md));
+    live.unmount();
+  });
+
+  it('never draws more per word than the whole message while a disclosure is still open', () => {
+    const intro = 'Intro paragraph.\n\n<details>\n<summary>Log</summary>\n\n';
+    const inside = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
+    const live = render(<Bubble md="Intro" incremental />);
+    let md = intro + inside;
+    live.rerender(<Bubble md={md} incremental />);
+    for (const word of tokenDeltas(' still inside the open disclosure')) {
+      markdownRenders.length = 0;
+      md += word;
+      live.rerender(<Bubble md={md} incremental />);
+      const drawn = markdownRenders.reduce((n, s) => n + s.length, 0);
+      expect(drawn).toBeLessThanOrEqual(md.length);
+      expect(canonical(live.container)).toBe(wholeHtml(md));
+    }
+    // Closing it pairs the whole run into one real disclosure, as the whole render does.
+    for (const word of tokenDeltas('\n\n</details>\n\nAfter it.')) {
+      md += word;
+      live.rerender(<Bubble md={md} incremental />);
+      expect(canonical(live.container)).toBe(wholeHtml(md));
+    }
+    expect(live.container.querySelector('details > summary')?.textContent).toBe('Log');
+    live.unmount();
+  });
+
+  // Review F3: the streaming view is state updated during render, so a render
+  // React discards (StrictMode runs every render twice) leaves nothing stale.
+  it('draws the same page under StrictMode, and when the content is replaced then grows again', () => {
+    const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'fenced code with a language')!.md;
+    const Strict = ({ text }: { text: string }) => <React.StrictMode><Bubble md={text} incremental /></React.StrictMode>;
+    const prefixes = prefixesOf(tokenDeltas(md));
+    const live = render(<Strict text={prefixes[0]} />);
+    for (const p of prefixes) {
+      live.rerender(<Strict text={p} />);
+      expect(canonical(live.container), `after ${JSON.stringify(p)}`).toBe(wholeHtml(p));
+    }
+    // Replaced (not appended to), then growing again from the new text.
+    let next = 'A different reply.\n\n- one\n- two';
+    live.rerender(<Strict text={next} />);
+    expect(canonical(live.container)).toBe(wholeHtml(next));
+    for (const word of tokenDeltas('\n\nThen more\n\n```js\nx()\n```\n\nEnd.')) {
+      next += word;
+      live.rerender(<Strict text={next} />);
+      expect(canonical(live.container), `after ${JSON.stringify(next)}`).toBe(wholeHtml(next));
+    }
+    live.unmount();
+  });
+
   it('draws a message that never grows (history) as one document, with no split', () => {
     const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
     markdownRenders.length = 0;
     render(<Bubble md={md} incremental />);
     expect(markdownRenders).toEqual([md]);
+  });
+
+  // Review F1: content already on screen must never be replaced by a fresh copy
+  // as the reply grows — a replaced element loses what the person did to it (a
+  // tapped-to-load picture goes back to its placeholder, an opened disclosure
+  // snaps shut, a selection vanishes). These hold element identity across
+  // updates, not just the markup.
+  const tapImage = (root: HTMLElement) => {
+    fireEvent.click(screen.getByRole('button', { name: /image from/i }));
+    const img = root.querySelector('img');
+    expect(img).not.toBeNull();
+    return img!;
+  };
+  // The whole-message page with its picture tapped open, for comparison.
+  const wholeTappedHtml = (md: string) => {
+    const r = render(<Bubble md={md} />);
+    fireEvent.click(r.container.querySelector('button[title^="Load image"]')!);
+    const html = canonical(r.container);
+    r.unmount();
+    return html;
+  };
+  const paragraph = (root: HTMLElement, text: string) =>
+    Array.from(root.querySelectorAll('p')).find((p) => p.textContent === text)!;
+
+  it('keeps what was drawn when the bubble opens with a reply already in progress', () => {
+    // Switching back to a session mid-reply mounts the bubble on a long prefix.
+    let md = 'Intro\n\n![pic](https://x.com/p.png)\n\npara\n\nmore\n\nnext';
+    const live = render(<Bubble md={md} incremental />);
+    const img = tapImage(live.container);
+    const para = paragraph(live.container, 'para');
+    for (const delta of tokenDeltas(' word and on\n\nA new paragraph arrives\n\n```js\nlet x = 1;\n```\n\nThe end.')) {
+      md += delta;
+      live.rerender(<Bubble md={md} incremental />);
+      expect(live.container.querySelector('img'), `after ${JSON.stringify(md)}`).toBe(img);
+      expect(paragraph(live.container, 'para')).toBe(para);
+    }
+    expect(canonical(live.container)).toBe(wholeTappedHtml(md));
+    live.unmount();
+  });
+
+  it('keeps what was drawn when a link definition arrives mid-reply', () => {
+    const full = 'Intro\n\n![pic](https://x.com/p.png)\n\nSee [docs] and [more].\n\nplain words\n\n[docs]: https://example.com/docs\n\nTail [more]\n\n[more]: https://example.com/more\n\nEnd.';
+    const prefixes = prefixesOf(tokenDeltas(full));
+    const cut = prefixes.findIndex((p) => p.includes('plain words'));
+    const live = render(<Bubble md={prefixes[0]} incremental />);
+    for (const p of prefixes.slice(1, cut + 1)) live.rerender(<Bubble md={p} incremental />);
+    const img = tapImage(live.container);
+    const plain = paragraph(live.container, 'plain words');
+    for (const p of prefixes.slice(cut + 1)) {
+      live.rerender(<Bubble md={p} incremental />);
+      expect(live.container.querySelector('img'), `after ${JSON.stringify(p)}`).toBe(img);
+      expect(paragraph(live.container, 'plain words')).toBe(plain);
+      expect(canonical(live.container), `after ${JSON.stringify(p)}`).toBe(wholeTappedHtml(p));
+    }
+    // The definitions took effect in the blocks above them.
+    expect(live.container.querySelector('a[href="https://example.com/docs"]')).not.toBeNull();
+    expect(live.container.querySelector('a[href="https://example.com/more"]')).not.toBeNull();
+    live.unmount();
   });
 });
