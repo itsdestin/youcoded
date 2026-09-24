@@ -15,6 +15,8 @@ let tainted = false;
 let draws: number;
 let paintedColors: string[];
 let wallpaperPixel: number[];
+let viewportWidth: number;
+let observed = 0;
 
 function Header() {
   const ref = useRef<HTMLDivElement>(null);
@@ -29,6 +31,7 @@ beforeEach(() => {
   theme.themeApplied = 1;
   document.body.dataset.chromeStyle = 'float';
   document.documentElement.dataset.wallpaper = 'true';
+  observed = 0;
   decodes = []; tainted = false; draws = 0; paintedColors = []; wallpaperPixel = [18, 30, 55];
   vi.stubGlobal('Image', class {
     crossOrigin = ''; naturalWidth = 800; naturalHeight = 600; src = '';
@@ -36,7 +39,7 @@ beforeEach(() => {
   });
   vi.stubGlobal('ResizeObserver', class {
     constructor(callback: () => void) { observer = { notify: callback, disconnect: vi.fn() }; }
-    observe() {} disconnect() { observer.disconnect(); }
+    observe() { observed++; } disconnect() { observer.disconnect(); }
   });
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
     set fillStyle(value: string) { paintedColors.push(value); },
@@ -48,8 +51,21 @@ beforeEach(() => {
     },
   }) as any);
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ x: 0, y: 0, left: 0, top: 0, right: 120, bottom: 40, width: 120, height: 40, toJSON() {} }));
+  // The hook coalesces its triggers on a timer; tests advance it explicitly.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  viewportWidth = 1024;
+  vi.spyOn(window, 'innerWidth', 'get').mockImplementation(() => viewportWidth);
 });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.removeAttribute('data-chrome-style'); document.documentElement.removeAttribute('data-wallpaper'); });
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.removeAttribute('data-chrome-style'); document.documentElement.removeAttribute('data-wallpaper'); });
+
+/** A window resize: the header's observer fires, then the coalescing timer
+ *  runs the sample. A new width is a new crop of the wallpaper. */
+async function resizeTo(width: number) {
+  viewportWidth = width;
+  await act(async () => { observer.notify(); });
+  await act(async () => { vi.advanceTimersByTime(200); });
+  await flush();
+}
 
 async function resolved() {
   expect(decodes.length).toBeGreaterThan(0);
@@ -98,12 +114,48 @@ describe('wallpaper header runtime', () => {
     expect(header().style.getPropertyValue(cssVars[0])).toBe('');
     await resolved();
     const count = draws;
-    await act(async () => { observer.notify(); });
-    await resolved();
-    expect(draws).toBeGreaterThan(count);
+    const decodesBefore = decodes.length;
+    // Three resize events in a burst are ONE sample, and the decoded image is reused.
+    await act(async () => { observer.notify(); observer.notify(); window.dispatchEvent(new Event('resize')); });
+    expect(draws).toBe(count);
+    await resizeTo(1280);
+    expect(draws).toBe(count + 1);
+    expect(decodes.length).toBe(decodesBefore);
+    // Same size again: the cached crop is reused, nothing is redrawn.
+    await resizeTo(1280);
+    expect(draws).toBe(count + 1);
     view.unmount();
     expect(observer.disconnect).toHaveBeenCalled();
     expect(header()?.style.getPropertyValue(cssVars[0])).toBeUndefined();
+  });
+
+  it('sets up no resize or session triggers outside the float style', () => {
+    document.body.dataset.chromeStyle = 'default';
+    const view = render(<Header />);
+    expect(observed).toBe(0);
+    view.unmount();
+    document.body.dataset.chromeStyle = 'float';
+    render(<Header />);
+    expect(observed).toBe(1);
+  });
+
+  it('does not sample while its header is hidden under a screen, and catches up when shown', async () => {
+    const view = render(<Header />);
+    await resolved();
+    const count = draws;
+    header().style.visibility = 'hidden';
+    await resizeTo(1280);
+    expect(draws).toBe(count);
+    header().style.visibility = '';
+    const screen = document.createElement('div');
+    document.body.append(screen);
+    await act(async () => { screen.dataset.screenOpen = 'true'; });
+    await act(async () => { screen.removeAttribute('data-screen-open'); });
+    await act(async () => { vi.advanceTimersByTime(50); });
+    await flush();
+    expect(draws).toBe(count + 1);
+    screen.remove();
+    view.unmount();
   });
 
   it('retains stable ink during a resize decode and after a failed same-theme sample', async () => {
@@ -122,13 +174,15 @@ describe('wallpaper header runtime', () => {
     expect(ink).toMatch(/^rgb\(/);
     expect(icon.dataset.wallpaperControlInk).toBe('true');
     expect(green).toMatch(/^rgb\(/);
+    viewportWidth = 1280;
     await act(async () => { observer.notify(); });
     // WHY: a pending replacement must not briefly expose the untuned theme ink.
     expect(header().style.getPropertyValue('--wallpaper-header-ink')).toBe(ink);
     expect(dot.style.getPropertyValue('--wallpaper-status-green')).toBe(green);
     expect(header().dataset.wallpaperInk).toBe('true');
     tainted = true;
-    await resolved();
+    await act(async () => { vi.advanceTimersByTime(200); });
+    await flush();
     expect(header().style.getPropertyValue('--wallpaper-header-ink')).toBe(ink);
     expect(dot.style.getPropertyValue('--wallpaper-status-green')).toBe(green);
     // Leaving the float style drops the calibration at once.
@@ -150,8 +204,7 @@ describe('wallpaper header runtime', () => {
     await resolved();
     const darkWallpaperInk = header().style.getPropertyValue('--wallpaper-header-ink');
     wallpaperPixel = [241, 237, 234];
-    await act(async () => { observer.notify(); });
-    await resolved();
+    await resizeTo(1280);
     const lightWallpaperInk = header().style.getPropertyValue('--wallpaper-header-ink');
     expect(lightWallpaperInk).toMatch(/^rgb\(/);
     expect(lightWallpaperInk).not.toBe(darkWallpaperInk);
@@ -307,11 +360,11 @@ describe('wallpaper header runtime', () => {
     expect(header().style.getPropertyValue('--wallpaper-header-ink')).toMatch(/^rgb\(/);
     expect(header().dataset.wallpaperInk).toBe('true');
     expect(green.style.getPropertyValue('--wallpaper-status-green')).toMatch(/^rgb\(/);
-    const beforeLate = decodes.length;
     view.rerender(<GoldenHeader late={true} />);
     await flush();
-    expect(decodes.length).toBeGreaterThan(beforeLate);
-    await resolved();
+    // A dot mounting later is sampled on the next tick, from the cached crop.
+    await act(async () => { vi.advanceTimersByTime(50); });
+    await flush();
     const red = header().querySelector<HTMLElement>('[data-status="red"]')!;
     expect(red.style.getPropertyValue('--wallpaper-status-red')).toMatch(/^rgb\(/);
     expect(red.style.getPropertyValue('--wallpaper-status-red')).not.toBe(green.style.getPropertyValue('--wallpaper-status-red'));

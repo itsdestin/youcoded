@@ -71,7 +71,19 @@ export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null
     let tintedControls: HTMLElement[] = [];
     let tintedDots: HTMLElement[] = [];
     let inkedBottom: HTMLElement[] = [];
+    // True once this instance has written anything, so clear() and the triggers
+    // below cost nothing for a theme or chrome style that never sampled.
+    let applied = false;
+    // WHY cached (code review 2026-09-24, F3/F4): every trigger re-decoded the
+    // wallpaper and re-read the whole viewport. The decode is kept per effect run
+    // (the effect re-runs when the theme or its image changes); the pixel strips
+    // are kept until the window size or the controls' band moves.
+    let decoded: Promise<HTMLImageElement> | null = null;
+    let strips: { key: string; top: Uint8ClampedArray; topEnd: number; bottom: Uint8ClampedArray; bottomStart: number } | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const clear = () => {
+      if (!applied) return;
+      applied = false;
       for (const control of tintedControls) {
         control.style.removeProperty('--wallpaper-header-ink');
         control.removeAttribute('data-wallpaper-control-ink');
@@ -93,22 +105,31 @@ export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null
     // WHY: only the float chrome style is see-through enough to need this; every
     // other theme and chrome style never runs the sampler at all.
     const eligible = () => !!src && document.body.dataset.chromeStyle === 'float';
+    // WHY (F1): the chat header stays mounted but `visibility: hidden` under a
+    // Projects/Pages screen, where ScreenBand samples for itself. A hidden header
+    // keeps its last ink and resamples when the screen closes (see `screens`).
+    const hidden = () => getComputedStyle(header).visibility === 'hidden';
+    const decode = () => {
+      decoded ??= (async () => {
+        const image = new Image();
+        // WHY: an image can paint successfully while a cross-origin canvas read is forbidden.
+        image.crossOrigin = 'anonymous';
+        image.src = src!;
+        await image.decode();
+        return image;
+      })();
+      return decoded;
+    };
     const sample = () => {
       const version = ++generation;
       // WHY: same-theme resize/session changes keep the last calibrated ink while
       // decode runs; leaving float must drop it immediately instead.
       if (!eligible()) { clear(); return; }
-      let image: HTMLImageElement;
-      try {
-        image = new Image();
-        // WHY: an image can paint successfully while a cross-origin canvas read is forbidden.
-        image.crossOrigin = 'anonymous';
-        image.src = src!;
-      } catch { return; }
+      if (hidden()) return;
       // decode may throw or reject on a missing/CORS-blocked image.
-      let decoding: Promise<void>;
-      try { decoding = image.decode(); } catch { return; }
-      void decoding.then(() => {
+      let decoding: Promise<HTMLImageElement>;
+      try { decoding = decode(); } catch { return; }
+      void decoding.then(image => {
         if (version !== generation || !eligible() || !image.naturalWidth || !image.naturalHeight) return;
         try {
           const width = Math.max(1, Math.ceil(window.innerWidth));
@@ -118,25 +139,48 @@ export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null
           // Cap the blur footprint and sample a bounded grid per control/dot.
           const blur = /blur\(([\d.]+)px\)/.exec(getComputedStyle(header).backdropFilter);
           const radius = blur ? Math.min(36, Math.max(0, Number(blur[1]) || 0)) : 0;
-          // WHY full height: the bottom chrome (chips, composer, status) needs
-          // its own ink — the wallpaper there can differ entirely from the top.
           const stripHeight = height;
-          const canvas = document.createElement('canvas');
-          canvas.width = width;
-          canvas.height = stripHeight;
-          const ctx = canvas.getContext('2d', { willReadFrequently: true });
-          if (!ctx) return;
-          // Same viewport-fixed center/cover projection as #theme-bg, extending
-          // below the header so a blurred icon near its bottom can read its neighbors.
-          const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
-          const paintedWidth = image.naturalWidth * scale;
-          const paintedHeight = image.naturalHeight * scale;
-          ctx.drawImage(image, (width - paintedWidth) / 2, (height - paintedHeight) / 2, paintedWidth, paintedHeight);
-          const pixels = ctx.getImageData(0, 0, width, stripHeight).data;
+          // Only two bands are read (F3): the header's, and — for the instance
+          // that inks them — the bottom controls'. The wallpaper there can differ
+          // entirely from the top, so both are real reads, not one full screen.
+          const bottomControls = inkBottom
+            ? [...document.querySelectorAll<HTMLElement>('.quick-chip, .quick-chip-edit, .status-bar > button, .status-bar .status-chip, .input-bar-container form')]
+            : [];
+          const topEnd = Math.min(height, Math.ceil(header.getBoundingClientRect().bottom + radius + 1));
+          const bottomTops = bottomControls.map(element => element.getBoundingClientRect()).filter(r => r.width && r.height).map(r => r.top);
+          const bottomStart = bottomTops.length ? Math.max(topEnd, Math.floor(Math.min(...bottomTops) - radius - 1)) : height;
+          const key = `${width}x${height}:${topEnd}:${bottomStart}`;
+          if (strips?.key !== key) {
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) return;
+            // Same viewport-fixed center/cover projection as #theme-bg, extending
+            // below the header so a blurred icon near its bottom can read its neighbors.
+            const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+            const paintedWidth = image.naturalWidth * scale;
+            const paintedHeight = image.naturalHeight * scale;
+            ctx.drawImage(image, (width - paintedWidth) / 2, (height - paintedHeight) / 2, paintedWidth, paintedHeight);
+            strips = {
+              key,
+              top: ctx.getImageData(0, 0, width, Math.max(1, topEnd)).data,
+              topEnd: Math.max(1, topEnd),
+              bottom: bottomStart < height ? ctx.getImageData(0, bottomStart, width, height - bottomStart).data : new Uint8ClampedArray(0),
+              bottomStart,
+            };
+          }
+          const band = strips;
           const at = (x: number, y: number): RGB => {
-            const offset = (Math.max(0, Math.min(stripHeight - 1, Math.round(y))) * width
-              + Math.max(0, Math.min(width - 1, Math.round(x)))) * 4;
-            return [pixels[offset], pixels[offset + 1], pixels[offset + 2]];
+            const column = Math.max(0, Math.min(width - 1, Math.round(x)));
+            const row = Math.max(0, Math.min(stripHeight - 1, Math.round(y)));
+            // A read between the bands (a blur footprint reaching past one)
+            // clamps to the nearer band's edge row.
+            const inBottom = band.bottom.length > 0 && row >= (band.topEnd + band.bottomStart) / 2;
+            const data = inBottom ? band.bottom : band.top;
+            const local = inBottom ? Math.max(0, row - band.bottomStart) : Math.min(band.topEnd - 1, row);
+            const offset = (local * width + column) * 4;
+            return [data[offset], data[offset + 1], data[offset + 2]];
           };
           const neighborhood = (x: number, y: number): RGB => {
             if (!radius) return at(x, y);
@@ -186,6 +230,7 @@ export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null
           // has been read and solved. Failed reads leave the stable sample intact.
           if (!stripResult && !localDots.some(entry => entry.result)) return;
           clear();
+          applied = true;
           if (stripResult) {
             header.style.setProperty('--wallpaper-header-ink', stripResult.ink);
             for (const [key, value] of Object.entries(stripResult.statuses)) header.style.setProperty(`--wallpaper-status-${key}`, value);
@@ -196,7 +241,7 @@ export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null
           // Each control gets its OWN ink: one shared ink found no answer on a
           // wallpaper that is dark on one side and bright on the other (Golden
           // Sunbreak), and the text fell back to invisible theme gold.
-          if (inkBottom) for (const element of document.querySelectorAll<HTMLElement>('.quick-chip, .quick-chip-edit, .status-bar > button, .status-bar .status-chip, .input-bar-container form')) {
+          for (const element of bottomControls) {
             const r = element.getBoundingClientRect();
             if (!r.width || !r.height) continue;
             // A wide composer crosses several wallpaper areas: sample across it.
@@ -218,30 +263,59 @@ export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null
             tintedControls.push(control);
           }
         } catch { /* Canvas taint or unreadable colors: keep the last valid same-theme calibration. */ }
-      }).catch(() => { /* Decode failed; only a theme/eligibility change clears the old calibration. */ });
+      }).catch(() => { decoded = null; /* Decode failed: retry next time; only a theme/eligibility change clears the old calibration. */ });
     };
-    sample();
-    const resize = () => sample();
+    // WHY coalesced (F2): a window resize fires both `resize` and the header's
+    // ResizeObserver, many times a second while dragging an edge. One sample
+    // after the burst settles; the ink holds its last value meanwhile.
+    const schedule = (delay: number) => {
+      clearTimeout(timer);
+      timer = setTimeout(sample, delay);
+    };
+    const resize = () => schedule(120);
     const observer = new ResizeObserver(resize);
-    observer.observe(header);
-    const modes = new MutationObserver(resize);
-    modes.observe(document.body, { attributes: true, attributeFilter: ['data-chrome-style'] });
     // WHY: session dots can mount after image decode without resizing the header.
     // Observe only strip membership; our own style/marker writes are attributes.
     const sessions = new MutationObserver(records => {
       if (records.some(record => (record.target as Element).closest?.('.session-strip')
         || [...record.addedNodes, ...record.removedNodes].some(node => node instanceof Element
-          && (node.matches('.session-strip') || !!node.querySelector('.session-strip'))))) sample();
+          && (node.matches('.session-strip') || !!node.querySelector('.session-strip'))))) schedule(16);
     });
-    sessions.observe(header, { childList: true, subtree: true });
-    window.addEventListener('resize', resize);
+    // A Projects/Pages screen opening or closing hides or shows this header.
+    const screens = new MutationObserver(() => schedule(16));
+    // WHY (F5): the triggers exist only while float is on; every other style
+    // keeps just the one attribute watch that notices float being turned on.
+    let attached = false;
+    const attach = (on: boolean) => {
+      if (on === attached) return;
+      attached = on;
+      if (on) {
+        observer.observe(header);
+        sessions.observe(header, { childList: true, subtree: true });
+        screens.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['data-screen-open'] });
+        window.addEventListener('resize', resize);
+      } else {
+        observer.disconnect();
+        sessions.disconnect();
+        screens.disconnect();
+        window.removeEventListener('resize', resize);
+      }
+    };
+    const modeChanged = () => {
+      attach(eligible());
+      // Leaving float drops the ink at once (sample() clears when ineligible).
+      clearTimeout(timer);
+      sample();
+    };
+    const modes = new MutationObserver(modeChanged);
+    modes.observe(document.body, { attributes: true, attributeFilter: ['data-chrome-style'] });
+    modeChanged();
     return () => {
       generation++;
+      clearTimeout(timer);
       clear();
-      observer.disconnect();
+      attach(false);
       modes.disconnect();
-      sessions.disconnect();
-      window.removeEventListener('resize', resize);
     };
   }, [headerRef, inkBottom, src, fg2, panel, activeTheme.slug, themeApplied]);
 }

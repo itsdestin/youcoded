@@ -162,7 +162,7 @@ describe('the approved float look', () => {
 
   it('the screen band shares the header ink without touching the chat\'s bottom controls', () => {
     expect(readSource(join(RENDERER, 'components/ScreenBand.tsx'))).toContain('useWallpaperHeaderInk(headerRef, { inkBottom: false });');
-    expect(readSource(join(RENDERER, 'hooks/use-wallpaper-header-ink.ts'))).toContain('if (inkBottom) for (const element of');
+    expect(readSource(join(RENDERER, 'hooks/use-wallpaper-header-ink.ts'))).toContain('const bottomControls = inkBottom');
   });
 
   it('draws the window buttons as three separate chips', () => {
