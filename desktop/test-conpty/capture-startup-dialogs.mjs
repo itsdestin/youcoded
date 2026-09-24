@@ -45,6 +45,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   resolveClaude, ccVersionOf, makeIsolatedRoot, isolatedEnv, copyAccessTokenOnly, sleep,
+  removeTempTree,
 } from './cc-capture-lib.mjs';
 import { readDialogShape, shapeSummary, normalizeVolatile } from './startup-dialog-shape.mjs';
 import { SCENARIOS, DEFAULT_COLS, DEFAULT_ROWS, scenarioKey } from './startup-scenarios.mjs';
@@ -251,7 +252,7 @@ export async function runScenario(s, { claudeBin, ccVersion, print = false }) {
     ? fs.readFileSync(hookLog, 'utf8').trim().split('\n').filter(Boolean).map((x) => Number(x) - t0)
     : [];
 
-  fs.rmSync(iso.root, { recursive: true, force: true, maxRetries: 3 });
+  await removeTempTree(iso.root);
   return {
     ccVersion,
     scenario: s.name,

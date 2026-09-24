@@ -100,3 +100,27 @@ export function copyAccessTokenOnly(configDir) {
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// WHY: Claude Code starts background work at launch (it clones its plugin
+// marketplace catalogue into <HOME>/.claude/plugins/marketplaces/) that can
+// outlive the killed main process. Removing the isolated HOME while that
+// grandchild is still writing threw ENOTEMPTY and crashed the whole drift
+// check on its first CI run (2026-09-24, run 35975340826) — AFTER the capture
+// itself had succeeded. Retry for a few seconds while the writer finishes; if
+// the folder still won't go, warn and move on: it is a throwaway temp dir, and
+// a leftover one must never turn a clean capture into a red drift report.
+export async function removeTempTree(dir, { attempts = 10, delayMs = 500 } = {}) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+      return true;
+    } catch (err) {
+      if (i === attempts) {
+        console.warn(`warning: could not remove temp folder ${dir} (${err.code || err.message}); leaving it`);
+        return false;
+      }
+      await sleep(delayMs);
+    }
+  }
+  return false;
+}

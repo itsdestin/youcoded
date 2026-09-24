@@ -29,7 +29,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { resolveClaude, ccVersionOf } from './cc-capture-lib.mjs';
+import { resolveClaude, ccVersionOf, removeTempTree } from './cc-capture-lib.mjs';
 import { runScenario, selectScenarios } from './capture-startup-dialogs.mjs';
 import { diffSummaries } from './startup-dialog-shape.mjs';
 
@@ -157,8 +157,9 @@ async function main() {
   if (process.env.GITHUB_STEP_SUMMARY) {
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, '```\n' + lines.join('\n') + '\n```\n');
   }
-  fs.rmSync(outDir, { recursive: true, force: true, maxRetries: 3 });
-  if (tempInstall) fs.rmSync(tempInstall.dir, { recursive: true, force: true, maxRetries: 3 });
+  // WHY removeTempTree: a cleanup failure must not decide the verdict — see its comment.
+  await removeTempTree(outDir);
+  if (tempInstall) await removeTempTree(tempInstall.dir);
   process.exit(failed || breaking || !appOk ? 1 : 0);
 }
 
