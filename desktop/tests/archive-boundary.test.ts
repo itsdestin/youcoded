@@ -9,7 +9,7 @@
 // key, an exported-but-never-called monotonic, a five-green-test helper nothing
 // invoked), so the logic lives in a module both sides import.
 import { describe, it, expect } from 'vitest';
-import { findArchiveBoundary } from '../src/renderer/state/archive-boundary';
+import { findArchiveBoundary, archivedTooltip } from '../src/renderer/state/archive-boundary';
 import type { TimelineEntry } from '../src/renderer/state/chat-types';
 
 const user = { kind: 'user', message: { id: 'm', role: 'user', content: 'x', timestamp: 1 } } as TimelineEntry;
@@ -86,3 +86,12 @@ describe('findArchiveBoundary', () => {
     expect(findArchiveBoundary([u('a'), skill, u('b'), native('s1')]).index).toBe(1);
   });
 });
+
+describe('archivedTooltip', () => {
+  it('names neither Claude nor a model, and says what each dimming means', () => {
+    expect(archivedTooltip('compact')).toBe('Summarized — the assistant has a summary of this, not the exact words');
+    expect(archivedTooltip('clear')).toBe('Cleared — still here to read, but the assistant no longer sees it');
+    for (const k of ['compact', 'clear'] as const) expect(archivedTooltip(k)).not.toMatch(/Claude/);
+  });
+});
+

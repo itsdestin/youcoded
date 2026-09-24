@@ -16,7 +16,7 @@ import CompactingCard from '../CompactingCard';
 import ThinkingIndicator from '../ThinkingIndicator';
 import { useTheme } from '../../state/theme-context';
 import { useEntryFolding } from '../../hooks/use-entry-folding';
-import { findArchiveBoundary } from '../../state/archive-boundary';
+import { findArchiveBoundary, archivedTooltip } from '../../state/archive-boundary';
 
 interface Props {
   sessionId: string | null;
@@ -605,7 +605,7 @@ export function BubbleFeed({ sessionId }: Props) {
                   ref={folding.registerEntry}
                   data-entry-key={key!}
                   className={`timeline-entry${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
-                  title={isPreCompaction ? "Archived by compaction — not in Claude's active context" : undefined}
+                  title={isPreCompaction ? archivedTooltip('compact') : undefined}
                   style={folded && foldHeight ? { height: foldHeight } : undefined}
                 >
                   {folded && foldHeight ? null : content}

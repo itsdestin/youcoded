@@ -49,3 +49,16 @@ export function findArchiveBoundary(
   }
   return { index: -1, kind: null };
 }
+
+/**
+ * Hover text for a dimmed (archived) entry; kept entries get none, like any
+ * message. WHY one shared string (Destin, 2026-09-23: "make sure our hover
+ * tooltips are still accurate"): the old copy said "Claude", which is wrong on
+ * a native chat running GPT or a local model, and "archived" did not say that a
+ * compacted message still lives on in the summary.
+ */
+export function archivedTooltip(kind: 'compact' | 'clear' | null): string {
+  return kind === 'clear'
+    ? 'Cleared — still here to read, but the assistant no longer sees it'
+    : 'Summarized — the assistant has a summary of this, not the exact words';
+}

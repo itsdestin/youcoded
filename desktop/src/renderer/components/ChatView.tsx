@@ -11,7 +11,7 @@ import { sendPromptInput } from '../state/prompt-input';
 import UsageCard from './UsageCard';
 import SystemMarker from './SystemMarker';
 import SkillInvocationCard from './SkillInvocationCard';
-import { findArchiveBoundary } from '../state/archive-boundary';
+import { findArchiveBoundary, archivedTooltip } from '../state/archive-boundary';
 import CompactingCard from './CompactingCard';
 import CopyPicker from './CopyPicker';
 import ThinkingIndicator from './ThinkingIndicator';
@@ -1269,11 +1269,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               const folded = folding.isFolded(key!);
               const foldHeight = folded ? folding.heightOf(key!) : undefined;
               return (
-                <Tooltip key={key!} text={isPreCompaction
-                    ? (archiveKind === 'clear'
-                      ? 'Cleared — still here to read, but not in Claude\'s context'
-                      : 'Archived by compaction — not in Claude\'s active context')
-                    : ''}>
+                <Tooltip key={key!} text={isPreCompaction ? archivedTooltip(archiveKind) : ''}>
                 <div
                   ref={attachEntry}
                   data-entry-key={key!}

@@ -45,11 +45,10 @@ export default function ModelSwitchPrompt({ open, currentLabel, targetLabel, sta
         {state.kind === 'error' && (
           <p className="text-xs text-destructive-fg" role="alert">{state.message}</p>
         )}
-        <div className="flex justify-end">
-          <Button variant="primary" onClick={onConfirm} disabled={working}>
-            {working ? 'Summarizing…' : 'Summarize and switch'}
-          </Button>
-        </div>
+        {/* The only action, so it spans the popup (Destin, 2026-09-23). */}
+        <Button variant="primary" className="w-full justify-center" onClick={onConfirm} disabled={working}>
+          {working ? 'Summarizing…' : 'Summarize and switch'}
+        </Button>
       </div>
     </Dialog>
   );
