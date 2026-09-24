@@ -64,6 +64,9 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 // Quarantine marker the healer appends when it atomically CLAIMS a conflict
 // copy (see heal()). Files carrying it are healer-private intermediates.
 const HEALING_MARKER = '.healing-';
+// '<id>.json.damaged-<uuid>': a canonical's unreadable bytes, set aside before
+// a write replaced them (see mutateRecord). Kept, never read as a record.
+const DAMAGED_MARKER = '.damaged-';
 
 function originalConflictName(name: string): string {
   // WHY: device labels can contain the marker. Only a suffix after the record
@@ -149,7 +152,6 @@ export function createConversationStore(conversationsRoot: string): Conversation
     provider: string,
     id: string,
     fn: (onDisk: ConversationRecord | null) => ConversationRecord,
-    strictExisting = false,
   ): Promise<ConversationRecord> {
     // recordPath validates provider + id and THROWS on traversal — this is the
     // single chokepoint every write path funnels through (review fix 1).
@@ -162,12 +164,15 @@ export function createConversationStore(conversationsRoot: string): Conversation
     // next record and stringify it in one shot; the lock is held across the
     // whole read+compute+write.
     const committed = await mutateFileUnderLock(target, (onDisk) => {
-      const existing = onDisk ? parseRecord(onDisk) : null;
-      // WHY: healing may seed only an absent canonical, never overwrite evidence
-      // it cannot interpret. Check inside the lock, including present empty files.
-      if (strictExisting && onDisk !== null &&
-          (!existing || existing.id !== id || existing.provider !== provider)) {
-        throw new Error(`conversation-store: cannot heal invalid canonical ${provider}/${id}`);
+      let existing = onDisk ? parseRecord(onDisk) : null;
+      if (existing && (existing.id !== id || existing.provider !== provider)) existing = null;
+      // WHY: bytes we cannot read as THIS record are evidence, not something to
+      // overwrite — but refusing the write would freeze the conversation's
+      // title/flags forever. Keep them in a sibling list() never reads as a
+      // record, then continue as if the canonical were absent. Blank = nothing
+      // to keep. Written inside the lock, before the replacement lands.
+      if (!existing && onDisk !== null && onDisk.trim() !== '') {
+        fs.writeFileSync(`${target}${DAMAGED_MARKER}${randomUUID()}`, onDisk);
       }
       result = fn(existing);
       return JSON.stringify(result, null, 2);
@@ -200,17 +205,6 @@ export function createConversationStore(conversationsRoot: string): Conversation
     // The provider dir may not exist yet — nothing to heal.
     try { names = fs.readdirSync(dir); } catch { return; }
     const baseName = `${id}.json`;
-    // WHY: a bad canonical is evidence, not a heal destination. Refuse before
-    // renaming valid claims on repeated reads; the locked write checks again.
-    try {
-      const canonical = fs.readFileSync(recordPath(provider, id), 'utf8');
-      const parsed = parseRecord(canonical);
-      if (!parsed || parsed.id !== id || parsed.provider !== provider) {
-        throw new Error(`conversation-store: cannot heal invalid canonical ${provider}/${id}`);
-      }
-    } catch (e: any) {
-      if (e.code !== 'ENOENT') throw e;
-    }
 
     const validated: { path: string; record: ConversationRecord }[] = [];
     for (const n of names) {
@@ -222,14 +216,14 @@ export function createConversationStore(conversationsRoot: string): Conversation
       // leaves unreadable or rejected claims in place; it does not prove the
       // bytes we actually claim, which are checked again after the rename.
       let peek: ConversationRecord | null;
-      try { peek = parseRecord(fs.readFileSync(full, 'utf8')); } catch { continue; }
+      try { peek = parseRecord(await fs.promises.readFile(full, 'utf8')); } catch { continue; }
       if (!peek || peek.id !== id || peek.provider !== provider) continue;
       const quarantine = path.join(dir, original) + HEALING_MARKER + process.pid + '-' + randomUUID();
       try { fs.renameSync(full, quarantine); } catch { continue; }
       // Another live healer may reclaim this private path. Never restore over
       // an original name that the sync engine may have recreated meanwhile.
       let record: ConversationRecord | null;
-      try { record = parseRecord(fs.readFileSync(quarantine, 'utf8')); } catch { continue; }
+      try { record = parseRecord(await fs.promises.readFile(quarantine, 'utf8')); } catch { continue; }
       if (!record || record.id !== id || record.provider !== provider) continue;
       validated.push({ path: quarantine, record });
     }
@@ -252,7 +246,7 @@ export function createConversationStore(conversationsRoot: string): Conversation
         if (current.length === 0) throw claimGone;
         // Fold over ORIGINAL inputs, including copies-only seeding.
         return foldConflictCopies(existing ?? current[0], existing ? current : current.slice(1));
-      }, true);
+      });
     } catch (e) {
       if (e === claimGone) return;
       throw e;
@@ -413,7 +407,7 @@ export function createConversationStore(conversationsRoot: string): Conversation
       if (!isSafeSegment(provider) || !isSafeSegment(id)) return false;
       let dir: string;
       try { dir = providerDir(provider); } catch { return false; }
-      if (!fs.existsSync(dir)) return false;
+      try { await fs.promises.access(dir); } catch { return false; }
       let removed = false;
       // WHY: a healer may have claimed a copy and be awaiting this same lock.
       // Delete the canonical and every currently present claim together; its

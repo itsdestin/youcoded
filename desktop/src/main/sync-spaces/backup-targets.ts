@@ -1,7 +1,7 @@
 import type { BackendInstance } from '../sync-state';
 import type { BackupTarget } from './daily-backup';
 
-export function selectSpaceBackupTargets(backends: BackendInstance[]): BackupTarget[] {
+function selectSpaceBackupTargets(backends: BackendInstance[]): BackupTarget[] {
   // WHY: paused/storage-only destinations still allow manual Upload now, but
   // must never receive the automatic daily snapshot without explicit consent.
   return backends

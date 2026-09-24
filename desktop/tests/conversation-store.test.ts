@@ -347,22 +347,37 @@ describe('createConversationStore', () => {
   });
 
   it.each(['{{{', '', '{}', recJson({ id: 'other' }), recJson({ provider: 'native' })])(
-    'heal preserves invalid canonical bytes %j and its claims', async (bytes) => {
+    'invalid canonical %j is set aside, not a permanent block', async (bytes) => {
+      const dir = path.join(tmp, 'claude');
       stage(tmp, 'claude', 'sess-1.json', bytes);
-      stage(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json', recJson());
-      await store.get('claude', 'sess-1');
-      expect(fs.readFileSync(path.join(tmp, 'claude', 'sess-1.json'), 'utf8')).toBe(bytes);
-      // WHY: the bad canonical is detectable before claiming, so leave the
-      // original conflict filename stable until the canonical is repaired.
-      expect(fs.readdirSync(path.join(tmp, 'claude')).sort())
-        .toEqual(['sess-1.json', 'sess-1 (from A, 2026-07-03).json'].sort());
-      expect(fs.readFileSync(path.join(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json'), 'utf8')).toBe(recJson());
-      // WHY: a write must stop before replacing evidence, unlike fail-soft reads.
-      await expect(store.upsert({ id: 'sess-1', provider: 'claude', title: 'New title' }))
-        .rejects.toThrow('cannot heal invalid canonical');
-      expect(fs.readFileSync(path.join(tmp, 'claude', 'sess-1.json'), 'utf8')).toBe(bytes);
+      stage(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json', recJson({
+        flags: { complete: { value: true, updatedAt: '2026-07-03T13:00:00.000Z' } },
+      }));
+      // WHY: the valid copy heals into a fresh canonical; the unreadable bytes
+      // survive beside it (blank bytes carry nothing to keep).
+      const rec = await store.get('claude', 'sess-1');
+      expect(rec!.flags.complete.value).toBe(true);
+      const damaged = fs.readdirSync(dir).filter((n) => n.startsWith('sess-1.json.damaged-'));
+      expect(damaged.map((n) => fs.readFileSync(path.join(dir, n), 'utf8'))).toEqual(bytes.trim() ? [bytes] : []);
+      expect(fs.existsSync(path.join(dir, 'sess-1 (from A, 2026-07-03).json'))).toBe(false);
+      expect(noHealingLeftovers(dir)).toBe(true);
+      // Later writes land normally, and the kept bytes are never a listed record.
+      await store.upsert({ id: 'sess-1', provider: 'claude', title: 'New title' });
+      expect((await store.get('claude', 'sess-1'))!.title).toBe('New title');
+      expect((await store.list('claude')).map((r) => r.id)).toEqual(['sess-1']);
+      expect(fs.readdirSync(dir).filter((n) => n.includes('.damaged-'))).toEqual(damaged);
     },
   );
+
+  it('an upsert over an unreadable canonical keeps its bytes (no conflict copy needed)', async () => {
+    const dir = path.join(tmp, 'claude');
+    stage(tmp, 'claude', 'sess-1.json', '{"id":"sess-1", truncated');
+    await store.upsert({ id: 'sess-1', provider: 'claude', title: 'Fresh' });
+    expect((await store.get('claude', 'sess-1'))!.title).toBe('Fresh');
+    const damaged = fs.readdirSync(dir).filter((n) => n.startsWith('sess-1.json.damaged-'));
+    expect(damaged).toHaveLength(1);
+    expect(fs.readFileSync(path.join(dir, damaged[0]), 'utf8')).toBe('{"id":"sess-1", truncated');
+  });
 
   it.each(['{{{', '{}', recJson({ id: 'other' }), recJson({ provider: 'native' })])(
     'heal leaves invalid originals and old claims untouched without seeding %j', async (bytes) => {
@@ -387,13 +402,24 @@ describe('createConversationStore', () => {
   it.each(['original', 'claim'])('heal retries transient %s read failures without losing bytes', async (phase) => {
     const name = 'sess-1 (from A, 2026-07-03).json';
     stage(tmp, 'claude', name, recJson());
+    const hit = (file: unknown) => {
+      const f = String(file);
+      return phase === 'claim' ? f.includes('.healing-') : f.endsWith(name);
+    };
+    const injected = () => Object.assign(new Error('injected read failure'), { code: 'EIO' });
+    // heal reads with both APIs (async outside the lock, sync inside it).
     const read = fs.readFileSync;
-    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((file, ...args) => {
-      if (String(file).includes(phase === 'claim' ? '.healing-' : name)) throw Object.assign(new Error('injected read failure'), { code: 'EIO' });
+    vi.spyOn(fs, 'readFileSync').mockImplementation((file, ...args) => {
+      if (hit(file)) throw injected();
       return read(file, ...args);
     });
+    const readAsync = fs.promises.readFile;
+    vi.spyOn(fs.promises, 'readFile').mockImplementation(async (file, ...args) => {
+      if (hit(file)) throw injected();
+      return readAsync(file, ...args);
+    });
     expect(await store.get('claude', 'sess-1')).toBeNull();
-    spy.mockRestore();
+    vi.restoreAllMocks();
     const names = fs.readdirSync(path.join(tmp, 'claude'));
     expect(names).toHaveLength(1);
     expect(phase === 'original' ? names[0] === name : names[0].includes('.healing-')).toBe(true);
@@ -440,7 +466,14 @@ describe('createConversationStore', () => {
     stage(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json', recJson({ title: 'After', lastActive: '2026-07-04T00:00:00Z' }));
     const target = path.join(tmp, 'claude', 'sess-1.json');
     const before = fs.readFileSync(target, 'utf8');
-    if (fault === 'read') vi.spyOn(fs.promises, 'readFile').mockRejectedValueOnce(Object.assign(new Error('injected'), { code: 'EIO' }));
+    if (fault === 'read') {
+      const readAsync = fs.promises.readFile;
+      let failed = false;
+      vi.spyOn(fs.promises, 'readFile').mockImplementation(async (file, ...args) => {
+        if (!failed && String(file) === target) { failed = true; throw Object.assign(new Error('injected'), { code: 'EIO' }); }
+        return readAsync(file, ...args);
+      });
+    }
     if (fault === 'rename') vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(new Error('injected'));
     if (fault === 'unlink') vi.spyOn(fs, 'unlinkSync').mockImplementationOnce(() => { throw new Error('injected'); });
     await store.get('claude', 'sess-1');
@@ -509,20 +542,6 @@ describe('createConversationStore', () => {
     finally { release(); await healing; }
     expect(await store.get('claude', 'sess-1')).toBeNull();
     expect(fs.readdirSync(path.join(tmp, 'claude'))).toEqual([]);
-  });
-
-  it('invalid canonical leaves a validated claim at a stable name across failed heals', async () => {
-    stage(tmp, 'claude', 'sess-1.json', '{{{');
-    stage(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json', recJson());
-    await store.get('claude', 'sess-1');
-    const dir = path.join(tmp, 'claude');
-    const first = fs.readdirSync(dir).sort();
-    expect(first).toEqual(['sess-1.json', 'sess-1 (from A, 2026-07-03).json'].sort());
-    expect(await store.get('claude', 'sess-1')).toBeNull();
-    expect(await store.list('claude')).toEqual([]);
-    const last = fs.readdirSync(dir).sort();
-    expect(last).toEqual(first); // WHY: failed commit must not churn valid evidence on every read.
-    expect(fs.readFileSync(path.join(dir, 'sess-1 (from A, 2026-07-03).json'), 'utf8')).toBe(recJson());
   });
 
   // Review fix 5b: a conflict copy that parses to a VALID record with a
