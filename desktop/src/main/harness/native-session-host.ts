@@ -53,7 +53,7 @@ import { truncateOutput, composeNotice } from './tools/truncate';
 import { APPROX_CHARS_PER_TOKEN } from './message-size';
 import { fitInjection, fitProjectInstructions } from './injection/injection-budget';
 import { frameSkillInvocation } from './skills/skill-invocation';
-import { buildTriggerIndex } from './injection/path-triggers';
+import { buildTriggerIndex, type TriggerIndex } from './injection/path-triggers';
 import { costForUsage, isFreePricing, type ModelPricing } from './pricing';
 import { log } from '../logger';
 // Same import PermissionStore uses, for the same reason: the project slug MUST
@@ -974,9 +974,9 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
     const title = header.title ?? record.title;
 
-    const gitSnapshot = await gitSnapshotAsync(workDir);
+    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(workDir), buildTriggerIndex(workDir)]);
     const session = this.buildSpecialistSession(
-      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
+      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot, triggers,
     );
     // Cold state rebuilt from the child's OWN transcript — seedHistory resets
     // readRegistry + todos too (the same reset-on-resume contract root
@@ -2664,7 +2664,7 @@ export class NativeSessionHost extends EventEmitter {
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
   private toolWiring(
-    sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string,
+    sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, gitSnapshot: string, triggers: TriggerIndex,
     // T2 (project-plugin-controls): skillEntries is the ALREADY-SCANNED
     // discoverSkillEntries(cwd) result — passed in rather than re-scanned
     // here, since create()/resume() need the same entries for availability
@@ -2690,10 +2690,10 @@ export class NativeSessionHost extends EventEmitter {
       // resolved at least once for this cwd.
       specialistRoster: this.specialistCatalog.roster(cwd),
       // Project rules + nested project instructions, indexed ONCE per session
-      // (M3 item 3). Built here rather than in the session because it is
-      // filesystem state scoped to the session's cwd, and re-statting the tree
-      // per tool call would be a real cost on a large repo.
-      triggers: buildTriggerIndex(cwd),
+      // (M3 item 3), by the host: filesystem state scoped to the session's cwd.
+      // Callers await buildTriggerIndex beside the git line (async since B8,
+      // 2026-09-24 — the walk used to freeze every window) and pass it in.
+      triggers,
       // Task 10 (plan 1b): the ONE root a ROOT session is allowed to Read
       // without an external_directory ask — this PROJECT's
       // sessions/<slug>/specialist-reports/ subdirectory, the exact place
@@ -3249,8 +3249,8 @@ export class NativeSessionHost extends EventEmitter {
     const store = this.continuationStore();
     // Off the main thread (2026-09-16 C2 review): this ran on every Resume
     // click and read the whole transcript synchronously. (restore() below
-    // still reads it once more, synchronously, to verify the checkpoint's
-    // digest — filed as a follow-up in the plan.)
+    // reads it once more to verify the checkpoint's digest — also async since
+    // 2026-09-24, blocking-calls B8.)
     const persisted = await this.store.readEventsAsync(sessionId, cwd);
     // WHY: the portable record also needs pre-reopen event references even when
     // there is no private continuation sidecar to restore or publish.
@@ -3264,7 +3264,7 @@ export class NativeSessionHost extends EventEmitter {
       try { identity = this.continuation.continuationIdentityFor!(session.binding); }
       catch { this.logContinuation(sessionId, 'identity-unavailable', 'restore'); }
       if (identity !== undefined) {
-        const restored = store.restore({
+        const restored = await store.restore({
           sessionId, transcriptPath: this.store.transcriptPath(sessionId, cwd),
           binding: identity, assemblyDigest: session.assemblyDigest(),
         });
@@ -3532,7 +3532,7 @@ export class NativeSessionHost extends EventEmitter {
     await this.specialistCatalog.ensureFresh(opts.cwd);
     // The <env> git line, read off the main thread before anything is built
     // (2026-09-16 C3). Never throws (a non-repo answers a fixed string).
-    const gitSnapshot = await gitSnapshotAsync(opts.cwd);
+    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(opts.cwd), buildTriggerIndex(opts.cwd)]);
     // Acquire this session's MCP servers (Task 6) BEFORE constructing the
     // session, so mcpServers is available for the very first buildAiTools().
     // T2: availability.mcpServerIds narrows this to the project's frozen set
@@ -3551,7 +3551,7 @@ export class NativeSessionHost extends EventEmitter {
     let session: HarnessSession;
     try {
       // Fix pass 1 / Finding 3: this whole block is fallible synchronous work
-      // (toolWiring() calls assembleSystemPrompt(), buildTriggerIndex()) that
+      // (toolWiring() calls assembleSystemPrompt()) that
       // runs AFTER the mcp acquire() above but BEFORE wire() ever registers
       // this id in `this.live`. destroy() early-returns for a non-live id, so
       // a throw here — with no catch — would strand the acquired MCP hold
@@ -3562,7 +3562,7 @@ export class NativeSessionHost extends EventEmitter {
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           commitCompaction: proposal => this.commitCompaction(opts.sessionId, session, proposal),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, skillEntries, availability.kind === 'resolved' ? availability.skillCatalogIds : undefined) },
+          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, triggers, skillEntries, availability.kind === 'resolved' ? availability.skillCatalogIds : undefined) },
         this.modelFactory,
       );
     } catch (err) {
@@ -3640,13 +3640,12 @@ export class NativeSessionHost extends EventEmitter {
     takenNames.add(name);
 
     // Build the session BEFORE writing the header: everything inside
-    // buildSpecialistSession is fallible synchronous work (buildTriggerIndex
-    // walks the tree), and a throw after the header write would leave a
-    // session file on disk for a child that never existed. The git line is
-    // awaited first, off the main thread (C3) — it never throws.
-    const gitSnapshot = await gitSnapshotAsync(workDir);
+    // buildSpecialistSession is fallible synchronous work, and a throw after
+    // the header write would leave a session file on disk for a child that
+    // never existed. The git line (C3) and trigger walk (B8) are awaited first.
+    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(workDir), buildTriggerIndex(workDir)]);
     const session = this.buildSpecialistSession(
-      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot,
+      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, gitSnapshot, triggers,
     );
 
     // `title` was drawn earlier (before this session was built — see that
@@ -3695,8 +3694,8 @@ export class NativeSessionHost extends EventEmitter {
     // ring up real money through a metered specialist (spec §5).
     pricing: ModelPricing | null, free: boolean,
     parentToolCallId: string, preset: ResolvedPreset, parent: LiveEntry,
-    // The child's <env> git line, awaited by the caller off the main thread (C3).
-    gitSnapshot: string,
+    // The child's <env> git line and trigger index, awaited by the caller off the main thread (C3, B8).
+    gitSnapshot: string, triggers: TriggerIndex,
   ): HarnessSession {
     const allowed = new Set(specialist.allowedTools);
     let session: HarnessSession;
@@ -3734,7 +3733,7 @@ export class NativeSessionHost extends EventEmitter {
         // state, not conversation state, so it does not violate the cold start —
         // and a Worker that edits files under rules the parent would have obeyed
         // must obey them too.
-        triggers: buildTriggerIndex(workDir),
+        triggers,
         // SKILL SUPPRESSION (cold-start contract): an explicit EMPTY catalog, not
         // an omission. syncSkillTool falls back to createSkillCatalog() — the full
         // installed catalog — whenever opts.skillCatalog is undefined, and it
@@ -4032,8 +4031,8 @@ export class NativeSessionHost extends EventEmitter {
     // structurally — this acquire() mints its own lease, and the outgoing
     // destroy() can only release the lease on the LiveEntry it captured. See
     // McpLease in mcp-manager.ts.
-    // The <env> git line, off the main thread, before the session is built (C3).
-    const gitSnapshot = await gitSnapshotAsync(cwd);
+    // The <env> git line + trigger index, off the main thread, before the session is built (C3, B8).
+    const [gitSnapshot, triggers] = await Promise.all([gitSnapshotAsync(cwd), buildTriggerIndex(cwd)]);
     // T2 (project-plugin-controls, design §3): REUSE the header's frozen set —
     // never recompute it. `header.availability` absent (an older conversation,
     // or a create() that fail-opened) means today's behaviour: both
@@ -4066,7 +4065,7 @@ export class NativeSessionHost extends EventEmitter {
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
           commitCompaction: proposal => this.commitCompaction(sessionId, session, proposal),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot, skillEntries, skillAllow) },
+          ...this.toolWiring(sessionId, cwd, preset, profile, gitSnapshot, triggers, skillEntries, skillAllow) },
         this.modelFactory,
       );
       // Full history rebuild (spec §2.5): rebuildHistory reconstructs the assistant

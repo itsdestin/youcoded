@@ -28,7 +28,7 @@ import * as fs from 'fs';
 import { EventEmitter } from 'events';
 import type { EngineModel, EngineModelState, EngineRunState } from '../../shared/engine-types';
 import type { ModelSettings } from '../../shared/model-manager-types';
-import { scanGgufCache } from './cache-scan';
+import { scanGgufCache, scanGgufCacheAsync } from './cache-scan';
 import { isFollowerPart } from '../../shared/gguf-split';
 import { renderPresetFile, writePresetFile } from './model-presets';
 
@@ -70,6 +70,88 @@ export interface EngineSupervisorOpts {
    *  model-presets.ts, and a plain read back. */
   writePresetImpl?: (filePath: string, contents: string) => void;
   readPresetImpl?: (filePath: string) => string;
+  /** Test seam: the /proc reader behind the loading progress bar (see
+   *  findModelChildRss). A supervisor given one answers as Linux does, so the
+   *  progress-bar path is testable on any machine. Default: fs.promises. */
+  procFs?: ProcFs;
+  /** Test seam: the disk scan listModels() unions into GET /models. Default:
+   *  scanGgufCacheAsync. WHY: that scan is real async I/O now, which fake-timer
+   *  cadence tests cannot step through deterministically. */
+  scanCacheImpl?: (cacheDir: string) => Promise<EngineModel[]>;
+}
+
+/** The two async reads the loading progress bar needs from /proc. */
+export interface ProcFs {
+  readFile(filePath: string): Promise<string>;
+  readdir(dirPath: string): Promise<string[]>;
+}
+
+const realProcFs: ProcFs = {
+  readFile: (p) => fs.promises.readFile(p, 'utf8'),
+  readdir: (p) => fs.promises.readdir(p),
+};
+
+/** How many /proc entries the last-resort full scan reads at once. WHY a cap:
+ *  hundreds of simultaneous reads would queue ahead of every other file read in
+ *  the app (Node's I/O pool has four threads); small batches keep the scan off
+ *  the main thread without crowding it. */
+const PROC_SCAN_BATCH = 16;
+
+/** Find the router's child process that is loading `modelId` and read its
+ *  resident memory (VmRSS), without blocking the main thread.
+ *
+ *  WHY this shape (perf, 2026-09-24): the old code read the command line of
+ *  EVERY process on the machine, synchronously, every 400 ms for the whole of
+ *  a model load — hundreds of blocking reads per tick while the user watched
+ *  the progress bar, hitching every window. Now, cheapest first:
+ *    1. the pid found on an earlier tick (two small reads);
+ *    2. the router's own children (`/proc/<router>/task/<tid>/children`) — the
+ *       model child is spawned by the router, so this is normally where it is;
+ *    3. only if neither finds it, the old whole-/proc scan, async and batched.
+ *  Every candidate is re-checked against its command line before its memory is
+ *  read, so a pid the kernel reused for another program is never reported.
+ *  Results are identical to the old scan: same needle, same VmRSS parse. */
+export async function findModelChildRss(
+  modelId: string,
+  routerPid: number | undefined,
+  knownPid: number | undefined,
+  procFs: ProcFs,
+): Promise<{ pid: number; bytes: number } | undefined> {
+  const needle = `/${modelId}.gguf`;
+  const tryPid = async (pid: number): Promise<{ pid: number; bytes: number } | undefined> => {
+    try {
+      const cmd = await procFs.readFile(`/proc/${pid}/cmdline`); // NUL-separated
+      if (!cmd.includes('--model') || !cmd.includes(needle)) return undefined;
+      const status = await procFs.readFile(`/proc/${pid}/status`);
+      const m = /VmRSS:\s+(\d+)\s+kB/.exec(status);
+      return m ? { pid, bytes: parseInt(m[1], 10) * 1024 } : undefined;
+    } catch { return undefined; } // raced exit / not ours to read
+  };
+  if (knownPid !== undefined) {
+    const hit = await tryPid(knownPid);
+    if (hit) return hit;
+  }
+  if (routerPid !== undefined) {
+    try {
+      for (const tid of await procFs.readdir(`/proc/${routerPid}/task`)) {
+        let kids: string;
+        try { kids = await procFs.readFile(`/proc/${routerPid}/task/${tid}/children`); } catch { continue; }
+        for (const kid of kids.split(/\s+/)) {
+          if (!/^\d+$/.test(kid)) continue;
+          const hit = await tryPid(Number(kid));
+          if (hit) return hit;
+        }
+      }
+    } catch { /* router gone, or no children file on this kernel — full scan below */ }
+  }
+  let pids: string[];
+  try { pids = (await procFs.readdir('/proc')).filter((p) => /^\d+$/.test(p)); } catch { return undefined; }
+  for (let i = 0; i < pids.length; i += PROC_SCAN_BATCH) {
+    const hits = await Promise.all(pids.slice(i, i + PROC_SCAN_BATCH).map((p) => tryPid(Number(p))));
+    const hit = hits.find((h) => h !== undefined);
+    if (hit) return hit;
+  }
+  return undefined;
 }
 
 // Keep at most 2 models resident: the router's LRU default (4) can overcommit
@@ -342,6 +424,17 @@ export class EngineSupervisor extends EventEmitter {
   // than as zero (see loadedModelsBytes below); the idle check reads it as [].
   private lastPolledModels: EngineModel[] | null = null;
   private loadProgress = new Map<string, number>();      // modelId → max resident bytes seen while loading (monotonic)
+  /** modelId → the pid last found loading it, so the next 400 ms tick reads two
+   *  small files instead of searching again (see findModelChildRss). */
+  private loadingPid = new Map<string, number>();
+  /** modelId → the resident-memory lookup already running. WHY single-flight:
+   *  the timer poll and a user's load/unload nudge can overlap; they share one
+   *  lookup instead of stacking /proc reads. */
+  private rssInFlight = new Map<string, Promise<number | undefined>>();
+  /** Bumped by stopModelPoll. A poll that was mid-await when the engine stopped
+   *  (or restarted) sees the change and drops its now-stale reading instead of
+   *  writing it into the fresh run's progress tracker. */
+  private pollGeneration = 0;
   /** Per-model request counts (see trackedFetch). Separate from `inFlight`
    *  because "is THIS model busy?" and "is the engine busy?" are different
    *  questions and only the first can gate a per-model settings apply. */
@@ -932,17 +1025,21 @@ export class EngineSupervisor extends EventEmitter {
    *  keep the exact observed shape pinned in test-engine/probe-models.mjs +
    *  docs/engine-dependencies.md. */
   async listModels(): Promise<EngineModel[]> {
-    if (this.state !== 'running') return scanGgufCache(this.cacheDir());
+    // WHY the async scan: this runs on the model poll (every 10 s, every 400 ms
+    // while a model loads); the sync scan stat'ed the cache folder on the main
+    // thread each time. Same scan, same result — see scanLocalDownloadsAsync.
+    const scan = this.opts.scanCacheImpl ?? scanGgufCacheAsync;
+    if (this.state !== 'running') return await scan(this.cacheDir());
     try {
       const res = await (this.opts.fetchImpl ?? fetch)(`${this.rootUrl()}/models`, { method: 'GET' });
-      if (!res.ok) return scanGgufCache(this.cacheDir());
+      if (!res.ok) return await scan(this.cacheDir());
       const payload: any = await res.json();
       const rows: any[] = Array.isArray(payload?.data) ? payload.data
         : Array.isArray(payload?.models) ? payload.models
         : Array.isArray(payload) ? payload : [];
       // /models rows carry no size — the cache scan does, so index sizes by id
       // and merge them in (the UI's loading banner shows the model size).
-      const scanned = scanGgufCache(this.cacheDir());
+      const scanned = await scan(this.cacheDir());
       const sizeById = new Map<string, number | null>();
       for (const m of scanned) sizeById.set(m.id, m.sizeBytes);
       const out: EngineModel[] = [];
@@ -998,7 +1095,7 @@ export class EngineSupervisor extends EventEmitter {
       }
       return out;
     } catch {
-      return scanGgufCache(this.cacheDir()); // engine died mid-call — degrade to scan
+      return await scan(this.cacheDir()); // engine died mid-call — degrade to scan
     }
   }
 
@@ -1171,6 +1268,8 @@ export class EngineSupervisor extends EventEmitter {
     this.lastModelSig = '';
 
     this.loadProgress.clear();
+    this.loadingPid.clear();
+    this.pollGeneration += 1;
     // Back to "not asked yet". A stopped engine holds no model in memory, but
     // the reading it left behind describes a process that no longer exists.
     this.lastPolledModels = null;
@@ -1197,17 +1296,30 @@ export class EngineSupervisor extends EventEmitter {
   private async emitModelsIfChanged(): Promise<void> {
     if (this.state !== 'running') return;
     let models: EngineModel[];
+    const generation = this.pollGeneration;
     try { models = await this.listModels(); } catch { return; }
+    // WHY read every loading model's memory up front, concurrently: the lookup
+    // is async now (it used to block the whole app), so do all the awaiting
+    // before touching any shared state below.
+    const rssById = new Map<string, number | undefined>(await Promise.all(
+      models.filter((m) => m.state === 'loading')
+        .map(async (m) => [m.id, await this.residentBytesForModel(m.id)] as const),
+    ));
+    // The engine stopped or restarted while we were reading: this reading
+    // describes the old run. Writing it would leave a phantom "loading" tracker
+    // that holds the next run's poll at the fast cadence.
+    if (generation !== this.pollGeneration) return;
     for (const m of models) {
       if (m.state === 'loading') {
         // Resident bytes of the model's child process, monotonic (Vulkan drops
         // RSS once weights move to VRAM, so hold the max seen this load).
-        const rss = this.residentBytesForModel(m.id) ?? 0;
+        const rss = rssById.get(m.id) ?? 0;
         const maxRss = Math.max(this.loadProgress.get(m.id) ?? 0, rss);
         this.loadProgress.set(m.id, maxRss);
         if (maxRss > 0) m.loadedBytes = m.sizeBytes ? Math.min(maxRss, m.sizeBytes) : maxRss;
       } else {
         this.loadProgress.delete(m.id); // load finished / not loading → drop tracker
+        this.loadingPid.delete(m.id);
       }
     }
     // Recorded on EVERY poll, not only when the signature changed. The emit
@@ -1223,24 +1335,22 @@ export class EngineSupervisor extends EventEmitter {
    *  which climbs toward the file size as the GGUF is read into RAM). Linux only
    *  (reads /proc); undefined elsewhere → the UI falls back to an elapsed-only,
    *  indeterminate bar. The child's cmdline carries `--model …/<id>.gguf`, which
-   *  the router process (with `--models-dir`) does not, so the needle is unique. */
-  private residentBytesForModel(modelId: string): number | undefined {
-    if (process.platform !== 'linux') return undefined;
-    const needle = `/${modelId}.gguf`;
-    let pids: string[];
-    try { pids = fs.readdirSync('/proc'); } catch { return undefined; }
-    for (const pid of pids) {
-      if (!/^\d+$/.test(pid)) continue;
-      let cmd: string;
-      try { cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8'); } catch { continue; } // NUL-separated
-      if (!cmd.includes('--model') || !cmd.includes(needle)) continue;
-      try {
-        const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
-        const m = /VmRSS:\s+(\d+)\s+kB/.exec(status);
-        if (m) return parseInt(m[1], 10) * 1024;
-      } catch { /* raced exit */ }
-    }
-    return undefined;
+   *  the router process (with `--models-dir`) does not, so the needle is unique.
+   *  ASYNC and single-flight per model — see findModelChildRss and rssInFlight. */
+  private residentBytesForModel(modelId: string): Promise<number | undefined> {
+    if (!this.opts.procFs && process.platform !== 'linux') return Promise.resolve(undefined);
+    const running = this.rssInFlight.get(modelId);
+    if (running) return running;
+    const generation = this.pollGeneration;
+    const lookup = findModelChildRss(
+      modelId, this.child?.pid ?? undefined, this.loadingPid.get(modelId), this.opts.procFs ?? realProcFs,
+    ).then((hit) => {
+      // Remember the pid only for the run that found it (a stop clears the map).
+      if (hit && generation === this.pollGeneration) this.loadingPid.set(modelId, hit.pid);
+      return hit?.bytes;
+    }, () => undefined).finally(() => { this.rssInFlight.delete(modelId); });
+    this.rssInFlight.set(modelId, lookup);
+    return lookup;
   }
 
   /** Best-effort per-model unload (frees its memory now). Used when the last

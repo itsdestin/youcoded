@@ -14,6 +14,7 @@ import {
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
 import { addTurnUsage, addSubagentUsage, addPatchLines, mergeTotals } from './session-totals';
+import { applyBackgroundTaskEnd, ccBackgroundOnLaunch, reopenResumedHelper, stopRunningBackground } from './cc-background';
 
 // Fix: message ids are used as React keys. A hydrated remote client restarts
 // this counter at 0 while its snapshot already holds msg-1..msg-N, so new live
@@ -1142,7 +1143,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             promptId: action.promptId,
             title: action.title,
             description: action.description,
-            buttons: action.buttons,
+            buttons: action.buttons, defaultIndex: action.defaultIndex,
           },
         },
       );
@@ -1186,10 +1187,18 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const hadInFlight = session.isThinking || session.activeTurnToolIds.size > 0;
-      if (action.exitCode === 0 && !hadInFlight) return state;
+      // Claude Code's background helpers and commands die with its process,
+      // and no notice will ever say so — without this their cards spin forever.
+      const toolCalls = stopRunningBackground(session.toolCalls, () => true);
+      if (action.exitCode === 0 && !hadInFlight) {
+        if (toolCalls === session.toolCalls) return state;
+        next.set(action.sessionId, { ...session, toolCalls });
+        return next;
+      }
       next.set(action.sessionId, {
         ...session,
-        ...endTurn(session),
+        toolCalls,
+        ...endTurn({ ...session, toolCalls }),
         // Override endTurn's 'ok' reset — this is the state we want to surface.
         attentionState: 'session-died',
       });
@@ -2075,10 +2084,21 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             ...(patch ? { structuredPatch: patch } : {}),
           });
         } else {
+          // A background launch's result is only a receipt: the call finished,
+          // the WORK did not. The card stays 'complete' (endTurn must never
+          // fail it) and ccBackground carries the work's real state.
+          const bg = action.backgroundTaskId
+            ? ccBackgroundOnLaunch(session, action.toolUseId, action.backgroundTaskId, existing.ccBackground)
+            : undefined;
           toolCalls.set(action.toolUseId, {
             ...base, status: 'complete', response: action.result,
             ...(patch ? { structuredPatch: patch } : {}),
+            ...(bg ? { ccBackground: bg } : {}),
+            // The receipt names the helper; the card knows it before the
+            // helper's first line binds (and even if it never does).
+            ...(bg && existing.toolName === 'Agent' && !existing.agentId ? { agentId: action.backgroundTaskId } : {}),
           });
+          if (action.resumedTaskId) toolCalls = reopenResumedHelper(session, toolCalls, action.toolUseId, action.resumedTaskId);
         }
       }
 
@@ -2104,6 +2124,14 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         ...session, toolCalls, totals, lastActivityAt: Date.now(),
         attentionState: 'ok',
       });
+      return next;
+    }
+
+    case 'TRANSCRIPT_BACKGROUND_TASK': {
+      const session = next.get(action.sessionId);
+      const settled = session && applyBackgroundTaskEnd(session, action);
+      if (!settled) return state;
+      next.set(action.sessionId, settled);
       return next;
     }
 
@@ -2950,7 +2978,12 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       let scratch: ChatState = new Map();
       // Seed from LIVE seenUuids so overlapping page and live events dedup;
       // otherwise the scratch replay prepends a second copy of a prompt already on screen.
-      scratch.set(action.sessionId, { ...createSessionChatState(), seenUuids: new Set(session.seenUuids) });
+      // ccBackgroundOutcomes: a newer page's "finished" notices must settle
+      // the cards this older page launches (see its field comment).
+      scratch.set(action.sessionId, {
+        ...createSessionChatState(), seenUuids: new Set(session.seenUuids),
+        ccBackgroundOutcomes: session.ccBackgroundOutcomes,
+      });
       for (const ev of action.events) {
         const pageAction = pageEventToAction(ev);
         if (pageAction) scratch = chatReducer(scratch, pageAction);
@@ -2958,9 +2991,18 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // Reap on scratch BEFORE merging: live tool ids are not copied from history and must survive.
       const replayed = scratch.get(action.sessionId)!;
       const interrupted = action.reconcileInterrupted ? replayed.activeTurnToolIds : new Set(action.reconcileInterruptedToolIds ?? []);
-      const pageSess = interrupted.size
+      const endedSess = interrupted.size
         ? { ...replayed, ...endTurn({ ...replayed, activeTurnToolIds: interrupted }, 'Session was interrupted while this was running') }
         : replayed;
+      // Background work launched before this Claude Code process started died
+      // with the old process: nothing will report on it, so it reads stopped.
+      // Only work with no recorded end — a notice anywhere already read wins.
+      const launchedBefore = action.reconcileInterrupted
+        ? () => true
+        : (id: string) => (action.reconcileInterruptedToolIds ?? []).includes(id);
+      const pageSess = action.reconcileInterrupted || action.reconcileInterruptedToolIds?.length
+        ? { ...endedSess, toolCalls: stopRunningBackground(endedSess.toolCalls, launchedBefore) }
+        : endedSess;
       next.set(action.sessionId, {
         ...session,
         timeline: [...pageSess.timeline, ...session.timeline],
@@ -2970,6 +3012,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
         toolGroups: new Map([...pageSess.toolGroups, ...session.toolGroups]),
         assistantTurns: new Map([...pageSess.assistantTurns, ...session.assistantTurns]),
         seenUuids: new Set([...session.seenUuids, ...pageSess.seenUuids]),
+        ccBackgroundOutcomes: { ...pageSess.ccBackgroundOutcomes, ...session.ccBackgroundOutcomes },
         // Fold in what this page counted. session-totals' contract was "rebuilt
         // for free when a resumed session replays its record", which paging
         // broke — the scratch replay accumulates the page's usage and it would

@@ -70,10 +70,12 @@ import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
 import { useZoomControls } from './hooks/useZoomControls';
 import { useChromeMeasurements } from './hooks/useChromeMeasurements';
 import { broadcastExpandAll, broadcastCollapseAll, isInExpandAllMode } from './hooks/useExpandAllToggle';
-import { AppIcon, WelcomeAppIcon, ThemeMascot } from './components/Icons';
+import { WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
-import TrustGate, { useTrustGateActive } from './components/TrustGate';
+import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
+import { InitializingCover } from './components/InitializingCover';
+import { promptShowMeansStarted, composerDisabled, startedIds } from './state/startup-dialog-store';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
@@ -656,7 +658,11 @@ function AppInner() {
   // (see useSessionDefaults for why).
   const sessionDefaults = useSessionDefaults(settingsOpen);
 
-  usePromptDetector();
+  // The detector's startup safety net asks "still starting?" — the init gate's answer, via a ref.
+  const initializedRef = useRef(initializedSessions);
+  initializedRef.current = initializedSessions;
+  const isStarting = useCallback((sid: string) => !initializedRef.current.has(sid), []);
+  usePromptDetector({ isStarting });
   // Recovers chat→PTY submits that get lost on Windows ConPTY when Claude is
   // busy — see useSubmitConfirmation for the full mechanism. Pass active
   // session + its view mode so the hook can suppress the `\r` retry while the
@@ -1465,9 +1471,29 @@ function AppInner() {
             result: event.data.toolResult || '',
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
+            backgroundTaskId: event.data.backgroundTaskId,
+            resumedTaskId: event.data.resumedTaskId,
             parentAgentToolUseId: event.data.parentAgentToolUseId,
             agentId: event.data.agentId,
           });
+          break;
+        case 'background-task':
+          // Claude Code: background work a card launched has ended — the only
+          // signal that it did (its tool result was just the launch receipt).
+          // Three mirrors: App.tsx, BubbleFeed.tsx, transcript-page-actions.ts.
+          if (event.data.backgroundTask) {
+            batchTranscriptDispatch({
+              type: 'TRANSCRIPT_BACKGROUND_TASK',
+              sessionId: event.sessionId,
+              uuid: event.uuid,
+              toolUseId: event.data.toolUseId,
+              taskIds: event.data.backgroundTask.taskIds,
+              status: event.data.backgroundTask.status,
+              summary: event.data.backgroundTask.summary,
+              result: event.data.backgroundTask.result,
+              parentAgentToolUseId: event.data.parentAgentToolUseId,
+            });
+          }
           break;
         case 'replay-complete':
           // End of a transcript replay — reap cards the history left 'running'.
@@ -1830,20 +1856,16 @@ function AppInner() {
 
     // Prompt events — Android bridge broadcasts Ink menu prompts detected from PTY screen
     const promptShowHandler = (window.claude.on as any).promptShow?.((payload: any) => {
-      // A prompt arriving proves the session is alive — dismiss "Initializing" overlay
-      setInitializedSessions((prev) => {
-        if (prev.has(payload.sessionId)) return prev;
-        const next = new Set(prev);
-        next.add(payload.sessionId);
-        return next;
-      });
+      // Only Android's explicit ready signal (first hook) starts the session — a
+      // startup-dialog card must not (review F1; startup-dialog-store.ts).
+      if (promptShowMeansStarted(payload.promptId)) setInitializedSessions((prev) => (prev.has(payload.sessionId) ? prev : new Set(prev).add(payload.sessionId)));
       dispatch({
         type: 'SHOW_PROMPT',
         sessionId: payload.sessionId,
         promptId: payload.promptId,
         title: payload.title,
         description: payload.description,
-        buttons: payload.buttons || [],
+        buttons: payload.buttons || [], defaultIndex: payload.defaultIndex,
       });
     });
     const promptDismissHandler = (window.claude.on as any).promptDismiss?.((payload: any) => {
@@ -2176,11 +2198,11 @@ function AppInner() {
         return [...prev, ...newSessions];
       });
       setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
-      // Mark all existing sessions as initialized — they're already running,
-      // so skip the "Initializing" overlay (which waits for first hook event)
+      // Existing sessions that have STARTED skip the "Initializing" cover; one
+      // still on its startup dialogs does not (SessionInfo.awaitingStart).
       setInitializedSessions((prev) => {
         const next = new Set(prev);
-        for (const s of list) next.add(s.id);
+        for (const id of startedIds(list)) next.add(id);
         return next;
       });
 
@@ -2269,10 +2291,7 @@ function AppInner() {
       setSessionModels((prev) => prev.has(sid) ? prev : new Map(prev).set(sid, matchModelAlias(sessionInfo.model)));
       // Transferred sessions were already initialized on the source — skip the
       // "Initializing" overlay, it would flash briefly before replay completes.
-      setInitializedSessions((prev) => {
-        if (prev.has(sid)) return prev;
-        const next = new Set(prev); next.add(sid); return next;
-      });
+      if (!sessionInfo.awaitingStart) setInitializedSessions((prev) => (prev.has(sid) ? prev : new Set(prev).add(sid)));
       if (freshWindow) setSessionId(sid);
       // Hydrate from ONE page, not a whole-transcript replay. Main knows this
       // window INHERITED the session and serves its first page read to EOF
@@ -2374,8 +2393,8 @@ function AppInner() {
         // Never over a place already on screen: this reply can land after the hydrate chose
         // one (T4 review, 7).
         setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
-        // Mark existing sessions as initialized (already running)
-        setInitializedSessions(new Set(list.map((s) => s.id)));
+        // Existing sessions that have started (not those still on startup dialogs)
+        setInitializedSessions(new Set(startedIds(list)));
       }).catch(() => {});
     });
     return unsub;
@@ -3425,20 +3444,10 @@ function AppInner() {
 
   const trustGateActive = useTrustGateActive(sessionId);
 
-  // Once trust gate activates, permanently mark the session as initialized
-  // so the "Initializing" overlay doesn't reappear after trust is completed
-  // (there's a gap between trust completion and the first hook event).
-  useEffect(() => {
-    if (trustGateActive && sessionId) {
-      setInitializedSessions((prev) => {
-        if (prev.has(sessionId)) return prev;
-        const next = new Set(prev);
-        next.add(sessionId);
-        (window as any).claude?.remote?.broadcastAction({ type: '_SESSION_INITIALIZED', sessionId });
-        return next;
-      });
-    }
-  }, [trustGateActive, sessionId]);
+  // No "trust gate = initialized" shortcut (removed 2026-09-24): it switched the
+  // startup safety net off for every dialog after trust. The cover steps aside
+  // for any waiting prompt card; the first real hook event marks the start.
+  const pendingPromptActive = usePendingPromptActive(sessionId);
 
   const sessionInitialized = sessionId ? initializedSessions.has(sessionId) : true;
   // Plan 2b Moved Gate: when the active session was taken over by another device,
@@ -3446,20 +3455,9 @@ function AppInner() {
   // (now-dead) chat/terminal view.
   const movedGate = sessionId ? movedSessions.get(sessionId) : undefined;
 
-  // Show a "something may be wrong" hint after 6s of waiting on initialization.
-  // WHY 6s (was 15s, shortened 2026-09-14): 15s was a long wait before the way
-  // out (the terminal view) was offered when a start really is stuck.
-  // Resets whenever the active session changes or the session becomes initialized.
-  const [initSlowWarning, setInitSlowWarning] = useState(false);
   // The init warning's button is a one-way door: switching to terminal view also
   // hides the overlay that named the toggle. This coach mark is the way back.
   const [backToChatHint, setBackToChatHint] = useState(false);
-  useEffect(() => {
-    if (sessionInitialized) { setInitSlowWarning(false); return; }
-    setInitSlowWarning(false);
-    const t = setTimeout(() => setInitSlowWarning(true), 6000);
-    return () => clearTimeout(t);
-  }, [sessionId, sessionInitialized]);
 
   // ── First-run guide ──────────────────────────────────────────────────────
   // The welcome screen's first-time version (deck 2026-09-10, Q-8): with no
@@ -3856,27 +3854,13 @@ function AppInner() {
                   expanded={artifactState.drawerExpanded}
                 />
               )}
-              {/* Initializing overlay — shown before Claude is ready, but only in chat view.
-                 Terminal view must stay accessible during init so the user can interact there.
-                 z-10: must stay below glassmorphism chrome (z-20) so header/bottom bars remain accessible */}
-              {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && (
-                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
-                  <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
-                  {/* select-none: a status line, not content. Ctrl+A must not
-                      paint it (Destin, 2026-09-10). */}
+              {/* Initializing cover — chat view only (terminal view stays usable during
+                 init), and never over a waiting prompt card. */}
+              {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && !pendingPromptActive && (
+                <InitializingCover sessionId={sessionId} onOpenTerminal={() => { setBackToChatHint(true); handleToggleView('terminal'); }}>
+                  {/* select-none: a status line, not content (ast-grep chrome-root-select-none-app). */}
                   <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>
-                  {initSlowWarning && (
-                    <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
-                      <p>Something may be wrong. The terminal may show what it is waiting on.</p>
-                      {/* Fix: the old copy told the user to go find the chat/terminal toggle
-                         themselves. This does it in one tap — and because the overlay is
-                         hidden in terminal view, switching also clears it. */}
-                      <Button variant="secondary" size="sm" onClick={() => { setBackToChatHint(true); handleToggleView('terminal'); }}>
-                        Check terminal view
-                      </Button>
-                    </div>
-                  )}
-                </div>
+                </InitializingCover>
               )}
               {backToChatHint && currentViewMode === 'terminal' && (
                 <ViewToggleHint onDismiss={() => setBackToChatHint(false)} />
@@ -3933,7 +3917,7 @@ function AppInner() {
             {/* Always mounted so draft text survives chat↔terminal switches.
                inert disables focus/keyboard/paste when hidden so keystrokes
                reach xterm instead of the buried textarea. */}
-              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
+              <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : isTerminalTouch ? ' bottom-docked' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
                 {/* A shell session draws NONE of the bottom chrome: no composer
                     (there is nothing to send a message to), and so no Stop
                     button, no model chip and no way into the model picker — all
@@ -3943,7 +3927,7 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
+                <ChatInputBar ref={inputBarRef} sendBlocked={isPendingTab} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={composerDisabled({ trustGate: trustGateActive, moved: !!movedGate, started: sessionInitialized, terminalTouch: isTerminalTouch })} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => {
                   // Name the blocker so reaching for "Send anyway" is an informed
                   // choice (it presses Esc into Claude Code first — which on a
                   // live permission or plan menu DECLINES it).

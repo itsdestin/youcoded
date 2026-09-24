@@ -151,9 +151,18 @@ function getStoredJSON<T>(key: string, fallback: T): T {
  *  window broadcast so ThemeProvider in other windows applies the change
  *  live (no reload). The broadcast is a no-op on single-window hosts. */
 function persistAppearance(prefs: Record<string, any>) {
+  writeAppearance(prefs);
+  broadcastAppearance(prefs);
+}
+function writeAppearance(prefs: Record<string, any>) {
   try { (window as any).claude?.appearance?.set(prefs); } catch {}
+}
+function broadcastAppearance(prefs: Record<string, any>) {
   try { (window as any).claude?.appearance?.broadcast?.(prefs); } catch {}
 }
+
+/** How often, at most, a glass-slider drag is written to disk (trailing). */
+export const GLASS_PERSIST_MS = 300;
 
 function applyFont(font: string) {
   document.documentElement.style.setProperty('--font-sans', font);
@@ -499,6 +508,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         try { localStorage.setItem(CONTEXT_DISPLAY_KEY, mode); } catch {}
       }
       if (prefs.glassOverrides && typeof prefs.glassOverrides === 'object') {
+        // WHY: a peer's edit is newer than our throttled, not-yet-written one
+        // (the peer already holds our earlier ticks and persists the whole
+        // object itself), so writing ours later would put an older value on disk.
+        pendingGlassWrite.current = null;
         setGlassOverrides(prefs.glassOverrides);
         try { localStorage.setItem(GLASS_OVERRIDES_KEY, JSON.stringify(prefs.glassOverrides)); } catch {}
       }
@@ -692,14 +705,48 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Update a glass field for a non-user theme. Persists per-slug so the
   // user's glass preferences survive theme switches and app restarts.
+  //
+  // WHY the disk write is throttled (perf B11, 2026-09-24): a glass slider
+  // calls this on EVERY tick of a drag, and `appearance:set` does a blocking
+  // read-merge-write of appearance.json on the main process — which freezes
+  // every window for each tick. The on-screen change (state, localStorage and
+  // the live broadcast to other windows) stays per-tick and instant; only the
+  // disk write waits, at most once per GLASS_PERSIST_MS, always carrying the
+  // LATEST value, and is flushed at once on unmount / window close so the
+  // final slider position is never lost.
+  const pendingGlassWrite = useRef<Record<string, GlassOverrides> | null>(null);
+  const glassWriteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushGlassWrite = useCallback(() => {
+    if (glassWriteTimer.current !== null) { clearTimeout(glassWriteTimer.current); glassWriteTimer.current = null; }
+    const pending = pendingGlassWrite.current;
+    pendingGlassWrite.current = null;
+    if (pending) writeAppearance({ glassOverrides: pending });
+  }, []);
   const setGlassOverride = useCallback((slug: string, field: string, value: number) => {
     setGlassOverrides(prev => {
       const next = { ...prev, [slug]: { ...prev[slug], [field]: value } };
       try { localStorage.setItem(GLASS_OVERRIDES_KEY, JSON.stringify(next)); } catch {}
-      persistAppearance({ glassOverrides: next });
+      broadcastAppearance({ glassOverrides: next });
+      pendingGlassWrite.current = next;
+      // Trailing throttle: the first tick arms the timer, later ticks only
+      // replace the pending value, so a long drag writes every ~300 ms.
+      if (glassWriteTimer.current === null) {
+        glassWriteTimer.current = setTimeout(flushGlassWrite, GLASS_PERSIST_MS);
+      }
       return next;
     });
-  }, []);
+  }, [flushGlassWrite]);
+  // WHY: a window closed (or the provider unmounted) mid-throttle must still
+  // write the last slider value. pagehide covers closes where beforeunload is skipped.
+  useEffect(() => {
+    window.addEventListener('beforeunload', flushGlassWrite);
+    window.addEventListener('pagehide', flushGlassWrite);
+    return () => {
+      window.removeEventListener('beforeunload', flushGlassWrite);
+      window.removeEventListener('pagehide', flushGlassWrite);
+      flushGlassWrite();
+    };
+  }, [flushGlassWrite]);
 
   const cycleTheme = useCallback(() => {
     // WHY: cycling (including leaving preview) is a newer choice than an in-flight peer read.

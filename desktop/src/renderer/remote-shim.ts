@@ -1938,6 +1938,9 @@ export function installShim(): void {
       // Set a named flag on a past session (complete, priority; helpful retired).
       setFlag: (sessionId: string, flag: string, value: boolean) =>
         invoke('session:set-flag', { sessionId, flag, value }),
+      // The host's per-session answer lock (menu-answer-lock.ts, review F4).
+      menuLock: (sessionId: string, holder: string, action: 'acquire' | 'release'): Promise<boolean> =>
+        invoke('session:menu-lock', { sessionId, holder, action }),
       // Toggle a custom user tag on a past session.
       setTag: (sessionId: string, tagId: string, value: boolean) =>
         invoke('session:set-tag', { sessionId, tagId, value }),

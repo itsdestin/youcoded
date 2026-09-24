@@ -1,0 +1,76 @@
+{
+ "ccVersion": "2.1.281",
+ "scenario": "trusted",
+ "key": "trusted-100x35",
+ "folder": "plain",
+ "trusted": true,
+ "args": [],
+ "files": [],
+ "auth": false,
+ "cols": 100,
+ "rows": 35,
+ "capturedAt": "2026-09-24T04:47:58.023Z",
+ "chunks": [
+  {
+   "t": 221,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 303,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 303,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 303,
+   "b64": "G10wO+KcsyBDbGF1ZGUgQ29kZQc="
+  },
+  {
+   "t": 334,
+   "b64": "G1szODsyOzIxNTsxMTk7ODdtIOKWkBtbNDg7MjswOzA7MG3ilpvilojilojilojilpvilogbWzEyRxtbMzltG1s0OW0bWzFtQ2xhdWRlG1sxOUdDb2RlG1syNEcbWzIybRtbMzg7MjsxNTM7MTUzOzE1M212Mi4xLjI4MRtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdt4pad4pacG1s0ODsyOzA7MDswbeKWiOKWiOKWiOKWiOKWiBtbNDlt4paI4paAG1sxMkcbWzM4OzI7MTUzOzE1MzsxNTNtT3B1cxtbMTdHNS41G1syMUcoMU0bWzI1R2NvbnRleHQpG1szNEfCtxtbMzZHQVBJG1s0MEdVc2FnZRtbNDZHQmlsbGluZxtbMzltDQ0KG1szODsyOzIxNTsxMTk7ODdtIBtbM0filp3ilp0bWzZH4pad4padG1sxMkcbWzM4OzI7MTUzOzE1MzsxNTNtL3RtcC9zdGFydHVwLXRydXN0ZWQtbkRTbDQ5L3Byb2plY3QbWzM5bQ0NCg0NCg0NChtbMzg7MjsxMzY7MTM2OzEzNm3ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NCuKdr8KgG1s3bSAbWzI3bQ0NChtbMzg7MjsxMzY7MTM2OzEzNm3ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NChtbM0cbWzM4OzI7MTUzOzE1MzsxNTNt4o+4G1s1R21hbnVhbBtbMTJHbW9kZRtbMTdHb24bWzIwR8K3G1syMkc/G1syNEdmb3IbWzI4R3Nob3J0Y3V0cxtbMzhHwrcbWzQwR+KGkBtbNDJHZm9yG1s0NkdhZ2VudHMbWzczRxtbMzg7MjsyNTU7MTA3OzEyOG1Ob3QbWzc3R2xvZ2dlZBtbODRHaW4bWzg3R8K3G1s4OUdSdW4bWzkzRy9sb2dpbhtbMzltDQ0KG1s4MUcbWzM4OzI7MTUzOzE1MzsxNTNt4peQG1s4M0dtZWRpdW0bWzkwR8K3G1s5MkcvZWZmb3J0G1szOW0NDQobWzJDG1s0QQ=="
+  },
+  {
+   "t": 398,
+   "b64": "G1s+MHEbWz91"
+  },
+  {
+   "t": 398,
+   "b64": "G1tj"
+  },
+  {
+   "t": 909,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 1162,
+   "b64": "G1syRBtbNEI="
+  },
+  {
+   "t": 1162,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz8yNWgbNxtbchs4G10wOwc="
+  }
+ ],
+ "marks": [
+  {
+   "t": 405,
+   "label": "main-prompt-visible",
+   "chunkIndex": 7
+  }
+ ],
+ "dialogs": [],
+ "outcome": {
+  "steps": [],
+  "reachedMainPrompt": true,
+  "exitCode": null,
+  "folderTrusted": true,
+  "bypassAccepted": false,
+  "userSettingsKeys": [
+   "hooks"
+  ],
+  "sessionStartHookAt": [
+   403
+  ]
+ }
+}

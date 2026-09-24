@@ -402,6 +402,43 @@ describe('native:retry channel parity', () => {
   });
 });
 
+// session:menu-lock — the one-device-at-a-time lease for answering a Claude Code
+// menu by verified navigation (main/menu-answer-lock.ts). WHY every surface is
+// pinned here (2026-09-24): the constant check above only compares preload with
+// shared/types.ts. If remote-server or Kotlin dropped the case, a phone's lock ask
+// would get `unsupported` — and a desktop window and a phone could then both type
+// arrows and Enter into one startup dialog, combining into an answer neither
+// person chose (e.g. trusting a folder). The desktop IPC handler and the remote
+// host must also share the ONE host instance, or each would grant its own lease.
+describe('session:menu-lock channel parity', () => {
+  const CHANNEL = 'session:menu-lock';
+  const read = (...p: string[]) => readSourceFile(path.join(__dirname, '..', ...p));
+
+  it('is declared in shared/types.ts and preload.ts under the same constant', () => {
+    expect(read('src', 'shared', 'types.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
+    expect(read('src', 'main', 'preload.ts')).toMatch(/SESSION_MENU_LOCK:\s*'session:menu-lock'/);
+  });
+  it('is invoked by preload.ts', () => {
+    expect(read('src', 'main', 'preload.ts')).toMatch(/ipcRenderer\.invoke\(IPC\.SESSION_MENU_LOCK\b/);
+  });
+  it('is handled in ipc-handlers.ts by the shared host lock', () => {
+    expect(read('src', 'main', 'ipc-handlers.ts')).toMatch(/ipcMain\.handle\(IPC\.SESSION_MENU_LOCK,[^\n]*menuAnswerLock\.handle\(/);
+  });
+  it('is invoked by remote-shim.ts', () => {
+    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('${CHANNEL}'`);
+  });
+  it('is handled in remote-server.ts by the shared host lock', () => {
+    expect(read('src', 'main', 'remote-server.ts')).toMatch(/case 'session:menu-lock':[^\n]*menuAnswerLock\.handle\(/);
+  });
+  it('is handled by SessionService.kt (Android)', () => {
+    const src = readSourceFile(path.join(
+      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
+    ));
+    expect(src).toMatch(/"session:menu-lock"\s*->/);
+  });
+});
+
 // Regression net for pty:raw-bytes. Tier 1 introduced the Android broadcaster;
 // Tier 2 (xterm-in-WebView) added the desktop-side consumer surfaces. Three
 // surfaces must carry identical type strings — drift would silently break the

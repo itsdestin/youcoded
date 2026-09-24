@@ -59,6 +59,7 @@ import { SyncService } from './sync-service';
 import { setSyncService, getSyncConfig } from './sync-state';
 // Cross-device sync spaces (spec 2026-07-03) — folder-based sync engine.
 import { startSyncSpaces, stopSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited } from './sync-spaces/service';
+import { loadSpaceBackupTargets } from './sync-spaces/backup-targets';
 import { createGithubClient, setGithubClient } from './github-client';
 // Plan 2b Task 8: conversation-lease lifecycle. The lease client coordinates
 // which device "holds" a conversation so two devices don't append to the same
@@ -2321,14 +2322,9 @@ void app.whenReady().then(async () => {
       // system uses — drive + iCloud only (GitHub is sync, not backup; spec §11).
       // getSyncConfig is async and exposes the backends array as `.backends`
       // (each BackendInstance carries type-specific fields in `.config`).
-      const cfg = await getSyncConfig();
-      return (cfg?.backends ?? [])
-        .filter((b) => b.type === 'drive' || b.type === 'icloud')
-        .map((b) => b.type === 'drive'
-          ? { type: 'drive' as const, base: `${b.config?.rcloneRemote ?? 'gdrive'}:${b.config?.DRIVE_ROOT ?? 'Claude'}` }
-          // iCloud base is a local folder path — drop backends that never set one.
-          : { type: 'icloud' as const, base: b.config?.ICLOUD_PATH ?? '' })
-        .filter((t) => t.base.length > 0);
+      // WHY: paused destinations did not consent to automatic spaces snapshots;
+      // manual Upload now remains independently available in the sync panel.
+      return loadSpaceBackupTargets(getSyncConfig);
     },
     (m) => log('INFO', 'SyncSpaces', m),
     // Durable machineId → keys the hub's per-device sync-recency map (same id the
@@ -2459,7 +2455,10 @@ async function runShutdown(): Promise<void> {
   // Stop the cross-device sync-spaces engine (clears its backup timer + watchers).
   // .catch, not try/catch: it's an async fn, so a failure arrives as a rejected
   // promise — the old `void` call left that rejection unhandled at quit.
-  stopSyncSpaces().catch(() => {});
+  // WHY captured (2026-09-24): stopSyncSpaces() now also flushes the sync state
+  // file's pending write (SpaceManager writes asynchronously). Joining the capped
+  // race below means turning sync off and quitting at once can't be lost.
+  const syncStopped = stopSyncSpaces().catch(() => {});
   // Stop the Conversation Store (Phase 2a) — unsubscribes the sync-spaces
   // listener, clears the periodic reconciler + pending debounce timers. Sync fn.
   try { stopConversationStore(); } catch {}
@@ -2482,7 +2481,7 @@ async function runShutdown(): Promise<void> {
   // flight lands, and a poll's read-modify-write cut off half-way is exactly the
   // torn account file the lock exists to prevent (review T4 F5). Same 4s cap.
   await Promise.race([
-    Promise.all([engineStopped, chatgptDisposed]),
+    Promise.all([engineStopped, chatgptDisposed, syncStopped]),
     new Promise<void>((r) => setTimeout(r, 4_000)),
   ]).catch(() => {});
 }

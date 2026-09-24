@@ -225,11 +225,19 @@ export async function removeDevice(personalRoot: string, id: string): Promise<vo
   if (!id || typeof id !== 'string') throw new Error(`device-registry: invalid id '${id}'`);
   const dir = registryDir(personalRoot);
   let names: string[];
-  try { names = fs.readdirSync(dir); } catch { return; } // no dir — nothing to remove
-  for (const n of names) {
-    if (!n.endsWith('.json')) continue;
-    const base = isConflictCopyName(n) ? extractConflictBase(n) : n;
-    if (base !== `${id}.json`) continue;
-    try { fs.rmSync(path.join(dir, n), { force: true }); } catch { /* vanished / locked — skip */ }
+  try { names = await fs.promises.readdir(dir); } catch { return; } // no dir — nothing to remove
+  const targets = names.filter((n) => n.endsWith('.json')
+    && (isConflictCopyName(n) ? extractConflictBase(n) : n) === `${id}.json`);
+  // WHY: one surviving copy keeps the device listed, so a locked file (Windows
+  // antivirus, a second app process) used to leave a "removed" device on
+  // screen. Retry once, then fail honestly so the UI does not claim success.
+  let left: string[] = targets;
+  for (let attempt = 0; attempt < 2 && left.length; attempt++) {
+    const failed: string[] = [];
+    for (const n of left) {
+      try { await fs.promises.rm(path.join(dir, n), { force: true }); } catch { failed.push(n); }
+    }
+    left = failed;
   }
+  if (left.length) throw new Error(`device-registry: could not remove ${left.length} file(s) for ${id}`);
 }

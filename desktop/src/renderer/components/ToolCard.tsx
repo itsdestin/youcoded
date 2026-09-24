@@ -158,7 +158,10 @@ export function friendlyToolDisplay(
   // detail line so the label stays the plain-language action, not the argument.
   // awaiting-approval counts as "active" too — it hasn't happened yet, so the
   // past-tense form ("Ran a command") would claim something that isn't true.
-  const active = tool.status === 'running' || tool.status === 'awaiting-approval';
+  // A Claude Code background run is still active after its call returned —
+  // "Running a command" while it works, "Ran a command" only once it ends.
+  const active = tool.status === 'running' || tool.status === 'awaiting-approval'
+    || tool.ccBackground?.status === 'running';
 
   switch (toolName) {
     case 'Bash': {
@@ -174,7 +177,9 @@ export function friendlyToolDisplay(
       // as a background hire). CC cards keep their ⟳ mark.
       const bg = tool.shellRun
         ? (tool.shellRun.status === 'running' ? ' · in the background' : '')
-        : (input.run_in_background ? ' ⟳' : '');
+        : tool.ccBackground
+          ? (tool.ccBackground.status === 'running' ? ' ⟳' : '')
+          : (input.run_in_background ? ' ⟳' : '');
       const label = toolActionLabel('Bash', active) + bg;
       // The model's own description reads better quoted than the raw shell
       // command — fall back to the command itself when there's no description.
@@ -308,7 +313,10 @@ export function friendlyToolDisplay(
     case 'Agent': {
       // Fix: a non-string description rendered "Agent: [object Object]".
       const desc = asString(input.description);
-      const bg = input.run_in_background ? ' ⟳' : '';
+      // ⟳ only while the helper is still out there — same rule as Bash above.
+      const bg = tool.ccBackground
+        ? (tool.ccBackground.status === 'running' && input.run_in_background ? ' ⟳' : '')
+        : (input.run_in_background ? ' ⟳' : '');
       const label = desc ? `Agent: ${desc}` : 'Running Sub-Agent';
       // Fix: a malformed (non-string) subagent_type used to render "[object Object]".
       const subagentType = asString(input.subagent_type);
@@ -1338,8 +1346,13 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   // G-1: a Bash card with a shell-run record shows the RUN's state the same
   // way — its tool result is only the launch acknowledgment.
   const shell = tool.toolName === 'Bash' ? tool.shellRun : undefined;
+  // Claude Code's background Agent / Bash (2026-09-24): same idea — the
+  // receipt says 'complete', the run record says whether the work is done.
+  // Only on a receipt that succeeded; a failed launch shows the tool's failure.
+  const ccBg = tool.status === 'complete' ? tool.ccBackground : undefined;
   const runIcon: 'spinner' | 'check' | 'fail' | 'stopped' | null =
     tool.status === 'awaiting-approval' ? null
+    : ccBg ? (ccBg.status === 'running' ? 'spinner' : ccBg.status === 'completed' ? 'check' : ccBg.status === 'failed' ? 'fail' : 'stopped')
     : shell ? (shell.status === 'running' ? 'spinner' : shell.status === 'stopped' ? 'stopped' : shell.exitCode === 0 ? 'check' : 'fail')
     : !run ? null
     : run.status === 'running' ? 'spinner'

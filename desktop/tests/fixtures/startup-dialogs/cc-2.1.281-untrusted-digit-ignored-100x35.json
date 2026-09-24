@@ -1,0 +1,157 @@
+{
+ "ccVersion": "2.1.281",
+ "scenario": "untrusted-digit-ignored",
+ "key": "untrusted-digit-ignored-100x35",
+ "folder": "plain",
+ "trusted": false,
+ "args": [],
+ "files": [],
+ "auth": false,
+ "cols": 100,
+ "rows": 35,
+ "capturedAt": "2026-09-24T04:47:42.853Z",
+ "chunks": [
+  {
+   "t": 203,
+   "b64": "GzcbW3IbOBtbPzI1aA=="
+  },
+  {
+   "t": 214,
+   "b64": "G1s/MjVs"
+  },
+  {
+   "t": 214,
+   "b64": "G1s/MjAwNGgbWz8yMDMxaBtbPzEwMDRo"
+  },
+  {
+   "t": 219,
+   "b64": "DQ0KG1szODsyOzI1NTsxOTM7N23ilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIAbWzM5bQ0NChtbMkcbWzM4OzI7MjU1OzE5Mzs3bRtbMW1BY2Nlc3NpbmcbWzEyR3dvcmtzcGFjZTobWzIybRtbMzltDQ0KDQ0KG1syRxtbMW0vdG1wL3N0YXJ0dXAtdW50cnVzdGVkLWRpZ2l0LWlnbm9yZWQtbmRIOVIwL3Byb2plY3QbWzIybQ0NCg0NChtbMkdRdWljaxtbOEdzYWZldHkbWzE1R2NoZWNrOhtbMjJHSXMbWzI1R3RoaXMbWzMwR2EbWzMyR3Byb2plY3QbWzQwR3lvdRtbNDRHY3JlYXRlZBtbNTJHb3IbWzU1R29uZRtbNTlHeW91G1s2M0d0cnVzdD8bWzcwRyhMaWtlG1s3Nkd5b3VyG1s4MUdvd24bWzg1R2NvZGUsG1s5MUdhDQ0KG1syR3dlbGwta25vd24bWzEzR29wZW4bWzE4R3NvdXJjZRtbMjVHcHJvamVjdCwbWzM0R29yG1szN0d3b3JrG1s0Mkdmcm9tG1s0N0d5b3VyG1s1Mkd0ZWFtKS4bWzU5R0lmG1s2Mkdub3QsG1s2N0d0YWtlG1s3MkdhG1s3NEdtb21lbnQbWzgxR3RvG1s4NEdyZXZpZXcbWzkxR3doYXQncxtbOThHaW4NDQobWzJHdGhpcxtbN0dmb2xkZXIbWzE0R2ZpcnN0Lg0NCg0NChtbMkdDbGF1ZGUbWzlHQ29kZSdsbBtbMTdHYmUbWzIwR2FibGUbWzI1R3RvG1syOEdyZWFkLBtbMzRHZWRpdCwbWzQwR2FuZBtbNDRHZXhlY3V0ZRtbNTJHZmlsZXMbWzU4R2hlcmUuDQ0KDQ0KG1syRxtbMzg7MjsxNTM7MTUzOzE1M21TZWN1cml0eRtbMTFHZ3VpZGUbWzM5bQ0NCg0NChtbMkcbWzM4OzI7MTc3OzE4NTsyNDlt4p2vG1s0R05vLBtbOEdleGl0G1szOW0NDQobWzRHWWVzLBtbOUdJG1sxMUd0cnVzdBtbMTdHdGhpcxtbMjJHZm9sZGVyDQ0KDQ0KG1syRxtbMzg7MjsxNTM7MTUzOzE1M21FbnRlchtbOEd0bxtbMTFHY29uZmlybRtbMTlHwrcbWzIxR0VzYxtbMjVHdG8bWzI4R2NhbmNlbBtbMzltDQ0KG1sxQxtbNEE="
+  },
+  {
+   "t": 220,
+   "b64": "G1s+MHEbWz91G1tj"
+  },
+  {
+   "t": 3258,
+   "b64": "G1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGw="
+  },
+  {
+   "t": 3509,
+   "b64": "G1sxRBtbNEI="
+  },
+  {
+   "t": 3510,
+   "b64": "G1s/MTAwNGwbWz40bRtbPHUbWz8yMDMxbBtbPzIwMDRsGyhCDxtbPzEwMTZsG1s/MTAwNmwbWz8xMDAzbBtbPzEwMDJsG1s/MTAwMGwbWz8yNWgbNxtbchs4G10wOwc="
+  }
+ ],
+ "marks": [
+  {
+   "t": 970,
+   "label": "dialog-1-visible",
+   "chunkIndex": 5
+  },
+  {
+   "t": 970,
+   "label": "send",
+   "chunkIndex": 5,
+   "data": "2"
+  },
+  {
+   "t": 2477,
+   "label": "dialog-1-checked",
+   "chunkIndex": 5
+  },
+  {
+   "t": 3204,
+   "label": "dialog-2-visible",
+   "chunkIndex": 5
+  },
+  {
+   "t": 3204,
+   "label": "send",
+   "chunkIndex": 5,
+   "data": "\u001b"
+  },
+  {
+   "t": 3849,
+   "label": "dialog-2-stuck",
+   "chunkIndex": 8
+  },
+  {
+   "t": 3849,
+   "label": "exited",
+   "chunkIndex": 8
+  }
+ ],
+ "dialogs": [
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "Accessing workspace:",
+   "options": [
+    "No, exit",
+    "Yes, I trust this folder"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "<tmp-path>",
+    "Quick safety check: Is this a project you created or one you trust? (Like your own code, a",
+    "well-known open source project, or work from your team). If not, take a moment to review what's in",
+    "this folder first.",
+    "Claude Code'll be able to read, edit, and execute files here.",
+    "Security guide"
+   ]
+  },
+  {
+   "present": true,
+   "kind": "select",
+   "heading": "Accessing workspace:",
+   "options": [
+    "No, exit",
+    "Yes, I trust this folder"
+   ],
+   "numbers": [
+    null,
+    null
+   ],
+   "defaultCursor": 0,
+   "selection": "cursor-arrows",
+   "footer": "Enter to confirm · Esc to cancel",
+   "body": [
+    "<tmp-path>",
+    "Quick safety check: Is this a project you created or one you trust? (Like your own code, a",
+    "well-known open source project, or work from your team). If not, take a moment to review what's in",
+    "this folder first.",
+    "Claude Code'll be able to read, edit, and execute files here.",
+    "Security guide"
+   ]
+  }
+ ],
+ "outcome": {
+  "steps": [
+   {
+    "dialog": 1,
+    "keys": "2",
+    "stayed": true
+   },
+   {
+    "dialog": 2,
+    "answered": "\"\\u001b\"",
+    "gone": false
+   }
+  ],
+  "exitCode": 0,
+  "folderTrusted": false,
+  "bypassAccepted": false,
+  "userSettingsKeys": [
+   "hooks"
+  ],
+  "sessionStartHookAt": []
+ }
+}

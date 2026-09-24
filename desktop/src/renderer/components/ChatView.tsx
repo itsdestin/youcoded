@@ -1,19 +1,12 @@
 import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn } from '../state/chat-types';
-import UserMessage from './UserMessage';
-import SpecialistReportCard from './SpecialistReportCard';
+import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn, type AssistantTurn } from '../state/chat-types';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
-import AssistantTurnBubble from './AssistantTurnBubble';
 import ToolCard from './ToolCard';
-import PromptCard, { PromptCardButton } from './PromptCard';
-import { sendPromptInput } from '../state/prompt-input';
-import UsageCard from './UsageCard';
-import SystemMarker from './SystemMarker';
-import SkillInvocationCard from './SkillInvocationCard';
-import { findArchiveBoundary, archivedTooltip } from '../state/archive-boundary';
-import CompactingCard from './CompactingCard';
-import CopyPicker from './CopyPicker';
+import type { PromptCardButton } from './PromptCard';
+import ChatTimelineRow, { type TimelineRowActions } from './ChatTimelineRow';
+import { answerPrompt } from '../state/prompt-input';
+import { findArchiveBoundary } from '../state/archive-boundary';
 import ThinkingIndicator from './ThinkingIndicator';
 import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
@@ -36,7 +29,6 @@ import { OnScreenContext } from '../state/on-screen-context';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
 import { StatusStrip, Button } from './ui';
-import { TimelineEntryHint } from './TimelineEntryHint';
 import { helperAsksOf } from '../utils/specialist-cards';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
@@ -885,19 +877,19 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
           beforeContextTokens: null, // Resume doesn't have pre-compaction stats
         });
       }
-      // Send the keystroke(s) that pick this option in the live Ink menu — a bare
-      // option digit, or (fallback only) arrows plus a separately-written \r.
-      sendPromptInput(sessionId, button);
-      // Mark the prompt as completed in the UI
-      dispatch({
-        type: 'COMPLETE_PROMPT',
-        sessionId,
-        promptId,
-        selection: label,
-      });
+      // Pick this option in the live Ink menu (a digit, or verified navigation),
+      // then mark the card answered — only once Claude Code took it (answerPrompt).
+      return answerPrompt(sessionId, button, () => dispatch({ type: 'COMPLETE_PROMPT', sessionId, promptId, selection: label }));
     },
     [sessionId, dispatch],
   );
+
+  // Latest-handlers ref for the memoised timeline rows (renderer-lists.md): a
+  // row reads these at click time, so the row never needs a fresh callback
+  // prop — which would re-render every row on every streamed word — and a row
+  // that skipped rendering can never call a stale handler.
+  const rowActionsRef = useRef<TimelineRowActions>({ promptSelect: handlePromptSelect, dispatch });
+  rowActionsRef.current = { promptSelect: handlePromptSelect, dispatch };
 
   // Task 12 review fix (Important — float collision): .model-status-strip and
   // .jump-to-bottom share .queued-messages-strip's offset band — they'd
@@ -1184,146 +1176,63 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
               // context reset (Destin, 2026-07-28).
               const { index: lastArchiveIdx, kind: archiveKind } = archiveBoundary;
               return state.timeline.map((entry, idx) => {
-                const isPreCompaction = lastArchiveIdx >= 0 && idx < lastArchiveIdx;
-              let key: string;
-              let content: React.ReactNode;
-              switch (entry.kind) {
-                case 'user':
-                  key = entry.message.id;
-                  // A host-injected user-role turn (a delivered specialist
-                  // report) is an EVENT for the assistant, not anyone's words —
-                  // a compact collapsed card, see SpecialistReportCard. MUST
-                  // mirror BubbleFeed.tsx.
-                  content = entry.injected ? (
-                    <SpecialistReportCard
-                      message={entry.message}
-                      injected={entry.injected}
-                      meta={entry.injectedMeta}
-                      sessionId={sessionId}
-                      showTimestamps={showTimestamps}
-                    />
-                  ) : (
-                    <UserMessage
-                      message={entry.message}
-                      sessionId={sessionId}
-                      showTimestamps={showTimestamps}
-                    />
-                  );
-                  break;
-                case 'assistant-turn': {
-                  const turn = state.assistantTurns.get(entry.turnId);
-                  // Shared gate (chat-types.ts): a segment-less turn renders
-                  // only when its abnormal stopReason gives the footer row
-                  // something to say — the empty_response fix.
-                  if (!shouldRenderAssistantTurn(turn)) return null;
-                  key = entry.turnId;
-                  content = (
-                    <AssistantTurnBubble
-                      turn={turn}
-                      toolGroups={state.toolGroups}
-                      toolCalls={state.toolCalls}
-                      sessionId={sessionId}
-                      provider={provider}
-                      showTimestamps={showTimestamps}
-                    />
-                  );
-                  break;
+                // Only the key and the "render nothing" gates live here; the
+                // row itself is ChatTimelineRow, memoised so a streamed word
+                // re-renders only the entry that changed (see its header).
+                let key: string;
+                let turn: AssistantTurn | undefined;
+                switch (entry.kind) {
+                  case 'user': key = entry.message.id; break;
+                  case 'assistant-turn':
+                    turn = state.assistantTurns.get(entry.turnId);
+                    // Shared gate (chat-types.ts): a segment-less turn renders
+                    // only when its abnormal stopReason gives the footer row
+                    // something to say — the empty_response fix.
+                    if (!shouldRenderAssistantTurn(turn)) return null;
+                    key = entry.turnId;
+                    break;
+                  case 'prompt':
+                    // Perf cycle 2: the "See previous messages" marker is retired —
+                    // older turns now stream in as the top of the list scrolls into
+                    // view. A timeline persisted by an OLDER build can still carry
+                    // one, so it is skipped rather than rendered as a dead prompt.
+                    if (entry.prompt.promptId === HISTORY_EXPAND_PROMPT_ID) return null;
+                    key = entry.prompt.promptId;
+                    break;
+                  // /cost and /usage snapshot — entryId is the stable key since the
+                  // same snapshot object is kept in state across re-renders.
+                  case 'usage-card': key = entry.snapshot.entryId; break;
+                  case 'system-marker': key = entry.marker.id; break;
+                  case 'skill-invocation':
+                  case 'compacting':
+                  case 'copy-picker':
+                    key = entry.id; break;
                 }
-                case 'prompt':
-                  // Perf cycle 2: the "See previous messages" marker is retired —
-                  // older turns now stream in as the top of the list scrolls into
-                  // view. A timeline persisted by an OLDER build can still carry
-                  // one, so it is skipped rather than rendered as a dead prompt.
-                  if (entry.prompt.promptId === HISTORY_EXPAND_PROMPT_ID) return null;
-                  key = entry.prompt.promptId;
-                  content = (
-                    <PromptCard
-                      prompt={entry.prompt}
-                      sessionId={sessionId}
-                      onSelect={(button, label) => handlePromptSelect(entry.prompt.promptId, button, label, entry.prompt.title)}
-                    />
-                  );
-                  break;
-                // /cost and /usage snapshot — entryId is the stable key since the
-                // same snapshot object is kept in state across re-renders.
-                case 'usage-card':
-                  key = entry.snapshot.entryId;
-                  content = <UsageCard snapshot={entry.snapshot} />;
-                  break;
-                // /clear and /compact dividers
-                case 'system-marker':
-                  key = entry.marker.id;
-                  content = <SystemMarker marker={entry.marker} />;
-                  break;
-                // /skill-name — a compact card, never the instructions themselves.
-                case 'skill-invocation':
-                  key = entry.id;
-                  content = (
-                    <SkillInvocationCard
-                      skillId={entry.skillId}
-                      displayName={entry.displayName}
-                      args={entry.args}
-                      skillPath={entry.skillPath}
-                      sessionId={sessionId}
-                    />
-                  );
-                  break;
-                // /compact spinner (and resume-from-summary)
-                case 'compacting':
-                  key = entry.id;
-                  content = <CompactingCard startedAt={entry.startedAt} />;
-                  break;
-                // /copy multi-block picker
-                case 'copy-picker': {
-                  key = entry.id;
-                  // Capture id in closure so the callbacks work after TS narrowing.
-                  const pickerId = entry.id;
-                  content = (
-                    <CopyPicker
-                      id={pickerId}
-                      options={entry.options}
-                      onCopy={(text, label) => {
-                        navigator.clipboard.writeText(text).catch(() => {});
-                        dispatch({ type: 'DISMISS_COPY_PICKER', sessionId, id: pickerId });
-                        // onToast would be nicer but ChatView doesn't have it — minimal UX for now
-                        void label;
-                      }}
-                      onDismiss={() => dispatch({ type: 'DISMISS_COPY_PICKER', sessionId, id: pickerId })}
-                    />
-                  );
-                  break;
-                }
-              }
-              // Folded: render the wrapper at exactly the height its body last
-              // occupied and omit the body. The wrapper stays in the DOM so the
-              // scroll height, the observers and captureScrollAnchor's
-              // `.timeline-entry` query all see an unchanged list.
-              const folded = folding.isFolded(key!);
-              const foldHeight = folded ? folding.heightOf(key!) : undefined;
-              // WHY the hint is a SIBLING, and only for archived entries: a
-              // wrapping <Tooltip> per entry ran its state and effects for every
-              // message on every streamed word, with empty text almost always.
-              // The entry element stays first in the keyed fragment either way,
-              // so archiving it never rebuilds it — see TimelineEntryHint.tsx.
-              return (
-                <React.Fragment key={key!}>
-                <div
-                  ref={attachEntry}
-                  data-entry-key={key!}
-                  className={`timeline-entry in-view${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
-                  style={folded && foldHeight ? { height: foldHeight } : undefined}
-                >
-                  {folded && foldHeight ? null : content}
-                </div>
-                {isPreCompaction && (
-                  <TimelineEntryHint
+                // Folded rows pass their held height; an unfolded row passes
+                // undefined — a primitive either way, so the memo holds.
+                const foldHeight = folding.isFolded(key!) ? folding.heightOf(key!) : undefined;
+                const isAssistant = entry.kind === 'assistant-turn';
+                return (
+                  <ChatTimelineRow
+                    key={key!}
+                    entry={entry}
                     entryKey={key!}
-                    getEntry={getEntryEl}
-                    text={archivedTooltip(archiveKind)}
+                    turn={turn}
+                    // Assistant rows only: a new toolCalls Map (any tool event)
+                    // must not re-render marker and card rows.
+                    toolGroups={isAssistant ? state.toolGroups : undefined}
+                    toolCalls={isAssistant ? state.toolCalls : undefined}
+                    sessionId={sessionId}
+                    provider={provider}
+                    showTimestamps={showTimestamps}
+                    archived={lastArchiveIdx >= 0 && idx < lastArchiveIdx}
+                    archiveKind={archiveKind}
+                    foldHeight={foldHeight}
+                    attachEntry={attachEntry}
+                    getEntryEl={getEntryEl}
+                    actionsRef={rowActionsRef}
                   />
-                )}
-                </React.Fragment>
-              );
+                );
               });
             })()}
             {/* Awaiting-approval tools (incl. AskUserQuestion) pop out as standalone
