@@ -173,11 +173,16 @@ export function ProjectSwitcher({
                   // Keyboard highlight is outline-not-fill (border-accent); the
                   // active project gets a subtle bg-inset fill instead. pr-9
                   // reserves room for the hover × when delete is available.
+                  // WHY bg-accent/10 for the active project, not bg-inset (fix
+                  // batch 1, 2026-09-24): isActive and the default hover both
+                  // used the SAME token, so a hovered-but-not-active row was
+                  // indistinguishable from the actually-active one (job D's
+                  // hover/selected collision). Hover only applies unselected.
                   className={`w-full flex items-center gap-2.5 px-2 py-2 ${onDeleteProject ? 'pr-9' : ''} rounded-md text-left transition-colors border ${
                     isHighlighted
                       ? 'border-accent bg-inset'
                       : isActive
-                        ? 'border-transparent bg-inset'
+                        ? 'border-transparent bg-accent/10'
                         : 'border-transparent hover:bg-inset'
                   }`}
                   onMouseEnter={() => setHighlightIndex(i)}

@@ -16,7 +16,7 @@
     "renderer/remote-shim.ts": 3134,
     "renderer/state/chat-reducer.ts": 3024,
     "renderer/styles/globals.css": 2921,
-    "renderer/components/SessionStrip.tsx": 2774,
+    "renderer/components/SessionStrip.tsx": 2781,
     "main/main.ts": 2538,
     "shared/types.ts": 2210,
     "renderer/components/SyncPanel.tsx": 2042,
@@ -24,6 +24,7 @@
     "renderer/components/ResumeBrowser.tsx": 1837,
     "main/preload.ts": 1891,
     "renderer/components/StatusBar.tsx": 1799,
-    "renderer/components/ToolCard.tsx": 1600
+    "renderer/components/ToolCard.tsx": 1600,
+    "renderer/components/SessionDrawer.tsx": 1514
   }
 }

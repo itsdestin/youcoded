@@ -34,7 +34,7 @@ import type { FileTypeGroup } from '../../shared/artifacts/categorization';
 import { getPlatform, isRemoteMode } from '../platform';
 import { downloadFile } from './artifact-views/download-file';
 import { formatRelativeTime } from '../utils/format-time';
-import { Button, CloseButton, EmptyState, ErrorState, FieldError, SearchFilterPill, Tooltip } from './ui';
+import { Button, CloseButton, EmptyState, ErrorState, FieldError, SearchFilterPill, SectionLabel, Tooltip } from './ui';
 import { FileFilterPopover } from './project-view/FileFilterPopover';
 import { useResolvedConversations } from '../hooks/useResolvedConversations';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -856,13 +856,22 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           after the title truncates the title itself. */}
       {referenced.length > 0 && (
         <div className="mt-3 border-t border-edge pt-2">
-          <div className="px-3 pb-1 text-2xs uppercase tracking-wider text-fg-muted">{COPY.referencedHeading}</div>
+          {/* WHY SectionLabel, not the old uppercase caption (fix batch 1,
+              2026-09-24): design guide small label — normal case, no
+              letter-spacing. Padding on the wrapper: SectionLabel owns only
+              margin (design-lint no-restyle). */}
+          <div className="px-3 pb-1">
+            <SectionLabel>{COPY.referencedHeading}</SectionLabel>
+          </div>
           {referenced.map((r) => (
             <button
               key={`${r.provider}:${r.id}`}
               type="button"
-              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-well ${
-                activePreview?.id === r.id ? 'bg-well text-fg' : 'text-fg-dim'
+              // WHY bg-accent/10 for selected, not bg-well (fix batch 1,
+              // 2026-09-24): was the same token as hover — the collision this
+              // batch's job D exists to fix. Hover only applies unselected.
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
+                activePreview?.id === r.id ? 'bg-accent/10 text-fg' : 'text-fg-dim hover:bg-well'
               }`}
               onClick={() => guardUnsaved(() => dispatch({ type: 'SESSION_PREVIEW_SET', sessionId, provider: r.provider, id: r.id, title: r.title }))}
             >
@@ -1386,8 +1395,14 @@ function ArtifactListItemImpl({ artifact, projectRoot, isActive, isDeleted, sess
     <div className="group relative mx-2 my-1.5 rounded-lg border border-edge-dim bg-inset">
       <Tooltip text={isDeleted ? 'Deleted (file is no longer on disk)' : ''}>
       <button
-        className={`w-full text-left rounded-lg px-2 py-2.5 ${canRemove ? 'pr-8' : ''} hover:bg-inset transition-colors ${
-          isActive ? 'bg-inset' : ''
+        // WHY bg-accent/10, not bg-inset, when selected (fix batch 1,
+        // 2026-09-24): both this and the hover state used the SAME token, so
+        // a hovered-but-not-selected row looked identical to the actually
+        // selected one (inventory/cards-rows-spacing.md's hover/selected
+        // collision finding). Selected gets an accent tint, matching
+        // ModelPicker/FolderSwitcher; hover only applies when NOT selected.
+        className={`w-full text-left rounded-lg px-2 py-2.5 ${canRemove ? 'pr-8' : ''} transition-colors ${
+          isActive ? 'bg-accent/10' : 'hover:bg-inset'
         } ${isDeleted ? 'opacity-50' : ''}`}
         onClick={() => onSelectId(artifact.id)}
       >

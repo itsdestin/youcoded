@@ -2317,13 +2317,20 @@ export default function SessionStrip({
                       const r = e.currentTarget.getBoundingClientRect();
                       setMenuDropIndex(e.clientY < r.top + r.height / 2 ? idx : idx + 1);
                     }}
+                    // WHY bg-accent/10 for the active session, not bg-inset
+                    // (fix batch 1, 2026-09-24): the active row and the
+                    // default hover both used the SAME token, so a hovered
+                    // row could look identical to the actually-active one
+                    // (job D's hover/selected collision). Only the colour
+                    // token changes here — every drag/motion class above and
+                    // below this line is untouched.
                     className={`relative flex items-center pr-1 group/row select-none touch-none ${
                       menuDragId === s.id ? 'opacity-40 ' : ''
                     }${
                       shiftNavIdx === idx
                         ? 'bg-accent/20 text-fg'
                         : s.id === activeSessionId
-                          ? 'bg-inset text-fg'
+                          ? 'bg-accent/10 text-fg'
                           : 'text-fg-dim hover:bg-inset hover:text-fg'
                     } ${isBeingDragged ? 'opacity-30' : ''}`}
                     style={{
