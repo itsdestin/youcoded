@@ -82,8 +82,17 @@ export interface PlanServiceDeps {
   /** Model binding (through the automatic specialist model resolver), price,
    *  specialist definition and permission fingerprints for this document.
    *  `pricing` must be a PlanPricingSnapshot (plan-spend.ts, T2) or null;
-   *  anything else is read as "no price". */
-  resolveManifest(input: { sessionId: string; cwd: string; document: PlanDocumentV1 }): Promise<ExecutionManifest>;
+   *  anything else is read as "no price". T4 (design §5): `stepModels` is
+   *  the plan's OWN per-step overrides, passed by `reconcile` (below) so a
+   *  previously-set override survives a re-freeze; a fresh `propose` has
+   *  none yet. */
+  resolveManifest(input: { sessionId: string; cwd: string; document: PlanDocumentV1; stepModels?: Record<string, { providerId: string; modelId: string }> }): Promise<ExecutionManifest>;
+  /** T4 (design §5): `PlanService.setStepModel`'s own single-leaf resolver —
+   *  optional so the ~70 existing bare `PlanServiceDeps` test constructions
+   *  keep compiling with no setStepModel support, the same way `executor`
+   *  being absent answers "unsupported" honestly instead of pretending to
+   *  run. Throws the resolver's or the provider's own sentence, un-ended. */
+  resolveStep?(input: { sessionId: string; cwd: string; document: PlanDocumentV1; stepId: string; override?: { providerId: string; modelId: string } }): Promise<ExecutionManifest['steps'][string]>;
   /** Queue the user-visible follow-up turn a Comment creates. */
   queueCommentTurn(input: { sessionId: string; turnId: string; planId: string; text: string }): Promise<void> | void;
   executor?: PlanExecutorHooks;
@@ -190,6 +199,16 @@ function allSteps(steps: PlanStepV1[]): PlanStepV1[] {
   return steps.flatMap((s) => (s.kind === 'repeat' ? [s, ...allSteps(s.steps!)] : [s]));
 }
 
+/** T4 (design §5): every LEAF step (map/verify/combine — a repeat's body
+ *  included, never the repeat wrapper itself) — what `setStepModel` may
+ *  name, matching `ExecutionManifest.steps`'s own keys. Duplicated from
+ *  `plan-host-bridge.ts`'s identical `leafSteps` rather than imported: that
+ *  module already imports `PlanService` from this one, and importing back
+ *  would make the two files circular. */
+function leafSteps(steps: PlanStepV1[]): PlanStepV1[] {
+  return steps.flatMap((s) => (s.kind === 'repeat' ? leafSteps(s.steps!) : [s]));
+}
+
 /** Stable JSON for fingerprint comparison (key order must not matter). */
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -251,14 +270,29 @@ type PlanReconcile =
 
 /**
  * Task 14: re-freeze this plan to the models that are configured NOW, in the
- * caller's own journal write. T5 (design §5 "recompute the estimate"):
- * `estimate` is passed in rather than computed here, because it needs the
- * usage-history dependency, which lives on PlanService, not on this bare
- * function — see PlanService.estimateFor's own WHY.
+ * caller's own journal write. T4 (design §5 "silently re-freeze NOT-STARTED
+ * steps"): a step with ≥1 attempt already ran (or is running) on its frozen
+ * binding — Approve/Continue must never swap the model out from under a
+ * specialist that has already spent tokens on it, so `current`'s freshly
+ * resolved entry is kept only for a step this plan hasn't launched yet; a
+ * started step keeps exactly the entry it had. `specialists`/
+ * `permissionFingerprint` are always taken from `current` — `reconcile`
+ * (below) already refused before reaching here if either differed from the
+ * frozen manifest, so they are identical anyway.
+ * T5 (design §5 "recompute the estimate"): `estimateOf` is called with the
+ * MERGED steps (not `current`'s raw ones), so a started step's real frozen
+ * price is what the estimate counts — never `current`'s number for a model
+ * that, for that step, will not actually change.
  */
-function refreeze(plan: PlanRecord, current: ExecutionManifest, estimate: PlanEstimate | undefined): void {
-  plan.manifest = current;
-  plan.estimate = estimate;
+function refreeze(plan: PlanRecord, current: ExecutionManifest, estimateOf: (steps: ExecutionManifest['steps']) => PlanEstimate | undefined): void {
+  const steps = { ...current.steps };
+  for (const step of plan.steps) {
+    if (step.attempts.length === 0) continue;
+    const frozen = plan.manifest.steps[step.id];
+    if (frozen) steps[step.id] = frozen;
+  }
+  plan.manifest = { ...current, steps };
+  plan.estimate = estimateOf(steps);
 }
 
 /** Design §8: `autoStart.underUsd` (renamed from `autoApprove.underTokens` —
@@ -337,7 +371,9 @@ export class PlanService {
     // created.") about a card that is plainly on screen — decision 26's promise
     // is "sign in, then press Continue". The provider's own sentence is
     // unchanged; only this ending is ours.
-    const current = await this.deps.resolveManifest({ sessionId: ref.sessionId, cwd: ref.cwd, document: plan.document })
+    // T4 (design §5): the plan's OWN stepModels overrides ride along, so a
+    // model the user set in Plan settings survives this re-freeze.
+    const current = await this.deps.resolveManifest({ sessionId: ref.sessionId, cwd: ref.cwd, document: plan.document, stepModels: plan.stepModels })
       .catch((e) => {
         if (e instanceof PlanSpecialistsNotReadyError) throw new PlanActionRefused(`${e.message} The plan can't start yet.`);
         throw e;
@@ -529,7 +565,7 @@ export class PlanService {
       const reconciled = await this.reconcile(ref, plan);
       return { ok: true, plan: await this.startRun(ref, planId, ['proposed'], (p) => {
         p.startedAt = this.now();
-        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest, this.estimateFor(ref, p.document, reconciled.manifest.steps));
+        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest, (steps) => this.estimateFor(ref, p.document, steps));
       }) };
     });
   }
@@ -559,10 +595,57 @@ export class PlanService {
       const view = await this.startRun(ref, planId, ['paused', 'interrupted'], (p, replaced) => {
         handoffId = replaced.paused?.handoff?.id;
         resetRecoveriesForContinue(p);
-        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest, this.estimateFor(ref, p.document, reconciled.manifest.steps));
+        if (reconciled.kind === 'refreshed') refreeze(p, reconciled.manifest, (steps) => this.estimateFor(ref, p.document, steps));
       });
       this.notifySuperseded(ref, planId, handoffId);
       return { ok: true, plan: view };
+    });
+  }
+
+  /**
+   * T4 (design §5): `null` clears the step's override (falls back to the
+   * document's own `model`, then the specialist's default); a binding sets
+   * one. Allowed on `proposed`/`running`/`paused`/`interrupted` — a running
+   * plan may still have steps that have not started (design: "a pending
+   * step may change while the plan runs"). Refused for an unknown leaf, a
+   * STARTED step (≥1 attempt), or a model the resolver/provider refuses.
+   * The resolution itself runs BEFORE the write (it may reach the catalog —
+   * never something a locked write should hold open); "started" is checked
+   * INSIDE the SAME locked write `createAttempts` uses (`plan-executor.ts`),
+   * so a launch racing this call can never see a half-applied change: either
+   * this write lands first and the launch reads the new binding, or the
+   * launch's own write lands first and this one is refused, atomically.
+   */
+  setStepModel(sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null): Promise<PlanActionResult> {
+    return this.act('change the model for', async () => {
+      if (!this.deps.resolveStep) return unsupported("Changing a plan's model isn't available in this version of YouCoded.");
+      const { ref, plan } = await this.loadPlan(sessionId, planId);
+      this.requireStatus(plan, ['proposed', 'running', 'paused', 'interrupted']);
+      if (!leafSteps(plan.document.steps).some((s) => s.id === stepId)) throw new PlanActionRefused('This plan has no such step.');
+      let resolved: ExecutionManifest['steps'][string];
+      try {
+        resolved = await this.deps.resolveStep({ sessionId: ref.sessionId, cwd: ref.cwd, document: plan.document, stepId, ...(model ? { override: model } : {}) });
+      } catch (e: any) {
+        // Neutral resolver/provider sentence — never invented here.
+        throw new PlanActionRefused(String(e?.message ?? e));
+      }
+      const record = await this.journal.mutate(ref, (file) => {
+        const p = file.plans.find((x) => x.planId === planId);
+        if (!p) throw new PlanActionRefused('This plan no longer exists.');
+        this.requireStatus(p, ['proposed', 'running', 'paused', 'interrupted']);
+        const started = (p.steps.find((s) => s.id === stepId)?.attempts.length ?? 0) > 0;
+        if (started) throw new PlanActionRefused("This specialist has already started, so its model can't be changed.");
+        if (model) {
+          p.stepModels = { ...p.stepModels, [stepId]: model };
+        } else if (p.stepModels && stepId in p.stepModels) {
+          const { [stepId]: _dropped, ...rest } = p.stepModels;
+          p.stepModels = Object.keys(rest).length > 0 ? rest : undefined;
+        }
+        p.manifest = { ...p.manifest, steps: { ...p.manifest.steps, [stepId]: resolved } };
+        p.estimate = this.estimateFor(ref, p.document, p.manifest.steps);
+        return p;
+      });
+      return { ok: true, plan: projectPlan(record, this.now()) };
     });
   }
 

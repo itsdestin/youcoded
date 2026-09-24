@@ -46,10 +46,22 @@ const DEFAULT_SCAN_DELAY_MS = 5_000;
  *  crossing MAX_ENTRIES repeatedly, writes once instead of once per entry. */
 const DEFAULT_WRITE_DEBOUNCE_MS = 2_000;
 
-/** The four transcript event types that carry a turn's billed usage —
- *  exactly `2026-09-19-specialist-usage.py`'s own read, and the set design
- *  §4 names: "turn-complete, user-interrupt, session-error, compact-summary". */
-const USAGE_EVENT_TYPES = new Set(['turn-complete', 'user-interrupt', 'session-error', 'compact-summary']);
+/** The transcript event types that carry a turn's billed usage, read off
+ *  disk by the background SCAN. WHY no `'session-error'` (T5 review H3):
+ *  design §4's own wording lists it alongside these three, matching
+ *  `2026-09-19-specialist-usage.py`'s read — but `session-error` is
+ *  display-only and never persisted to a session's `.jsonl` file
+ *  (`session-store.ts`'s `append()`, module comment + its own `if
+ *  (event.type === 'session-error')` short-circuit), so this SCAN can never
+ *  actually observe that branch. The LIVE `record()` calls
+ *  (`reportSpecialistSpend`, `runPlanChild`'s `finally`) are unaffected —
+ *  they sum the harness's own in-memory usage totals, not a transcript
+ *  re-parse, so an error-terminated run is still captured correctly the
+ *  first time; only a scan-recovered rebuild (e.g. after a restart before
+ *  `record()` ran) would ever miss that reply's usage, and only very
+ *  slightly. Listing a type here that the scan can never see would just be
+ *  dead code with a misleading comment. */
+const USAGE_EVENT_TYPES = new Set(['turn-complete', 'user-interrupt', 'compact-summary']);
 
 /** One past specialist run, netted into the same four buckets `costForUsage`
  *  bills separately (pricing.ts) — never the raw `inputTokens` total, which

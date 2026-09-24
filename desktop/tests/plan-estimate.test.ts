@@ -204,6 +204,23 @@ describe('estimatePlan — unpriced notes', () => {
     const est = estimatePlan(document, steps, EMPTY_HISTORY);
     expect(est).toMatchObject({ unpricedNote: 'runs on your computer and included in your ChatGPT plan' });
   });
+
+  // T5 review H4: a THIRD distinct reason must read as a proper list, not
+  // "X and Y and Z".
+  it('joins three distinct unpriced notes as a proper list, not "X and Y and Z"', () => {
+    const document = doc([
+      { id: 's1', kind: 'verify', specialist: 'worker', task: 't', summary: 's', of: 'x' },
+      { id: 's2', kind: 'verify', specialist: 'reviewer', task: 't', summary: 's', of: 'x' },
+      { id: 's3', kind: 'verify', specialist: 'explorer', task: 't', summary: 's', of: 'x' },
+    ]);
+    const steps: ExecutionManifest['steps'] = {
+      ...manifestSteps(['s1'], { pricing: { kind: 'local' } }),
+      ...manifestSteps(['s2'], { pricing: { kind: 'free' } }),
+      ...manifestSteps(['s3'], { pricing: null }),
+    };
+    const est = estimatePlan(document, steps, EMPTY_HISTORY);
+    expect(est).toMatchObject({ unpricedNote: 'runs on your computer, included in your ChatGPT plan and no published price' });
+  });
 });
 
 describe('estimatePlan — mixed plans', () => {

@@ -58,7 +58,7 @@ describe('scan', () => {
     });
   });
 
-  it('sums usage across multiple turn-complete/user-interrupt/session-error/compact-summary lines', async () => {
+  it('sums usage across multiple turn-complete/user-interrupt/compact-summary lines', async () => {
     await home.appendSessionLine('proj', 'child-multi', {
       v: 1, sessionId: 'child-multi', harnessId: 'h1', cwd: '/proj', createdAt: 1,
       sessionKind: 'specialist', agentType: 'reviewer', binding: { providerId: 'a', modelId: 'm' },
@@ -70,6 +70,24 @@ describe('scan', () => {
     const h = new SpecialistUsageHistory(home, NO_AUTO_SCAN);
     await h.scan();
     expect(h.snapshot().entries[0].usage).toEqual({ uncached: 170, cacheRead: 0, cacheWrite: 0, output: 17 });
+  });
+
+  // T5 review H3: 'session-error' is display-only and never actually reaches
+  // a real transcript (session-store.ts's append() short-circuits it before
+  // it hits disk), so it carries no usage in the live app. This pins the
+  // scan's own behavior directly — a hand-appended line the real write path
+  // would never produce is still correctly ignored, never double-counted or
+  // crashed on.
+  it('ignores a session-error line even if one is present on disk', async () => {
+    await home.appendSessionLine('proj', 'child-err', {
+      v: 1, sessionId: 'child-err', harnessId: 'h1', cwd: '/proj', createdAt: 1,
+      sessionKind: 'specialist', agentType: 'reviewer', binding: { providerId: 'a', modelId: 'm' },
+    });
+    await home.appendSessionLine('proj', 'child-err', { type: 'turn-complete', sessionId: 'child-err', data: { usage: { inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheCreationTokens: 0 } } });
+    await home.appendSessionLine('proj', 'child-err', { type: 'session-error', sessionId: 'child-err', data: { usage: { inputTokens: 999, outputTokens: 999, cacheReadTokens: 999, cacheCreationTokens: 999 } } });
+    const h = new SpecialistUsageHistory(home, NO_AUTO_SCAN);
+    await h.scan();
+    expect(h.snapshot().entries[0].usage).toEqual({ uncached: 100, cacheRead: 0, cacheWrite: 0, output: 10 });
   });
 
   it('skips a non-specialist (root) session file — no entry at all', async () => {

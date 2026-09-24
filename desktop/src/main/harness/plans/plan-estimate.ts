@@ -190,10 +190,17 @@ function defaultUsageFor(agentType: string, canWrite?: (specialistId: string) =>
   return canWrite?.(agentType) === false ? DEFAULT_USAGE_BY_TYPE.reviewer : DEFAULT_USAGE_BY_TYPE.worker;
 }
 
+/** T5 review H4: a plain "X and Y" reads fine for two notes, but joining
+ *  three or more the same way ("X and Y and Z") is grammatically odd. The
+ *  general list form (all but the last comma-joined, "and" before the last)
+ *  degrades to plain "X and Y" at exactly two — same wording as before —
+ *  and only changes shape once a third distinct note (local + ChatGPT + no
+ *  published price, all in one plan) makes it "X, Y and Z". Same join style
+ *  `notReadySentence` (plan-host-bridge.ts) already uses for its own list. */
 function composeUnpricedNote(notes: readonly string[]): string {
   if (notes.length === 0) return NO_PUBLISHED_PRICE;
   if (notes.length === 1) return notes[0];
-  return notes.join(' and ');
+  return `${notes.slice(0, -1).join(', ')} and ${notes[notes.length - 1]}`;
 }
 
 /**

@@ -1,18 +1,21 @@
-// Specialists plans, Task 4 — the plan-specific host decisions (plan-host-bridge.ts)
-// against a fake host port: which model a plan specialist runs on, what is
-// frozen into the manifest, when a launch is refused, and the smallest Add
-// budget after a soft (ChatGPT) overshoot.
+// Specialists plans, Task 4 (spending rework T4) — the plan-specific host
+// decisions (plan-host-bridge.ts) against a fake host port: which model a
+// plan specialist runs on (per LEAF STEP now — design §5), what is frozen
+// into the manifest, and when a launch is refused. The old per-request
+// budget-adapter measurement (setup probe, minimum Add budget, soft-route
+// overshoot) is gone with the reservation system it belonged to — see this
+// file's own WHY comments for what each deleted describe block used to
+// cover and why nothing here replaces it 1:1.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
-import { PlanHostBridge, definitionFingerprint, PLAN_MINIMUM_ADD_MARGIN_TOKENS, type PlanHostPort, type PlanRoute } from '../src/main/harness/plans/plan-host-bridge';
+import { PlanHostBridge, definitionFingerprint, type PlanHostPort, type PlanRoute } from '../src/main/harness/plans/plan-host-bridge';
 import { BUILTIN_ROSTER, resolveSpecialist } from '../src/main/harness/specialists/registry';
 import { DelegatedModels } from '../src/main/harness/specialists/delegated-models';
 import { CLOUD_DEFAULT } from '../src/main/harness/capability-profile';
-import { PLAN_CACHE_WINDOW_MS, disableAdapterForPlans, resetDisabledAdaptersForTests } from '../src/main/harness/plans/budget-adapter';
 import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
-import { PLAN_REPORT_ONLY_RESEND, PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError } from '../src/main/harness/plans/plan-executor';
-import { PlanSpecialistsNotReadyError, type PlanRecord } from '../src/main/harness/plans/types';
+import { PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError } from '../src/main/harness/plans/plan-executor';
+import { PlanSpecialistsNotReadyError, type ExecutionManifest, type PlanRecord } from '../src/main/harness/plans/types';
 import { PLAN_PAUSE_KINDS } from '../src/shared/types';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { ProviderReadiness } from '../src/shared/provider-types';
@@ -21,13 +24,15 @@ const SID = 'root';
 // Task 13: the provider registry's own sentence, verbatim — never reworded here.
 const SIGN_IN = 'Sign in with ChatGPT in Settings → Model Providers to use this model.';
 const DOC: PlanDocumentV1 = { goal: 'g', steps: [
-  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] },
+  { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a'] },
 ] };
 
 let root: string; let home: NativeHome; let routeType: PlanRoute['providerType']; let mode: string;
 let parentBinding = { providerId: 'openrouter', modelId: 'parent' };
-let catalog = [{ id: 'deepseek/deepseek-v4-flash-0731', providerId: 'openrouter', label: 'DS' }, { id: 'gpt-5.6-terra', providerId: 'chatgpt', label: 'Terra' }];
-let nextBound = 100;
+let catalog: Array<{ id: string; providerId: string; label: string }> = [
+  { id: 'deepseek/deepseek-v4-flash-0731', providerId: 'openrouter', label: 'DS' },
+  { id: 'gpt-5.6-terra', providerId: 'chatgpt', label: 'Terra' },
+];
 let childEvents: TranscriptEvent[] = [];
 // Task 13 (decision 25): what the provider registry says about the binding's
 // credentials. Ready unless a test says otherwise.
@@ -44,7 +49,16 @@ function port(): PlanHostPort {
     roster: () => BUILTIN_ROSTER,
     designated: new DelegatedModels(home),
     catalog: async () => catalog,
-    resolveRoute: async () => ({ providerType: routeType, profile: CLOUD_DEFAULT, pricing: { in: 1, out: 2 }, free: false, contextLength: 100_000, totalSlots: null }),
+    // WHY `free`/`pricing` follow `routeType` (T4 rewrite): the old fake
+    // always returned the same priced route no matter the provider, which
+    // fit the deleted "soft ChatGPT route" concept but tests nothing real
+    // now — a ChatGPT-routed specialist's pricing snapshot is the thing
+    // worth pinning (`pricingSnapshot`'s own `free`/`isFreePricing` check).
+    resolveRoute: async () => ({
+      providerType: routeType, profile: CLOUD_DEFAULT,
+      pricing: routeType === 'chatgpt' ? null : { in: 1, out: 2 },
+      free: routeType === 'chatgpt', contextLength: 100_000, totalSlots: null,
+    }),
     credentialReadiness: async (binding) => { readinessAsked.push(binding.modelId); return readiness; },
     maxConcurrent: () => 4,
     readChildEvents: () => childEvents,
@@ -57,59 +71,95 @@ function port(): PlanHostPort {
     queuePlanNotice: () => false,
     withdrawPlanNotice: () => false,
     startChild: async () => { throw new Error('not in this test'); },
-    probeSession: async () => ({
-      session: {
-        planSetupRequest: async () => ({ system: 'x'.repeat(500), tools: [] }),
-        planNextRequestBound: async () => ({ ok: true, tokens: nextBound }),
-      } as any,
-      dispose: () => {},
-    }),
   };
 }
 
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-bridge-'));
   home = new NativeHome(root);
-  routeType = 'openrouter'; mode = 'ask'; nextBound = 100; childEvents = [];
+  routeType = 'openrouter'; mode = 'ask'; childEvents = [];
   readiness = { ok: true }; readinessAsked = [];
   parentBinding = { providerId: 'openrouter', modelId: 'parent' };
-  resetDisabledAdaptersForTests();
+  catalog = [
+    { id: 'deepseek/deepseek-v4-flash-0731', providerId: 'openrouter', label: 'DS' },
+    { id: 'gpt-5.6-terra', providerId: 'chatgpt', label: 'Terra' },
+  ];
 });
 afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }));
 
-describe('the frozen manifest', () => {
-  it('uses the automatic specialist model and measures the setup with the route\'s adapter', async () => {
+describe('the frozen manifest — per-leaf-step resolution (design §5)', () => {
+  it('uses the automatic specialist default and freezes the CATALOG label, not the bare id', async () => {
     const m = await new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC });
-    expect(m.specialists.reviewer).toEqual({
-      definitionFingerprint: definitionFingerprint(resolveSpecialist('reviewer')!),
+    expect(m.specialists.reviewer).toEqual({ definitionFingerprint: definitionFingerprint(resolveSpecialist('reviewer')!) });
+    expect(m.steps.s1).toEqual({
       binding: { providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash-0731' },
+      label: 'DS',
       pricing: { kind: 'priced', rates: { in: 1, out: 2 } },
-      setupTokens: 500 + 1024,
+      source: 'default',
     });
     expect(m.modelLabel).toBe('deepseek/deepseek-v4-flash-0731');
   });
 
-  it('a ChatGPT specialist marks its entry approximate (soft route)', async () => {
+  it('a ChatGPT specialist freezes a free pricing snapshot, not a priced one', async () => {
     parentBinding = { providerId: 'chatgpt', modelId: 'gpt-parent' };
     routeType = 'chatgpt';
     const m = await new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC });
-    expect(m.specialists.reviewer).toMatchObject({ binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' }, approximateLimit: true });
+    expect(m.steps.s1).toMatchObject({ binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' }, pricing: { kind: 'free' } });
+  });
+
+  it('the document\'s own step `model` wins over the specialist default, and falls back to it when absent', async () => {
+    const withModel: PlanDocumentV1 = { goal: 'g', steps: [{ ...DOC.steps[0], model: 'gpt-5.6-terra' }] };
+    const m = await new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: withModel });
+    expect(m.steps.s1).toMatchObject({ binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' }, source: 'document' });
+    const noModel = await new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC });
+    expect(noModel.steps.s1.source).toBe('default');
+  });
+
+  it('a `stepModels` user override wins over both the document\'s model and the default', async () => {
+    const withModel: PlanDocumentV1 = { goal: 'g', steps: [{ ...DOC.steps[0], model: 'gpt-5.6-terra' }] };
+    const m = await new PlanHostBridge(port()).resolveManifest({
+      sessionId: SID, cwd: '/proj', document: withModel,
+      stepModels: { s1: { providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash-0731' } },
+    });
+    expect(m.steps.s1).toMatchObject({ binding: { providerId: 'openrouter', modelId: 'deepseek/deepseek-v4-flash-0731' }, source: 'user' });
+  });
+
+  it('T4: providerId disambiguates a model id offered by two providers — a bare document `model` refuses instead', async () => {
+    catalog = [
+      { id: 'shared-id', providerId: 'openrouter', label: 'Shared (OpenRouter)' },
+      { id: 'shared-id', providerId: 'chatgpt', label: 'Shared (ChatGPT)' },
+    ];
+    const withModel: PlanDocumentV1 = { goal: 'g', steps: [{ ...DOC.steps[0], model: 'shared-id' }] };
+    // No providerId to disambiguate: the document's own `model` is a bare
+    // string, so this refuses exactly like an assistant-typed ambiguous id.
+    await expect(new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: withModel }))
+      .rejects.toThrow(/available from multiple providers/);
+    // A `stepModels` override carries its own providerId, so it resolves cleanly.
+    const m = await new PlanHostBridge(port()).resolveManifest({
+      sessionId: SID, cwd: '/proj', document: DOC,
+      stepModels: { s1: { providerId: 'chatgpt', modelId: 'shared-id' } },
+    });
+    expect(m.steps.s1).toMatchObject({ binding: { providerId: 'chatgpt', modelId: 'shared-id' }, label: 'Shared (ChatGPT)' });
+  });
+
+  it('a stepModels override the catalog no longer confirms refuses with the resolver\'s own sentence', async () => {
+    await expect(new PlanHostBridge(port()).resolveManifest({
+      sessionId: SID, cwd: '/proj', document: DOC,
+      stepModels: { s1: { providerId: 'openrouter', modelId: 'retired-model' } },
+    })).rejects.toThrow(/"retired-model" is not an available model/);
   });
 
   it('refuses with a readable reason when no safe specialist model can be confirmed', async () => {
     catalog = [];
     await expect(new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC }))
       .rejects.toThrow('couldn\'t confirm a budget model for the "reviewer" specialist');
-    catalog = [{ id: 'deepseek/deepseek-v4-flash-0731', providerId: 'openrouter', label: 'DS' }, { id: 'gpt-5.6-terra', providerId: 'chatgpt', label: 'Terra' }];
   });
 
   // Task 13 (decision 25), the whole reason for this task: Destin's tiers
   // resolved to ChatGPT models while he was signed out, the app proposed the
   // plan anyway, and it only died after he approved it.
   it('refuses to propose when a specialist\'s provider is not ready, repeating the provider\'s own sentence', async () => {
-    const probed: string[] = [];
     const p = port();
-    p.probeSession = async (input) => { probed.push(input.specialist.id); throw new Error('the probe must not run for a specialist that cannot run'); };
     parentBinding = { providerId: 'chatgpt', modelId: 'gpt-parent' };
     routeType = 'chatgpt';
     readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
@@ -120,8 +170,6 @@ describe('the frozen manifest', () => {
     expect(err).toBeInstanceOf(PlanSpecialistsNotReadyError);
     expect((err as Error).message).toBe(`The "reviewer" specialist can't run right now: ${SIGN_IN}`);
     expect((err as PlanSpecialistsNotReadyError).specialists).toEqual([{ id: 'reviewer', label: 'ChatGPT Plan', message: SIGN_IN }]);
-    // Nothing was measured: no probe session for a specialist that can't run.
-    expect(probed).toEqual([]);
     // The check ran on the RESOLVED specialist model, not the parent's.
     expect(readinessAsked).toEqual(['gpt-5.6-terra']);
   });
@@ -130,14 +178,22 @@ describe('the frozen manifest', () => {
     // Review finding 9: throwing inside the loop named only the first one, so
     // the person fixed it, asked again and was refused for the second.
     const two: PlanDocumentV1 = { goal: 'g', steps: [
-      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] },
-      { id: 's2', kind: 'map', specialist: 'worker', task: 'Fix {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a'] },
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a'] },
+      { id: 's2', kind: 'map', specialist: 'worker', task: 'Fix {item}', summary: 'Plain sentence.', items: ['a'] },
     ] };
-    const p = port();
-    p.probeSession = async () => { throw new Error('the probe must not run for a specialist that cannot run'); };
     readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
-    await expect(new PlanHostBridge(p).resolveManifest({ sessionId: SID, cwd: '/proj', document: two }))
+    await expect(new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: two }))
       .rejects.toThrow(`The "reviewer" and "worker" specialists can't run right now: ${SIGN_IN}`);
+  });
+
+  it('T4: two leaf steps of the SAME specialist, both not ready with the same message, are named once — not twice', async () => {
+    const two: PlanDocumentV1 = { goal: 'g', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a'] },
+      { id: 's2', kind: 'map', specialist: 'reviewer', task: 'Review {item} too', summary: 'Plain sentence.', items: ['a'] },
+    ] };
+    readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
+    const err = await new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: two }).catch((e) => e);
+    expect((err as PlanSpecialistsNotReadyError).specialists).toEqual([{ id: 'reviewer', label: 'ChatGPT Plan', message: SIGN_IN }]);
   });
 
   it('gives each different provider problem its own sentence', () => {
@@ -166,124 +222,64 @@ describe('the frozen manifest', () => {
   });
 });
 
-const soft = (over: Partial<PlanRecord> = {}): PlanRecord => ({
-  planId: 'p1', toolUseId: 't', document: DOC, maximumAttempts: 1, maxFanOut: 1,
-  ceilingTokens: 2000, ceilingUsd: null, usedTokens: 2600, status: 'paused', seq: 3, createdAt: 1,
-  manifest: {
-    modelLabel: 'x', permissionFingerprint: 'p',
-    specialists: { reviewer: { definitionFingerprint: 'd', binding: { providerId: 'chatgpt', modelId: 'm' }, pricing: null, setupTokens: 1000, approximateLimit: true } },
-  },
-  steps: [{ id: 's1', status: 'paused', attempts: [{
-    attemptId: 'a1', itemIndex: 0, iteration: 0, childId: 'kid', baseTokens: 2000, addedTokens: 0, reservedTokens: 0, spentTokens: 2600, phase: 'response-persisted', softLimit: true,
-  }] }],
-  fenceEpoch: 1,
+// T4 (design §5): `PlanService.setStepModel`'s own resolver — behavior
+// beyond what `plan-step-model.test.ts` covers through the real service is
+// exercised here directly, against the bridge.
+describe('resolveStep — the single-leaf resolver behind setStepModel', () => {
+  it('resolves one leaf without needing the OTHER leaves\' specialists to be ready', async () => {
+    const two: PlanDocumentV1 = { goal: 'g', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Plain sentence.', items: ['a'] },
+      { id: 's2', kind: 'map', specialist: 'worker', task: 'Fix {item}', summary: 'Plain sentence.', items: ['a'] },
+    ] };
+    const p = port();
+    p.credentialReadiness = async (binding) => (binding.modelId.includes('deepseek') ? { ok: false, message: 'nope', label: 'X' } : { ok: true });
+    const bridge = new PlanHostBridge(p);
+    // s2's specialist (worker) resolves to the SAME not-ready model as s1's
+    // default — but changing s1 to an explicit, ready override must still
+    // succeed: this call names only s1.
+    const entry = await bridge.resolveStep({
+      sessionId: SID, cwd: '/proj', document: two, stepId: 's1', override: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' },
+    });
+    expect(entry).toMatchObject({ binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' }, source: 'user' });
+  });
+
+  it('a provider that is not ready is the plain provider sentence, never "the plan wasn\'t created"', async () => {
+    readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
+    const bridge = new PlanHostBridge(port());
+    await expect(bridge.resolveStep({ sessionId: SID, cwd: '/proj', document: DOC, stepId: 's1', override: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' } }))
+      .rejects.toThrow(SIGN_IN);
+  });
+
+  it('clearing the override (no `override`) falls back to the document/default, same order as resolveManifest', async () => {
+    const withModel: PlanDocumentV1 = { goal: 'g', steps: [{ ...DOC.steps[0], model: 'gpt-5.6-terra' }] };
+    const bridge = new PlanHostBridge(port());
+    const entry = await bridge.resolveStep({ sessionId: SID, cwd: '/proj', document: withModel, stepId: 's1' });
+    expect(entry).toMatchObject({ binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' }, source: 'document' });
+  });
+
+  it('an unknown leaf refuses plainly', async () => {
+    const bridge = new PlanHostBridge(port());
+    await expect(bridge.resolveStep({ sessionId: SID, cwd: '/proj', document: DOC, stepId: 'ghost' })).rejects.toThrow('This plan has no such step.');
+  });
+});
+
+const manifest = (over: Partial<ExecutionManifest> = {}): ExecutionManifest => ({
+  modelLabel: 'm',
+  specialists: { reviewer: { definitionFingerprint: 'd' } },
+  steps: { s1: { binding: { providerId: 'chatgpt', modelId: 'm' }, label: 'm', pricing: null, source: 'default' } },
+  permissionFingerprint: 'x',
   ...over,
 });
-const ev = (type: TranscriptEvent['type'], data: TranscriptEvent['data'] = {}): TranscriptEvent => ({ type, sessionId: 'kid', uuid: `${type}${Math.random()}`, timestamp: 1, data });
 
-describe('the minimum Add budget', () => {
-  it('after a soft overshoot covers the resume prompt, what the specialist overshot, and the plan limit', async () => {
-    routeType = 'chatgpt';
-    nextBound = 300;
-    childEvents = [ev('user-message', { text: 'brief' }), ev('assistant-text', { text: 'long' }), ev('turn-complete', { stopReason: 'plan_budget_exhausted' })];
-    const bridge = new PlanHostBridge(port()) as any;
-    const min = (await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1'))?.tokens;
-    // left = 2000 − 2600 = −600 → the resume request needs 300 + 1 + margin + 600.
-    expect(min).toBe(300 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
-    // Review items 3/4: an unexplained action restarts with the tool-naming
-    // brief, so that request is measured too.
-    childEvents = [ev('user-message', { text: 'brief' }), ev('tool-use', { toolUseId: 'w', toolName: 'Write' })];
-    expect((await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1'))?.tokens).toBe(300 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
-    // The plan-wide soft stop alone (nothing measurable) needs used − ceiling + 1.
-    childEvents = [];
-    expect((await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, soft(), 'a1'))?.tokens).toBe(2600 - 2000 + 1);
-  });
-
-  it('review item 2: the plan-wide gap is asked once — a sibling\'s own overshoot is left to its own pause', async () => {
-    routeType = 'chatgpt';
-    nextBound = 0;
-    childEvents = [ev('user-message', { text: 'brief' })];
-    const plan = soft({ usedTokens: 6600, ceilingTokens: 4000 });
-    plan.document = { goal: 'g', steps: [{ id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a', 'b'] }] };
-    plan.steps[0].attempts.push({
-      attemptId: 'b1', itemIndex: 1, iteration: 0, childId: 'kid-b', baseTokens: 2000, addedTokens: 0, reservedTokens: 0, spentTokens: 4000, phase: 'response-persisted', softLimit: true,
-    });
-    const bridge = new PlanHostBridge(port()) as any;
-    // A: its own need (0 + 1 + margin + its 600 overshoot). Without the fix the
-    // whole gap (6600 − 4000 + 1 = 2601, which includes B's 2000) was asked here
-    // AND again at B's own pause.
-    expect((await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, plan, 'a1'))?.tokens).toBe(1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS + 600);
-  });
-
-  it('a capped route has no plan-wide gap; nothing is needed when the allowance already fits', async () => {
-    childEvents = [ev('user-message', { text: 'brief' })];
-    const bridge = new PlanHostBridge(port()) as any;
-    const plan = soft({ usedTokens: 500, manifest: { ...soft().manifest, specialists: { reviewer: { ...soft().manifest.specialists.reviewer, binding: { providerId: 'openrouter', modelId: 'm' }, approximateLimit: undefined } } } });
-    plan.steps[0].attempts[0].spentTokens = 500;
-    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, plan, 'a1')).toBeUndefined();
-  });
+const pausedRecord = (over: Partial<PlanRecord> = {}): PlanRecord => ({
+  planId: 'p1', toolUseId: 't', document: DOC, maximumAttempts: 1, maxFanOut: 1,
+  usedTokens: 0, status: 'paused', seq: 3, createdAt: 1,
+  manifest: manifest(),
+  steps: [{ id: 's1', status: 'paused', attempts: [] }],
+  fenceEpoch: 1,
+  paused: { stepId: 's1', reason: 'a specialist paused' },
+  ...over,
 });
-
-describe('Task 12 follow-up 1: warm and cold minimums', () => {
-  const capped = (over: Partial<PlanAttemptRecordLike> = {}): PlanRecord => {
-    const plan = soft({ usedTokens: 500, manifest: { ...soft().manifest, specialists: { reviewer: { ...soft().manifest.specialists.reviewer, binding: { providerId: 'openrouter', modelId: 'm' }, approximateLimit: undefined } } } });
-    Object.assign(plan.steps[0].attempts[0], { spentTokens: 1_900, softLimit: undefined, lastRequest: { at: 50_000, messages: 3, hash: 'h' } }, over);
-    return plan;
-  };
-  type PlanAttemptRecordLike = PlanRecord['steps'][number]['attempts'][number];
-  /** A probe whose warm answer (given a mark) is smaller than its full one. */
-  const twoBounds = (p: ReturnType<typeof port>, full: number, warmTokens: number, seen: Array<{ text: string; warm: unknown }>) => {
-    p.probeSession = async () => ({
-      session: { planNextRequestBound: async (_a: unknown, text: string, warm?: unknown) => { seen.push({ text, warm }); return { ok: true, tokens: warm ? warmTokens : full }; } } as any,
-      dispose: () => {},
-    });
-    return p;
-  };
-
-  it('returns the cold minimum and, when smaller, the warm one valid until the last request + 4 minutes', async () => {
-    childEvents = [ev('user-message', { text: 'brief' }), ev('tool-use', { toolUseId: 'w', toolName: 'Read' }), ev('tool-result', { toolUseId: 'w', toolResult: 'x' })];
-    const seen: Array<{ text: string; warm: unknown }> = [];
-    const bridge = new PlanHostBridge(twoBounds(port(), 5_000, 1_200, seen), { now: () => 60_000 }) as any;
-    // left = 2000 − 1900 = 100.
-    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, capped(), 'a1')).toEqual({
-      tokens: 5_000 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100,
-      warm: { tokens: 1_200 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100, until: 50_000 + PLAN_CACHE_WINDOW_MS },
-    });
-    expect(seen[1].warm).toEqual({ last: { at: 50_000, messages: 3, hash: 'h' }, now: 60_000 });
-    // No previous request: cold only.
-    expect(await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, capped({ lastRequest: undefined }), 'a1')).toEqual({ tokens: 5_000 + 1 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100 });
-  });
-
-  it('a report-only turn is measured with its own message and its whole 2,000-token reply', async () => {
-    childEvents = [ev('user-message', { text: 'brief' })];
-    const seen: Array<{ text: string; warm: unknown }> = [];
-    const bridge = new PlanHostBridge(twoBounds(port(), 5_000, 1_200, seen), { now: () => 60_000 }) as any;
-    const min = await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, capped({ reportOnly: true, brief: 'Send your report now.' }), 'a1');
-    expect(seen[0].text).toBe('Send your report now.');
-    expect(min).toEqual({
-      tokens: 5_000 + 2_000 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100,
-      warm: { tokens: 1_200 + 2_000 + PLAN_MINIMUM_ADD_MARGIN_TOKENS - 100, until: 50_000 + PLAN_CACHE_WINDOW_MS },
-    });
-    // Already delivered: the short nudge is what will be sent, so it is what is measured.
-    childEvents = [ev('user-message', { text: 'Send your report now.' })];
-    seen.length = 0;
-    await bridge.minimumAddTokens({ cwd: '/proj', sessionId: SID }, capped({ reportOnly: true, brief: 'Send your report now.' }), 'a1');
-    expect(seen[0].text).toBe(PLAN_REPORT_ONLY_RESEND);
-  });
-});
-
-describe('launch refusal', () => {
-  it('a budget route switched off for plans refuses before anything is reserved', async () => {
-    const bridge = new PlanHostBridge(port()) as any;
-    expect(await bridge.launchRefusal(soft(), 'reviewer')).toBeUndefined();
-    disableAdapterForPlans('generic:openrouter', 'a request read 900 tokens of input');
-    expect(await bridge.launchRefusal(soft(), 'reviewer')).toMatch(/switched off.*900 tokens/);
-    resetDisabledAdaptersForTests();
-    expect(await bridge.launchRefusal(soft({ disabledAdapters: [{ adapterId: 'generic:openrouter', detail: 'in this plan' }] }), 'reviewer'))
-      .toMatch(/in this plan/);
-  });
-});
-
 describe('review fix 6: starts that can never succeed are refusals', () => {
   const launchInput = (over: Record<string, unknown> = {}) => ({
     ref: { cwd: '/proj', sessionId: SID }, planId: 'p1', fence: 'f', stepId: 's1', attemptId: 'a1',
@@ -293,23 +289,17 @@ describe('review fix 6: starts that can never succeed are refusals', () => {
   const seedPlan = async (bridge: any, rec: PlanRecord) => {
     await bridge.journal.mutate({ cwd: '/proj', sessionId: SID }, (file: any) => { file.plans.push(rec); });
   };
-  const withReviewer = (binding = { providerId: 'openrouter', modelId: 'm' }) => soft({
-    manifest: { ...soft().manifest, specialists: { reviewer: {
-      definitionFingerprint: definitionFingerprint(resolveSpecialist('reviewer')!), binding, pricing: null, setupTokens: 1000,
-    } } },
+  const withReviewer = (binding = { providerId: 'openrouter', modelId: 'm' }) => pausedRecord({
+    manifest: manifest({
+      specialists: { reviewer: { definitionFingerprint: definitionFingerprint(resolveSpecialist('reviewer')!) } },
+      steps: { s1: { binding, label: binding.modelId, pricing: null, source: 'default' } },
+    }),
   });
 
   it('no approved settings for the specialist → PlanLaunchRefusedError', async () => {
     const bridge = new PlanHostBridge(port()) as any;
     await seedPlan(bridge, withReviewer());
     await expect(bridge.launch(launchInput({ specialist: 'writer' }))).rejects.toBeInstanceOf(PlanLaunchRefusedError);
-  });
-
-  it('a route with no budget adapter → PlanLaunchRefusedError', async () => {
-    routeType = 'no-such-provider' as any;
-    const bridge = new PlanHostBridge(port()) as any;
-    await seedPlan(bridge, withReviewer());
-    await expect(bridge.launch(launchInput())).rejects.toBeInstanceOf(PlanLaunchRefusedError);
   });
 
   // Task 13 (decision 26): a provider that cannot run is NOT a refusal —
@@ -323,7 +313,7 @@ describe('review fix 6: starts that can never succeed are refusals', () => {
     expect(err).not.toBeInstanceOf(PlanLaunchRefusedError);
     expect(err).not.toBeInstanceOf(PlanLaunchDriftError);
     expect((err as Error).message).toBe(SIGN_IN);
-    // The FROZEN binding is what was checked, not the parent's.
+    // The FROZEN per-STEP binding is what was checked, not the parent's.
     expect(readinessAsked).toEqual(['gpt-5.6-terra']);
   });
 
@@ -334,43 +324,16 @@ describe('review fix 6: starts that can never succeed are refusals', () => {
     expect(await runner.providerNotReady({ cwd: '/proj', sessionId: SID }, plan, 'reviewer')).toBeUndefined();
     readiness = { ok: false, message: SIGN_IN, label: 'ChatGPT Plan' };
     expect(await runner.providerNotReady({ cwd: '/proj', sessionId: SID }, plan, 'reviewer')).toBe(SIGN_IN);
-    // A specialist the plan never approved is launchRefusal's business.
+    // A specialist the document never names has no step to look the binding up from.
     expect(await runner.providerNotReady({ cwd: '/proj', sessionId: SID }, plan, 'writer')).toBeUndefined();
   });
 
   it('a changed definition stays a drift, not a refusal', async () => {
     const bridge = new PlanHostBridge(port()) as any;
-    await seedPlan(bridge, soft());
+    await seedPlan(bridge, pausedRecord());
     const err = await bridge.launch(launchInput()).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PlanLaunchDriftError);
     expect(err).not.toBeInstanceOf(PlanLaunchRefusedError);
-  });
-});
-
-describe('review fix 2: the report-only request is measured on the specialist\'s own session', () => {
-  it('measures `message` as the next turn of that session, and reads its newest user message', async () => {
-    const probes: Array<{ historyFromChildId?: string; text?: string }> = [];
-    const p = port();
-    p.probeSession = async (input) => {
-      const rec: { historyFromChildId?: string; text?: string } = { historyFromChildId: input.historyFromChildId };
-      probes.push(rec);
-      return {
-        session: { planNextRequestBound: async (_a: unknown, text: string) => { rec.text = text; return { ok: true, tokens: 4321 }; } } as any,
-        dispose: () => {},
-      };
-    };
-    const bridge = new PlanHostBridge(p) as any;
-    const runner = bridge.runner();
-    const plan = soft({ manifest: { ...soft().manifest, specialists: { reviewer: { ...soft().manifest.specialists.reviewer, binding: { providerId: 'openrouter', modelId: 'm' }, approximateLimit: undefined } } } });
-    expect(await runner.reportOnlyInputBound({ cwd: '/proj', sessionId: SID }, plan, 'a1', 'REPORT NOW')).toBe(4321);
-    expect(probes).toEqual([{ historyFromChildId: 'kid', text: 'REPORT NOW' }]);
-    // Nothing to measure without a specialist session → not fundable.
-    plan.steps[0].attempts[0].childId = undefined;
-    expect(await runner.reportOnlyInputBound({ cwd: '/proj', sessionId: SID }, plan, 'a1', 'REPORT NOW')).toBeUndefined();
-    childEvents = [ev('user-message', { text: 'brief' }), ev('assistant-text', { text: 'x' }), ev('user-message', { text: 'REPORT NOW' }), ev('assistant-text', { text: 'y' })];
-    expect(runner.latestUserText({ cwd: '/proj', sessionId: SID }, 'kid')).toBe('REPORT NOW');
-    childEvents = [];
-    expect(runner.latestUserText({ cwd: '/proj', sessionId: SID }, 'kid')).toBeUndefined();
   });
 });
 
@@ -378,12 +341,9 @@ describe('review fix 2: the report-only request is measured on the specialist\'s
 // own decisions. Every rule here came from a review-4 finding.
 describe('Ask the assistant', () => {
   const REF = { cwd: '/proj', sessionId: SID };
-  const pausedPlan = (over: Partial<NonNullable<PlanRecord['paused']>> = {}): PlanRecord => ({
-    planId: 'p-h', toolUseId: 't', document: DOC, maximumAttempts: 1, maxFanOut: 1,
-    ceilingTokens: 1000, ceilingUsd: null, usedTokens: 1000, status: 'paused', seq: 1, createdAt: 1,
-    manifest: { modelLabel: 'm', specialists: { reviewer: { definitionFingerprint: 'd', binding: { providerId: 'p', modelId: 'm' }, pricing: null, setupTokens: 0 } }, permissionFingerprint: 'x' },
-    steps: [{ id: 's1', status: 'paused', attempts: [] }], fenceEpoch: 1,
-    paused: { stepId: 's1', reason: 'used it all', kind: 'budget', ...over },
+  const pausedPlan = (over: Partial<NonNullable<PlanRecord['paused']>> = {}): PlanRecord => pausedRecord({
+    planId: 'p-h', usedTokens: 1000,
+    paused: { stepId: 's1', reason: 'used it all', ...over },
   });
   type Notice = Parameters<PlanHostPort['queuePlanNotice']>[1];
   async function setup(over: Partial<PlanHostPort> = {}, opts: { handoffBackstopMs?: number } = {}) {
@@ -493,8 +453,10 @@ describe('Ask the assistant', () => {
     const pushed = t.emitted.filter((e) => e.plan.planId === 'p-2').pop();
     expect(pushed.plan.paused.askUnavailable).toBe(true);
     expect((await t.bridge.views(SID)).find((v) => v.planId === 'p-2')!.paused!.askUnavailable).toBe(true);
-    const add = await t.bridge.addBudget(SID, 'p-2', 10);
-    expect(add).toMatchObject({ ok: true, plan: { paused: { askUnavailable: true } } });
+    // Another action answer (a no-op setStepModel, on this same still-paused
+    // plan) — the flag rides it too, not just pushes and hydration.
+    const answered = await t.bridge.setStepModel(SID, 'p-2', 's1', null);
+    expect(answered).toMatchObject({ ok: true, plan: { paused: { askUnavailable: true } } });
     // Tools available, or not known (the conversation is not open here): Ask shows.
     tools = true;
     expect((await t.bridge.views(SID)).find((v) => v.planId === 'p-2')!.paused!.askUnavailable).toBeUndefined();
@@ -666,8 +628,8 @@ describe('a plan whose final write failed', () => {
     await bridge.journal.mutate(REF, (file) => {
       file.plans.push({
         planId: 'p-o', toolUseId: 't', document: DOC, maximumAttempts: 1, maxFanOut: 1,
-        ceilingTokens: 1000, ceilingUsd: null, usedTokens: 0, status: 'proposed', seq: 1, createdAt: 1,
-        manifest: { modelLabel: 'm', specialists: { reviewer: { definitionFingerprint: 'd', binding: { providerId: 'p', modelId: 'm' }, pricing: null, setupTokens: 0 } }, permissionFingerprint: 'x' },
+        usedTokens: 0, status: 'proposed', seq: 1, createdAt: 1,
+        manifest: manifest(),
         steps: [{ id: 's1', status: 'running', attempts: [] }], fenceEpoch: 0,
       });
     });

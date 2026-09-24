@@ -296,6 +296,8 @@ export class PlanHostBridge {
       ...(opts.now ? { now: opts.now } : {}),
       sessionCwd: (sessionId) => port.rootCwd(sessionId),
       resolveManifest: (input) => this.resolveManifest(input),
+      // T4 (design §5): PlanService.setStepModel's own single-step resolver.
+      resolveStep: (input) => this.resolveStep(input),
       queueCommentTurn: ({ sessionId, turnId, text }) => {
         port.queueTurn(sessionId, commentTurnText(text), turnId, COMMENT_MODEL_NOTE);
       },
@@ -540,6 +542,10 @@ export class PlanHostBridge {
   // WHY no addBudget any more (spending rework stage 1, design §1/§6):
   // deleted — T7 removes the matching `plans:add-budget` IPC channel.
   async resume(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.resume(sessionId, planId)); }
+  /** T4 (design §5, T7 wires the IPC channel to this). */
+  async setStepModel(sessionId: string, planId: string, stepId: string, model: { providerId: string; modelId: string } | null): Promise<PlanActionResult> {
+    return this.decorated(sessionId, await this.service.setStepModel(sessionId, planId, stepId, model));
+  }
   async stop(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.stop(sessionId, planId)); }
   getAutoApprove(): Promise<PlanAutoApproveRead> { return this.service.getAutoApprove(); }
   setAutoApprove(underUsd: unknown): Promise<PlanSettingsWriteResult> { return this.service.setAutoApprove(underUsd); }
@@ -675,12 +681,18 @@ export class PlanHostBridge {
 
   // ---- manifest (frozen at proposal) ----
 
-  private async bindingFor(def: SpecialistDefinition, parent: ModelBinding, catalog: () => Promise<CatalogModel[] | null>): Promise<ModelBinding> {
-    // The same resolver the Task tool uses for a specialist with no explicit
-    // model: a provider-matched safe default, never the parent by accident.
-    const requested = resolveRequestedModel(undefined, def.modelPreference);
+  /**
+   * The specialist's own default binding (design §5 step 3), or — with
+   * `argModel` — the document step's explicit override (step 2),
+   * "budget"/"frontier"/an exact id resolved the SAME way a Task call's
+   * `model` argument is. Throws a NEUTRAL error (no ending) — every caller
+   * adds its own, the way Task 13's `PlanSpecialistsNotReadyError` already
+   * does for a not-ready provider.
+   */
+  private async bindingFor(def: SpecialistDefinition, parent: ModelBinding, catalog: () => Promise<CatalogModel[] | null>, argModel?: string): Promise<ModelBinding> {
+    const requested = resolveRequestedModel(argModel, def.modelPreference);
     if (requested === 'parent') return parent;
-    if (!this.port.designated) throw new PlanProposalError("Specialist models aren't available in this session, so the plan wasn't created.");
+    if (!this.port.designated) throw new Error("Specialist models aren't available in this session.");
     const needsCatalog = typeof requested === 'object' || !this.port.designated.get(requested);
     try {
       const { binding } = resolveDelegatedBinding({
@@ -689,69 +701,193 @@ export class PlanHostBridge {
       return { providerId: binding.providerId, modelId: binding.modelId };
     } catch (e) {
       if (e instanceof DelegatedModelUnavailable) {
-        throw new PlanProposalError(`YouCoded couldn't confirm a ${e.tier} model for the "${def.id}" specialist, so the plan wasn't created.`);
+        throw new Error(`YouCoded couldn't confirm a ${e.tier} model for the "${def.id}" specialist.`);
       }
-      if (e instanceof DelegatedModelRefused) throw new PlanProposalError(e.message);
+      if (e instanceof DelegatedModelRefused) throw e; // already a standalone, human sentence
       throw e;
     }
+  }
+
+  /**
+   * T4 (design §5 step 1): a per-step model OVERRIDE — `stepModels[id]`
+   * (Plan settings) or `setStepModel`'s own argument — always carries its
+   * exact provider already, so it is catalog-validated with that provider as
+   * the disambiguator (`resolveDelegatedBinding`'s new `providerId`) rather
+   * than resolved through the tier/preference chain `bindingFor` walks.
+   * Neutral error, like `bindingFor`.
+   */
+  private async resolveOverride(override: { providerId: string; modelId: string }, parent: ModelBinding, catalog: () => Promise<CatalogModel[] | null>): Promise<ModelBinding> {
+    if (!this.port.designated) throw new Error("Specialist models aren't available in this session.");
+    const { binding } = resolveDelegatedBinding({
+      requested: { modelId: override.modelId }, providerId: override.providerId, parent, designated: this.port.designated, catalog: await catalog(),
+    });
+    return { providerId: binding.providerId, modelId: binding.modelId };
+  }
+
+  /** The catalog's own display label for a binding, falling back to the bare
+   *  model id when the catalog hasn't loaded or no longer lists it (a
+   *  removed/renamed model still shows something readable). */
+  private async labelFor(binding: ModelBinding, catalog: () => Promise<CatalogModel[] | null>): Promise<string> {
+    const list = await catalog();
+    return list?.find((m) => m.id === binding.modelId && m.providerId === binding.providerId)?.label ?? binding.modelId;
+  }
+
+  /** design §5: one leaf step's binding, in the resolution order — (1) a
+   *  user override for THIS step, (2) the document's own step `model`
+   *  (assistant, explicit direction only), (3) the specialist's default.
+   *  Shared by `resolveManifest` (every leaf, at propose/reconcile) and
+   *  `resolveStep` (ONE leaf, for `PlanService.setStepModel`). */
+  private async resolveStepBinding(
+    step: PlanStepV1, def: SpecialistDefinition, parent: ModelBinding,
+    override: { providerId: string; modelId: string } | undefined,
+    catalog: () => Promise<CatalogModel[] | null>,
+  ): Promise<{ binding: ModelBinding; source: 'default' | 'document' | 'user' }> {
+    if (override) return { binding: await this.resolveOverride(override, parent, catalog), source: 'user' };
+    if (step.model !== undefined) return { binding: await this.bindingFor(def, parent, catalog, step.model), source: 'document' };
+    return { binding: await this.bindingFor(def, parent, catalog), source: 'default' };
   }
 
   /**
    * WHY no setup-probe measurement any more (spending rework stage 1, design
    * §1/§5): the setup-probe existed to certify each specialist's fixed
    * starting cost for the (now deleted) per-step token ceiling — nothing
-   * here measures anything before freezing a binding. `steps[id]` is keyed
-   * by every LEAF step (design §5), because a per-step model override means
-   * two steps naming the same specialist may resolve to different bindings.
-   * // T4 owns the real per-step resolution order — (1) `stepModels[id]`
-   * (user override), (2) `document.model` via `resolveRequestedModel`, (3)
-   * the specialist's own default — and the `source`/`providerId`
-   * disambiguation that goes with it. This still resolves ONE binding per
-   * SPECIALIST (today's behavior) and freezes it onto every leaf step of
-   * that specialist with `source: 'default'`, which is correct until T4
-   * adds real overrides (`document.model`/`stepModels` are ignored here).
+   * here measures anything before freezing a binding.
+   *
+   * T4 (design §5): resolves EVERY leaf step (map/verify/combine — a
+   * repeat's body steps included), because a per-step override means two
+   * steps naming the SAME specialist can freeze two different bindings.
+   * Route/readiness are memoized per distinct BINDING (not per step), so a
+   * plan whose steps share a binding still asks the provider registry once.
+   * Task 13 (decision 25) still holds: every not-ready provider is
+   * collected before anything is frozen, so one trip to Settings fixes them
+   * all — deduped by (specialist, message) now that more than one step can
+   * name the same specialist.
    */
-  async resolveManifest(input: { sessionId: string; cwd: string; document: PlanDocumentV1 }): Promise<ExecutionManifest> {
+  async resolveManifest(input: {
+    sessionId: string; cwd: string; document: PlanDocumentV1;
+    /** T4: the plan's OWN per-step overrides (`PlanRecord.stepModels`).
+     *  Undefined for a fresh proposal (a plan has none until
+     *  `PlanService.setStepModel` writes one); Approve/Continue's
+     *  `reconcile` passes `plan.stepModels` so an override already set
+     *  survives a re-freeze. */
+    stepModels?: Record<string, { providerId: string; modelId: string }>;
+  }): Promise<ExecutionManifest> {
     const parent = this.port.parentBinding(input.sessionId);
     if (!parent) throw new PlanProposalError("This conversation isn't open, so the plan can't be prepared.");
     const roster = this.port.roster(input.cwd);
     let catalog: Promise<CatalogModel[] | null> | undefined;
-    const specialists: ExecutionManifest['specialists'] = {};
+    const catalogGetter = () => (catalog ??= this.port.catalog());
+    const leaves = leafSteps(input.document.steps);
+
+    const defs = new Map<string, SpecialistDefinition>();
+    for (const id of new Set(leaves.map((s) => s.specialist))) {
+      const def = roster.resolve(id);
+      if (!def) throw new PlanProposalError(`The plan names a specialist ("${id}") that isn't available in this project.`);
+      defs.set(id, def);
+    }
+
+    const routeCache = new Map<string, Promise<PlanRoute>>();
+    const readyCache = new Map<string, Promise<ProviderReadiness>>();
+    const bindingKey = (b: ModelBinding) => `${b.providerId}\u0000${b.modelId}`;
+    const routeFor = (b: ModelBinding): Promise<PlanRoute> => {
+      const k = bindingKey(b);
+      let p = routeCache.get(k);
+      if (!p) { p = this.port.resolveRoute(b); routeCache.set(k, p); }
+      return p;
+    };
+    const readyFor = (b: ModelBinding): Promise<ProviderReadiness> => {
+      const k = bindingKey(b);
+      let p = readyCache.get(k);
+      if (!p) { p = this.port.credentialReadiness(b); readyCache.set(k, p); }
+      return p;
+    };
+
     // Task 13 (decision 25): a plan is never PROPOSED with a specialist that
-    // cannot run. Resolved FIRST, for every specialist, before anything is
+    // cannot run. Resolved FIRST, for every LEAF step, before anything is
     // frozen — review finding 9's "one trip to Settings" holds: the refusal
     // below names every specialist that is not ready, not just the first.
     // The provider's own sentence is repeated verbatim: never a new cause.
-    const resolved: Array<{ id: string; def: SpecialistDefinition; binding: ModelBinding; route: PlanRoute }> = [];
+    const resolvedSteps = new Map<string, { binding: ModelBinding; route: PlanRoute; source: 'default' | 'document' | 'user' }>();
     const notReady: PlanNotReadySpecialist[] = [];
-    const leaves = leafSteps(input.document.steps);
-    for (const id of [...new Set(leaves.map((s) => s.specialist))]) {
-      const def = roster.resolve(id);
-      if (!def) throw new PlanProposalError(`The plan names a specialist ("${id}") that isn't available in this project.`);
-      const binding = await this.bindingFor(def, parent, () => (catalog ??= this.port.catalog()));
-      const route = await this.port.resolveRoute(binding);
-      const ready = await this.port.credentialReadiness(binding);
-      if (ready.ok) resolved.push({ id, def, binding, route });
-      else notReady.push({ id, label: ready.label, message: ready.message });
+    const notReadySeen = new Set<string>();
+    for (const step of leaves) {
+      const def = defs.get(step.specialist)!;
+      const override = input.stepModels?.[step.id];
+      let resolvedBinding: { binding: ModelBinding; source: 'default' | 'document' | 'user' };
+      try {
+        resolvedBinding = await this.resolveStepBinding(step, def, parent, override, catalogGetter);
+      } catch (e) {
+        // Neutral resolver errors (bindingFor/resolveOverride) get the same
+        // ending a proposal always carries; a PlanSpecialistsNotReadyError
+        // is impossible here (readiness isn't checked yet), so nothing else
+        // needs to pass through unwrapped.
+        throw new PlanProposalError(`${(e as Error).message} The plan wasn't created.`);
+      }
+      const ready = await readyFor(resolvedBinding.binding);
+      if (!ready.ok) {
+        const key = `${step.specialist}\u0000${ready.message}`;
+        if (!notReadySeen.has(key)) { notReadySeen.add(key); notReady.push({ id: step.specialist, label: ready.label, message: ready.message }); }
+        continue;
+      }
+      const route = await routeFor(resolvedBinding.binding);
+      resolvedSteps.set(step.id, { binding: resolvedBinding.binding, route, source: resolvedBinding.source });
     }
     if (notReady.length > 0) throw new PlanSpecialistsNotReadyError(notReady);
-    const bySpecialist = new Map(resolved.map((r) => [r.id, r]));
-    for (const { id, def } of resolved) specialists[id] = { definitionFingerprint: definitionFingerprint(def) };
+
+    const specialists: ExecutionManifest['specialists'] = {};
+    for (const [id, def] of defs) specialists[id] = { definitionFingerprint: definitionFingerprint(def) };
+
     const steps: ExecutionManifest['steps'] = {};
     for (const step of leaves) {
-      const r = bySpecialist.get(step.specialist)!;
+      const r = resolvedSteps.get(step.id)!;
       steps[step.id] = {
         binding: r.binding,
-        label: r.binding.modelId,
+        label: await this.labelFor(r.binding, catalogGetter),
         pricing: pricingSnapshot({ pricing: r.route.pricing, free: r.route.free, local: r.route.providerType === 'local-engine' }),
-        source: 'default',
+        source: r.source,
       };
     }
     return {
-      modelLabel: [...new Set(resolved.map((r) => r.binding.modelId))].join(', '),
+      modelLabel: [...new Set(leaves.map((s) => resolvedSteps.get(s.id)!.binding.modelId))].join(', '),
       specialists,
       steps,
       permissionFingerprint: `perm:${sha(this.port.permissionState(input.sessionId))}`,
+    };
+  }
+
+  /**
+   * T4 (design §5): `PlanService.setStepModel`'s own resolution — ONE leaf
+   * step, never the whole plan, so an unrelated specialist's readiness (or
+   * a stale binding on an already-started step) can never block changing
+   * this one's model. `override` absent means "clear it" — falls back to
+   * the document's own step `model`, then the specialist's default, exactly
+   * `resolveManifest`'s own order. Every error is the resolver's or the
+   * provider's own sentence, un-ended — `PlanService` decides how a settings
+   * action reports it, never "the plan wasn't created" (this is not a
+   * proposal).
+   */
+  async resolveStep(input: {
+    sessionId: string; cwd: string; document: PlanDocumentV1; stepId: string;
+    override?: { providerId: string; modelId: string };
+  }): Promise<ExecutionManifest['steps'][string]> {
+    const parent = this.port.parentBinding(input.sessionId);
+    if (!parent) throw new Error("This conversation isn't open, so the model can't be changed.");
+    const roster = this.port.roster(input.cwd);
+    const step = leafSteps(input.document.steps).find((s) => s.id === input.stepId);
+    if (!step) throw new Error('This plan has no such step.');
+    const def = roster.resolve(step.specialist);
+    if (!def) throw new Error(`The plan names a specialist ("${step.specialist}") that isn't available in this project.`);
+    let catalog: Promise<CatalogModel[] | null> | undefined;
+    const catalogGetter = () => (catalog ??= this.port.catalog());
+    const { binding, source } = await this.resolveStepBinding(step, def, parent, input.override, catalogGetter);
+    const ready = await this.port.credentialReadiness(binding);
+    if (!ready.ok) throw new Error(ready.message);
+    const route = await this.port.resolveRoute(binding);
+    return {
+      binding,
+      label: await this.labelFor(binding, catalogGetter),
+      pricing: pricingSnapshot({ pricing: route.pricing, free: route.free, local: route.providerType === 'local-engine' }),
+      source,
     };
   }
 

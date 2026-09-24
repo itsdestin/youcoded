@@ -134,8 +134,16 @@ export function resolveDelegatedBinding(i: {
    *  not found": an override that cannot be confirmed is refused, never
    *  trusted on faith. */
   catalog: CatalogModel[] | null;
+  /** T4 (plans spending rework, design §5): disambiguates a specific-id
+   *  request offered by more than one provider. A per-step model override
+   *  (Plan settings' picker, or a document step's `model` once resolved
+   *  against a known route) always carries its own provider alongside the
+   *  model id, so it never has to fall into the "which provider?" refusal
+   *  below the way an assistant-typed bare id can. Ignored for a tier
+   *  lookup, like `catalog` itself. */
+  providerId?: string;
 }): { binding: ModelBinding; fellBack: boolean; automatic?: boolean; reason?: string } {
-  const { requested, parent, designated, catalog } = i;
+  const { requested, parent, designated, catalog, providerId } = i;
 
   if (requested === 'parent') {
     return { binding: parent, fellBack: false };
@@ -167,7 +175,7 @@ export function resolveDelegatedBinding(i: {
   // live catalog. A null catalog (not loaded) and a catalog that simply
   // doesn't list this id read identically here — both mean "cannot confirm
   // this model exists", and an unconfirmed override is refused, not guessed at.
-  const matches = catalog?.filter((m) => m.id === requested.modelId) ?? [];
+  const matches = catalog?.filter((m) => m.id === requested.modelId && (providerId === undefined || m.providerId === providerId)) ?? [];
   if (matches.length !== 1) {
     if (matches.length > 1) {
       throw new DelegatedModelRefused(
