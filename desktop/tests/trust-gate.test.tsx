@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../src/renderer/state/prompt-input', () => ({
   sendPromptInput: (...a: unknown[]) => mocks.send(...a),
   PROMPT_FAILURE_COPY: { 'menu-changed': 'options changed', 'menu-gone': 'gone', 'not-taken': 'not taken' },
+  PROMPT_UNKNOWN_FAILURE: 'may not have reached',
 }));
 
 // useTrustGateActive reads through the store (a cached selector since
@@ -147,5 +148,18 @@ describe('TrustGate — one answer at a time', () => {
     const yes = screen.getByRole('button', { name: 'Yes, I trust this folder' });
     act(() => { no.click(); yes.click(); });
     expect(mocks.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('TrustGate — an answer that throws', () => {
+  it('releases the buttons and says it may not have gone through', async () => {
+    mocks.state.timeline = [{ kind: 'prompt', prompt: { promptId: 'p1', title: 'Trust This Folder?', completed: false,
+      buttons: [{ label: 'No, exit', input: '', pick: { signature: 's', index: 0 } }] } }];
+    mocks.send.mockReset();
+    mocks.send.mockRejectedValue(new Error('boom'));
+    render(<TrustGate sessionId="s1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'No, exit' }));
+    expect(await screen.findByRole('alert')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'No, exit' }) as HTMLButtonElement).disabled).toBe(false);
   });
 });

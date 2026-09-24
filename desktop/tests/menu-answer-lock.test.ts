@@ -48,3 +48,37 @@ describe('a verified answer asks the host first', () => {
     expect(lock.acquire('s1', 'someone-else')).toBe(true);
   });
 });
+
+describe('the lock ask can fail without leaving the card dead (second review F1)', () => {
+  let sendInput: ReturnType<typeof vi.fn>;
+  beforeEach(() => { sendInput = vi.fn(); });
+  const pickBtn = { label: 'a', input: '', pick: { signature: 'x', index: 0 } };
+
+  it('a lost connection or timeout: resolves "unreachable", types nothing, never throws', async () => {
+    (window as any).claude = { session: { sendInput, menuLock: () => Promise.reject(new Error('Request timed out: session:menu-lock')) } };
+    await expect(sendPromptInput('s1', pickBtn)).resolves.toEqual({ ok: false, reason: 'unreachable', typed: false });
+    expect(sendInput).not.toHaveBeenCalled();
+    expect(PROMPT_FAILURE_COPY.unreachable).toMatch(/couldn't reach the computer/);
+  });
+
+  it('an older host without the channel ("remote-unsupported"): answers unlocked, as before the lock', async () => {
+    const release = vi.fn();
+    (window as any).claude = { session: { sendInput, menuLock: (_s: string, _h: string, a: string) =>
+      a === 'acquire' ? Promise.reject(new Error('remote-unsupported: session:menu-lock')) : (release(), Promise.resolve(true)) } };
+    // Menu not on screen → the driver itself refuses; the point is it RAN (not busy/unreachable).
+    await expect(sendPromptInput('s1', pickBtn)).resolves.toEqual({ ok: false, reason: 'menu-gone', typed: false });
+    await Promise.resolve();
+    expect(release).not.toHaveBeenCalled(); // nothing held, nothing to release
+  });
+
+  it('a failing release is swallowed (no unhandled rejection)', async () => {
+    (window as any).claude = { session: { sendInput, menuLock: (_s: string, _h: string, a: string) =>
+      a === 'acquire' ? Promise.resolve(true) : Promise.reject(new Error('socket closed')) } };
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    await sendPromptInput('s1', pickBtn);
+    await new Promise((r) => setTimeout(r, 10));
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+});

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import { useChatState, useChatDispatch, useChatStore } from '../state/chat-context';
 import { InteractivePrompt, TimelineEntry, HISTORY_EXPAND_PROMPT_ID } from '../state/chat-types';
 import { TRUST_PROMPT_TITLE } from '../parser/ink-select-parser';
-import { sendPromptInput, PROMPT_FAILURE_COPY } from '../state/prompt-input';
+import { sendPromptInput, PROMPT_FAILURE_COPY, PROMPT_UNKNOWN_FAILURE } from '../state/prompt-input';
 import type { PromptCardButton } from './PromptCard';
 import { AppIcon, ThemeMascot } from './Icons';
 
@@ -79,10 +79,13 @@ export default function TrustGate({ sessionId }: Props) {
       // refused answer (the dialog changed) leaves the gate up and says why.
       setSending(true);
       setError(null);
-      const r = await sendPromptInput(sessionId, button);
+      // A rejection must still release the gate (second review F1).
+      let r: Awaited<ReturnType<typeof sendPromptInput>> | null = null;
+      try { r = await sendPromptInput(sessionId, button); } catch { r = null; }
       sendingRef.current = false;
       if (!mounted.current) return;
       setSending(false);
+      if (!r) { setError(PROMPT_UNKNOWN_FAILURE); return; }
       if (!r.ok) { setError(PROMPT_FAILURE_COPY[r.reason]); return; }
       const action = {
         type: 'COMPLETE_PROMPT' as const,

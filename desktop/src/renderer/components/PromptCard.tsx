@@ -6,7 +6,7 @@ import { Button, ButtonVariant } from './ui/Button';
 import { isAndroid } from '../platform';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useCardKeysLive } from '../state/card-keys-context';
-import { PROMPT_FAILURE_COPY, type PromptAnswerResult } from '../state/prompt-input';
+import { PROMPT_FAILURE_COPY, PROMPT_UNKNOWN_FAILURE, type PromptAnswerResult } from '../state/prompt-input';
 
 export type PromptCardButton = InteractivePrompt['buttons'][number];
 
@@ -120,11 +120,18 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
         sendingRef.current = true;
         setSending(true);
         setError(null);
+        // A rejection must still release the card (second review F1): a
+        // thrown answer used to leave every button dead for good.
         void (outcome as Promise<PromptAnswerResult>).then((r) => {
           sendingRef.current = false;
           if (!mounted.current) return;
           setSending(false);
           if (!r.ok) setError(PROMPT_FAILURE_COPY[r.reason]);
+        }, () => {
+          sendingRef.current = false;
+          if (!mounted.current) return;
+          setSending(false);
+          setError(PROMPT_UNKNOWN_FAILURE);
         });
       }
     },

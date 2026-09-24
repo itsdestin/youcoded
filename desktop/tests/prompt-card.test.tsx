@@ -219,3 +219,13 @@ describe('PromptCard — one answer at a time', () => {
     expect(onSelect).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('PromptCard — an answer that throws', () => {
+  it('releases the buttons and says it may not have gone through', async () => {
+    const onSelect = vi.fn(() => Promise.reject(new Error('boom')));
+    render(<PromptCard prompt={mcpPrompt()} sessionId="s1" onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole('button', { name: /Continue without/ }));
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringMatching(/may not have reached/));
+    for (const b of screen.getAllByRole('button')) expect((b as HTMLButtonElement).disabled).toBe(false);
+  });
+});
