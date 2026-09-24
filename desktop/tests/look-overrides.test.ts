@@ -25,10 +25,19 @@ describe('applyLookOverrides', () => {
     expect(applyLookOverrides(flatTheme, {})).toBe(flatTheme);
   });
 
-  it('lays the chosen layout, bubble shape and message box over the theme', () => {
-    const out = applyLookOverrides(wallpaperTheme, { chromeStyle: 'float', bubbleStyle: 'pill', inputStyle: 'minimal' });
-    expect(out.layout).toMatchObject({ 'chrome-style': 'float', 'bubble-style': 'pill', 'input-style': 'minimal' });
+  it('lays the chosen layout and bubble shape over the theme', () => {
+    const out = applyLookOverrides(wallpaperTheme, { chromeStyle: 'float', bubbleStyle: 'pill' });
+    expect(out.layout).toMatchObject({ 'chrome-style': 'float', 'bubble-style': 'pill' });
     expect(wallpaperTheme.layout?.['chrome-style']).toBe('default');
+  });
+
+  it('brings the layout\'s own message box with it, and leaves the theme\'s alone on Auto', () => {
+    // AR4-4: the message box is tied to the layout (the theme builder's preset pairs).
+    const minimalInput = { ...wallpaperTheme, layout: { ...wallpaperTheme.layout, 'input-style': 'minimal' as const } };
+    expect(applyLookOverrides(minimalInput, { chromeStyle: 'floating' }).layout?.['input-style']).toBe('floating');
+    expect(applyLookOverrides(minimalInput, { chromeStyle: 'default' }).layout?.['input-style']).toBe('default');
+    expect(applyLookOverrides(minimalInput, { chromeStyle: 'float' }).layout?.['input-style']).toBe('default');
+    expect(applyLookOverrides(minimalInput, { bubbleStyle: 'pill' }).layout?.['input-style']).toBe('minimal');
   });
 
   it('gives a theme with no layout block the chosen layout', () => {

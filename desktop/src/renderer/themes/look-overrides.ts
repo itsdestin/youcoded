@@ -34,7 +34,6 @@ export interface LookOverrides {
   /** The Fine-tune sliders' values; used only while `glass` is 'custom'. */
   glassCustom?: GlassValues;
   bubbleStyle?: BubbleStyle;
-  inputStyle?: InputStyle;
   /** 0 = square … 1 = fully round, the same scale the user-theme editor uses. */
   roundness?: number;
 }
@@ -93,18 +92,33 @@ function glassValuesFor(o: LookOverrides): GlassValues | null {
   return GLASS_PRESETS[o.glass];
 }
 
+/** The message box each layout wears when the user picks it for every theme — the
+ *  theme builder's layout presets (kit-presets.json: Classic, Floating, Minimalist). */
+const LAYOUT_INPUT_STYLE: Record<ChromeStyle, InputStyle> = {
+  default: 'default',
+  floating: 'floating',
+  float: 'default',
+};
+
 export function hasAnyOverride(o: LookOverrides): boolean {
   return o.chromeStyle !== undefined || o.glass !== undefined || o.bubbleStyle !== undefined
-    || o.inputStyle !== undefined || o.roundness !== undefined;
+    || o.roundness !== undefined;
 }
 
 export function applyLookOverrides(theme: LoadedTheme, o: LookOverrides): LoadedTheme {
   if (!hasAnyOverride(o)) return theme;
   let next: LoadedTheme = theme;
   const layoutPatch: Record<string, string> = {};
-  if (o.chromeStyle) layoutPatch['chrome-style'] = o.chromeStyle;
+  if (o.chromeStyle) {
+    layoutPatch['chrome-style'] = o.chromeStyle;
+    // WHY the message box rides on the layout (Destin, appearance-panel-review-4 AR4-4:
+    // "the message box setting should just be tied to the frame setting"): its own
+    // setting was removed, and a layout picked for every theme brings its matching
+    // message box — the same pairing as the theme builder's layout presets. Auto
+    // layout leaves the theme's own message box alone.
+    layoutPatch['input-style'] = LAYOUT_INPUT_STYLE[o.chromeStyle];
+  }
   if (o.bubbleStyle) layoutPatch['bubble-style'] = o.bubbleStyle;
-  if (o.inputStyle) layoutPatch['input-style'] = o.inputStyle;
   if (Object.keys(layoutPatch).length) {
     next = { ...next, layout: { ...(next.layout ?? {}), ...layoutPatch } };
   }
@@ -129,7 +143,6 @@ export function parseLookOverrides(raw: unknown): LookOverrides {
   out.chromeStyle = oneOf(r.chromeStyle, ['default', 'floating', 'float'] as const);
   out.glass = oneOf(r.glass, ['clear', 'frosted', 'solid', 'custom'] as const);
   out.bubbleStyle = oneOf(r.bubbleStyle, ['default', 'pill', 'flat', 'bordered'] as const);
-  out.inputStyle = oneOf(r.inputStyle, ['default', 'floating', 'minimal', 'terminal'] as const);
   if (typeof r.roundness === 'number' && r.roundness >= 0 && r.roundness <= 1) out.roundness = r.roundness;
   if (r.glassCustom && typeof r.glassCustom === 'object') {
     const g: GlassValues = {};

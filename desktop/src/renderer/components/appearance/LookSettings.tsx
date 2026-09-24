@@ -2,17 +2,18 @@
 // theme (themes/look-overrides.ts). Every control's first option is "Auto" — the
 // theme's own choice — which is also what everything starts on. Decisions:
 // appearance-panel-questions (2026-09-24) AP-1 one layout picker, AP-2 glass presets
-// with Fine-tune on request, AP-4 bubble shape / message box / roundness, AP-S1
+// with Fine-tune on request, AP-4 bubble shape / roundness, AP-S1
 // nobody's look changes until they change a setting; appearance-panel-review-3 —
 // pictures for every choice, painted in the theme's real colours, and the Look
-// settings behind one "Customize look" row.
+// settings behind one "Customize look" row; review-4 — no Message box setting (it now
+// rides on the layout, look-overrides.ts), and the opened settings live inside that row's box.
 //
 // What must last is the FUNCTIONALITY — `lookOverrides` / `setLookOverrides` on
 // useTheme(), the rules in themes/look-overrides.ts, and "absent field = Auto".
 
 import { useState, type ReactNode } from 'react';
 import { useTheme } from '../../state/theme-context';
-import type { BubbleStyle, ChromeStyle, InputStyle, LoadedTheme } from '../../themes/theme-types';
+import type { BubbleStyle, ChromeStyle, LoadedTheme } from '../../themes/theme-types';
 import {
   GLASS_DEFAULTS, GLASS_PRESETS, hasAnyOverride, hasSeeThroughBackground, themeRoundness,
   type GlassField, type GlassPreset, type GlassValues, type LookOverrides,
@@ -36,14 +37,6 @@ const BUBBLE_CHOICES = ['default', 'pill', 'flat', 'bordered'] as const;
 const BUBBLE_LABEL: Record<BubbleStyle, string> = {
   default: 'Standard', pill: 'Pill', flat: 'Flat', bordered: 'Outlined',
 };
-// Terminal is left out of the choices on purpose (review-3, AR3-1): no published theme
-// uses it and the theme builder never offers it. A theme that asks for it keeps it
-// under Auto — only the user can no longer pick it for every theme.
-const INPUT_CHOICES = ['default', 'floating', 'minimal'] as const;
-const INPUT_LABEL: Record<InputStyle, string> = {
-  default: 'Standard', floating: 'Floating', minimal: 'Minimal', terminal: 'Terminal',
-};
-
 // ── Pictures ─────────────────────────────────────────────────────────────────
 // WHY real-colour miniatures (Destin, review-3 AR3-1: "more effort into building better
 // renders/images"): the first round drew grey outlines, and Standard and Outlined looked
@@ -72,29 +65,6 @@ function MiniBubbles({ style }: { style: BubbleStyle }) {
         <div className={`self-end w-3/5 h-3.5 bg-accent ${shape('user')}`} />
         <div className={`self-start w-3/4 h-4 bg-inset ${shape('reply')}`} />
       </div>
-    </Mini>
-  );
-}
-
-/** The bottom of the window in a message-box style — mirrors input-style in globals.css. */
-function MiniInput({ style }: { style: InputStyle }) {
-  const send = <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />;
-  const text = <span className="flex-1 h-0.5 rounded-full bg-fg-muted opacity-60" />;
-  return (
-    <Mini>
-      <div className="absolute inset-x-2 top-1.5 flex flex-col gap-0.5">
-        <div className="self-end w-1/2 h-1.5 rounded-sm bg-accent opacity-60" />
-        <div className="self-start w-3/5 h-1.5 rounded-sm bg-inset" />
-      </div>
-      {style === 'floating' && (
-        <div className="absolute inset-x-1.5 bottom-1.5 h-3.5 rounded-full bg-panel border border-edge-dim shadow-sm flex items-center gap-1 px-1.5">{text}{send}</div>
-      )}
-      {style === 'minimal' && (
-        <div className="absolute inset-x-2 bottom-1.5 h-3.5 flex items-center gap-1">{text}{send}</div>
-      )}
-      {(style === 'default' || style === 'terminal') && (
-        <div className="absolute inset-x-0 bottom-0 h-4 bg-panel border-t border-edge flex items-center gap-1 px-2">{text}{send}</div>
-      )}
     </Mini>
   );
 }
@@ -368,7 +338,7 @@ export function LayoutSettings() {
   );
 }
 
-const LOOK_KEYS: (keyof LookOverrides)[] = ['glass', 'bubbleStyle', 'inputStyle', 'roundness'];
+const LOOK_KEYS: (keyof LookOverrides)[] = ['glass', 'bubbleStyle', 'roundness'];
 
 /** Bubbles, message box, roundness and glass, behind one "Customize look" row.
  *  WHY folded (Destin, review-3 AR3-2, picked "Look tucked away"): the most-used
@@ -380,24 +350,27 @@ export function LookSettings() {
   const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
   const without = (key: keyof LookOverrides) => { const next = { ...look }; delete next[key]; return next; };
   const themeBubble: BubbleStyle = raw.layout?.['bubble-style'] ?? 'default';
-  const themeInput: InputStyle = raw.layout?.['input-style'] ?? 'default';
   const themeRound = themeRoundness(raw);
   const roundPick = look.roundness === undefined ? undefined
     : (Object.keys(ROUND_PRESETS) as RoundPreset[]).find(k => ROUND_PRESETS[k] === look.roundness) ?? null;
   const changed = LOOK_KEYS.filter(k => look[k] !== undefined).length;
   const [open, setOpen] = useState(false);
 
+  // WHY one box (Destin, review-4 AR4-3: "all of the submenus should exist within the
+  // customize look container when expanded"): the row's tinted box continues below it
+  // when open — the row drops its bottom corners and the settings sit in the same tint.
   return (
-    <div className="space-y-3">
+    <div>
       <SettingRow
         variant="item"
         title="Customize look"
-        description={changed === 0 ? 'Message bubbles, message box, corners, glass' : `${changed} changed from the theme`}
+        description={changed === 0 ? 'Message bubbles, corners, glass' : `${changed} changed from the theme`}
         expanded={open}
         onClick={() => setOpen(v => !v)}
+        className={open ? 'rounded-b-none' : ''}
       />
       {open && (
-        <div className="space-y-4 px-1">
+        <div className="space-y-4 bg-inset/50 rounded-b-lg px-3 pt-2 pb-3">
           <StackedRow title="Message bubbles">
             <TilePicker<BubbleStyle>
               label="Message bubbles"
@@ -407,17 +380,6 @@ export function LookSettings() {
               picture={id => <MiniBubbles style={id === THEME ? themeBubble : id as BubbleStyle} />}
               name={id => BUBBLE_LABEL[id]}
               autoIs={BUBBLE_LABEL[themeBubble]}
-            />
-          </StackedRow>
-          <StackedRow title="Message box">
-            <TilePicker<InputStyle>
-              label="Message box"
-              choices={INPUT_CHOICES}
-              value={look.inputStyle}
-              onChange={v => set(v ? { ...look, inputStyle: v } : without('inputStyle'))}
-              picture={id => <MiniInput style={id === THEME ? themeInput : id as InputStyle} />}
-              name={id => INPUT_LABEL[id]}
-              autoIs={INPUT_LABEL[themeInput]}
             />
           </StackedRow>
           <StackedRow title="Roundness">

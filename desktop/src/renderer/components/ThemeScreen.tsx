@@ -32,7 +32,7 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       heading: 'What the settings do',
       bullets: [
         { term: 'Your Themes', text: 'Every theme installed on your device. Tap one to use it right away.' },
-        { term: 'Layout and Customize look', text: "Your own layout, message bubbles, message box, roundness and glass, applied to every theme. Each one starts on \"Auto\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
+        { term: 'Layout and Customize look', text: "Your own layout (which brings its matching message box), message bubbles, roundness and glass, applied to every theme. Each one starts on \"Auto\", which keeps the theme exactly as its author made it. Change one and it applies to every theme until you set it back to Auto." },
         { term: 'Glass', text: 'How see-through the panels and bubbles are over a wallpaper. Clear, Frosted and Solid are one-tap choices; Fine-tune sets each blur and see-through level yourself. Themes without a wallpaper are not affected.' },
         { term: 'The pencil icon', text: 'Appears on themes you built yourself. It opens an edit menu for that theme: accent color, roundness, particles, glass, and publishing it to the marketplace.' },
         { term: 'Theme cycle', text: 'Configured from the status bar widget editor (tap the gear in the status bar → the pencil next to "Theme"). Themes in the cycle rotate when you tap the theme pill at the bottom.' },
@@ -172,8 +172,8 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
     const card = box?.querySelector<HTMLElement>('[data-active-theme]');
     if (!box || !card || userScrolledFavs.current) return;
     const top = card.offsetTop; // the box is `relative`, so this is measured from its top
-    // 56 = the button zone at the box's bottom (pb-14): a card under the buttons is not "in view".
-    if (top + card.offsetHeight > box.scrollTop + box.clientHeight - 56) box.scrollTop = top - 8;
+    // 48 = the button zone at the box's bottom (pb-12): a card under the buttons is not "in view".
+    if (top + card.offsetHeight > box.scrollTop + box.clientHeight - 48) box.scrollTop = top - 8;
   }, [gridThemes]);
   const markFavsTouched = () => { userScrolledFavs.current = true; };
 
@@ -231,15 +231,16 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
             and Browse / Build sit INSIDE it at the bottom with the cards scrolling under them,
             faded by the masked edge (.scroll-mask) rather than the painted band.
             max-h-56 = 224px: 8px top padding + one 96px card + the gap + ~half the next row
-            above the 56px button zone (pb-14 keeps the last card clear of the buttons).
+            above the button zone (pb-12 keeps the last card 8px clear of the buttons).
             data-guide-anchor: the first-run tour's "make it yours" stop rings the grid. */}
         <div className="relative rounded-xl border border-edge bg-inset/50 overflow-hidden">
           <div
             ref={favBoxRef}
             onWheel={markFavsTouched} onPointerDown={markFavsTouched} onTouchStart={markFavsTouched}
-            className="scroll-mask max-h-56 overscroll-contain p-2 pb-14"
-            // 48 = the buttons' top edge (8px padding + 40px button).
-            style={{ ['--scroll-mask-under' as string]: '48px' }}
+            className="scroll-mask max-h-56 overscroll-contain p-2 pb-12"
+            // 40 = the buttons' top edge (8px padding + a 32px button). pb-12 (48) leaves the
+            // last card 8px above them — the same gap as between cards (review-4 AR4-1).
+            style={{ ['--scroll-mask-under' as string]: '40px' }}
             aria-label="Favorited themes"
           >
           <div className="grid grid-cols-2 gap-2" data-guide-anchor="theme-grid">
