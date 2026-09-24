@@ -163,6 +163,15 @@ export function tokenize(command: string, backslashEscapes: boolean): Tokenized 
       const next = expansion(i);
       if (next !== -1) { i = next; continue; }
     }
+    // An unquoted `#` starting a word begins a comment: the rest of the line is
+    // not part of the command. WHY (review N8): `rm -rf build # clean ~` was
+    // read as removing the home folder, and `npm test # needs .env` as naming
+    // a secret file.
+    if (c === '#' && !cur) {
+      const nl = command.indexOf('\n', i);
+      i = nl === -1 ? command.length : nl;
+      continue;
+    }
     if (c === '~' && !cur) start().tilde = true;
     push(c, GLOB_CHARS.has(c));
     i++;
@@ -171,30 +180,78 @@ export function tokenize(command: string, backslashEscapes: boolean): Tokenized 
   return { tokens: out, nested };
 }
 
-/** Drop heredoc BODIES (the lines after `<<EOF` up to the `EOF` line), which
- *  are text fed to a command, not commands. Used by the secret-path floor so
- *  a body line like `.env` is not read as a command naming a file. The
- *  removal floor keeps them: `bash <<EOF` runs its body, and asking about a
- *  removal found there is the safe direction. */
-export function stripHeredocBodies(text: string): string {
+/** A heredoc body and the command it is fed to. */
+export interface HeredocBody { body: string; feeder: string }
+
+/** Commands that RUN a heredoc body as shell commands (`bash <<EOF`,
+ *  `sudo sh <<EOF`, `ssh host <<EOF`). Any other feeder (`cat > notes.md`,
+ *  `git commit -m "$(cat <<EOF …)"`) receives the body as TEXT. */
+export const SHELL_FEEDERS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'ssh']);
+/** Interpreters whose inline script can open files (`python3 - <<EOF`, `-c`). */
+export const INTERPRETERS = new Set(['python', 'python3', 'python2', 'node', 'ruby', 'perl', 'deno', 'bun', 'php']);
+
+/** Split heredoc BODIES (the lines after `<<EOF` up to the `EOF` line) out of
+ *  the text, each with the command it feeds. WHY (review N9): a body is text
+ *  fed to a command, not a command — `cat > notes.md <<EOF … rm -rf ~ … EOF`
+ *  was read as removing the home folder — UNLESS the feeder runs it as a
+ *  script, which the caller decides from `feeder`. Works on raw lines, so a
+ *  heredoc inside `$(…)` is removed before the tokenizer ever sees it. */
+export function splitHeredocs(text: string): { text: string; bodies: HeredocBody[] } {
   const lines = text.split('\n');
   const out: string[] = [];
-  let delimiter: string | null = null;
+  const bodies: HeredocBody[] = [];
+  let open: { delimiter: string; feeder: string; lines: string[] } | null = null;
   for (const line of lines) {
-    if (delimiter !== null) {
-      if (line.trim() === delimiter) delimiter = null;
+    if (open) {
+      if (line.trim() === open.delimiter) { bodies.push({ body: open.lines.join('\n'), feeder: open.feeder }); open = null; }
+      else open.lines.push(line);
       continue;
     }
     out.push(line);
     const m = line.match(/<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/);
-    if (m && !line.includes('<<<')) delimiter = m[2];
+    if (m && m.index !== undefined && !line.includes('<<<')) {
+      // The feeder is the last simple command before `<<` on this line.
+      const before = line.slice(0, m.index).split(/[;&|(`]|\$\(/).pop() ?? '';
+      const words = tokenize(before, true).tokens.filter((t): t is Word => !(t as Op).op);
+      const w = commandIndex(words);
+      open = { delimiter: m[2], feeder: w < words.length ? baseName(words[w].value) : '', lines: [] };
+    }
   }
-  return out.join('\n');
+  if (open) bodies.push({ body: open.lines.join('\n'), feeder: open.feeder });
+  return { text: out.join('\n'), bodies };
 }
 
-/** `$HOME`, `${HOME}`, `$env:USERPROFILE`, `%USERPROFILE%` at the start of a word. */
+/** The command's own name, as the shell finds it: `/usr/bin/sudo` → `sudo`. */
+export function baseName(value: string): string {
+  return (value.split(/[\\/]/).pop() ?? value).toLowerCase().replace(/\.exe$/, '');
+}
+
+/** The script a command runs as SHELL commands: `sh -c 'cmd'`, `bash -lc …`,
+ *  `sh -c -- 'cmd'`, `eval "cmd"`. null when it runs none. Shared by both
+ *  floors (review N1): `bash -c 'rm -rf ~'` must be read like `rm -rf ~`. */
+export function inlineShellScript(name: string, args: Word[]): string | null {
+  if (name === 'eval') return args.length ? args.map((a) => a.value).join(' ') : null;
+  if (!SHELL_FEEDERS.has(name) || name === 'ssh') return null;
+  const c = args.findIndex((a) => /^-[a-z]*c[a-z]*$/.test(a.value));
+  if (c === -1) return null;
+  const script = args[c + 1]?.value === '--' ? args[c + 2] : args[c + 1];
+  return script ? script.value : null;
+}
+
+/** The inline script an interpreter runs (`python -c`, `node -e/-p/--eval`,
+ *  `ruby -e`, `perl -e/-E`, `deno eval`), or null. */
+export function inlineInterpreterScript(name: string, args: Word[]): string | null {
+  if (!INTERPRETERS.has(name)) return null;
+  if (name === 'deno' && args[0]?.value === 'eval') return args[1]?.value ?? null;
+  const flag = args.findIndex((a) => ['-c', '-e', '-E', '-p', '--eval', '--print', '-r'].includes(a.value));
+  return flag !== -1 && args[flag + 1] ? args[flag + 1].value : null;
+}
+
+/** `$HOME`, `${HOME}`, `${HOME:?}` (and the other `${HOME:-…}` forms),
+ *  `$env:USERPROFILE`, `%USERPROFILE%` at the start of a word. The guarded
+ *  forms still expand to the home folder — `rm -rf "${HOME:?}"/` removes it. */
 export function homeVariable(value: string): RegExpMatchArray | null {
-  return value.match(/^(\$HOME|\$\{HOME\}|\$env:USERPROFILE|\$env:HOME|%USERPROFILE%)(?=$|[\\/])/i);
+  return value.match(/^(\$HOME|\$\{HOME(?::?[-?=+][^}]*)?\}|\$env:USERPROFILE|\$env:HOME|%USERPROFILE%)(?=$|[\\/])/i);
 }
 
 /** Replace a leading `~` (when the shell would expand it) or home variable
@@ -239,7 +296,9 @@ export function commandIndex(words: Word[]): number {
     const before = w;
     while (w < words.length && ASSIGNMENT.test(words[w].value)) w++;
     while (w < words.length && SHELL_KEYWORDS.has(words[w].value)) w++;
-    const wrapper = w < words.length ? WRAPPERS[words[w].value] : undefined;
+    const key = w < words.length ? baseName(words[w].value) : '';
+    // Own-property lookup: a command named `constructor` must not find Object's.
+    const wrapper = Object.hasOwn(WRAPPERS, key) ? WRAPPERS[key] : undefined;
     if (wrapper) {
       w++;
       while (w < words.length && (words[w].value.startsWith('-') || ASSIGNMENT.test(words[w].value))) {
