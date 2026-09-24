@@ -12,6 +12,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, fireEvent, act, screen } from '@testing-library/react';
 import { UnmemoizedChatView as ChatView } from '../src/renderer/components/ChatView';
 import { Tooltip } from '../src/renderer/components/ui/Tooltip';
+import { archivedTooltip } from '../src/renderer/state/archive-boundary';
 
 const mocks = vi.hoisted(() => ({ state: {} as any }));
 
@@ -72,7 +73,8 @@ function state(timeline: any[], turns: string[]) {
 
 const view = () => <ChatView sessionId="s1" visible sessionActive />;
 const entry = (c: HTMLElement, key: string) => c.querySelector<HTMLElement>(`[data-entry-key="${key}"]`)!;
-const ARCHIVED = 'Archived by compaction — not in Claude\'s active context';
+// The hint text itself is owned by archivedTooltip (master reworded it 2026-09-23).
+const ARCHIVED = archivedTooltip('compact');
 
 describe('archived-entry hint', () => {
   it('builds no Tooltip for a conversation with nothing archived', () => {

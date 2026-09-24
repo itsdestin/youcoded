@@ -368,7 +368,7 @@ export function PageHost({ settingsOpen, onToggleSettings, settingsBadge, settin
               Q-own-pages, S-change). "Not now" leaves the page unselected — or, from
               a pinned button (no panel to fall back to), goes back to chat. */}
           {load.state === 'ready' && awaitingApproval && (
-            <PageApproval page={load.page} onNotNow={() => dispatch({ type: state.pageFocus ? 'PAGE_VIEW_CLOSED' : 'PAGE_CLOSED' })} />
+            <PageApproval page={load.page} onNotNow={() => dispatch({ type: pageFocus ? 'PAGE_VIEW_CLOSED' : 'PAGE_CLOSED' })} />
           )}
           {load.state === 'ready' && !awaitingApproval && (
             <iframe
