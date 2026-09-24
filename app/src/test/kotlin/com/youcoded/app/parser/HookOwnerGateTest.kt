@@ -16,15 +16,23 @@ class HookOwnerGateTest {
         assertTrue(g.accept("mobile-2", "2000", true))
     }
 
-    // Review F2: a nested claude reporting before any SessionStart must not
-    // become the owner and lock the real session out.
+    // Review C2: the real SessionStart can be lost; its tool hooks arrive
+    // first, and a nested SessionStart must not claim the session.
     @Test
-    fun `a non-SessionStart hook arriving first does not claim`() {
+    fun `order A - real tool hooks then a nested SessionStart claims the real pid`() {
         val g = HookOwnerGate()
-        assertTrue(g.accept("mobile-1", "2000", false))
-        assertTrue(g.accept("mobile-1", "1000", true))
+        assertTrue(g.accept("mobile-1", "1000", false))
+        assertFalse(g.accept("mobile-1", "2000", true))
         assertTrue(g.accept("mobile-1", "1000", false))
         assertFalse(g.accept("mobile-1", "2000", false))
+    }
+
+    @Test
+    fun `order B - real SessionStart then a nested one keeps the real pid`() {
+        val g = HookOwnerGate()
+        assertTrue(g.accept("mobile-1", "1000", true))
+        assertFalse(g.accept("mobile-1", "2000", true))
+        assertTrue(g.accept("mobile-1", "1000", false))
     }
 
     @Test

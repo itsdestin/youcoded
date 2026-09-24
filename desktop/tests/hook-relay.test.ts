@@ -270,15 +270,29 @@ describe('HookOwnerGate', () => {
     expect(g.accept('desk-1', '2000', true)).toBe(false); // a nested SessionStart cannot take over
     expect(g.accept('desk-2', '2000', true)).toBe(true);
   });
-  // Review F2: a nested process whose hook arrives BEFORE any SessionStart
-  // must not become the owner and lock the real session out.
-  it('a non-SessionStart hook arriving first does not claim ownership', async () => {
+  // Review C2: the real SessionStart can be lost (relay.js tries once). Its
+  // tool hooks then arrive first; a nested SessionStart must not claim.
+  it('order A — real tool hooks, SessionStart lost, then a nested SessionStart: the real pid is claimed', async () => {
     const { HookOwnerGate } = await import('../src/main/hook-relay');
     const g = new HookOwnerGate();
-    expect(g.accept('desk-1', '2000', false)).toBe(true);   // nested, first — passes, claims nothing
-    expect(g.accept('desk-1', '1000', true)).toBe(true);    // real SessionStart claims
+    expect(g.accept('desk-1', '1000', false)).toBe(true);   // real, SessionStart was lost
+    expect(g.accept('desk-1', '2000', true)).toBe(false);   // nested SessionStart refused
     expect(g.accept('desk-1', '1000', false)).toBe(true);
     expect(g.accept('desk-1', '2000', false)).toBe(false);
+  });
+  it('order B — real SessionStart first, then a nested one: the real pid is claimed', async () => {
+    const { HookOwnerGate } = await import('../src/main/hook-relay');
+    const g = new HookOwnerGate();
+    expect(g.accept('desk-1', '1000', true)).toBe(true);
+    expect(g.accept('desk-1', '1000', false)).toBe(true);
+    expect(g.accept('desk-1', '2000', true)).toBe(false);
+    expect(g.accept('desk-1', '1000', false)).toBe(true);
+  });
+  it('/clear (a second SessionStart from the owner) keeps the owner', async () => {
+    const { HookOwnerGate } = await import('../src/main/hook-relay');
+    const g = new HookOwnerGate();
+    expect(g.accept('desk-1', '1000', true)).toBe(true);
+    expect(g.accept('desk-1', '1000', true)).toBe(true);
   });
   it('fails open with no pid (older Claude Code or relay)', async () => {
     const { HookOwnerGate } = await import('../src/main/hook-relay');
@@ -305,6 +319,35 @@ describe('HookRelay — hooks from a nested claude', () => {
     if (!keepOpen) client.end();
     return { closedWithoutReply };
   }
+
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+
+  // B1: pins the relay's call site — only a real SessionStart may claim. If
+  // the relay passed "is SessionStart" for every hook, the first tool hook
+  // would claim and the second pid below would be dropped.
+  it('before any SessionStart, tool hooks from two pids both get through', async () => {
+    await relay.start();
+    const events: any[] = [];
+    relay.on('hook-event', (e) => events.push(e));
+    await send({ hook_event_name: 'PostToolUse', session_id: 'a', _desktop_session_id: 'desk-1', _claude_pid: '2000' });
+    await settle();
+    await send({ hook_event_name: 'PostToolUse', session_id: 'b', _desktop_session_id: 'desk-1', _claude_pid: '1000' });
+    await settle();
+    expect(events.map((e) => e.payload.session_id)).toEqual(['a', 'b']);
+  });
+
+  it('C2 end to end: the real SessionStart was lost, a nested SessionStart is dropped', async () => {
+    await relay.start();
+    const events: any[] = [];
+    relay.on('hook-event', (e) => events.push(e));
+    await send({ hook_event_name: 'PostToolUse', session_id: 'ours', _desktop_session_id: 'desk-1', _claude_pid: '1000' });
+    await settle();
+    await send({ hook_event_name: 'SessionStart', source: 'startup', session_id: 'nested', _desktop_session_id: 'desk-1', _claude_pid: '2000' });
+    await settle();
+    await send({ hook_event_name: 'PostToolUse', session_id: 'ours', _desktop_session_id: 'desk-1', _claude_pid: '1000' });
+    await settle();
+    expect(events.map((e) => e.payload.session_id)).toEqual(['ours', 'ours']);
+  });
 
   it('drops a foreign process\'s events and ends its permission request with no decision', async () => {
     await relay.start();

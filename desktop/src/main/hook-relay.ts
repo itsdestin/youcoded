@@ -32,19 +32,32 @@ const DEFAULT_PIPE_NAME = process.platform === 'win32'
  */
 export class HookOwnerGate {
   private owners = new Map<string, string>();
+  // First pid that sent a NON-SessionStart hook before any owner was claimed.
+  private firstToolPid = new Map<string, string>();
 
   /** True when this event may be attributed to `sessionId`.
    *  WHY only a SessionStart claims (review F2): a nested process whose hook
    *  happened to arrive first must never become the owner and lock the real
-   *  session out. Before a SessionStart claims, everything passes (fail open). */
+   *  session out. Before a claim, everything passes (fail open).
+   *  WHY a claim can go to an EARLIER pid (review C2): relay.js tries once and
+   *  exits quietly, so the real process's SessionStart can be lost. Its tool
+   *  hooks then arrive with no owner, and a nested `claude`'s SessionStart
+   *  would otherwise claim the session and drop every real hook from then on.
+   *  A nested process only exists after the real one has run a tool, and the
+   *  real one fires SessionStart before any tool — so a pid that sent tool
+   *  hooks before any claim is the real one, and it is claimed instead. */
   accept(sessionId: string, claudePid: unknown, isSessionStart: boolean): boolean {
     if (!sessionId || typeof claudePid !== 'string' || !claudePid) return true;
     const owner = this.owners.get(sessionId);
-    if (owner === undefined) {
-      if (isSessionStart) this.owners.set(sessionId, claudePid);
+    if (owner !== undefined) return owner === claudePid;
+    if (!isSessionStart) {
+      if (!this.firstToolPid.has(sessionId)) this.firstToolPid.set(sessionId, claudePid);
       return true;
     }
-    return owner === claudePid;
+    const claimed = this.firstToolPid.get(sessionId) ?? claudePid;
+    this.owners.set(sessionId, claimed);
+    this.firstToolPid.delete(sessionId);
+    return claimed === claudePid;
   }
 }
 
