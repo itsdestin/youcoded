@@ -143,15 +143,22 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
     if (__proposal) {
       // @ts-ignore TS1343 — import.meta.glob is a Vite build-time transform
       const sheets: Record<string, () => Promise<unknown>> = import.meta.glob('./dev/workbench/proposals/*.css', { query: '?inline', import: 'default' });
-      const load = sheets[`./dev/workbench/proposals/${__proposal}.css`];
-      if (load) {
+      // Comma-separated so decided choices stack under the one being compared
+      // (e.g. `shape-round,cards-raised`): later names win within the layer.
+      const css: string[] = [];
+      for (const name of __proposal.split(',').map((n) => n.trim()).filter(Boolean)) {
+        const load = sheets[`./dev/workbench/proposals/${name}.css`];
+        if (load) css.push((await load()) as string);
+        else console.error(`[workbench] no style proposal named ${name}`);
+      }
+      if (css.length) {
         const style = document.createElement('style');
         style.dataset.proposal = __proposal;
-        style.textContent = (await load()) as string;
+        style.textContent = css.join('\n');
         // First in <head> so `@layer proposal` is the earliest layer and its
         // !important rules outrank the app's layered !important utilities.
         document.head.prepend(style);
-      } else console.error(`[workbench] no style proposal named ${__proposal}`);
+      }
     }
     if (isChild) {
       // The tool gallery is a separate surface, not part of the app shell, so it

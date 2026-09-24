@@ -1,0 +1,17 @@
+/* Design-guide review (2026-09-24): CARD LOOK "OUTLINED".
+   Every card that sits on a page or in a popup gets one treatment: panel fill and a thin border, no shadow — the Pages / Project Files look, everywhere.
+   Corners follow the theme (Round was chosen: ui-element-review-roundness#R-1).
+   Grids of cards all use a 12px gap. Theme preview tiles keep their own colors.
+   Workbench-only: ?proposal=cards-outlined. Layered and prepended by index.tsx. */
+@layer proposal {
+:is(
+  .layer-surface.hover-lift, .layer-surface.card-interactive, .card-interactive,
+  [class~="rounded-lg"][class~="border"]:is(.bg-panel, .bg-inset, .bg-well)
+):not(input, textarea, select, [role=dialog], [role=menu], [role=listbox]):not([style*="background"]) {
+  background: var(--panel) !important; border: 1px solid var(--edge) !important; box-shadow: none !important;
+}
+:is(.grid, .flex-wrap):has(> :is(
+  .layer-surface.hover-lift, .layer-surface.card-interactive, .card-interactive,
+  [class~="rounded-lg"][class~="border"]:is(.bg-panel, .bg-inset, .bg-well)
+):not(input, textarea, select, [role=dialog], [role=menu], [role=listbox])) { gap: 12px !important; }
+}

@@ -1,0 +1,17 @@
+/* Design-guide review (2026-09-24): CARD LOOK "FILLED".
+   Every card that sits on a page or in a popup gets one treatment: a lightly tinted fill, no border and no shadow — the Settings-row look, everywhere.
+   Corners follow the theme (Round was chosen: ui-element-review-roundness#R-1).
+   Grids of cards all use a 12px gap. Theme preview tiles keep their own colors.
+   Workbench-only: ?proposal=cards-filled. Layered and prepended by index.tsx. */
+@layer proposal {
+:is(
+  .layer-surface.hover-lift, .layer-surface.card-interactive, .card-interactive,
+  [class~="rounded-lg"][class~="border"]:is(.bg-panel, .bg-inset, .bg-well)
+):not(input, textarea, select, [role=dialog], [role=menu], [role=listbox]):not([style*="background"]) {
+  background: var(--inset) !important; border-color: transparent !important; box-shadow: none !important;
+}
+:is(.grid, .flex-wrap):has(> :is(
+  .layer-surface.hover-lift, .layer-surface.card-interactive, .card-interactive,
+  [class~="rounded-lg"][class~="border"]:is(.bg-panel, .bg-inset, .bg-well)
+):not(input, textarea, select, [role=dialog], [role=menu], [role=listbox])) { gap: 12px !important; }
+}
