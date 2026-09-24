@@ -99,13 +99,10 @@ function usd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 const isUnderACent = (n: number) => n > 0 && n < 0.005;
-/** Final review F22: an estimate with its marker — "about $0.12" / "~$0.12" —
- *  but never "about less than a cent" or "~less than a cent" (the words
- *  already say it is small). */
-function estimateUsd(n: number, marker: string): string {
-  return isUnderACent(n) ? usd(n) : `${marker}${usd(n)}`;
-}
 
+// WHY estimateUsd is ALSO GONE (review R5): its only caller was the deleted
+// Add-budget token-to-dollar conversion (spending rework stage 1); knip
+// confirmed no remaining call site.
 // WHY approx/limitTokens/tokenLimit/spent/limit/newRequestId are ALL GONE
 // (spending rework stage 1, design §1/§2, decision 34): `approximateLimit`
 // (the uncapped-route tilde marker) and the token ceiling they formatted are

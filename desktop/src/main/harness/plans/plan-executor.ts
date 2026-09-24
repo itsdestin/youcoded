@@ -683,14 +683,16 @@ export class PlanExecutor implements PlanExecutorHooks {
    * terminal → commit with no request; an unanswered EXTERNAL call → paused
    * (never auto-replayed) via the same routing every recoverable failure uses.
    *
-   * // T3: the OLD "ambiguityReported" flag (now deleted from the schema —
-   * design §2) broke the loop where Continue on THIS pause would otherwise
-   * re-run this exact check and pause again for the identical unanswered
-   * call. Revision 1 D6 pins "goes to the assistant exactly as before" as a
-   * NEW named test T3 must add; until that mechanism is rebuilt without the
-   * flag, an unanswered-external pause may re-pause once more on Continue
-   * instead of relaunching — a known, narrower regression than silently
-   * replaying an external action, and never a spending change.
+   * // Review R1/R2: the OLD "ambiguityReported" flag (deleted from the
+   * schema — design §2) broke the loop where Continue on THIS pause would
+   * otherwise re-run this exact check and pause again for the identical
+   * unanswered call. Its durable replacement is `PlanAttemptRecord.
+   * pauseAcknowledged`, set (in `settle`'s `finalWrite`) the moment the pause
+   * itself becomes visible and consumed right here (recoverAttempt) the next
+   * time this attempt is looked at — which can only be through the person's
+   * own Continue, since nothing else restarts a paused plan — so that start
+   * restarts the specialist with the check-first turn instead of re-pausing
+   * (Revision 1 D6's promised test).
    */
   private async prepare(run: ActiveRun): Promise<void> {
     const plan = await this.load(run);
@@ -731,6 +733,22 @@ export class PlanExecutor implements PlanExecutorHooks {
       return this.commitReport(run, def, attemptId, verdict.report, finalLeaf);
     }
     if (verdict.kind === 'dangling-effect') {
+      // Review R2: `original.pauseAcknowledged` means the LAST time this
+      // exact dangling call was found, the pause it produced was already
+      // written (settle's `finalWrite` sets it in the same write). A paused
+      // plan runs again only through `PlanService.resume` — the person's own
+      // Continue — so reaching this attempt again with the flag still set
+      // means that press already happened: skip the pause and restart with
+      // the check-first turn (decision 13), never show the identical pause
+      // twice. Consumed once, before anything else runs, so a fresh crash
+      // (no prior pause) or a genuinely NEW dangling call still classifies
+      // and pauses normally.
+      if (original.pauseAcknowledged) {
+        await this.journal.mutateFenced(run.ref, run.planId, run.fence, (plan) => {
+          delete this.findAttempt(plan, stepId, attemptId).pauseAcknowledged;
+        });
+        return undefined;
+      }
       const cause: PlanRecoveryCause = 'unknown-outcome';
       const key = { stepId, iteration: original.iteration, itemIndex: original.itemIndex };
       // Review finding 10 (decision 26): the restart-time self-recovery is the
@@ -1036,6 +1054,18 @@ export class PlanExecutor implements PlanExecutorHooks {
             recordChild: (childId, info) => this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
               const a = this.findAttempt(p, step.id, attemptId);
               a.childId = childId;
+              // Review R1 fix: this callback is the runner's contractual
+              // promise (PlanChildLaunch.recordChild's own doc-comment) that
+              // it runs "after the session exists and BEFORE anything is
+              // sent" — the earliest point a request could go out. Until now
+              // 'prepared' must mean "provably nothing was sent"; from here
+              // on it no longer does, so the attempt moves to 'launched' RIGHT
+              // HERE, not after the turn resolves. A crash any time after this
+              // write therefore always goes through recoverAttempt's
+              // transcript classification instead of skipping it (the bug
+              // R1 found: phase never left 'prepared', so an unanswered
+              // EXTERNAL tool call was silently auto-resumed).
+              a.phase = 'launched';
               // Review item 6: what the card's specialist row shows.
               if (info?.title) a.childTitle = info.title;
               a.startedAt = Date.now();
@@ -1481,6 +1511,18 @@ export class PlanExecutor implements PlanExecutorHooks {
           };
           const s = p.steps.find((x) => x.id === final.stepId);
           if (s && s.status !== 'done') s.status = 'paused';
+          // Review R2: mark the attempt this pause named as acknowledged, in
+          // THIS write — the same one that makes the pause visible — so the
+          // only way this plan runs again (`PlanService.resume`, i.e. the
+          // person's Continue) restarts it with the check-first turn instead
+          // of reaching the identical pause a second time. Scoped to
+          // `unknown-outcome` (decision 13's "Continue = restart with
+          // check-first" cut-off-action case) — every other pause kind keeps
+          // showing the same buttons on every Continue, as before.
+          if (final.why === 'unknown-outcome' && final.attemptId) {
+            const attempt = s?.attempts.find((a) => a.attemptId === final.attemptId);
+            if (attempt) attempt.pauseAcknowledged = true;
+          }
         } else {
           p.status = 'interrupted';
         }

@@ -182,6 +182,21 @@ const PlanAttemptSchema = z.object({
    *  allowance is what the failed attempt left unspent. Kept on the record so
    *  a crash before or during that turn restarts it the same way. */
   reportOnly: z.literal(true).optional(),
+  /** Review R2: the durable, minimal replacement for the deleted
+   *  `ambiguityReported` flag (same mechanism, carried over unchanged by the
+   *  spending rework: the phase it used to ride on, `'ambiguous'`, is gone,
+   *  but the flag's own meaning is not spend-related). Set on the ONE
+   *  attempt an `unknown-outcome` pause names, in the SAME write that makes
+   *  the pause visible (`settle`'s `finalWrite`) — the ONLY way this plan
+   *  runs again from `paused` is `PlanService.resume`, i.e. the person's own
+   *  Continue, so marking it here already means "Continue will mean this".
+   *  `recoverAttempt` reads and clears it on that next start: set → skip the
+   *  pause and restart with the check-first turn (`planRestartBrief`);
+   *  absent (a fresh crash — `interrupted` status carries no `paused`, so no
+   *  attempt is ever marked from it) → classify and pause exactly as
+   *  before. Single use, so a later, genuinely new dangling call still
+   *  pauses. */
+  pauseAcknowledged: z.literal(true).optional(),
   terminal: z.enum(['completed', 'failed', 'stopped']).optional(),
   reportText: z.string().optional(),
   reportPath: z.string().optional(),
