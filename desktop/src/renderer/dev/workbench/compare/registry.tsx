@@ -91,6 +91,7 @@ import { FriendlyMascots } from '../mockups/FriendlyMascots';
 import { RemoteSetupDemo } from '../mockups/RemoteSetup';
 import { SettingsTaperDemo } from '../mockups/SettingsTaperDemo';
 import { PopupTaperDemo } from '../mockups/PopupTaperDemo';
+import { SettingsAnatomyDemo } from '../mockups/SettingsAnatomyDemo';
 import { PairDialogDemo, SingleDialogDemo, DangerDialogDemo, QuestionCardDemo, PermissionRowDemo } from '../mockups/ButtonPlacementDemo';
 import { ProjectPopupTaperDemo } from '../mockups/ProjectPopupTaperDemo';
 import { MarketplaceFileTaperDemo, TagEditorTaperDemo } from '../mockups/CustomPopupTaperDemo';
@@ -7366,6 +7367,35 @@ export const COMPARE_SURFACES: CompareSurface[] = [
         { id: 'right', label: 'Pair on the right', note: 'Kept side by side at the right edge.', render: () => <PairDialogDemo layout="right" /> },
         { id: 'halves', label: 'Equal halves', note: 'Side by side, each half the width.', render: () => <PairDialogDemo layout="halves" /> },
         { id: 'stacked', label: 'Stacked', note: 'Filled on top, Cancel under it, both full width.', render: () => <PairDialogDemo layout="stacked" /> },
+      ] },
+    ],
+  },
+  // WHY (design-guide review, 2026-09-24): Settings layout questions — one
+  // realistic popup (Remote Access-like), only the arrangement varies.
+  {
+    id: 'settings-anatomy',
+    label: 'Settings layout',
+    question: 'How is a Settings popup laid out?',
+    frame: 'canvas',
+    paneWidth: { min: 480, max: 560 },
+    rounds: [
+      { n: 1, basis: 'Where a setting\'s control goes relative to its title and hint.', candidates: [
+        { id: 'below', label: 'Always below', note: 'Title and hint, then the control on its own line, for every setting.', render: () => <SettingsAnatomyDemo layout="below" /> },
+        { id: 'beside', label: 'Always beside', note: 'Title and hint on the left, the control on the right, for every setting.', render: () => <SettingsAnatomyDemo layout="beside" /> },
+        { id: 'mixed', label: 'By control size', note: 'Small controls (switches) beside; wide ones (text boxes, choices) below.', render: () => <SettingsAnatomyDemo layout="mixed" /> },
+      ] },
+      { n: 2, basis: 'How five choices are offered.', candidates: [
+        { id: 'segmented', label: 'Switch strip', note: 'All five side by side in one strip.', render: () => <SettingsAnatomyDemo choice="segmented" /> },
+        { id: 'radios', label: 'Boxed list', note: 'One boxed row per choice, the picked one marked.', render: () => <SettingsAnatomyDemo choice="radios" /> },
+        { id: 'select', label: 'Dropdown', note: 'One box that opens a list.', render: () => <SettingsAnatomyDemo choice="select" /> },
+      ] },
+      { n: 3, basis: 'A group of related settings: box inside a box, or flat.', candidates: [
+        { id: 'nested', label: 'Boxes in a box', note: 'Today\'s Backup & Sync shape: an outer card holding inner cards and a dashed add button.', render: () => <SettingsAnatomyDemo nesting="nested" /> },
+        { id: 'flat', label: 'Flat', note: 'A small label, then the rows directly, then a normal button.', render: () => <SettingsAnatomyDemo nesting="flat" /> },
+      ] },
+      { n: 4, basis: 'How much space between groups.', candidates: [
+        { id: 'compact', label: 'Tighter', note: '16px between groups, 6px between rows.', render: () => <SettingsAnatomyDemo spacing="compact" /> },
+        { id: 'roomy', label: 'Roomier', note: '24px between groups, 8px between rows.', render: () => <SettingsAnatomyDemo spacing="roomy" /> },
       ] },
     ],
   },
