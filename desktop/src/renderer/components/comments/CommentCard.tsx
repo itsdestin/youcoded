@@ -4,27 +4,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/Button';
 import { Textarea } from '../ui/Textarea';
+import { TextInput } from '../ui/TextInput';
 import { CheckIcon } from '../Icons';
 import { formatRelativeTime } from '../../utils/format-time';
-import type { CommentAuthor, DocComment } from '../../state/doc-comments-store';
-
-function Avatar({ author }: { author: CommentAuthor }) {
-  // WHY a letter/glyph, not an accent fill: G-8 reserves the accent colour for
-  // STATE (selection, focus, primary actions) — a resting avatar is decoration,
-  // so it stays neutral like every other tag/badge in the app.
-  return (
-    <span
-      aria-hidden
-      className="inline-flex items-center justify-center shrink-0 w-5 h-5 rounded-full border border-edge-dim bg-inset text-3xs font-medium text-fg-2"
-    >
-      {author === 'assistant' ? '✳' : 'D'}
-    </span>
-  );
-}
-
-function authorName(author: CommentAuthor): string {
-  return author === 'assistant' ? 'Claude' : 'You';
-}
+import type { DocComment } from '../../state/doc-comments-store';
+import { Avatar, authorName } from './Avatar';
 
 interface Props {
   comment: DocComment;
@@ -112,15 +96,27 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
         </div>
       ))}
 
+      {/* Round 3: Reply + Resolve now share ONE compact row with the reply
+          field (guide §4.6 card anatomy) instead of two stacked action rows —
+          the second row used to render for a still-empty draft too, which was
+          pure dead space while typing (item 9: no stray empty column). A
+          draft has nothing to resolve yet, so it only offers Delete. */}
       {!isDraft && (
         <div className="mt-2 flex items-center gap-1.5">
-          <Textarea
+          <TextInput
             size="sm"
-            rows={1}
             value={replyText}
             onChange={(e) => setReplyText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && replyText.trim()) { onReply(replyText); setReplyText(''); }
+            }}
             placeholder="Reply…"
-            className="artifact-edit-textarea flex-1"
+            // min-w-0: a native <input>'s flexbox min-width defaults to its
+            // content size, not 0 — `flex-1` alone can't shrink it below
+            // that, so at the margin's 256px card width it was pushing the
+            // Resolve button that follows clean off the row (found reviewing
+            // this round's own screenshots).
+            className="flex-1 min-w-0"
           />
           <Button
             variant="secondary"
@@ -130,15 +126,14 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
           >
             Reply
           </Button>
+          <Button variant="secondary" size="sm" onClick={onResolve}>Resolve</Button>
         </div>
       )}
-
-      <div className="mt-2 flex items-center justify-end gap-1.5">
-        {isDraft && (
+      {isDraft && (
+        <div className="mt-2 flex items-center justify-end gap-1.5">
           <Button variant="ghost" size="sm" onClick={onDelete}>Delete</Button>
-        )}
-        <Button variant="secondary" size="sm" onClick={onResolve}>Resolve</Button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

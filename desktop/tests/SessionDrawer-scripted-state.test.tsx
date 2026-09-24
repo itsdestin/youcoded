@@ -36,6 +36,14 @@ vi.mock('../src/renderer/state/ArtifactContext', async () => {
       return mocks.dispatch;
     },
     useArtifactSelector: (select: (s: any) => unknown) => select(mocks.state),
+    // Round 3 (doc-comments polish): ActiveArtifactView (a child the drawer
+    // mounts once a file is open) now reads these Optional variants for its
+    // Comments-mode auto-expand effect — plain pass-throughs to the SAME
+    // fake state/dispatch above, deliberately NOT wired into bodyRuns/
+    // listeners: those two count the DRAWER's own body/redraws, and this is
+    // a different component's read.
+    useArtifactDispatchOptional: () => mocks.dispatch,
+    useArtifactSelectorOptional: (select: (s: any) => unknown) => select(mocks.state),
   };
 });
 

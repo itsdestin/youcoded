@@ -22,6 +22,14 @@ import { CommentsReviewBar } from '../comments/CommentsReviewBar';
 import { CodeCommentsRail } from '../comments/CodeCommentsRail';
 import { useDocComments } from '../../state/doc-comments-store';
 import { useNarrowByRef } from '../../hooks/use-container-narrow';
+// Round 3: Comments mode needs margin-card room the drawer's DEFAULT width
+// doesn't have (see the effect below's own WHY) — reuses the drawer's
+// existing Expand control's shared state rather than inventing a second
+// "wide" concept for this one mode. Optional variants: several existing
+// ActiveArtifactView tests render it with no ArtifactProvider ancestor at
+// all (it didn't read this store before), and the throwing hooks would take
+// down every one of them rather than just no-op the auto-expand.
+import { useArtifactSelectorOptional, useArtifactDispatchOptional } from '../../state/ArtifactContext';
 
 /** Absolute on-disk path of an artifact — the same join SessionDrawer and
  *  FilesTab make for Copy path, so Download asks the host for the same file. */
@@ -571,6 +579,39 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     setCommentsMode('comments');
   }, [pathComments, setPathShowResolved]);
 
+  // Round 3 (item 6): Comments mode needs the margin's card width; the
+  // drawer's DEFAULT ~480px pane (SessionDrawer's --right-pane-width) has
+  // none, which is why it used to fall back to a bottom sheet that covered
+  // the composer. Fix: entering Comments mode at that width flips the
+  // drawer's existing Expand control — the same one the header's ⛶ button
+  // drives — and flipping it back on exit restores exactly what the user
+  // had. Reusing that shared flag (over inventing a second "wide" concept)
+  // does mean it's global, not per-file: if the app window itself is under
+  // 640px wide while Project View's file tab (already full-width in
+  // practice, so narrowPane there is normally false) has Comments mode
+  // open, exiting will also un-expand whatever chat session is behind it —
+  // an accepted, rare edge case flagged in the round-3 report rather than
+  // solved with a second, viewer-local width flag.
+  const dispatch = useArtifactDispatchOptional();
+  const drawerExpanded = useArtifactSelectorOptional((s) => s.drawerExpanded);
+  const autoExpandedRef = useRef(false);
+  useEffect(() => {
+    if (!dispatch) return; // no provider (e.g. a unit test rendering this in isolation) — nothing to reuse
+    if (commentsMode === 'comments' && narrowPane && !drawerExpanded) {
+      dispatch({ type: 'DRAWER_EXPAND_TOGGLED' });
+      autoExpandedRef.current = true;
+    } else if (commentsMode !== 'comments' && autoExpandedRef.current) {
+      dispatch({ type: 'DRAWER_EXPAND_TOGGLED' });
+      autoExpandedRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires on commentsMode transitions only; narrowPane/drawerExpanded are read at that instant, not tracked continuously
+  }, [commentsMode]);
+  // Restore on unmount too (closing the file entirely while still expanded
+  // for it) — otherwise the flag leaks past this component's own lifetime.
+  useEffect(() => () => {
+    if (autoExpandedRef.current) dispatch?.({ type: 'DRAWER_EXPAND_TOGGLED' });
+  }, [dispatch]);
+
   const showPartialBanner = !editing
     && contentInfo?.truncated === true
     && typeof contentInfo.sizeBytes === 'number'
@@ -678,7 +719,11 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           on any text file; the rest of the review bar (Show resolved, Send)
           only renders IN Comments mode — that's what makes the mode visibly
           distinct, not just an internal flag (brief: "must be clearly a
-          different mode… the review bar only appears here"). */}
+          different mode… the review bar only appears here"). Round 3: ONE
+          toolbar row owns the border/background/padding now — CommentsReviewBar
+          used to nest a second copy of all three inside this one, clawed
+          back with negative margins, which is what made the strip read as
+          two stacked bars instead of one tidy row. */}
       {showComments && (
         <div className="flex items-center gap-2 px-2 py-1.5 border-b border-edge bg-panel shrink-0">
           <CommentsModeToggle
@@ -687,9 +732,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
             onToggle={() => setCommentsMode((m) => (m === 'comments' ? 'reading' : 'comments'))}
           />
           {commentsMode === 'comments' && (
-            <div className="flex-1 min-w-0 -my-1.5 -mr-2">
-              <CommentsReviewBar path={artifact.path} narrow={narrowPane} />
-            </div>
+            <CommentsReviewBar path={artifact.path} narrow={narrowPane} />
           )}
         </div>
       )}

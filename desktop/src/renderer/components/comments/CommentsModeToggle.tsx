@@ -27,6 +27,9 @@ export function CommentsModeToggle({ active, count, onToggle }: Props) {
       className={`gap-1.5 shrink-0 ${active ? 'ring-1 ring-accent' : ''}`}
     >
       <ChatIcon className="w-3.5 h-3.5" />
+      {/* Round 3: was icon+count only — read as an unlabelled bubble with a
+          number, not a mode switch. */}
+      <span>Comments</span>
       <Badge>{count}</Badge>
     </Button>
   );

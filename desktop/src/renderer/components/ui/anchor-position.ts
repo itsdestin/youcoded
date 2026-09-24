@@ -28,9 +28,15 @@ export type BubbleAlign = 'center' | 'start';
  * trigger, the window is. Whichever it is, it is also intersected with the
  * window, because a dialog can itself be taller than a short window.
  */
-export function boundsFor(el: HTMLElement) {
-  const host = el.closest('[role="dialog"]');
-  const h = host ? host.getBoundingClientRect() : null;
+// `host`: round 3 (doc-comments polish) — the file viewer's popovers (the new-
+// comment box, the highlight hover card) anchor to a raw SELECTION rect, not a
+// dialog, and must stay inside the viewer's OWN content area (never over its
+// header row above). Passing the content element directly skips the
+// `[role="dialog"]` lookup instead of teaching this function about a second
+// kind of host to search for.
+export function boundsFor(el: HTMLElement, host?: HTMLElement | null) {
+  const dialogHost = host ?? el.closest('[role="dialog"]');
+  const h = dialogHost ? dialogHost.getBoundingClientRect() : null;
   return {
     left: Math.max(EDGE, h ? h.left + EDGE : EDGE),
     right: Math.min(window.innerWidth - EDGE, h ? h.right - EDGE : window.innerWidth - EDGE),
@@ -57,12 +63,15 @@ export function placeBubble(
     gapBelow: number;
     gapAbove: number;
   },
+  // Optional explicit bounds host (see boundsFor's WHY) — omit for the
+  // original dialog-or-window behavior AnchorTip/Tooltip rely on.
+  boundsHost?: HTMLElement | null,
 ): { left: number; top: number } {
   const rect = trigger.getBoundingClientRect();
   const box = panel?.getBoundingClientRect();
   const w = box?.width ?? 0;
   const h = box?.height ?? 0;
-  const b = boundsFor(trigger);
+  const b = boundsFor(trigger, boundsHost);
 
   // Preferred side, then flip if the preferred side does not fit and the other
   // one does. Flipping only happens when staying put would push the bubble out

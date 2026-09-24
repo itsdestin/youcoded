@@ -3,8 +3,17 @@
 // to the assistant as a batch. Only rendered while in Comments mode
 // (ActiveArtifactView) — the count itself now lives on CommentsModeToggle,
 // which is visible in BOTH modes, so it isn't repeated here (round 2).
+//
+// Round 3: this used to render its OWN border/background/padding nested
+// inside ActiveArtifactView's toolbar row (with negative margins clawing
+// some of it back) — two stacked "toolbar" surfaces reading as one janky
+// row. It's now bare content (`flex-1` + its own items) that ActiveArtifactView
+// lays out inside its ONE toolbar row, alongside CommentsModeToggle. "Show
+// resolved" moved from an icon-only Toggle (unlabelled once the pane got
+// tight — see MARGIN_COLLAPSE_PX's own WHY) to the shared FilterChip, which
+// carries its own label at every width.
 import { Button } from '../ui/Button';
-import { Toggle } from '../ui/Toggle';
+import { FilterChip } from '../ui/FilterChip';
 import { basenameOf, useDocComments } from '../../state/doc-comments-store';
 import { genRefId, truncateQuote, type ComposeRef } from '../context-menu/compose-ref';
 
@@ -45,12 +54,18 @@ export function CommentsReviewBar({ path, narrow = false }: Props) {
   };
 
   return (
-    <div className="flex items-center gap-2 px-2 py-1.5 border-b border-edge bg-panel shrink-0 text-xs min-w-0">
+    <div className="flex items-center gap-2 flex-1 min-w-0 text-xs">
       {resolvedCount > 0 && (
-        <label className="flex items-center gap-1.5 text-fg-muted select-none shrink-0" title="Show resolved comments">
-          <Toggle checked={showResolved} onChange={setShowResolved} aria-label="Show resolved comments" />
-          {!narrow && 'Show resolved'}
-        </label>
+        <FilterChip
+          kind="toggle"
+          active={showResolved}
+          onClick={() => setShowResolved(!showResolved)}
+          aria-label="Show resolved comments"
+          title="Show resolved comments"
+          className="shrink-0"
+        >
+          Show resolved
+        </FilterChip>
       )}
       <div className="flex-1 min-w-0" />
       <Button

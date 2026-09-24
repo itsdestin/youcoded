@@ -75,12 +75,15 @@ const PATHS: Record<MenuIconName, React.ReactNode> = {
   ),
 };
 
-export function MenuIcon({ name }: { name: MenuIconName }) {
+// className replaces the old fixed width="14" height="14" (same rendered
+// size via the default) — round 3 (doc-comments polish) reuses this icon set
+// for TokenPill's small message/file glyph, which needs a SMALLER size than
+// a menu row's; a fixed pixel attribute couldn't be overridden by a caller.
+export function MenuIcon({ name, className = 'w-3.5 h-3.5' }: { name: MenuIconName; className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
-      width="14"
-      height="14"
+      className={className}
       fill="none"
       stroke="currentColor"
       strokeWidth={2}

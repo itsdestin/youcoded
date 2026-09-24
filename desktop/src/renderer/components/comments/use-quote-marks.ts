@@ -19,7 +19,17 @@ const MARK_RESOLVED = 'bg-fg-muted/10 text-fg-muted rounded-sm cursor-pointer';
 // Exported: both CommentsMargin (Comments mode) and ReadingHighlights
 // (Reading mode) toggle these on the SAME mark elements when linking a
 // highlight to its card/hover-card, so the active look must be one constant.
-export const ACTIVE_CLASSES = ['ring-2', 'ring-accent/60'];
+//
+// Round 3 (polish pass): this used to be a 2px accent RING — on a highlight
+// that's just a soft tint, a hard ring reads as a focus-outline bug, not
+// "this thread is open" (Destin's own words). The fix is more of the SAME
+// tint, not a border: `!` forces it past the resting bg-accent/15 (or, on a
+// resolved mark, bg-fg-muted/10) regardless of which utility the bundler
+// happens to emit later in the stylesheet — Tailwind resolves two classes
+// setting the same property by CSS source order, not DOM class order (the
+// exact trap Button.tsx's mergeClasses exists to dodge; `!important` is the
+// cheaper fix here since this is one property, not a whole conflict table).
+export const ACTIVE_CLASSES = ['!bg-accent/30'];
 
 /**
  * Wraps each visible comment's quote text in a `<mark>` inside `container`,
