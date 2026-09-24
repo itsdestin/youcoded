@@ -63,7 +63,9 @@ export default function GamePanel({ connection, chessConnection, incognito, onTo
     // drawer's aside) and fills its container. It no longer carries the old
     // w-80 / border-l / bg-panel slide-out styling.
     // relative: positioning context for the resize handle below.
-    <div className="relative h-full flex flex-col overflow-hidden bg-inset">
+    // game-panel: class hook only, for the 'float' chrome style's see-through
+    // pane (float-chrome.css); no other style reads it.
+    <div className="game-panel relative h-full flex flex-col overflow-hidden bg-inset">
       {/* w-1.5 is a 6px hit area hugging the pane's left edge; the visible
           affordance is the hover/drag accent tint. Theme tokens only — no new
           backdrop-filter (react-renderer rule). */}

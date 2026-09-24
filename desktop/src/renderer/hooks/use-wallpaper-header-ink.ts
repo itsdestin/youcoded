@@ -52,8 +52,12 @@ function readableOf(a: RGB, b: RGB, pixels: readonly RGB[]): string {
   return `rgb(${pick.join(' ')})`;
 }
 
-/** CSS overrides belong to the header, not the theme tokens or the global status palette. */
-export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null>) {
+/** CSS overrides belong to the header, not the theme tokens or the global status palette.
+ *  `inkBottom: false` — for a header that does not own the chat's bottom controls
+ *  (ScreenBand over Projects/Pages). WHY: every instance clears what it wrote on
+ *  unmount, so a second instance inking the SAME bottom controls would strip the
+ *  chat header's ink when the screen closed. */
+export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null>, { inkBottom = true }: { inkBottom?: boolean } = {}) {
   const { activeTheme, themeApplied } = useTheme();
   const background = activeTheme.background;
   const src = background?.type === 'image' ? background.value : null;
@@ -192,7 +196,7 @@ export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null
           // Each control gets its OWN ink: one shared ink found no answer on a
           // wallpaper that is dark on one side and bright on the other (Golden
           // Sunbreak), and the text fell back to invisible theme gold.
-          for (const element of document.querySelectorAll<HTMLElement>('.quick-chip, .quick-chip-edit, .status-bar > button, .status-bar .status-chip, .input-bar-container form')) {
+          if (inkBottom) for (const element of document.querySelectorAll<HTMLElement>('.quick-chip, .quick-chip-edit, .status-bar > button, .status-bar .status-chip, .input-bar-container form')) {
             const r = element.getBoundingClientRect();
             if (!r.width || !r.height) continue;
             // A wide composer crosses several wallpaper areas: sample across it.
@@ -239,5 +243,5 @@ export function useWallpaperHeaderInk(headerRef: RefObject<HTMLDivElement | null
       sessions.disconnect();
       window.removeEventListener('resize', resize);
     };
-  }, [headerRef, src, fg2, panel, activeTheme.slug, themeApplied]);
+  }, [headerRef, inkBottom, src, fg2, panel, activeTheme.slug, themeApplied]);
 }

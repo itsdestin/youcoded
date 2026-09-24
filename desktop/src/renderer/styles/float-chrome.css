@@ -229,8 +229,8 @@
 /* ── Hover and press ─────────────────────────────────────────────────────── */
 @media (hover: hover) {
   [data-chrome-style='float'] :is(
-    .header-bar > .header-controls-left > button:not(.session-strip),
-    .header-bar > .header-controls-left > div:not(.wide-view-toggle) > button,
+    .header-bar > .header-controls-left > button:not(.session-strip):not([aria-pressed='true']),
+    .header-bar > .header-controls-left > div:not(.wide-view-toggle) > button:not([aria-pressed='true']),
     .header-bar > .header-controls-right > div > button:not(.bg-accent):not(.caption-buttons > button:last-child),
     .quick-chip, .quick-chip-edit,
     .status-bar > button, .status-bar .status-chip
@@ -268,7 +268,10 @@
    minimalist-themes-selected, S-1): the one nearly solid element in the header,
    with a firmer shadow and the icon in the theme's main text colour. */
 [data-chrome-style='float'] .header-bar > .header-controls-right > div > button.bg-accent,
-[data-chrome-style='float'] .header-bar .wide-view-toggle-indicator {
+[data-chrome-style='float'] .header-bar .wide-view-toggle-indicator,
+/* The open screen's own button on Projects / Pages (and a focused pinned
+   page) is the same kind of "you are here" — the same pill. */
+[data-chrome-style='float'] .header-bar > .header-controls-left button[aria-pressed='true']:not(.wide-view-toggle *) {
   background: color-mix(in srgb, var(--panel) 85%, transparent) !important;
   box-shadow: inset 0 0 0 1px var(--edge), 0 2px 8px -2px rgba(0, 0, 0, .42) !important;
 }
@@ -279,7 +282,9 @@
 [data-chrome-style='float'] .header-bar > .header-controls-right > div > button.bg-accent,
 [data-chrome-style='float'] .header-bar > .header-controls-right > div > button.bg-accent > svg,
 [data-chrome-style='float'] .header-bar .wide-view-toggle button[aria-pressed='true'],
-[data-chrome-style='float'] .header-bar .wide-view-toggle button[aria-pressed='true'] > svg {
+[data-chrome-style='float'] .header-bar .wide-view-toggle button[aria-pressed='true'] > svg,
+[data-chrome-style='float'] .header-bar > .header-controls-left button[aria-pressed='true']:not(.wide-view-toggle *),
+[data-chrome-style='float'] .header-bar > .header-controls-left button[aria-pressed='true']:not(.wide-view-toggle *) > svg {
   color: var(--fg) !important;
 }
 /* Session Files' count uses `bg-accent`, which is translucent on some packs;
@@ -306,6 +311,15 @@
    produced one; accent states, badges and the selected segment keep theirs. */
 [data-wallpaper] [data-chrome-style='float'] .header-bar button[data-wallpaper-control-ink]:not(.bg-accent):not(.text-amber-700):not(.text-accent):not([aria-pressed='true']) > svg {
   color: var(--wallpaper-header-ink);
+}
+/* A worded header button (Projects / Pages' "Back to chat · Esc") takes the
+   same ink for its words; the key hint stays quieter. Badges (a span with its
+   own fill) keep their colours. */
+[data-wallpaper] [data-chrome-style='float'] .header-bar > .header-controls-right > div > button[data-wallpaper-control-ink]:not(.bg-accent) > span:not([class*='bg-']) {
+  color: var(--wallpaper-header-ink);
+}
+[data-wallpaper] [data-chrome-style='float'] .header-bar > .header-controls-right > div > button[data-wallpaper-control-ink]:not(.bg-accent) > span:is(.text-fg-muted, .text-fg-faint) {
+  opacity: .7;
 }
 
 /* ── Session switcher ────────────────────────────────────────────────────── */
@@ -369,4 +383,105 @@
 }
 [data-chrome-style='float'] .input-bar-container form[data-bottom-ink] textarea::placeholder {
   color: color-mix(in srgb, var(--control-ink) 70%, transparent) !important;
+}
+
+/* ═══ Beyond the chat: side pane, Projects, Pages, terminal ════════════════
+   Destin, 2026-09-23: these "match the transparent/blurred background styling
+   used elsewhere in this new theme/chrome style". Each large surface becomes a
+   floating SHEET — the message box's recipe (faint fill, hairline ring, soft
+   drop, heavy frost) — with the solid layers inside it cleared so the frost is
+   what you see. One variable, so the sheet's density is one number.
+   DENSITY: the controls' 16% fill left a file list's dark text unreadable over a
+   dark stretch of wallpaper, so a sheet takes the chat messages' density — the
+   theme's own panels-opacity, which every theme already tunes for reading. */
+[data-chrome-style='float'] {
+  --float-sheet-fill: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
+  --float-sheet-ring: inset 0 0 0 1px color-mix(in srgb, var(--edge) 40%, transparent);
+  --float-sheet-drop: 0 8px 24px -10px rgba(0, 0, 0, .3);
+}
+
+/* ── Session Files / Games pane ─────────────────────────────────────────────
+   Floats clear of the header and the chips (the gaps 'floating' uses) instead
+   of butting against the invisible bars. */
+[data-chrome-style='float'] .framed-shell > .drawer-pane {
+  margin-top: calc(var(--top-chrome-bottom, 3rem) + 6px);
+  margin-bottom: calc(var(--bottom-chrome-height, 5rem) + 6px);
+  margin-right: 8px;
+  background-color: var(--float-sheet-fill) !important;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
+}
+/* Literal px: Chromium does not repaint a blur written through a variable. One
+   blur for the whole pane — its rows and cards below get none (a filter per
+   repeated card is the paint bug react-renderer.md warns about). */
+[data-wallpaper] [data-chrome-style='float'] .framed-shell > .drawer-pane {
+  backdrop-filter: blur(16px) saturate(1.15) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(1.15) !important;
+}
+/* The pane's own interior layers were solid --inset; clear them. */
+[data-chrome-style='float'] .drawer-pane :is(.drawer-aside, .game-panel) {
+  background-color: transparent !important;
+}
+/* Cards and fields inside the pane wear the controls' light surface. */
+[data-chrome-style='float'] .drawer-pane :is(.bg-well, .bg-inset, .bg-panel):not(.game-panel):not(.drawer-aside) {
+  background-color: color-mix(in srgb, var(--inset) 22%, transparent) !important;
+  border-color: color-mix(in srgb, var(--edge) 45%, transparent) !important;
+}
+
+/* ── Projects and Pages ─────────────────────────────────────────────────────
+   A screen is a solid sheet in every other style. Here the sheet clears to the
+   wallpaper and its panes become floating sheets; its band is already a
+   .header-bar, so its buttons pick up the header's floating surface. The chat
+   column under the screen is hidden so the frost samples the wallpaper, not the
+   chat (visibility, not display: it keeps its layout and the terminal's size). */
+[data-chrome-style='float'] .screen-view {
+  background-color: transparent !important;
+}
+[data-chrome-style='float'] [data-screen-open='true'] {
+  visibility: hidden;
+}
+[data-chrome-style='float'] .screen-view .screen-body {
+  --frame-edge: 8px;
+  padding-top: 6px;
+}
+[data-chrome-style='float'] .screen-pane {
+  background-color: var(--float-sheet-fill) !important;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
+}
+[data-wallpaper] [data-chrome-style='float'] .screen-pane {
+  backdrop-filter: blur(16px) saturate(1.15);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+}
+/* Cards on a screen (the project hero, file tiles, the search field): the
+   light surface, no blur of their own. */
+[data-chrome-style='float'] .screen-pane :is(.bg-panel, .bg-inset, .bg-well, .bg-canvas) {
+  background-color: color-mix(in srgb, var(--inset) 22%, transparent) !important;
+  border-color: color-mix(in srgb, var(--edge) 45%, transparent) !important;
+}
+
+/* ── Terminal ───────────────────────────────────────────────────────────────
+   The terminal already sits on a pre-blurred copy of the wallpaper (painted
+   once — no live blur), full-bleed behind the header. Here it becomes an inset
+   floating sheet like the others. Desktop only: on phones the message box stays
+   under the terminal and the terminal's box is sized by the app, so it keeps
+   today's look. The inset is theme-driven, never view-driven, so the terminal
+   is one size in both views (a resize would make the PTY re-emit its buffer). */
+html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scroll {
+  top: calc(var(--top-chrome-bottom, 3rem) + 6px) !important;
+  left: 8px !important;
+  right: 8px !important;
+  bottom: 8px !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
+  /* The grid's own insets were measured from the window; inside the card it
+     needs only a small margin. */
+  --terminal-top-inset: 6px;
+  --terminal-side-inset: 6px;
+  --terminal-bottom-inset: 6px;
+}
+/* Keep the blurred wallpaper copy aligned with the real wallpaper: stretch it
+   back out to the window edges the card was pulled in from. */
+html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scroll > .terminal-wallpaper {
+  inset: calc(-1 * (var(--top-chrome-bottom, 3rem) + 6px)) -8px -8px -8px !important;
 }

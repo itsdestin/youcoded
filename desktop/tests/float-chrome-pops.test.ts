@@ -96,6 +96,9 @@ describe('float chrome never reaches another chrome style', () => {
     expect(readSource(join(RENDERER, 'components/tags/SessionTagsChip.tsx'))).toContain('className="status-chip flex');
     expect(readSource(join(RENDERER, 'components/HeaderBar.tsx'))).toContain('className="caption-buttons flex bg-inset');
     expect(readSource(join(RENDERER, 'components/SessionStrip.tsx'))).toContain('data-status={color} className={`session-dot ');
+    expect(readSource(join(RENDERER, 'components/ScreenBand.tsx'))).toContain('className="header-controls-left flex');
+    expect(readSource(join(RENDERER, 'components/game/GamePanel.tsx'))).toContain('className="game-panel relative');
+    expect(readSource(join(RENDERER, 'components/TerminalView.tsx'))).toContain('className="terminal-wallpaper"');
   });
 });
 
@@ -126,7 +129,22 @@ describe('the approved float look', () => {
 
   it('marks selected Files/Games and the selected Chat segment with the solid bright pill', () => {
     const css = floatCSS();
-    expect(css).toMatch(/button\.bg-accent,\s*\[data-chrome-style='float'\] \.header-bar \.wide-view-toggle-indicator \{\s*background: color-mix\(in srgb, var\(--panel\) 85%/);
+    expect(css).toMatch(/button\.bg-accent,\s*\[data-chrome-style='float'\] \.header-bar \.wide-view-toggle-indicator,[^{]*button\[aria-pressed='true'\]:not\(\.wide-view-toggle \*\) \{\s*background: color-mix\(in srgb, var\(--panel\) 85%/);
+  });
+
+  it('floats Session Files / Games, Projects, Pages and the terminal as frosted sheets', () => {
+    const css = floatCSS();
+    // WHY bubble density, not the controls' 16%: a file list's text vanished over dark wallpaper.
+    expect(css).toContain('--float-sheet-fill: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);');
+    for (const sheet of ['.framed-shell > .drawer-pane {', '.screen-pane {', '.terminal-overlay-scroll {']) expect(css).toContain(sheet);
+    expect(css).toMatch(/\.drawer-pane :is\(\.drawer-aside, \.game-panel\) \{\s*background-color: transparent/);
+    // The terminal card is desktop-only: on phones the message box sits under it.
+    expect(css).toMatch(/html\[data-platform="electron"\] \[data-chrome-style='float'\] \.terminal-overlay-scroll \{/);
+  });
+
+  it('the screen band shares the header ink without touching the chat\'s bottom controls', () => {
+    expect(readSource(join(RENDERER, 'components/ScreenBand.tsx'))).toContain('useWallpaperHeaderInk(headerRef, { inkBottom: false });');
+    expect(readSource(join(RENDERER, 'hooks/use-wallpaper-header-ink.ts'))).toContain('if (inkBottom) for (const element of');
   });
 
   it('draws the window buttons as three separate chips', () => {
