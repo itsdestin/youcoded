@@ -170,7 +170,7 @@ describe('SubagentWatcher', () => {
     expect(emitted).toHaveLength(1); // no duplicate emit
   });
 
-  it('getHistory yields all events from all subagent files for replay', () => {
+  it('getHistory yields all events from all subagent files for replay', async () => {
     writeMeta(subagentsDir, 'abc', 'Find bug', 'Explore');
     appendLine(subagentsDir, 'abc', toolUseLine('u1', 'toolu_X', 'Read', { file_path: '/a' }));
     writeMeta(subagentsDir, 'def', 'Other', 'Plan');
@@ -180,7 +180,7 @@ describe('SubagentWatcher', () => {
     historyIndex.recordParentAgentToolUse('toolu_P1', 'Find bug', 'Explore');
     historyIndex.recordParentAgentToolUse('toolu_P2', 'Other', 'Plan');
 
-    const events = watcher.getHistory(historyIndex);
+    const events = await watcher.getHistory(historyIndex);
     expect(events.length).toBe(2);
     const byTool: Record<string, TranscriptEvent> = {};
     for (const e of events) byTool[e.data.toolName!] = e;
@@ -216,6 +216,100 @@ describe('SubagentWatcher', () => {
     expect(emitted[0].data.parentAgentToolUseId).toBe('toolu_parent');
     expect(emitted[1].data.parentAgentToolUseId).toBe('toolu_parent');
     expect(emitted[0].data.agentId).toBe('abc');
+  });
+
+  // ---- Blocking-call batch B1 (2026-09-24): the scan and replay are async ----
+
+  it('getHistory never touches a blocking fs call, and a missing directory is an empty replay', async () => {
+    writeMeta(subagentsDir, 'abc', 'Find bug', 'Explore');
+    appendLine(subagentsDir, 'abc', toolUseLine('u1', 'toolu_X', 'Read', { file_path: '/a' }));
+    const historyIndex = new SubagentIndex();
+    historyIndex.recordParentAgentToolUse('toolu_P1', 'Find bug', 'Explore');
+    const sync = [vi.spyOn(fs, 'readFileSync'), vi.spyOn(fs, 'readdirSync'), vi.spyOn(fs, 'existsSync')];
+    try {
+      expect(await watcher.getHistory(historyIndex)).toHaveLength(1);
+      for (const spy of sync) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of sync) spy.mockRestore();
+    }
+    const gone = new SubagentWatcher({ sessionId: 's', subagentsDir: path.join(tmpRoot, 'nope'), index, emit: () => undefined });
+    expect(await gone.getHistory(new SubagentIndex())).toEqual([]);
+  });
+
+  it('getHistory binds same-description helpers in directory order, even though reads run in parallel', async () => {
+    // Two helpers share a description: binding is FIFO over parents in the
+    // order the directory lists the files — exactly the sync version's order.
+    for (const id of ['a1', 'a2', 'a3']) {
+      writeMeta(subagentsDir, id, 'Same task', 'Explore');
+      appendLine(subagentsDir, id, toolUseLine(`u-${id}`, `toolu_${id}`, 'Read', { file_path: `/${id}` }));
+    }
+    const order = fs.readdirSync(subagentsDir).filter(n => n.endsWith('.jsonl')).map(n => n.slice(6, -6));
+    const historyIndex = new SubagentIndex();
+    for (const p of ['P1', 'P2', 'P3']) historyIndex.recordParentAgentToolUse(p, 'Same task', 'Explore');
+    const events = await watcher.getHistory(historyIndex);
+    expect(events.map(e => e.data.agentId)).toEqual(order);
+    expect(events.map(e => e.data.parentAgentToolUseId)).toEqual(['P1', 'P2', 'P3']);
+  });
+
+  it('overlapping directory scans coalesce: a burst of triggers is one scan plus one rerun', async () => {
+    watcher.start();
+    await vi.waitFor(() => expect((watcher as any).scanInFlight).toBeNull(), { timeout: SETTLE_MS });
+    const readdir = vi.spyOn(fs.promises, 'readdir');
+    try {
+      for (let i = 0; i < 20; i++) watcher.kickScan(); // e.g. 20 appended lines → 20 dir events
+      await vi.waitFor(() => expect((watcher as any).scanInFlight).toBeNull(), { timeout: SETTLE_MS });
+      expect(readdir.mock.calls.length).toBeLessThanOrEqual(2);
+      expect(readdir.mock.calls.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      readdir.mockRestore();
+    }
+  });
+
+  it('stop() while a scan is in flight tracks nothing and leaves no watch behind', async () => {
+    writeMeta(subagentsDir, 'late', 'Late', 'Explore');
+    appendLine(subagentsDir, 'late', toolUseLine('u-l', 'toolu_L', 'Read', { file_path: '/l' }));
+    index.recordParentAgentToolUse('toolu_parent_l', 'Late', 'Explore');
+    const watchSpy = vi.spyOn(fs, 'watch');
+    try {
+      watcher.start(); // scan starts (async readdir)…
+      watcher.stop();  // …and the session closes before it lands
+      await wait(100); // negative assertion — a fixed settle is correct here
+      expect(watcher.trackedCount()).toBe(0);
+      expect(emitted).toEqual([]);
+      // Only the directory watch start() attaches synchronously — no per-helper watch.
+      expect(watchSpy.mock.calls.every(c => c[0] === subagentsDir)).toBe(true);
+    } finally {
+      watchSpy.mockRestore();
+    }
+  });
+
+  it('a helper whose parent was recorded while its first read was in flight still emits (no lost output)', async () => {
+    // The race the async scan widened: tracked with no parent → first read in
+    // flight → the parent's Agent tool_use lands and flushAllPending() finds
+    // an EMPTY buffer → the read then buffers the lines. Before the fix nothing
+    // flushed them again, so the helper's output never showed.
+    writeMeta(subagentsDir, 'race', 'Race task', 'Explore');
+    appendLine(subagentsDir, 'race', toolUseLine('u-r', 'toolu_R', 'Read', { file_path: '/r' }));
+    const realOpen = fs.promises.open;
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (...args: Parameters<typeof realOpen>) => {
+      await gate;
+      return realOpen(...args);
+    }) as typeof realOpen);
+    try {
+      watcher.start();
+      await vi.waitFor(() => expect(watcher.trackedCount()).toBe(1), { timeout: SETTLE_MS });
+      await vi.waitFor(() => expect(openSpy).toHaveBeenCalled(), { timeout: SETTLE_MS }); // read is in flight
+      index.recordParentAgentToolUse('toolu_parent_r', 'Race task', 'Explore');
+      watcher.flushAllPending(); // what TranscriptWatcher does — nothing buffered yet
+      release();
+      await vi.waitFor(() => expect(emitted.map(e => e.data.toolUseId)).toEqual(['toolu_R']), { timeout: SETTLE_MS });
+      expect(emitted[0].data.parentAgentToolUseId).toBe('toolu_parent_r');
+    } finally {
+      release();
+      openSpy.mockRestore();
+    }
   });
 });
 
@@ -485,7 +579,7 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('a directory whose fs.watch cannot be attached falls back to the polls', () => {
+  it('a directory whose fs.watch cannot be attached falls back to the polls', async () => {
     setPlatform('linux');
     fs.mkdirSync(subagentsDir, { recursive: true });
     writeMeta(subagentsDir, 'nw', 'No watch', 'claude');
@@ -493,8 +587,10 @@ describe('SubagentWatcher arms timers only when there is something to poll', () 
     appendLine(subagentsDir, 'nw', toolUseLine('u-nw', 'toolu_NW', 'Read', { file_path: '/nw' }));
     vi.spyOn(fs, 'watch').mockImplementation(() => { throw new Error('EMFILE'); });
     watcher.start();
+    // The helper is tracked by the async directory scan (B1), so its file poll
+    // arms a tick after start().
+    await vi.waitFor(() => expect(watcher.hasActivePoll('nw')).toBe(true), { timeout: SETTLE_MS });
     expect(vi.getTimerCount()).toBe(2); // directory poll + this helper's file poll
-    expect(watcher.hasActivePoll('nw')).toBe(true);
   });
 
   // A settled helper has no watch of its own, and a directory re-scan skips

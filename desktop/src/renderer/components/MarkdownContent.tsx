@@ -11,6 +11,10 @@ import { FilepathToken } from './FilepathToken';
 import { CONVERSATIONS_FENCE, parseConversationRefs } from '../../shared/chatsearch-refs';
 import ChatsearchRefBlock from './tool-views/ChatsearchRefBlock';
 import { SessionRefsEnabled } from './session-refs-context';
+import {
+  startStream, advanceStream, withDefinitions, type StreamView,
+  DETAILS_OPEN_WITH_SUMMARY, DETAILS_OPEN, DETAILS_SUMMARY, DETAILS_CLOSE, DETAILS_OPEN_ANY,
+} from './markdown-blocks';
 
 /**
  * Rehype plugin: tag every <code> that lives inside a <pre> with data-block.
@@ -54,10 +58,10 @@ const rehypeSafeDisclosures: Plugin<[{ disclosures?: boolean }?], Root> =
       if (child.type === 'element') processChildren(child as Element);
       if (child.type !== 'raw' || typeof child.value !== 'string') continue;
 
-      const combinedOpening = child.value.match(
-        /^\s*<details(\s+open)?\s*>\s*<summary>\s*([^<>]*?)\s*<\/summary>\s*$/i,
-      );
-      const detailsOnly = child.value.match(/^\s*<details(\s+open)?\s*>\s*$/i);
+      // The patterns are shared with markdown-blocks.ts, whose streaming planner
+      // must predict exactly which blocks this pairs (see DETAILS_* there).
+      const combinedOpening = child.value.match(DETAILS_OPEN_WITH_SUMMARY);
+      const detailsOnly = child.value.match(DETAILS_OPEN);
       let summary = combinedOpening?.[2];
       let contentStart = index + 1;
       if (!summary && detailsOnly) {
@@ -69,7 +73,7 @@ const rehypeSafeDisclosures: Plugin<[{ disclosures?: boolean }?], Root> =
           && hastText(children[summaryIndex]).trim() === '') summaryIndex++;
         const summaryNode = children[summaryIndex] as RootContent & { value?: string };
         const summaryMatch = summaryNode?.type === 'raw'
-          ? summaryNode.value?.match(/^\s*<summary>\s*([^<>]*?)\s*<\/summary>\s*$/i)
+          ? summaryNode.value?.match(DETAILS_SUMMARY)
           : null;
         if (summaryMatch) {
           summary = summaryMatch[1];
@@ -81,13 +85,13 @@ const rehypeSafeDisclosures: Plugin<[{ disclosures?: boolean }?], Root> =
         const closingIndex = children.findIndex(
           (candidate, candidateIndex) => candidateIndex >= contentStart
             && candidate.type === 'raw'
-            && /^\s*<\/details>\s*$/i.test((candidate as RootContent & { value?: string }).value ?? ''),
+            && DETAILS_CLOSE.test((candidate as RootContent & { value?: string }).value ?? ''),
         );
         // Nested raw disclosures are deliberately flattened rather than paired
         // incorrectly; only one unambiguous details/summary pair is promoted.
         const hasNestedOpening = children.slice(contentStart, closingIndex).some(
           (candidate) => candidate.type === 'raw'
-            && /^\s*<details(?:\s+open)?\s*>/i.test((candidate as RootContent & { value?: string }).value ?? ''),
+            && DETAILS_OPEN_ANY.test((candidate as RootContent & { value?: string }).value ?? ''),
         );
         if (closingIndex !== -1 && !hasNestedOpening) {
           // A root may technically contain a doctype, but an element may not.
@@ -538,9 +542,39 @@ interface Props {
   sessionId?: string;
   /** Decorative rendering for tiles: no Copy buttons, no links — nothing focusable or clickable. */
   preview?: boolean;
+  /**
+   * The content may GROW while this stays mounted (a reply streaming in). Once it
+   * does, finished blocks are drawn once and only the tail is re-drawn per update.
+   * Same page either way — see markdown-blocks.ts.
+   */
+  incremental?: boolean;
 }
 
-export default React.memo(function MarkdownContent({ content, sessionId, preview }: Props) {
+/**
+ * One piece of a streaming message, drawn as its own markdown document.
+ * WHY memo: a finished block's `source` never changes again, so it is parsed,
+ * highlighted and reconciled exactly once instead of once per streamed word.
+ * Every prop is a string or module-level/memoised, so the comparison holds.
+ */
+const MarkdownChunk = React.memo(function MarkdownChunk({ source, defs, rehypePlugins, components }: {
+  source: string;
+  /** The message's link definitions, when this piece could use them (see withDefinitions). */
+  defs: string;
+  rehypePlugins: PluggableList;
+  components: React.ComponentProps<typeof ReactMarkdown>['components'];
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={remarkPluginsStable}
+      rehypePlugins={rehypePlugins}
+      components={components}
+    >
+      {withDefinitions(source, defs)}
+    </ReactMarkdown>
+  );
+});
+
+export default React.memo(function MarkdownContent({ content, sessionId, preview, incremental }: Props) {
   // Memoize the rehype plugin array and the component map by sessionId so that:
   // (a) When sessionId is absent, we use the stable module-scope arrays (no allocation).
   // (b) When sessionId is present, the filepath-token component is added once and
@@ -580,6 +614,60 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, preview]);
+
+  // Streaming (smoothness sweep A5): see markdown-blocks.ts for how a growing
+  // message is cut into groups and which of them are finished.
+  // WHY state updated during render, not a ref (review F3): this is React's
+  // "information from previous renders" pattern. A ref written during render
+  // survives a render React throws away (concurrent rendering, StrictMode) and
+  // would then describe content that never reached the screen; a state update
+  // made during render is discarded along with that render. React re-runs this
+  // function at once with the new view, before drawing any child, so the cost
+  // is one extra call of this function, not a second draw.
+  const [streamState, setStreamState] = useState<StreamView>(() => startStream(content));
+  let stream = streamState;
+  if (incremental && stream.drawn !== content) {
+    stream = advanceStream(stream, content);
+    setStreamState(stream);
+  }
+
+  if (incremental) {
+    // WHY a keyed Fragment per group, not a wrapper element: the groups' elements
+    // land as direct siblings exactly as one whole-message render would put them,
+    // so `.assistant-bubble > *`, `last:mb-0` and every other selector see the
+    // same tree. The '\n' between groups is the text node react-markdown itself
+    // puts between top-level blocks — only between groups that draw something,
+    // as react-markdown skips a link definition without leaving a newline.
+    // WHY keyed by where the group starts in the message (review F1): a group
+    // keeps its elements however the groups before it change; group 0 is the
+    // same element the single-document render used, so nothing drawn before the
+    // message started growing is rebuilt.
+    let painted = false;
+    return (
+      <>
+        {stream.groups.map((g) => {
+          const newline = g.paints && painted;
+          painted ||= g.paints;
+          return (
+            <React.Fragment key={g.key}>
+              {newline ? '\n' : null}
+              {/* WHY skip a group of only link definitions (review 2, F1): it
+                  draws nothing, and while a definition list streams in it is
+                  the live group — drawing it re-parsed the whole list per word. */}
+              {g.paints && (
+                <MarkdownChunk
+                  source={g.draw}
+                  defs={g.defs}
+                  rehypePlugins={rehypePlugins}
+                  components={components}
+                />
+              )}
+            </React.Fragment>
+          );
+        })}
+      </>
+    );
+  }
 
   return (
     <ReactMarkdown
