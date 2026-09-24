@@ -634,6 +634,17 @@ describe('MarkdownContent while a reply streams in', () => {
   };
   const lines = (n: number, line: (i: number) => string) => Array.from({ length: n }, (_, i) => line(i)).join('\n');
 
+  // Each update may extend a link definition, and a definition can change how
+  // any block that names it is drawn — but only the blocks that NAME it.
+  it('never does more work per word than the whole message while a list of link definitions streams in', () => {
+    const body = Array.from({ length: 40 }, (_, i) => `Point ${i} see [source ${i}][${i}] and \`code\`.`).join('\n\n') + '\n\n';
+    const defs = lines(40, (i) => `[${i}]: https://example.com/articles/${i}/page "Title ${i}"`);
+    const costs = streamCosts('Point', body, tokenDeltas(defs));
+    expectNoMoreThanToday(costs);
+    // A definition only re-draws the blocks that use its label.
+    for (const c of costs) expect(c.drawn.length, `after ${JSON.stringify(c.md.slice(-40))}`).toBeLessThanOrEqual(2);
+  });
+
   // A reply that ends in one big block with no blank line in it: the splitter
   // must not parse that block again on top of drawing it.
   it('never does more work per word than the whole message while one long list grows', () => {

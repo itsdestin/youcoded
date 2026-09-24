@@ -651,12 +651,17 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
           return (
             <React.Fragment key={g.key}>
               {newline ? '\n' : null}
-              <MarkdownChunk
-                source={g.draw}
-                defs={g.refs ? stream.defs : ''}
-                rehypePlugins={rehypePlugins}
-                components={components}
-              />
+              {/* WHY skip a group of only link definitions (review 2, F1): it
+                  draws nothing, and while a definition list streams in it is
+                  the live group — drawing it re-parsed the whole list per word. */}
+              {g.paints && (
+                <MarkdownChunk
+                  source={g.draw}
+                  defs={g.defs}
+                  rehypePlugins={rehypePlugins}
+                  components={components}
+                />
+              )}
             </React.Fragment>
           );
         })}
