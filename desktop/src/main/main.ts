@@ -86,7 +86,7 @@ import { createWelcomeBackStore, type WelcomeBackStore } from './welcome-back-st
 // Welcome back (design §4, plan T3): the in-app quit warning's request/answer
 // state machine. Extracted so it can be unit-tested without a BrowserWindow —
 // see close-request-manager.ts's header WHY.
-import { createCloseRequestManager } from './close-request-manager';
+import { createCloseRequestManager, applyCloseAnswer } from './close-request-manager';
 import { randomUUID } from 'crypto';
 import { createAuthStore } from './marketplace-auth-store';
 import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
@@ -1000,20 +1000,21 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     // for every concurrent invocation of this handler (design §4 step 4) — the
     // first one through already ran the block below and set confirmedClose.
     if (confirmedClose) return;
-    if (!answer.close) return; // Cancel — leave the window open, ask again next press
-    // `reopen` false (the switch was left off) means Destin said "don't bring
-    // these back" — untrack so Welcome back never offers them (design §4 step
-    // 3). A timeout or a whole-app-quit settle both resolve reopen:true
-    // (design §4 steps 2, 5): keep tracked, exactly like a crash.
-    if (!answer.reopen) {
-      for (const sid of ownedSessions) welcomeBackStore?.untrack(sid);
-    }
-    for (const sid of ownedSessions) {
-      sessionManager.destroySession(sid);
-      windowRegistry.releaseSession(sid);
-    }
+    // Re-read ownership rather than reusing `ownedSessions`: the in-app prompt
+    // does not block the strip the way the old modal OS dialog did, so a
+    // session can be dragged into another window (or closed with its own X)
+    // while this one waits on an answer. Passing a STALE list into
+    // applyCloseAnswer would destroy/untrack a session that no longer belongs
+    // to this window — review finding, T3 (pinned by
+    // close-request-manager.test.ts's applyCloseAnswer suite).
+    const shouldClose = applyCloseAnswer(answer, windowRegistry.sessionsForWindow(wid), {
+      untrack: (sid) => welcomeBackStore?.untrack(sid),
+      destroySession: (sid) => sessionManager.destroySession(sid),
+      releaseSession: (sid) => windowRegistry.releaseSession(sid),
+    });
+    if (!shouldClose) return; // Cancel — leave the window open, ask again next press
     confirmedClose = true;
-    win.close();
+    if (!win.isDestroyed()) win.close();
   });
 
   return win;

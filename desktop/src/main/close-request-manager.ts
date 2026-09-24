@@ -73,6 +73,48 @@ export interface CloseRequestManager {
   settleAll(cancelled: (windowId: number, requestId: string) => void): void;
 }
 
+export interface CloseAnswerEffects {
+  untrack: (sessionId: string) => void;
+  destroySession: (sessionId: string) => void;
+  releaseSession: (sessionId: string) => void;
+}
+
+/**
+ * Applies a settled close-request answer against the sessions the window
+ * CURRENTLY owns (design §4 step 3) — `currentlyOwned` must be a fresh read
+ * taken AFTER `request()` resolves, never the snapshot passed to `request()`
+ * itself. WHY: the in-app prompt does not block the strip the way the old
+ * modal `dialog.showMessageBox` did, so while a prompt is awaiting an answer
+ * a session can be dragged into another window, or closed with its own X —
+ * destroying/untracking by a STALE list would kill or mistrack a session
+ * that no longer belongs to this window by the time the answer lands (main.ts
+ * close-handler review finding, T3). An empty `currentlyOwned` (everything
+ * left during the prompt) is naturally a no-op loop — the window still
+ * closes, nothing is destroyed twice.
+ *
+ * Returns whether the caller should now close the window (false only for an
+ * explicit Cancel — `answer.close === false`).
+ */
+export function applyCloseAnswer(
+  answer: { close: boolean; reopen?: boolean },
+  currentlyOwned: readonly string[],
+  effects: CloseAnswerEffects,
+): boolean {
+  if (!answer.close) return false;
+  // `reopen` false (the switch was left off) means Destin said "don't bring
+  // these back" — untrack so Welcome back never offers them (design §4 step
+  // 3). A timeout or a whole-app-quit settle both resolve reopen:true (design
+  // §4 steps 2, 5): keep tracked, exactly like a crash.
+  if (!answer.reopen) {
+    for (const sid of currentlyOwned) effects.untrack(sid);
+  }
+  for (const sid of currentlyOwned) {
+    effects.destroySession(sid);
+    effects.releaseSession(sid);
+  }
+  return true;
+}
+
 export function createCloseRequestManager(deps: CloseRequestManagerDeps): CloseRequestManager {
   const timeoutMs = deps.timeoutMs ?? 5_000;
   const pending = new Map<number, PendingRequest>();

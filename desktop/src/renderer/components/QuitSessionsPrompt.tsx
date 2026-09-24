@@ -19,7 +19,10 @@ export default function QuitSessionsPrompt({ count, onCancel, onConfirm }: {
 }) {
   const [reopen, setReopen] = useState(false);
   return (
-    <Dialog open onClose={onCancel} size="panel" title="Close window" scrollBody={false}>
+    // layer={3}: L3 Critical (Overlay.tsx) — the same stacking layer as the
+    // app's other destructive confirmations (ModelSwitchPrompt); this is a
+    // z-index-only change, not the dictated copy/layout above.
+    <Dialog open onClose={onCancel} size="panel" title="Close window" scrollBody={false} layer={3}>
       <div className="px-4 pt-4 pb-3 flex flex-col gap-1.5">
         <p className="text-xs font-bold text-fg">
           You have {count} active session{count === 1 ? '' : 's'} - proceed?
