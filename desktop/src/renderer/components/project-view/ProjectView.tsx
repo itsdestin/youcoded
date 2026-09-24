@@ -21,7 +21,7 @@ import { useEscClose } from '../../hooks/use-esc-close';
 import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
-import { isWorkbenchMode, workbenchScreenFrame } from '../../workbench-mode';
+import { workbenchScreenFrame } from '../../workbench-mode';
 import { SkillsToolsTab, needsSetupRowDomId } from './SkillsToolsTab';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
@@ -51,7 +51,8 @@ import { ContextEditorOverlay } from './ContextEditorOverlay';
 // 2026-07-23: the Artifacts tab merged into Files. Artifacts was not a subset of
 // All files, so the merge moved externals into their own section inside this tab
 // rather than deleting them — see the file-merge spec.
-// WHY: the new tab exists only in the isolated workbench until the UI and behavior are approved.
+// 'skills' (T4, project-plugin-controls): Skills & tools — a real tab for
+// everyone, not a workbench-only preview.
 type TabId = 'files' | 'conversations' | 'context' | 'skills';
 
 // Live hero stats, computed from the project:* / artifacts:* IPC (not the stale
@@ -261,16 +262,6 @@ export function ProjectView(props: ProjectViewProps) {
     });
     return () => cancelAnimationFrame(frame);
   }, [scrollToNeedsSetup, scrollItemKey, projectViewOpen, activeProject, tab]);
-  // The workbench's own "Writing helper" preview card (CommandDrawer.tsx,
-  // T5's territory) still dispatches this bare window event with no project
-  // path — it now just triggers the SAME production action above, in
-  // workbench builds only, instead of its own bespoke open/scroll logic.
-  useEffect(() => {
-    if (!isWorkbenchMode()) return;
-    const openPreview = () => dispatch({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB' });
-    window.addEventListener('workbench:open-project-skills', openPreview);
-    return () => window.removeEventListener('workbench:open-project-skills', openPreview);
-  }, [dispatch]);
   // Artifacts search query (lifted out of FilesTab so it can sit on the
   // shared seg-row next to the segmented control, matching the design).
   const [artifactSearch, setArtifactSearch] = useState('');
@@ -924,8 +915,7 @@ export function ProjectView(props: ProjectViewProps) {
                     console.warn('post-rename project list refresh failed', err);
                   }
                 }}
-                canRemove={!heroSpace && !(isWorkbenchMode() && activeProject.name === 'Your Assistant')}
-                builtInPreview={isWorkbenchMode() && activeProject.name === 'Your Assistant'}
+                canRemove={!heroSpace}
                 onRemove={() => setDeletingProject(activeProject)}
               />
             ) : (

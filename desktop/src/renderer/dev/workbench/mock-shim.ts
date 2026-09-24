@@ -1,7 +1,9 @@
 import { MARKETPLACE_API_HOST } from '../../state/marketplace-api-client';
 import type { ChatGptAccountStatus } from '../../../shared/chatgpt-types';
 import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
-import type { TranscriptEvent } from '../../../shared/types';
+import type {
+  TranscriptEvent, ProjectExtensionsGetResult, ProjectExtensionsChange, ProjectExtensionsForSessionResult,
+} from '../../../shared/types';
 import type { MockStore } from './mock-store';
 import type { MarketplaceUser } from '../../../main/marketplace-auth-store';
 import type {
@@ -46,6 +48,12 @@ import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
 import { createRemoteAccessPreview } from './fixtures/remote-access';
 import { folderPageFromRecords } from '../../../shared/artifacts/folder-page';
+// T7 (project-plugin-controls cleanup): realistic fixture data for the
+// project-extensions:* channels — see that file's own header for the shape.
+import {
+  defaultView as peDefaultView, applyChange as peApplyChange,
+  inboxGroup as peInboxGroup, forSessionFixture as peForSessionFixture,
+} from './fixtures/project-extensions';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
 // states (partial-view banner, handoff) against the fake backend.
@@ -233,6 +241,11 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // catch-all on purpose: it must return its unsubscribe synchronously.
   'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
   'update.getBetaChannel', 'update.setBetaChannel',
+  // Project skills & tools (T3/T4-T6/T7) — real channels (project-extensions:*
+  // in main), hand-written so the workbench's Skills & tools tab, drawer
+  // chips and post-install panel all have real fixture data instead of the
+  // catch-all's `[]`, which doesn't match any of these results' shapes.
+  'projectExtensions.get', 'projectExtensions.set', 'projectExtensions.forSession', 'projectExtensions.importSkill',
 ];
 
 const warned = new Set<string>();
@@ -2551,16 +2564,6 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const withRemoteRows = <T extends { id: string }>(rows: T[]): T[] =>
     isRemoteMode() ? [...rows, REMOTE_BIG_PDF as unknown as T] : rows;
 
-  // WHY: Your Assistant is still a planned project; opt-in sample entry lets
-  // its locked bundled controls be reviewed inside the real Projects shell.
-  const assistantProjectPreview = typeof location !== 'undefined'
-    && new URLSearchParams(location.search).get('projectAssistantPreview') === '1';
-  const assistantProjectSample: ReturnType<typeof artifactProjects>[number] = {
-    id: '/workbench/your-assistant', name: 'Your Assistant', path: '/workbench/your-assistant',
-    lastIndexed: '', lastSession: null, contentTypes: [], stats: { artifactCount: 0 },
-    description: 'The built-in project for conversations with your assistant.',
-    fileCount: 0, conversationCount: 0,
-  };
   const artifacts = {
     listProjectsIndex: async (opts?: { withCounts?: boolean }) => ({
       ok: true,
@@ -2569,7 +2572,6 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       projects: noProjectsSwitch ? [] : (studentSwitch
         ? (opts?.withCounts ? studentProjectsWithCounts((path) => conversationsIn(path).length) : studentProjects())
         : (opts?.withCounts ? projectsWithCounts() : artifactProjects()))
-        .concat(assistantProjectPreview ? [assistantProjectSample] : [])
         .map((p) => ({ ...p, description: descriptionFor(p.path, p.description) })),
     }),
     // Student mode: every session's drawer lists the Econ 201 session's files
@@ -3126,6 +3128,57 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     getPackages: async () => (marketplaceEmpty ? {} : JSON.parse(JSON.stringify(installedPackages))),
   };
 
+  // Project skills & tools (T3's IPC, T4-T6's UI). T7: the workbench used to
+  // fall through the catch-all's `[]` here, which doesn't match
+  // ProjectExtensionsGetResult's shape at all — SkillsToolsTab, the drawer's
+  // availability chips and ProjectSetupPanel all rendered nothing real. One
+  // Map per project path, seeded lazily from the fixture's default view so a
+  // project nobody has asked for yet still answers something real instead of
+  // throwing on first read.
+  const projectExtViews = new Map<string, ReturnType<typeof peDefaultView>>();
+  const projectExtView = (path: string): ReturnType<typeof peDefaultView> => {
+    let view = projectExtViews.get(path);
+    if (!view) {
+      view = peDefaultView(path);
+      projectExtViews.set(path, view);
+    }
+    // Fold a live Marketplace install of "Inbox" (youcoded-inbox) into EVERY
+    // project's own installed list, seeded ON — mirrors the real store's
+    // seed-on-first-scan behaviour (R19: "it starts off everywhere") so the
+    // post-install ProjectSetupPanel flow has a real per-project row to show.
+    if (installedPackages['youcoded-inbox'] && !view.installed.some((g) => g.pluginId === 'youcoded-inbox')) {
+      view = { ...view, installed: [...view.installed, peInboxGroup()] };
+      projectExtViews.set(path, view);
+    }
+    return view;
+  };
+  const projectExtensions = {
+    get: async (path: string): Promise<ProjectExtensionsGetResult> => ({ ok: true, view: projectExtView(path) }),
+    set: async (path: string, changes: ProjectExtensionsChange[]): Promise<ProjectExtensionsGetResult> => {
+      // `store.refuseWrites` (the `refused` scenario) exercises the
+      // controller's revert path — same convention as every other `write()`
+      // call in this file.
+      if (store.refuseWrites) return { ok: false, error: 'Mock failure (project-extensions:set)' };
+      let view = projectExtView(path);
+      for (const change of changes) view = peApplyChange(view, change);
+      projectExtViews.set(path, view);
+      return { ok: true, view };
+    },
+    forSession: async (sessionId: string): Promise<ProjectExtensionsForSessionResult> => {
+      const cwd = store.getState().sessions.find((s: any) => s.id === sessionId)?.cwd
+        ?? store.getState().past.find((p: any) => p.sessionId === sessionId)?.projectPath;
+      return peForSessionFixture(sessionId, cwd);
+    },
+    // No real import UX in the workbench (no filesystem) — `dialog.openFile`
+    // falls to the catch-all's `[]`, so `chooseSkillFile` in SkillsToolsTab
+    // already no-ops cleanly on "no paths chosen". Handled here only so a
+    // deliberately-chosen path (an ast-grep/e2e rig, or a future workbench
+    // affordance) has somewhere real to land instead of the catch-all's `[]`.
+    importSkill: async (skillMdPath: string): Promise<{ ok: true; name: string; destination: string } | { ok: false; error: string }> => ({
+      ok: true, name: skillMdPath.split('/').pop()?.replace(/\.md$/, '') ?? 'imported-skill', destination: skillMdPath,
+    }),
+  };
+
   // Games arcade (Step 1). Maps the workbench's own scenario switch onto the
   // arcade's four interesting states, so every state that is hard to reach by
   // accident — a board with only you on it, a service that is down, a player
@@ -3291,7 +3344,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, openrouter, claudeCode, search,
-    update, dev: devMock, ...(remote ? { remote } : {}),
+    update, dev: devMock, projectExtensions, ...(remote ? { remote } : {}),
     pages: createPagesMock(activeScenario === 'empty'),
   } as unknown as Record<string, Record<string, unknown>>;
 }

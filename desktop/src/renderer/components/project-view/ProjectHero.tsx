@@ -74,7 +74,6 @@ interface ProjectHeroProps {
   onSyncNow: (spaceId: string) => void;
   onRenamed: () => void;             // parent refreshes the list after a rename / stop
   canRemove: boolean;                // false for synced projects (move-out is deferred)
-  builtInPreview?: boolean;          // opt-in workbench sample, not a shipped project
   onRemove: () => void;
 }
 
@@ -127,7 +126,6 @@ export function ProjectHero({
   onSyncNow,
   onRenamed,
   canRemove,
-  builtInPreview,
   onRemove,
 }: ProjectHeroProps) {
   const showRepoSlug = !!(repo?.webUrl && repo.owner && repo.name);
@@ -579,7 +577,7 @@ export function ProjectHero({
             ) : (
               // Kept — this explains why there is no Remove button, which is a
               // different fact from the pill's sync state.
-              <span className="text-2xs text-fg-muted">{builtInPreview ? 'Built into YouCoded' : 'Managed by sync'}</span>
+              <span className="text-2xs text-fg-muted">Managed by sync</span>
             ))}
           </div>
         )}
