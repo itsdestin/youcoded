@@ -150,6 +150,14 @@ const PROTECTED: Protection[] = [
     kinds: { walk: 'const-arrow' },
     requiredAwait: { text: 'fs.promises.stat(root)', what: 'the async root probe `await fs.promises.stat(root)`' },
     why: "the Glob tool's directory walk ran sync and froze every window, several times per turn" },
+  { was: 'blocking-call batch B1 (2026-09-24)', file: 'transcript-page.ts', noBlocking: ['*'],
+    mustExist: ['readTranscriptPage', 'readLines'],
+    kinds: { readTranscriptPage: 'function', readLines: 'function' },
+    why: 'every conversation open, scroll-up and buddy open reads a page (up to 2 MB); it was async in name only' },
+  { was: 'blocking-call batch B1 (2026-09-24)', file: 'subagent-watcher.ts',
+    noBlocking: ['getHistory', 'readMeta', 'scanDirectory', 'scanOnce'],
+    kinds: { getHistory: 'method', readMeta: 'method', scanDirectory: 'method', scanOnce: 'method' },
+    why: 'getHistory re-read every helper transcript per history page; scanDirectory runs on every line a helper appends (Linux directory watch)' },
 ];
 
 // ---------------------------------------------------------------------------

@@ -3355,7 +3355,7 @@ export function registerIpcHandlers(
     let nativeEvents: TranscriptEvent[] | null;
     try {
       nativeEvents = await nativeHost.getHistoryAsync(sessionId);
-      events = nativeEvents ?? transcriptWatcher.getHistory(sessionId);
+      events = nativeEvents ?? []; // WHY no CC replay (B1): nothing sends this channel; history pages via TRANSCRIPT_PAGE
     } catch (err) {
       log('WARN', 'IPC', 'transcript replay failed to read the history', { sessionId, error: String((err as any)?.message ?? err) });
       return;

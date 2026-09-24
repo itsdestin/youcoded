@@ -633,6 +633,10 @@ describe('TranscriptWatcher', () => {
     }, { timeout: SETTLE_MS });
   });
 
+  // WHY live, not replay (2026-09-24, B1): TranscriptWatcher.getHistory — the
+  // whole-transcript replay this test used to read — was removed as dead. The
+  // correlation it pinned is the LIVE path's: a parent Agent tool_use the
+  // tailer reads binds the helper file, whose events come out stamped.
   it('records Agent tool_use in SubagentIndex for correlation', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-agent-'));
     const slug = 'C--tmp-project';
@@ -642,19 +646,7 @@ describe('TranscriptWatcher', () => {
     const parentJsonl = path.join(projectDir, `${sessionId}.jsonl`);
     const subagentsDir = path.join(projectDir, sessionId, 'subagents');
     fs.mkdirSync(subagentsDir, { recursive: true });
-
-    fs.writeFileSync(parentJsonl, JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-1',
-      message: {
-        role: 'assistant',
-        content: [{
-          type: 'tool_use', id: 'toolu_P1', name: 'Agent',
-          input: { description: 'Find bug', subagent_type: 'Explore', prompt: 'go' },
-        }],
-        stop_reason: null,
-      },
-    }) + '\n');
+    fs.writeFileSync(parentJsonl, '');
 
     fs.writeFileSync(
       path.join(subagentsDir, 'agent-abc.meta.json'),
@@ -673,21 +665,44 @@ describe('TranscriptWatcher', () => {
     );
 
     const tw = new TranscriptWatcher(tmpRoot);
+    const events: TranscriptEvent[] = [];
+    tw.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
     tw.startWatching('desktop-sess-1', sessionId, 'C:/tmp/project');
+    try {
+      fs.appendFileSync(parentJsonl, agentToolUseLine('uuid-1', 'toolu_P1') + '\n');
+      tw.readNewLinesForSession('desktop-sess-1');
+      await vi.waitFor(() => {
+        expect(events.map(e => e.type + ':' + (e.data.toolName ?? ''))).toContain('tool-use:Read');
+      }, { timeout: WATCH_MS });
+    } finally {
+      tw.stopWatching('desktop-sess-1');
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
 
-    const history = tw.getHistory('desktop-sess-1');
-    tw.stopWatching('desktop-sess-1');
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
-
-    const parentToolUse = history.find(e => e.type === 'tool-use' && e.data.toolName === 'Agent');
-    const subagentToolUse = history.find(e => e.type === 'tool-use' && e.data.toolName === 'Read');
+    const parentToolUse = events.find(e => e.type === 'tool-use' && e.data.toolName === 'Agent');
+    const subagentToolUse = events.find(e => e.type === 'tool-use' && e.data.toolName === 'Read');
     expect(parentToolUse).toBeDefined();
     expect(parentToolUse!.data.parentAgentToolUseId).toBeUndefined();
-    expect(subagentToolUse).toBeDefined();
     expect(subagentToolUse!.data.parentAgentToolUseId).toBe('toolu_P1');
     expect(subagentToolUse!.data.agentId).toBe('abc');
   });
 });
+
+/** A parent-transcript line carrying one Agent tool_use ('Find bug' / Explore). */
+function agentToolUseLine(uuid: string, toolUseId: string): string {
+  return JSON.stringify({
+    type: 'assistant',
+    uuid,
+    message: {
+      role: 'assistant',
+      content: [{
+        type: 'tool_use', id: toolUseId, name: 'Agent',
+        input: { description: 'Find bug', subagent_type: 'Explore', prompt: 'go' },
+      }],
+      stop_reason: null,
+    },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Read serialization, UTF-8 boundary safety, replay dedup (2026-07-10 review)
@@ -891,26 +906,8 @@ describe('TranscriptWatcher read integrity', () => {
       openSpy.mockRestore();
     }
   });
-
-  it('getHistory skips repeated assistant-text for the same uuid (mirrors live dedup)', () => {
-    const jsonlPath = setupSession('desktop-replay', 'claude-replay');
-
-    const assistantLine = (text: string) =>
-      JSON.stringify({
-        type: 'assistant',
-        uuid: 'uuid-replay-dup',
-        message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: null },
-      });
-    // Claude rewrites the same uuid line as the message grows — replay must
-    // apply first-write-wins exactly like the live path, or a re-docked
-    // window renders duplicate text segments.
-    fs.writeFileSync(jsonlPath, assistantLine('grow') + '\n' + assistantLine('grow more') + '\n');
-
-    const history = watcher.getHistory('desktop-replay');
-    const texts = history.filter((e) => e.type === 'assistant-text');
-    expect(texts.length).toBe(1);
-    expect(texts[0].data.text).toBe('grow');
-  });
+  // (The replay-side dedup test that lived here moved to transcript-page.test.ts
+  //  with the removal of TranscriptWatcher.getHistory — B1, 2026-09-24.)
 });
 
 // ---------------------------------------------------------------------------
@@ -973,7 +970,7 @@ describe('startWatching path source', () => {
   // Here cwd's slug ("C--tmp-project") and the hook-supplied transcript
   // directory are deliberately different strings — subagentsDir can only be
   // computed correctly by riding jsonlPath's own dirname.
-  it('subagentsDir follows the hook-supplied transcript path, not slug(cwd)', () => {
+  it('subagentsDir follows the hook-supplied transcript path, not slug(cwd)', async () => {
     const cwd = 'C:/tmp/project'; // slug(cwd) === 'C--tmp-project' — must NOT appear below
     const divergentDir = path.join(tmpDir, 'not a slug CC would ever produce');
     fs.mkdirSync(divergentDir, { recursive: true });
@@ -982,18 +979,7 @@ describe('startWatching path source', () => {
     const subagentsDir = path.join(divergentDir, sessionId, 'subagents');
     fs.mkdirSync(subagentsDir, { recursive: true });
 
-    fs.writeFileSync(parentJsonl, JSON.stringify({
-      type: 'assistant',
-      uuid: 'uuid-hook-1',
-      message: {
-        role: 'assistant',
-        content: [{
-          type: 'tool_use', id: 'toolu_HP1', name: 'Agent',
-          input: { description: 'Find bug', subagent_type: 'Explore', prompt: 'go' },
-        }],
-        stop_reason: null,
-      },
-    }) + '\n');
+    fs.writeFileSync(parentJsonl, '');
 
     fs.writeFileSync(
       path.join(subagentsDir, 'agent-hook.meta.json'),
@@ -1016,9 +1002,16 @@ describe('startWatching path source', () => {
     // look under tmpDir/C--tmp-project/sess-hook/subagents instead — a
     // directory that was never created — and the subagent tool_use below
     // would never be found.
+    const history: TranscriptEvent[] = [];
+    watcher.on('transcript-event', (ev: TranscriptEvent) => history.push(ev));
     watcher.startWatching('desktop-hook-1', sessionId, cwd, parentJsonl);
-
-    const history = watcher.getHistory('desktop-hook-1');
+    // Live path (getHistory was removed in B1): the parent's Agent tool_use is
+    // appended after watching starts, which binds the helper file.
+    fs.appendFileSync(parentJsonl, agentToolUseLine('uuid-hook-1', 'toolu_HP1') + '\n');
+    watcher.readNewLinesForSession('desktop-hook-1');
+    await vi.waitFor(() => {
+      expect(history.some(e => e.type === 'tool-use' && e.data.toolName === 'Read')).toBe(true);
+    }, { timeout: WATCH_MS });
 
     const parentToolUse = history.find(e => e.type === 'tool-use' && e.data.toolName === 'Agent');
     const subagentToolUse = history.find(e => e.type === 'tool-use' && e.data.toolName === 'Read');
