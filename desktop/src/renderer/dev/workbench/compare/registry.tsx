@@ -91,6 +91,7 @@ import { FriendlyMascots } from '../mockups/FriendlyMascots';
 import { RemoteSetupDemo } from '../mockups/RemoteSetup';
 import { SettingsTaperDemo } from '../mockups/SettingsTaperDemo';
 import { PopupTaperDemo } from '../mockups/PopupTaperDemo';
+import { PairDialogDemo, SingleDialogDemo, DangerDialogDemo, QuestionCardDemo, PermissionRowDemo } from '../mockups/ButtonPlacementDemo';
 import { ProjectPopupTaperDemo } from '../mockups/ProjectPopupTaperDemo';
 import { MarketplaceFileTaperDemo, TagEditorTaperDemo } from '../mockups/CustomPopupTaperDemo';
 import { MarketplaceDetailHeaderDemo } from '../mockups/MarketplaceDetailHeaderDemo';
@@ -7305,6 +7306,58 @@ export const COMPARE_SURFACES: CompareSurface[] = [
           { id: 'selected-composition', label: 'Your selected composition', note: '16px medium title, header line with quick 8% ends, steady 42px content fade tapered 4% at each side; no painted overlay.', render: () => <SettingsTaperDemo taper="quick" scrollEdge="surface" fadeStrength="requested" maskWidth="widest" /> },
         ],
       },
+    ],
+  },
+  // WHY (design-guide review, 2026-09-24): Destin's button-placement rule —
+  // filled right, light directly left, single button often full width,
+  // stacked vs side by side — shown on the real Dialog and Button before it
+  // becomes a guide rule. One round per situation; only the action row differs.
+  {
+    id: 'button-placement',
+    label: 'Button placement',
+    question: 'Where do the buttons go?',
+    frame: 'canvas',
+    paneWidth: { min: 460, max: 600 },
+    rounds: [
+      { n: 1, basis: 'A popup with a main action and Cancel.', candidates: [
+        { id: 'today', label: 'Today', note: 'Bare-text Cancel on the left, the filled button stretched across the rest.', render: () => <PairDialogDemo layout="today" /> },
+        { id: 'right', label: 'Pair on the right', note: 'Outlined Cancel directly left of the filled button, both at the right edge.', render: () => <PairDialogDemo layout="right" /> },
+        { id: 'halves', label: 'Equal halves', note: 'Outlined Cancel and the filled button share the width equally, filled on the right.', render: () => <PairDialogDemo layout="halves" /> },
+        { id: 'stacked', label: 'Stacked', note: 'Filled button full width on top, outlined Cancel full width under it.', render: () => <PairDialogDemo layout="stacked" /> },
+      ] },
+      { n: 2, basis: 'A popup with one main action.', candidates: [
+        { id: 'full', label: 'Full width', note: 'The single button spans the popup.', render: () => <SingleDialogDemo layout="full" /> },
+        { id: 'right', label: 'On the right', note: 'The single button hugs its label at the right edge.', render: () => <SingleDialogDemo layout="right" /> },
+        { id: 'center', label: 'Centered', note: 'The single button hugs its label in the middle.', render: () => <SingleDialogDemo layout="center" /> },
+      ] },
+      { n: 3, basis: 'A confirmation that destroys something.', candidates: [
+        { id: 'danger-right', label: 'Red on the right', note: 'Cancel, then the red button last — the same place the filled button always goes.', render: () => <DangerDialogDemo layout="danger-right" /> },
+        { id: 'danger-left', label: 'Red on the left', note: 'The red button first, Cancel last.', render: () => <DangerDialogDemo layout="danger-left" /> },
+      ] },
+      { n: 4, basis: 'A question the assistant asks inside the chat.', candidates: [
+        { id: 'today', label: 'Today', note: 'Filled Submit first on the left, a quiet Dismiss after it.', render: () => <QuestionCardDemo layout="today" /> },
+        { id: 'flipped', label: 'Same as popups', note: 'Outlined Dismiss directly left of a filled Submit, at the right edge.', render: () => <QuestionCardDemo layout="flipped" /> },
+      ] },
+      { n: 5, basis: 'The permission row in the chat.', candidates: [
+        { id: 'today', label: 'Today', note: 'Yes · Always Allow · No from the left.', render: () => <PermissionRowDemo layout="today" /> },
+        { id: 'flipped', label: 'Mirrored', note: 'No · Always Allow · Yes at the right edge, so the yes ends on the right like popups.', render: () => <PermissionRowDemo layout="flipped" /> },
+      ] },
+    ],
+  },
+  // Same popup at phone width: its own surface because a pane's width comes from
+  // the surface, not from the deck.
+  {
+    id: 'button-placement-phone',
+    label: 'Button placement — phone width',
+    question: 'Where do the buttons go on a phone?',
+    frame: 'canvas',
+    paneWidth: { min: 390, max: 390 },
+    rounds: [
+      { n: 1, basis: 'The two-button popup at 390px.', candidates: [
+        { id: 'right', label: 'Pair on the right', note: 'Kept side by side at the right edge.', render: () => <PairDialogDemo layout="right" /> },
+        { id: 'halves', label: 'Equal halves', note: 'Side by side, each half the width.', render: () => <PairDialogDemo layout="halves" /> },
+        { id: 'stacked', label: 'Stacked', note: 'Filled on top, Cancel under it, both full width.', render: () => <PairDialogDemo layout="stacked" /> },
+      ] },
     ],
   },
   ...ALL_SURFACES.filter((s) => s.id === ACTIVE_FIRST),
