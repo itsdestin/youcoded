@@ -1,17 +1,16 @@
-// The "Look" section of Settings → Appearance: the user's own choices laid over
-// every theme (themes/look-overrides.ts). Every control's first option is
-// "Theme's choice", which is also what everything starts on — Destin's
-// appearance-panel-questions deck, 2026-09-24: AP-1 (one picker for layout),
-// AP-2 (glass presets with Fine-tune on request), AP-4 (bubble shape, message
-// box, roundness), AP-S1 (nobody's look changes until they change a setting).
+// The "Look" parts of Settings → Appearance: the user's own choices laid over every
+// theme (themes/look-overrides.ts). Every control's first option is "Auto" — the
+// theme's own choice — which is also what everything starts on. Decisions:
+// appearance-panel-questions (2026-09-24) AP-1 one layout picker, AP-2 glass presets
+// with Fine-tune on request, AP-4 bubble shape / message box / roundness, AP-S1
+// nobody's look changes until they change a setting; appearance-panel-review-3 —
+// pictures for every choice, painted in the theme's real colours, and the Look
+// settings behind one "Customize look" row.
 //
-// INTERIM UI (Destin, 2026-09-24): the Appearance panel's look is to be rebuilt
-// from the design-guidelines work in a separate session; what is meant to last
-// is the FUNCTIONALITY — `lookOverrides` / `setLookOverrides` on useTheme(),
-// the rules in themes/look-overrides.ts, and "absent field = Theme's choice".
-// A redesign should keep that contract and replace these controls freely.
+// What must last is the FUNCTIONALITY — `lookOverrides` / `setLookOverrides` on
+// useTheme(), the rules in themes/look-overrides.ts, and "absent field = Auto".
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTheme } from '../../state/theme-context';
 import type { BubbleStyle, ChromeStyle, InputStyle, LoadedTheme } from '../../themes/theme-types';
 import {
@@ -19,95 +18,179 @@ import {
   type GlassField, type GlassPreset, type GlassValues, type LookOverrides,
 } from '../../themes/look-overrides';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../../themes/theme-engine';
-import { Button, RadioGroup, SegmentedTabs, Select, SettingRow, FOCUS_RING } from '../ui';
+import { Button, RadioGroup, SegmentedTabs, SettingRow, FOCUS_RING } from '../ui';
 
 export const SECTION_LABEL = 'text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
+
+// "Auto" = the absent field = the theme's own choice (AP-S1). Named "Auto" at Destin's
+// request (appearance-panel-review-3, AR3-1): "Auto (Theme)" in place of "Theme's".
+const THEME = 'theme';
+const AUTO = 'Auto';
 
 const CHROME_LABEL: Record<ChromeStyle, string> = {
   default: 'Framed',
   floating: 'Floating bars',
   float: 'Minimalist',
 };
+const BUBBLE_CHOICES = ['default', 'pill', 'flat', 'bordered'] as const;
 const BUBBLE_LABEL: Record<BubbleStyle, string> = {
   default: 'Standard', pill: 'Pill', flat: 'Flat', bordered: 'Outlined',
 };
+// Terminal is left out of the choices on purpose (review-3, AR3-1): no published theme
+// uses it and the theme builder never offers it. A theme that asks for it keeps it
+// under Auto — only the user can no longer pick it for every theme.
+const INPUT_CHOICES = ['default', 'floating', 'minimal'] as const;
 const INPUT_LABEL: Record<InputStyle, string> = {
   default: 'Standard', floating: 'Floating', minimal: 'Minimal', terminal: 'Terminal',
 };
-const THEME = 'theme';
 
-/** A tiny drawing of each layout, so the choice is seen rather than read.
- *  Drawn in currentColor so it follows the app's text colour on any theme. */
-function LayoutSketch({ style }: { style: ChromeStyle }) {
-  const bar = { fill: 'currentColor', fillOpacity: 0.35 };
+// ── Pictures ─────────────────────────────────────────────────────────────────
+// WHY real-colour miniatures (Destin, review-3 AR3-1: "more effort into building better
+// renders/images"): the first round drew grey outlines, and Standard and Outlined looked
+// alike. Each picture is now a tiny chat window painted with the ACTIVE theme's own
+// colours (canvas, panel, inset, accent, edge) and shaped like the setting it stands
+// for. Plain divs with theme classes: nothing to load, and they follow every theme and
+// every Look change live.
+
+/** The miniature's window: the theme's canvas with a hairline edge. */
+function Mini({ children }: { children: ReactNode }) {
+  return <div className="relative w-full h-11 rounded-md overflow-hidden bg-canvas border border-edge-dim" aria-hidden="true">{children}</div>;
+}
+
+/** Two chat bubbles — yours (accent) and the reply (inset) — in a bubble style.
+ *  Mirrors the bubble-style rules in globals.css. */
+function MiniBubbles({ style }: { style: BubbleStyle }) {
+  const shape = (side: 'user' | 'reply') => {
+    if (style === 'pill') return 'rounded-full';
+    if (style === 'flat') return 'rounded-none border-l-2 border-edge';
+    if (style === 'bordered') return 'rounded-sm border border-edge';
+    return side === 'user' ? 'rounded-md rounded-br-none' : 'rounded-md rounded-bl-none';
+  };
   return (
-    <svg viewBox="0 0 60 40" className="w-full h-auto" aria-hidden="true">
-      <rect x="0.5" y="0.5" width="59" height="39" rx="3" fill="none" stroke="currentColor" strokeOpacity="0.25" />
-      {/* chat lines, the same in all three */}
-      <rect x="14" y="13" width="22" height="3" rx="1.5" fill="currentColor" fillOpacity="0.18" />
-      <rect x="24" y="19" width="24" height="3" rx="1.5" fill="currentColor" fillOpacity="0.18" />
+    <Mini>
+      <div className="absolute inset-x-1.5 top-1.5 flex flex-col gap-1">
+        <div className={`self-end w-3/5 h-3.5 bg-accent ${shape('user')}`} />
+        <div className={`self-start w-3/4 h-4 bg-inset ${shape('reply')}`} />
+      </div>
+    </Mini>
+  );
+}
+
+/** The bottom of the window in a message-box style — mirrors input-style in globals.css. */
+function MiniInput({ style }: { style: InputStyle }) {
+  const send = <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />;
+  const text = <span className="flex-1 h-0.5 rounded-full bg-fg-muted opacity-60" />;
+  return (
+    <Mini>
+      <div className="absolute inset-x-2 top-1.5 flex flex-col gap-0.5">
+        <div className="self-end w-1/2 h-1.5 rounded-sm bg-accent opacity-60" />
+        <div className="self-start w-3/5 h-1.5 rounded-sm bg-inset" />
+      </div>
+      {style === 'floating' && (
+        <div className="absolute inset-x-1.5 bottom-1.5 h-3.5 rounded-full bg-panel border border-edge-dim shadow-sm flex items-center gap-1 px-1.5">{text}{send}</div>
+      )}
+      {style === 'minimal' && (
+        <div className="absolute inset-x-2 bottom-1.5 h-3.5 flex items-center gap-1">{text}{send}</div>
+      )}
+      {(style === 'default' || style === 'terminal') && (
+        <div className="absolute inset-x-0 bottom-0 h-4 bg-panel border-t border-edge flex items-center gap-1 px-2">{text}{send}</div>
+      )}
+    </Mini>
+  );
+}
+
+/** The whole window in a layout: where the header, message box and edges sit. */
+function MiniLayout({ style }: { style: ChromeStyle }) {
+  const chip = 'bg-panel border border-edge-dim';
+  return (
+    <Mini>
+      <div className="absolute inset-x-3 top-3.5 flex flex-col gap-0.5">
+        <div className="self-end w-1/2 h-1.5 rounded-sm bg-accent" />
+        <div className="self-start w-3/5 h-1.5 rounded-sm bg-inset" />
+      </div>
       {style === 'default' && (
         <>
-          <rect x="0.5" y="0.5" width="59" height="7" rx="3" {...bar} />
-          <rect x="0.5" y="30" width="59" height="9.5" rx="3" {...bar} />
-          <rect x="0.5" y="7" width="3" height="23" {...bar} />
-          <rect x="56.5" y="7" width="3" height="23" {...bar} />
+          <div className="absolute inset-x-0 top-0 h-2.5 bg-panel border-b border-edge" />
+          <div className="absolute inset-x-0 bottom-0 h-3 bg-panel border-t border-edge" />
+          <div className="absolute left-0 top-2.5 bottom-3 w-1 bg-panel" />
+          <div className="absolute right-0 top-2.5 bottom-3 w-1 bg-panel" />
         </>
       )}
       {style === 'floating' && (
         <>
-          <rect x="4" y="3" width="52" height="6" rx="3" {...bar} />
-          <rect x="4" y="29" width="52" height="8" rx="3" {...bar} />
+          <div className={`absolute inset-x-1.5 top-1 h-2 rounded-full ${chip}`} />
+          <div className={`absolute inset-x-1.5 bottom-1 h-2.5 rounded-full ${chip}`} />
         </>
       )}
       {style === 'float' && (
         <>
-          <circle cx="7" cy="6" r="2" {...bar} />
-          <circle cx="12.5" cy="6" r="2" {...bar} />
-          <rect x="40" y="4" width="15" height="4" rx="2" {...bar} />
-          <rect x="13" y="28" width="34" height="5" rx="2.5" {...bar} />
-          <rect x="19" y="35" width="7" height="2.5" rx="1.25" {...bar} />
-          <rect x="28" y="35" width="7" height="2.5" rx="1.25" {...bar} />
-          <rect x="37" y="35" width="5" height="2.5" rx="1.25" {...bar} />
+          <div className={`absolute left-1.5 top-1 w-1.5 h-1.5 rounded-full ${chip}`} />
+          <div className={`absolute left-3.5 top-1 w-1.5 h-1.5 rounded-full ${chip}`} />
+          <div className={`absolute right-1.5 top-1 w-4 h-1.5 rounded-full ${chip}`} />
+          <div className={`absolute left-1/4 right-1/4 bottom-2.5 h-2 rounded-full ${chip}`} />
+          <div className="absolute left-1/4 right-1/4 bottom-1 flex justify-center gap-0.5">
+            <span className={`w-2 h-1 rounded-full ${chip}`} /><span className={`w-2 h-1 rounded-full ${chip}`} /><span className={`w-1.5 h-1 rounded-full ${chip}`} />
+          </div>
         </>
       )}
-    </svg>
+    </Mini>
   );
 }
 
-const LAYOUT_CHOICES = [THEME, 'default', 'floating', 'float'] as const;
+/** A card and a button at a roundness (0 square … 1 round), drawn with real radii. */
+function MiniCorners({ r }: { r: number }) {
+  return (
+    <Mini>
+      <div className="absolute inset-x-2 top-1.5 bottom-1.5 bg-inset border border-edge-dim flex items-end justify-end p-1" style={{ borderRadius: `${r * 10}px` }}>
+        <div className="w-5 h-2.5 bg-accent" style={{ borderRadius: `${r * 5 + 0.5}px` }} />
+      </div>
+    </Mini>
+  );
+}
 
-function LayoutPicker({ raw, value, onChange }: { raw: LoadedTheme; value: ChromeStyle | undefined; onChange: (v: ChromeStyle | undefined) => void }) {
-  const themeStyle: ChromeStyle = raw.layout?.['chrome-style'] ?? 'default';
-  const current = value ?? THEME;
+// Static class names so Tailwind generates them.
+const GRID_COLS: Record<number, string> = { 3: 'grid-cols-3', 4: 'grid-cols-4', 5: 'grid-cols-5' };
+
+/** A row of picture tiles, one per choice; the first is always Auto (the theme's own).
+ *  The picture IS the option; the border marks the pick, like the theme cards.
+ *  `value` null = the saved value matches no tile (a roundness set by the old slider). */
+function TilePicker<T extends string>({ label, choices, value, onChange, picture, name, autoIs }: {
+  label: string;
+  choices: readonly T[];
+  value: T | undefined | null;
+  onChange: (v: T | undefined) => void;
+  picture: (id: T | typeof THEME) => ReactNode;
+  name: (id: T) => string;
+  /** What Auto currently resolves to, shown under it. */
+  autoIs: string;
+}) {
+  const current = value === undefined ? THEME : value;
+  const all = [THEME, ...choices] as (T | typeof THEME)[];
   return (
     <RadioGroup
-      options={LAYOUT_CHOICES}
-      value={current}
-      onChange={(id) => onChange(id === THEME ? undefined : id as ChromeStyle)}
-      aria-label="Layout"
-      className="grid grid-cols-4 gap-2"
+      options={all}
+      value={current ?? ''}
+      onChange={(id) => onChange(id === THEME ? undefined : id as T)}
+      aria-label={label}
+      className={`grid gap-1.5 ${GRID_COLS[all.length] ?? 'grid-cols-4'}`}
     >
-      {LAYOUT_CHOICES.map((id) => {
+      {all.map((id) => {
         const selected = id === current;
-        const sketch: ChromeStyle = id === THEME ? themeStyle : id;
         return (
           <button
             key={id}
             type="button"
             role="radio"
             aria-checked={selected}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onChange(id === THEME ? undefined : id as ChromeStyle)}
-            // A tile, not a list row: the sketch IS the option. Border marks the pick,
-            // like the theme cards above it.
-            className={`flex flex-col items-center gap-1 p-1.5 rounded-lg border text-fg-2 transition-colors ${FOCUS_RING} ${selected ? 'border-accent bg-inset' : 'border-edge-dim hover:border-edge'}`}
+            tabIndex={selected || (current === null && id === THEME) ? 0 : -1}
+            onClick={() => onChange(id === THEME ? undefined : id as T)}
+            className={`flex flex-col items-center gap-1 px-1 pt-1 pb-2 rounded-lg border transition-colors ${FOCUS_RING} ${selected ? 'border-accent bg-inset' : 'border-transparent hover:bg-inset/50'}`}
           >
-            <LayoutSketch style={sketch} />
-            <span className="text-3xs font-medium leading-tight text-center">
-              {id === THEME ? "Theme's choice" : CHROME_LABEL[id]}
+            {picture(id)}
+            <span className={`text-3xs leading-tight text-center truncate max-w-full ${selected ? 'text-fg font-medium' : 'text-fg-2'}`}>
+              {id === THEME ? AUTO : name(id as T)}
             </span>
-            {id === THEME && <span className="text-4xs text-fg-muted leading-none">{CHROME_LABEL[themeStyle]}</span>}
+            {id === THEME && <span className="text-4xs text-fg-muted leading-none -mt-0.5 truncate max-w-full">{autoIs}</span>}
           </button>
         );
       })}
@@ -161,6 +244,20 @@ const GLASS_SLIDERS: { field: GlassField; label: string; min: number; max: numbe
   { field: 'terminal-brightness', label: 'Terminal brightness', min: 0.5, max: 1.2, step: 0.02, format: pct, terminal: true, filter: true },
 ];
 
+/** A setting with its choices underneath: title (and optional hint) on top, the choices
+ *  full width below — the design guide's rule for a set of choices (SA-1 "mixed"). */
+function StackedRow({ title, hint, children }: { title: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <div>
+        <div className="text-xs font-medium text-fg">{title}</div>
+        {hint && <p className="text-3xs text-fg-muted">{hint}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function GlassSettings({ active, raw, look, set, reducedEffects }: {
   active: LoadedTheme; raw: LoadedTheme; look: LookOverrides; set: (next: LookOverrides) => void; reducedEffects: boolean;
 }) {
@@ -168,7 +265,9 @@ function GlassSettings({ active, raw, look, set, reducedEffects }: {
   const seeThrough = hasSeeThroughBackground(raw);
   const bakedTerminal = raw.background?.type === 'image' && !!raw.background?.['terminal-value'];
   const tabs = [
-    { id: THEME, label: "Theme's" },
+    // "Auto", not Destin's "Auto (Theme)": in a four-way strip the longer label wrapped
+    // to two lines. Every picker's first choice reads "Auto" the same way.
+    { id: THEME, label: AUTO },
     { id: 'clear', label: 'Clear' },
     { id: 'frosted', label: 'Frosted' },
     { id: 'solid', label: 'Solid' },
@@ -193,37 +292,25 @@ function GlassSettings({ active, raw, look, set, reducedEffects }: {
     set({ ...look, glass: 'custom', glassCustom: { ...base, [field]: v } });
   };
 
+  // WHY the hint sits under the title (redesign, 2026-09-24): it used to be a loose
+  // paragraph under the strip, which read as a separate block of text.
+  const hint = !seeThrough ? 'No effect on this theme — it has no wallpaper'
+    : reducedEffects ? 'Blur is off while Reduce Visual Effects is on' : undefined;
+
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-fg-2">Glass</span>
-      </div>
-      <SegmentedTabs
-        tabs={tabs}
-        value={look.glass ?? THEME}
-        onChange={pick}
-        variant="contained"
-        aria-label="Glass"
-      />
-      {!seeThrough && (
-        <p className="text-3xs text-fg-muted leading-relaxed">
-          This theme has no wallpaper, so glass has no effect on it. Your choice still applies to themes that do.
-        </p>
-      )}
-      {seeThrough && reducedEffects && (
-        <p className="text-3xs text-fg-muted leading-relaxed">
-          Reduce Visual Effects is on, so blur is off. See-through still applies.
-        </p>
-      )}
+    <div className="space-y-1.5">
+      <StackedRow title="Glass" hint={hint}>
+        <SegmentedTabs tabs={tabs} value={look.glass ?? THEME} onChange={pick} variant="contained" aria-label="Glass" />
+      </StackedRow>
       <SettingRow
         variant="item"
-        title="Fine-tune"
-        description={look.glass === 'custom' ? 'Your own values' : 'Set each blur and see-through level yourself'}
+        title="Fine-tune glass"
+        description={look.glass === 'custom' ? 'Your own values' : 'Set each blur and see-through level'}
         expanded={fineTune}
         onClick={() => setFineTune(v => !v)}
       />
       {fineTune && (
-        <div className="space-y-3 px-1 pt-1">
+        <div className="space-y-3 px-3 py-2">
           {GLASS_SLIDERS.map(s => {
             const value = (look.glass === 'custom' ? look.glassCustom?.[s.field] : undefined)
               ?? active.background?.[s.field]
@@ -252,109 +339,105 @@ function GlassSettings({ active, raw, look, set, reducedEffects }: {
   );
 }
 
-function ChoiceRow<T extends string>({ title, labels, themeValue, value, onChange }: {
-  title: string; labels: Record<T, string>; themeValue: T; value: T | undefined; onChange: (v: T | undefined) => void;
-}) {
-  const options = [
-    { value: THEME, label: `Theme's choice (${labels[themeValue]})` },
-    ...(Object.keys(labels) as T[]).map(k => ({ value: k, label: labels[k] })),
-  ];
-  return (
-    <SettingRow
-      variant="item"
-      title={title}
-      control={
-        <div className="w-52 shrink-0">
-          <Select
-            size="sm"
-            options={options}
-            value={value ?? THEME}
-            onChange={v => onChange(v === THEME ? undefined : v as T)}
-            aria-label={title}
-          />
-        </div>
-      }
-    />
-  );
-}
+// Roundness is three steps of the same 0..1 scale the old slider covered, so a tile
+// stores exactly what dragging there would have (review-3: pictures, no slider).
+type RoundPreset = 'square' | 'soft' | 'round';
+const ROUND_PRESETS: Record<RoundPreset, number> = { square: 0, soft: 0.5, round: 1 };
+const ROUND_LABEL: Record<RoundPreset, string> = { square: 'Square', soft: 'Soft', round: 'Round' };
+const nearestRound = (r: number): RoundPreset => (r < 0.25 ? 'square' : r < 0.75 ? 'soft' : 'round');
 
 /** The layout picker on its own. WHY split from LookSettings (Destin, appearance-panel-review
- *  AR-1, 2026-09-24): "layout should be at the top" — it heads the whole panel, above the
- *  theme list, while the rest of Look stays below it. */
+ *  AR-1, 2026-09-24): "layout should be at the top" — it heads the whole panel. */
 export function LayoutSettings() {
   const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set } = useTheme();
   const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
+  const themeStyle: ChromeStyle = raw.layout?.['chrome-style'] ?? 'default';
   return (
-    <LayoutPicker
-      raw={raw}
+    <TilePicker<ChromeStyle>
+      label="Layout"
+      choices={['default', 'floating', 'float']}
       value={look.chromeStyle}
       onChange={v => {
         if (v) { set({ ...look, chromeStyle: v }); return; }
         const next = { ...look }; delete next.chromeStyle; set(next);
       }}
+      picture={(id) => <MiniLayout style={id === THEME ? themeStyle : id as ChromeStyle} />}
+      name={(id) => CHROME_LABEL[id]}
+      autoIs={CHROME_LABEL[themeStyle]}
     />
   );
 }
 
+const LOOK_KEYS: (keyof LookOverrides)[] = ['glass', 'bubbleStyle', 'inputStyle', 'roundness'];
+
+/** Bubbles, message box, roundness and glass, behind one "Customize look" row.
+ *  WHY folded (Destin, review-3 AR3-2, picked "Look tucked away"): the most-used
+ *  settings — layout, themes, the two switches — stay up front; these open in place. */
 export function LookSettings() {
   const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set, reducedEffects } = useTheme();
-  // The theme's OWN choices, for the "Theme's choice (…)" labels. allThemes is raw;
-  // activeTheme already has the overrides applied.
+  // The theme's OWN choices, for the Auto labels. allThemes is raw; activeTheme
+  // already has the overrides applied.
   const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
   const without = (key: keyof LookOverrides) => { const next = { ...look }; delete next[key]; return next; };
+  const themeBubble: BubbleStyle = raw.layout?.['bubble-style'] ?? 'default';
+  const themeInput: InputStyle = raw.layout?.['input-style'] ?? 'default';
   const themeRound = themeRoundness(raw);
+  const roundPick = look.roundness === undefined ? undefined
+    : (Object.keys(ROUND_PRESETS) as RoundPreset[]).find(k => ROUND_PRESETS[k] === look.roundness) ?? null;
+  const changed = LOOK_KEYS.filter(k => look[k] !== undefined).length;
+  const [open, setOpen] = useState(false);
 
   return (
-    <div className="space-y-4">
-      <GlassSettings active={activeTheme} raw={raw} look={look} set={set} reducedEffects={reducedEffects} />
-
-      <div className="space-y-1">
-        <ChoiceRow
-          title="Bubble shape"
-          labels={BUBBLE_LABEL}
-          themeValue={raw.layout?.['bubble-style'] ?? 'default'}
-          value={look.bubbleStyle}
-          onChange={v => set(v ? { ...look, bubbleStyle: v } : without('bubbleStyle'))}
-        />
-        <ChoiceRow
-          title="Message box"
-          labels={INPUT_LABEL}
-          themeValue={raw.layout?.['input-style'] ?? 'default'}
-          value={look.inputStyle}
-          onChange={v => set(v ? { ...look, inputStyle: v } : without('inputStyle'))}
-        />
-        <SettingRow
-          variant="item"
-          title="Roundness"
-          control={
-            <div className="w-52 shrink-0">
-              <Select
-                size="sm"
-                options={[{ value: THEME, label: "Theme's choice" }, { value: 'custom', label: 'Custom' }]}
-                value={look.roundness === undefined ? THEME : 'custom'}
-                onChange={v => set(v === THEME ? without('roundness') : { ...look, roundness: themeRound })}
-                aria-label="Roundness"
-              />
-            </div>
-          }
-        />
-        {look.roundness !== undefined && (
-          <div className="px-3 pt-1">
-            <LookSlider
-              label="Corners"
-              min={0} max={1} step={0.05}
-              value={look.roundness}
-              onChange={v => set({ ...look, roundness: v })}
-              format={v => (v < 0.05 ? 'Square' : v > 0.95 ? 'Round' : pct(v))}
+    <div className="space-y-3">
+      <SettingRow
+        variant="item"
+        title="Customize look"
+        description={changed === 0 ? 'Message bubbles, message box, corners, glass' : `${changed} changed from the theme`}
+        expanded={open}
+        onClick={() => setOpen(v => !v)}
+      />
+      {open && (
+        <div className="space-y-4 px-1">
+          <StackedRow title="Message bubbles">
+            <TilePicker<BubbleStyle>
+              label="Message bubbles"
+              choices={BUBBLE_CHOICES}
+              value={look.bubbleStyle}
+              onChange={v => set(v ? { ...look, bubbleStyle: v } : without('bubbleStyle'))}
+              picture={id => <MiniBubbles style={id === THEME ? themeBubble : id as BubbleStyle} />}
+              name={id => BUBBLE_LABEL[id]}
+              autoIs={BUBBLE_LABEL[themeBubble]}
             />
-          </div>
-        )}
-      </div>
-
-      {hasAnyOverride(look) && (
-        <Button variant="ghost" size="sm" onClick={() => set({})} className="w-full">
-          Reset everything to Theme's choice
-        </Button>
+          </StackedRow>
+          <StackedRow title="Message box">
+            <TilePicker<InputStyle>
+              label="Message box"
+              choices={INPUT_CHOICES}
+              value={look.inputStyle}
+              onChange={v => set(v ? { ...look, inputStyle: v } : without('inputStyle'))}
+              picture={id => <MiniInput style={id === THEME ? themeInput : id as InputStyle} />}
+              name={id => INPUT_LABEL[id]}
+              autoIs={INPUT_LABEL[themeInput]}
+            />
+          </StackedRow>
+          <StackedRow title="Roundness">
+            <TilePicker<RoundPreset>
+              label="Roundness"
+              choices={['square', 'soft', 'round']}
+              value={roundPick}
+              onChange={v => set(v ? { ...look, roundness: ROUND_PRESETS[v] } : without('roundness'))}
+              picture={id => <MiniCorners r={id === THEME ? themeRound : ROUND_PRESETS[id as RoundPreset]} />}
+              name={id => ROUND_LABEL[id]}
+              autoIs={ROUND_LABEL[nearestRound(themeRound)]}
+            />
+          </StackedRow>
+          <GlassSettings active={activeTheme} raw={raw} look={look} set={set} reducedEffects={reducedEffects} />
+          {hasAnyOverride(look) && (
+            <Button variant="secondary" size="sm" onClick={() => set({})} className="w-full">
+              Reset all to Auto
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );
