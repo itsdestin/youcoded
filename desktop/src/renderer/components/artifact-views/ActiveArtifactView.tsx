@@ -104,6 +104,10 @@ export interface CommentsHeaderState {
   /** The full comment column is on screen — Comments mode AND wide enough
    *  for the margin (not collapsed to its marker rail). */
   paneVisible: boolean;
+  /** Width of the scrollbar at the comment column's right edge, in px. The
+   *  host's floating buttons are placed from the pane's right edge, so they
+   *  must step in by this much to line up with the column (round 11). */
+  scrollbarW: number;
 }
 
 /** Metadata from the artifacts:get response that content alone cannot carry —
@@ -589,6 +593,34 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // it — Comments mode hides resolved by default, and jumping to a thread
   // nobody can see would look like the link did nothing.
   const { comments: pathComments, setShowResolved: setPathShowResolved } = useDocComments(artifact.path);
+  // Round 11 (Destin: "the spacing/centering of these buttons looks odd
+  // because of the scrollbar"): the comment column sits LEFT of the
+  // document's scrollbar, but the host places its floating buttons from the
+  // pane's right edge — so they sat one scrollbar-width too far right. Measure
+  // the real scrollbar (0 where scrollbars overlay, ~10px on a classic one)
+  // and report it. A ResizeObserver catches it appearing: when content starts
+  // to overflow, the scroller's content box narrows by the scrollbar's width.
+  const [scrollbarW, setScrollbarW] = useState(0);
+  useEffect(() => {
+    if (commentsMode !== 'comments') return;
+    const root = rootRef.current;
+    let ro: ResizeObserver | null = null;
+    // The scroller mounts with the viewer (a lazy chunk), so look for it on
+    // the next frame rather than in this pass.
+    const raf = requestAnimationFrame(() => {
+      const el = root?.querySelector<HTMLElement>('[data-comments-scroller]');
+      if (!el) return;
+      const measure = () => {
+        const w = el.offsetWidth - el.clientWidth;
+        setScrollbarW((cur) => (cur === w ? cur : w));
+      };
+      measure();
+      ro = new ResizeObserver(measure);
+      ro.observe(el);
+    });
+    return () => { cancelAnimationFrame(raf); ro?.disconnect(); };
+  }, [commentsMode, artifact.id, showCodeRail]);
+
   // Round 4 (Destin): the Comments button lives in the host's header icon
   // row "alongside the other actions" — same imperative-handle + state
   // callback pattern the header already uses for Edit/Save.
@@ -597,8 +629,8 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     // the same 640px pane width narrowPane measures here; the code rail is
     // always full width.
     const paneVisible = commentsMode === 'comments' && showComments && (showCodeRail || !narrowPane);
-    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: pathComments.length, paneVisible });
-  }, [showComments, showCodeRail, narrowPane, commentsMode, pathComments.length, onCommentsStateChange]);
+    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: pathComments.length, paneVisible, scrollbarW });
+  }, [showComments, showCodeRail, narrowPane, commentsMode, pathComments.length, scrollbarW, onCommentsStateChange]);
   const openComments = useCallback((commentId?: string) => {
     if (commentId) {
       if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);

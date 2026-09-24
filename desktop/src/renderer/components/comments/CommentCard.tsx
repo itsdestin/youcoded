@@ -1,4 +1,4 @@
-// CommentCard — one comment thread: author + timestamp, the anchored quote,
+// CommentCard — one comment thread: author + timestamp,
 // the note, replies (including an assistant reply), and resolve/reopen.
 // Used both in the margin (desktop) and inside a popover (narrow viewport).
 import React, { useEffect, useRef, useState } from 'react';
@@ -18,10 +18,9 @@ interface Props {
   onResolve: () => void;
   onReopen: () => void;
   onDelete: () => void;
-  onJump?: () => void;
 }
 
-export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResolve, onReopen, onDelete, onJump }: Props) {
+export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResolve, onReopen, onDelete }: Props) {
   const [replyText, setReplyText] = useState('');
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -48,16 +47,20 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
       className="shrink-0"
     />
   );
-  // The quoted text doubles as "jump to it in the document".
-  const quote = (clamp: 'truncate' | 'line-clamp-2') => (
-    <button type="button" onClick={onJump} className="flex-1 min-w-0 text-left">
-      <p className={`text-fg-muted italic ${clamp} border-l-2 border-edge-dim pl-2`}>&ldquo;{comment.quote}&rdquo;</p>
-    </button>
+  // Round 11 (Destin: "remove the quote section at the top of each
+  // comment"): in Comments mode each card already sits beside its highlight
+  // and lights it up on hover, so repeating the quoted words was noise. The
+  // resolve toggle moves onto the author row, top right.
+  const header = (c: { author: DocComment['author']; createdAt: number }) => (
+    <div className="flex items-baseline gap-1.5 min-w-0">
+      <span className="font-medium text-fg">{authorName(c.author)}</span>
+      <span className="text-2xs text-fg-muted">{formatRelativeTime(c.createdAt)}</span>
+    </div>
   );
 
   if (comment.resolved) {
-    // Collapsed (Docs-style): the quote and who resolved it; the filled
-    // toggle top-right is the way back.
+    // Collapsed (Docs-style): who wrote it, a one-line note, who resolved
+    // it; the filled toggle top-right is the way back.
     return (
       // Design-guide review (round 7): a card inside a side pane is `inset`
       // with an `edge-dim` border and no shadow (§2.1/§2.4 — the tool-card
@@ -65,7 +68,11 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
       // the contrast floor.
       <div className="rounded-lg border border-edge-dim bg-inset p-3 text-xs">
         <div className="flex items-start gap-2">
-          {quote('truncate')}
+          <Avatar author={comment.author} />
+          <div className="flex-1 min-w-0">
+            {header(comment)}
+            <p className="mt-0.5 text-fg-muted truncate">{comment.text}</p>
+          </div>
           {resolveToggle}
         </div>
         <p className="mt-1.5 text-fg-muted">Resolved by {comment.resolvedBy === 'assistant' ? 'Claude' : 'you'}</p>
@@ -81,18 +88,10 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
 
   return (
     <div className="rounded-lg border border-edge-dim bg-inset p-3 text-xs w-full">
-      <div className="flex items-start gap-2 mb-2">
-        {quote('line-clamp-2')}
-        {resolveToggle}
-      </div>
-
       <div className="flex items-start gap-2">
         <Avatar author={comment.author} />
         <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-1.5">
-            <span className="font-medium text-fg">{authorName(comment.author)}</span>
-            <span className="text-2xs text-fg-muted">{formatRelativeTime(comment.createdAt)}</span>
-          </div>
+          {header(comment)}
           {isDraft ? (
             <Textarea
               ref={textRef}
@@ -110,16 +109,14 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
             <p className="mt-0.5 text-fg-2 whitespace-pre-wrap">{comment.text}</p>
           )}
         </div>
+        {resolveToggle}
       </div>
 
       {comment.replies.map((r) => (
         <div key={r.id} className="flex items-start gap-2 mt-2 pl-1">
           <Avatar author={r.author} />
           <div className="flex-1 min-w-0">
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-medium text-fg">{authorName(r.author)}</span>
-              <span className="text-2xs text-fg-muted">{formatRelativeTime(r.createdAt)}</span>
-            </div>
+            {header(r)}
             <p className="mt-0.5 text-fg-2 whitespace-pre-wrap">{r.text}</p>
           </div>
         </div>

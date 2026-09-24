@@ -67,7 +67,9 @@ export function MarkdownView({
       {/* The scrolling ancestor is this flex row, not the text column alone —
           the margin (or, narrow, its marker rail) is a SIBLING inside it, so
           both move together on scroll with no listener of our own. */}
-      <div className="flex-1 overflow-auto">
+      {/* data-comments-scroller: ActiveArtifactView measures this element's
+          scrollbar so the floating comment actions line up with the column. */}
+      <div className="flex-1 overflow-auto" data-comments-scroller>
         {/* WHY an inner min-h-full flex row: a scroller's own flex children
             stretch only to the scroller's VISIBLE height, so the margin
             column (and its divider line) ended one screen down while the

@@ -190,7 +190,6 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
                 onResolve={() => { resolveComment(openComment.id, 'user'); setOpenId(null); }}
                 onReopen={() => reopenComment(openComment.id)}
                 onDelete={() => { removeComment(openComment.id); setOpenId(null); }}
-                onJump={() => { jump(openComment.id); setOpenId(null); }}
               />
             </OverlayPanel>
           </>
@@ -217,7 +216,6 @@ export function CommentsMargin({ containerRef, path, narrow, openThreadId }: Pro
             onResolve={() => resolveComment(c.id, 'user')}
             onReopen={() => reopenComment(c.id)}
             onDelete={() => removeComment(c.id)}
-            onJump={() => jump(c.id)}
           />
         </div>
       ))}

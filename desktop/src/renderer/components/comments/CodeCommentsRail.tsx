@@ -23,22 +23,33 @@ export function CodeCommentsRail({ path, onJumpToLine }: Props) {
   return (
     // pb-48: room to scroll the last card up past the floating Ask/Show
     // resolved buttons (SessionDrawer's bottom-right cluster).
-    <div className="w-64 shrink-0 border-l border-edge bg-panel overflow-y-auto p-2 pb-48 flex flex-col gap-2">
+    <div data-comments-scroller className="w-64 shrink-0 border-l border-edge bg-panel overflow-y-auto p-2 pb-48 flex flex-col gap-2">
       {visible.length === 0 && (
         <EmptyState message="No comments on this file yet." variant="inline" />
       )}
       {visible.map((c) => (
-        <CommentCard
+        // Clicking a card's background jumps the editor to its line (code
+        // files have no in-text highlight to click, and the quote that used
+        // to be the jump target was removed in round 11). Clicks on the
+        // card's own controls are left alone.
+        <div
           key={c.id}
-          comment={c}
-          autoFocus={c.id === focusId}
-          onTextChange={(t) => setCommentText(c.id, t)}
-          onReply={(t) => addReply(c.id, 'user', t)}
-          onResolve={() => resolveComment(c.id, 'user')}
-          onReopen={() => reopenComment(c.id)}
-          onDelete={() => removeComment(c.id)}
-          onJump={c.startLine ? () => onJumpToLine(c.startLine!) : undefined}
-        />
+          onClick={(e) => {
+            if (!c.startLine || (e.target as HTMLElement).closest('button, input, textarea')) return;
+            onJumpToLine(c.startLine);
+          }}
+          className={c.startLine ? 'cursor-pointer' : undefined}
+        >
+          <CommentCard
+            comment={c}
+            autoFocus={c.id === focusId}
+            onTextChange={(t) => setCommentText(c.id, t)}
+            onReply={(t) => addReply(c.id, 'user', t)}
+            onResolve={() => resolveComment(c.id, 'user')}
+            onReopen={() => reopenComment(c.id)}
+            onDelete={() => removeComment(c.id)}
+          />
+        </div>
       ))}
     </div>
   );
