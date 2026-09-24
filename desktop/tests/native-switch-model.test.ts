@@ -127,3 +127,17 @@ describe('NativeSessionHost.switchModel', () => {
     expect(host.setBinding).not.toHaveBeenCalled();
   });
 });
+
+// Merge with the skill repeat guard (master, 2026-09-23): a summary retires the
+// skill's body, so the guard must forget it — or the model is told a skill it
+// no longer has is "already loaded".
+it('a committed summary forgets which skills were loaded', async () => {
+  const s = makeSession({ contextLength: 200_000, model: scriptModel([{ text: 'Goal: continue.' }]) });
+  s.seedHistory(Array.from({ length: 40 }, (_, i) => ([
+    { role: 'user', content: `question ${i} ${'x'.repeat(2_000)}` },
+    { role: 'assistant', content: `answer ${i} ${'y'.repeat(2_000)}` },
+  ])).flat() as any);
+  (s as any).servedSkills.add('some:skill');
+  expect(await s.compactNow(undefined, 32_768)).toEqual({ ok: true });
+  expect((s as any).servedSkills.size).toBe(0);
+});

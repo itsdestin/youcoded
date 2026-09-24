@@ -4,7 +4,7 @@
 import { truncateOutput, composeNotice, type TruncateOpts } from './truncate';
 import type { NativeTool, ToolContext, ToolResultPayload } from './types';
 
-const DEFAULT_CAPS: TruncateOpts = { maxChars: 30_000 };
+export const DEFAULT_CAPS: TruncateOpts = { maxChars: 30_000 };
 
 export function defineTool<A>(
   def: NativeTool<A> & { caps?: TruncateOpts },

@@ -22,6 +22,16 @@ declare global {
       /** Dev-instance label (run-dev.sh --label). null in the built app and on remote. */
       devLabel?: string | null;
       session: {
+        handoff: {
+          begin: (conversationId: string, provider: 'claude' | 'native', create?: import('../../shared/types').HandoffCreateParams) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          status: (id: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          wait: (id: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          retry: (id: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          savedCopy: (id: string, consent: boolean) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          force: (id: string, consent: boolean, expectedHolderId: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          cancel: (id: string) => Promise<import('../../shared/types').HandoffAttemptResult>;
+          setCreateParams: (id: string, create: import('../../shared/types').HandoffCreateParams) => Promise<import('../../shared/types').HandoffAttemptResult>;
+        };
         create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; model?: string; provider?: 'claude' | 'native'; resumeSessionId?: string; binding?: { providerId: string; modelId: string } }) => Promise<any>;
         destroy: (sessionId: string) => Promise<boolean>;
         list: () => Promise<any[]>;
@@ -523,7 +533,7 @@ declare global {
         leaseQuery?: (claudeSessionId: string) => Promise<{ held: boolean; device?: string; deviceId?: string; self?: boolean; source?: string }>;
         // 'undeliverable': the hub had no delivery path (holder never asked) —
         // distinct from 'timeout' (asked, no answer within the poll budget).
-        leaseTakeover?: (claudeSessionId: string) => Promise<{ outcome: 'acquired' | 'timeout' | 'error' | 'undeliverable' }>;
+        leaseTakeover?: (claudeSessionId: string) => Promise<{ outcome: 'ready' | 'timeout' | 'error' | 'undeliverable' }>;
         leaseForce?: (claudeSessionId: string) => Promise<{ ok: boolean }>;
         // Device registry (Plan 2b spec §10a): the "Your devices" list. Optional so
         // remote / older Android builds without the handler still typecheck — every

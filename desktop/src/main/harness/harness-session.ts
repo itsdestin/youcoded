@@ -799,6 +799,8 @@ export class HarnessSession extends EventEmitter {
    *  trim, so in practice the map is cleared first; the residual exposure is
    *  the same narrow tiny-window case documented for shownImages. */
   private servedReads = new Map<string, ServedRead>();
+  /** Skill repeat guard (ToolContext.servedSkills): cleared wherever servedReads is, same reason. */
+  private servedSkills = new Set<string>();
   /** 1-based running count of tool calls dispatched — lets Read say "N calls ago". */
   private toolCallCount = 0;
   private bashOutputReadsThisTurn = 0;   // G-1 per-turn cap, reset in beginTurn
@@ -989,6 +991,7 @@ export class HarnessSession extends EventEmitter {
     this.readRegistry.clear();
     this.shownImages.clear();
     this.servedReads.clear(); // G-11: the earlier Read results are not in a resumed session's view
+    this.servedSkills.clear();
     this.todos.length = 0;
     this.shellCwd = null; // a resumed session starts back at the workspace root
     this.shellEnv = null; // same contract — a resumed session starts with a fresh env too
@@ -1869,7 +1872,9 @@ export class HarnessSession extends EventEmitter {
     }, cut, sourceRevision);
     if (!committed) { this.failedCompactionRevision = this.capture.revision; return false; }
     // Every bail-out above returns before the first history mutation.
-    this.servedReads.clear();
+    // WHY servedSkills too: a skill body in the retired span is now only in
+    // the summary, so the repeat guard must not call it "already loaded".
+    this.servedReads.clear(); this.servedSkills.clear();
     // WHY the history swap happens BEFORE the emit (2026-09-16): the event now
     // carries the window's occupancy AFTER this rewrite, and that number cannot
     // be read off a history the rewrite has not landed in yet. emitEvent is
@@ -1944,7 +1949,7 @@ export class HarnessSession extends EventEmitter {
     // commit rather than diffed, because a text prune has no cheap
     // before/after signal the way images do; the cost of over-clearing is one
     // redundant re-read, the cost of under-clearing is a false notice.
-    this.servedReads.clear();
+    this.servedReads.clear(); this.servedSkills.clear();
   }
 
   // Live prefill progress from llama.cpp, forwarded onto the SAME
@@ -2116,7 +2121,7 @@ export class HarnessSession extends EventEmitter {
       }, cut, sourceRevision);
       if (!committed) return { ok: false, reason: 'summary-failed' };
       this.shownImages.clear();
-      this.servedReads.clear();
+      this.servedReads.clear(); this.servedSkills.clear(); // same reason as maybeCompact
       this.history = replacement;
       this.historyOrigins = [null, ...this.historyOrigins.slice(cut)];
       this.reprojectContextUsed(estimateBeforeSummary);
@@ -2168,6 +2173,7 @@ export class HarnessSession extends EventEmitter {
     // of that file deliver for real, matching what "already visible" claims.
     this.shownImages.clear();
     this.servedReads.clear(); // G-11: same contract — the served Read results are gone with the history
+    this.servedSkills.clear();
     // Emitted (not just persisted) so the store appends it through the host's
     // normal chain AND every attached surface — other windows, the remote web
     // client — learns the conversation was cleared. On replay this same event
@@ -2332,7 +2338,8 @@ export class HarnessSession extends EventEmitter {
    *  model history on resume. Without it a resumed conversation would replay a
    *  turn whose opening move has no visible cause.
    */
-  async runSkill(inv: { skillId: string; displayName: string; body: string; args?: string; skillPath?: string }): Promise<void> {
+  async runSkill(inv: { skillId: string; displayName: string; body: string; args?: string; skillPath?: string; cut?: boolean }): Promise<void> {
+    if (!inv.cut) this.servedSkills.add(inv.skillId); // a WHOLE body is now in history: a model Skill call for it is a repeat
     const historyText = inv.args ? `${inv.body}\n\n${inv.args}` : inv.body;
     return this.beginTurn(historyText, () => this.emitEvent('skill-invoked', {
       skillId: inv.skillId, displayName: inv.displayName, args: inv.args,
@@ -3984,6 +3991,7 @@ export class HarnessSession extends EventEmitter {
       binding: this.binding,
       readRegistry: this.readRegistry,
       servedReads: this.servedReads,      // G-11 re-read dedupe (see the field's WHY)
+      servedSkills: this.servedSkills,    // Skill repeat guard (see the field's WHY)
       toolCallIndex: this.toolCallCount,
       shellCwd: this.shellCwd ?? this.opts.cwd,
       setShellCwd: (next: string) => {

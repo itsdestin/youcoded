@@ -109,6 +109,71 @@ describe('InputBar — context-menu image paste', () => {
   });
 });
 
+describe('InputBar freshness wait — draft without submission', () => {
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
+      session: { sendInput: vi.fn() },
+      skills: {
+        list: vi.fn().mockResolvedValue([]), getFavorites: vi.fn().mockResolvedValue([]),
+        getChips: vi.fn().mockResolvedValue([]), getCuratedDefaults: vi.fn().mockResolvedValue([]),
+      },
+    };
+  });
+  afterEach(cleanup);
+
+  it('exports a pending draft for the newly admitted detached window', () => {
+    const ref = React.createRef<InputBarHandle>();
+    render(<ChatProvider><SkillProvider><InputBar ref={ref} sessionId="pending-handoff:one" provider="native" sendBlocked /></SkillProvider></ChatProvider>);
+    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'unsent note' } });
+    expect(ref.current!.readDraftPayload('pending-handoff:one')).toEqual({ text: 'unsent note', attachments: [] });
+  });
+
+  it('restores a detached draft without automatically sending it', () => {
+    const ref = React.createRef<InputBarHandle>();
+    render(<ChatProvider><SkillProvider><InputBar ref={ref} sessionId="admitted" provider="native"
+      initialInput="unsent note" initialAttachments={['/project/screenshot.png']} /></SkillProvider></ChatProvider>);
+    expect((screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement).value).toBe('unsent note');
+    expect(screen.getByText('screenshot.png')).toBeTruthy();
+    expect((window as any).claude.native.send).not.toHaveBeenCalled();
+  });
+
+  it('rebinds a pending draft to the admitted id without sending it', () => {
+    const ref = React.createRef<InputBarHandle>();
+    const wrap = (id: string, blocked: boolean) => <ChatProvider><SkillProvider>
+      <InputBar ref={ref} sessionId={id} provider="native" sendBlocked={blocked} />
+    </SkillProvider></ChatProvider>;
+    const { rerender } = render(wrap('pending-handoff:one', true));
+    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'unfinished thought' } });
+    act(() => ref.current!.transferDraft('pending-handoff:one', 'admitted'));
+    rerender(wrap('admitted', false));
+    expect(input.value).toBe('unfinished thought');
+    expect(ref.current!.readDraft()).toBe('unfinished thought');
+    expect((window as any).claude.native.send).not.toHaveBeenCalled();
+  });
+
+  it('allows typing but blocks button, Enter and form submit until the wait ends', () => {
+    const { rerender } = render(<ChatProvider><SkillProvider><InputBar sessionId="freshness-test" provider="native" sendBlocked /></SkillProvider></ChatProvider>);
+    const input = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: 'a saved draft' } });
+    expect(input.disabled).toBe(false);
+    const button = screen.getByRole('button', { name: 'Send message' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.submit(button.closest('form')!);
+    expect((window as any).claude.native.send).not.toHaveBeenCalled();
+    expect(input.value).toBe('a saved draft');
+    rerender(<ChatProvider><SkillProvider><InputBar sessionId="freshness-test" provider="native" sendBlocked={false} /></SkillProvider></ChatProvider>);
+    expect(input.value).toBe('a saved draft');
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    expect((window as any).claude.native.send).toHaveBeenCalledOnce();
+  });
+});
+
 describe('InputBar native send — failure keeps the draft (reviewer Critical fix)', () => {
   beforeEach(() => {
     (global as any).ResizeObserver = NoopResizeObserver;

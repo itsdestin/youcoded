@@ -598,6 +598,9 @@ describe('NativeSessionHost durable continuation', () => {
     expect((await fx.host.compact('reject-commit')).ok).toBe(false);
     expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(0);
     expect(fx.sessionStore.readEvents('reject-commit', cwd).filter(e => e.type === 'compact-summary')).toHaveLength(0);
+    // A write that started and failed can no longer certify a complete transcript (handoff).
+    await fx.host.drain('reject-commit');
+    expect((fx.host as any).live.get('reject-commit').handoffPersistenceFailed).toBe(true);
     await turn(fx.host, 'reject-commit', 'fourth');
     await fx.host.drain('reject-commit');
     expect(JSON.stringify(fx.sessionStore.readEvents('reject-commit', cwd))).toContain('fourth answer');
@@ -620,6 +623,8 @@ describe('NativeSessionHost durable continuation', () => {
     expect((await canceled).ok).toBe(false);
     await fx.host.drain('race-commit');
     expect(fx.sessionStore.readEvents('race-commit', cwd).filter(e => e.type === 'compact-summary')).toHaveLength(0);
+    // Cancelled before any write: the transcript is still complete.
+    expect((fx.host as any).live.get('race-commit').handoffPersistenceFailed).toBeFalsy();
 
     const entered = deferred(); const release = deferred();
     const original = fx.sessionStore.append.bind(fx.sessionStore);
