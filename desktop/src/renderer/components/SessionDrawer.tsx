@@ -424,7 +424,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // this ref + mirrors its state so the toolbar can swap pencil ↔ save/cancel.
   const editRef = useRef<ActiveArtifactHandle>(null);
   const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean }>({ isEditable: false, editing: false });
-  const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0 });
+  const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0, paneVisible: false });
   // Entering Comments mode folds the file list away however it was entered
   // (the Comments button, clicking a highlight, a sent pill) — the floating
   // comment actions share Edit's hide-while-the-list-is-open rule, so with the
@@ -1295,6 +1295,18 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   clickable while invisible. Clicking Comments folds the list
                   away, like clicking Edit does, so the buttons Comments mode
                   needs are on screen the moment it opens. */}
+              {/* Comment actions (Show resolved / Ask Your Assistant) at the foot
+                  of the comment column — w-60 = the margin's card width, right-2
+                  = the cards' 8px inset from the edge (measured). Round 10
+                  (Destin: "should only appear when the full pane is actually
+                  visible, and should disappear if the pane is hidden"): shown
+                  only while the full column is on screen — not with the file
+                  list's pop-in rule, and not over the collapsed marker rail. */}
+              {active && commentsState.paneVisible && (
+                <div className="absolute bottom-9 right-2 w-60 z-20 pointer-events-none">
+                  <CommentsFloatingActions path={active.path} />
+                </div>
+              )}
               {active && (
                 <div
                   inert={!(editState.editing || !showList)}
@@ -1302,14 +1314,6 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                     editState.editing || !showList ? 'opacity-100 scale-100' : 'opacity-0 scale-90'
                   }`}
                 >
-                  {/* Round 8 (Destin: "comments/edit should remain over the
-                      file pane, not the comments pane"): two anchors in one
-                      pop-in group. The comment actions sit at the bottom of the
-                      comment column — w-60 = the margin's card width, right-2 =
-                      the cards' 8px inset from the edge (measured). */}
-                  {commentsState.active && (
-                    <div className="absolute bottom-0 right-2 w-60"><CommentsFloatingActions path={active.path} /></div>
-                  )}
                   {/* Comments + Edit sit over the DOCUMENT: in Comments mode they
                       move left past the 256px comment column (right-68 = 16px
                       clearance + 256px), otherwise their usual 16px from the edge. */}

@@ -156,18 +156,23 @@ export function SessionCardMeta({ session: s, showProject }: { session: PastSess
 /** Mark a conversation complete, or undo it. The Resume card and the Projects
  *  preview both carry it. Hover copy is a question ("Mark this session
  *  complete?") so the icon reads as an action, not a status badge. */
-export function CompleteToggle({ done, name, onToggle, className = '' }: {
+export function CompleteToggle({ done, name, onToggle, className = '', titles }: {
   done: boolean;
   name: string;
   onToggle: (next: boolean) => void;
   className?: string;
+  /** Hover copy for another kind of "done" (a resolved doc comment reuses
+   *  this control). Omitted = the conversation wording below, unchanged. */
+  titles?: { set: string; unset: string };
 }) {
   return (
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); onToggle(!done); }}
       aria-pressed={done}
-      title={done ? 'Marked complete — hidden unless Show Complete is on. Click to undo.' : 'Mark this session complete?'}
+      title={titles
+        ? (done ? titles.set : titles.unset)
+        : (done ? 'Marked complete — hidden unless Show Complete is on. Click to undo.' : 'Mark this session complete?')}
       aria-label={done ? `Mark ${name} not complete` : `Mark ${name} complete`}
       className={`rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
         done ? 'text-accent' : 'text-fg-faint hover:text-fg-2'

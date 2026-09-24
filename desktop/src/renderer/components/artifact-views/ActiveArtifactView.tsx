@@ -101,6 +101,9 @@ export interface CommentsHeaderState {
   available: boolean;
   active: boolean;
   count: number;
+  /** The full comment column is on screen — Comments mode AND wide enough
+   *  for the margin (not collapsed to its marker rail). */
+  paneVisible: boolean;
 }
 
 /** Metadata from the artifacts:get response that content alone cannot carry —
@@ -590,8 +593,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   // row "alongside the other actions" — same imperative-handle + state
   // callback pattern the header already uses for Edit/Save.
   useEffect(() => {
-    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: pathComments.length });
-  }, [showComments, commentsMode, pathComments.length, onCommentsStateChange]);
+    // paneVisible: MarkdownView collapses its margin to a marker rail below
+    // the same 640px pane width narrowPane measures here; the code rail is
+    // always full width.
+    const paneVisible = commentsMode === 'comments' && showComments && (showCodeRail || !narrowPane);
+    onCommentsStateChange?.({ available: showComments, active: commentsMode === 'comments', count: pathComments.length, paneVisible });
+  }, [showComments, showCodeRail, narrowPane, commentsMode, pathComments.length, onCommentsStateChange]);
   const openComments = useCallback((commentId?: string) => {
     if (commentId) {
       if (pathComments.find((c) => c.id === commentId)?.resolved) setPathShowResolved(true);

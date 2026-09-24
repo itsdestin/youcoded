@@ -4,8 +4,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui/Button';
 import { Textarea } from '../ui/Textarea';
-import { TextInput } from '../ui/TextInput';
-import { CheckIcon } from '../Icons';
+import { InputGroup } from '../ui/InputGroup';
+import { CompleteToggle } from '../SessionCardDetails';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { DocComment } from '../../state/doc-comments-store';
 import { Avatar, authorName } from './Avatar';
@@ -34,33 +34,57 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
 
   const isDraft = comment.text.trim() === '' && comment.replies.length === 0 && !comment.resolved;
 
+  // Round 10 (Destin: "the 'resolved' button should be an icon, like the
+  // complete button for resume browser, at the top right of each comment
+  // area"): the SAME CompleteToggle the Resume card uses — hollow circle-check
+  // to resolve, filled to show it's resolved (click again to reopen). A draft
+  // has nothing to resolve yet, so it gets no toggle.
+  const resolveToggle = !isDraft && (
+    <CompleteToggle
+      done={comment.resolved}
+      name="this comment"
+      onToggle={(next) => (next ? onResolve() : onReopen())}
+      titles={{ set: 'Resolved. Click to reopen.', unset: 'Resolve this comment?' }}
+      className="shrink-0"
+    />
+  );
+  // The quoted text doubles as "jump to it in the document".
+  const quote = (clamp: 'truncate' | 'line-clamp-2') => (
+    <button type="button" onClick={onJump} className="flex-1 min-w-0 text-left">
+      <p className={`text-fg-muted italic ${clamp} border-l-2 border-edge-dim pl-2`}>&ldquo;{comment.quote}&rdquo;</p>
+    </button>
+  );
+
   if (comment.resolved) {
-    // Fade/collapse (Docs-style): a one-line sliver naming who resolved it,
-    // with the only action being to bring it back.
+    // Collapsed (Docs-style): the quote and who resolved it; the filled
+    // toggle top-right is the way back.
     return (
       // Design-guide review (round 7): a card inside a side pane is `inset`
       // with an `edge-dim` border and no shadow (§2.1/§2.4 — the tool-card
-      // recipe). Resolved used to fade the whole card to 70% opacity, which
-      // pushed its text under the contrast floor; muted text alone says
-      // "done" without making it unreadable.
-      <div className="rounded-lg border border-edge-dim bg-inset px-3 py-2 text-xs">
-        <button type="button" onClick={onJump} className="block w-full text-left mb-1 min-w-0">
-          <p className="text-fg-muted italic truncate">&ldquo;{comment.quote}&rdquo;</p>
-        </button>
-        <div className="flex items-center gap-1.5 text-fg-muted">
-          <CheckIcon className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">Resolved by {comment.resolvedBy === 'assistant' ? 'Claude' : 'you'}</span>
-          <Button variant="ghost" size="sm" onClick={onReopen} className="ml-auto shrink-0">Reopen</Button>
+      // recipe); muted text says "done" without fading the whole card below
+      // the contrast floor.
+      <div className="rounded-lg border border-edge-dim bg-inset p-3 text-xs">
+        <div className="flex items-start gap-2">
+          {quote('truncate')}
+          {resolveToggle}
         </div>
+        <p className="mt-1.5 text-fg-muted">Resolved by {comment.resolvedBy === 'assistant' ? 'Claude' : 'you'}</p>
       </div>
     );
   }
 
+  const sendReply = () => {
+    if (!replyText.trim()) return;
+    onReply(replyText);
+    setReplyText('');
+  };
+
   return (
     <div className="rounded-lg border border-edge-dim bg-inset p-3 text-xs w-full">
-      <button type="button" onClick={onJump} className="block w-full text-left mb-2 min-w-0">
-        <p className="text-fg-muted italic line-clamp-2 border-l-2 border-edge-dim pl-2">&ldquo;{comment.quote}&rdquo;</p>
-      </button>
+      <div className="flex items-start gap-2 mb-2">
+        {quote('line-clamp-2')}
+        {resolveToggle}
+      </div>
 
       <div className="flex items-start gap-2">
         <Avatar author={comment.author} />
@@ -101,38 +125,21 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
         </div>
       ))}
 
-      {/* Round 3: Reply + Resolve moved OFF a single row with the reply field
-          (guide §4.6 card anatomy) after the coordinator's review caught
-          Resolve — and sometimes Reply — clipped off the margin's 256px
-          card even with min-w-0 on the input: three controls sharing one
-          row simply don't fit that width. The input now takes its own
-          full-width row; the two buttons sit right-aligned below it, which
-          fits at any card width the margin ever renders. A draft has
-          nothing to resolve yet, so it only offers Delete. */}
+      {/* Round 10 (Destin: "the send button for replies should be within the
+          right side of the reply box"): InputGroup — the primitive for a field
+          with its submit inside it (TagPicker's Create is the same shape).
+          Enter still sends. */}
       {!isDraft && (
-        <div className="mt-2 flex flex-col gap-1.5">
-          <TextInput
-            size="sm"
+        <InputGroup size="sm" className="mt-2 w-full">
+          <InputGroup.Field
+            aria-label="Reply"
             value={replyText}
             onChange={(e) => setReplyText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && replyText.trim()) { onReply(replyText); setReplyText(''); }
-            }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); sendReply(); } }}
             placeholder="Reply…"
-            className="w-full"
           />
-          <div className="flex items-center justify-end gap-1.5">
-            <Button
-              variant="secondary"
-              size="sm"
-              disabled={!replyText.trim()}
-              onClick={() => { onReply(replyText); setReplyText(''); }}
-            >
-              Reply
-            </Button>
-            <Button variant="secondary" size="sm" onClick={onResolve}>Resolve</Button>
-          </div>
-        </div>
+          <Button size="sm" disabled={!replyText.trim()} onClick={sendReply}>Send</Button>
+        </InputGroup>
       )}
       {isDraft && (
         <div className="mt-2 flex items-center justify-end gap-1.5">
