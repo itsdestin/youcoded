@@ -269,6 +269,12 @@ interface Props {
   welcomeBack?: WelcomeBackMode;
 }
 
+/** What one Resume press on Welcome back did. `needModel`: rows skipped because
+ *  their last model is not set up on this device — reported by the resume itself
+ *  so the status line never depends on the earlier (asynchronous) needs-model
+ *  check having finished before the press. */
+export interface WelcomeBackResumeResult { launched: string[]; needModel: string[] }
+
 /** The Welcome back screen (questions deck 2026-09-24, welcome-back-questions).
  *  WHY the Resume browser and not a new screen: Destin, Q-actions — "this surface
  *  should basically be the full resume browser for the given sessions.
@@ -280,7 +286,7 @@ interface WelcomeBackMode { // not exported: only this file's own prop type uses
   ids: readonly string[];
   /** Resume these rows in one go; resolves to the ids that actually launched.
    *  A row left out (e.g. its model is not on this device) stays on the list. */
-  onResumeMany: (rows: PastSession[]) => Promise<string[]>;
+  onResumeMany: (rows: PastSession[]) => Promise<WelcomeBackResumeResult>;
   /** Leave the screen: forget whatever is left (Q-leftover: "forget them"). */
   onDone: () => void;
 }
@@ -846,7 +852,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     setResumingMany(true);
     setResumeStatus(null); // U2: this press's own result replaces any earlier one
     try {
-      const done = await wb.onResumeMany(tickedRows);
+      const result = await wb.onResumeMany(tickedRows);
+      const done = result.launched;
+      // The resume itself knows which rows it skipped for want of a model; fold
+      // them into needsModel too, so their cards say so even if the up-front
+      // check had not finished when Resume was pressed.
+      if (result.needModel.length > 0) setNeedsModel((prev) => new Set([...prev, ...result.needModel]));
       setLaunched((prev) => new Set([...prev, ...done]));
       // Open the first row that could not go by itself, so its model picker is
       // on screen — the footer line says why — instead of a button that
@@ -856,15 +867,15 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setTicked((prev) => new Set([...prev].filter((id) => !done.includes(id))));
       // U2: a partial resume used to say nothing — the panel just shrank and
       // its heading quietly went plural to singular, which read as the click
-      // doing nothing (or worse, as the other rows being lost). `needsModel`
-      // is worked out before every press (see its declaration above), so it
-      // already reflects exactly which of these rows welcomeBackResumeMany
-      // skipped for that reason; a row that didn't reopen for any OTHER
-      // reason gets a plain "didn't reopen" rather than a guessed cause.
+      // doing nothing (or worse, as the other rows being lost). The reason
+      // comes from the resume's own result (`needModel`), not from the
+      // up-front check, which may still be loading on a quick press; a row
+      // that didn't reopen for any OTHER reason gets a plain "didn't reopen"
+      // rather than a guessed cause.
       const remaining = tickedRows.filter((r) => !done.includes(r.sessionId));
       if (remaining.length === 0) return;
       const reopenedPart = done.length === 0 ? 'None reopened.' : `${done.length} reopened.`;
-      const allNeedModel = remaining.every((r) => needsModel.has(r.sessionId));
+      const allNeedModel = remaining.every((r) => result.needModel.includes(r.sessionId));
       const leftPart = remaining.length === 1
         ? (allNeedModel ? 'The one left needs a model picked first.' : 'The one left didn’t reopen.')
         : (allNeedModel ? `The ${remaining.length} left need a model picked first.` : `The ${remaining.length} left didn’t reopen.`);

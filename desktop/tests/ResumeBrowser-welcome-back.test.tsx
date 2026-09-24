@@ -81,7 +81,7 @@ function mockWindowClaude(sessions: any[]) {
 function welcomeBack(ids: string[], overrides: Partial<{ onResumeMany: any; onDone: any }> = {}) {
   return {
     ids,
-    onResumeMany: overrides.onResumeMany ?? vi.fn().mockResolvedValue([]),
+    onResumeMany: overrides.onResumeMany ?? vi.fn().mockResolvedValue({ launched: [], needModel: [] }),
     onDone: overrides.onDone ?? vi.fn(),
   };
 }
@@ -266,7 +266,7 @@ describe('ResumeBrowser — Welcome back mode', () => {
   // quietly went plural to singular. It must say how many reopened and why
   // the rest stayed.
   it('a partial Resume press says how many reopened and that the rest need a model', async () => {
-    const onResumeMany = vi.fn().mockResolvedValue(['sess-1']); // only Session A actually reopens
+    const onResumeMany = vi.fn().mockResolvedValue({ launched: ['sess-1'], needModel: ['sess-2'] }); // only Session A actually reopens
     mockWindowClaude([
       row(),
       row({
@@ -288,7 +288,7 @@ describe('ResumeBrowser — Welcome back mode', () => {
   });
 
   it('pluralizes the status line for more than one row left', async () => {
-    const onResumeMany = vi.fn().mockResolvedValue(['sess-1']);
+    const onResumeMany = vi.fn().mockResolvedValue({ launched: ['sess-1'], needModel: ['sess-2', 'sess-3'] });
     const needsModelRow = (id: string, name: string) => row({
       sessionId: id, name, provider: 'native', harnessId: 'assistant',
       lastUsedModel: { modelId: 'gpt-5', providerType: 'openai', providerLabel: 'OpenAI' },
@@ -305,8 +305,8 @@ describe('ResumeBrowser — Welcome back mode', () => {
 
   it('clears the status line on the next Resume press', async () => {
     const onResumeMany = vi.fn()
-      .mockResolvedValueOnce(['sess-1']) // first press: partial
-      .mockResolvedValueOnce(['sess-2']); // second press: the rest goes
+      .mockResolvedValueOnce({ launched: ['sess-1'], needModel: [] }) // first press: partial, not for want of a model
+      .mockResolvedValueOnce({ launched: ['sess-2'], needModel: [] }); // second press: the rest goes
     mockWindowClaude([
       row(),
       row({
@@ -325,7 +325,7 @@ describe('ResumeBrowser — Welcome back mode', () => {
   });
 
   it('Start fresh clears any status line from an earlier partial Resume press', async () => {
-    const onResumeMany = vi.fn().mockResolvedValue(['sess-1']);
+    const onResumeMany = vi.fn().mockResolvedValue({ launched: ['sess-1'], needModel: ['sess-2'] });
     const onDone = vi.fn();
     mockWindowClaude([
       row(),
@@ -343,5 +343,25 @@ describe('ResumeBrowser — Welcome back mode', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start fresh' }));
     expect(onDone).toHaveBeenCalled();
     expect(screen.queryByText('1 reopened. The one left needs a model picked first.')).not.toBeInTheDocument();
+  });
+
+  // A quick press — before the up-front needs-model check has answered — must
+  // still give the real reason, because the resume reports it itself.
+  it('names the missing model even when Resume is pressed before the model check finishes', async () => {
+    const onResumeMany = vi.fn().mockResolvedValue({ launched: ['sess-1'], needModel: ['sess-2'] });
+    mockWindowClaude([
+      row(),
+      row({
+        sessionId: 'sess-2', name: 'Session B', provider: 'native', harnessId: 'assistant',
+        lastUsedModel: { modelId: 'gpt-5', providerType: 'openai', providerLabel: 'OpenAI' },
+      }),
+    ]);
+    // The model check never answers during this test.
+    (window as any).claude.providers = { list: () => new Promise(() => {}), catalog: () => new Promise(() => {}) };
+    render(<ResumeBrowser open onClose={() => {}} onResume={() => {}} welcomeBack={welcomeBack(['sess-1', 'sess-2'], { onResumeMany })} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume all 2' }));
+    expect(await screen.findByText('1 reopened. The one left needs a model picked first.')).toBeInTheDocument();
+    expect(screen.getByText("Its last model isn't set up here — Resume will ask you to pick one.")).toBeInTheDocument();
   });
 });

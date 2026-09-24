@@ -3511,17 +3511,19 @@ function AppInner() {
   // at a time so each goes through its own lease check. A native row reuses the
   // model it last ran on (Q-model); one whose model is not set up here is left
   // on the list for a manual Resume, which asks.
-  const welcomeBackResumeMany = useCallback(async (rows: PastSession[]): Promise<string[]> => {
+  const welcomeBackResumeMany = useCallback(async (rows: PastSession[]): Promise<{ launched: string[]; needModel: string[] }> => {
     const [providers, catalog] = await Promise.all([
       window.claude.providers.list(),
       window.claude.providers.catalog(),
     ]).catch(() => [[], []] as [any[], any[]]);
     const done: string[] = [];
+    const needModel: string[] = [];
     for (const r of rows) {
       let binding: ModelBinding | undefined;
       if (r.provider === 'native') {
         binding = resolveNativeBinding(r.lastUsedModel, providers as any[], catalog as any[]) ?? undefined;
-        if (!binding) continue;
+        // Reported, so the screen can say WHY this row stayed (UX review 2, U2).
+        if (!binding) { needModel.push(r.sessionId); continue; }
       }
       const ok = await handleResumeSession(
         r.sessionId, r.projectSlug, r.projectPath,
@@ -3530,7 +3532,7 @@ function AppInner() {
       );
       if (ok) done.push(r.sessionId);
     }
-    return done;
+    return { launched: done, needModel };
   }, [handleResumeSession, sessionDefaults]);
   const welcomeBackMode = useMemo(() => (welcomeBackIds && welcomeBackIds.length > 0
     ? { ids: welcomeBackIds, onResumeMany: welcomeBackResumeMany, onDone: welcomeBackDone }
