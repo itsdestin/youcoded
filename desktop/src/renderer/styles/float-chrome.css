@@ -520,11 +520,17 @@ html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scr
   bottom: 8px !important;
   border-radius: var(--radius-lg) !important;
   box-shadow: var(--float-sheet-ring), var(--float-sheet-drop);
-  /* The grid's own insets were measured from the window; inside the card it
-     needs only a small margin. */
-  --terminal-top-inset: 6px;
-  --terminal-side-inset: 6px;
-  --terminal-bottom-inset: 6px;
+  /* The grid fills the card edge to edge. Its old insets were measured from the
+     window, and any inset here leaves an untinted strip between the card's
+     edge and the tinted grid (Destin, 2026-09-24: "notice the gaps"). The
+     breathing room comes from padding on .xterm below instead, which sits
+     inside the tinted grid and which xterm's fit step subtracts. */
+  --terminal-top-inset: 0px;
+  --terminal-side-inset: 0px;
+  --terminal-bottom-inset: 0px;
+}
+html[data-platform="electron"] [data-chrome-style='float'] .terminal-overlay-scroll .xterm {
+  padding: 8px 6px 6px 10px;
 }
 /* Keep the blurred wallpaper copy aligned with the real wallpaper: stretch it
    back out to the window edges the card was pulled in from. */

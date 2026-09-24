@@ -140,6 +140,9 @@ describe('the approved float look', () => {
     expect(css).toMatch(/\.drawer-pane :is\(\.drawer-aside, \.game-panel\) \{\s*background-color: transparent/);
     // The terminal card is desktop-only: on phones the message box sits under it.
     expect(css).toMatch(/html\[data-platform="electron"\] \[data-chrome-style='float'\] \.terminal-overlay-scroll \{/);
+    // WHY no inset: an inset left an untinted strip between the card edge and the grid.
+    expect(css).toContain('--terminal-side-inset: 0px;');
+    expect(css).toMatch(/\.terminal-overlay-scroll \.xterm \{\s*padding:/);
   });
 
   it('gives the session menu the switcher\'s surface and restyles every scroll bar', () => {
