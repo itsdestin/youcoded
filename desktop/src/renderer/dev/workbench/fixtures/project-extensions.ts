@@ -113,6 +113,50 @@ export function inboxGroup(): PluginGroup {
   };
 }
 
+// `remember`, `commit-message` -> `Remember`, `Commit message` — the fixture
+// has no curated display name for an arbitrary catalog component (unlike
+// researchKitGroup's hand-written "Web digest"/"Research sources" above), so
+// this derives a readable one from the raw skill/MCP-server id the catalog
+// entry ships.
+function humanizeComponentName(name: string): string {
+  return name
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+}
+
+// U2 fix (beta review 2): generalizes inboxGroup — any Marketplace plugin
+// installed live during this workbench session (not just youcoded-inbox)
+// must appear in every project's "Added on this device" section, built from
+// the SAME catalog `.components` block the real `pluginHasParts` gate reads
+// (shared/catalog-types.ts) — skills and MCP servers become parts, matching
+// what the review found missing for "Remember". Unlike Inbox (grandfathered
+// ON as a stand-in for something installed before this feature shipped), the
+// master switch starts OFF/paused — matches the real store's
+// `defaultPluginOn` rule 2 (main/project-extensions/resolve.ts): a
+// marketplace install whose `installedAt` is after this feature's first run
+// on the device defaults off.
+export function installedPluginGroup(plugin: {
+  id: string;
+  displayName: string;
+  components?: { skills?: readonly string[]; mcpServers?: readonly string[] } | null;
+}): PluginGroup {
+  const skills = plugin.components?.skills ?? [];
+  const mcpServers = plugin.components?.mcpServers ?? [];
+  const parts: PartRow[] = [
+    ...skills.map((name) => ({
+      key: `${plugin.id}:${name}`, kind: 'skill' as const, displayName: humanizeComponentName(name), on: false,
+    })),
+    ...mcpServers.map((name) => ({
+      key: `${plugin.id}:${name}`, kind: 'mcp' as const, displayName: humanizeComponentName(name), on: false,
+    })),
+  ];
+  return {
+    pluginId: plugin.id, displayName: plugin.displayName, bundled: false, on: false, paused: true, parts,
+  };
+}
+
 /** Applies one `project-extensions:set` change to a view, matching the real
  *  store's semantics: a `plugin` change flips the master switch (and
  *  `paused` follows `!on`); an `item` change flips exactly one part, wherever

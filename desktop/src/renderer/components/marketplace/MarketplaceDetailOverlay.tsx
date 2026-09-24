@@ -19,7 +19,7 @@ import LikeButton from "./LikeButton";
 import { SourceBadge, ScanBadge, AuthorBadge } from "./TrustBadges";
 import { CapabilityList } from "./CapabilityList";
 import FeedbackSection from "./FeedbackSection";
-import { CATALOG_TYPE_LABEL, isInstallableSource } from "../../../shared/catalog-types";
+import { CATALOG_TYPE_LABEL, isInstallableSource, pluginHasParts } from "../../../shared/catalog-types";
 import FileViewerOverlay, { type FileViewerTarget } from "./FileViewerOverlay";
 // Task 1: an installed item with an update available needs a way to take it —
 // the overlay swapped straight to Uninstall once installed, so the only route
@@ -39,20 +39,6 @@ export type DetailTarget =
   | { kind: "skill"; id: string }
   | { kind: "theme"; slug: string };
 
-// T6: "has parts" (design §5 — gate the post-install panel on "a plugin that
-// has skills or tool connections", not a fixture id). `components` comes
-// straight off the catalog entry (extract-components.js, at sync time) —
-// there is no separate signal in the install call itself (`installSkill`
-// resolves void), so the catalog entry IS "the install result" here. `null`
-// (extraction failed) or `undefined` (a pre-Phase-1 cached entry) means no
-// data to gate on — keep today's plain installed view rather than guessing;
-// a prompt-only skill's own `components` is either absent or an empty
-// object, so it never qualifies either way.
-function pluginHasParts(entry: SkillEntry): boolean {
-  const c = entry.components;
-  return !!c && (c.skills.length > 0 || c.mcpServers.length > 0);
-}
-
 interface Props {
   target: DetailTarget;
   onClose(): void;
@@ -65,10 +51,22 @@ interface Props {
   // "Part of …" link, or a bundle's "What's inside" rows. The screen owns
   // the target, so this just swaps it.
   onNavigate?(target: DetailTarget): void;
+  // U2 fix (beta review 2): set by MarketplaceScreen right after a plugin
+  // install completed via the CARD's own install button (grid/rail/search) —
+  // not this overlay's Install button, which has its own onInstall below.
+  // Opens the overlay straight into the "choose your projects" setup state
+  // so a card install reaches the same panel a detail-page install already
+  // did. `null`/absent everywhere else (today's plain view).
+  openSetupFor?: { id: string; displayName: string } | null;
+  // Fires once openSetupFor has been applied, so the parent can clear its
+  // state and this doesn't replay if the same plugin's detail page is opened
+  // again later — same one-shot shape as MarketplaceScreen's own
+  // initialDetailId/onDetailConsumed pair above it.
+  onSetupForConsumed?(): void;
 }
 
 export default function MarketplaceDetailOverlay({
-  target, onClose, onOpenShareSheet, onOpenThemeShare, onNavigate,
+  target, onClose, onOpenShareSheet, onOpenThemeShare, onNavigate, openSetupFor, onSetupForConsumed,
 }: Props) {
   const mp = useMarketplace();
   // T6: which plugin just finished installing, and its id — drives the
@@ -79,6 +77,18 @@ export default function MarketplaceDetailOverlay({
   // back later (design §5: "resets on target change (targetKey)").
   const targetKey = target.kind === 'theme' ? `theme:${target.slug}` : `${target.kind}:${target.id}`;
   useEffect(() => { setJustInstalled(null); }, [targetKey]);
+  // U2 fix: the card-install path (see openSetupFor above) — runs AFTER the
+  // reset above (declaration order), so it applies on top of a fresh
+  // mount/navigation rather than being immediately wiped by it. Guarded on
+  // target.kind === 'skill' so a theme detail opened for some other reason
+  // can never pick up a stale skill's setup state.
+  useEffect(() => {
+    if (openSetupFor && target.kind === 'skill' && target.id === openSetupFor.id) {
+      setJustInstalled(openSetupFor);
+      onSetupForConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- targetKey covers target
+  }, [targetKey, openSetupFor, onSetupForConsumed]);
   // Needed for Apply action and isActive check in ThemeBody
   const { theme: activeThemeSlug, setTheme } = useTheme();
 

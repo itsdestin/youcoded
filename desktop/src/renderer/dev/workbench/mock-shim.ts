@@ -53,6 +53,7 @@ import { folderPageFromRecords } from '../../../shared/artifacts/folder-page';
 import {
   defaultView as peDefaultView, applyChange as peApplyChange,
   inboxGroup as peInboxGroup, forSessionFixture as peForSessionFixture,
+  installedPluginGroup as peInstalledPluginGroup,
 } from './fixtures/project-extensions';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
@@ -3036,6 +3037,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     .filter((s) => !studentSwitch || !DEVELOPER_BUNDLES.includes(s.pluginName))
     .map((s) => ({ ...s }));
   const installedPackages: Record<string, any> = JSON.parse(JSON.stringify(INSTALLED_PACKAGES));
+  // U2 fix (beta review 2): plugin ids installed live during THIS workbench
+  // session via skills.install() below — read by projectExtView() further
+  // down to fold each one into every project's Skills & tools, generalizing
+  // the youcoded-inbox-only special case that used to be the only way to
+  // reproduce a fresh install there.
+  const sessionInstalledPluginIds = new Set<string>();
   // Quick chips are a STATEFUL mock, not a canned read: the editor writes
   // through setChips on every add/remove/reorder/edit, so a read-only fixture
   // would make every mutation appear to do nothing. Mirrors the real store's
@@ -3090,12 +3097,26 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       if (!chipList.some((c) => c.skillId === plugin.id || c.label === plugin.displayName)) {
         chipList = [...chipList, { skillId: plugin.id, label: plugin.displayName, prompt: `/${plugin.id} ` }];
       }
+      // U2 fix (beta review 2): record the install so projectExtView() below
+      // folds this plugin into every project's Skills & tools — see that
+      // function's own comment for why youcoded-inbox is excluded here.
+      sessionInstalledPluginIds.add(plugin.id);
       return { ok: true };
     },
     uninstall: async (id: string) => {
       installedSkills = installedSkills.filter((s) => s.id !== id && s.pluginName !== id);
       delete installedPackages[id];
       chipList = chipList.filter((c) => c.skillId !== id);
+      sessionInstalledPluginIds.delete(id);
+      // Strip any project-extensions view already computed with this plugin's
+      // group in it — otherwise an uninstall-then-reinstall-elsewhere in the
+      // same session would leave a ghost row behind (projectExtView only ADDS
+      // a session-installed group, it never re-checks one already cached).
+      for (const [path, view] of projectExtViews) {
+        if (view.installed.some((g) => g.pluginId === id)) {
+          projectExtViews.set(path, { ...view, installed: view.installed.filter((g) => g.pluginId !== id) });
+        }
+      }
       return { ok: true };
     },
     getFavorites: async () => [...skillFavourites],
@@ -3148,6 +3169,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // post-install ProjectSetupPanel flow has a real per-project row to show.
     if (installedPackages['youcoded-inbox'] && !view.installed.some((g) => g.pluginId === 'youcoded-inbox')) {
       view = { ...view, installed: [...view.installed, peInboxGroup()] };
+      projectExtViews.set(path, view);
+    }
+    // U2 fix (beta review 2): generalizes the Inbox case above to ANY OTHER
+    // plugin installed live this session (e.g. "Remember" from the review) —
+    // youcoded-inbox is excluded here because it already got its own
+    // grandfathered-ON row just above; every other session install is
+    // OFF/paused by default (installedPluginGroup's own comment explains why).
+    // Built from the same MARKETPLACE_PLUGINS catalog entry skills.install()
+    // matched, so its parts mirror the real catalog `.components` a live
+    // install would carry.
+    for (const id of sessionInstalledPluginIds) {
+      if (id === 'youcoded-inbox' || view.installed.some((g) => g.pluginId === id)) continue;
+      const plugin = MARKETPLACE_PLUGINS.find((p) => p.id === id);
+      if (!plugin) continue;
+      view = { ...view, installed: [...view.installed, peInstalledPluginGroup(plugin)] };
       projectExtViews.set(path, view);
     }
     return view;

@@ -107,3 +107,22 @@ export function isInstallableSource(entry: { type?: string; sourceType?: string;
   if (entry.type === 'prompt') return typeof entry.prompt === 'string' && entry.prompt.trim().length > 0;
   return entry.sourceType === 'local' || entry.sourceType === 'url' || entry.sourceType === 'git-subdir';
 }
+
+/** T6 (project-plugin-controls), moved here U2 fix round (beta review 2):
+ *  "has parts" gates the post-install "choose your projects" panel on "a
+ *  plugin that has skills or tool connections" — never a fixture id. Shared
+ *  between the Marketplace CARD's own install button (grid/rail/search) and
+ *  the detail overlay's Install button, so EVERY successful install of a
+ *  plugin with parts reaches the same setup panel, not just the one started
+ *  from the detail page (a card install used to leave no way there at all).
+ *  `components` comes straight off the catalog entry (extract-components.js,
+ *  at sync time) — there is no separate signal in the install call itself
+ *  (`installSkill` resolves void), so the catalog entry IS "the install
+ *  result" here. `null` (extraction failed) or `undefined` (a pre-Phase-1
+ *  cached entry) means no data to gate on — keep today's plain installed view
+ *  rather than guessing; a prompt-only skill's own `components` is either
+ *  absent or an empty object, so it never qualifies either way. */
+export function pluginHasParts(entry: { components?: { skills: unknown[]; mcpServers: unknown[] } | null }): boolean {
+  const c = entry.components;
+  return !!c && (c.skills.length > 0 || c.mcpServers.length > 0);
+}

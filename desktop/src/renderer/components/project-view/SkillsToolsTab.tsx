@@ -43,7 +43,10 @@ function needCopy(projectName: string, row: NeedsSetupRowData): string {
     return `${projectName} has ${row.displayName} turned on, but its skill file was added on another device. Personal skill files don't sync yet.`;
   }
   if (row.kind === 'tool-connection') {
-    return `${projectName} has ${row.displayName} turned on. Its connection and any sign-in stay on the device where they were set up, so it needs setting up here too.`;
+    // U7 fix (beta review 2): the old copy doubled up "set up"/"setting up"
+    // and read awkwardly. Kept the same length/tone as the personal-skill
+    // sentence above so the three needCopy branches still read as one voice.
+    return `${projectName} has ${row.displayName} turned on. Its connection and sign-in stay on the device where it was added, so connect it here too.`;
   }
   return `${projectName} has ${row.displayName} turned on, but it isn't installed on this device.`;
 }
@@ -70,7 +73,11 @@ export function needsSetupRowDomId(itemKey: string): string {
 
 function kindLabel(kind: NeedsSetupRowData['kind']): string {
   if (kind === 'personal-skill') return 'Personal skill';
-  if (kind === 'tool-connection') return 'Tool connection (MCP server)';
+  // U5 fix (beta review 2): "(MCP server)" is developer jargon a non-coder
+  // won't know — CommandDrawer's own missingKindLabel already says just
+  // "Tool connection" for the same row kind; this matches it so the two
+  // surfaces don't disagree.
+  if (kind === 'tool-connection') return 'Tool connection';
   return 'Plugin';
 }
 
@@ -221,7 +228,14 @@ function SkillsToolsTabImpl({ hidden, project, onNewConversation }: SkillsToolsT
                 {state.view.builtIn.length > 0 && (
                   <section aria-label="Included plugins" className="mb-5 shrink-0">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mb-2 px-1">
-                      <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Built into YouCoded</span>
+                      {/* U4 fix (beta review 2): "Built into YouCoded" read as
+                          naming a project called "youcoded" when viewed from a
+                          DIFFERENT project (e.g. "recipes") — this section
+                          header never names the current project at all, so the
+                          old copy looked like a leftover from elsewhere. Rows
+                          under it already say "Built in · …" (PluginGroupRow's
+                          description above); this just matches that wording. */}
+                      <span className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Built in</span>
                       <span className="text-xs text-fg-muted">Ready to choose for this project</span>
                     </div>
                     <div className="flex flex-col gap-2">
