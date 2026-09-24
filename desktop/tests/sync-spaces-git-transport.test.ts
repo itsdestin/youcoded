@@ -1029,7 +1029,8 @@ describe('GitTransport conflict resolution never guesses on a failed read', () =
     const { h, a, b } = await conflicted();
     try {
       const git = proto.git;
-      vi.spyOn(proto, 'git').mockImplementation(function (this: unknown, space: SyncSpace, args: string[]) {
+      vi.spyOn(proto, 'git').mockImplementation(function (this: unknown, ...call: unknown[]) {
+        const [space, args] = call as [SyncSpace, string[]];
         const stageRead = (args[0] === 'ls-files' && args.includes('-u')) || (args[0] === 'cat-file' && String(args[2]).startsWith(':3:'));
         if (stageRead) return Promise.resolve({ code: 128, stdout: '', stderr: 'fatal: injected read failure', tokenUsed: false });
         return git.call(this, space, args);
