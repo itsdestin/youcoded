@@ -672,7 +672,10 @@ describe('MarkdownContent while a reply streams in', () => {
   // Switching back to a session mid-reply mounts the bubble on a long prefix
   // drawn as one document. That document is re-drawn as today until its last
   // block is finished, and never parsed again on top of that.
-  it('never does more work per word than the whole message after opening mid-reply', () => {
+  // The promise has ONE accepted exception, pinned here: the update that first
+  // splits a message opened mid-reply parses it once (no redraw), so that update
+  // alone can cost a parse of the message plus the new block.
+  it('never does more work per word than the whole message after opening mid-reply, bar one split that redraws nothing', () => {
     const long = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
     const base = `${long}\n\n${long}\n\nA paragraph still being`;
     const costs = streamCosts(base, base, tokenDeltas(' typed with more words\n\nThen a new paragraph that keeps going word by word\n\nAnd another'));
@@ -832,11 +835,14 @@ describe('MarkdownContent while a reply streams in', () => {
       }
     });
   }
+
   // Updates of several characters that land on a markdown-significant spot.
   const MULTI_CHAR: [string, string[]][] = [
     ['a digit, then the rest of an ordered item', ['1. a', '1. a\n\n2', '1. a\n\n2. x', '1. a\n\n2. x\n\nend']],
     ['a digit, then the rest of a ")" item', ['1) a', '1) a\n\n2', '1) a\n\n2) x']],
     ['one digit, then a two-digit item', ['p', 'p\n\n1. a\n\n1', 'p\n\n1. a\n\n10. x']],
+    ['a label with an escape', ['x', 'x\n\n[my\\_file]: /u', 'x\n\n[my\\_file]: /u\n\nsee [my\\_file]']],
+    ['labels that differ only as raw text', ['[a&amp;]: /one', '[a&amp;]: /one\n\n[a&]: /two', '[a&amp;]: /one\n\n[a&]: /two\n\nuse [a&amp;] and [a&]']],
   ];
   for (const [name, steps] of MULTI_CHAR) {
     it(`draws ${name} exactly like the whole message`, () => {
@@ -844,4 +850,77 @@ describe('MarkdownContent while a reply streams in', () => {
     });
   }
 
+  // Real streams cut text anywhere — "\n\n2" in one update and ". x" in the
+  // next — while tokenDeltas keeps "\n\n2." together. This streams seeded
+  // random documents in random 1-7 character chunks, and cuts exactly where a
+  // markdown reading can flip: between a digit and "." or ")", between a
+  // label's "]" and ":", around "<" and around a blank line. After every update
+  // the page and every element today's render kept must match.
+  it('draws documents cut into random pieces exactly like the whole message, keeping the same elements', () => {
+    const FRAGS = ['1. one', '2. two', '1) one', '2) two', '10. ten', '1', '2', '- a', '* b', '+ c', '-', '  cont', '[a]: /u', '[A]: /v "t"',
+      'x [a] y', 'see [c] and [a][]', '[c]: /c',
+      // Labels whose raw text differs from their meaning (escapes, entities):
+      // micromark matches labels on the RAW text.
+      'see [my\\_file]\n\n[my\\_file]: /f', '[a&amp;]: /one\n\n[a&]: /two\n\nuse [a&amp;] [a&]', 'see [e\\]]\n\n[e\\]]: /e',
+      '[d]:\n/dd', '[d] late', '<details>', '<summary>S</summary>', '</details>', '<br>', '<!-- c -->', '<b>x</b> text', '```', 'code();',
+      '    indented', '| a | b |', '| - | - |', '===', '---', 'Setext', '> q', '> [a] quoted', 'plain words here', '![i][a]', '', ''];
+    // Where a cut can change how the text before it reads.
+    const boundaries = (md: string) => {
+      const at: number[] = [];
+      for (let i = 1; i < md.length; i++) {
+        const a = md[i - 1];
+        const b = md[i];
+        if ((/\d/.test(a) && /[.)]/.test(b)) || (a === ']' && b === ':') || a === '<' || b === '<' || (a === '\n' && b === '\n') || (md[i - 2] === '\n' && a === '\n')) at.push(i);
+      }
+      return at;
+    };
+    let seed = 20260925;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    // A fixed count sized to ~5 s here, not a time box (under load a time box
+    // would quietly test less).
+    for (let docs = 0; docs < 200; docs++) {
+      const md = Array.from({ length: 2 + Math.floor(rnd() * 5) }, () => FRAGS[Math.floor(rnd() * FRAGS.length)]).join(rnd() < 0.35 ? '\n' : '\n\n');
+      const cuts = boundaries(md);
+      const prefixes: string[] = [];
+      for (let i = 0; i < md.length;) {
+        let next = Math.min(md.length, i + 1 + Math.floor(rnd() * 7));
+        const edge = cuts.find((c) => c > i);
+        if (edge !== undefined && edge < next && rnd() < 0.85) next = edge;
+        prefixes.push(md.slice(0, next));
+        i = next;
+      }
+      if (prefixes.length < 2) continue;
+      const mountAt = rnd() < 0.3 ? Math.floor(rnd() * prefixes.length) : 0;
+      const live = render(<Bubble md={prefixes[mountAt]} incremental />);
+      const today = render(<Bubble md={prefixes[mountAt]} />);
+      let liveEls = elementsByPath(live.container);
+      let todayEls = elementsByPath(today.container);
+      let before = prefixes[mountAt];
+      for (const p of prefixes.slice(mountAt)) {
+        live.rerender(<Bubble md={p} incremental />);
+        today.rerender(<Bubble md={p} />);
+        expect(canonical(live.container), `doc ${JSON.stringify(md)}, after ${JSON.stringify(p)}`).toBe(canonical(today.container));
+        const nextLive = elementsByPath(live.container);
+        const nextToday = elementsByPath(today.container);
+        // The one accepted rebuild (markdown-blocks.ts, advanceStream): a
+        // single update that finishes the last block's unfinished line — so the
+        // block can change kind ("--" -> "---", "<b" -> "<br>", "[a]: " -> a
+        // definition) — AND starts a new block after a blank line. Today's
+        // render reuses the old element for whatever now sits in its place;
+        // ours draws both afresh. Nothing the person did is lost: that block
+        // was still being typed.
+        const turned = !/[\r\n]$/.test(before) && /\n[ \t]*\n/.test(p.slice(before.length));
+        if (!turned) {
+          for (const [path, el] of nextToday) {
+            if (todayEls.get(path) === el) expect(nextLive.get(path), `doc ${JSON.stringify(md)}, ${path} after ${JSON.stringify(p)}`).toBe(liveEls.get(path));
+          }
+        }
+        liveEls = nextLive;
+        todayEls = nextToday;
+        before = p;
+      }
+      live.unmount();
+      today.unmount();
+    }
+  });
 });

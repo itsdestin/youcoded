@@ -199,11 +199,28 @@ function isIndentedCode(text: string, block: MdNode): boolean {
   return !/^ {0,3}(?:```|~~~)/.test(text.slice(lineStart(text, at)));
 }
 
+/** The raw text between a definition's brackets, or null if it cannot be read. */
+function rawLabel(source: string): string | null {
+  const open = source.indexOf('[');
+  if (open === -1) return null;
+  for (let i = open + 1; i < source.length; i++) {
+    if (source[i] === '\\') i++;
+    else if (source[i] === ']') return source.slice(open + 1, i);
+  }
+  return null;
+}
+
 function blockInfo(text: string, block: MdNode, base: number): BlockInfo {
   if (block.type === 'definition') {
     const at = block.position?.start.offset ?? 0;
-    const id = normalizeIdentifier(block.label ?? '');
-    return { kind: 'def', id, key: labelKey(id), text: text.slice(at, block.position?.end.offset ?? text.length), at: base + at };
+    const source = text.slice(at, block.position?.end.offset ?? text.length);
+    // WHY the RAW label, not mdast's `label` (review 3, F2): mdast decodes
+    // escapes and entities ("my\\_file" -> "my_file", "a&amp;" -> "a&"), but
+    // micromark matches a reference to a definition on the raw text between
+    // the brackets — and labelsOf reads references raw. The label runs from the
+    // first "[" to the first unescaped "]" (a label holds no bare bracket).
+    const id = normalizeIdentifier(rawLabel(source) ?? block.label ?? '');
+    return { kind: 'def', id, key: labelKey(id), text: source, at: base + at };
   }
   if (block.type !== 'html') return { kind: 'other' };
   const v = block.value ?? '';
@@ -520,8 +537,20 @@ export function startStream(content: string): StreamView {
  *     off. Group 0 is redrawn in full until its last block is finished — exactly
  *     today's cost — and is then frozen like any other group;
  *   - link definitions are handed to each group rather than collapsing the pieces.
- * The remaining remount is a footnote arriving mid-reply (whole-message fallback,
- * once), and a content REPLACEMENT (not an append; the app only appends).
+ * The remaining rebuilds: a footnote or nested definition arriving mid-reply
+ * (whole-message fallback, once); a content REPLACEMENT (not an append; the app
+ * only appends); and (review 3, F3, accepted) one update that both finishes the
+ * last block's unfinished line so the block changes kind ("--" -> "---", "<b"
+ * -> "<br>", a paragraph -> a definition) AND starts a new block after a blank
+ * line — today's render reuses the old element for whatever lands in its place,
+ * this draws both afresh. That block was still being typed, so nothing the
+ * person did to it is lost.
+ *
+ * COST — never above today's whole-message render per update, with ONE
+ * accepted exception (review 3, F4): the update that first splits a message
+ * drawn as one document (a bubble opened mid-reply) parses that message once.
+ * It redraws nothing already on screen, and parsing is well under a full draw,
+ * but in characters parsed + drawn that one update can exceed today's.
  */
 export function advanceStream(view: StreamView, content: string): StreamView {
   if (content === view.drawn) return view;
