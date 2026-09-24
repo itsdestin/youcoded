@@ -536,6 +536,56 @@ describe('MarkdownContent while a reply streams in', () => {
     live.unmount();
   });
 
+  // Review F4: seeded random replies, streamed word by word into a bubble that
+  // sometimes mounts mid-reply, compared as DRAWN PAGES (not parse trees) with
+  // the whole-message render after every word. Mixes in the constructs that act
+  // across blocks: disclosures, raw HTML, link definitions, footnotes, pictures.
+  it('draws random replies exactly like the whole message after every word, keeping the same elements', () => {
+    const FRAGS = ['Para with *em* and `code`.', 'Another line', '# Head', 'Setext', '===', '---', '- item', '  - nested', '1. one',
+      '> quote', '```js', 'let x = 1;', '```', '    indented', '| a | b |', '| - | - |', '| 1 | 2 |', '<details>', '<summary>Sum</summary>',
+      '</details>', '<details open><summary>Both</summary>', '<!-- c -->', '<br>', '<div>x</div>', '[x]: https://ex.com/x', 'See [x] and [y].',
+      '[y]: https://ex.com/y "T"', 'Note[^1].', '[^1]: The note.', '![pic](https://ex.com/p.png)', '![local](./a.png)', 'https://ex.com/page',
+      '/tmp/file.txt', '- [ ] task', '***', '', '', '', '',
+      // Whole disclosures spanning blank lines, so pairing across pieces is exercised.
+      '<details>\n<summary>Sum</summary>\n\nInside **text**\n\n</details>', '<details open><summary>Two</summary>\n\n- in list\n\n</details>',
+      '<details>\n\n<summary>Apart</summary>\n\nBody\n\n</details>'];
+    let seed = 20260924;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    // A fixed count, not a time box (a time box would test less under load):
+    // ~3-4 s here. Thousands of documents, word by word and character by
+    // character, passed when this landed.
+    for (let docs = 0; docs < 30; docs++) {
+      const md = Array.from({ length: 4 + Math.floor(rnd() * 10) }, () => FRAGS[Math.floor(rnd() * FRAGS.length)]).join('\n');
+      const prefixes = prefixesOf(tokenDeltas(md));
+      if (prefixes.length < 2) continue;
+      const mountAt = rnd() < 0.3 ? Math.floor(rnd() * prefixes.length) : 0;
+      // `today` is the whole-message render, updated in place as the app does today.
+      const live = render(<Bubble md={prefixes[mountAt]} incremental />);
+      const today = render(<Bubble md={prefixes[mountAt]} />);
+      let liveEls = elementsByPath(live.container);
+      let todayEls = elementsByPath(today.container);
+      for (const p of prefixes.slice(mountAt)) {
+        live.rerender(<Bubble md={p} incremental />);
+        today.rerender(<Bubble md={p} />);
+        expect(canonical(live.container), `doc ${docs}, after ${JSON.stringify(p)}`).toBe(canonical(today.container));
+        // Every element today's render kept through this update, the streamed
+        // render kept too (review F1). A footnote arriving is the one documented
+        // exception: it switches to the whole-message render once.
+        const nextLive = elementsByPath(live.container);
+        const nextToday = elementsByPath(today.container);
+        if (!p.includes('[^1]:')) {
+          for (const [path, el] of nextToday) {
+            if (todayEls.get(path) === el) expect(nextLive.get(path), `doc ${docs}, ${path} after ${JSON.stringify(p)}`).toBe(liveEls.get(path));
+          }
+        }
+        liveEls = nextLive;
+        todayEls = nextToday;
+      }
+      live.unmount();
+      today.unmount();
+    }
+  });
+
   it('draws a message that never grows (history) as one document, with no split', () => {
     const md = MARKDOWN_STREAM_CORPUS.find((s) => s.name === 'long mixed reply')!.md;
     markdownRenders.length = 0;
@@ -561,6 +611,22 @@ describe('MarkdownContent while a reply streams in', () => {
     const html = canonical(r.container);
     r.unmount();
     return html;
+  };
+  // Every element under `root`, by its place in the tree (tag and position among
+  // same-tag siblings at each level) — the same place in two equal pages.
+  const elementsByPath = (root: Element) => {
+    const found = new Map<string, Element>();
+    const walk = (el: Element, at: string) => {
+      const seen: Record<string, number> = {};
+      for (const child of Array.from(el.children)) {
+        seen[child.tagName] = (seen[child.tagName] ?? -1) + 1;
+        const path = `${at}/${child.tagName}${seen[child.tagName]}`;
+        found.set(path, child);
+        walk(child, path);
+      }
+    };
+    walk(root, '');
+    return found;
   };
   const paragraph = (root: HTMLElement, text: string) =>
     Array.from(root.querySelectorAll('p')).find((p) => p.textContent === text)!;
