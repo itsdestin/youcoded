@@ -196,6 +196,14 @@ const PROTECTED: Protection[] = [
       foldOneDir: 'function', scanGgufCacheAsync: 'function' },
     bannedCalls: [{ scope: 'scanGgufCacheAsync', callee: /^scanLocalDownloads$/, what: 'the sync scan inside the async one' }],
     why: 'the async cache scan is what the model poll runs; the sync twins stay legal for their sync callers' },
+  { was: 'blocking-call batch B1 (2026-09-24)', file: 'transcript-page.ts', noBlocking: ['*'],
+    mustExist: ['readTranscriptPage', 'readLines'],
+    kinds: { readTranscriptPage: 'function', readLines: 'function' },
+    why: 'every conversation open, scroll-up and buddy open reads a page (up to 2 MB); it was async in name only' },
+  { was: 'blocking-call batch B1 (2026-09-24)', file: 'subagent-watcher.ts',
+    noBlocking: ['getHistory', 'readMeta', 'scanDirectory', 'scanOnce'],
+    kinds: { getHistory: 'method', readMeta: 'method', scanDirectory: 'method', scanOnce: 'method' },
+    why: 'getHistory re-read every helper transcript per history page; scanDirectory runs on every line a helper appends (Linux directory watch)' },
 ];
 
 // ---------------------------------------------------------------------------
