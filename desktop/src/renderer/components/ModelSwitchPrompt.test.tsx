@@ -86,6 +86,8 @@ describe('model switch popup (U11)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Switch model' })).toBeNull());
     expect(onClose).not.toHaveBeenCalled();
     expect(onNativeModelChanged).not.toHaveBeenCalled();
+    // The model list is open again underneath, not folded into an empty box.
+    expect(await screen.findByPlaceholderText(/Search/i)).toBeInTheDocument();
   });
 
   it('X closes the question too', async () => {

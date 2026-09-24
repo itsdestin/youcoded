@@ -183,6 +183,11 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
   // user already chose to stay.
   const [switchPrompt, setSwitchPrompt] = useState<{ choice: Extract<ModelChoice, { runtime: 'native' }>; state: ModelSwitchPromptState } | null>(null);
   const switchAbandoned = useRef(false);
+  // WHY: the shared picker folds its list away on every pick (it expects this
+  // dialog to close). When the switch does NOT happen — the popup asks, or it
+  // fails — remounting reopens the list; otherwise the dialog was left an
+  // empty box under the question or the error line.
+  const [pickerEpoch, setPickerEpoch] = useState(0);
 
   // Same problem, same fix as ModelPicker.tsx (Destin, 2026-09-06): this list
   // refetched when the popup OPENED but could never catch up while it was
@@ -277,6 +282,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
     // switched; the answer is a question for the user instead.
     const result = await requestSwitch(c, false);
     setNativeSwapping(false);
+    if (result.status !== 'switched') setPickerEpoch((n) => n + 1);
     if (result.status === 'needs-summary') {
       setSwitchPrompt({ choice: c, state: { kind: 'ask' } });
       return;
@@ -444,6 +450,7 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 duplicated text once the picker opens straight into view. */}
             <section>
               <ModelPicker
+                key={pickerEpoch}
                 value={isNative ? nativeValue : (currentModel ? { runtime: 'claude', alias: currentModel } : null)}
                 onSelect={(c) => { void applyChoice(c); }}
                 includeClaude={!isNative}
