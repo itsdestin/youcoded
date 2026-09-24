@@ -10,10 +10,17 @@
 // row. It's now bare content (`flex-1` + its own items) that ActiveArtifactView
 // lays out inside its ONE toolbar row, alongside CommentsModeToggle. "Show
 // resolved" moved from an icon-only Toggle (unlabelled once the pane got
-// tight — see MARGIN_COLLAPSE_PX's own WHY) to the shared FilterChip, which
-// carries its own label at every width.
+// tight — see MARGIN_COLLAPSE_PX's own WHY) to a labelled control that sits
+// right next to CommentsModeToggle.
+//
+// Coordinator review, round 3: that control was FilterChip, whose pinned
+// recipe (`tests/filter-chip.test.tsx` — "must not repaint the marketplace")
+// is `text-sm`/`py-1` — visibly bigger and taller than CommentsModeToggle's
+// `Button size="sm"` (`text-2xs`/`py-1`) right beside it. FilterChip can't
+// be resized without breaking that pin, so "Show resolved" is now the SAME
+// Button/size/pressed-ring recipe as the mode toggle instead — one
+// primitive, matching height and text scale across the whole row (G-1).
 import { Button } from '../ui/Button';
-import { FilterChip } from '../ui/FilterChip';
 import { basenameOf, useDocComments } from '../../state/doc-comments-store';
 import { genRefId, truncateQuote, type ComposeRef } from '../context-menu/compose-ref';
 
@@ -56,16 +63,16 @@ export function CommentsReviewBar({ path, narrow = false }: Props) {
   return (
     <div className="flex items-center gap-2 flex-1 min-w-0 text-xs">
       {resolvedCount > 0 && (
-        <FilterChip
-          kind="toggle"
-          active={showResolved}
+        <Button
+          variant="secondary"
+          size="sm"
+          aria-pressed={showResolved}
           onClick={() => setShowResolved(!showResolved)}
-          aria-label="Show resolved comments"
           title="Show resolved comments"
-          className="shrink-0"
+          className={`shrink-0 ${showResolved ? 'ring-1 ring-accent' : ''}`}
         >
           Show resolved
-        </FilterChip>
+        </Button>
       )}
       <div className="flex-1 min-w-0" />
       <Button

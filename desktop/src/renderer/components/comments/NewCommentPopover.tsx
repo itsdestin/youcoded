@@ -11,7 +11,16 @@
 // window, so it can't happen again. Cancel/Comment buttons replace the old
 // blur-to-commit: with real buttons on screen, a silent commit-on-blur would
 // double-fire (blur, then the button's own click).
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+//
+// Coordinator review, round 3: the popup could still land ON TOP of the
+// floating Edit FAB (SessionDrawer.tsx, `bottom-9 right-4`) — a different
+// branch of the tree, sitting above it in z-order. Rather than plumb a
+// "something is open" signal all the way up to SessionDrawer to hide the
+// FAB, this shrinks the bounds it places INTO: `boundsHost` below reports a
+// rect whose bottom is pulled up by the FAB's reserved footprint, so
+// placeBubble's own clamp/flip treats that band as already outside the
+// panel — the popup either sits higher or flips above, but never over it.
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Textarea } from '../ui/Textarea';
 import { Button } from '../ui/Button';
 import { POPOVER_Z } from '../overlays/Overlay';
@@ -19,6 +28,10 @@ import { placeBubble } from '../ui/anchor-position';
 import type { DocComment } from '../../state/doc-comments-store';
 
 const GAP = 6;
+// The Edit FAB sits `bottom-9` (36px) with ~44px of button height above
+// that — 90px clears its full footprint plus a small gap, without needing
+// its actual DOM rect (a different component tree, per the file's own WHY).
+const FAB_RESERVED_BOTTOM = 90;
 
 interface Props {
   comment: DocComment;
@@ -38,16 +51,39 @@ export function NewCommentPopover({ comment, anchorRect, boundsEl, onTextChange,
   const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: anchorRect.left, top: anchorRect.bottom + GAP });
 
+  // A duck-typed "host" (placeBubble/boundsFor only ever call
+  // getBoundingClientRect on it — see anchor-position.ts) reporting the
+  // viewer's content rect with FAB_RESERVED_BOTTOM already carved off the
+  // bottom, so the FAB's corner is never inside the box the popup is
+  // allowed to occupy.
+  const boundsHost = useMemo(() => {
+    if (!boundsEl) return null;
+    return {
+      getBoundingClientRect: () => {
+        // DOMRect's left/top/right/bottom/width/height are PROTOTYPE
+        // getters, not own properties — `{...r}` silently drops every one
+        // of them. Read each explicitly instead.
+        const r = boundsEl.getBoundingClientRect();
+        const height = Math.max(0, r.height - FAB_RESERVED_BOTTOM);
+        return {
+          x: r.x, y: r.y, width: r.width, height,
+          top: r.top, left: r.left, right: r.right, bottom: r.top + height,
+          toJSON: () => ({}),
+        } as DOMRect;
+      },
+    } as unknown as HTMLElement;
+  }, [boundsEl]);
+
   useLayoutEffect(() => {
     const trigger = { getBoundingClientRect: () => anchorRect } as unknown as HTMLElement;
     const { left, top } = placeBubble(
       trigger,
       panelRef.current,
       { placement: 'bottom', align: 'start', gapBelow: GAP, gapAbove: GAP },
-      boundsEl,
+      boundsHost,
     );
     setPos({ left, top });
-  }, [comment.id, anchorRect, boundsEl]);
+  }, [comment.id, anchorRect, boundsHost]);
 
   useEffect(() => { textRef.current?.focus(); }, []);
 

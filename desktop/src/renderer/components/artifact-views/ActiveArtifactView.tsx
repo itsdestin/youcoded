@@ -595,17 +595,27 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   const dispatch = useArtifactDispatchOptional();
   const drawerExpanded = useArtifactSelectorOptional((s) => s.drawerExpanded);
   const autoExpandedRef = useRef(false);
+  // Round 3 coordinator review (defect 1): `narrowPane` starts `false` and
+  // only becomes `true` once useNarrowByRef's ResizeObserver fires — one or
+  // more frames after commentsMode flips to 'comments'. A deps array of just
+  // `[commentsMode]` ran this ONCE, at the instant of the click, and missed
+  // narrowPane's real value entirely (still measuring), so the auto-expand
+  // silently never fired and the margin stayed at the default cramped
+  // width — reproduced with the artifact list open AND closed. Depending on
+  // narrowPane/drawerExpanded too makes the effect re-check as they settle;
+  // `autoExpandedRef` still guards it to firing (and un-firing) exactly once.
   useEffect(() => {
     if (!dispatch) return; // no provider (e.g. a unit test rendering this in isolation) — nothing to reuse
-    if (commentsMode === 'comments' && narrowPane && !drawerExpanded) {
-      dispatch({ type: 'DRAWER_EXPAND_TOGGLED' });
-      autoExpandedRef.current = true;
-    } else if (commentsMode !== 'comments' && autoExpandedRef.current) {
+    if (commentsMode === 'comments') {
+      if (narrowPane && !drawerExpanded && !autoExpandedRef.current) {
+        dispatch({ type: 'DRAWER_EXPAND_TOGGLED' });
+        autoExpandedRef.current = true;
+      }
+    } else if (autoExpandedRef.current) {
       dispatch({ type: 'DRAWER_EXPAND_TOGGLED' });
       autoExpandedRef.current = false;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires on commentsMode transitions only; narrowPane/drawerExpanded are read at that instant, not tracked continuously
-  }, [commentsMode]);
+  }, [commentsMode, narrowPane, drawerExpanded, dispatch]);
   // Restore on unmount too (closing the file entirely while still expanded
   // for it) — otherwise the flag leaks past this component's own lifetime.
   useEffect(() => () => {

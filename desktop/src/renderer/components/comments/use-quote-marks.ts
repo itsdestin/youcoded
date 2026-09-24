@@ -14,8 +14,16 @@ const MARK_ATTR = 'data-comment-mark';
 // bg-accent/10-15 family FolderSwitcher and SettingsPanel already use for an
 // active row) — an OPEN comment's anchor; resolved fades to neutral, matching
 // the resolved card's own faded state.
-const MARK_OPEN = 'bg-accent/15 hover:bg-accent/25 rounded-sm cursor-pointer transition-colors';
-const MARK_RESOLVED = 'bg-fg-muted/10 text-fg-muted rounded-sm cursor-pointer';
+//
+// Coordinator review, round 3: a flat tint alone reads as a plain text
+// SELECTION in Midnight (its accent is grey by design, G-8), not as "this
+// span has a comment on it" — a real drag-selection is just as plausible a
+// reading of a grey box. An underline is the one thing a native selection
+// never draws, so it's added here as the disambiguating signal, not the
+// tint. `decoration-2`/`underline-offset-2`: thin enough to read as an
+// annotation mark, not a second bolder highlight.
+const MARK_OPEN = 'bg-accent/15 hover:bg-accent/25 rounded-sm cursor-pointer transition-colors underline decoration-2 decoration-accent/70 underline-offset-2';
+const MARK_RESOLVED = 'bg-fg-muted/10 text-fg-muted rounded-sm cursor-pointer underline decoration-2 decoration-fg-muted/50 underline-offset-2';
 // Exported: both CommentsMargin (Comments mode) and ReadingHighlights
 // (Reading mode) toggle these on the SAME mark elements when linking a
 // highlight to its card/hover-card, so the active look must be one constant.

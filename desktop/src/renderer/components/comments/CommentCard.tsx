@@ -96,13 +96,16 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
         </div>
       ))}
 
-      {/* Round 3: Reply + Resolve now share ONE compact row with the reply
-          field (guide §4.6 card anatomy) instead of two stacked action rows —
-          the second row used to render for a still-empty draft too, which was
-          pure dead space while typing (item 9: no stray empty column). A
-          draft has nothing to resolve yet, so it only offers Delete. */}
+      {/* Round 3: Reply + Resolve moved OFF a single row with the reply field
+          (guide §4.6 card anatomy) after the coordinator's review caught
+          Resolve — and sometimes Reply — clipped off the margin's 256px
+          card even with min-w-0 on the input: three controls sharing one
+          row simply don't fit that width. The input now takes its own
+          full-width row; the two buttons sit right-aligned below it, which
+          fits at any card width the margin ever renders. A draft has
+          nothing to resolve yet, so it only offers Delete. */}
       {!isDraft && (
-        <div className="mt-2 flex items-center gap-1.5">
+        <div className="mt-2 flex flex-col gap-1.5">
           <TextInput
             size="sm"
             value={replyText}
@@ -111,22 +114,19 @@ export function CommentCard({ comment, autoFocus, onTextChange, onReply, onResol
               if (e.key === 'Enter' && replyText.trim()) { onReply(replyText); setReplyText(''); }
             }}
             placeholder="Reply…"
-            // min-w-0: a native <input>'s flexbox min-width defaults to its
-            // content size, not 0 — `flex-1` alone can't shrink it below
-            // that, so at the margin's 256px card width it was pushing the
-            // Resolve button that follows clean off the row (found reviewing
-            // this round's own screenshots).
-            className="flex-1 min-w-0"
+            className="w-full"
           />
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={!replyText.trim()}
-            onClick={() => { onReply(replyText); setReplyText(''); }}
-          >
-            Reply
-          </Button>
-          <Button variant="secondary" size="sm" onClick={onResolve}>Resolve</Button>
+          <div className="flex items-center justify-end gap-1.5">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!replyText.trim()}
+              onClick={() => { onReply(replyText); setReplyText(''); }}
+            >
+              Reply
+            </Button>
+            <Button variant="secondary" size="sm" onClick={onResolve}>Resolve</Button>
+          </div>
         </div>
       )}
       {isDraft && (
