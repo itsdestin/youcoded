@@ -150,6 +150,11 @@ const PROTECTED: Protection[] = [
     kinds: { walk: 'const-arrow' },
     requiredAwait: { text: 'fs.promises.stat(root)', what: 'the async root probe `await fs.promises.stat(root)`' },
     why: "the Glob tool's directory walk ran sync and froze every window, several times per turn" },
+  // WHY whole-file: every method of the naming store sits on the per-reply
+  // auto-naming check or a rename click (2026-09-24 triage batch B3).
+  { was: 'none (new 2026-09-24, main-blocking triage B3)', file: 'conversations/naming-store.ts', noBlocking: ['*'],
+    mustExist: ['conflictCopiesIn'], kinds: { conflictCopiesIn: 'function' },
+    why: 'get() runs on every completed reply and once listed the whole naming folder synchronously' },
 ];
 
 // ---------------------------------------------------------------------------
