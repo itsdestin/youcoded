@@ -25,13 +25,12 @@ import { buildContextMenu, type MenuEntry } from '../context-menu/build-menu';
 import { useQuoteMarks, ACTIVE_CLASSES, segmentsRect } from './use-quote-marks';
 import { useDocComments } from '../../state/doc-comments-store';
 
-// Hover-card open delay + close grace period (item 3): a highlight answering
-// on the first pixel of hover would fire constantly while reading/scanning
-// text; the grace period on close is what lets the pointer actually travel
-// from the highlight down onto the card (e.g. to click "Open in comments")
-// without it vanishing first.
+// Hover-card open delay + a short close delay: a highlight answering on the
+// first pixel of hover would fire constantly while reading/scanning text;
+// the close delay only bridges the gap between the segments of a highlight
+// that wraps across lines, so the card doesn't blink moving along it.
 const HOVER_OPEN_MS = 300;
-const HOVER_CLOSE_MS = 200;
+const HOVER_CLOSE_MS = 120;
 // A selection under this length isn't worth popping a menu over (item 1).
 const MIN_SELECTION_CHARS = 2;
 
@@ -60,12 +59,11 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
   const marks = useQuoteMarks(containerRef, visible);
 
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-  const [pinnedId, setPinnedId] = useState<string | null>(null);
   const [cardRect, setCardRect] = useState<DOMRect | null>(null);
   const draftComment = visible.find((c) => c.id === focusId) ?? null;
   // The draft being composed always wins the "active" (marked) look while
   // its popup is open (item 2: "keep the selected span visibly marked").
-  const activeId = draftComment?.id ?? pinnedId ?? hoveredId;
+  const activeId = draftComment?.id ?? hoveredId;
   const activeComment = !draftComment ? (visible.find((c) => c.id === activeId) ?? null) : null;
 
   const openTimerRef = useRef<number | null>(null);
@@ -97,9 +95,14 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
         clearOpenTimer();
         scheduleClose();
       };
+      // Round 9 (Destin: "clicking the highlighted area should default to
+      // opening the comments pane"): a click goes straight to Comments mode,
+      // focused on this thread; the hover card is dismissed on the way.
       const click = () => {
-        setCardRect(segmentsRect(segs));
-        setPinnedId((cur) => (cur === id ? null : id));
+        clearOpenTimer();
+        clearCloseTimer();
+        setHoveredId(null);
+        onOpenComments(id);
       };
       mark.addEventListener('mouseenter', enter);
       mark.addEventListener('mouseleave', leave);
@@ -115,6 +118,7 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
       clearOpenTimer();
       clearCloseTimer();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onOpenComments is the host's stable callback; marks is the real trigger
   }, [marks]);
 
   useEffect(() => {
@@ -124,30 +128,19 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
   }, [marks, activeId]);
 
   // A sent pill's click ("Ask about this" / a batched comment) jumps back to
-  // its highlight and pins the hover card — a no-op unless this exact file
-  // happens to be open (compose-ref.ts's dispatchJumpToRef: "there is no
-  // cross-file navigation here, only a scroll+flash of an already-open match").
+  // its thread — the same as clicking the highlight: Comments mode, focused
+  // on it. A no-op unless this exact file is open (compose-ref.ts's
+  // dispatchJumpToRef: there is no cross-file navigation here).
   useEffect(() => {
     const listener = (e: Event) => {
       const commentId = (e as CustomEvent<{ commentId?: string }>).detail?.commentId;
       if (!commentId) return;
-      const segs = marks.get(commentId);
-      if (!segs) return;
-      segs[0].scrollIntoView({ block: 'center', behavior: 'smooth' });
-      setCardRect(segmentsRect(segs));
-      setPinnedId(commentId);
+      if (!marks.has(commentId)) return;
+      onOpenComments(commentId);
     };
     window.addEventListener('youcoded:jump-to-ref', listener);
     return () => window.removeEventListener('youcoded:jump-to-ref', listener);
-  }, [marks]);
-
-  // Esc unpins a clicked (not just hovered) card.
-  useEffect(() => {
-    if (!pinnedId) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPinnedId(null); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [pinnedId]);
+  }, [marks, onOpenComments]);
 
   // ── Selection → the SAME right-click menu (item 1) ──────────────────────
   const [selectionMenu, setSelectionMenu] = useState<SelectionMenu | null>(null);
@@ -224,9 +217,6 @@ export function ReadingHighlights({ containerRef, path, onOpenComments }: Props)
           comment={activeComment}
           anchorRect={cardRect}
           boundsEl={containerRef.current}
-          onMouseEnter={clearCloseTimer}
-          onMouseLeave={scheduleClose}
-          onOpenComments={() => { setPinnedId(null); onOpenComments(activeComment.id); }}
         />
       )}
       {draftComment && draftAnchor && (

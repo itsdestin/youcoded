@@ -425,6 +425,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const editRef = useRef<ActiveArtifactHandle>(null);
   const [editState, setEditState] = useState<{ isEditable: boolean; editing: boolean }>({ isEditable: false, editing: false });
   const [commentsState, setCommentsState] = useState<CommentsHeaderState>({ available: false, active: false, count: 0 });
+  // Entering Comments mode folds the file list away however it was entered
+  // (the Comments button, clicking a highlight, a sent pill) — the floating
+  // comment actions share Edit's hide-while-the-list-is-open rule, so with the
+  // list open "Ask Your Assistant" would be hidden the moment the mode opened.
+  useEffect(() => {
+    if (commentsState.active) setListOpen(false);
+  }, [commentsState.active]);
   // D3: every navigation away from a dirty editor goes through this guard
   // (Save / Discard / Cancel dialog) instead of silently discarding the draft.
   const { guard: guardUnsaved, dialog: unsavedDialog } = useUnsavedGuard(
@@ -1310,7 +1317,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   {commentsState.available && !editState.editing && (
                     <CommentsBtn
                       state={commentsState}
-                      onClick={() => { if (!commentsState.active) setListOpen(false); editRef.current?.toggleComments(); }}
+                      onClick={() => editRef.current?.toggleComments()}
                     />
                   )}
               {/* Round 7 (Destin: "the button should stay in the same spot next
