@@ -171,7 +171,7 @@ import { formatArgErrors } from './tools/arg-errors';
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile } from './capability-profile';
 import { adaptForWire } from './wire-adapter';
-import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, markSummaryInput, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
+import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, planContextBudget, selectCompactionCut, summaryProvenanceNote, markAppGenerated, fitSummaryToolOutputs, validateCompactionCandidate, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
 import { messageTokens, messagesTokens, requestOccupancy, requestFixedTokens, type UsageAnchor, APPROX_CHARS_PER_TOKEN } from './message-size';
 import { createSkillTool } from './tools/skill';
@@ -2216,7 +2216,10 @@ export class HarnessSession extends EventEmitter {
     // Preserve the whole retired prefix. The old hard trim removed messages
     // from the front of this span, potentially losing the original request or
     // a paired tool batch before the model could summarize either.
-    const instructionTokens = Math.ceil(summarizePrompt(focus).length / APPROX_CHARS_PER_TOKEN);
+    // Provenance rides at the END of the instruction so the span stays
+    // byte-identical to what the provider cached (see summaryProvenanceNote).
+    const instruction = summarizePrompt(focus) + summaryProvenanceNote(span);
+    const instructionTokens = Math.ceil(instruction.length / APPROX_CHARS_PER_TOKEN);
     const plan = planContextBudget({ contextLength: this.opts.contextLength ?? null,
       fixedCost: requestFixedTokens(this.systemText, aiTools), summaryOverhead: instructionTokens,
       maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
@@ -2224,13 +2227,13 @@ export class HarnessSession extends EventEmitter {
     // may push this request past that limit between steps; shorten only its
     // summarizer copy, largest first, never the accepted history or recent tail.
     const spanBudget = plan.contextLength - plan.fixedCost
-      - messageTokens({ role: 'user', content: summarizePrompt(focus) }) - plan.summaryAllowance - plan.margin
+      - messageTokens({ role: 'user', content: instruction }) - plan.summaryAllowance - plan.margin
       - 32; // SDK wire envelope/role conversion varies by provider; leave small additional headroom.
     if (spanBudget <= 0 || plan.summaryAllowance <= 0) {
       this.summaryInputCannotFit = true;
       return { text: '' };
     }
-    const bounded = fitSummaryToolOutputs(markSummaryInput(span), spanBudget);
+    const bounded = fitSummaryToolOutputs(span, spanBudget);
     if (!bounded) {
       this.summaryInputCannotFit = true;
       return { text: '' };
@@ -2251,7 +2254,7 @@ export class HarnessSession extends EventEmitter {
     const streamArgs: Parameters<typeof streamText>[0] = {
       model,
       system: this.systemText,
-      messages: [...adaptForWire(bounded, { nativeImageToolResults: this.profile.nativeImageToolResults, supportsVision: this.profile.supportsVision }), { role: 'user', content: summarizePrompt(focus) } as ModelMessage],
+      messages: [...adaptForWire(bounded, { nativeImageToolResults: this.profile.nativeImageToolResults, supportsVision: this.profile.supportsVision }), { role: 'user', content: instruction } as ModelMessage],
       maxOutputTokens: plan.summaryAllowance,
       toolChoice: 'none',
       abortSignal: this.abort!.signal,

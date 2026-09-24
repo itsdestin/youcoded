@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { MockLanguageModelV4, simulateReadableStream } from 'ai/test';
 import { HarnessSession } from '../src/main/harness/harness-session';
-import { markSummaryInput } from '../src/main/harness/compaction';
+import { summaryProvenanceNote } from '../src/main/harness/compaction';
 import type { TranscriptEvent } from '../src/shared/types';
 import type { TriggerIndex } from '../src/main/harness/injection/path-triggers';
 import { bindOpenAIContinuationModel } from '../src/main/harness/openai-continuation';
@@ -204,7 +204,7 @@ describe('HarnessSession accepted history', () => {
     await session.runSkill({ skillId: 'demo', displayName: 'Demo', body: 'skill instructions', args: 'user arguments' });
     const history = session.acceptedHistory().messages;
     expect(history[0].content).toBe('skill instructions\n\nuser arguments');
-    expect(markSummaryInput(history)[0].content).toBe('[App-generated, not from the user]\nskill instructions\n\nuser arguments');
+    expect(summaryProvenanceNote(history)).toContain('"skill instructions user arguments"');
   });
 
   it('spliceNotice records the user-message uuid it emitted and advances the revision', async () => {

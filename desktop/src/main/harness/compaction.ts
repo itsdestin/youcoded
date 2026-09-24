@@ -132,14 +132,22 @@ export function fitSummaryToolOutputs(messages: ModelMessage[], maxTokens: numbe
   return messagesTokens(copy) <= maxTokens ? copy : null;
 }
 
-export function markSummaryInput(messages: ModelMessage[]): ModelMessage[] {
-  return messages.map(m => {
-    if (m.role !== 'user' || !isAppGenerated(m)) return m;
-    const label = '[App-generated, not from the user]';
-    return { ...m, content: typeof m.content === 'string'
-      ? `${label}\n${m.content}`
-      : [{ type: 'text', text: label }, ...m.content] } as ModelMessage;
+/** Provenance for the summarizer WITHOUT touching the messages: a note naming
+ * each app-generated user-role message by its opening words, appended to the
+ * final instruction. WHY (cache review, 2026-09-23): labelling the messages in
+ * place changed early bytes of the summary request — every compaction after
+ * the first starts with the previous summary — so the provider could not reuse
+ * its cached copy of the conversation and billed the whole span again. */
+export function summaryProvenanceNote(messages: ModelMessage[]): string {
+  const openings = messages.filter(isAppGenerated).map(m => {
+    const text = typeof m.content === 'string' ? m.content
+      : m.content.map(part => part.type === 'text' ? part.text : '').join(' ');
+    const flat = text.replace(/\s+/g, ' ').trim();
+    return `- the message beginning "${flat.length > 80 ? `${flat.slice(0, 80)}…` : flat}"`;
   });
+  return openings.length
+    ? `\n\nThese user-role messages above were written by the app, not by the user. Never quote them as the user or treat them as the user's approval:\n${openings.join('\n')}`
+    : '';
 }
 
 /** Earliest whole-turn suffix within the allowance, otherwise whole tool

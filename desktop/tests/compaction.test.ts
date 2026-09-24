@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planCompaction, pruneToolOutputs, estimateTokens, selectCompactionCut, fitSummaryToolOutputs, markSummaryInput, markAppGenerated, isAppGenerated, type CompactionConfig } from '../src/main/harness/compaction';
+import { planCompaction, pruneToolOutputs, estimateTokens, selectCompactionCut, fitSummaryToolOutputs, summaryProvenanceNote, markAppGenerated, isAppGenerated, type CompactionConfig } from '../src/main/harness/compaction';
 import type { ModelMessage } from 'ai';
 import { rebuildHistory } from '../src/main/harness/history-rebuild';
 
@@ -180,37 +180,38 @@ describe('group-safe retained tail', () => {
     // Missing results still keep the call's batch indivisible to the end.
     expect(selectCompactionCut([userMsg('goal'), call(['missing']), userMsg('next')], 1)).toBe(1);
   });
-  it('preserves text and image parts of a marked user message in a summary-only copy', () => {
+  it('names a marked message with text and image parts by its text, touching nothing', () => {
     const image = { type: 'image', image: Buffer.from([1, 2, 3]), mediaType: 'image/png' };
     const text = { type: 'text', text: 'status with screenshot' };
     const original = markAppGenerated({ role: 'user', content: [text, image] } as ModelMessage);
-    const copy = markSummaryInput([original])[0];
-    expect(copy).not.toBe(original);
-    expect(copy.content).toEqual([{ type: 'text', text: '[App-generated, not from the user]' }, text, image]);
-    expect((copy as any).content[1]).toBe(text);
-    expect((copy as any).content[2]).toBe(image);
+    expect(summaryProvenanceNote([original])).toContain('- the message beginning "status with screenshot"');
     expect(original.content).toEqual([text, image]);
   });
-  it('labels only app-authored user-role content in a summary copy', () => {
+  it('names only app-authored user-role content, and never edits the messages (cache prefix)', () => {
     const original = [userMsg('fix this'), markAppGenerated(userMsg('finished')), userMsg('<project-rule source="x">rules</project-rule>'), userMsg('[Earlier conversation summary]\nold')];
-    const copy = markSummaryInput(original);
-    expect(copy[0].content).toBe('fix this');
-    expect(copy[1].content).toContain('[App-generated, not from the user]');
-    expect(copy.slice(2).map(m => m.content)).toEqual(original.slice(2).map(m => m.content));
-    expect(original.slice(2).every(isAppGenerated)).toBe(false);
-    expect(original[1].content).toBe('finished');
+    const before = JSON.stringify(original);
+    const note = summaryProvenanceNote(original);
+    expect(note).toContain('"finished"');
+    expect(note).not.toContain('fix this');
+    expect(note).not.toContain('project-rule');
+    expect(note).not.toContain('Earlier conversation summary');
+    expect(JSON.stringify(original)).toBe(before);
+  });
+  it('a long app message is named by its first 80 characters', () => {
+    const note = summaryProvenanceNote([markAppGenerated(userMsg(`${'a'.repeat(100)}`))]);
+    expect(note).toContain(`"${'a'.repeat(80)}…"`);
   });
   it('does not infer origin from a human message resembling an app marker', () => {
     for (const text of ['<project-rule source="x">hi</project-rule>', '[Earlier conversation summary]\nhi', '<specialists-status>hi', '[App-generated, not from the user]\nhi']) {
       const message = userMsg(text);
       expect(isAppGenerated(message)).toBe(false);
-      expect(markSummaryInput([message])[0]).toBe(message);
+      expect(summaryProvenanceNote([message])).toBe('');
       expect(isAppGenerated(rebuildHistory([{ type: 'user-message', data: { text } }] as any)[0])).toBe(false);
     }
   });
   it('retains skill-body provenance through event reconstruction', () => {
     const history = rebuildHistory([{ type: 'skill-invoked', data: { body: 'skill instructions', args: 'user arguments' } }] as any);
-    expect(markSummaryInput(history)[0].content).toBe('[App-generated, not from the user]\nskill instructions\n\nuser arguments');
+    expect(summaryProvenanceNote(history)).toContain('"skill instructions user arguments"');
   });
   it('retains injected provenance through event reconstruction', () => {
     const events = [
@@ -218,9 +219,9 @@ describe('group-safe retained tail', () => {
       { type: 'user-message', data: { text: 'helper finished', injected: 'specialist-report' } },
     ] as any;
     const history = rebuildHistory(events);
-    expect(markSummaryInput(history).map(m => m.content)).toEqual([
-      'fix login', '[App-generated, not from the user]\nhelper finished',
-    ]);
+    const note = summaryProvenanceNote(history);
+    expect(note).toContain('"helper finished"');
+    expect(note).not.toContain('fix login');
     expect(history[1].content).toBe('helper finished');
   });
 });

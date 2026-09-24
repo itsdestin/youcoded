@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { AcceptedHistoryStore, type AcceptedHistoryProposal } from '../src/main/harness/accepted-history-store';
-import { imageCollapsedToolResultText, isAppGenerated, markAppGenerated, markSummaryInput, prunedToolResultText } from '../src/main/harness/compaction';
+import { imageCollapsedToolResultText, isAppGenerated, markAppGenerated, summaryProvenanceNote, prunedToolResultText } from '../src/main/harness/compaction';
 import type { PersistedEventReference } from '../src/main/harness/session-store';
 
 const sessionId = 'private-session';
@@ -122,10 +122,8 @@ describe('AcceptedHistoryStore', () => {
       ] as any,
       transformation: { kind: 'summary', summaryEventUuid: 'c1' },
     });
-    expect(markSummaryInput(restored.messages).map(m => m.content)).toEqual([
-      '[App-generated, not from the user]\n[Earlier conversation summary]\nSUMMARY_BODY',
-      '[App-generated, not from the user]\nSKILL_BODY\n\nSKILL_ARGS',
-    ]);
+    expect(restored.messages.map(isAppGenerated)).toEqual([true, true]);
+    expect(summaryProvenanceNote(restored.messages)).toContain('"SKILL_BODY SKILL_ARGS"');
     expect(sidecar()).not.toContain('SUMMARY_BODY');
     expect(sidecar()).not.toContain('SKILL_BODY');
     expect(restored).toEqual({
@@ -446,9 +444,7 @@ describe('AcceptedHistoryStore', () => {
     ]);
     expect(isAppGenerated(restored.messages.at(-2))).toBe(true);
     expect(isAppGenerated(restored.messages.at(-1))).toBe(false);
-    expect(markSummaryInput(restored.messages).slice(-2).map(m => m.content)).toEqual([
-      `[App-generated, not from the user]\n${rule}`, rule,
-    ]);
+    expect(summaryProvenanceNote(restored.messages.slice(-2)).match(/the message beginning/g)).toHaveLength(1);
     // The private marker belongs in the sidecar, not the provider-visible message.
     expect(JSON.stringify(restored.messages.slice(-2))).toBe(JSON.stringify([appRule, humanRule]));
     const again = await roundTrip({ messages: restored.messages });
@@ -470,9 +466,7 @@ describe('AcceptedHistoryStore', () => {
     ]);
     expect(isAppGenerated(restored.messages[0])).toBe(true);
     expect(isAppGenerated(restored.messages[1])).toBe(false);
-    expect(markSummaryInput(restored.messages).map(m => m.content)).toEqual([
-      `[App-generated, not from the user]\n${rule}`, rule,
-    ]);
+    expect(summaryProvenanceNote(restored.messages).match(/the message beginning/g)).toHaveLength(1);
     expect(restored.eventUuids).toEqual(['human-rule']);
     const again = await roundTrip({ references: [refFor(human)], messages: restored.messages });
     expect(again.ok).toBe(true);
