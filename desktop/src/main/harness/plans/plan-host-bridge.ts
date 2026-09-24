@@ -29,7 +29,7 @@ import { PlanService, type PlanHandoffProblem, type PlanProposal, type PlanRecom
 import { PLAN_HANDOFF_BACKSTOP_MS, normalizePlanQuestion, planHandoffNotice } from './plan-handoff';
 import {
   PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError, classifyChildTranscript,
-  type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type TranscriptVerdict,
+  type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type PlanSpendLimit, type TranscriptVerdict,
 } from './plan-executor';
 import type {
   ExecutionManifest, PlanActionResult, PlanAutoApproveRead, PlanEvent, PlanRecord, PlanRef, PlanSettingsWriteResult,
@@ -107,9 +107,11 @@ export interface PlanChildStart {
    *  same fence every other write for this attempt uses. */
   fence: string;
   /** T2: this run's shared spend flags, forwarded from `PlanChildLaunch` (see
-   *  its own WHY comment) straight into the `PlanSpend` the host builds. */
+   *  its own WHY comment) straight into the `PlanSpend` the host builds. X1
+   *  fix: `markLimitReached` carries the limit value now (see
+   *  `PlanChildLaunch`'s own copy of this comment). */
   isLimitReached(): boolean;
-  markLimitReached(): void;
+  markLimitReached(limit: PlanSpendLimit): void;
   isWriteFailed(): boolean;
   markWriteFailed(): void;
 }

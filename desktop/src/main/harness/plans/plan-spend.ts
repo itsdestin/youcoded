@@ -26,6 +26,14 @@ import type { PlanRecord, PlanRef } from './types';
  *  module both already depend on. */
 export const PLAN_LIMIT_REACHED_STOP_REASON = 'plan_limit_reached';
 
+/** T3/X1 fix (review 2026-09-24, `docs/active/reviews/2026-09-24-plans-spending-T3-review.md`):
+ *  mirrors plan-executor.ts's own `PlanSpendLimit` — kept as a separate small
+ *  copy rather than an import so this file stays independent of
+ *  plan-executor.ts's internals (which itself imports FROM this file, so the
+ *  reverse import would be circular), the same reasoning `crossedLimit`
+ *  below already used for `spendLimitCrossed`. */
+type PlanSpendLimit = NonNullable<PlanRecord['spendLimit']>;
+
 /** What one reply reports — exactly the shape the turn loop already has in
  *  hand (`step.usage`, and the SAME `costForUsage` call the chip uses). */
 export interface PlanSpendReply {
@@ -61,7 +69,11 @@ export interface PlanSpendHooks {
  *  this module stays host-agnostic like the rest of `plans/*.ts`. */
 export interface PlanSpendRunFlags {
   isLimitReached(): boolean;
-  markLimitReached(): void;
+  /** X1 fix: called with the limit value THIS write already knows (from
+   *  `crossedLimit` below) — never `void` any more — so the executor's
+   *  `requestHalt` can be called synchronously, with no journal re-read
+   *  needed to find out what the limit was. */
+  markLimitReached(limit: PlanSpendLimit): void;
   isWriteFailed(): boolean;
   markWriteFailed(): void;
 }
@@ -75,14 +87,18 @@ export interface PlanSpendDeps extends PlanSpendRunFlags {
   fence: string;
 }
 
-/** Design §4: true once this write pushed the plan's own used figure to or
- *  past its `spendLimit`, in whichever unit the limit was set in. A plan
- *  with no `spendLimit` is never crossed (decision 34: "no limit by
- *  default"). */
-function crossedLimit(plan: PlanRecord): boolean {
+/** Design §4: the limit itself once this write pushed the plan's own used
+ *  figure to or past it, in whichever unit the limit was set in — undefined
+ *  when not crossed. A plan with no `spendLimit` is never crossed (decision
+ *  34: "no limit by default"). X1 fix: returns the LIMIT, not a bare
+ *  boolean, so `afterReply` below can hand it straight to `markLimitReached`
+ *  — the executor's `requestHalt` no longer needs to re-read the plan just
+ *  to learn what it already knew at this exact call site. */
+function crossedLimit(plan: PlanRecord): PlanSpendLimit | undefined {
   const limit = plan.spendLimit;
-  if (!limit) return false;
-  return 'usd' in limit ? (plan.usedUsd ?? 0) >= limit.usd : plan.usedTokens >= limit.tokens;
+  if (!limit) return undefined;
+  const crossed = 'usd' in limit ? (plan.usedUsd ?? 0) >= limit.usd : plan.usedTokens >= limit.tokens;
+  return crossed ? limit : undefined;
 }
 
 /**
@@ -139,7 +155,7 @@ export class PlanSpend implements PlanSpendHooks {
       // with a reply in flight finishes it ... and stops at its own
       // beforeRequest" — idempotent, so a later write that is ALSO past the
       // limit setting it again costs nothing.
-      if (crossed) this.deps.markLimitReached();
+      if (crossed) this.deps.markLimitReached(crossed);
     }, (e) => {
       // Revision 1 D3: never an unhandled rejection in the main process — the
       // failure is recorded on the shared run flag (beforeRequest and

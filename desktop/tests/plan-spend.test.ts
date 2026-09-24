@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as os from 'os'; import * as path from 'path';
 import { NativeHome } from '../src/main/native-home';
-import { PlanJournal } from '../src/main/harness/plans/plan-journal';
+import { PlanFenceError, PlanJournal } from '../src/main/harness/plans/plan-journal';
 import { PlanSpend, PLAN_LIMIT_REACHED_STOP_REASON, type PlanSpendRunFlags } from '../src/main/harness/plans/plan-spend';
 import { costForUsage, billedEquivalentTokens, type ModelPricing } from '../src/main/harness/pricing';
 import type { ExecutionManifest, PlanAttemptRecord, PlanRecord, PlanRef } from '../src/main/harness/plans/types';
@@ -35,15 +35,19 @@ const attemptRec = (over: Partial<PlanAttemptRecord> = {}): PlanAttemptRecord =>
 /** A minimal run-flags implementation a real ActiveRun would provide (see
  *  plan-executor.ts's memberStart closures). Records every call so a test can
  *  assert exactly what PlanSpend did with them. */
-function runFlags(): PlanSpendRunFlags & { limitCalls: number; writeFailCalls: number } {
-  const state = { limitReached: false, writeFailed: false, limitCalls: 0, writeFailCalls: 0 };
+function runFlags(): PlanSpendRunFlags & { limitCalls: number; writeFailCalls: number; lastLimit: unknown } {
+  const state = { limitReached: false, writeFailed: false, limitCalls: 0, writeFailCalls: 0, lastLimit: undefined as unknown };
   return {
     isLimitReached: () => state.limitReached,
-    markLimitReached: () => { state.limitReached = true; state.limitCalls++; },
+    // X1 fix (review 2026-09-24): records the limit value it was called
+    // with, so a test can pin that the crossing write's OWN limit is what
+    // flows through — never re-read from anywhere else.
+    markLimitReached: (limit: unknown) => { state.limitReached = true; state.limitCalls++; state.lastLimit = limit; },
     isWriteFailed: () => state.writeFailed,
     markWriteFailed: () => { state.writeFailed = true; state.writeFailCalls++; },
     get limitCalls() { return state.limitCalls; },
     get writeFailCalls() { return state.writeFailCalls; },
+    get lastLimit() { return state.lastLimit; },
   } as any;
 }
 
@@ -116,6 +120,10 @@ describe('PlanSpend', () => {
     spend.afterReply({ usage, costUsd });
     await spend.spendSettled();
     expect(flags.limitCalls).toBe(1);
+    // X1 fix (review 2026-09-24): the crossing write hands the LIMIT itself
+    // to markLimitReached — the executor no longer needs to re-read the
+    // journal just to learn a value this write already had in hand.
+    expect(flags.lastLimit).toEqual({ usd: 1 });
     const stopped = await spend.beforeRequest();
     expect(stopped).toBe(PLAN_LIMIT_REACHED_STOP_REASON);
   });
@@ -174,6 +182,39 @@ describe('PlanSpend', () => {
     expect(flags.writeFailCalls).toBe(1);
     const stopped = await spend.beforeRequest();
     expect(stopped).toBe(PLAN_LIMIT_REACHED_STOP_REASON);
+  });
+
+  // X2 (review 2026-09-24, docs/active/reviews/2026-09-24-plans-spending-T3-
+  // review.md): a crossing whose OWN write fails because the lease was lost
+  // (another process now owns this plan) must never produce a spend-limit
+  // pause — `markLimitReached` is only ever called from a write that
+  // actually landed (the `.then` success branch), never from the failure
+  // branch, so a lease loss here can only ever route through
+  // `markWriteFailed` (which the executor's `onJournalError`-based recovery
+  // already turns into a 'lost' state at the next thing that tries to write,
+  // never a spurious "Reached your $X limit."). Previously the ONLY place
+  // this distinction could have been lost was `requestSpendLimitDrain`'s own
+  // now-deleted re-read of the plan (X1's fix removed it, along with the
+  // bare `catch {}` that used to swallow exactly this error).
+  it('a lease lost on the crossing write itself never produces a spend-limit pause — only a write failure', async () => {
+    const fence = await seed(record({
+      spendLimit: { usd: 1 },
+      steps: [{ id: 's1', status: 'running', attempts: [attemptRec()] }],
+    }));
+    const flags = runFlags();
+    const spend = makeSpend(fence, flags);
+    const usage = { inputTokens: 500_000, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const costUsd = costForUsage(usage, PRICING);   // crosses the $1 limit — IF the write landed
+    expect(costUsd).toBeGreaterThan(1);
+    vi.spyOn(journal, 'mutateFenced').mockRejectedValueOnce(new PlanFenceError('p1'));
+    spend.afterReply({ usage, costUsd });
+    await expect(spend.spendSettled()).resolves.toBeUndefined();
+    // The crossing was never recorded — the write that would have proven it
+    // never landed — so `markLimitReached` (and therefore any spend-limit
+    // pause) was never called; only the write failure was.
+    expect(flags.limitCalls).toBe(0);
+    expect(flags.writeFailCalls).toBe(1);
+    expect(flags.isLimitReached()).toBe(false);
   });
 
   it('spendSettled waits for a third replys slow write, not just the first two', async () => {

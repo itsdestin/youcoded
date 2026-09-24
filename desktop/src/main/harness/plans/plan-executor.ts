@@ -154,9 +154,12 @@ export interface PlanChildLaunch {
    *  builds one `PlanSpend` per attempt (Revision 3 F1) and wires them
    *  straight through to it, never touching `ActiveRun` itself. `markX` is
    *  idempotent; T3 reads `isLimitReached` for the wave-start check and the
-   *  drain halt — not built here. */
+   *  drain halt — not built here. X1 fix (review 2026-09-24): `markX`
+   *  carries the limit the crossing write already knows, so the host's
+   *  `PlanSpend` can hand it straight through without either side re-reading
+   *  the journal. */
   isLimitReached(): boolean;
-  markLimitReached(): void;
+  markLimitReached(limit: PlanSpendLimit): void;
   isWriteFailed(): boolean;
   markWriteFailed(): void;
 }
@@ -429,8 +432,11 @@ const isCommitted = (a: PlanAttemptRecord) => a.phase === 'committed' || a.compl
 const fmtItem = (n: number, of: number) => `${n + 1} of ${of}`;
 
 /** T3: the plan's own optional spend limit (design §2/§7). Reused from
- *  `PlanRecord` rather than declared fresh so the two can never drift. */
-type PlanSpendLimit = NonNullable<PlanRecord['spendLimit']>;
+ *  `PlanRecord` rather than declared fresh so the two can never drift.
+ *  Exported (X1 fix) so `plan-host-bridge.ts`'s `PlanChildStart` — which
+ *  already imports from this file — can type its own `markLimitReached`
+ *  the same way, instead of a third mirrored copy. */
+export type PlanSpendLimit = NonNullable<PlanRecord['spendLimit']>;
 
 /** T3 (design §3: "runWave first checks used ≥ limit on the plan it loaded,
  *  so no new wave starts past the limit"). Mirrors plan-spend.ts's own
@@ -474,7 +480,8 @@ function isLocalEngineStep(plan: PlanRecord, stepId: string): boolean {
  *  try block (`if (run.halt) return undefined;`, before any of this
  *  function's own `await`s), and re-reading the bare property later lets
  *  that stale narrowing leak across the awaits that follow, typing it as
- *  `never` even though `markLimitReached`'s async half may genuinely have
+ *  `never` even though a CONCURRENT sibling's spend write completing (now
+ *  synchronous with its own `requestHalt` call, X1 fix) may genuinely have
  *  set it by now. A function call is opaque to that narrowing. */
 function currentHalt(run: ActiveRun): HaltRequest | undefined {
   return run.halt;
@@ -678,10 +685,26 @@ export class PlanExecutor implements PlanExecutorHooks {
   // ---- internals ----
 
   private requestHalt(run: ActiveRun, request: HaltRequest): void {
-    // First reason wins, except that losing the lease overrides everything:
-    // once another owner holds the plan, nothing here may write.
-    if (run.halt && request.kind !== 'lost') return;
+    // First reason wins, with two deliberate overrides:
+    //  - losing the lease ALWAYS overrides, and nothing overrides an
+    //    existing 'lost' — once another owner holds the plan, nothing here
+    //    may write.
+    //  - X1 fix (review 2026-09-24, docs/active/reviews/2026-09-24-plans-
+    //    spending-T3-review.md): a user Stop overrides an in-progress
+    //    spend-limit DRAIN specifically. A drain hasn't finished settling —
+    //    every live specialist keeps running until its own next
+    //    `beforeRequest` or the drain deadline — so a Stop the user presses
+    //    a moment after the crossing was detected is a genuine, later,
+    //    more deliberate choice and must not be silently absorbed by
+    //    "first reason wins" just because the crossing's own halt request
+    //    happened to be requested first. No other halt reason gets this
+    //    override — only Stop is the user's own explicit act; every other
+    //    reason (a sibling's error, an interruption) still loses to a
+    //    crossing that was genuinely detected first.
     if (run.halt?.kind === 'lost') return;
+    const overridesDrain = request.kind === 'stop'
+      && run.halt?.kind === 'pause' && run.halt.why === 'spend-limit' && run.halt.drain === true;
+    if (run.halt && request.kind !== 'lost' && !overridesDrain) return;
     run.halt = request;
     // T3 (design §3 "Concurrency"): a DRAIN halt (a spend-limit pause) must
     // NOT abort what is already running — the whole point is letting each
@@ -701,28 +724,35 @@ export class PlanExecutor implements PlanExecutorHooks {
   }
 
   /**
-   * T3 (design §3 "Concurrency"): the FIRST attempt whose spend write crosses
-   * the plan's limit calls this (via the `markLimitReached` closure
+   * T3 (design §3 "Concurrency"): the FIRST attempt whose spend write
+   * crosses the plan's limit calls this (via the `markLimitReached` closure
    * `memberStart` hands `runner.launch()`) to turn the crossing into a
-   * visible pause. The synchronous half already happened in the caller
-   * (`run.limitReached = true`, seen at once by every sibling's own
-   * `beforeRequest`); this half re-reads the plan for the limit's actual
-   * value (for the card) and requests the halt — `drain: true`, so
-   * `requestHalt` does NOT abort anyone: every live specialist keeps running
-   * until its own next `beforeRequest` ends its turn, or until settle's
-   * drain deadline forces it. `requestHalt`'s own "first reason wins" guard
-   * makes a second crossing (a different sibling, or a sibling's own
+   * visible pause. `requestHalt`'s own "first reason wins" guard makes a
+   * second crossing (a different sibling, or a sibling's own
    * specialist-error/interrupted pause once it lands) a no-op, so the plan
    * pauses exactly once no matter how many attempts cross or land after it.
+   *
+   * X1 fix (review 2026-09-24, docs/active/reviews/2026-09-24-plans-
+   * spending-T3-review.md): called SYNCHRONOUSLY, with the limit value the
+   * crossing write already knows (`plan-spend.ts`'s `crossedLimit` returns
+   * it, not a bare boolean) — no `await` between "the crossing was
+   * detected" and "the halt was requested". Previously this method
+   * re-read the plan (`await this.load(run)`) purely to learn `spendLimit`
+   * for the card's wording, a value the write that got us here already had
+   * in hand; that read's own `PlanFenceError` on lease loss was also
+   * silently swallowed by a bare `catch {}` instead of `onJournalError`
+   * (X2 — the same gap, now gone with the read that could throw it). The
+   * awaited gap let a sibling's unrelated `requestHalt` (e.g.
+   * `memberEnd`'s "specialist-stopped" for an interrupted outcome, itself
+   * fully synchronous once its outcome resolves) win "first reason wins"
+   * even when the crossing genuinely happened first — see
+   * `plan-executor.test.ts`'s "a crossing that happens first always wins
+   * the pause reason" for the reproduction.
    */
-  private requestSpendLimitDrain(run: ActiveRun, stepId: string): void {
-    void (async () => {
-      let limit: PlanSpendLimit | undefined;
-      try { limit = (await this.load(run)).spendLimit; } catch { /* the run may already be gone; pause with no limit named */ }
-      this.requestHalt(run, {
-        kind: 'pause', why: 'spend-limit', drain: true, stepId, limit, reason: spendLimitReason(limit),
-      });
-    })();
+  private requestSpendLimitDrain(run: ActiveRun, stepId: string, limit: PlanSpendLimit): void {
+    this.requestHalt(run, {
+      kind: 'pause', why: 'spend-limit', drain: true, stepId, limit, reason: spendLimitReason(limit),
+    });
   }
 
   private async beat(run: ActiveRun): Promise<void> {
@@ -1230,14 +1260,15 @@ export class PlanExecutor implements PlanExecutorHooks {
             // object, so one sibling's crossing is visible to every other's
             // own beforeRequest check.
             isLimitReached: () => run.limitReached === true,
-            // T3: the synchronous flag first (every sibling's own
-            // `beforeRequest` must see it at once), then — once, idempotent —
-            // turn the crossing into an actual drain-and-pause. See
-            // `requestSpendLimitDrain`'s own WHY comment.
-            markLimitReached: () => {
+            // T3/X1: the synchronous flag first (every sibling's own
+            // `beforeRequest` must see it at once), then — once, idempotent,
+            // and with NO await in between — turn the crossing into an
+            // actual drain-and-pause. See `requestSpendLimitDrain`'s own WHY
+            // comment for why the "no await" part matters.
+            markLimitReached: (limit) => {
               if (run.limitReached) return;
               run.limitReached = true;
-              this.requestSpendLimitDrain(run, step.id);
+              this.requestSpendLimitDrain(run, step.id, limit);
             },
             isWriteFailed: () => run.spendWriteFailed === true,
             markWriteFailed: () => { run.spendWriteFailed = true; },
@@ -1641,6 +1672,15 @@ export class PlanExecutor implements PlanExecutorHooks {
 
   private async settle(run: ActiveRun): Promise<void> {
     const halt = run.halt ?? { kind: 'lost' as const };
+    // X3 fix (review 2026-09-24): computed here, before step 0, so the
+    // busy-wait below gets the drain deadline too — a launch handshake
+    // (`track()`'s `recordChild`/`runner.launch()` gap) that "lands a
+    // little later" during a drain is explicitly allowed to keep running
+    // (`memberStart`'s stillDraining branch), so the wait it's part of must
+    // not be cut short by the ordinary, shorter settle deadline. Previously
+    // this was computed only at step 1 (below), so step 0 always used the
+    // short deadline regardless of a drain in progress.
+    const draining = halt.kind === 'pause' && halt.drain === true;
     // 0. Review fix 1: members still launching, re-reserving or journalling
     //    finish first (they stop at once now that the plan is halted), so
     //    every specialist they started is in `run.live` and every hold they
@@ -1649,7 +1689,7 @@ export class PlanExecutor implements PlanExecutorHooks {
     //    comes back must not keep the card from settling. Whatever is left is
     //    logged; a hold it takes later is released by recoverAttempt on the
     //    next start, and a specialist it starts later is disposed (run.closed).
-    const busyDeadline = Date.now() + this.settleDeadlineMs;
+    const busyDeadline = Date.now() + (draining ? this.drainDeadlineMs : this.settleDeadlineMs);
     while (run.busy.size > 0) {
       const left = busyDeadline - Date.now();
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1671,8 +1711,7 @@ export class PlanExecutor implements PlanExecutorHooks {
     //    deliberately did NOT abort anyone, so this wait is really "let every
     //    live specialist reach its own next `beforeRequest` and end its turn
     //    there", and it gets the longer drain deadline instead of the normal
-    //    settle one.
-    const draining = run.halt?.kind === 'pause' && run.halt.drain === true;
+    //    settle one (`draining` computed above, at step 0, X3 fix).
     let pending = run.live.filter((c) => !c.outcome);
     if (pending.length > 0) {
       let timer: ReturnType<typeof setTimeout> | undefined;

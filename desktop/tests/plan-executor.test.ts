@@ -183,6 +183,16 @@ function executor(runner: PlanRunner, over: Partial<ConstructorParameters<typeof
   return new PlanExecutor({ journal, runner, settleDeadlineMs: 60, heartbeatMs: 10_000, ...over });
 }
 
+/** X4 (review 2026-09-24, test-suite-hygiene.md "never let a fixed sleep...
+ *  stand in for a signal"): a plain externally-resolvable gate, so a
+ *  scripted specialist can wait on an event the test controls directly
+ *  instead of a `setTimeout` the test hopes was long enough. */
+function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-exec-'));
   home = new NativeHome(root); events = []; log = [];
@@ -1860,27 +1870,37 @@ describe('spend limit: drain halt', () => {
   const TWO_ITEMS: PlanDocumentV1 = { goal: 'two', steps: [
     { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', summary: 'Plain sentence.', items: ['a', 'b'] },
   ] };
+  const LIMIT = { tokens: 999_999 };
 
   it('a crossing write drains: siblings finish their own in-flight reply, the plan pauses once, and nothing is aborted before the deadline', async () => {
+    // X4 fix (review 2026-09-24, test-suite-hygiene.md): gates the test
+    // controls directly, not fixed sleeps hoping both children are still
+    // genuinely in flight when the crossing lands.
+    const aFinish = deferred(); const bFinish = deferred();
     const runner = new FakeRunner((l) => async (ctx) => {
       if (l.brief === 'Do a') {
         // Stands in for T2's PlanSpend calling this from inside a reply's
         // journal write — the crossing itself, mid-turn.
-        await new Promise((r) => setTimeout(r, 10));
-        ctx.launch.markLimitReached();
+        ctx.launch.markLimitReached(LIMIT);
         // The crossing reply's OWN tools still run (design §3): this
-        // specialist keeps going a little longer and still finishes for real.
-        await new Promise((r) => setTimeout(r, 10));
+        // specialist keeps going until the test lets it, and still finishes
+        // for real.
+        await aFinish.promise;
         return { kind: 'completed' as const, report: 'A done' };
       }
-      // The sibling is never asked to stop — it simply finishes its own reply.
-      await new Promise((r) => setTimeout(r, 20));
+      // The sibling is never asked to stop — it simply finishes its own
+      // reply whenever the test lets it, proving the crossing (which
+      // already happened by the time either gate is released) never
+      // touched it.
+      await bFinish.promise;
       return { kind: 'completed' as const, report: 'B done' };
     });
-    const fence = await seed(record(TWO_ITEMS, { spendLimit: { tokens: 999_999 } }));
+    const fence = await seed(record(TWO_ITEMS, { spendLimit: LIMIT }));
     const exec = executor(runner, { drainDeadlineMs: 5_000 });
     const drainDeadline = markDeadline(5_000);
     exec.start({ ref: REF, planId: 'p1', fence });
+    await vi.waitFor(() => expect(runner.launches.length).toBe(2));
+    aFinish.resolve(); bFinish.resolve();
     await exec.settled('p1');
     // Neither sibling was ever aborted, and the (generous) drain deadline
     // never had to fire — both ended on their own.
@@ -1901,14 +1921,14 @@ describe('spend limit: drain halt', () => {
       if (!ctx.signal.aborted) await new Promise<void>((res) => ctx.signal.addEventListener('abort', () => res(), { once: true }));
       return { kind: 'interrupted' };
     };
+    // X4 fix: the crossing fires the instant this child launches — no sleep
+    // needed at all; what this test is actually proving (the abort waits
+    // for the drain deadline) doesn't depend on when the crossing lands.
     const runner = new FakeRunner((l) => async (ctx) => {
-      if (l.brief === 'Do a') {
-        await new Promise((r) => setTimeout(r, 5));
-        ctx.launch.markLimitReached();
-      }
+      if (l.brief === 'Do a') ctx.launch.markLimitReached(LIMIT);
       return stayUntilAborted(ctx);
     });
-    const fence = await seed(record(TWO_ITEMS, { spendLimit: { tokens: 999_999 } }));
+    const fence = await seed(record(TWO_ITEMS, { spendLimit: LIMIT }));
     // A settle deadline far bigger than the drain one: once aborted, these
     // children resolve almost at once (they honor the signal), so this
     // second timer is only a safety net and must not itself decide anything.
@@ -1924,6 +1944,72 @@ describe('spend limit: drain halt', () => {
     expect(p.status).toBe('paused');
     expect(p.paused).toMatchObject({ kind: 'spend-limit' });
     expect(events.filter((e) => e.plan.status === 'paused')).toHaveLength(1);
+  });
+
+  // X1 (review 2026-09-24, docs/active/reviews/2026-09-24-plans-spending-T3-
+  // review.md): a drain halt used to lose the "first reason wins" race to a
+  // sibling's unrelated halt landing in the async gap `requestSpendLimitDrain`
+  // used to have between "limit crossed" (synchronous) and its own
+  // `requestHalt` call (behind an awaited journal re-read). This reproduces
+  // that race deterministically: sibling 'a' crosses the limit as the very
+  // first thing its turn does (fully synchronous now — no gap to land in),
+  // then, in the SAME synchronous turn, releases sibling 'b' to become
+  // 'interrupted' (memberEnd's own synchronous requestHalt for
+  // 'specialist-stopped', once b's outcome promise resolves). Before the
+  // fix, b's halt request would very plausibly win — its own requestHalt is
+  // reached after only a couple of microtask hops, while the crossing's was
+  // stuck behind a REAL journal file read. After the fix there is no gap at
+  // all: 'a' claims the halt before 'b' even resumes.
+  it('a crossing that happens first always wins the pause reason, even against a sibling halting in the very same turn', async () => {
+    const bTrigger = deferred();
+    const runner = new FakeRunner((l) => async (ctx) => {
+      if (l.brief === 'Do a') {
+        ctx.launch.markLimitReached(LIMIT);
+        // Still fully synchronous relative to the call above — no `await`
+        // separates them.
+        bTrigger.resolve();
+        return { kind: 'completed' as const, report: 'A done' };
+      }
+      await bTrigger.promise;
+      return { kind: 'interrupted' as const };
+    });
+    const fence = await seed(record(TWO_ITEMS, { spendLimit: LIMIT }));
+    const exec = executor(runner, { drainDeadlineMs: 5_000 });
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(p.status).toBe('paused');
+    expect(p.paused).toMatchObject({ kind: 'spend-limit', limit: LIMIT });
+    expect(events.filter((e) => e.plan.status === 'paused')).toHaveLength(1);
+  });
+
+  it('a user Stop overrides an in-progress spend-limit drain (Stop is the users explicit choice)', async () => {
+    // `exec.stop()` is called INSIDE the script, synchronously, in the very
+    // same tick as the crossing right above it — no `await` separates
+    // them — so this exercises `requestHalt`'s own precedence decision
+    // directly, never a race against `settle()` possibly having already
+    // moved on by the time a separately-scheduled Stop call landed.
+    let exec!: PlanExecutor;
+    const aFinish = deferred();
+    const runner = new FakeRunner((l) => async (ctx) => {
+      if (l.brief !== 'Do a') return completes('B done')(ctx);
+      ctx.launch.markLimitReached(LIMIT);
+      void exec.stop({ ref: REF, planId: 'p1', finalize: (p) => { p.status = 'stopped'; } });
+      await aFinish.promise;
+      return { kind: 'completed' as const, report: 'A done' };
+    });
+    const fence = await seed(record(TWO_ITEMS, { spendLimit: LIMIT }));
+    exec = executor(runner, { drainDeadlineMs: 5_000, settleDeadlineMs: 60 });
+    exec.start({ ref: REF, planId: 'p1', fence });
+    aFinish.resolve();
+    await exec.settled('p1');
+    const p = await plan();
+    // A plain drain never produces 'stopped' — only a Stop request does
+    // (the two prior tests in this block, hit by the identical crossing
+    // with no Stop, both end 'paused' with kind 'spend-limit'). Landing
+    // here as 'stopped' proves the override actually took effect.
+    expect(p.status).toBe('stopped');
+    expect(p.lease).toBeUndefined();
   });
 });
 
@@ -1949,6 +2035,77 @@ describe('local engine: at most one plan specialist at a time', () => {
     await exec.settled('p1');
     expect(runner.maxLive).toBe(1);
     expect(runner.launches).toHaveLength(4);
+    expect((await plan()).status).toBe('completed');
+  });
+
+  // X5 (review 2026-09-24, docs/active/reviews/2026-09-24-plans-spending-T3-
+  // review.md): the commit message claimed a retry and a repeat body were
+  // "included" in T3's local-engine coverage; only a bare `map` was actually
+  // tested. The mechanism was already sound by construction (`local`/`width`
+  // are recomputed fresh from a freshly-loaded plan at the top of every
+  // `runStep` call — verified in the review), so these pin that claim rather
+  // than fix a defect.
+  it('a retried local-engine item never overlaps its sibling, even across the automatic relaunch', async () => {
+    const doc: PlanDocumentV1 = { goal: 'local', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Do {item}', summary: 'Plain sentence.', items: ['flaky', 'steady'] },
+    ] };
+    let flakyAttempts = 0;
+    const runner = new FakeRunner((l) => async (ctx) => {
+      await new Promise((r) => setTimeout(r, 5));
+      if (l.brief === 'Do flaky') {
+        flakyAttempts += 1;
+        if (flakyAttempts === 1) return { kind: 'failed' as const, detail: 'the provider hiccupped' };
+      }
+      return completes('ok')(ctx);
+    });
+    runner.cap = 4;   // generous — the local rule alone must serialize
+    const manifest: ExecutionManifest = {
+      ...MANIFEST,
+      steps: { s1: { binding: { providerId: 'local-engine', modelId: 'llama' }, label: 'llama', pricing: { kind: 'local' }, source: 'default' } },
+    };
+    const fence = await seed(record(doc, { manifest }));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect(runner.maxLive).toBe(1);
+    // Confirms the automatic relaunch actually happened (this isn't just a
+    // 2-item wave that happened to stay serial) — same specialist error
+    // recovery every other test in this file already exercises.
+    expect(flakyAttempts).toBe(2);
+    expect((await plan()).status).toBe('completed');
+  });
+
+  it("a repeat body's local-engine map step never overlaps its own items, across every round", async () => {
+    const doc: PlanDocumentV1 = { goal: 'loop', steps: [
+      { id: 'r', kind: 'repeat', specialist: 'reviewer', task: 'loop', summary: 'Plain sentence.', max_iterations: 2, until: 'tests pass',
+        steps: [
+          { id: 'fix', kind: 'map', specialist: 'reviewer', task: 'Fix {item}', summary: 'Plain sentence.', items: ['x', 'y'] },
+          { id: 'check', kind: 'verify', specialist: 'reviewer', task: 'Check the fix', summary: 'Plain sentence.', of: 'fix' },
+        ] },
+    ] };
+    let checks = 0;
+    const runner = new FakeRunner((l) => async (ctx) => {
+      await new Promise((r) => setTimeout(r, 5));
+      if (l.stepId === 'fix') return completes(`fixed in round ${l.iteration}`)(ctx);
+      checks += 1;
+      return completes(JSON.stringify({ report: `CHECK-${checks}`, repeatSatisfied: checks === 2 }))(ctx);
+    });
+    runner.cap = 4;   // generous — the local rule alone must serialize
+    const manifest: ExecutionManifest = {
+      ...MANIFEST,
+      // Only 'fix' is local-bound — 'check' (a single-item verify step that
+      // always runs after 'fix' anyway) is untouched, exactly like design
+      // §5's per-LEAF-STEP binding.
+      steps: { fix: { binding: { providerId: 'local-engine', modelId: 'llama' }, label: 'llama', pricing: { kind: 'local' }, source: 'default' } },
+    };
+    const fence = await seed(record(doc, { manifest }));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect(runner.maxLive).toBe(1);
+    // Two rounds, two 'fix' items each: proves the check is still enforced
+    // on round 2, not just remembered from round 1.
+    expect(runner.launches.filter((l) => l.stepId === 'fix')).toHaveLength(4);
     expect((await plan()).status).toBe('completed');
   });
 });
