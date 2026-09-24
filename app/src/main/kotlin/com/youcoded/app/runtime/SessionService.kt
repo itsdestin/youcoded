@@ -1012,6 +1012,15 @@ class SessionService : Service() {
                     })
                 })
             }
+            // Welcome back (design 2026-09-24 §3, S-phone): the "open at last
+            // shutdown" screen is desktop-only, so Android never has a real
+            // list — always answer as if nothing is offered.
+            "session:reopen-list" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
+            }
+            "session:forget-reopen" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
+            }
             "session:list" -> {
                 val sessions = sessionRegistry.sessions.value.map { (id, session) ->
                     MessageRouter.buildSessionInfo(

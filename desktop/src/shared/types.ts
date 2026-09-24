@@ -1859,6 +1859,10 @@ export const IPC = {
   SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
   SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
   SESSION_GET_META: 'session:get-meta', // (sessionId) → { tags, note, supported }
+  // Welcome back (design 2026-09-24 §3): the per-install "open at last
+  // shutdown" list. Desktop-only — Android always answers []/{ok:true}.
+  SESSION_REOPEN_LIST: 'session:reopen-list',     // () → string[] (conversation ids)
+  SESSION_FORGET_REOPEN: 'session:forget-reopen', // (ids: string[]) → { ok: true }
   TAGS_LIST: 'tags:list',
   TAGS_CREATE: 'tags:create',           // (label, color)
   TAGS_UPDATE: 'tags:update',           // (id, { label?, color?, archived? })
@@ -1884,6 +1888,13 @@ export const IPC = {
   // Repositions macOS traffic lights so they sit inside the floating chrome's
   // rounded header; null restores OS default. Called from theme-engine.
   WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
+  // Welcome back's in-app quit warning (design §4, plan T3). Electron-only
+  // (window.claude.window) — no remote-shim/Android twin, same as the other
+  // WINDOW_* entries above: a phone or browser tab never owns a desktop
+  // session for this to ask about.
+  WINDOW_CLOSE_REQUEST: 'window:close-request',                       // Main -> Renderer (push): {requestId, sessions}
+  WINDOW_ANSWER_CLOSE: 'window:answer-close',                         // Renderer -> Main: {requestId, close, reopen?}
+  WINDOW_CLOSE_REQUEST_CANCELLED: 'window:close-request-cancelled',   // Main -> Renderer (push): {requestId}
   // Zoom controls
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',

@@ -42,6 +42,10 @@ declare global {
         respondToPermission: (requestId: string, decision: object) => Promise<boolean>;
         browse: () => Promise<any[]>;
         loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) => Promise<any>;
+        // Welcome back (design 2026-09-24 §3): conversation ids open at the
+        // last shutdown.
+        reopenList: () => Promise<string[]>;
+        forgetReopen: (ids: string[]) => Promise<{ ok: boolean }>;
       };
       skills: {
         list: () => Promise<import('../../shared/types').SkillEntry[]>;

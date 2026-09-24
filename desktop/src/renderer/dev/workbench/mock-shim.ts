@@ -660,6 +660,9 @@ interface UntypedSessionWrites {
   setTag: (sessionId: string, tagId: string, value: boolean) => Promise<{ ok: boolean }>;
   setNote: (sessionId: string, note: string) => Promise<{ ok: boolean }>;
   getMeta: (sessionId: string) => Promise<{ tags: string[]; note: string; supported: boolean; flags: Record<string, boolean> }>;
+  // Welcome back (MOCK_ONLY — see mock-only.ts).
+  reopenList: () => Promise<string[]>;
+  forgetReopen: (ids: string[]) => Promise<{ ok: boolean }>;
 }
 
 /** Upsert one session's meta slice, seeding from a `past` row of the same id so
@@ -932,6 +935,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     handoff: handoff as any,
     list: async () => store.getState().sessions,
     browse: async () => store.getState().past,
+    // Welcome back — MOCK_ONLY until the per-install list lands in main.
+    reopenList: async () => delay(store.getState().reopen),
+    forgetReopen: async (ids: string[]) => {
+      store.setState((s) => ({ ...s, reopen: s.reopen.filter((id) => !ids.includes(id)) }));
+      return delay({ ok: true });
+    },
 
     create: async (opts) => {
       // Admission belongs to creation, just like the desktop backend. A race
@@ -2828,6 +2837,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // object.
   const windowNs = {
     getId: async () => WORKBENCH_WINDOW_ID,
+    // Welcome back's in-app quit warning — MOCK_ONLY. `?quit=ask` plays the
+    // close button being pressed, so the prompt is reviewable without a window
+    // manager; the answer is only logged. requestId is a fixed string: the
+    // workbench is a single tab with no whole-app quit to race this prompt
+    // against, so nothing here needs it to be unique.
+    onCloseRequest: (cb: (req: { requestId: string; sessions: number }) => void) => {
+      if (typeof location === 'undefined' || new URLSearchParams(location.search).get('quit') !== 'ask') return () => {};
+      const t = setTimeout(() => cb({ requestId: 'workbench-close', sessions: store.getState().sessions.length }), 400);
+      return () => clearTimeout(t);
+    },
+    answerClose: (answer: { requestId: string; close: boolean; reopen?: boolean }) => {
+      console.info('[workbench] close answer', answer);
+    },
+    // Real main.ts pushes this only when a whole-app quit settles a request
+    // the renderer was still waiting on (design §4 step 5) — never reachable
+    // here, but the subscription must exist so App's effect has something to
+    // call.
+    onCloseRequestCancelled: (_cb: (payload: { requestId: string }) => void) => () => {},
   };
   const detach: Ns<'detach'> & { openDetached: (payload: { sessionId: string }) => void } = {
     // Present so `detachAvailable` is true and the "Launch in New Window"

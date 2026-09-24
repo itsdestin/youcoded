@@ -4,7 +4,7 @@ import {
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { nativeStoreSlug } from '../src/main/slug-encoding';
+import { nativeStoreSlug, ccProjectSlug } from '../src/main/slug-encoding';
 
 // Mock electron before importing ipc-handlers, which transitively imports
 // main.ts (for setPermissionOverrides). main.ts uses protocol.registerSchemesAsPrivileged
@@ -482,12 +482,27 @@ describe('session:create native resume — missing stored header', () => {
       ensureBundledPluginsInstalled: vi.fn(),
       ensureMigrated: vi.fn(),
     };
+    // F2 (code review 2026-09-24): a resumed session is optimistically tracked
+    // as "open" the instant it's created (S-sent — it already has messages),
+    // but every failure branch of a native resume tore the session down via a
+    // bare destroySession and never untracked it — so an unresumable
+    // conversation (saved data gone, project folder missing, lease held
+    // elsewhere) stayed a phantom "open" entry and got wrongly re-offered by
+    // the next Welcome back screen. A resume that failed is not "open".
+    const welcomeBackStore = {
+      ready: Promise.resolve(),
+      track: vi.fn(), untrack: vi.fn(), remap: vi.fn(),
+      offerIds: vi.fn(() => []), forget: vi.fn(),
+      flush: vi.fn(async () => {}), startup: vi.fn(async () => {}),
+    };
 
     registerIpcHandlers(
       mockIpcMain as any,
       mockSessionManager as any,
       mockWindow as any,
       mockSkillProvider as any,
+      undefined as any, undefined, undefined, undefined, undefined, undefined, undefined,
+      welcomeBackStore as any,
     );
 
     const handler = (mockIpcMain.handle as any).mock.calls.find(
@@ -500,6 +515,8 @@ describe('session:create native resume — missing stored header', () => {
       { provider: 'native', resumeSessionId: 'ghost-native-1', cwd: '/tmp', name: 'Resuming…', skipPermissions: false },
     )).rejects.toThrow('saved data is missing');
     expect(mockSessionManager.destroySession).toHaveBeenCalledWith('ghost-native-1');
+    expect(welcomeBackStore.track).toHaveBeenCalledWith('ghost-native-1', 'ghost-native-1', 'native');
+    expect(welcomeBackStore.untrack).toHaveBeenCalledWith('ghost-native-1');
   });
 
   // Combined branch: bugfix-remote's session creator became master's
@@ -861,7 +878,9 @@ describe('status push: deduplicated, paused while nobody can see it, resumed on 
 
 // A mock ipcMain/session manager/window/skill provider wired through the REAL
 // registerIpcHandlers; handler(channel) returns what it registered.
-function setup(sessionManagerOverrides: Record<string, unknown> = {}) {
+// `welcomeBackStore` is an optional 2nd param (design 2026-09-24 §2 tests
+// below pass a fake); every existing single-arg call site is unaffected.
+function setup(sessionManagerOverrides: Record<string, unknown> = {}, welcomeBackStore?: unknown) {
   const mockIpcMain = { handle: vi.fn(), on: vi.fn() };
   const mockSessionManager = {
     createSession: vi.fn(),
@@ -886,10 +905,12 @@ function setup(sessionManagerOverrides: Record<string, unknown> = {}) {
     mockSessionManager as any,
     mockWindow as any,
     mockSkillProvider as any,
+    undefined as any, undefined, undefined, undefined, undefined, undefined,
+    undefined, welcomeBackStore as any,
   );
   const handler = (channel: string) =>
     (mockIpcMain.handle as any).mock.calls.find((c: any) => c[0] === channel)[1];
-  return { handler, mockWindow };
+  return { handler, mockWindow, mockSessionManager };
 }
 
 // The three split-refusal messages of the native resume path (session:create).
@@ -1014,6 +1035,75 @@ describe('session:create native resume refusals', () => {
         'This conversation could not be resumed — its saved data is missing.',
       );
     });
+  });
+});
+
+// A resumed Claude Code session's pill used to stay on the 'Resuming...'
+// placeholder for the life of the session: only native resumes re-applied the
+// stored title (native-resume-title.ts). Destin, 2026-09-24: "we should fix
+// the 'resuming' [name] as well". The pill now gets the same name the Resume
+// browser row showed — the stored title, else the conversation's opening words.
+describe('session:create Claude Code resume names the pill', () => {
+  let tmpHome: string;
+  let tmpConvRoot: string;
+  let prevHome: string | undefined;
+  let prevUserProfile: string | undefined;
+  const CONV = '11111111-2222-3333-4444-555555555555';
+
+  beforeAll(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-cc-title-'));
+    prevHome = process.env.HOME;
+    prevUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tmpHome;
+    process.env.USERPROFILE = tmpHome;
+  });
+  afterAll(() => {
+    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
+  });
+  beforeEach(async () => {
+    tmpConvRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-cc-title-store-'));
+    await startConversationStore({
+      conversationsRoot: tmpConvRoot,
+      projectsDir: path.join(tmpHome, '.claude', 'projects'),
+      topicsDir: path.join(tmpHome, '.claude', 'topics'),
+      device: 'test-device',
+    });
+    // The conversation's transcript, where Claude Code keeps it for this cwd.
+    const dir = path.join(tmpHome, '.claude', 'projects', ccProjectSlug(tmpHome));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${CONV}.jsonl`), JSON.stringify({
+      type: 'user', promptId: 'p1', timestamp: '2026-09-24T12:00:00.000Z', sessionId: CONV,
+      message: { role: 'user', content: 'what did we decide about the scroll bug' },
+    }) + '\n');
+  });
+  afterEach(() => {
+    stopConversationStore();
+    try { fs.rmSync(tmpConvRoot, { recursive: true, force: true }); } catch {}
+  });
+
+  const resume = (handler: any) => handler('session:create')(
+    { sender: { id: 1 } },
+    { provider: 'claude', resumeSessionId: CONV, cwd: tmpHome, name: 'Resuming...', skipPermissions: false },
+  );
+  const renamedTo = (send: any) => (send.mock.calls as any[][])
+    .filter((c) => c[0] === 'session:renamed' && c[1] === 'desktop-cc-1').map((c) => c[2]);
+
+  it('puts the stored title on the pill', async () => {
+    await getConversationStore()!.upsert({ provider: 'claude', id: CONV, projectName: path.basename(tmpHome), originalPath: tmpHome, title: 'Scroll bug decision' });
+    const { handler, mockWindow } = setup({
+      createSession: vi.fn(() => ({ id: 'desktop-cc-1', name: 'Resuming...', cwd: tmpHome, status: 'active', provider: 'claude' })),
+    });
+    await resume(handler);
+    await vi.waitFor(() => expect(renamedTo(mockWindow.webContents.send)).toEqual(['Scroll bug decision']));
+  });
+
+  it('with no stored title, uses the opening words the Resume browser row shows', async () => {
+    const { handler, mockWindow } = setup({
+      createSession: vi.fn(() => ({ id: 'desktop-cc-1', name: 'Resuming...', cwd: tmpHome, status: 'active', provider: 'claude' })),
+    });
+    await resume(handler);
+    await vi.waitFor(() => expect(renamedTo(mockWindow.webContents.send)).toEqual(['what did we decide about the scroll bug']));
   });
 });
 
@@ -1253,5 +1343,118 @@ describe('native session meta through the real store', () => {
       expect(res.unsupported).toBeUndefined();
       expect(res.error).toContain('bogus');
     });
+  });
+});
+
+// Welcome back (design 2026-09-24 §2, plan T2). Each hook is pinned against a
+// fake store — `welcome-back-store.test.ts` (T1) already covers the store's
+// own state machine, so these only prove ipc-handlers.ts calls it at the
+// right moments, with the right ids.
+describe('Welcome back tracking hooks', () => {
+  function makeFakeStore() {
+    return {
+      ready: Promise.resolve(),
+      track: vi.fn(), untrack: vi.fn(), remap: vi.fn(),
+      offerIds: vi.fn(() => []), forget: vi.fn(),
+      flush: vi.fn(async () => {}), startup: vi.fn(async () => {}),
+    };
+  }
+  const mainWindow = () => ({ webContents: { send: vi.fn() }, isDestroyed: () => false } as any);
+  const skillProvider = () => ({ configStore: { getPackages: vi.fn(() => ({})) } } as any);
+
+  it('a resumed session is tracked at creation (already has messages — S-sent)', async () => {
+    const ipc = { handle: vi.fn(), on: vi.fn() };
+    const manager: any = {
+      createSession: vi.fn(() => ({ id: 'desktop-r1', provider: 'claude', cwd: '/tmp', status: 'active' })),
+      getSession: vi.fn(() => undefined), listSessions: vi.fn(() => []),
+      destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
+    };
+    const store = makeFakeStore();
+    registerIpcHandlers(ipc as any, manager, mainWindow(), skillProvider(),
+      undefined as any, undefined, undefined, undefined, undefined, undefined, undefined, store as any);
+    const open = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
+    await open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'conv-1' });
+    expect(store.track).toHaveBeenCalledWith('desktop-r1', 'conv-1', 'claude');
+  });
+
+  it('SESSION_DESTROY untracks the session; destroySession alone (an ordinary exit) does not', async () => {
+    const ipc = { handle: vi.fn(), on: vi.fn() };
+    const manager: any = {
+      createSession: vi.fn(), getSession: vi.fn(() => undefined), listSessions: vi.fn(() => []),
+      destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
+    };
+    const store = makeFakeStore();
+    registerIpcHandlers(ipc as any, manager, mainWindow(), skillProvider(),
+      undefined as any, undefined, undefined, undefined, undefined, undefined, undefined, store as any);
+
+    // An ordinary process exit calls sessionManager.destroySession directly —
+    // exactly like session-exit/destroyAll do — and must NOT untrack: that is
+    // the case a crash or a quit must leave tracked (S-other-quit).
+    manager.destroySession('desktop-d1');
+    expect(store.untrack).not.toHaveBeenCalled();
+
+    // The user's own X goes through the SESSION_DESTROY IPC handler instead.
+    const destroy = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:destroy')[1];
+    await destroy({}, 'desktop-d1');
+    expect(store.untrack).toHaveBeenCalledWith('desktop-d1');
+  });
+
+  it('the first user-message transcript event tracks a brand-new session, once', async () => {
+    const { TranscriptWatcher } = await import('../src/main/transcript-watcher');
+    const listeners: Record<string, Array<(...args: any[]) => void>> = {};
+    const onSpy = vi.spyOn(TranscriptWatcher.prototype, 'on').mockImplementation(function (this: any, event: string, cb: any) {
+      (listeners[event] ??= []).push(cb);
+      return this;
+    });
+    try {
+      const ipc = { handle: vi.fn(), on: vi.fn() };
+      const hookRelay = { on: vi.fn(), start: vi.fn() };
+      const manager: any = {
+        createSession: vi.fn(() => ({ id: 'desktop-c2', provider: 'claude', cwd: '/tmp', status: 'active' })),
+        getSession: vi.fn(() => undefined), listSessions: vi.fn(() => []),
+        destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
+      };
+      const store = makeFakeStore();
+      registerIpcHandlers(ipc as any, manager, mainWindow(), skillProvider(),
+        undefined as any, hookRelay as any, undefined, undefined, undefined, undefined, undefined, store as any);
+
+      // A brand-new (non-resume) session gets its sessionIdMap entry from CC's
+      // own SessionStart hook, not from creation — the LAST 'hook-event'
+      // listener registered is the remap one (the FIRST is a status-push
+      // trigger that isn't under test here and must not run against these fakes).
+      const hookEvent = (hookRelay.on as any).mock.calls.findLast((c: any) => c[0] === 'hook-event')![1] as any;
+      hookEvent({ sessionId: 'desktop-c2', payload: { session_id: 'conv-2', hook_event_name: 'SessionStart', source: 'startup' } });
+      // Mapped, but no message yet — not remembered (S-sent: at least one message).
+      expect(store.track).not.toHaveBeenCalled();
+
+      const emit = listeners['transcript-event']?.[0];
+      expect(emit).toBeTypeOf('function');
+      const event = { type: 'user-message', sessionId: 'desktop-c2', uuid: 'u1', timestamp: 1, data: { text: 'hi' } };
+      emit!(event);
+      emit!(event); // a second message must not re-track — one write per session
+      expect(store.track).toHaveBeenCalledTimes(1);
+      expect(store.track).toHaveBeenCalledWith('desktop-c2', 'conv-2', 'claude');
+    } finally { onSpy.mockRestore(); }
+  });
+
+  it("a SessionStart remap updates a tracked session's remembered conversation id", async () => {
+    const ipc = { handle: vi.fn(), on: vi.fn() };
+    const hookRelay = { on: vi.fn(), start: vi.fn() };
+    const manager: any = {
+      createSession: vi.fn(() => ({ id: 'desktop-c3', provider: 'claude', cwd: '/tmp', status: 'active' })),
+      getSession: vi.fn(() => undefined), listSessions: vi.fn(() => []),
+      destroySession: vi.fn(() => true), on: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
+    };
+    const store = makeFakeStore();
+    registerIpcHandlers(ipc as any, manager, mainWindow(), skillProvider(),
+      undefined as any, hookRelay as any, undefined, undefined, undefined, undefined, undefined, store as any);
+    const open = (ipc.handle as any).mock.calls.find((c: any) => c[0] === 'session:create')[1];
+    await open({ sender: { id: 1 } }, { name: 'Resume', cwd: '/tmp', skipPermissions: false, resumeSessionId: 'conv-old' });
+    store.remap.mockClear();
+
+    const hookEvent = (hookRelay.on as any).mock.calls.findLast((c: any) => c[0] === 'hook-event')![1] as any;
+    // /clear rotation: SessionStart reports a NEW claude id for the same desktop session.
+    hookEvent({ sessionId: 'desktop-c3', payload: { session_id: 'conv-new', hook_event_name: 'SessionStart', source: 'clear' } });
+    expect(store.remap).toHaveBeenCalledWith('desktop-c3', 'conv-new');
   });
 });

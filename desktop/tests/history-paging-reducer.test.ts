@@ -207,11 +207,22 @@ describe('history paging reducer', () => {
     expect(deserializeChatState(legacy).get('s')!.history).toEqual({ cursor: null, hasMore: false, loading: false });
   });
 
-  it('an unknown session is a no-op, not a crash', () => {
+  it('a page request for an unknown session is a no-op, not a crash', () => {
     const st = withSession('s');
     expect(chatReducer(st, { type: 'HISTORY_PAGE_REQUESTED', sessionId: 'nope' })).toBe(st);
-    expect(chatReducer(st, {
-      type: 'HISTORY_PAGE_LOADED', sessionId: 'nope', events: [], cursor: null, hasMore: false,
-    })).toBe(st);
+  });
+
+  // A LOADED page for a session with no chat state yet is KEPT, not dropped: a
+  // resumed session's first page can land before its SESSION_INIT, and
+  // dropping it opened resumed sessions empty (2026-09-24; pinned in
+  // chat-reducer.test.ts → "HISTORY_PAGE_LOADED for a session with no chat
+  // state yet"). Still never a crash, and other sessions are untouched.
+  it('a page loaded for a not-yet-initialized session creates its state and leaves others alone', () => {
+    const st = withSession('s');
+    const out = chatReducer(st, {
+      type: 'HISTORY_PAGE_LOADED', sessionId: 'early', events: [], cursor: null, hasMore: false,
+    });
+    expect(out.has('early')).toBe(true);
+    expect(out.get('s')).toBe(st.get('s'));
   });
 });

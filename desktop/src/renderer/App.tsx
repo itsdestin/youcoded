@@ -79,6 +79,8 @@ import { promptShowMeansStarted, composerDisabled, startedIds } from './state/st
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
+import QuitSessionsPrompt from './components/QuitSessionsPrompt';
+import { fetchReopenList, forgetReopenList, resolveNativeBinding, claudeModelFor } from './state/welcome-back';
 import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
 import { useNativeBinding, usePreset, NativeExtras, loadLastBinding, persistLastBinding, defaultRuntime, type Runtime, type Binding } from './components/RuntimeBinding';
@@ -100,14 +102,14 @@ import { PageHost } from './components/pages/PageHost';
 import { PageCreateDialog, type PageCreateRequest } from './components/pages/PageCreateDialog';
 import { setGlobalShortcutsBlocked } from './utils/shortcut-gate';
 
-import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
+import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider, PastSession } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
 import { detectPermissionMode, syncKeyedSubscriptions, clearKeyedSubscriptions } from './state/permission-mode-scan';
 import { RESUMING_NATIVE, RESUMING_CLAUDE } from '../shared/session-title';
 import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
 
 import FirstRunView from './components/FirstRunView';
-import { getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+import { getPlatform, isAndroid, isRemoteMode, onConnectionModeChange } from './platform';
 import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
 
 /** Remote access batch 2: where a phone's copy of the conversation stands. */
@@ -1217,10 +1219,17 @@ function AppInner() {
       // Exact conversation match only: another conversation opened meanwhile must appear at once.
       if (waiting?.phase === 'waiting' && (info.resumeSessionId ?? info.id) === waiting.conversationId)
         deferredCreatedRef.current.set(info.id, info);
-      else setSessions((prev) => {
+      else {
+        // WHY here, not inside the updater below: updaters run at the next
+        // render and must be pure, so a dispatch in there landed AFTER a
+        // resume's first page (which then had no chat state to land in) and
+        // tripped React's "Cannot update a component while rendering" error.
+        // SESSION_INIT is has()-guarded, so a replayed announcement for a
+        // session that already exists changes nothing.
+        dispatch({ type: 'SESSION_INIT', sessionId: info.id });
+        setSessions((prev) => {
         // Deduplicate — replay buffers resend session:created for existing sessions
         if (prev.some((s) => s.id === info.id)) return prev;
-        dispatch({ type: 'SESSION_INIT', sessionId: info.id });
         // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
         // client not before its place is decided: the restore sends every session as
         // session:created ahead of the hydrate.
@@ -1228,6 +1237,7 @@ function AppInner() {
         if (mayAutoSelect() && !pendingRef.current?.active) setSessionId(info.id);
         return [...prev, info];
       });
+      }
       // Native harness sessions (roadmap Phase 1+) are chat-first — they have
       // no PTY, so 'terminal' would be an empty pane. Claude sessions also
       // default to chat. (Gemini, the old terminal-only provider, is gone.)
@@ -3485,6 +3495,87 @@ function AppInner() {
     // edge — no manual touched reset needed here.
     setWelcomeFormOpen(true);
   }, [sessionDefaults]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── Welcome back (design 2026-09-24) ─────────────────────────────────────
+  // Asked ONCE per launch, strip empty, not while a phone catches up, and only
+  // in the LEADER window (remote/Android never — S-phone; a non-leader WAITS).
+  const [welcomeBackIds, setWelcomeBackIds] = useState<string[] | null>(null);
+  const welcomeBackAsked = useRef(false);
+  useEffect(() => {
+    if (welcomeBackAsked.current || isFirstRun !== false || !sessionListLoaded || remoteCatchingUp) return;
+    if (!(myWindowId != null && leaderWindowId !== -1) && !isRemoteMode() && !isAndroid()) return; // leader not yet known
+    if (isRemoteMode() || isAndroid() || !isLeader) { welcomeBackAsked.current = true; return; }
+    welcomeBackAsked.current = true;
+    if (sessions.length > 0) return;
+    let alive = true;
+    void fetchReopenList().then((ids) => { if (alive && ids.length > 0) setWelcomeBackIds(ids); });
+    return () => { alive = false; };
+  }, [isFirstRun, sessionListLoaded, remoteCatchingUp, sessions.length, myWindowId, leaderWindowId, isLeader]);
+  const welcomeBackDone = useCallback(() => {
+    setWelcomeBackIds((ids) => { if (ids) void forgetReopenList(ids); return null; });
+  }, []);
+  // Resume every ticked row through the same path as a Resume-browser click, one
+  // at a time so each goes through its own lease check. A native row reuses the
+  // model it last ran on (Q-model); one whose model is not set up here is left
+  // on the list for a manual Resume, which asks.
+  const welcomeBackResumeMany = useCallback(async (rows: PastSession[]): Promise<{ launched: string[]; needModel: string[] }> => {
+    const [providers, catalog] = await Promise.all([
+      window.claude.providers.list(),
+      window.claude.providers.catalog(),
+    ]).catch(() => [[], []] as [any[], any[]]);
+    const done: string[] = [];
+    const needModel: string[] = [];
+    for (const r of rows) {
+      let binding: ModelBinding | undefined;
+      if (r.provider === 'native') {
+        binding = resolveNativeBinding(r.lastUsedModel, providers as any[], catalog as any[]) ?? undefined;
+        // Reported, so the screen can say WHY this row stayed (UX review 2, U2).
+        if (!binding) { needModel.push(r.sessionId); continue; }
+      }
+      const ok = await handleResumeSession(
+        r.sessionId, r.projectSlug, r.projectPath,
+        claudeModelFor(r.provider === 'native' ? undefined : r.lastUsedModel, sessionDefaults.model),
+        // WHY always false: this screen shows no Skip Permissions switch, so a
+        // default of "skip" would have reopened every session with approvals off,
+        // unseen. Resuming one row through its own card still shows the switch.
+        false, false, r.provider, binding, r.name,
+      );
+      if (ok) done.push(r.sessionId);
+    }
+    return { launched: done, needModel };
+  }, [handleResumeSession, sessionDefaults]);
+  const welcomeBackMode = useMemo(() => (welcomeBackIds && welcomeBackIds.length > 0
+    ? { ids: welcomeBackIds, onResumeMany: welcomeBackResumeMany, onDone: welcomeBackDone }
+    : undefined), [welcomeBackIds, welcomeBackResumeMany, welcomeBackDone]);
+
+  // The in-app quit warning (Welcome back S-dialog, design §4). Main asks
+  // when a window that still owns sessions is closed; the answer says whether
+  // to close and whether those sessions come back next launch. `requestId`
+  // round-trips on the answer so main can match it to the right pending
+  // request (a second window closing at the same time gets its own).
+  const [quitPrompt, setQuitPrompt] = useState<{ requestId: string; sessions: number } | null>(null);
+  useEffect(() => {
+    const api = (window.claude as any).window;
+    return api?.onCloseRequest?.((req: { requestId: string; sessions: number }) => setQuitPrompt(req)) ?? undefined;
+  }, []);
+  useEffect(() => {
+    // Whole-app quit wins over a pending prompt (design §4 step 5): main
+    // pushes this when shutdownApp() settles a request this window was still
+    // waiting on, so the dialog does not sit open describing a window that is
+    // already closing. Matched by requestId — an unrelated push (there is
+    // only ever one prompt per window, but belt-and-suspenders costs nothing)
+    // must not clear a DIFFERENT, still-live prompt.
+    const api = (window.claude as any).window;
+    return api?.onCloseRequestCancelled?.((payload: { requestId: string }) => {
+      setQuitPrompt((cur) => (cur && cur.requestId === payload.requestId ? null : cur));
+    }) ?? undefined;
+  }, []);
+  const answerClose = useCallback((answer: { close: boolean; reopen?: boolean }) => {
+    setQuitPrompt((cur) => {
+      if (cur) (window.claude as any).window?.answerClose?.({ requestId: cur.requestId, ...answer });
+      return null;
+    });
+  }, []);
+
   const autoOpenedWelcome = useRef(false);
   useEffect(() => {
     // Not while a phone is still catching up: the screen it would open over is about to fill
@@ -3972,7 +4063,9 @@ function AppInner() {
               />
             </div>
           <div
-            className="flex-1 flex flex-col items-center justify-center gap-3"
+            // invisible under Welcome back: that screen takes this one's place
+            // until you choose (Q-where), rather than sitting on top of it.
+            className={`flex-1 flex flex-col items-center justify-center gap-3${welcomeBackMode ? ' invisible' : ''}`}
             // The header is position:absolute over the top of this area, so
             // center the welcome content in the space BELOW it (and above the
             // bare frame's bottom strip) rather than behind it. --top-chrome-
@@ -4330,6 +4423,25 @@ function AppInner() {
       {skipWarning}
       {smallModelWarning}
       {fullAutoWarning}
+      {quitPrompt && (
+        <QuitSessionsPrompt
+          count={quitPrompt.sessions}
+          onCancel={() => answerClose({ close: false })}
+          onConfirm={(reopen) => answerClose({ close: true, reopen })}
+        />
+      )}
+      {/* Welcome back: its own instance, so the everyday Resume browser keeps
+          its search/filter state and open/close behaviour untouched. */}
+      {welcomeBackMode && (
+        <ResumeBrowser
+          open
+          onClose={welcomeBackDone}
+          onResume={handleResumeSession}
+          defaultModel={sessionDefaults.model}
+          defaultSkipPermissions={sessionDefaults.skipPermissions}
+          welcomeBack={welcomeBackMode}
+        />
+      )}
       <ResumeBrowser
         open={resumeRequested}
         onClose={() => setResumeRequested(false)}
