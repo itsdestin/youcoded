@@ -199,8 +199,6 @@
     {"file": "engine/engine-manager.ts", "fn": "deviceNameOf", "call": "fs.readFileSync", "count": 1},
     {"file": "engine/engine-supervisor.ts", "fn": "EngineSupervisor.attemptStart", "call": "fs.mkdirSync", "count": 1},
     {"file": "engine/engine-supervisor.ts", "fn": "EngineSupervisor.preparePreset", "call": "fs.readFileSync", "count": 1},
-    {"file": "engine/engine-supervisor.ts", "fn": "EngineSupervisor.residentBytesForModel", "call": "fs.readFileSync", "count": 2},
-    {"file": "engine/engine-supervisor.ts", "fn": "EngineSupervisor.residentBytesForModel", "call": "fs.readdirSync", "count": 1},
     {"file": "engine/engine-supervisor.ts", "fn": "defaultExeForPid", "call": "fs.readlinkSync", "count": 1},
     {"file": "engine/engine-supervisor.ts", "fn": "defaultPidOnPort", "call": "execFileSync", "count": 1},
     {"file": "engine/engine-supervisor.ts", "fn": "listenInodeForPort", "call": "fs.readFileSync", "count": 1},
