@@ -560,8 +560,19 @@ describe('launchInstaller', () => {
     });
 
     it('with no pkexec, hands back the one command to run, and keeps the download', async () => {
-      const filePath = path.join(tmpDir, 'youcoded-1.3.0.pacman');
-      fs.writeFileSync(filePath, 'x');
+      const realPath = path.join(tmpDir, 'youcoded-1.3.0.pacman');
+      fs.writeFileSync(realPath, 'x');
+      // WHY forward slashes: this block simulates Linux (platform: 'linux' below), where a
+      // path can never contain a backslash. On the Windows CI runner, `tmpDir` is a REAL
+      // Windows path (e.g. "C:\Users\...") because it comes from the actual os.tmpdir(),
+      // and shellQuote() in update-installer.ts correctly single-quotes any path holding a
+      // backslash (it's a POSIX shell escape character) — so this test's unquoted
+      // expectation was only ever true on Linux/macOS runners. Normalizing to forward
+      // slashes makes the fixture match what a real Linux path looks like on every OS the
+      // suite runs on; Windows' fs APIs accept forward slashes too, so `filePath` below
+      // still resolves to the real file written above. Root-caused 2026-09-23: 6/6 Windows
+      // CI failures on this exact assertion.
+      const filePath = realPath.split(path.sep).join('/');
       const spawned: string[] = [];
       const launch = linuxLaunch({
         exists: () => false,
