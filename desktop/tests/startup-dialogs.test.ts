@@ -488,7 +488,11 @@ describe('the startup-dialog driver never guesses — each check on its own', ()
     // trickle part of the "before" count.
     let out = 0;
     let trickle = 0;
-    const cc = scripted(mcpScreen(1), (k, s) => (k === '\u001b[B' ? (trickle = 2, mcpScreen(2)) : s));
+    const cc = scripted(mcpScreen(1), (k, s) => {
+      if (k !== '\u001b[B') return s;
+      trickle = 2;
+      return mcpScreen(2);
+    });
     const io: InkMenuIO = {
       ...cc.io,
       settle: async (ms) => { if (trickle > 0) { trickle--; out++; } await cc.io.settle(ms); },
