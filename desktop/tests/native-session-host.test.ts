@@ -1015,6 +1015,51 @@ describe('NativeSessionHost', () => {
       expect((h as any).live.get('s-1').session.contextInventory().skills.map((s: { id: string }) => s.id)).toContain('alpha');
       await h.destroyAll();
     });
+
+    // T2 review fix F1: resolveAvailabilityForCreate's own body — not just
+    // resolveSessionAvailability's internal try/catch — must fail OPEN.
+    // Before the fix, a throw here escaped past create()'s bare try/finally
+    // (no catch) and aborted session creation outright.
+    it('resolveProjectAvailabilityInputs throwing fails open — create() still succeeds with everything available', async () => {
+      writeProjectSkill('alpha');
+      const h = new NativeSessionHost(
+        new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null, undefined,
+        undefined, undefined, undefined, undefined,
+        undefined, undefined, undefined, undefined, undefined, undefined,
+        async () => { throw new Error('candidates/stores construction blew up'); },
+      );
+      await expect(h.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } })).resolves.toBeUndefined();
+      const ids = (h as any).live.get('s-1').session.contextInventory().skills.map((s: { id: string }) => s.id);
+      expect(ids).toContain('alpha');
+      // No header.availability was ever written — resume() would see this
+      // exactly like a pre-T2 conversation (today's unrestricted behaviour).
+      expect((h as any).store.readHeader('s-1', root)?.availability).toBeUndefined();
+      await h.destroyAll();
+    });
+
+    // Same fail-open contract, one call further in: the registry read
+    // (mcpManager.listEnabled()) throws instead of resolveProjectAvailabilityInputs.
+    // NativeHome.readJson deliberately rethrows non-ENOENT fs errors reading
+    // ~/.youcoded/mcp.json — this is that failure mode reaching availability
+    // resolution before acquireMcp's own (separate) try/catch ever runs.
+    it('mcpManager.listEnabled throwing fails open — create() still succeeds with an unfiltered MCP acquire', async () => {
+      writeProjectSkill('alpha');
+      const acquire = vi.fn(async (_sessionId: string, allowIds?: Set<string>) => ({
+        // Fail-open must never narrow the acquire call — a real allowlist
+        // would exclude 'srv' here, so its presence in the result proves
+        // acquireMcp received `undefined`, not an empty Set.
+        servers: allowIds ? [] : [{ id: 'srv', label: 'srv', tools: [], call: async () => ({ text: '', isError: false }) }],
+        release: async () => {},
+      }));
+      const listEnabled = vi.fn(async () => { throw new Error('mcp.json unreadable (EACCES)'); });
+      const { h } = hostWithProject({ destroyAll: async () => {}, acquire, listEnabled });
+      await expect(h.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } })).resolves.toBeUndefined();
+      expect(acquire).toHaveBeenCalledWith('s-1');
+      const session = (h as any).live.get('s-1').session;
+      expect(session.contextInventory().skills.map((s: { id: string }) => s.id)).toContain('alpha');
+      expect(session.opts.mcpServers.map((s: { id: string }) => s.id)).toEqual(['srv']);
+      await h.destroyAll();
+    });
   });
 
   // ---- Task 6 review fix 2: the per-parent slot/writer bookkeeping had zero

@@ -274,6 +274,15 @@ export interface SpecialistRunError extends Error {
   specialistUsage?: SpecialistRunResult['usage'];
 }
 
+// T2 review fix F3 — see resolveAvailabilityForCreate's own header comment
+// for why this is a discriminated union rather than `SessionAvailability |
+// null`: 'unknown' (fail-open/not-yet-known) and 'resolved' (a real decision,
+// possibly to empty Sets — B-1) must never be collapsible into one another at
+// the type level.
+type CreateAvailabilityResult =
+  | { kind: 'unknown'; mcpEntries?: CatalogMcpEntry[] }
+  | { kind: 'resolved'; projectKey: string | null; skillCatalogIds: Set<string>; mcpServerIds: Set<string>; mcpEntries: CatalogMcpEntry[] };
+
 interface LiveEntry {
   session: HarnessSession;
   cwd: string;
@@ -2241,7 +2250,10 @@ export class NativeSessionHost extends EventEmitter {
     // keeps compiling unchanged.
     private mcpManager?: {
       destroyAll(): Promise<void>;
-      acquire(sessionId: string, allowIds?: Set<string>): Promise<McpLease>;
+      // preResolved (T2 review F2): lets a caller that already read
+      // listEnabled() hand the SAME list back in, so acquire() skips its own
+      // registry.resolveAllEnabled() — see acquireMcp's own comment below.
+      acquire(sessionId: string, allowIds?: Set<string>, preResolved?: CatalogMcpEntry[]): Promise<McpLease>;
       listEnabled?(): Promise<CatalogMcpEntry[]>;
     },
     // Task 2 (plan 1b) — backs the DelegationLedger this constructor builds
@@ -2804,14 +2816,24 @@ export class NativeSessionHost extends EventEmitter {
    *  already handled inside McpManager itself (excluded from the returned
    *  list, never a rejection) — this only guards the rarer whole-registry
    *  failure. */
-  private async acquireMcp(sessionId: string, allowIds?: Set<string>): Promise<McpLease | undefined> {
+  private async acquireMcp(sessionId: string, allowIds?: Set<string>, preResolved?: CatalogMcpEntry[]): Promise<McpLease | undefined> {
     if (!this.mcpManager) return undefined;
     try {
-      // `allowIds` omitted entirely (not passed as an explicit `undefined`)
-      // when there is no restriction — keeps the exact one-arg call shape
-      // every pre-T2 caller/test already asserts on, and matches
-      // McpManager.acquire's own "undefined keeps today's behaviour" contract
-      // to the letter rather than merely to the same runtime effect.
+      // `allowIds`/`preResolved` each omitted entirely (not passed as an
+      // explicit `undefined`) when absent — keeps the exact call shape every
+      // pre-T2 caller/test already asserts on (see
+      // native-session-host.test.ts's `toHaveBeenCalledWith('s-1')` pins),
+      // and matches McpManager.acquire's own "undefined keeps today's
+      // behaviour" contract to the letter rather than merely to the same
+      // runtime effect. `preResolved` (T2 review F2) is the SAME list
+      // resolveAvailabilityForCreate already read via listEnabled() to
+      // compute `allowIds` — threading it through here means acquire() never
+      // re-reads the MCP registry a second time for the same session create.
+      if (preResolved !== undefined) {
+        return allowIds !== undefined
+          ? await this.mcpManager.acquire(sessionId, allowIds, preResolved)
+          : await this.mcpManager.acquire(sessionId, undefined, preResolved);
+      }
       return allowIds !== undefined
         ? await this.mcpManager.acquire(sessionId, allowIds)
         : await this.mcpManager.acquire(sessionId);
@@ -2819,6 +2841,29 @@ export class NativeSessionHost extends EventEmitter {
       log('ERROR', 'NativeSessionHost', 'mcp acquire failed — session opens with no MCP servers', { sessionId, error: String(err) });
       return undefined;
     }
+  }
+
+  /**
+   * T2 review fix F3: an explicit discriminated result, rather than
+   * `SessionAvailability | null`, for resolveAvailabilityForCreate's return —
+   * so a future edit at this method's call site (createInner, below) cannot
+   * accidentally collapse "we don't know" (`kind: 'unknown'`, fail OPEN — no
+   * restriction applied at all) into B-1's genuine "resolved to nothing"
+   * decision (`kind: 'resolved'` with empty Sets) via something like
+   * `availability?.mcpServerIds ?? new Set()`. The two must never mean the
+   * same thing (session-availability.ts's own header comment explains why);
+   * this type makes the caller name which one it means at every read.
+   *
+   * `mcpEntries` rides on BOTH variants (T2 review F2): whenever this method
+   * actually reached the `mcpManager.listEnabled()` read below, the result is
+   * kept and handed back regardless of whether resolution itself succeeded,
+   * so createInner can thread the SAME list into acquireMcp()'s `preResolved`
+   * — never a second `registry.resolveAllEnabled()` for the same session
+   * create. Absent only when this method returned before ever attempting that
+   * read (the `!this.resolveProjectAvailabilityInputs` early return below).
+   */
+  private resolveAvailabilityForCreateUnknown(mcpEntries?: CatalogMcpEntry[]): CreateAvailabilityResult {
+    return { kind: 'unknown', mcpEntries };
   }
 
   /**
@@ -2832,31 +2877,52 @@ export class NativeSessionHost extends EventEmitter {
    *  - skills: discoverSkillEntries(cwd) — the SAME scan toolWiring() would
    *    otherwise trigger a SECOND time via createSkillCatalog(undefined, cwd);
    *    the result is reused for both (see toolWiring's own skillCatalog line).
-   *  - mcp: mcpManager.listEnabled() — a raw, pre-connect read; acquireMcp()
-   *    (called separately, after this) re-resolves the registry itself
-   *    inside McpManager.acquire — an accepted double-resolve, see
-   *    listEnabled's own comment.
+   *  - mcp: mcpManager.listEnabled() — a raw, pre-connect read, resolved
+   *    exactly ONCE here and threaded into acquireMcp()'s `preResolved` (T2
+   *    review F2) rather than let McpManager.acquire() re-resolve the
+   *    registry a second time.
    *  - installs: skillConfigStore.getPackages() — marketplace installedAt.
-   * Never throws (resolveSessionAvailability's own contract) — a resolution
-   * failure fails OPEN (returns null), logged inside that function already.
+   *
+   * T2 review fix F1: this method's own body — including the two awaits
+   * above, NOT just the resolveSessionAvailability() call at the end — is now
+   * wrapped in one try/catch. Previously, a throw from
+   * `resolveProjectAvailabilityInputs()` (candidates/stores construction) or
+   * `mcpManager.listEnabled()` (NativeHome.readJson deliberately RETHROWS any
+   * non-ENOENT fs error reading `~/.youcoded/mcp.json` — native-home.ts)
+   * propagated straight out of this method, past resolveSessionAvailability's
+   * OWN try/catch (which only wraps code that runs after candidates/stores
+   * are already in hand) and out of create() itself — aborting session
+   * creation outright instead of failing open like every other failure in
+   * this pipeline. Never throws now, matching the fail-open contract every
+   * caller (createInner) already assumes.
    */
-  private async resolveAvailabilityForCreate(cwd: string, skillEntries: ReturnType<typeof discoverSkillEntries>) {
+  private async resolveAvailabilityForCreate(cwd: string, skillEntries: ReturnType<typeof discoverSkillEntries>): Promise<CreateAvailabilityResult> {
     // Not wired (no test override, and this is not the real ipc-handlers.ts
     // construction) — "don't know", same fail-open answer as every other
     // failure path in this pipeline. See this seam's own constructor comment
     // for why there is no default that reads real global state instead.
-    if (!this.resolveProjectAvailabilityInputs) return null;
-    const { candidates, stores } = await this.resolveProjectAvailabilityInputs();
-    const mcp = (await this.mcpManager?.listEnabled?.()) ?? [];
-    const installs = this.skillConfigStore?.getPackages() ?? {};
-    return resolveSessionAvailability(cwd, {
-      projectsRoot: null, // unused — `candidates` below is already resolved
-      candidates,
-      stores,
-      skills: skillEntries,
-      mcp,
-      installs,
-    });
+    // Deliberately BEFORE the try/catch below: no mcp registry read is even
+    // attempted, so `mcpEntries` stays absent rather than an empty array.
+    if (!this.resolveProjectAvailabilityInputs) return this.resolveAvailabilityForCreateUnknown();
+    let mcpEntries: CatalogMcpEntry[] | undefined;
+    try {
+      const { candidates, stores } = await this.resolveProjectAvailabilityInputs();
+      mcpEntries = (await this.mcpManager?.listEnabled?.()) ?? [];
+      const installs = this.skillConfigStore?.getPackages() ?? {};
+      const resolved = await resolveSessionAvailability(cwd, {
+        projectsRoot: null, // unused — `candidates` below is already resolved
+        candidates,
+        stores,
+        skills: skillEntries,
+        mcp: mcpEntries,
+        installs,
+      });
+      if (resolved === null) return this.resolveAvailabilityForCreateUnknown(mcpEntries);
+      return { kind: 'resolved', projectKey: resolved.projectKey, skillCatalogIds: resolved.skillCatalogIds, mcpServerIds: resolved.mcpServerIds, mcpEntries };
+    } catch (err) {
+      log('ERROR', 'NativeSessionHost', "project availability resolution failed — session opens with today's unrestricted behaviour", { cwd, error: String(err) });
+      return this.resolveAvailabilityForCreateUnknown(mcpEntries);
+    }
   }
 
   /** Task 5 (plan 1b): one line per NON-DELIVERED delegation for `sessionId`
@@ -3435,10 +3501,13 @@ export class NativeSessionHost extends EventEmitter {
       cwd: opts.cwd,
       createdAt: Date.now(),
       ...(stepGuard === null ? {} : { stepGuard }),
-      // Fail-open (availability === null) writes NOTHING here, so resume()'s
-      // "no stored set" branch — today's unrestricted behaviour — is exactly
-      // what an availability-resolution failure at create time also gets.
-      ...(availability ? { availability: {
+      // Fail-open (`kind: 'unknown'`) writes NOTHING here, so resume()'s "no
+      // stored set" branch — today's unrestricted behaviour — is exactly what
+      // an availability-resolution failure at create time also gets. T2
+      // review fix F3: this is now an exhaustive discriminant, not an
+      // optional-chain default, so a future edit here cannot silently turn
+      // "don't know" into an empty (B-1-shaped) stored set.
+      ...(availability.kind === 'resolved' ? { availability: {
         projectKey: availability.projectKey,
         skillCatalogIds: [...availability.skillCatalogIds],
         mcpServerIds: [...availability.mcpServerIds],
@@ -3461,10 +3530,16 @@ export class NativeSessionHost extends EventEmitter {
     // session, so mcpServers is available for the very first buildAiTools().
     // T2: availability.mcpServerIds narrows this to the project's frozen set
     // (an EMPTY Set for B-1, outside any project — that still filters out
-    // everything). `availability` itself being null (resolution failed open)
-    // passes `undefined` here, which keeps today's behaviour exactly — see
-    // acquire()'s own allowIds doc.
-    const mcpLease = await this.acquireMcp(opts.sessionId, availability?.mcpServerIds);
+    // everything). `kind: 'unknown'` (resolution failed open, or was never
+    // attempted) passes `undefined` here, which keeps today's behaviour
+    // exactly — see acquire()'s own allowIds doc. `mcpEntries` (T2 review F2)
+    // rides on BOTH variants — see resolveAvailabilityForCreate's own comment
+    // — so acquireMcp() reuses the SAME registry read instead of a second one.
+    const mcpLease = await this.acquireMcp(
+      opts.sessionId,
+      availability.kind === 'resolved' ? availability.mcpServerIds : undefined,
+      availability.mcpEntries,
+    );
     const mcpServers = mcpLease?.servers;
     let session: HarnessSession;
     try {
@@ -3480,7 +3555,7 @@ export class NativeSessionHost extends EventEmitter {
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           commitCompaction: proposal => this.commitCompaction(opts.sessionId, session, proposal),
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, skillEntries, availability?.skillCatalogIds) },
+          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile, gitSnapshot, skillEntries, availability.kind === 'resolved' ? availability.skillCatalogIds : undefined) },
         this.modelFactory,
       );
     } catch (err) {

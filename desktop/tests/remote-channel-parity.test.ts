@@ -189,6 +189,34 @@ describe('remote channels — device list channels', () => {
   });
 });
 
+// Project skills & tools (project-plugin-controls T3): same four-surface
+// shape as the "device list channels" block above, plus the not-implemented
+// Android stub (B-2 "later" — enforcement is desktop native harness only).
+describe('remote channels — project-extensions channels', () => {
+  const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+  const preload = read('../src/main/preload.ts');
+  const handlers = read('../src/main/ipc-handlers.ts');
+  const shim = read('../src/renderer/remote-shim.ts');
+  const server = read('../src/main/remote-server.ts');
+  const kotlin = read('../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
+  const CHANNELS = ['project-extensions:get', 'project-extensions:set', 'project-extensions:for-session', 'project-extensions:import-skill'];
+
+  describe('the Skills & tools tab exists on every desktop transport, and is honestly refused on Android', () => {
+    it('each channel is registered in preload, ipc-handlers, the shim, and the remote WS host', () => {
+      for (const c of CHANNELS) {
+        expect(preload).toContain(`'${c}'`);
+        expect(handlers).toContain(`'${c}'`);
+        expect(shim).toContain(`'${c}'`);
+        expect(server).toContain(`'${c}'`);
+      }
+    });
+
+    it('Android answers all four with not-implemented-on-mobile rather than falling through to unsupported', () => {
+      for (const c of CHANNELS) expect(kotlin).toContain(`"${c}"`);
+    });
+  });
+});
+
 // Remote access batch 2, design §6 "Surfaces" (T4): the strip's two channels on
 // every surface. Preload declares them (desktop never shows the strip), desktop
 // IPC answers not-remote, the shim implements them, the host handles

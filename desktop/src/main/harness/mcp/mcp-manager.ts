@@ -131,6 +131,15 @@ export class McpManager {
    * (every caller before this task, and any session outside a project) keeps
    * today's behaviour exactly: every enabled server is eligible.
    *
+   * `preResolved` (T2 review F2 fix): the SAME list a caller already read via
+   * `listEnabled()` to compute `allowIds` in the first place — pass it back
+   * in and this method skips its own `registry.resolveAllEnabled()` call
+   * entirely, rather than re-reading `~/.youcoded/mcp.json` (a synchronous
+   * fs read, performance rule 1) and re-decrypting every enabled server's
+   * secrets a second time on every native session create. `undefined` (every
+   * caller before this fix, and any caller with no availability resolution to
+   * reuse) keeps today's behaviour exactly: a fresh `resolveAllEnabled()`.
+   *
 
    * WHY THERE IS NO RACE MACHINERY HERE ANY MORE. The previous version carried
    * three cooperating mechanisms (an in-flight registration map, a touch
@@ -150,10 +159,10 @@ export class McpManager {
    * once. Without it a hung server blocks every server behind it from even
    * beginning to spawn.
    */
-  async acquire(sessionId: string, allowIds?: Set<string>): Promise<McpLease> {
+  async acquire(sessionId: string, allowIds?: Set<string>, preResolved?: ResolvedMcpServer[]): Promise<McpLease> {
     const leaseId = `${sessionId}#${++this.leaseSeq}`;
     try {
-      let servers = await this.registry.resolveAllEnabled();
+      let servers = preResolved ?? await this.registry.resolveAllEnabled();
       // Filter BEFORE anything below ever sees an excluded server — never a
       // post-hoc drop from the ready list, which is how a broken server is
       // handled (that one still gets pooled/logged; this one must not exist
@@ -337,13 +346,11 @@ export class McpManager {
    * the registry this manager already wraps. Never connects/spawns anything
    * (same as acquire()'s own pass 1 registration, this only calls through to
    * `registry.resolveAllEnabled()`) — NativeSessionHost's availability
-   * resolution is the one caller, and it deliberately runs BEFORE acquire(),
-   * so this and acquire()'s own resolveAllEnabled() call do resolve the
-   * registry twice per session create. That duplication is the accepted cost
-   * of the design's given `acquire(sessionId, allowIds?)` contract (§3): the
-   * allowlist must already be known before acquire() ever runs, and acquire()
-   * itself must independently re-derive "every enabled server" so an
-   * `allowIds`-less caller keeps getting exactly today's behaviour.
+   * resolution is the one caller, and it deliberately runs BEFORE acquire().
+   * T2 review fix F2: the caller now threads this SAME resolved list back
+   * into acquire()'s own `preResolved` parameter, so the registry (a
+   * synchronous fs read plus one secrets decrypt per enabled server) is read
+   * exactly once per session create, never twice.
    */
   async listEnabled(): Promise<ResolvedMcpServer[]> {
     return this.registry.resolveAllEnabled();

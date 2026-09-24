@@ -14,6 +14,10 @@ import { REMOTE_RECONNECTED_EVENT } from './remote-events';
 // The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
 import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
 import type { FirstRunState } from '../shared/first-run-types';
+import type {
+  ProjectExtensionsGetResult, ProjectExtensionsSetResult, ProjectExtensionsForSessionResult,
+  ProjectExtensionsImportSkillResult, ProjectExtensionsChange,
+} from '../shared/types';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
 interface MarketplaceUser {
@@ -3064,6 +3068,16 @@ export function installShim(): void {
       list: () => invoke('permissions:list'),
       remove: (slug: string, rule: unknown) => invoke('permissions:remove', { slug, rule }),
       removeProject: (slug: string) => invoke('permissions:remove-project', { slug }),
+    },
+    // Project skills & tools (project-plugin-controls T3) — object payloads,
+    // matching every other remote-shim namespace above; preload takes
+    // positional args instead, same split as those.
+    projectExtensions: {
+      get: (path: string): Promise<ProjectExtensionsGetResult> => invoke('project-extensions:get', { path }),
+      set: (path: string, changes: ProjectExtensionsChange[]): Promise<ProjectExtensionsSetResult> =>
+        invoke('project-extensions:set', { path, changes }),
+      forSession: (sessionId: string): Promise<ProjectExtensionsForSessionResult> => invoke('project-extensions:for-session', { sessionId }),
+      importSkill: (skillMdPath: string): Promise<ProjectExtensionsImportSkillResult> => invoke('project-extensions:import-skill', { skillMdPath }),
     },
     // Specialists 1c (Task 8) — object payloads, matching every other remote-
     // shim namespace above (permissions, search) — preload takes positional

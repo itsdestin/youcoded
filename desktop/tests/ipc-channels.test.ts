@@ -917,6 +917,45 @@ describe('github:* channel parity (desktop surfaces)', () => {
   });
 });
 
+// Project skills & tools (project-plugin-controls T3, design §4). Four
+// channels, five surfaces each (ipc-bridge.md): preload/remote-shim carry the
+// literal string (no IPC.* constant — same convention as permissions:*/
+// arcade:* above, not the syncspaces:*/github:* IPC-map style), ipc-handlers
+// and remote-server share their glue via project-extensions/ipc-shell.ts, and
+// Android (B-2 "later") answers not-implemented-on-mobile for all four.
+describe('project-extensions:* channel parity (desktop surfaces + Android stub)', () => {
+  const channels = [
+    'project-extensions:get',
+    'project-extensions:set',
+    'project-extensions:for-session',
+    'project-extensions:import-skill',
+  ];
+  const preload = readSourceFile(path.join(__dirname, '../src/main/preload.ts'));
+  const shim = readSourceFile(path.join(__dirname, '../src/renderer/remote-shim.ts'));
+  const handlers = readSourceFile(path.join(__dirname, '../src/main/ipc-handlers.ts'));
+  const remoteServer = readSourceFile(path.join(__dirname, '../src/main/remote-server.ts'));
+  for (const ch of channels) {
+    it(`${ch} present in preload, remote-shim, ipc-handlers, remote-server`, () => {
+      expect(preload).toContain(ch);
+      expect(shim).toContain(ch);
+      expect(handlers).toContain(ch);
+      expect(remoteServer).toContain(ch);
+    });
+  }
+
+  const kotlinPath = path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt');
+  if (fs.existsSync(kotlinPath)) {
+    const kotlin = readSourceFile(kotlinPath);
+    for (const ch of channels) {
+      it(`${ch} has an Android not-implemented-on-mobile stub in SessionService.kt`, () => {
+        expect(kotlin).toContain(`"${ch}"`);
+      });
+    }
+  } else {
+    it.skip('SessionService.kt not found — skipping Android project-extensions stub check', () => {});
+  }
+});
+
 // Native runtime capability flag (platform roadmap Phase 0 seam).
 // preload and remote-shim must both expose window.claude.native.supported —
 // the renderer gates the runtime selector on it without platform branching.

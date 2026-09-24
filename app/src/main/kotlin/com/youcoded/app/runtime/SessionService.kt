@@ -4303,6 +4303,17 @@ class SessionService : Service() {
             "permissions:list",
             "permissions:remove",
             "permissions:remove-project",
+            // Project skills & tools (project-plugin-controls, B-2 "later"):
+            // resolveAvailability/enforcement is desktop native harness only —
+            // Android has no per-project skill/MCP restriction to read or
+            // write until an Android opt-in exists. Reply not-implemented so
+            // the shared React UI hides the tab/chips instead of timing out;
+            // a phone paired to a desktop over remote access gets the full
+            // feature through that connection instead (remote-server.ts).
+            "project-extensions:get",
+            "project-extensions:set",
+            "project-extensions:for-session",
+            "project-extensions:import-skill",
             // Specialists 1c (Task 8) — roster + tier reads/writes + card
             // actions all read/write the DESKTOP native harness (SpecialistCatalog,
             // DelegationLedger, DelegatedModels), same as permissions:* above;

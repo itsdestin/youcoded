@@ -379,6 +379,56 @@ describe('McpManager', () => {
       expect(lease.servers.map((s) => s.id).sort()).toEqual(['off', 'on']);
       expect(connected.sort()).toEqual(['off', 'on']);
     });
+
+    // T2 review fix F2: a caller that already read listEnabled() (to compute
+    // allowIds) can hand that SAME list back in, so acquire() never re-reads
+    // the registry (a synchronous fs read plus per-secret decrypt) a second
+    // time for the same session create.
+    it('preResolved skips the registry read entirely and is still filtered by allowIds', async () => {
+      const resolveAllEnabled = vi.fn(async () => ([
+        { id: 'on', label: 'On', enabled: true, transport: { type: 'stdio', command: 'x' }, origin: { kind: 'user' }, missingSecrets: [] },
+      ] as any));
+      const connected: string[] = [];
+      const mgr = new McpManager({
+        registry: { resolveAllEnabled } as any,
+        connectionFactory: (s: any) => ({
+          state: 'ready' as const, lastError: null,
+          connect: async () => { connected.push(s.id); },
+          listTools: () => [],
+          callTool: async () => ({ text: 'ok', isError: false }),
+          close: async () => {},
+        }),
+      });
+      const preResolved = [
+        { id: 'on', label: 'On', enabled: true, transport: { type: 'stdio', command: 'x' }, origin: { kind: 'user' }, missingSecrets: [] },
+        { id: 'off', label: 'Off', enabled: true, transport: { type: 'stdio', command: 'y' }, origin: { kind: 'user' }, missingSecrets: [] },
+      ] as any;
+      const lease = await mgr.acquire('s1', new Set(['on']), preResolved);
+      expect(resolveAllEnabled).not.toHaveBeenCalled();
+      expect(lease.servers.map((s) => s.id)).toEqual(['on']);
+      expect(connected).toEqual(['on']); // 'off' (present only in preResolved) was correctly filtered out
+    });
+
+    it('preResolved with no allowIds connects every server in the preResolved list, still without reading the registry', async () => {
+      const resolveAllEnabled = vi.fn(async () => ([] as any));
+      const connected: string[] = [];
+      const mgr = new McpManager({
+        registry: { resolveAllEnabled } as any,
+        connectionFactory: (s: any) => ({
+          state: 'ready' as const, lastError: null,
+          connect: async () => { connected.push(s.id); },
+          listTools: () => [],
+          callTool: async () => ({ text: 'ok', isError: false }),
+          close: async () => {},
+        }),
+      });
+      const preResolved = [
+        { id: 'on', label: 'On', enabled: true, transport: { type: 'stdio', command: 'x' }, origin: { kind: 'user' }, missingSecrets: [] },
+      ] as any;
+      const lease = await mgr.acquire('s1', undefined, preResolved);
+      expect(resolveAllEnabled).not.toHaveBeenCalled();
+      expect(lease.servers.map((s) => s.id)).toEqual(['on']);
+    });
   });
 
   it('listEnabled reads the registry\'s raw enabled list without connecting anything', async () => {

@@ -1626,6 +1626,18 @@ contextBridge.exposeInMainWorld('claude', {
     remove: (slug: string, rule: unknown) => ipcRenderer.invoke('permissions:remove', slug, rule),
     removeProject: (slug: string) => ipcRenderer.invoke('permissions:remove-project', slug),
   },
+  // Project skills & tools (project-plugin-controls T3, design §4). `path` is
+  // always the project's canonical path (artifacts:list-projects-index's own
+  // `.path`) — see project-extensions/ipc-shell.ts's header comment for why
+  // no channel here ever exposes store.ts's internal sync-name-or-path
+  // storage key.
+  projectExtensions: {
+    get: (path: string) => ipcRenderer.invoke('project-extensions:get', path),
+    set: (path: string, changes: { plugin?: string; item?: string; on: boolean }[]) =>
+      ipcRenderer.invoke('project-extensions:set', path, changes),
+    forSession: (sessionId: string) => ipcRenderer.invoke('project-extensions:for-session', sessionId),
+    importSkill: (skillMdPath: string) => ipcRenderer.invoke('project-extensions:import-skill', skillMdPath),
+  },
   // Specialists 1c (Task 8) — roster + tier reads/writes + card actions.
   // Positional args, matching every other request-response namespace above
   // (permissions, search, providers) — the remote-shim equivalent below takes
