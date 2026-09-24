@@ -4,6 +4,55 @@ import os from 'os';
 import path from 'path';
 import { isBackupDue, datedFolderName, foldersToPrune, DailyBackup } from '../src/main/sync-spaces/daily-backup';
 import type { SyncSpace } from '../src/main/sync-spaces/types';
+import type { BackendInstance } from '../src/main/sync-state';
+
+const backend = (id: string, type: BackendInstance['type'], syncEnabled = true,
+  config: Record<string, string> = {}): BackendInstance => ({ id, label: id, type, syncEnabled, config });
+
+// WHY: exercise the same configuration-to-target composition the app supplies to startSyncSpaces.
+const targets = async (backends: BackendInstance[]) => {
+  const { loadSpaceBackupTargets } = await import('../src/main/sync-spaces/backup-targets');
+  return loadSpaceBackupTargets(async () => ({ backends }));
+};
+
+describe('automatic spaces backup targets', () => {
+  it('excludes paused Drive/iCloud and GitHub while keeping enabled target order', async () => {
+    expect(await targets([
+      backend('drive-a', 'drive', true, { rcloneRemote: 'personal', DRIVE_ROOT: 'My Files' }),
+      backend('drive-paused', 'drive', false),
+      backend('icloud-a', 'icloud', true, { ICLOUD_PATH: '/fixtures/cloud-a' }),
+      backend('github', 'github'),
+      backend('icloud-paused', 'icloud', false, { ICLOUD_PATH: '/fixtures/paused' }),
+      backend('drive-b', 'drive', true, { rcloneRemote: 'work', DRIVE_ROOT: 'Work' }),
+    ])).toEqual([
+      { type: 'drive', base: 'personal:My Files' },
+      { type: 'icloud', base: '/fixtures/cloud-a' },
+      { type: 'drive', base: 'work:Work' },
+    ]);
+  });
+
+  it('skips empty/missing iCloud paths and every non-true consent flag', async () => {
+    const malformed = [false, undefined, null, 0, 1, '', 'false', 'true'].map(flag => ({
+      ...backend(String(flag), 'drive'), syncEnabled: flag,
+    })) as unknown as BackendInstance[];
+    expect(await targets([...malformed, backend('icloud', 'icloud'), backend('blank', 'icloud', true, { ICLOUD_PATH: '' })])).toEqual([]);
+    expect(await targets([])).toEqual([]);
+  });
+
+  it('preserves Drive defaults, explicit empty strings and frozen input', async () => {
+    const entries = [
+      backend('defaults', 'drive'), backend('remote', 'drive', true, { rcloneRemote: '' }),
+      backend('root', 'drive', true, { DRIVE_ROOT: '' }),
+      backend('both', 'drive', true, { rcloneRemote: '', DRIVE_ROOT: '' }),
+    ];
+    entries.forEach(entry => { Object.freeze(entry.config); Object.freeze(entry); });
+    Object.freeze(entries);
+    expect(await targets(entries)).toEqual([
+      { type: 'drive', base: 'gdrive:Claude' }, { type: 'drive', base: ':Claude' },
+      { type: 'drive', base: 'gdrive:' }, { type: 'drive', base: ':' },
+    ]);
+  });
+});
 
 describe('isBackupDue', () => {
   it('due when no marker', () => expect(isBackupDue(null, new Date('2026-07-03T10:00:00Z'))).toBe(true));
