@@ -54,10 +54,18 @@ function port(): PlanHostPort {
     // fit the deleted "soft ChatGPT route" concept but tests nothing real
     // now — a ChatGPT-routed specialist's pricing snapshot is the thing
     // worth pinning (`pricingSnapshot`'s own `free`/`isFreePricing` check).
+    // Issue 2 fix (owner's live test): `free` is FALSE for chatgpt, matching
+    // `resolveContextAndProfile`'s real computation (native-session-host.ts:
+    // `type === 'local-engine' || isFreePricing(pricing)` — chatgpt is
+    // neither). This fake used to say `free: routeType === 'chatgpt'`, which
+    // made a ChatGPT route look like a zero-rate `{kind:'free'}` pricing
+    // snapshot in every test here; production actually freezes `pricing:
+    // null` for it (no published price, not free) — the exact mismatch that
+    // let plan-estimate.ts's ChatGPT note bug ship unnoticed.
     resolveRoute: async () => ({
       providerType: routeType, profile: CLOUD_DEFAULT,
       pricing: routeType === 'chatgpt' ? null : { in: 1, out: 2 },
-      free: routeType === 'chatgpt', contextLength: 100_000, totalSlots: null,
+      free: false, contextLength: 100_000, totalSlots: null,
     }),
     credentialReadiness: async (binding) => { readinessAsked.push(binding.modelId); return readiness; },
     maxConcurrent: () => 4,
@@ -100,11 +108,16 @@ describe('the frozen manifest — per-leaf-step resolution (design §5)', () => 
     expect(m.modelLabel).toBe('deepseek/deepseek-v4-flash-0731');
   });
 
-  it('a ChatGPT specialist freezes a free pricing snapshot, not a priced one', async () => {
+  it('a ChatGPT specialist freezes a null (no published price) pricing snapshot, never a priced or free one', async () => {
+    // Issue 2 fix: a ChatGPT sign-in binding has no per-token rate card — it
+    // is unpriced, not `{kind:'free'}` (that shape means a zero-RATE model,
+    // e.g. an OpenRouter `:free` variant — see `isFreePricing`, pricing.ts).
+    // plan-estimate.ts's `noteFor` reads the PROVIDER id for the ChatGPT
+    // wording now, precisely because this snapshot is null, not 'free'.
     parentBinding = { providerId: 'chatgpt', modelId: 'gpt-parent' };
     routeType = 'chatgpt';
     const m = await new PlanHostBridge(port()).resolveManifest({ sessionId: SID, cwd: '/proj', document: DOC });
-    expect(m.steps.s1).toMatchObject({ binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' }, pricing: { kind: 'free' } });
+    expect(m.steps.s1).toMatchObject({ binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' }, pricing: null });
   });
 
   it('the document\'s own step `model` wins over the specialist default, and falls back to it when absent', async () => {
@@ -615,6 +628,137 @@ describe('Ask the assistant', () => {
     expect((bridge as any).noticeTurns.size).toBe(0);
     expect((bridge as any).handoffs.size).toBe(0);
     expect((await t.handoff())!.state).toBe('answered');
+  });
+});
+
+// Issue 1 fix + decision 38: two automatic "lifecycle" notices the host
+// queues without the user asking — a plan starts running (Approve/
+// auto-start) and a plan finishes. `queueLifecycleNotice`/`notifyRunning`
+// are exercised directly (the private-method route every other durability
+// test in this file already uses, e.g. `(bridge as any).handoffs`) so these
+// tests don't need a full scripted specialist run just to reach a
+// `completed`/`running` plan record.
+describe('plan lifecycle notices (issue 1 fix + decision 38)', () => {
+  const REF = { cwd: '/proj', sessionId: SID };
+  type Notice = Parameters<PlanHostPort['queuePlanNotice']>[1];
+  const runningRecord = (over: Partial<PlanRecord> = {}): PlanRecord => pausedRecord({
+    planId: 'p-life', status: 'running', paused: undefined, ...over,
+  });
+  async function setup(over: Partial<PlanHostPort> = {}) {
+    const queued: Notice[] = [];
+    const bridge = new PlanHostBridge({ ...port(), queuePlanNotice: (_s, n) => { queued.push(n); return true; }, ...over });
+    return { bridge, queued };
+  }
+  /** Every queued lifecycle notice settles it in the test — no card, no
+   *  handoff, nothing to leave open. */
+  const settle = (n: Notice, failed?: string) => { n.onStart(); n.onEnd(failed !== undefined ? { failed } : undefined); };
+
+  it('a plan durably running (Approve) gets exactly one "running" notice, hidden-prefixed and naming the plan', async () => {
+    const t = await setup();
+    await t.bridge.journal.mutate(REF, (file) => { file.plans.push(runningRecord()); });
+    const view = await t.bridge.journal.get(REF, 'p-life').then((p) => ({ status: p!.status, planId: p!.planId }));
+    // `notifyRunning` fires the queue as fire-and-forget (never awaited by its
+    // own callers, approve()/propose() — see their own WHY comments), so the
+    // notice appears a tick after it returns, not synchronously with it.
+    (t.bridge as any).notifyRunning(SID, view);
+    await vi.waitFor(() => expect(t.queued).toHaveLength(1));
+    expect(t.queued[0].text.startsWith('[Plan running]')).toBe(true);
+    expect(t.queued[0].text).toContain('Plan id: p-life');
+    expect(t.queued[0].text).toContain('ONE-LINE confirmation');
+    settle(t.queued[0]);
+    await vi.waitFor(async () => expect((await t.bridge.journal.get(REF, 'p-life'))!.runningNotified).toBe(true));
+  });
+
+  it('notifyRunning is a no-op for anything other than a plan that is actually `running` (e.g. Continue/resume never queues one)', async () => {
+    const t = await setup();
+    (t.bridge as any).notifyRunning(SID, { status: 'proposed', planId: 'x' });
+    (t.bridge as any).notifyRunning(SID, { status: 'paused', planId: 'x' });
+    expect(t.queued).toHaveLength(0);
+  });
+
+  it('a completed plan gets exactly one "completed" notice, carrying the last step\'s report', async () => {
+    const t = await setup();
+    const rec = runningRecord({
+      status: 'completed', endedAt: 5,
+      steps: [{ id: 's1', status: 'done', attempts: [{
+        attemptId: 'a1', itemIndex: 0, iteration: 0, spentTokens: 10, phase: 'committed', terminal: 'completed', reportText: 'The final answer.',
+      }] }],
+    });
+    await t.bridge.journal.mutate(REF, (file) => { file.plans.push(rec); });
+    await (t.bridge as any).queueLifecycleNotice(REF, 'p-life', 'completed');
+    expect(t.queued).toHaveLength(1);
+    expect(t.queued[0].text.startsWith('[Plan completed]')).toBe(true);
+    expect(t.queued[0].text).toContain('The final answer.');
+    expect(t.queued[0].text).toContain('1 step ran, 1 specialist run completed.');
+  });
+
+  it('never queues twice: a plan already marked notified is skipped, even across a fresh bridge (simulated reload)', async () => {
+    const t1 = await setup();
+    const rec = runningRecord();
+    await t1.bridge.journal.mutate(REF, (file) => { file.plans.push(rec); });
+    await (t1.bridge as any).queueLifecycleNotice(REF, 'p-life', 'running');
+    expect(t1.queued).toHaveLength(1);
+    settle(t1.queued[0]); // marks runningNotified durably
+    await vi.waitFor(async () => expect((await t1.bridge.journal.get(REF, 'p-life'))!.runningNotified).toBe(true));
+    // A brand new bridge instance (the "reload") reads the SAME durable flag.
+    const t2 = await setup();
+    await (t2.bridge as any).queueLifecycleNotice(REF, 'p-life', 'running');
+    expect(t2.queued).toHaveLength(0);
+  });
+
+  it('a queueing failure (conversation not open/held) marks nothing, so recover() retries it once the conversation opens', async () => {
+    let open = false;
+    const t = await setup({ noticeRefusal: () => (open ? undefined : 'not open here') });
+    const rec = runningRecord();
+    await t.bridge.journal.mutate(REF, (file) => { file.plans.push(rec); });
+    // A genuinely running plan holds a SELF-owned lease — without one,
+    // recover()'s own crash-recovery pass (recoverInterrupted) would read a
+    // running-with-no-lease record as abandoned and flip it to `interrupted`
+    // before this test's own scan ever ran.
+    await t.bridge.journal.acquireLease(REF, 'p-life', {});
+    await (t.bridge as any).queueLifecycleNotice(REF, 'p-life', 'running');
+    expect(t.queued).toHaveLength(0);
+    expect((await t.bridge.journal.get(REF, 'p-life'))!.runningNotified).toBeUndefined();
+    // The conversation opens: recover()'s own scan picks up the un-notified plan.
+    open = true;
+    await t.bridge.recover(SID, '/proj');
+    await vi.waitFor(() => expect(t.queued).toHaveLength(1));
+    expect(t.queued[0].text.startsWith('[Plan running]')).toBe(true);
+  });
+
+  it('two concurrent attempts to queue the SAME lifecycle notice (e.g. a live onCompleted racing a recover() scan) queue only one', async () => {
+    const t = await setup();
+    const rec = runningRecord({ status: 'completed', endedAt: 5, steps: [{ id: 's1', status: 'done', attempts: [] }] });
+    await t.bridge.journal.mutate(REF, (file) => { file.plans.push(rec); });
+    await Promise.all([
+      (t.bridge as any).queueLifecycleNotice(REF, 'p-life', 'completed'),
+      (t.bridge as any).queueLifecycleNotice(REF, 'p-life', 'completed'),
+    ]);
+    expect(t.queued).toHaveLength(1);
+  });
+
+  it('ordering: a running notice queued before a completion notice for the same plan stays ahead of it (decision 38\'s "very fast plan" case)', async () => {
+    const t = await setup();
+    await t.bridge.journal.mutate(REF, (file) => { file.plans.push(runningRecord()); });
+    // Both triggers fire close together (Approve, then the plan finishes
+    // before its running notice was delivered) — they still queue in the
+    // order they were called, and the shared per-session queue is FIFO.
+    await (t.bridge as any).queueLifecycleNotice(REF, 'p-life', 'running');
+    await t.bridge.journal.mutate(REF, (file) => {
+      const p = file.plans.find((x) => x.planId === 'p-life')!;
+      p.status = 'completed'; p.endedAt = 5; p.steps = [{ id: 's1', status: 'done', attempts: [] }];
+    });
+    await (t.bridge as any).queueLifecycleNotice(REF, 'p-life', 'completed');
+    expect(t.queued.map((n) => (n.text.startsWith('[Plan running]') ? 'running' : 'completed'))).toEqual(['running', 'completed']);
+  });
+
+  it('a notice turn that ends in a provider error is still marked notified (no retry loop) — the failure is only logged', async () => {
+    const t = await setup();
+    const rec = runningRecord();
+    await t.bridge.journal.mutate(REF, (file) => { file.plans.push(rec); });
+    await (t.bridge as any).queueLifecycleNotice(REF, 'p-life', 'running');
+    settle(t.queued[0], 'the model provider returned an error');
+    await vi.waitFor(async () => expect((await t.bridge.journal.get(REF, 'p-life'))!.runningNotified).toBe(true));
   });
 });
 

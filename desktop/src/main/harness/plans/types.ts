@@ -400,6 +400,15 @@ const PlanRecordSchema = z.object({
   /** Task 9b: the assistant replaced this paused plan with a revised one from
    *  the pause's notice turn (the card must not say "after your comment"). */
   revisedOnPause: z.literal(true).optional(),
+  /** Issue 1 fix + decision 38: true once the assistant has actually been
+   *  told — its notice turn ENDED, never merely queued — that this plan
+   *  started running (Approve or auto-start) / finished. Read by
+   *  `PlanHostBridge.queueLifecycleNotice` before queuing (so a delivered
+   *  notice is never resent) and by `recover()` (so a notice that never got
+   *  to queue, e.g. the app closed first, is tried again the next time this
+   *  conversation opens — never lost, never duplicated). */
+  runningNotified: z.literal(true).optional(),
+  completionNotified: z.literal(true).optional(),
   manifest: ExecutionManifestSchema,
   steps: z.array(PlanStepRecordSchema),
   /** Highest fencing epoch ever issued — survives lease release, so a later

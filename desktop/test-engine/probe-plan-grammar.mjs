@@ -72,12 +72,20 @@ let TRIALS;
 // field changes neither the recursion bound nor the per-kind union shape the
 // probe actually exercises — the question this probe answers ("can a local
 // model fill a deep tree at all") is unaffected.
+// 2026-09-24 (issue 3, owner's live test): `model`'s DESCRIPTION TEXT ONLY is
+// reworded to a flat prohibition (a live plan froze a model on a step nobody
+// asked to change, under the older, softer "only when the user explicitly
+// asked... otherwise omit" wording). The field's type, maxLength and
+// optionality are unchanged, so this is not a shape the probe exercises
+// differently — the probe was NOT re-run, same reasoning as every change
+// above it. Kept byte-identical to plans/schema.ts's copy (plan-schema.test.ts
+// pins the two equal).
 const FIELD = {
   id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
   specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
   task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
   summary: { type: 'string', minLength: 1, maxLength: 200, description: 'One plain sentence for the user who approves this plan, in everyday words: what this step does. Not a restatement of task, no jargon, no file paths or tool names.' },
-  model: { type: 'string', maxLength: 128, description: 'Only when the user explicitly asked for a model for this step: "budget", "frontier", or an exact model id. Otherwise omit.' },
+  model: { type: 'string', maxLength: 128, description: 'Leave unset. Do NOT set this yourself for any reason (a step seeming hard, slow, cheap, or important is not a reason) — that is the user\'s decision alone, never yours. Set it ONLY when the user has explicitly named a model or provider for this exact step, earlier in this conversation: "budget", "frontier", or an exact model id.' },
   items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
   of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
   max_iterations: { type: 'integer', minimum: 1, maximum: 5, description: 'repeat only: hard cap.' },

@@ -234,6 +234,13 @@ export interface PlanRunner {
    *  journal still says `running` under this process's lease. The host runs
    *  recovery (with `PlanExecutor.orphanReason`) to show the real state. */
   onOrphaned?(ref: PlanRef, planId: string): void;
+  /** Issue 1 fix: the plan just reached `completed`, in the SAME write
+   *  `settle()` used to record it (called right after that write lands, so
+   *  the host reads a durably-completed plan, never a race). The host queues
+   *  the "your plan finished" notice; never awaited and never throws past
+   *  here — a notice that can't be queued right now (conversation not open)
+   *  is retried the next time this conversation opens (PlanHostBridge.recover). */
+  onCompleted?(ref: PlanRef, planId: string): void;
 }
 
 
@@ -509,6 +516,76 @@ function latestAttempt(rec: PlanStepRecord, itemIndex: number, iteration: number
 
 function shorten(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}\n[… shortened: ${text.length - max} more characters not shown]`;
+}
+
+/** The bounded, labelled reports one verify/combine (or repeat-round) step
+ *  reads from an earlier step — shared by `briefFor` (a running specialist's
+ *  own brief) and, module-scope (issue 1 fix), `finalStepReportsText` below,
+ *  which reads the PLAN'S last step the same way for the completion notice.
+ *  WHY module scope, not a method: neither caller needs executor state, and
+ *  the completion notice is built from a bare `PlanRecord`, off the hot
+ *  path, with no `PlanExecutor` instance in hand. */
+function dependencyReports(plan: PlanRecord, ofId: string, iteration: number): Array<{ text: string; label?: string }> {
+  const def = allSteps(plan.document.steps).find((s) => s.id === ofId);
+  if (!def) return [];
+  if (def.kind === 'repeat') {
+    // A repeat's result is its final check's last completed round.
+    const leaf = def.steps![def.steps!.length - 1];
+    const rec = plan.steps.find((s) => s.id === leaf.id);
+    const last = Math.max(-1, ...(rec?.attempts.filter((a) => isCommitted(a) && a.terminal === 'completed').map((a) => a.iteration) ?? []));
+    return last < 0 ? [] : dependencyReports(plan, leaf.id, last);
+  }
+  const rec = plan.steps.find((s) => s.id === ofId);
+  if (!rec) return [];
+  // A step inside the same repeat body is read from THIS round; a step
+  // outside any repeat only ever has round 0.
+  const inSameRepeat = plan.document.steps.some((s) => s.kind === 'repeat' && s.steps!.some((b) => b.id === ofId));
+  const round = inSameRepeat ? iteration : 0;
+  const finalLeafOfRepeat = isFinalLeaf(plan.document.steps, ofId);
+  const out: Array<{ text: string; label?: string }> = [];
+  for (let i = 0; i < itemCount(def); i++) {
+    const a = latestAttempt(rec, i, round);
+    if (!a || !isCommitted(a) || a.terminal !== 'completed') continue;
+    let text = a.reportText ?? '';
+    if (finalLeafOfRepeat) {
+      const parsed = parseRepeatDecision(text);
+      if (parsed.ok) text = parsed.report;
+    }
+    out.push({ text, ...(def.kind === 'map' ? { label: `item: ${def.items![i]}` } : {}) });
+  }
+  return out;
+}
+
+/**
+ * Issue 1 (completion notice): the plan's LAST document-level step's
+ * committed report(s), bounded and labelled exactly the way a verify/combine
+ * step already reads an earlier one's (`dependencyReports`/`briefFor`) — the
+ * completion notice reuses the identical shape so the assistant reads the
+ * plan's own final work the same way it already reads an intermediate
+ * result, rather than inventing a second format. A step with no committed
+ * report (should not happen for a plan that reached `completed`, but the
+ * journal is read fresh, not assumed) says so plainly instead of an empty
+ * block.
+ */
+export function finalStepReportsText(plan: PlanRecord): string {
+  const steps = plan.document.steps;
+  const last = steps[steps.length - 1];
+  if (!last) return '(this plan had no steps)';
+  const reports = dependencyReports(plan, last.id, 0);
+  if (reports.length === 0) return '(no report was recorded for the last step)';
+  const perReport = Math.min(PLAN_DEPENDENCY_REPORT_MAX_CHARS, Math.floor(PLAN_DEPENDENCY_TOTAL_MAX_CHARS / Math.max(1, reports.length)));
+  return reports
+    .map((r, i) => `--- Report ${fmtItem(i, reports.length)} from step "${last.id}"${r.label ? ` (${r.label})` : ''} ---\n${shorten(r.text, perReport)}`)
+    .join('\n\n');
+}
+
+/** Issue 1 (completion notice): "a one-line summary of what ran" — every
+ *  fact here already lives on the record (top-level step count, committed
+ *  specialist runs), so nothing is invented for the assistant to relay. */
+export function planRunSummary(plan: PlanRecord): string {
+  const stepCount = plan.document.steps.length;
+  const runs = plan.steps.reduce((n, s) => n + s.attempts.filter(isCommitted).length, 0);
+  return `${stepCount} step${stepCount === 1 ? '' : 's'} ran, ${runs} specialist run${runs === 1 ? '' : 's'} completed.`;
 }
 
 function errorText(e: unknown): string {
@@ -1601,7 +1678,7 @@ export class PlanExecutor implements PlanExecutorHooks {
   private briefFor(plan: PlanRecord, step: PlanStepV1, iteration: number, finalLeaf: boolean): (itemIndex: number) => string {
     let dependencies = '';
     if (step.of !== undefined) {
-      const reports = this.dependencyReports(plan, step.of, iteration);
+      const reports = dependencyReports(plan, step.of, iteration);
       const perReport = Math.min(PLAN_DEPENDENCY_REPORT_MAX_CHARS, Math.floor(PLAN_DEPENDENCY_TOTAL_MAX_CHARS / Math.max(1, reports.length)));
       const blocks = reports.map((r, i) => `--- Result ${fmtItem(i, reports.length)} from step "${step.of}"${r.label ? ` (${r.label})` : ''} ---\n${shorten(r.text, perReport)}`);
       dependencies = `\n\nResults to work from (${reports.length}):\n\n${blocks.join('\n\n')}`;
@@ -1614,7 +1691,7 @@ export class PlanExecutor implements PlanExecutorHooks {
     let previousRound = '';
     if (repeat && iteration > 0 && repeat.steps![0].id === step.id) {
       const leaf = repeat.steps![repeat.steps!.length - 1];
-      const reports = this.dependencyReports(plan, leaf.id, iteration - 1);
+      const reports = dependencyReports(plan, leaf.id, iteration - 1);
       const perReport = Math.min(PLAN_DEPENDENCY_REPORT_MAX_CHARS, Math.floor(PLAN_DEPENDENCY_TOTAL_MAX_CHARS / Math.max(1, reports.length)));
       const blocks = reports.map((r, i) => `--- Check ${fmtItem(i, reports.length)} from round ${iteration} (step "${leaf.id}")${r.label ? ` (${r.label})` : ''} ---\n${shorten(r.text, perReport)}`);
       if (blocks.length > 0) {
@@ -1635,37 +1712,6 @@ export class PlanExecutor implements PlanExecutorHooks {
       }
       return `${task}${previousRound}${dependencies}${decisionRules}`;
     };
-  }
-
-  private dependencyReports(plan: PlanRecord, ofId: string, iteration: number): Array<{ text: string; label?: string }> {
-    const def = allSteps(plan.document.steps).find((s) => s.id === ofId);
-    if (!def) return [];
-    if (def.kind === 'repeat') {
-      // A repeat's result is its final check's last completed round.
-      const leaf = def.steps![def.steps!.length - 1];
-      const rec = plan.steps.find((s) => s.id === leaf.id);
-      const last = Math.max(-1, ...(rec?.attempts.filter((a) => isCommitted(a) && a.terminal === 'completed').map((a) => a.iteration) ?? []));
-      return last < 0 ? [] : this.dependencyReports(plan, leaf.id, last);
-    }
-    const rec = plan.steps.find((s) => s.id === ofId);
-    if (!rec) return [];
-    // A step inside the same repeat body is read from THIS round; a step
-    // outside any repeat only ever has round 0.
-    const inSameRepeat = plan.document.steps.some((s) => s.kind === 'repeat' && s.steps!.some((b) => b.id === ofId));
-    const round = inSameRepeat ? iteration : 0;
-    const finalLeafOfRepeat = isFinalLeaf(plan.document.steps, ofId);
-    const out: Array<{ text: string; label?: string }> = [];
-    for (let i = 0; i < itemCount(def); i++) {
-      const a = latestAttempt(rec, i, round);
-      if (!a || !isCommitted(a) || a.terminal !== 'completed') continue;
-      let text = a.reportText ?? '';
-      if (finalLeafOfRepeat) {
-        const parsed = parseRepeatDecision(text);
-        if (parsed.ok) text = parsed.report;
-      }
-      out.push({ text, ...(def.kind === 'map' ? { label: `item: ${def.items![i]}` } : {}) });
-    }
-    return out;
   }
 
   // -- settling --
@@ -1813,6 +1859,17 @@ export class PlanExecutor implements PlanExecutorHooks {
           p.status = 'interrupted';
         }
       });
+      // Issue 1 fix: fired AFTER the write above durably lands, never before
+      // — the host reads a plan that really is `completed` on disk, and a
+      // hook that throws (or a host that is slow) can never delay or corrupt
+      // this write. Only for a genuine completion; a pause/interrupt/stop
+      // needs no notice (a paused card already explains itself, and a user
+      // Stop needs none — see the completion-notice WHY in plan-host-bridge.ts).
+      if (final.kind === 'complete') {
+        try { this.runner.onCompleted?.(run.ref, run.planId); } catch (err) {
+          console.error('[plan-executor] onCompleted listener threw', err);
+        }
+      }
     } catch (e) {
       if (!this.onJournalError(run, e)) {
         // Final review F2: the run is over, but the journal still says

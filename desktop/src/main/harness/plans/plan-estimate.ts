@@ -109,8 +109,20 @@ function readPricingSnapshot(value: unknown): PricingSnapshot | null {
   return null;
 }
 
-function noteFor(snapshot: PricingSnapshot | null): string {
-  if (snapshot?.kind === 'free') return CHATGPT_NOTE;
+/**
+ * Issue 2 fix (owner's live test): a ChatGPT sign-in specialist's pricing
+ * snapshot is `null` — ChatGPT has no per-token rate card, so it is
+ * genuinely "no published price", not `{kind:'free'}` (that shape is a
+ * zero-RATE OpenRouter `:free` model, a different thing entirely; see
+ * `isFreePricing`, pricing.ts). Classifying by the snapshot's kind therefore
+ * can never reach decision 34 Q-5's ChatGPT wording — it must be read off
+ * the FROZEN BINDING's own provider id instead, which is available however
+ * the snapshot came out. Provider identity wins over the snapshot's kind
+ * (checked first) so a ChatGPT binding always reads "included in your
+ * ChatGPT plan", never "no published price".
+ */
+function noteFor(snapshot: PricingSnapshot | null, providerId: string): string {
+  if (providerId === 'chatgpt') return CHATGPT_NOTE;
   if (snapshot?.kind === 'local') return LOCAL_NOTE;
   return NO_PUBLISHED_PRICE;
 }
@@ -247,7 +259,7 @@ export function estimatePlan(
       pricedSteps++;
     } else {
       unpricedTokens += low * stats.medianTokens;
-      const note = noteFor(snapshot);
+      const note = noteFor(snapshot, manifestStep.binding.providerId);
       if (!unpricedNotes.includes(note)) unpricedNotes.push(note);
     }
   }

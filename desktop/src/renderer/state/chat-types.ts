@@ -1,4 +1,4 @@
-import { ChatMessage, PLAN_ASK_DETAIL_HEADER, PLAN_ASK_NOTICE_LEAD, PLAN_ASK_QUESTION_CLOSE, PLAN_ASK_QUESTION_LABEL, PLAN_ASK_QUESTION_OPEN, PLAN_NOTICE_PREFIX, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop } from '../../shared/types';
+import { ChatMessage, PLAN_ASK_DETAIL_HEADER, PLAN_ASK_NOTICE_LEAD, PLAN_ASK_QUESTION_CLOSE, PLAN_ASK_QUESTION_LABEL, PLAN_ASK_QUESTION_OPEN, PLAN_COMPLETE_NOTICE_PREFIX, PLAN_NOTICE_PREFIX, PLAN_RUNNING_NOTICE_PREFIX, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PlanView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText, type FloorStop } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -177,7 +177,12 @@ export function userEntryRenderKind(entry: { message: { content: string }; injec
   if (!entry.injected || entry.injectedMeta) return 'show';
   const text = entry.message.content;
   if (text.startsWith(PLAN_ASK_NOTICE_LEAD)) return 'ask-message';
-  return text.startsWith(PLAN_NOTICE_PREFIX) ? 'hide' : 'show';
+  // Issue 1 fix + decision 38: the plan-lifecycle notices ("your plan is
+  // running" / "your plan finished") are automatic too, so they hide the
+  // same way the pause notice does — the user only ever sees the
+  // assistant's own reply, never a row for the notice itself.
+  if (text.startsWith(PLAN_NOTICE_PREFIX) || text.startsWith(PLAN_RUNNING_NOTICE_PREFIX) || text.startsWith(PLAN_COMPLETE_NOTICE_PREFIX)) return 'hide';
+  return 'show';
 }
 
 // Snapshot of session stats + rate limits captured when /cost or /usage was typed.

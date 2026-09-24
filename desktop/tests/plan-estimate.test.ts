@@ -171,11 +171,28 @@ describe('estimatePlan — unpriced notes', () => {
     if ('tokens' in est) expect(est.tokens).toBeGreaterThan(0);
   });
 
-  it('an all-ChatGPT (free-kind) plan returns tokens + "included in your ChatGPT plan"', () => {
+  // Issue 2 fix (owner's live test): a ChatGPT sign-in step freezes a NULL
+  // pricing snapshot (no per-token rate card exists) — never `{kind:'free'}`,
+  // which means a genuinely zero-RATE model instead (see the next test). The
+  // ChatGPT wording is read off the frozen binding's own PROVIDER id, so it
+  // applies even though the snapshot is null.
+  it('an all-ChatGPT plan (pricing snapshot null, provider chatgpt) returns tokens + "included in your ChatGPT plan"', () => {
     const document = doc([{ id: 's1', kind: 'verify', specialist: 'worker', task: 't', summary: 's', of: 'x' }]);
-    const steps = manifestSteps(['s1'], { pricing: { kind: 'free' } });
+    const steps = manifestSteps(['s1'], { pricing: null, binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' } });
     const est = estimatePlan(document, steps, EMPTY_HISTORY);
     expect(est).toMatchObject({ unpricedNote: 'included in your ChatGPT plan' });
+  });
+
+  // A `{kind:'free'}` snapshot is a genuinely zero-rate model (an OpenRouter
+  // `:free` variant), unrelated to ChatGPT — issue 2's fix stopped reading
+  // this shape as "must be ChatGPT" (the OLD, wrong classification this bug
+  // report traced back to). No dedicated free-model wording exists yet, so it
+  // reads as unpriced, same as no snapshot at all — never the ChatGPT note.
+  it('a genuinely free (zero-rate) non-ChatGPT step never reads as "included in your ChatGPT plan"', () => {
+    const document = doc([{ id: 's1', kind: 'verify', specialist: 'worker', task: 't', summary: 's', of: 'x' }]);
+    const steps = manifestSteps(['s1'], { pricing: { kind: 'free' }, binding: { providerId: 'openrouter', modelId: 'some/model:free' } });
+    const est = estimatePlan(document, steps, EMPTY_HISTORY);
+    expect(est).toMatchObject({ unpricedNote: 'no published price' });
   });
 
   it('a plan with no published price at all returns tokens + "no published price"', () => {
@@ -199,7 +216,7 @@ describe('estimatePlan — unpriced notes', () => {
     ]);
     const steps: ExecutionManifest['steps'] = {
       ...manifestSteps(['s1'], { pricing: { kind: 'local' } }),
-      ...manifestSteps(['s2'], { pricing: { kind: 'free' } }),
+      ...manifestSteps(['s2'], { pricing: null, binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' } }),
     };
     const est = estimatePlan(document, steps, EMPTY_HISTORY);
     expect(est).toMatchObject({ unpricedNote: 'runs on your computer and included in your ChatGPT plan' });
@@ -215,7 +232,7 @@ describe('estimatePlan — unpriced notes', () => {
     ]);
     const steps: ExecutionManifest['steps'] = {
       ...manifestSteps(['s1'], { pricing: { kind: 'local' } }),
-      ...manifestSteps(['s2'], { pricing: { kind: 'free' } }),
+      ...manifestSteps(['s2'], { pricing: null, binding: { providerId: 'chatgpt', modelId: 'gpt-5.6-terra' } }),
       ...manifestSteps(['s3'], { pricing: null }),
     };
     const est = estimatePlan(document, steps, EMPTY_HISTORY);

@@ -107,6 +107,8 @@ class FakeRunner implements PlanRunner {
   }
   onUnreadable(_ref: PlanRef, planId: string, detail: string): void { this.unreadable.push(`${planId}:${detail}`); }
   onOrphaned?: (ref: PlanRef, planId: string) => void;
+  /** Issue 1 fix: fired once, after the write that marks a plan `completed`. */
+  onCompleted?: (ref: PlanRef, planId: string) => void;
   /** Task 13 (decision 26): the provider's own sentence, when it can't run. */
   notReady: string | undefined = undefined;
   notReadyAsked: string[] = [];
@@ -455,6 +457,54 @@ describe('durable completion and resume', () => {
     // 'prepared') and is marked acknowledged in the same write, so the next
     // Continue restarts it with the check-first turn instead of re-pausing.
     expect(p.steps[0].attempts[1]).toMatchObject({ phase: 'launched', pauseAcknowledged: true, spentTokens: 300 });
+  });
+});
+
+// Issue 1 fix: today only a user-requested pause handoff queues a notice
+// turn — a COMPLETED plan queues nothing, so the assistant never learns its
+// own plan finished and the chat goes silent. `onCompleted` is the executor's
+// hook for that (PlanHostBridge implements it — plan-host-bridge.test.ts
+// covers the actual notice text/queueing/durability; this only pins WHEN and
+// HOW OFTEN the executor calls the hook, and that a hook throwing never
+// corrupts the write it fires after).
+describe('onCompleted (issue 1 fix)', () => {
+  it('fires exactly once, with this run\'s ref and planId, only AFTER the completed write lands', async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    const calls: Array<{ ref: PlanRef; planId: string }> = [];
+    runner.onCompleted = (ref, planId) => { calls.push({ ref, planId }); };
+    const fence = await seed(record(TWO_STEP));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    expect((await plan()).status).toBe('completed');
+    expect(calls).toEqual([{ ref: REF, planId: 'p1' }]);
+  });
+
+  it('never fires for a pause, a stop, or an interruption — only a real completion', async () => {
+    // Pause: one step fails with a Bash call left dangling → unknown-outcome.
+    const paused = new FakeRunner(() => failsWith('boom'));
+    const pausedCalls: string[] = [];
+    paused.onCompleted = (_ref, planId) => { pausedCalls.push(planId); };
+    const fence1 = await seed(record(TWO_STEP));
+    const exec1 = executor(paused);
+    exec1.start({ ref: REF, planId: 'p1', fence: fence1 });
+    await exec1.settled('p1');
+    expect((await plan()).status).toBe('paused');
+    expect(pausedCalls).toEqual([]);
+  });
+
+  it('a throwing onCompleted never corrupts the completed write or the settle it followed', async () => {
+    const runner = new FakeRunner(() => completes('ok'));
+    runner.onCompleted = () => { throw new Error('listener blew up'); };
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const fence = await seed(record(TWO_STEP));
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const p = await plan();
+    expect(p.status).toBe('completed');
+    expect(p.lease).toBeUndefined();
+    expect(errSpy).toHaveBeenCalled();
   });
 });
 

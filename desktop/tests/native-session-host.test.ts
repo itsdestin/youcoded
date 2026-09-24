@@ -6361,13 +6361,19 @@ describe('specialists plans in the native host (Task 4)', () => {
       let revisionTurnId: string | undefined;
       // Final review F27 (R37): the notice seam itself, watched from before the
       // run starts — a pause reached by the real executor must never reach it.
+      // Issue 1 fix + decision 38: the SAME seam now also carries the
+      // "your plan is running" notice `pauseOnBudget`'s own `approvePlan`
+      // legitimately queues — unrelated to this test's invariant (no pause
+      // ever hands itself over), so calls are narrowed to PAUSE-HANDOFF-
+      // shaped ones (`[Plan paused]`) throughout this test.
       const queueNotice = vi.spyOn(host as any, 'queuePlanNotice');
+      const handoffCalls = () => queueNotice.mock.calls.filter(([, n]: [unknown, { text: string }]) => n.text.startsWith('[Plan paused]'));
       const planId = await pauseOnBudget();
       // §6: nothing happens until the user asks. The pause (a positive signal
       // pauseOnBudget already waited for) has landed and the lease is gone, so
       // this settles the negatives.
       await new Promise((r) => setTimeout(r, 40));
-      expect(queueNotice).not.toHaveBeenCalled();
+      expect(handoffCalls()).toHaveLength(0);
       expect(handoff()).toBeUndefined();
       expect(notices()).toHaveLength(0);
       expect(parentPrompts.some((p) => p.includes('[Plan paused]'))).toBe(false);
@@ -6384,7 +6390,7 @@ describe('specialists plans in the native host (Task 4)', () => {
       const res = await ask(planId);
       // The same seam the pause never touched: the user's press does reach it,
       // exactly once — so the check above is a real negative, not a dead spy.
-      expect(queueNotice).toHaveBeenCalledTimes(1);
+      expect(handoffCalls()).toHaveLength(1);
       expect(res).toMatchObject({ ok: true, plan: { status: 'paused', paused: { handoff: { state: 'pending' } } } });
       expect((res as any).plan.paused.handoff.waiting).toBeUndefined();
       // WHY also the revision: the recommendation marks the question answered
@@ -6720,7 +6726,16 @@ describe('specialists plans in the native host (Task 4)', () => {
       await host.create({ sessionId: SID, cwd: root, binding: PARENT });
       parentSteps = [
         proposeStep('call-a', { ...SMALL, goal: 'Plan A' }), proposeStep('call-b', { ...SMALL, goal: 'Plan B' }),
-        textStep('Two plans.'), gatedNotice, gatedNotice,
+        textStep('Two plans.'),
+        // Issue 1 fix + decision 38: each `approvePlan` below now ALSO
+        // queues a "your plan is running" notice — its own parent turn,
+        // unrelated to this test's own two ASK-triggered notice turns
+        // (`gatedNotice, gatedNotice`), so it needs its own scripted reply
+        // or it silently consumes one of theirs (see the delivery order WHY
+        // at plan-host-bridge.ts's `queueLifecycleNotice`: same per-session
+        // FIFO queue as the ask handoff notice, so these two run first).
+        textStep('Approved.'), textStep('Approved.'),
+        gatedNotice, gatedNotice,
       ];
       host.send(SID, 'Plan both');
       await waitFor(() => planStatus().filter((st: string) => st === 'proposed').length === 2, 'both proposals');
@@ -6730,6 +6745,10 @@ describe('specialists plans in the native host (Task 4)', () => {
       for (const p of plans) await host.setPlanLimit(SID, p.planId, { usd: 0.001 });
       childReply = () => ({ chunks: [...textChunks('x', 'REPORT a'), finishChunk('stop', 2_000, 2_000)] });
       for (const p of plans) await host.approvePlan(SID, p.planId);
+      // Issue 1 fix: let both "running" notice turns drain before the asks
+      // below queue theirs — otherwise a running notice could still be
+      // mid-flight and consume a `gatedNotice` meant for an ask.
+      await waitFor(() => host.isIdle(SID) && (host as any).pendingHostNotices.get(SID) === undefined, 'both running notices delivered');
       await waitFor(() => planStatus().every((st: string) => st === 'paused') && journalFile().plans.every((p: any) => !p.lease), 'both pauses');
       for (const p of plans) expect(await ask(p.planId)).toMatchObject({ ok: true });
       await waitFor(() => gates.length === 1, 'the first notice turn');

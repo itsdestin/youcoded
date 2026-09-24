@@ -26,7 +26,9 @@ import { nativeToolEffect } from '../tools';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
 import { PlanService, type PlanHandoffProblem, type PlanProposal, type PlanRecommendation } from './plan-service';
-import { PLAN_HANDOFF_BACKSTOP_MS, normalizePlanQuestion, planHandoffNotice } from './plan-handoff';
+import {
+  PLAN_HANDOFF_BACKSTOP_MS, normalizePlanQuestion, planApprovalNotice, planCompletionNotice, planHandoffNotice,
+} from './plan-handoff';
 import {
   PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError, classifyChildTranscript,
   type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type PlanSpendLimit, type TranscriptVerdict,
@@ -267,6 +269,14 @@ export class PlanHostBridge {
    *  at the same moment keeps it. */
   private readonly handoffs = new Map<string, LiveHandoff>();
   private readonly noticeTurns = new Set<string>();
+  /** Issue 1 fix + decision 38: `${sessionId}\0${planId}\0${kind}` while a
+   *  lifecycle notice (running/completed) for that plan is queued or being
+   *  delivered in THIS process — guards against two concurrent callers (e.g.
+   *  `onCompleted` firing while `recover()` is mid-scan) both queuing the
+   *  same notice before either has written the durable flag that would
+   *  normally stop the second one. Cleared in every exit path of
+   *  `queueLifecycleNotice`. */
+  private readonly pendingLifecycleNotices = new Set<string>();
   private readonly handoffBackstopMs: number;
   private readonly orphanRecoveryDelaysMs: readonly number[];
   private readonly orphanTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -342,6 +352,12 @@ export class PlanHostBridge {
       ...(turnId !== undefined ? { turnId } : {}),
       // Task 9b: host-known, never model input.
       ...(turnId !== undefined && this.noticeTurns.has(turnId) ? { fromPlanNotice: true } : {}),
+    }).then((view) => {
+      // Decision 38: auto-start (design §5 "when the estimate is under $X")
+      // is the OTHER way a plan starts running with no Approve click —
+      // `propose` returns it already `running` exactly then.
+      this.notifyRunning(sessionId, view);
+      return view;
     });
   }
 
@@ -537,9 +553,99 @@ export class PlanHostBridge {
     void this.clearSessionHandoffs(sessionId);
   }
 
+  // ---- Issue 1 fix + decision 38: plan-lifecycle notices (running/completed) ----
+
+  /**
+   * Tell the assistant, without the user asking, that its plan started
+   * running or finished — exactly once, ever, per plan and kind. Reuses the
+   * pause handoff's own queue and delivery machinery end to end
+   * (`port.queuePlanNotice`, `drainDeliveries`'s `head.plan` branch): its own
+   * turn, never while another runs, invisible as a card. Unlike a real
+   * handoff there is nothing for the user to answer, so there is no
+   * `handoffs` map entry and no withdrawal — a queued lifecycle notice is
+   * simply delivered whenever its turn comes.
+   *
+   * Ordering (decision 38's "a very fast plan could complete before the
+   * approval notice is delivered"): both notices for one conversation share
+   * the SAME per-session FIFO queue (`pendingHostNotices`), and a plan can
+   * only reach `completed` after `approve`/auto-start already queued the
+   * running notice — so simply queuing each in the order its trigger fires
+   * already puts "running" strictly before "completed" for that plan; no
+   * separate ordering check is needed.
+   *
+   * Durability: the plan's `runningNotified`/`completionNotified` flag is
+   * set only in `onEnd` — after the notice turn actually ENDED, never merely
+   * queued — so a crash between queuing and delivery leaves the flag unset
+   * and `recover()` (below) tries again the next time this conversation
+   * opens. A turn that ends in a provider error is treated the same as a
+   * delivered one (marked, not retried): unlike a paused card, a lifecycle
+   * notice has no card to show a Retry button on, so silently trying forever
+   * would be the only alternative, and the queued notice already logged its
+   * own failure. This is the accepted gap the task called out.
+   */
+  private async queueLifecycleNotice(ref: PlanRef, planId: string, kind: 'running' | 'completed'): Promise<void> {
+    const key = `${ref.sessionId}\u0000${planId}\u0000${kind}`;
+    if (this.pendingLifecycleNotices.has(key)) return; // already in flight this process
+    this.pendingLifecycleNotices.add(key);
+    let holding = true;
+    try {
+      const plan = await this.journal.get(ref, planId);
+      if (!plan) return;
+      if (kind === 'running' ? plan.runningNotified : plan.completionNotified) return; // already delivered
+      if (kind === 'running' ? plan.status !== 'running' : plan.status !== 'completed') return; // stopped/failed first
+      const refusal = this.port.noticeRefusal(ref.sessionId);
+      if (refusal !== undefined) return; // not open here, or held — recover() retries later
+      const text = kind === 'running' ? planApprovalNotice(plan) : planCompletionNotice(plan);
+      const turnId = randomUUID();
+      const queued = this.port.queuePlanNotice(ref.sessionId, {
+        text, turnId, planId,
+        // No real handoff exists to tag; a unique id still lets the shared
+        // delivery machinery treat this as its own notice turn.
+        handoffId: randomUUID(),
+        onStart: () => { this.noticeTurns.add(turnId); },
+        onEnd: () => {
+          this.noticeTurns.delete(turnId);
+          this.pendingLifecycleNotices.delete(key);
+          void this.markLifecycleNotified(ref, planId, kind);
+        },
+      });
+      if (queued) holding = false; // ownership of the key moves to onEnd above
+    } catch (e) {
+      log('WARN', 'PlanHostBridge', `could not queue a plan ${kind} notice`, { planId, error: String(e) });
+    } finally {
+      if (holding) this.pendingLifecycleNotices.delete(key);
+    }
+  }
+
+  private async markLifecycleNotified(ref: PlanRef, planId: string, kind: 'running' | 'completed'): Promise<void> {
+    try {
+      await this.journal.mutate(ref, (file) => {
+        const p = file.plans.find((x) => x.planId === planId);
+        if (!p) return;
+        if (kind === 'running') p.runningNotified = true; else p.completionNotified = true;
+      });
+    } catch (e) {
+      log('WARN', 'PlanHostBridge', `could not record that a plan ${kind} notice was delivered`, { planId, error: String(e) });
+    }
+  }
+
+  /** Approve and auto-start both call this right after the plan is durably
+   *  `running`; `resume` (Continue) deliberately does not — decision 38 is
+   *  about a plan STARTING, not one resuming after a pause. */
+  private notifyRunning(sessionId: string, plan: PlanView): void {
+    if (plan.status !== 'running') return;
+    const cwd = this.port.rootCwd(sessionId);
+    if (cwd === undefined) return;
+    void this.queueLifecycleNotice({ cwd, sessionId }, plan.planId, 'running');
+  }
+
   // ---- the card and settings actions + hydration ----
 
-  async approve(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.approve(sessionId, planId)); }
+  async approve(sessionId: string, planId: string): Promise<PlanActionResult> {
+    const res = await this.service.approve(sessionId, planId);
+    if (res.ok) this.notifyRunning(sessionId, res.plan);
+    return this.decorated(sessionId, res);
+  }
   async comment(sessionId: string, planId: string, text: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.comment(sessionId, planId, text)); }
   // WHY no addBudget any more (spending rework stage 1, design §1/§6):
   // deleted — T7 removed the matching `plans:add-budget` IPC channel.
@@ -632,6 +738,17 @@ export class PlanHostBridge {
       // Task 11 (review 4-4): asked live, inside the service's write, so a
       // question pressed while this runs is kept.
       await this.service.clearStaleHandoffs(ref, (id) => this.handoffs.get(id)?.ref.sessionId === sessionId);
+      // Issue 1 fix + decision 38: a lifecycle notice that never got queued
+      // (the app was closed when the plan started running or finished, or an
+      // earlier queuing attempt found the conversation not open/held) is
+      // tried again now that this conversation is open. `peekRecords` is a
+      // cheap, read-only scan; `queueLifecycleNotice` re-checks the durable
+      // flag itself, so this is a no-op for every plan that already got its
+      // notice.
+      for (const record of this.journal.peekRecords(ref)) {
+        if (record.status === 'running' && !record.runningNotified) void this.queueLifecycleNotice(ref, record.planId, 'running');
+        else if (record.status === 'completed' && !record.completionNotified) void this.queueLifecycleNotice(ref, record.planId, 'completed');
+      }
       if (recheckAt !== undefined && this.port.rootCwd(sessionId) === cwd) {
         const timer = setTimeout(() => {
           this.rechecks.delete(sessionId);
@@ -917,6 +1034,10 @@ export class PlanHostBridge {
       inspectTranscript: (ref, childId): TranscriptVerdict => classifyChildTranscript(this.port.readChildEvents(childId, ref.cwd), nativeToolEffect),
       onUnreadable: (ref, planId, detail) => this.onUnreadable(ref, planId, detail),
       onOrphaned: (ref, planId) => this.scheduleOrphanRecovery(ref, planId),
+      // Issue 1 fix: fired after settle()'s own write durably marks the plan
+      // `completed` — never awaited, never lets a queueing failure affect
+      // the run that just finished.
+      onCompleted: (ref, planId) => { void this.queueLifecycleNotice(ref, planId, 'completed'); },
       providerNotReady: (_ref, plan, specialist) => this.providerNotReady(plan, specialist),
       latestUserText: (ref, childId) => {
         const events = this.port.readChildEvents(childId, ref.cwd);

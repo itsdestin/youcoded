@@ -23,7 +23,7 @@ import { render, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PLAN_ASK_NOTICE_LEAD, PLAN_NOTICE_PREFIX } from '../src/shared/types';
+import { PLAN_ASK_NOTICE_LEAD, PLAN_COMPLETE_NOTICE_PREFIX, PLAN_NOTICE_PREFIX, PLAN_RUNNING_NOTICE_PREFIX } from '../src/shared/types';
 import { planAskMessage, planAskQuestion, userEntryRenderKind } from '../src/renderer/state/chat-types';
 
 const mocks = vi.hoisted(() => ({ state: {} as any }));
@@ -122,6 +122,18 @@ describe('plan notices in the chat', () => {
     expect(userEntryRenderKind(userEntry('e', AUTO_NOTICE))).toBe('show');
     // A report with a header (it folds into its Task card) is not this notice.
     expect(userEntryRenderKind(userEntry('f', ASK_NOTICE, 'specialist-report', { childId: 'k', title: 'Kai', agentType: 'worker', status: 'completed' }))).toBe('show');
+  });
+
+  // Issue 1 fix + decision 38: the two automatic lifecycle notices hide the
+  // same way an automatic pause notice does — nobody asked, so there is no
+  // user bubble, only whatever the assistant replies.
+  it('the plan-lifecycle notices (running/completed) are hidden too, and still show if a user literally types their words', () => {
+    const running = `${PLAN_RUNNING_NOTICE_PREFIX} The user approved your plan and it is now running.\n\nPlan id: plan-1`;
+    const completed = `${PLAN_COMPLETE_NOTICE_PREFIX} Your plan finished running.\n\nPlan id: plan-1`;
+    expect(userEntryRenderKind(userEntry('g', running, 'specialist-report'))).toBe('hide');
+    expect(userEntryRenderKind(userEntry('h', completed, 'specialist-report'))).toBe('hide');
+    expect(userEntryRenderKind(userEntry('i', running))).toBe('show');
+    expect(userEntryRenderKind(userEntry('j', completed))).toBe('show');
   });
 
   it('the chat (desktop and remote draw the same ChatView)', () => {

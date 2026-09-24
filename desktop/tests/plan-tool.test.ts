@@ -56,6 +56,18 @@ describe('propose_plan tool', () => {
     expect(description).toContain('hire a specialist directly instead of proposing a plan');
   });
 
+  // Issue 3 fix (owner's live test): a live plan set a step's model
+  // (gpt-6-sol) that the user never asked for, under the softer "Set `model`
+  // on a step only when the user explicitly asked" wording. Decision 35.4
+  // is a flat rule, not a judgment call, so the tool description says so
+  // as a prohibition — matching the field description in schema.ts.
+  it('flatly tells the model never to set a step\'s model on its own judgment (decision 35.4, issue 3)', () => {
+    const description = createProposePlanTool(BUILTIN_ROSTER).description ?? '';
+    expect(description).toMatch(/do not set a step's `model` yourself, ever/i);
+    expect(description).toMatch(/never your call to make/i);
+    expect(description).toMatch(/only when the user explicitly named a model or provider/i);
+  });
+
   it('refuses a plan that is one specialist doing one thing, and says what to do instead', async () => {
     const propose = vi.fn();
     const oneRun: PlanDocumentV1 = {

@@ -103,7 +103,13 @@ const JSON_FIELD = {
   // WHY optional, not required (design §2): every step runs on its
   // specialist's default model unless the user explicitly asked for a
   // particular one — see propose_plan's own description (tools/propose-plan.ts).
-  model: { type: 'string', maxLength: PLAN_MAX_MODEL_CHARS, description: 'Only when the user explicitly asked for a model for this step: "budget", "frontier", or an exact model id. Otherwise omit.' },
+  // Issue 3 fix (owner's live test): the softer wording this replaced ("Only
+  // when the user explicitly asked... Otherwise omit.") still let a model set
+  // this field on its own judgment (a live plan froze gpt-6-sol on a step
+  // nobody asked to change) — decision 35.4 is an outright "assistant never
+  // decides this", not a preference, so the field description says so as a
+  // prohibition, not a condition.
+  model: { type: 'string', maxLength: PLAN_MAX_MODEL_CHARS, description: 'Leave unset. Do NOT set this yourself for any reason (a step seeming hard, slow, cheap, or important is not a reason) — that is the user\'s decision alone, never yours. Set it ONLY when the user has explicitly named a model or provider for this exact step, earlier in this conversation: "budget", "frontier", or an exact model id.' },
   items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ITEM_CHARS }, minItems: 1, maxItems: PLAN_MAX_MAP_ITEMS, description: 'map only: one child per item.' },
   of: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ID_CHARS, description: 'verify/combine: the id of the step whose results this consumes.' },
   max_iterations: { type: 'integer', minimum: 1, maximum: PLAN_MAX_REPEAT_ITERATIONS, description: 'repeat only: hard cap.' },

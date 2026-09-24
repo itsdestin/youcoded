@@ -69,6 +69,19 @@ describe('plan schema and semantic validator', () => {
     expect(branch('map').properties.model.maxLength).toBe(128);
   });
 
+  // Issue 3 fix (owner's live test): a live plan froze a step's model
+  // (gpt-6-sol, source 'document') that the user never asked for, under the
+  // older, softer wording ("Only when the user explicitly asked... Otherwise
+  // omit."). The field description is now an outright prohibition, not a
+  // condition the model can weigh against other judgment calls.
+  it('the `model` field description reads as a flat prohibition, not a soft preference (decision 35.4, issue 3)', () => {
+    const description = branch('map').properties.model.description as string;
+    for (const kind of ['map', 'verify', 'combine', 'repeat']) expect(branch(kind).properties.model.description).toBe(description);
+    expect(description).toMatch(/do not|leave unset/i);
+    expect(description).toMatch(/never yours|not your (call|decision)/i);
+    expect(description).toMatch(/only when the user has explicitly named/i);
+  });
+
   it('pins the complete model-facing schema to the schema proven by the live probe', () => {
     expect(PLAN_DOCUMENT_JSON_SCHEMA).toEqual(PROBE_PLAN_DOCUMENT_JSON_SCHEMA);
     expect(branch('map').properties.specialist.enum).toEqual(['explorer', 'researcher', 'reviewer', 'worker']);

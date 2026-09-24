@@ -14,10 +14,14 @@
 // work, not a fact about the pause.
 import {
   PLAN_ASK_DETAIL_HEADER, PLAN_ASK_NOTICE_LEAD, PLAN_ASK_QUESTION_CLOSE, PLAN_ASK_QUESTION_LABEL, PLAN_ASK_QUESTION_OPEN,
-  PLAN_QUESTION_MAX_CHARS, type PlanPauseKind,
+  PLAN_COMPLETE_NOTICE_PREFIX, PLAN_QUESTION_MAX_CHARS, PLAN_RUNNING_NOTICE_PREFIX, type PlanPauseKind,
 } from '../../../shared/types';
 import { projectPlan } from './plan-journal';
 import { pausedRouting } from './pause-routing';
+// Issue 1 fix: the completion notice's final result is built from the SAME
+// bounded, labelled shape a verify/combine step already reads an earlier
+// step's report in (see plan-executor.ts's own WHY comment on both exports).
+import { finalStepReportsText, planRunSummary } from './plan-executor';
 import type { PlanRecord } from './types';
 
 /** §2 step 6: the assistant's message on the card. */
@@ -185,4 +189,52 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?
       + 'You cannot continue the plan or stop it yourself: the user presses the button.',
   ];
   return lines.join('\n');
+}
+
+/**
+ * Decision 38: the notice queued once a plan starts running (manual Approve,
+ * or auto-start) — never once for `resume`/Continue, which restarts existing
+ * work rather than starting it (PlanHostBridge only calls this from
+ * `approve`/`propose`'s auto-start branch). WHY hidden, not drawn as the
+ * user's own message like the Ask notice: nobody asked anything — the user's
+ * click already showed the approved card, so a second bubble asking a
+ * question that was never asked would be confusing. The assistant's OWN
+ * reply is what the user is meant to see (decision 38, "1-line confirmation").
+ */
+export function planApprovalNotice(plan: PlanRecord): string {
+  return [
+    `${PLAN_RUNNING_NOTICE_PREFIX} The user approved your plan and it is now running.`,
+    '',
+    `Plan: "${fact(plan.document.goal)}"`,
+    `Plan id: ${plan.planId}`,
+    '',
+    "You'll get another message with its results once every step finishes — you do not need to check on it. "
+      + 'Reply to the user now with a short, ONE-LINE confirmation only (do not restate the plan). '
+      + 'If the user asks you to do something else in the meantime, you may work on that; the plan keeps running on its own.',
+  ].join('\n');
+}
+
+/**
+ * Issue 1 fix: the notice queued once a plan reaches `completed` — the
+ * assistant's only way to learn the plan finished (nothing else tells it).
+ * Gives the final step's own report(s), bounded and labelled the identical
+ * way an intermediate verify/combine step already reads an earlier one's
+ * (finalStepReportsText), plus a one-line summary of what ran — both already
+ * computed from facts the journal holds, nothing invented here. Hidden for
+ * the same reason the approval notice is: this is the host telling the
+ * assistant something, not the user asking it anything.
+ */
+export function planCompletionNotice(plan: PlanRecord): string {
+  return [
+    `${PLAN_COMPLETE_NOTICE_PREFIX} Your plan finished running.`,
+    '',
+    `Plan: "${fact(plan.document.goal)}"`,
+    `Plan id: ${plan.planId}`,
+    `What ran: ${planRunSummary(plan)}`,
+    '',
+    'Final result:',
+    finalStepReportsText(plan),
+    '',
+    "Tell the user what the plan produced — this is the assistant's own reply, not a new question from them.",
+  ].join('\n');
 }

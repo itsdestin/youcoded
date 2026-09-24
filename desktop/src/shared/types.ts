@@ -883,6 +883,15 @@ export const PLAN_NOTICE_PREFIX = '[Plan paused]';
  *  typed question, else "What should I do about this paused plan?"); an older
  *  automatic notice (same prefix, other words) stays hidden — nobody asked. */
 export const PLAN_ASK_NOTICE_LEAD = `${PLAN_NOTICE_PREFIX} The user asked you about this paused plan.`;
+/** Issue 1 fix + decision 38: the two automatic "lifecycle" notices the host
+ *  queues without the user asking — a plan starting to run (Approve or
+ *  auto-start) and a plan finishing. Same "hide" treatment as PLAN_NOTICE_PREFIX
+ *  above (userEntryRenderKind): the row never renders, the assistant's own
+ *  reply is all the user sees. Kept as separate, readable prefixes (rather
+ *  than reusing PLAN_NOTICE_PREFIX, which literally reads "paused") so a
+ *  transcript or a log naming the notice kind is never misleading. */
+export const PLAN_RUNNING_NOTICE_PREFIX = '[Plan running]';
+export const PLAN_COMPLETE_NOTICE_PREFIX = '[Plan completed]';
 /** The four marks that fence the user's typed question inside that notice
  *  (decision 20; Task 12 review fix 1). The chat reads the question back from
  *  between the tags, under the label and above the detail header, so replay,

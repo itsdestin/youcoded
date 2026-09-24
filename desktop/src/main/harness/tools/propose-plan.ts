@@ -84,7 +84,13 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
       + 'A plan must be more than one specialist doing one thing: if the whole job is a single specialist run, hire a specialist directly instead of proposing a plan. '
       // Design §9/§5, decision 35.4: model choice is opt-out-by-default —
       // the assistant only overrides it when the user actually asked.
-      + 'Each step runs on its specialist\'s default model. Set `model` on a step only when the user explicitly asked for a particular model there.',
+      // Issue 3 fix (owner's live test): strengthened from "Set `model` on a
+      // step only when the user explicitly asked" — that reads as a
+      // preference the model can weigh, and it set one anyway on a live
+      // plan. This is not a judgment call: say so as a flat prohibition,
+      // with the field's own description (schema.ts) repeating it.
+      + 'Each step runs on its specialist\'s default model. Do not set a step\'s `model` yourself, ever — not because a step looks hard, slow, expensive, or important: that is never your call to make. '
+      + 'Set `model` ONLY when the user explicitly named a model or provider for that step, earlier in this conversation. Leave it unset in every other case.',
     shortDescription: 'Propose a bounded multi-specialist plan for user approval.',
     inputSchema: PlanDocumentSchema,
     // Model-facing constrained decoding must stay byte-for-byte on the completed
