@@ -22,7 +22,7 @@ import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
 import { isWorkbenchMode, workbenchScreenFrame } from '../../workbench-mode';
-import { SkillsToolsTab } from './SkillsToolsTab';
+import { SkillsToolsTab, needsSetupRowDomId } from './SkillsToolsTab';
 import { formatRelativeTime } from '../../utils/format-time';
 import type { CentralIndexProject, ArtifactRecord } from '../../../shared/artifacts/types';
 import type { PastSession } from '../../../shared/types';
@@ -201,42 +201,66 @@ export function ProjectView(props: ProjectViewProps) {
   // state. Both paths now go through the SAME action.
   const openSkillsTabRequest = useArtifactSelector((s) => s.openSkillsTabRequest);
   const [scrollToNeedsSetup, setScrollToNeedsSetup] = useState(false);
+  // F6 (T4 review): which needs-setup ROW to scroll to, when the request
+  // named one (`needsSetupRowDomId` in SkillsToolsTab.tsx builds the matching
+  // id) — falls back to the whole section when absent (a path-less workbench
+  // preview, or a caller dispatching the action before it gained this field;
+  // the action stays backward-compatible — see its own comment).
+  const [scrollItemKey, setScrollItemKey] = useState<string | null>(null);
   // A request naming a specific project may arrive before the project index
   // has loaded (or before the named project appears in it, e.g. it was just
-  // added). Held in a ref — not state — because it's consumed by the
-  // project-load effect below without needing to be a render dependency itself.
-  const pendingSkillsProjectPathRef = useRef<string | null>(null);
+  // added) — OR while Project View is already open and fully loaded (T4
+  // review F1). STATE, not a ref: a ref here sat un-consumed forever in the
+  // already-open case, because nothing else in this component re-runs on a
+  // ref mutation alone. `projects`/`indexLoaded` only change on a
+  // CLOSED→open transition (the fetch effect below is keyed on
+  // `projectViewOpen` flipping false→true) — they do NOT change just because
+  // `PROJECT_VIEW_OPEN_SKILLS_TAB` fires again while already open, so the old
+  // ref-consuming effect (keyed on `[projects, indexLoaded]`) never re-fired
+  // and silently kept whatever project was already active. Making this state
+  // means the assignment below is itself a dependency change the consuming
+  // effect sees, whether or not the index needed to reload.
+  const [pendingSkillsProjectPath, setPendingSkillsProjectPath] = useState<string | null>(null);
   useEffect(() => {
     if (!openSkillsTabRequest) return;
     // Consume immediately: a later request (even to the same project) must
     // start from null again so this effect is guaranteed to re-fire for it.
     dispatch({ type: 'PROJECT_VIEW_SKILLS_REQUEST_HANDLED' });
     dispatch({ type: 'PROJECT_VIEW_OPENED' });
-    pendingSkillsProjectPathRef.current = openSkillsTabRequest.projectPath ?? null;
+    setPendingSkillsProjectPath(openSkillsTabRequest.projectPath ?? null);
     setTab('skills');
     setScrollToNeedsSetup(true);
+    setScrollItemKey(openSkillsTabRequest.itemKey ?? null);
   }, [openSkillsTabRequest, dispatch]);
-  // Once the project index has loaded, route a pending request's named
-  // project into the active selection. A path matching no project (stale
-  // request, or the workbench's path-less preview) leaves the normal
-  // re-home-to-focused-conversation selection from the load effect below
-  // untouched — never overwritten by a null result here.
+  // Route a pending request's named project into the active selection —
+  // whether the index was already loaded (Project View already open: this
+  // fires the instant `pendingSkillsProjectPath` changes above, since it's
+  // now a dependency) or still loading (closed→open: fires once
+  // `indexLoaded`/`projects` land from the fetch effect below). A path
+  // matching no project (stale request, or the workbench's path-less
+  // preview) leaves the normal re-home-to-focused-conversation selection
+  // from the load effect below untouched — never overwritten by a null
+  // result here.
   useEffect(() => {
-    if (!pendingSkillsProjectPathRef.current || !indexLoaded) return;
-    const match = matchProjectByPath(projects, pendingSkillsProjectPathRef.current);
+    if (pendingSkillsProjectPath === null || !indexLoaded) return;
+    const match = matchProjectByPath(projects, pendingSkillsProjectPath);
     if (match) setActiveProject(match);
-    pendingSkillsProjectPathRef.current = null;
-  }, [projects, indexLoaded]);
+    setPendingSkillsProjectPath(null);
+  }, [pendingSkillsProjectPath, projects, indexLoaded]);
   useEffect(() => {
     if (!scrollToNeedsSetup || !projectViewOpen || !activeProject || tab !== 'skills') return;
-    // WHY: navigation from a missing skill lands on the actionable section,
-    // not just the Projects shell; wait for the selected project to render.
+    // WHY: navigation from a missing skill lands on the actionable row (or,
+    // with no itemKey / no matching row, the section) — wait for the
+    // selected project to render.
     const frame = requestAnimationFrame(() => {
-      document.getElementById('project-tools-needing-setup')?.scrollIntoView({ block: 'center' });
+      const target = (scrollItemKey && document.getElementById(needsSetupRowDomId(scrollItemKey)))
+        || document.getElementById('project-tools-needing-setup');
+      target?.scrollIntoView({ block: 'center' });
       setScrollToNeedsSetup(false);
+      setScrollItemKey(null);
     });
     return () => cancelAnimationFrame(frame);
-  }, [scrollToNeedsSetup, projectViewOpen, activeProject, tab]);
+  }, [scrollToNeedsSetup, scrollItemKey, projectViewOpen, activeProject, tab]);
   // The workbench's own "Writing helper" preview card (CommandDrawer.tsx,
   // T5's territory) still dispatches this bare window event with no project
   // path — it now just triggers the SAME production action above, in

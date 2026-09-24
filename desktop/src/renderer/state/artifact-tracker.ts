@@ -26,8 +26,9 @@ export interface ArtifactState {
    *  see PROJECT_VIEW_OPEN_SKILLS_TAB's own comment in artifact-actions.ts.
    *  null = nothing pending. `projectPath` is undefined when the request
    *  names no specific project (re-home to the focused conversation's
-   *  project, matching plain Project View open). */
-  openSkillsTabRequest: { projectPath: string | undefined } | null;
+   *  project, matching plain Project View open). `itemKey` (review F6) is
+   *  undefined when the request doesn't name a specific needs-setup row. */
+  openSkillsTabRequest: { projectPath: string | undefined; itemKey: string | undefined } | null;
   // YouCoded Pages (Phase 1 shell): the library screen, and which page (if
   // any) is open on top of it. A pinned page opens with the library closed;
   // a card opens it with the library still open underneath, so Back returns
@@ -200,7 +201,7 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
     case 'PROJECT_VIEW_OPEN_SKILLS_TAB':
       return {
         ...s, projectViewOpen: true, pageViewOpen: false, pagesViewOpen: false, openPageId: null, pageFocus: false,
-        openSkillsTabRequest: { projectPath: a.projectPath },
+        openSkillsTabRequest: { projectPath: a.projectPath, itemKey: a.itemKey },
       };
     case 'PROJECT_VIEW_SKILLS_REQUEST_HANDLED':
       return { ...s, openSkillsTabRequest: null };

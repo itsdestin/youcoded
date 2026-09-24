@@ -48,7 +48,11 @@ export type ArtifactAction =
   // with no path (re-homes to the focused conversation's project, same as
   // opening Project View normally). A fresh object each dispatch so
   // ProjectView's effect fires even for a repeat request to the same project.
-  | { type: 'PROJECT_VIEW_OPEN_SKILLS_TAB'; projectPath?: string }
+  // `itemKey` (T4 review F6, optional and backward-compatible — existing
+  // dispatchers that only pass `projectPath` keep working unchanged) scrolls
+  // to that SPECIFIC needs-setup row's DOM id instead of just the section,
+  // once T5's chip has one to give it.
+  | { type: 'PROJECT_VIEW_OPEN_SKILLS_TAB'; projectPath?: string; itemKey?: string }
   // ProjectView dispatches this the instant it consumes a request above, so
   // the field goes back to null and a later identical request is still a
   // real state transition (null -> object) instead of a no-op.

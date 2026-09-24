@@ -1,9 +1,16 @@
-import { describe, it, expect } from 'vitest';
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import React from 'react';
+import { render, cleanup, waitFor, act } from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
 import {
   describeImportFailure,
   importResultTitle,
   matchProjectByPath,
+  ProjectView,
 } from '../src/renderer/components/project-view/ProjectView';
+import { needsSetupRowDomId } from '../src/renderer/components/project-view/SkillsToolsTab';
+import { ArtifactProvider, createArtifactStore } from '../src/renderer/state/ArtifactContext';
 
 // ── Which project the view opens on ─────────────────────────────────────────
 // Project view homes to the FOCUSED conversation's folder every time it opens,
@@ -154,5 +161,143 @@ describe('importResultTitle', () => {
     expect(importResultTitle({ hardFailures: 1, partial: 1, alreadyInPlace: 1 })).toBe('Import failed');
     expect(importResultTitle({ hardFailures: 0, partial: 1, alreadyInPlace: 1 }))
       .toBe('Import partly finished');
+  });
+});
+
+// ── PROJECT_VIEW_OPEN_SKILLS_TAB (T4 review F1/F6) ──────────────────────────
+// A REAL store (createArtifactStore, the same reducer App uses), not a
+// scripted `{ state, dispatch }` value — F1's bug is specifically that the
+// EFFECT CHAIN inside ProjectView failed to react to a second dispatch, so a
+// mock dispatch that doesn't run the reducer would not exercise it at all.
+const PROJECT_A = { id: 'pa', path: '/home/d/alpha', name: 'Alpha' } as any;
+const PROJECT_B = { id: 'pb', path: '/home/d/beta', name: 'Beta' } as any;
+
+function installWindowClaude() {
+  (globalThis as any).IntersectionObserver = class {
+    observe() {} unobserve() {} disconnect() {} takeRecords() { return []; }
+  };
+  (window as any).claude = {
+    artifacts: {
+      listAllFiles: () => Promise.resolve({ ok: true, files: [] }),
+      listFolder: () => Promise.resolve({ ok: true, entries: [], hasMore: false }),
+      listProjectsIndex: () => Promise.resolve({ ok: true, projects: [PROJECT_A, PROJECT_B] }),
+      onChanged: () => () => {},
+      watchProject: () => Promise.reject(new Error('no watcher in tests')),
+      get: () => Promise.resolve({ ok: false }),
+      readBinary: () => Promise.resolve({ ok: false }),
+      searchContent: () => Promise.resolve({ ok: true, hits: [] }),
+    },
+    project: {
+      listConversations: () => Promise.resolve({ ok: true, conversations: [] }),
+      listContext: () => Promise.resolve({ ok: true, groups: [] }),
+      repoInfo: () => Promise.resolve(null),
+    },
+    syncSpaces: {
+      status: () => Promise.reject(new Error('no sync in tests')),
+      onEvent: () => () => {},
+    },
+    projectExtensions: {
+      // Each project's needs-setup row is named after its OWN project so a
+      // test can tell which project's Skills & tools tab actually rendered.
+      get: (path: string) => Promise.resolve({
+        ok: true,
+        view: {
+          projectKey: path,
+          builtIn: [], installed: [], personal: [],
+          needsSetup: [{ key: `mcp:${path}`, displayName: `Tool for ${path}`, kind: 'tool-connection', projectKey: path }],
+        },
+      }),
+      set: vi.fn(),
+      importSkill: vi.fn(),
+    },
+    dialog: { openFile: vi.fn() },
+  };
+}
+
+function renderProjectView(store: ReturnType<typeof createArtifactStore>) {
+  return render(
+    <ArtifactProvider store={store}>
+      <ProjectView
+        onNewConversation={vi.fn()}
+        onResumeConversation={vi.fn() as any}
+        settingsOpen={false}
+        onToggleSettings={vi.fn()}
+      />
+    </ArtifactProvider>,
+  );
+}
+
+// jsdom has no rAF-with-real-frames, and under a loaded full-suite run the
+// REAL one can take far longer than a `waitFor` budget to fire (test-suite-
+// hygiene.md: "under load the work hasn't started") — drive it manually
+// instead, the same recipe as zoom-loupe.test.tsx.
+let frames: FrameRequestCallback[] = [];
+function flushFrames() {
+  const pending = frames;
+  frames = [];
+  act(() => { pending.forEach((cb) => cb(0)); });
+}
+
+describe('PROJECT_VIEW_OPEN_SKILLS_TAB', () => {
+  beforeEach(() => {
+    installWindowClaude();
+    Element.prototype.scrollIntoView = vi.fn();
+    frames = [];
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.push(cb); return frames.length; });
+    vi.stubGlobal('cancelAnimationFrame', () => {});
+  });
+  afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); });
+
+  it('closed → open: opens on Skills & tools for the NAMED project', async () => {
+    const store = createArtifactStore();
+    const view = renderProjectView(store);
+
+    store.dispatch({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB', projectPath: PROJECT_B.path });
+
+    expect(await view.findByText(`Tool for ${PROJECT_B.path}`)).toBeInTheDocument();
+    expect(view.queryByText(`Tool for ${PROJECT_A.path}`)).not.toBeInTheDocument();
+  });
+
+  it('already open on a DIFFERENT project: still switches to the named project (F1)', async () => {
+    // Open plainly first (re-homes to projects[0] = Alpha, since there is no
+    // focused conversation), and let it settle on the Files tab showing Alpha
+    // — this is "Project View already open, browsing something else" (the
+    // exact scenario the old ref-based code silently failed on).
+    const store = createArtifactStore();
+    store.dispatch({ type: 'PROJECT_VIEW_OPENED' });
+    const view = renderProjectView(store);
+    await view.findByText('Alpha');
+
+    store.dispatch({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB', projectPath: PROJECT_B.path });
+
+    // Must land on BETA's Skills & tools, not silently stay on Alpha showing
+    // whatever Alpha's own needs-setup section holds.
+    expect(await view.findByText(`Tool for ${PROJECT_B.path}`)).toBeInTheDocument();
+    expect(view.queryByText(`Tool for ${PROJECT_A.path}`)).not.toBeInTheDocument();
+  });
+
+  it('scrolls to the specific needs-setup ROW named by itemKey, not just the section (F6)', async () => {
+    const store = createArtifactStore();
+    const view = renderProjectView(store);
+    const itemKey = `mcp:${PROJECT_B.path}`;
+
+    store.dispatch({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB', projectPath: PROJECT_B.path, itemKey });
+    await view.findByText(`Tool for ${PROJECT_B.path}`);
+
+    await waitFor(() => { flushFrames(); expect(Element.prototype.scrollIntoView).toHaveBeenCalled(); });
+    const scrolledEl = (Element.prototype.scrollIntoView as any).mock.instances[0];
+    expect(scrolledEl.id).toBe(needsSetupRowDomId(itemKey));
+  });
+
+  it('falls back to the whole section when no itemKey is given (backward compatible)', async () => {
+    const store = createArtifactStore();
+    const view = renderProjectView(store);
+
+    store.dispatch({ type: 'PROJECT_VIEW_OPEN_SKILLS_TAB', projectPath: PROJECT_B.path });
+    await view.findByText(`Tool for ${PROJECT_B.path}`);
+
+    await waitFor(() => { flushFrames(); expect(Element.prototype.scrollIntoView).toHaveBeenCalled(); });
+    const scrolledEl = (Element.prototype.scrollIntoView as any).mock.instances[0];
+    expect(scrolledEl.id).toBe('project-tools-needing-setup');
   });
 });

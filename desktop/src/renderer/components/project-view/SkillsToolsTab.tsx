@@ -25,11 +25,6 @@ type PluginGroup = SkillsToolsView['builtIn'][number];
 type PartRow = PluginGroup['parts'][number];
 type NeedsSetupRowData = SkillsToolsView['needsSetup'][number];
 
-// SettingRow's nav density truncates descriptions to one line, which on a
-// narrow phone cuts explanatory copy mid-word (R21). These rows carry the
-// only explanation of what a row means or what to do about it, so they wrap.
-const WRAP = 'text-fg-muted !whitespace-normal';
-
 export interface SkillsToolsTabProps {
   hidden: boolean;
   project: CentralIndexProject;
@@ -96,6 +91,16 @@ function askAssistantPrompt(row: NeedsSetupRowData): string {
   return `Please help me install the "${row.displayName}" plugin — it's turned on for this project but isn't installed on this device yet.`;
 }
 
+// F6 (T4 review): a stable DOM id for one needs-setup row, so
+// PROJECT_VIEW_OPEN_SKILLS_TAB's optional `itemKey` (artifact-actions.ts) can
+// scroll to THAT row instead of only the whole section — exported so
+// ProjectView's scroll effect builds the identical id without a second copy
+// of the scheme. `itemKey` values (`mcp:foo`, `self:bar`) never contain
+// whitespace today; the replace is a defensive belt for a future one that did.
+export function needsSetupRowDomId(itemKey: string): string {
+  return `project-tools-needing-setup-item-${itemKey.replace(/\s+/g, '-')}`;
+}
+
 function kindLabel(kind: NeedsSetupRowData['kind']): string {
   if (kind === 'personal-skill') return 'Personal skill';
   if (kind === 'tool-connection') return 'Tool connection (MCP server)';
@@ -116,11 +121,11 @@ function PluginGroupRow({
   return (
     <section className="rounded-lg border border-edge-dim bg-panel overflow-hidden">
       <SettingRow
-        variant="nav" className="!bg-transparent" icon={<PluginIcon />} title={group.displayName}
-        description={description} descriptionClassName={WRAP}
+        variant="nav" flat icon={<PluginIcon />} title={group.displayName}
+        description={description} wrapDescription
         accessory={group.parts.length ? (
           <Button variant="ghost" size="icon" aria-label={`${expanded ? 'Collapse' : 'Expand'} ${group.displayName} items`} aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>
-            <ChevronDown className={`h-4 w-4 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+            <ChevronDown className="h-4 w-4" expanded={expanded} />
           </Button>
         ) : undefined}
         control={<Toggle checked={group.on} onChange={onToggleMaster} aria-label={`${group.displayName} in this project`} />}
@@ -131,11 +136,11 @@ function PluginGroupRow({
             const status = group.paused ? 'Paused with plugin' : `Automatic use ${part.on ? 'on' : 'off'}`;
             return (
               <SettingRow
-                key={part.key} variant="nav" className="!bg-inset/50 border border-edge-dim"
+                key={part.key} variant="nav" bordered
                 icon={part.kind === 'mcp' ? <ToolIcon size={17} /> : <SkillIcon size={17} />}
                 title={part.displayName}
                 description={`${part.kind === 'mcp' ? 'Tool connection' : 'Skill'} · ${status}${part.needsLocalSetup ? ' · Needs local setup' : ''}`}
-                descriptionClassName={WRAP}
+                wrapDescription
                 control={<Toggle checked={part.on} disabled={group.paused} onChange={(next) => onTogglePart(part, next)} aria-label={`${part.displayName} in this project`} />}
               />
             );
@@ -150,11 +155,11 @@ function PersonalItemRow({ part, onToggle }: { part: PartRow; onToggle: (next: b
   return (
     <section className="rounded-lg border border-edge-dim bg-panel overflow-hidden">
       <SettingRow
-        variant="nav" className="!bg-transparent"
+        variant="nav" flat
         icon={part.kind === 'mcp' ? <ToolIcon size={17} /> : <SkillIcon size={17} />}
         title={part.displayName}
         description={`${part.kind === 'mcp' ? 'Tool connection' : 'Skill'} · Automatic use ${part.on ? 'on' : 'off'}${part.needsLocalSetup ? ' · Needs local setup' : ''}`}
-        descriptionClassName={WRAP}
+        wrapDescription
         control={<Toggle checked={part.on} onChange={onToggle} aria-label={`${part.displayName} in this project`} />}
       />
     </section>
@@ -167,11 +172,11 @@ function PersonalItemRow({ part, onToggle }: { part: PartRow; onToggle: (next: b
 // review S-2: "dont want this inside the card. maybe a popup").
 function NeedsSetupRow({ row, onOpen }: { row: NeedsSetupRowData; onOpen: () => void }) {
   return (
-    <div className="rounded-lg border border-edge-dim bg-panel">
+    <div id={needsSetupRowDomId(row.key)} className="rounded-lg border border-edge-dim bg-panel">
       <SettingRow
-        variant="nav" className="!bg-transparent"
+        variant="nav" flat
         icon={row.kind === 'tool-connection' ? <ToolIcon size={17} /> : <SkillIcon size={17} />}
-        title={row.displayName} description={`${kindLabel(row.kind)} · Not on this device`} descriptionClassName={WRAP}
+        title={row.displayName} description={`${kindLabel(row.kind)} · Not on this device`} wrapDescription
         accessory={<Button size="sm" variant="secondary" onClick={onOpen}>Set up here</Button>}
       />
     </div>
@@ -195,6 +200,17 @@ function SkillsToolsTabImpl({ hidden, project, onNewConversation }: SkillsToolsT
   // The last failed write, so the error's Retry button re-attempts the SAME
   // change rather than doing nothing or re-fetching the whole tab.
   const lastFailedRef = useRef<{ change: ProjectExtensionsChange; optimistic: (v: SkillsToolsView) => SkillsToolsView } | null>(null);
+  // Serializes writes (T4 review F3): `commit` used to read `viewRef.current`
+  // as its `prev` snapshot, but the ref was only advanced by the effect just
+  // above — which runs AFTER the render commits, not synchronously inside
+  // `commit` itself. Two toggles fired before that effect ran (same tick, or
+  // a fast double-click on different rows) both computed their optimistic
+  // view from the SAME stale `prev`, so the second silently overwrote the
+  // first's in-flight change, and a first-request FAILURE could revert past
+  // an already-applied second toggle. Chaining every write onto the tail of
+  // the last one guarantees `prev` is always the settled outcome (success OR
+  // revert) of every earlier write before the next one's snapshot is taken.
+  const writeChainRef = useRef<Promise<void>>(Promise.resolve());
 
   const load = useCallback(async (path: string) => {
     setState({ kind: 'loading' });
@@ -210,32 +226,59 @@ function SkillsToolsTabImpl({ hidden, project, onNewConversation }: SkillsToolsT
     }
   }, []);
 
-  // Re-fetch whenever the PROJECT actually changes (path, not object
-  // identity — `project` gets a fresh object on every projects-index
-  // refresh even for the same project, and re-fetching on those would waste
-  // an IPC round trip for nothing that changed).
-  useEffect(() => { void load(project.path); }, [project.path, load]);
+  // Fetch lazily (T4 review F4): the first time this tab is actually SHOWN
+  // for a project, not the moment ProjectView mounts it (hidden, alongside
+  // FilesTab, for instant tab switches). Before this, opening Projects and
+  // never visiting Skills & tools still paid a project-extensions:get IPC
+  // round trip for every project browsed — hidden means idle (performance.md
+  // rule 2). Tracks the path already shown-for so a project switch WHILE
+  // visible still refetches (path, not object identity — `project` gets a
+  // fresh object on every projects-index refresh even for the same project),
+  // but toggling tabs back to an already-loaded project doesn't.
+  const shownForPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (hidden) return;
+    if (shownForPathRef.current === project.path) return;
+    shownForPathRef.current = project.path;
+    void load(project.path);
+  }, [project.path, hidden, load]);
 
-  const commit = useCallback(async (change: ProjectExtensionsChange, optimistic: (v: SkillsToolsView) => SkillsToolsView) => {
-    const prev = viewRef.current;
-    if (!prev) return;
-    setState({ kind: 'ready', view: optimistic(prev) });
-    setSaveError(null);
-    try {
-      const res = await (window.claude as any).projectExtensions.set(project.path, [change]);
-      if (res.ok) {
-        setState({ kind: 'ready', view: res.view });
-        lastFailedRef.current = null;
-      } else {
+  const commit = useCallback((change: ProjectExtensionsChange, optimistic: (v: SkillsToolsView) => SkillsToolsView) => {
+    const run = async () => {
+      const prev = viewRef.current;
+      if (!prev) return;
+      const next = optimistic(prev);
+      // Synchronous — see writeChainRef's WHY above. Not just via the
+      // `state.kind === 'ready'` effect, which would hand the NEXT queued
+      // write (chained below) a stale snapshot.
+      viewRef.current = next;
+      setState({ kind: 'ready', view: next });
+      setSaveError(null);
+      try {
+        const res = await (window.claude as any).projectExtensions.set(project.path, [change]);
+        if (res.ok) {
+          viewRef.current = res.view;
+          setState({ kind: 'ready', view: res.view });
+          lastFailedRef.current = null;
+        } else {
+          viewRef.current = prev;
+          setState({ kind: 'ready', view: prev });
+          setSaveError(res.error);
+          lastFailedRef.current = { change, optimistic };
+        }
+      } catch (err: any) {
+        viewRef.current = prev;
         setState({ kind: 'ready', view: prev });
-        setSaveError(res.error);
+        setSaveError(err?.message ? String(err.message) : String(err));
         lastFailedRef.current = { change, optimistic };
       }
-    } catch (err: any) {
-      setState({ kind: 'ready', view: prev });
-      setSaveError(err?.message ? String(err.message) : String(err));
-      lastFailedRef.current = { change, optimistic };
-    }
+    };
+    // Chain onto the tail regardless of the previous write's outcome — `run`
+    // never itself rejects (its own try/catch handles every failure mode),
+    // but `.then(run, run)` stays correct even if that ever changes.
+    const chained = writeChainRef.current.then(run, run);
+    writeChainRef.current = chained;
+    return chained;
   }, [project.path]);
 
   const retryLastFailed = useCallback(() => {
