@@ -27,7 +27,7 @@ import type { PlanDriverIO } from './plan-menu-driver';
 
 export type InkMenuIO = PlanDriverIO;
 
-export type InkMenuFailure =
+type InkMenuFailure =
   /** The options on screen are not the ones the card showed. Nothing typed. */
   | 'menu-changed'
   /** The menu is no longer on screen. Nothing typed. */

@@ -115,7 +115,7 @@ import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } 
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
-import { StartupDialogLog } from './startup-dialog-log';
+import { attachStartupDialogLog } from './startup-dialog-log';
 import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
 import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
@@ -782,20 +782,7 @@ export function registerIpcHandlers(
   sessionManager.on('session-created', (info) => {
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
-
-  // A line in desktop.log for every Claude Code startup dialog (trust, bypass,
-  // MCP approval…) and a warning if a session waits on one for a minute — so a
-  // "stuck on Initializing session…" report can be diagnosed. Watches only
-  // until the session's first hook event (see startup-dialog-log.ts).
-  const startupDialogs = new StartupDialogLog(log);
-  sessionManager.on('session-created', (info) => {
-    if ((info.provider ?? 'claude') === 'claude') startupDialogs.begin(info.id);
-  });
-  sessionManager.on('pty-output', (sessionId: string, data: string) => startupDialogs.output(sessionId, data));
-  sessionManager.on('session-exit', (sessionId: string) => startupDialogs.end(sessionId, 'exited'));
-  hookRelay?.on('hook-event', (event: { sessionId?: string }) => {
-    if (event.sessionId) startupDialogs.end(event.sessionId, 'started');
-  });
+  attachStartupDialogLog(sessionManager, hookRelay, log); // desktop.log: Claude Code's startup dialogs
 
   // window.claude.terminal.getScreenText — reads the visible xterm buffer
   // for the given session. The actual read happens in the renderer (xterm

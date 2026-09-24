@@ -46,7 +46,7 @@ const SETUP_PROMPT_TITLES = new Set([
  * permission menus belong to the hook cards and numbered lists in replies are
  * not menus.
  */
-export function cardTitleFor(menu: ParsedMenu, starting: boolean): string | null {
+function cardTitleFor(menu: ParsedMenu, starting: boolean): string | null {
   if (SETUP_PROMPT_TITLES.has(menu.title)) return menu.title;
   if (starting && menu.dialog) {
     const heading = (menu.heading ?? '').replace(/:\s*$/, '').trim();

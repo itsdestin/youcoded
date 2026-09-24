@@ -51,6 +51,23 @@ export function sendPromptInput(sessionId: string, button: PromptButton): Promis
   return Promise.resolve({ ok: true });
 }
 
+/**
+ * Answer a prompt card and run `complete` (mark it answered) at the right time.
+ * A numbered menu's digit is fire-and-forget, so the card completes at once. A
+ * verified-navigation answer can be REFUSED (the options changed, the cursor
+ * would not move); completing up front would then claim a choice Claude Code
+ * never received — so it completes only on success, and the result goes back
+ * to the card, which shows why it did not.
+ */
+export function answerPrompt(sessionId: string, button: PromptButton, complete: () => void): Promise<PromptAnswerResult> | undefined {
+  if (button.pick) {
+    return sendPromptInput(sessionId, button).then((r) => { if (r.ok) complete(); return r; });
+  }
+  void sendPromptInput(sessionId, button);
+  complete();
+  return undefined;
+}
+
 /** What a card says when a verified answer did not go through. */
 export const PROMPT_FAILURE_COPY: Record<Exclude<PromptAnswerResult, { ok: true }>['reason'], string> = {
   'menu-changed': "Claude Code's options changed before that went through, so nothing was sent. Check terminal view.",

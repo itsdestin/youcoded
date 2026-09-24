@@ -100,3 +100,21 @@ export class StartupDialogLog {
     }
   }
 }
+
+interface SessionEvents {
+  on(event: 'session-created', cb: (info: { id: string; provider?: string }) => void): unknown;
+  on(event: 'pty-output', cb: (sessionId: string, data: string) => void): unknown;
+  on(event: 'session-exit', cb: (sessionId: string) => void): unknown;
+}
+interface HookEvents { on(event: 'hook-event', cb: (event: { sessionId?: string }) => void): unknown }
+
+/** Wire the log to the app's session and hook events: Claude Code sessions
+ *  only, from spawn until their first hook event or exit. */
+export function attachStartupDialogLog(sessions: SessionEvents, hooks: HookEvents | undefined, log: LogFn): StartupDialogLog {
+  const trail = new StartupDialogLog(log);
+  sessions.on('session-created', (info) => { if ((info.provider ?? 'claude') === 'claude') trail.begin(info.id); });
+  sessions.on('pty-output', (sessionId, data) => trail.output(sessionId, data));
+  sessions.on('session-exit', (sessionId) => trail.end(sessionId, 'exited'));
+  hooks?.on('hook-event', (event) => { if (event.sessionId) trail.end(event.sessionId, 'started'); });
+  return trail;
+}

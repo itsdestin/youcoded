@@ -93,24 +93,22 @@ Enter to confirm`);
     expect(buttons.map((b) => b.label)).toEqual(menu.options);
   });
 
-  it('splits the arrow fallback into two writes so the arrows survive', () => {
+  it('a button carrying a second write (Android / older builds) still sends it separately', () => {
     vi.useFakeTimers();
-    // Hand-built unnumbered menu — the only way to reach the fallback.
-    const buttons = menuToButtons({
-      id: 'x',
-      title: 'x',
-      options: ['a', 'b'],
-      selectedIndex: 0,
-    });
-
-    sendPromptInput('s1', buttons[1]);
+    sendPromptInput('s1', { label: 'b', input: '\u001b[B', submitInput: '\r' });
     // Navigation first, alone.
     expect(sendInput).toHaveBeenCalledTimes(1);
     expect(sendInput.mock.calls[0][1]).not.toContain('\r');
-
     vi.advanceTimersByTime(PROMPT_SUBMIT_DELAY_MS);
     // Then the Enter, as its own write.
     expect(sendInput).toHaveBeenCalledTimes(2);
     expect(sendInput.mock.calls[1][1]).toBe('\r');
+  });
+
+  it('an unnumbered menu\'s button types nothing when the menu is not on screen', async () => {
+    const [, second] = menuToButtons({ id: 'x', title: 'x', options: ['a', 'b'], selectedIndex: 0 });
+    const r = await sendPromptInput('s1', second);
+    expect(r).toEqual({ ok: false, reason: 'menu-gone', typed: false });
+    expect(sendInput).not.toHaveBeenCalled();
   });
 });

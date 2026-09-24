@@ -6,7 +6,7 @@ export type { ToolCallState, AttentionState };
 
 /** One answer on a parser-detected prompt card (serialized: remote clients and
  *  Android receive the same shape). */
-export interface PromptButtonSpec {
+interface PromptButtonSpec {
   label: string;
   input: string;
   submitInput?: string;

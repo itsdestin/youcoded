@@ -70,11 +70,11 @@ import { useNativeSessionTotals } from './hooks/useNativeSessionTotals';
 import { useZoomControls } from './hooks/useZoomControls';
 import { useChromeMeasurements } from './hooks/useChromeMeasurements';
 import { broadcastExpandAll, broadcastCollapseAll, isInExpandAllMode } from './hooks/useExpandAllToggle';
-import { AppIcon, WelcomeAppIcon, ThemeMascot } from './components/Icons';
+import { WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import { TerminalScrollButtons } from './components/TerminalToolbar';
 import TrustGate, { useTrustGateActive, usePendingPromptActive } from './components/TrustGate';
-import { useUnreadableStartupDialog } from './state/startup-dialog-store';
+import { InitializingCover } from './components/InitializingCover';
 import MovedGate from './components/MovedGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
@@ -657,9 +657,7 @@ function AppInner() {
   // (see useSessionDefaults for why).
   const sessionDefaults = useSessionDefaults(settingsOpen);
 
-  // The detector's startup safety net needs "is this session still starting?"
-  // — the same answer the Initializing screen uses. Read through a ref so the
-  // detector's buffer listener is not re-subscribed on every render.
+  // The detector's startup safety net asks "still starting?" — the init gate's answer, via a ref.
   const initializedRef = useRef(initializedSessions);
   initializedRef.current = initializedSessions;
   const isStarting = useCallback((sid: string) => !initializedRef.current.has(sid), []);
@@ -3420,16 +3418,10 @@ function AppInner() {
 
   const trustGateActive = useTrustGateActive(sessionId);
 
-  // WHY there is no longer a "trust gate = initialized" shortcut here: it
-  // marked the session started the moment the trust dialog appeared, which
-  // switched the startup safety net off for every dialog AFTER trust (the
-  // bypass warning, an MCP server's approval) — they were then never shown,
-  // and the Initializing cover hid their cards anyway (2026-09-24). The cover
-  // now steps aside whenever a prompt card is waiting instead, and the session
-  // counts as started on its first real hook event, which Claude Code sends
-  // only once every startup dialog is answered.
+  // No "trust gate = initialized" shortcut (removed 2026-09-24): it switched the
+  // startup safety net off for every dialog after trust. The cover steps aside
+  // for any waiting prompt card; the first real hook event marks the start.
   const pendingPromptActive = usePendingPromptActive(sessionId);
-  const unreadableStartupDialog = useUnreadableStartupDialog(sessionId);
 
   const sessionInitialized = sessionId ? initializedSessions.has(sessionId) : true;
   // Plan 2b Moved Gate: when the active session was taken over by another device,
@@ -3437,20 +3429,9 @@ function AppInner() {
   // (now-dead) chat/terminal view.
   const movedGate = sessionId ? movedSessions.get(sessionId) : undefined;
 
-  // Show a "something may be wrong" hint after 6s of waiting on initialization.
-  // WHY 6s (was 15s, shortened 2026-09-14): 15s was a long wait before the way
-  // out (the terminal view) was offered when a start really is stuck.
-  // Resets whenever the active session changes or the session becomes initialized.
-  const [initSlowWarning, setInitSlowWarning] = useState(false);
   // The init warning's button is a one-way door: switching to terminal view also
   // hides the overlay that named the toggle. This coach mark is the way back.
   const [backToChatHint, setBackToChatHint] = useState(false);
-  useEffect(() => {
-    if (sessionInitialized) { setInitSlowWarning(false); return; }
-    setInitSlowWarning(false);
-    const t = setTimeout(() => setInitSlowWarning(true), 6000);
-    return () => clearTimeout(t);
-  }, [sessionId, sessionInitialized]);
 
   // ── First-run guide ──────────────────────────────────────────────────────
   // The welcome screen's first-time version (deck 2026-09-10, Q-8): with no
@@ -3847,44 +3828,13 @@ function AppInner() {
                   expanded={artifactState.drawerExpanded}
                 />
               )}
-              {/* Initializing overlay — shown before Claude is ready, but only in chat view.
-                 Terminal view must stay accessible during init so the user can interact there.
-                 z-10: must stay below glassmorphism chrome (z-20) so header/bottom bars remain accessible */}
+              {/* Initializing cover — chat view only (terminal view stays usable during
+                 init), and never over a waiting prompt card. */}
               {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && !pendingPromptActive && (
-                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
-                  <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
-                  {/* select-none: a status line, not content. Ctrl+A must not
-                      paint it (Destin, 2026-09-10). */}
-                  {unreadableStartupDialog ? (
-                    // Safety net (2026-09-24): Claude Code is showing a startup
-                    // dialog the app can't turn into buttons. Say so NOW, name
-                    // it in Claude Code's own words, and offer the one place it
-                    // can be answered — never a silent "Initializing…".
-                    <div className="text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2" data-testid="startup-dialog-unreadable">
-                      <p className="text-sm text-fg-dim font-medium select-none">Claude Code is asking something</p>
-                      {unreadableStartupDialog.heading && (
-                        <p className="text-fg-2">&ldquo;{unreadableStartupDialog.heading}&rdquo;</p>
-                      )}
-                      <p>YouCoded can&rsquo;t show these options here. Answer it in terminal view.</p>
-                      <Button variant="secondary" size="sm" onClick={() => { setBackToChatHint(true); handleToggleView('terminal'); }}>
-                        Answer in terminal view
-                      </Button>
-                    </div>
-                  ) : (
+                <InitializingCover sessionId={sessionId} onOpenTerminal={() => { setBackToChatHint(true); handleToggleView('terminal'); }}>
+                  {/* select-none: a status line, not content (ast-grep chrome-root-select-none-app). */}
                   <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>
-                  )}
-                  {initSlowWarning && !unreadableStartupDialog && (
-                    <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
-                      <p>Something may be wrong. The terminal may show what it is waiting on.</p>
-                      {/* Fix: the old copy told the user to go find the chat/terminal toggle
-                         themselves. This does it in one tap — and because the overlay is
-                         hidden in terminal view, switching also clears it. */}
-                      <Button variant="secondary" size="sm" onClick={() => { setBackToChatHint(true); handleToggleView('terminal'); }}>
-                        Check terminal view
-                      </Button>
-                    </div>
-                  )}
-                </div>
+                </InitializingCover>
               )}
               {backToChatHint && currentViewMode === 'terminal' && (
                 <ViewToggleHint onDismiss={() => setBackToChatHint(false)} />
