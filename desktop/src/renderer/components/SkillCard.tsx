@@ -180,9 +180,11 @@ function SkillCardImpl({ skill, handlersRef, hasFavorite, favoriteFilled, hasPlu
       )}
       <span className="text-sm font-medium text-fg leading-tight">{skill.displayName}</span>
       <span className="text-2xs text-fg-muted mt-1 leading-snug line-clamp-2 flex-1">{skill.description}</span>
-      <div className="mt-2 flex w-full flex-wrap items-center gap-1.5">{badge}
-        {availabilityPreview && <span className="ml-auto"><AvailabilityPreviewChip kind={availabilityPreview} /></span>}
-      </div>
+      {/* WHY: the shipped card keeps master's exact markup; only the workbench
+          preview (which passes availabilityPreview) gets the chip row. */}
+      {availabilityPreview ? <div className="mt-2 flex w-full flex-wrap items-center gap-1.5">{badge}
+        <span className="ml-auto"><AvailabilityPreviewChip kind={availabilityPreview} /></span>
+      </div> : <div className="mt-2 self-start">{badge}</div>}
     </div>
   );
 }

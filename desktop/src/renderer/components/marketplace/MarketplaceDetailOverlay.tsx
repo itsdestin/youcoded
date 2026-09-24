@@ -3,7 +3,7 @@
 // content from the same shell; the "What's inside" section only shows for
 // skills with extracted `components` data.
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useEscClose } from "../../hooks/use-esc-close";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import { useMarketplace, installTrackingKey } from "../../state/marketplace-context";
@@ -55,6 +55,10 @@ export default function MarketplaceDetailOverlay({
 }: Props) {
   const mp = useMarketplace();
   const [setupPreview, setSetupPreview] = useState(false);
+  // WHY: the overlay is reused across in-panel navigation (no key), so a setup
+  // preview from one install must not replay when the user comes back later.
+  const targetKey = target.kind === 'theme' ? `theme:${target.slug}` : `${target.kind}:${target.id}`;
+  useEffect(() => { setSetupPreview(false); }, [targetKey]);
   // Needed for Apply action and isActive check in ThemeBody
   const { theme: activeThemeSlug, setTheme } = useTheme();
 

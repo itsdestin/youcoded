@@ -353,7 +353,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter: extern
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-1.5">
                     {favsSorted.map(renderSkillCard)}
                     {/* WHY: a missing skill cannot be invoked, but clicking its
-                        greyed card can lead to the right project's setup page. */}
+                        greyed card opens the current project's setup rows (sample data). */}
                     {isWorkbenchMode() && <button type="button" className="group rounded-lg border border-edge-dim bg-panel p-3 text-left text-fg-muted opacity-75 flex flex-col hover:opacity-100 hover:border-edge focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-accent"
                       aria-label="Writing helper unavailable on this device; open project setup"
                       title="Open Projects to add Writing helper locally"
