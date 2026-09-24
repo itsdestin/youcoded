@@ -188,6 +188,29 @@ describe('minting a link', () => {
     expect(await mint(path.join(stray, 'unlisted.md'), { projectRoot: stray, artifactId: 'art-1' })).toMatchObject({ ok: false, error: 'outside-roots' });
   });
 
+  it('a trusted ../ record downloads at its judged location; a refused one does not', async () => {
+    // Re-review C5: the artifact route resolved a relative record against the
+    // app's own folder. A project under HOME (only those vouch — review F1).
+    const proj = fs.realpathSync(fs.mkdtempSync(path.join(process.env.HOME!, 'yc-dl-dotdot-')));
+    try {
+      fs.mkdirSync(path.join(proj, 'sub'));
+      fs.mkdirSync(path.join(proj, '.youcoded'));
+      fs.writeFileSync(path.join(proj, 'here.md'), 'judged');
+      const rec = (id: string, rel: string) => ({ id, path: path.basename(rel), kind: 'external', absolutePath: rel,
+        lastModified: new Date().toISOString(), status: 'active', versions: [], comments: [], tags: [] });
+      fs.writeFileSync(path.join(proj, '.youcoded', 'artifacts.json'), JSON.stringify({
+        $schema: SIDECAR_SCHEMA_VERSION, projectId: 'dd', name: 'dd',
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+        artifacts: [rec('ok', 'sub/../here.md'), rec('far', path.relative(proj, path.join(stray, 'unlisted.md')))],
+        manualExcludes: [], manualIncludes: [],
+      }));
+      const res = await mint(path.join(proj, 'here.md'), { projectRoot: proj, artifactId: 'ok' });
+      expect(res.ok).toBe(true);
+      expect(await (await fetch(res.url)).text()).toBe('judged');
+      expect(await mint(path.join(stray, 'unlisted.md'), { projectRoot: proj, artifactId: 'far' })).toMatchObject({ ok: false });
+    } finally { fs.rmSync(proj, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+
   it('a file whose inode is 0 is refused as not-allowed rather than accepted unpinnable', async () => {
     const dl = makeDownloads({
       // A real BigIntStats (isFile() and all) with its inode zeroed, as a

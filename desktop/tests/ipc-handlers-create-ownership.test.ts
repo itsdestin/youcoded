@@ -49,6 +49,8 @@ const rec = vi.hoisted(() => ({
 vi.mock('electron', () => {
   const BrowserWindowMock: any = vi.fn(() => ({ loadURL: vi.fn(), on: vi.fn(), webContents: { send: vi.fn() } }));
   BrowserWindowMock.getAllWindows = vi.fn(() => []);
+  // A reused writer's focus request focuses its window (ipc-handlers createSession).
+  BrowserWindowMock.fromWebContents = vi.fn(() => ({ focus: vi.fn() }));
   return {
     // whenReady must never resolve — otherwise main.ts runs its entire init chain
     // (createWindow, RemoteServer, SyncService, etc.) which hits unmocked APIs.
@@ -153,7 +155,7 @@ import { IPC } from '../src/shared/types';
  * window 1, so a send that lands there is exactly the misrouting this test is
  * about.
  */
-async function runSessionCreate(opts: any, senderWindowId = 2) {
+async function runSessionCreate(opts: any, senderWindowId = 2, liveSessions: any[] = [], managerExtras: Record<string, unknown> = {}) {
   rec.order.length = 0;
   rec.sends.length = 0;
 
@@ -188,10 +190,11 @@ async function runSessionCreate(opts: any, senderWindowId = 2) {
     return sessionInfo;
   });
   mockSessionManager.destroySession = vi.fn(() => true);
-  mockSessionManager.listSessions = vi.fn(() => []);
+  mockSessionManager.listSessions = vi.fn(() => liveSessions);
   mockSessionManager.getSession = vi.fn(() => sessionInfo);
   mockSessionManager.sendInput = vi.fn();
   mockSessionManager.resizeSession = vi.fn();
+  Object.assign(mockSessionManager, managerExtras);
 
   const mainWindow: any = {
     isDestroyed: () => false,
@@ -264,9 +267,10 @@ async function runSessionCreate(opts: any, senderWindowId = 2) {
   // the assertion below passes for the wrong reason. Verified empirically:
   // the same handler shape logs [assign, tick] under a direct await and
   // [tick, assign] under setImmediate dispatch.
+  let result: any;
   await new Promise<void>((resolve, reject) => {
     setImmediate(() => {
-      Promise.resolve(handler({ sender: { id: senderWindowId } }, opts)).then(() => resolve(), reject);
+      Promise.resolve(handler({ sender: { id: senderWindowId } }, opts)).then((r) => { result = r; resolve(); }, reject);
     });
   });
 
@@ -275,7 +279,7 @@ async function runSessionCreate(opts: any, senderWindowId = 2) {
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
 
-  return { order: [...rec.order], sends: [...rec.sends], assignSession };
+  return { order: [...rec.order], sends: [...rec.sends], assignSession, result, createSession: mockSessionManager.createSession };
 }
 
 function assertAssignBeforeCreated(order: string[], sends: Array<{ window: string; channel: string }>, label: string) {
@@ -371,7 +375,56 @@ describe('session:create — a Claude Code chat is described too', () => {
   it('does NOT send one for a native chat — the harness host owns that', async () => {
     // Two records for one chat would race, and the host's is the one that knows
     // the budget things were sized against.
-    const { sends } = await runSessionCreate({ provider: 'native', cwd: '/tmp' });
+    const { sends } = await runSessionCreate({ provider: 'native', cwd: '/tmp', binding: { providerId: 'p', modelId: 'm' } });
     expect(sends.find((s) => s.channel === 'native:session-context')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Resuming a conversation that is already open does not open it twice.
+// ---------------------------------------------------------------------------
+// Combined branch: main now answers through master's resume admission
+// (`reused: true`) instead of chatfiles' `alreadyOpen`; same guarantee.
+describe('session:create — a conversation already open is not resumed a second time', () => {
+  it('answers with the open session instead of creating a second one', async () => {
+    const open = {
+      id: 'native-open', name: 'My chat', cwd: '/tmp', provider: 'native', status: 'active',
+      createdAt: 1, permissionMode: 'normal', skipPermissions: false,
+    };
+    const { result, createSession, sends } = await runSessionCreate({
+      provider: 'native', resumeSessionId: 'native-open', cwd: '/tmp', name: 'Resuming…', skipPermissions: false,
+    }, 2, [open]);
+    expect(createSession).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: 'native-open', reused: true });
+    // An already-open session nobody owns (as here) is still brought forward:
+    // the focus request goes to the leader window (combined-branch fix).
+    expect(sends.some((x) => x.channel === 'session:focus-request' && x.payload === 'native-open')).toBe(true);
+    expect(sends.find((s) => s.channel === IPC.SESSION_CREATED)).toBeUndefined();
+  });
+
+  it('catches a second resume before Claude Code has reported the first one in', async () => {
+    // The desktop→Claude id map fills in only at the first hook; until then the
+    // session manager is the only one who knows which conversation it holds.
+    const pending = {
+      id: 'desk-9', name: 'Resuming…', cwd: '/tmp', provider: 'claude', status: 'active',
+      createdAt: 1, permissionMode: 'normal', skipPermissions: false,
+    };
+    const { result, createSession } = await runSessionCreate({
+      provider: 'claude', resumeSessionId: 'claude-X', cwd: '/tmp', name: 'Resuming…', skipPermissions: false,
+    }, 2, [pending], { resumedConversationOf: (id: string) => (id === 'desk-9' ? 'claude-X' : undefined) });
+    expect(createSession).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: 'desk-9', reused: true });
+  });
+
+  it('still resumes when no open session holds the conversation', async () => {
+    const other = {
+      id: 'some-other', name: 'x', cwd: '/tmp', provider: 'native', status: 'active',
+      createdAt: 1, permissionMode: 'normal', skipPermissions: false,
+    };
+    const { result, createSession } = await runSessionCreate({
+      provider: 'native', resumeSessionId: 'native-session-under-test', cwd: '/tmp', name: 'Resuming…', skipPermissions: false,
+    }, 2, [other]);
+    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(result?.reused).toBeUndefined();
   });
 });

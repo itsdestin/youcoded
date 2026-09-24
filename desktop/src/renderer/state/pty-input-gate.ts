@@ -7,14 +7,14 @@ import { HISTORY_EXPAND_PROMPT_ID } from './chat-types';
 // permission request, AskUserQuestion, or plan approval is pending, Claude
 // Code's native Ink select menu is LIVE in the PTY at the same time YouCoded
 // shows its chat card (the card answers via the hook socket, but the terminal
-// menu still listens for keystrokes — that's how PlanApprovalButtons drives
-// it with arrow keys). Any byte YouCoded writes to the PTY in that window is
-// menu input: a bare `\r` presses Enter on the highlighted option, silently
-// auto-answering the question or auto-approving the permission.
+// menu still listens for keystrokes — that's how PlanApprovalCard answers the
+// plan menu, by typing a row's number). Any byte YouCoded writes to the PTY in
+// that window is menu input: a bare `\r` presses Enter on the highlighted
+// option, silently auto-answering the question or auto-approving the permission.
 //
 // Every AUTOMATED PTY writer (submit-retry nudge, chat sends, command sends)
 // must consult these predicates first. Deliberate menu-driving writes
-// (ToolCard plan keys, TrustGate buttons, terminal-view keystrokes) must NOT
+// (PlanApprovalCard keys, TrustGate buttons, terminal-view keystrokes) must NOT
 // go through this gate — driving the menu is their whole purpose.
 
 /**
@@ -48,6 +48,37 @@ export function hasPendingInteraction(session: SessionChatState): boolean {
     }
   }
   return false;
+}
+
+/**
+ * WHICH kind of interaction is blocking sends — the send-refusal copy names it
+ * (2026-07-30 permission-ask-timeout spec §4). With the app now holding an
+ * unanswered ask for up to 2 hours, a generic "answer the prompt" reads as a
+ * mystery lock once it has sat a while; an 'approval' card is in the chat, so
+ * the copy points there. Same scan, same fields as hasPendingInteraction —
+ * kept parallel (not derived from its boolean) so the two cannot disagree.
+ */
+export function pendingInteractionKind(session: SessionChatState): 'approval' | 'prompt' | null {
+  for (const id of session.activeTurnToolIds) {
+    if (session.toolCalls.get(id)?.status === 'awaiting-approval') return 'approval';
+  }
+  for (const entry of session.timeline) {
+    if (entry.kind === 'prompt'
+        && entry.prompt.promptId !== HISTORY_EXPAND_PROMPT_ID
+        && !entry.prompt.completed) {
+      return 'prompt';
+    }
+  }
+  return null;
+}
+
+/** The one refusal sentence every send-refusal site reads, so they cannot drift.
+ *  "answer the card" is true of every card shape that blocks (permission, plan,
+ *  question, and a kept card with its Dismiss). */
+export function pendingInteractionRefusalCopy(kind: 'approval' | 'prompt' | null): string {
+  return kind === 'approval'
+    ? 'Your assistant is waiting for your response — answer the card in the chat first.'
+    : 'Your assistant is waiting for your response — answer the prompt first.';
 }
 
 /**

@@ -1950,5 +1950,50 @@ describe('the vision catalog', () => {
       expect(rows.map((r) => r.id)).toEqual(['tiny-Q4_K_M']);
       expect(rows[0].supportsVision).toBeUndefined();
     });
+
+    // Roadmap (local-models, 2026-09-05): a vision model downloaded while the
+    // app runs was told to the assistant as text-only when the session started
+    // before the router re-scanned. The files on disk now answer too.
+    function plantVisionFolder(id: string, { projector = 'mmproj-F16.gguf' } = {}) {
+      const dir = path.join(cacheDir, id);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${id}.gguf`), Buffer.alloc(8));
+      if (projector) fs.writeFileSync(path.join(dir, projector), Buffer.alloc(4));
+    }
+
+    it('a just-downloaded vision folder the router has not re-scanned yet reads supportsVision TRUE', async () => {
+      plantVisionFolder('gemma-3-4b-it-Q4_K_M');
+      // The router still lists only the OLD model — the post-boot download
+      // arrives through listModels' disk union, with no modalities.
+      mgr = await runningManager({ object: 'list', data: [{ id: 'older-Q4_K_M', status: { value: 'unloaded' } }] });
+      const byId = Object.fromEntries((await mgr.catalogModels()).map((r) => [r.id, r]));
+      expect(byId['gemma-3-4b-it-Q4_K_M'].supportsVision).toBe(true);
+      expect(byId['older-Q4_K_M'].supportsVision).toBeUndefined();
+    });
+
+    it('an explicit router "text only" answer is honoured even with a projector on disk', async () => {
+      plantVisionFolder('gemma-3-4b-it-Q4_K_M');
+      mgr = await runningManager({ object: 'list', data: [{
+        id: 'gemma-3-4b-it-Q4_K_M', status: { value: 'unloaded' }, architecture: { input_modalities: ['text'] },
+      }] });
+      const [row] = await mgr.catalogModels();
+      expect(row.supportsVision).toBe(false);
+    });
+
+    it('the engine-OFF path sees the projector too', async () => {
+      plantInstall();
+      plantVisionFolder('gemma-3-4b-it-Q4_K_M');
+      mgr = new EngineManager(home, userData, 9999);
+      const [row] = await mgr.catalogModels();
+      expect(row.supportsVision).toBe(true);
+    });
+
+    it('a projector still downloading is not a yes', async () => {
+      plantInstall();
+      plantVisionFolder('gemma-3-4b-it-Q4_K_M', { projector: 'mmproj-F16.gguf.partial' });
+      mgr = new EngineManager(home, userData, 9999);
+      const rows = await mgr.catalogModels();
+      for (const r of rows) expect(r.supportsVision).not.toBe(true);
+    });
   });
 });

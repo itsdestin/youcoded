@@ -266,3 +266,32 @@ describe('SettingsPanel — remote setup flow', () => {
   // by behaviour in `remote-config.test.ts` → detectTailscale, against real BackendState
   // values, rather than by scanning the mapping table here.
 });
+
+// While the Android app is paired to a computer, Remove asks the phone's own runtime, which
+// can fail or time out. The failure used to go nowhere; the row just stayed.
+describe('SettingsPanel — the Android app\'s saved computers', () => {
+  afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('a Remove that fails says so with the runtime\'s own words, keeps the row, and Retry works', async () => {
+    const { ConnectToDesktopButton } = await import('../src/renderer/components/SettingsPanel');
+    const removePairedDevice = vi.fn()
+      .mockRejectedValueOnce(new Error('The phone did not answer.'))
+      .mockResolvedValue(true);
+    (window as any).claude = {
+      android: {
+        getPairedDevices: vi.fn(async () => ({ devices: [{ name: 'Desk', host: 'desk', port: 9900, password: 'pw' }] })),
+        removePairedDevice,
+      },
+      remote: { detectTailscale: vi.fn(async () => null) },
+    };
+    render(<ConnectToDesktopButton />);
+    fireEvent.click(await screen.findByText('1 saved device'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
+    expect(await screen.findByText("Couldn't remove Desk: The phone did not answer.")).toBeTruthy();
+    expect(screen.getByText('Desk')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await vi.waitFor(() => expect(screen.queryByText('Desk')).toBeNull());
+    expect(removePairedDevice).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/Couldn't remove/)).toBeNull();
+  });
+});

@@ -69,6 +69,20 @@ describe('ModelPicker — a failed provider load is not "no providers set up"', 
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('You have not set up any model providers.')).toBeInTheDocument();
   });
+
+  // The first load runs with the panel closed, and only an open re-asked — so a read lost
+  // during a phone's drop left the list empty until the panel was opened.
+  it('a remote reconnect loads again with the panel closed', async () => {
+    const { REMOTE_RECONNECTED_EVENT } = await import('../src/renderer/remote-events');
+    const list = vi.fn().mockRejectedValueOnce(new Error('lost')).mockResolvedValue([]);
+    bridge(list, vi.fn().mockResolvedValue([]));
+    render(<ModelPicker value={null} onSelect={() => {}} includeClaude={false} />);
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+    await act(async () => { window.dispatchEvent(new Event(REMOTE_RECONNECTED_EVENT)); });
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await openPanel();
+    expect(await screen.findByText('You have not set up any model providers.')).toBeInTheDocument();
+  });
 });
 
 // ── The list catches up after a download ─────────────────────────────────────

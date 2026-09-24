@@ -567,11 +567,12 @@ export class TranscriptWatcher extends EventEmitter {
    * the reader, which would make transcript-watcher <-> transcript-page a
    * circular import (the reader needs parseTranscriptLine).
    */
-  pageSourceFor(desktopSessionId: string): { jsonlPath: string; subagentsDir: string; startOffset: number } | null {
+  pageSourceFor(desktopSessionId: string): { jsonlPath: string; subagentsDir: string; startOffset: number; cwd: string } | null {
     const session = this.sessions.get(desktopSessionId);
     if (!session) return null;
     return {
       jsonlPath: session.jsonlPath,
+      cwd: session.cwd, // hook's post-realpath cwd, paired to this exact watched file
       subagentsDir: path.join(path.dirname(session.jsonlPath), session.claudeSessionId, 'subagents'),
       startOffset: session.startOffset,
     };
@@ -959,8 +960,9 @@ export class TranscriptWatcher extends EventEmitter {
         }
         if (event.type === 'tool-result' && event.data.toolUseId) {
           // If this result completes a parent Agent tool call, that subagent
-          // is done writing — settle its file poll (fire-and-forget; no-op
-          // for non-Agent toolUseIds, fs.watch stays attached either way).
+          // is done writing — final read, then release its own watch + poll
+          // (fire-and-forget; no-op for non-Agent toolUseIds). A late write
+          // still arrives through the subagents directory watch.
           void session.subagentWatcher.settleByParent(event.data.toolUseId);
         }
       }

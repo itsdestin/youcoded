@@ -20,7 +20,7 @@ afterEach(() => {
 const PRESET = 'PRESET_BODY_MARKER';
 
 describe('assembleSystemPrompt — section order', () => {
-  it('orders identity → preset → env → project instructions → tool guidance', () => {
+  it('orders identity → preset → project instructions → tool guidance → env, env last so later sessions reuse the cached rest', () => {
     fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'PROJECT_INSTR_MARKER');
     const out = assembleSystemPrompt({ presetBody: PRESET, cwd: dir, appVersion: '9.9.9' });
 
@@ -32,9 +32,9 @@ describe('assembleSystemPrompt — section order', () => {
 
     expect(iIdentity).toBeGreaterThanOrEqual(0);
     expect(iPreset).toBeGreaterThan(iIdentity);
-    expect(iEnv).toBeGreaterThan(iPreset);
-    expect(iProject).toBeGreaterThan(iEnv);
+    expect(iProject).toBeGreaterThan(iPreset);
     expect(iTools).toBeGreaterThan(iProject);
+    expect(iEnv).toBeGreaterThan(iTools);
   });
 
   it('labels the env block as a snapshot at session start', () => {
@@ -278,7 +278,7 @@ describe('assembleSystemPromptParts — the pieces ARE the prompt', () => {
     const ids = assembleSystemPromptParts(base).map((p) => p.id);
     expect(ids).not.toContain('project');
     expect(ids).not.toContain('steering');
-    expect(ids).toEqual(['identity', 'preset', 'env', 'doctrine']);
+    expect(ids).toEqual(['identity', 'preset', 'doctrine', 'env']);
   });
 
   it('names the project instructions part only when there is a file', () => {

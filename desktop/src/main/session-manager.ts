@@ -140,10 +140,21 @@ interface ManagedSession {
   // HarnessSession owned by NativeSessionHost (ipc-handlers wires it up after
   // createSession returns). Every `session.worker.X` access is guarded.
   worker?: ChildProcess;
+  /** The conversation a `--resume` launch was asked for. WHY (review
+   *  2026-09-23, F7): the desktop→Claude id map fills in only when Claude
+   *  Code's first hook arrives, seconds later; until then this is the only
+   *  record of which conversation the session holds, and without it a second
+   *  resume in that window opened a second tab. */
+  resumedConversation?: string;
 }
+
+export type HandoffStopResult = { status: 'stopped' } | { status: 'unknown' };
 
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, ManagedSession>();
+  private handoffStops = new Map<string, { worker: ChildProcess; promise: Promise<HandoffStopResult>; finish: (result: HandoffStopResult) => void }>();
+  private handoffStopping = new Set<string>();
+  private static readonly HANDOFF_STOP_TIMEOUT_MS = 15000;
   private pipeName: string = '';
 
   setPipeName(name: string) {
@@ -296,15 +307,20 @@ export class SessionManager extends EventEmitter {
       // The shell's own name is how the strip and header label this session —
       // it has no model alias and no harness preset to label it with.
       ...(isShell ? { shellName: shellDisplayName(shellCommand) } : {}),
+      ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
     };
 
-    const session: ManagedSession = { info, worker };
+    const session: ManagedSession = { info, worker, ...(opts.resumeSessionId ? { resumedConversation: opts.resumeSessionId } : {}) };
     this.sessions.set(id, session);
     this.emit('session-created', info);
 
     // Handle spawn failure (e.g., node not on PATH) — without this,
     // the unhandled 'error' event would crash the Electron main process.
+    let workerGone = false;
     worker.on('error', (err) => {
+      workerGone = true;
+      this.handoffStops.get(id)?.finish({ status: 'unknown' });
+      this.handoffStopping.delete(id);
       log('ERROR', 'SessionManager', 'Worker spawn failed', { sessionId: id, error: String(err) });
       if (this.sessions.has(id)) {
         this.sessions.get(id)!.info.status = 'destroyed';
@@ -349,7 +365,7 @@ export class SessionManager extends EventEmitter {
       // prompt for the user to run. Ordinary typing and paste keep the single
       // unchunked write they have always had.
       const session = this.sessions.get(id);
-      try { session?.worker?.send({ type: 'input-chunked', data: command }); }
+      try { if (!this.handoffStopping.has(id)) session?.worker?.send({ type: 'input-chunked', data: command }); }
       catch { /* worker IPC already closed — the session is gone */ }
     };
     // Backstop for a shell that reads input before it writes anything: without
@@ -368,17 +384,43 @@ export class SessionManager extends EventEmitter {
           flushCommand();
           break;
         case 'exit':
+          if (workerGone) return; // no proof from a frame after worker death
           clearTimeout(commandFallbackTimer);
+          // WHY: only this message is emitted by the worker's PTY onExit callback.
+          // A dead/disconnected worker alone cannot certify a final transcript.
+          // WHY: a handoff stop is deliberate; its PTY's kill code must not
+          // read as a crash in the renderer.
+          const deliberate = this.handoffStops.get(id)?.worker === worker;
+          if (deliberate) {
+            this.handoffStops.get(id)?.finish({ status: 'stopped' });
+            // WHY: worker.send's own callback only guarantees transport flush.
+            // A parent receipt keeps the worker alive until this handler has
+            // actually consumed the PTY exit frame, preventing exit-before-message.
+            try { worker.send({ type: 'handoff-exit-received' }); }
+            catch { /* proof was received; worker's bounded fallback will exit */ }
+          }
+          this.handoffStopping.delete(id);
+          // WHY: a late PTY-exit frame still proves stop after an ordinary
+          // destroy removed the manager entry; its early exit never does.
+          this.emit('session-stopped', id);
           if (!this.sessions.has(id)) return;
           const exitingSession = this.sessions.get(id)!;
           exitingSession.info.status = 'destroyed';
-          this.emit('session-exit', id, msg.exitCode);
+          this.emit('session-exit', id, deliberate ? 0 : msg.exitCode);
           this.sessions.delete(id);
           break;
       }
     });
 
+    worker.on('disconnect', () => {
+      workerGone = true;
+      this.handoffStops.get(id)?.finish({ status: 'unknown' });
+    });
+
     worker.on('exit', () => {
+      workerGone = true;
+      this.handoffStops.get(id)?.finish({ status: 'unknown' });
+      this.handoffStopping.delete(id);
       clearTimeout(commandFallbackTimer);
       if (!this.sessions.has(id)) return;
       const exitingSession = this.sessions.get(id)!;
@@ -415,7 +457,44 @@ export class SessionManager extends EventEmitter {
     return info;
   }
 
+  /** Stop a Claude Code writer for handoff. Only the captured worker's PTY onExit
+   * message proves shutdown; ordinary destroySession's boolean does not. */
+  stopSessionForHandoff(id: string): Promise<HandoffStopResult> {
+    const pending = this.handoffStops.get(id);
+    if (pending) return pending.promise;
+    const session = this.sessions.get(id);
+    if (!session?.worker || session.info.provider !== 'claude' || this.handoffStopping.has(id)) {
+      return Promise.resolve({ status: 'unknown' });
+    }
+    const worker = session.worker;
+    // WHY: fence inputs synchronously before asking the worker to kill. A timeout
+    // leaves the fence in place until a genuine exit/ordinary teardown, not a
+    // writable session whose shutdown status is still unknown.
+    this.handoffStopping.add(id);
+    let finish!: (result: HandoffStopResult) => void;
+    const promise = new Promise<HandoffStopResult>((resolve) => {
+      const timer = setTimeout(() => finish({ status: 'unknown' }), SessionManager.HANDOFF_STOP_TIMEOUT_MS);
+      finish = (result) => {
+        if (this.handoffStops.get(id)?.promise !== promise) return;
+        clearTimeout(timer);
+        this.handoffStops.delete(id);
+        resolve(result);
+      };
+    });
+    this.handoffStops.set(id, { worker, promise, finish });
+    try {
+      worker.send({ type: 'stop-for-handoff' }, (error) => {
+        if (error) finish({ status: 'unknown' });
+      });
+    } catch {
+      finish({ status: 'unknown' });
+    }
+    return promise;
+  }
+
   destroySession(id: string): boolean {
+    this.handoffStops.get(id)?.finish({ status: 'unknown' });
+    this.handoffStopping.delete(id);
     const session = this.sessions.get(id);
     if (!session) return false;
     session.info.status = 'destroyed';
@@ -436,7 +515,7 @@ export class SessionManager extends EventEmitter {
 
   sendInput(id: string, text: string): boolean {
     const session = this.sessions.get(id);
-    if (!session || !session.worker) return false; // native sessions have no PTY
+    if (!session || !session.worker || this.handoffStopping.has(id)) return false; // native sessions have no PTY
     try { session.worker.send({ type: 'input', data: text }); } catch { return false; }
     return true;
   }
@@ -512,6 +591,18 @@ export class SessionManager extends EventEmitter {
 
   getSession(id: string): SessionInfo | undefined {
     return this.sessions.get(id)?.info;
+  }
+
+  /** True when this id belongs to a live session — HookRelay's ownership gate:
+   *  an ask for any other id is handed straight back to Claude Code (hook-relay.ts). */
+  hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
+  }
+
+  /** The conversation this session was launched to resume, if any (see
+   *  ManagedSession.resumedConversation). */
+  resumedConversationOf(id: string): string | undefined {
+    return this.sessions.get(id)?.resumedConversation;
   }
 
   destroyAll(): void {

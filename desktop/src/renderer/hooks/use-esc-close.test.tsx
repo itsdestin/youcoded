@@ -2,6 +2,7 @@
 // Fix: pin jsdom here because vitest.config.ts only auto-applies jsdom to
 // tests under `tests/**/*.tsx`; this file lives under `src/**/*.test.tsx`
 // and would otherwise run in the default `node` env with no `window`.
+import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, act } from '@testing-library/react';
 import { EscCloseProvider, useEscClose, useEscStackEmpty, useDismissTop } from './use-esc-close';
@@ -172,6 +173,78 @@ describe('useEscClose', () => {
     act(() => { dismiss(); });
     expect(onCloseB).toHaveBeenCalledTimes(1);
     expect(onCloseA).not.toHaveBeenCalled();
+  });
+
+  // A layered overlay (Resume browser: Organize sheet → expanded row → browser)
+  // peels one layer per Esc and stays OPEN. Its entry must survive that press,
+  // or the next Esc finds an empty stack: the browser won't close, and the
+  // key falls through to the chat and interrupts the assistant.
+  it('a layered overlay that peels one layer keeps its place: every Esc is consumed until it closes', () => {
+    function Layered({ onClosed }: { onClosed: () => void }) {
+      const [layers, setLayers] = React.useState(2);
+      const [open, setOpen] = React.useState(true);
+      useEscClose(open, () => {
+        if (layers > 0) setLayers((n) => n - 1);
+        else { setOpen(false); onClosed(); }
+      });
+      return <div data-layers={layers} />;
+    }
+    const onClosed = vi.fn();
+    render(
+      <EscCloseProvider>
+        <Layered onClosed={onClosed} />
+      </EscCloseProvider>,
+    );
+    const presses = [0, 1, 2].map(() => {
+      const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      act(() => { window.dispatchEvent(ev); });
+      return ev.defaultPrevented;
+    });
+    expect(presses).toEqual([true, true, true]);
+    expect(onClosed).toHaveBeenCalledTimes(1);
+    // Closed now: the next Esc is the chat's again.
+    const after = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    act(() => { window.dispatchEvent(after); });
+    expect(after.defaultPrevented).toBe(false);
+  });
+
+  it('a panel beside the chat takes one Escape while focus is elsewhere; peels only with focus inside', () => {
+    let inside = false;
+    const onBack = vi.fn();
+    function Panel() {
+      useEscClose(true, onBack, { layeredWhile: () => inside });
+      return null;
+    }
+    render(<EscCloseProvider><Panel /></EscCloseProvider>);
+    const press = () => {
+      const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      act(() => { window.dispatchEvent(ev); });
+      return ev.defaultPrevented;
+    };
+    expect([press(), press(), press()]).toEqual([true, false, false]);
+    expect(onBack).toHaveBeenCalledTimes(1);
+    inside = true;
+    expect([press(), press()]).toEqual([true, true]);
+    expect(onBack).toHaveBeenCalledTimes(3);
+  });
+
+  it('Android Back keeps peeling a panel that Escape already spent, and never reports the stack empty while it is open', () => {
+    // Re-review C2: a spent drawer counted as empty, which switched Android's
+    // Back interception off — the next Back left the app with the drawer open.
+    const onBack = vi.fn();
+    let dismiss: () => void = () => {};
+    const empties: boolean[] = [];
+    function Panel() { useEscClose(true, onBack, { layeredWhile: () => false }); return null; }
+    function Probe() { dismiss = useDismissTop(); empties.push(useEscStackEmpty()); return null; }
+    render(<EscCloseProvider><Probe /><Panel /></EscCloseProvider>);
+    // One Escape from the chat spends the panel…
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); });
+    expect(onBack).toHaveBeenCalledTimes(1);
+    // …but the stack is still not empty, and Back still reaches the panel.
+    expect(empties[empties.length - 1]).toBe(false);
+    act(() => { dismiss(); });
+    act(() => { dismiss(); });
+    expect(onBack).toHaveBeenCalledTimes(3);
   });
 
   it('useDismissTop is a no-op when the stack is empty', () => {

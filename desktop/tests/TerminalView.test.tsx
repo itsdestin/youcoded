@@ -16,6 +16,12 @@ const terminalCtorArgs: any[] = [];
 const onDataSpy = vi.fn();
 const writeSpy = vi.fn();
 const clearTextureAtlasSpy = vi.fn();
+// Every fake Terminal constructed, newest last — the render-pause and backing
+// sections read an instance's refresh / dispose / options.
+const terminalInstances: any[] = [];
+// Stands in for xterm's private RenderService._handleIntersectionChange — the
+// pause switch attachRenderPause drives (real-xterm pin: xterm-render-pause.test.ts).
+const handleIntersectionSpy = vi.fn();
 let termGrid: { cols?: number; rows: number } = { rows: 24 };
 
 // Mock factories use `function` (not arrow) so they're invokable as
@@ -26,6 +32,8 @@ vi.mock('@xterm/xterm', () => {
   return {
     Terminal: vi.fn(function (this: any, opts: any) {
       terminalCtorArgs.push(opts);
+      terminalInstances.push(this);
+      this._core = { _renderService: { _isPaused: false, _handleIntersectionChange: handleIntersectionSpy } };
       this.loadAddon = vi.fn();
       this.open = vi.fn();
       this.unicode = { activeVersion: '11' };
@@ -85,6 +93,7 @@ vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 vi.mock('../src/renderer/platform', () => ({
   isAndroid: vi.fn().mockReturnValue(false),
   isTouchDevice: vi.fn().mockReturnValue(false),
+  isRemoteMode: vi.fn().mockReturnValue(false),
   getPlatform: vi.fn().mockReturnValue('electron'),
 }));
 
@@ -119,7 +128,11 @@ vi.mock('../src/renderer/hooks/usePtyRawBytes', () => ({
 
 import { join } from 'node:path';
 import { readSource } from './helpers/guard-scope';
-import TerminalView from '../src/renderer/components/TerminalView';
+// The UNMEMOISED component: this file's useTheme mock is a plain getter, and
+// the theme tests deliver a "new theme" by re-rendering with identical props —
+// exactly what memo exists to skip. In the app the theme arrives through
+// context, which memo never blocks (same arrangement as UnmemoizedChatView).
+import { UnmemoizedTerminalView as TerminalView } from '../src/renderer/components/TerminalView';
 import * as platform from '../src/renderer/platform';
 import { usePtyOutput } from '../src/renderer/hooks/useIpc';
 import { usePtyRawBytes } from '../src/renderer/hooks/usePtyRawBytes';
@@ -390,10 +403,39 @@ describe('mount logic', () => {
     // order). On touch, the raw-bytes hook gets the real sessionId and the
     // string hook gets null (early-returns inside the hook). Asserting which
     // hook got the real sessionId is the meaningful check, not which got called.
-    it('passes sessionId to usePtyRawBytes and null to usePtyOutput', () => {
+    it('passes sessionId to usePtyRawBytes and null to usePtyOutput on the Android app', () => {
+      vi.mocked(platform.isAndroid).mockReturnValue(true);
+      try {
+        render(<TerminalView sessionId="s1" visible={true} />);
+        expect(usePtyRawBytes).toHaveBeenCalledWith('s1', expect.any(Function));
+        expect(usePtyOutput).toHaveBeenCalledWith(null, expect.any(Function));
+      } finally {
+        vi.mocked(platform.isAndroid).mockReturnValue(false);
+      }
+    });
+
+    // The Android app PAIRED to a computer still reports 'android', but the computer
+    // sends the terminal as text — waiting for raw bytes there drew a blank terminal.
+    it('the Android app paired to a computer draws the text stream the computer sends', () => {
+      vi.mocked(platform.isAndroid).mockReturnValue(true);
+      vi.mocked(platform.isRemoteMode).mockReturnValue(true);
+      try {
+        render(<TerminalView sessionId="s1" visible={true} />);
+        expect(usePtyOutput).toHaveBeenCalledWith('s1', expect.any(Function));
+        expect(usePtyRawBytes).toHaveBeenCalledWith(null, expect.any(Function));
+      } finally {
+        vi.mocked(platform.isAndroid).mockReturnValue(false);
+        vi.mocked(platform.isRemoteMode).mockReturnValue(false);
+      }
+    });
+
+    // A phone BROWSER is a touch device too, but the computer it talks to sends the
+    // terminal as text and never as raw bytes — only the Android app's own runtime
+    // does. Listening for raw bytes there would draw a blank terminal.
+    it('a phone browser draws the text stream the computer sends', () => {
       render(<TerminalView sessionId="s1" visible={true} />);
-      expect(usePtyRawBytes).toHaveBeenCalledWith('s1', expect.any(Function));
-      expect(usePtyOutput).toHaveBeenCalledWith(null, expect.any(Function));
+      expect(usePtyOutput).toHaveBeenCalledWith('s1', expect.any(Function));
+      expect(usePtyRawBytes).toHaveBeenCalledWith(null, expect.any(Function));
     });
   });
 
@@ -740,6 +782,104 @@ describe('workbench screen and terminal surface', () => {
       const css = readSource(join(__dirname, '../src/renderer/styles/globals.css'));
       const rule = css.slice(css.indexOf('.xterm-viewport {'));
       expect(rule).toMatch(/background-color:\s*var\(--terminal-backing,\s*var\(--canvas\)\)\s*!important/);
+    });
+  });
+});
+
+// Perf batch 2026-09-23. B1: a hidden terminal's DRAWING pauses (xterm's own
+// off-screen switch) while its buffer keeps receiving every write — the prompt
+// detector reads hidden sessions' buffers. E5: a theme switch that changes the
+// terminal backing recolours the open terminal instead of rebuilding it.
+describe('hidden terminals and theme switches', () => {
+  beforeEach(() => {
+    terminalInstances.length = 0;
+    terminalCtorArgs.length = 0;
+    handleIntersectionSpy.mockReset();
+    writeSpy.mockReset();
+    vi.mocked(usePtyOutput).mockReset();
+    (globalThis as any).window.claude = {
+      session: { signalReady: vi.fn(), sendInput: vi.fn(), resize: vi.fn() },
+    };
+  });
+  afterEach(() => {
+    cleanup();
+    document.documentElement.removeAttribute('style');
+    document.documentElement.removeAttribute('data-wallpaper');
+    delete (globalThis as any).window.claude;
+  });
+
+  const lastPauseVerdict = () => handleIntersectionSpy.mock.calls.at(-1)?.[0];
+  // The PTY output handler TerminalView registered (usePtyOutput is mocked).
+  const ptyOutput = () => vi.mocked(usePtyOutput).mock.calls.at(-1)![1] as (data: string) => void;
+
+  describe('TerminalView render pause (B1)', () => {
+    it('a terminal mounted hidden starts with drawing paused', () => {
+      render(<TerminalView sessionId="s1" visible={false} />);
+      expect(lastPauseVerdict()).toEqual({ isIntersecting: false });
+    });
+
+    it('a terminal mounted visible is left alone', () => {
+      render(<TerminalView sessionId="s1" visible={true} />);
+      expect(handleIntersectionSpy).not.toHaveBeenCalled();
+    });
+
+    it('PTY output still reaches the hidden terminal (its buffer stays current)', () => {
+      render(<TerminalView sessionId="s1" visible={false} />);
+      ptyOutput()('Do you trust the files in this folder?');
+      expect(writeSpy).toHaveBeenCalledWith('Do you trust the files in this folder?', expect.any(Function));
+    });
+
+    it('showing it resumes drawing and repaints the whole screen', () => {
+      const { rerender } = render(<TerminalView sessionId="s1" visible={false} />);
+      const term = terminalInstances.at(-1);
+      term.refresh.mockClear();
+
+      rerender(<TerminalView sessionId="s1" visible={true} />);
+      expect(lastPauseVerdict()).toEqual({ isIntersecting: true });
+      expect(term.refresh).toHaveBeenCalledWith(0, 23);
+    });
+
+    it('hiding it again pauses drawing again', () => {
+      const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+      rerender(<TerminalView sessionId="s1" visible={false} />);
+      expect(lastPauseVerdict()).toEqual({ isIntersecting: false });
+    });
+  });
+
+  describe('TerminalView backing change (E5)', () => {
+    function theme(background: any): ThemeDefinition {
+      return {
+        name: 'T', slug: 't', dark: true,
+        tokens: {
+          canvas: '#0D0F1A', panel: '#141726', inset: '#1F2440', well: '#0D0F1A',
+          accent: '#7C6AF7', 'on-accent': '#FFFFFF',
+          fg: '#C4BFFF', 'fg-2': '#9090C0', 'fg-dim': '#6060A0',
+          'fg-muted': '#404070', 'fg-faint': '#282848',
+          edge: '#2A2F55', 'edge-dim': '#2A2F5580',
+          'scrollbar-thumb': '#2A2F55', 'scrollbar-hover': '#3A3F70',
+        },
+        background,
+      };
+    }
+
+    it('flat -> wallpaper theme recolours the open terminal in place: no dispose, no second terminal', async () => {
+      const flat = theme(undefined);
+      applyThemeToDom(flat);
+      mockActiveTheme = flat;
+      const { rerender } = render(<TerminalView sessionId="s1" visible={true} />);
+      expect(terminalInstances).toHaveLength(1);
+      const term = terminalInstances[0];
+      expect(terminalCtorArgs[0].theme.background).toBe('#0D0F1A'); // --canvas
+
+      const wallpaper = theme({ type: 'image', value: 'theme-asset://meadow/wallpaper.jpg' });
+      applyThemeToDom(wallpaper);
+      mockActiveTheme = wallpaper;
+      rerender(<TerminalView sessionId="s1" visible={true} />);
+
+      expect(terminalInstances).toHaveLength(1);
+      expect(term.dispose).not.toHaveBeenCalled();
+      // The theme effect recolours on the next frame, to the --panel backing.
+      await waitFor(() => expect(term.options.theme?.background).toBe('#141726'));
     });
   });
 });

@@ -11,6 +11,8 @@ import type { RemoteBridge } from '../shared/bridge-types';
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
 import { REMOTE_RECONNECTED_EVENT } from './remote-events';
+// The phone's own runtime while paired: localBridgeUrl + invokeLocalBridge (WHY there).
+import { localBridgeUrl, invokeLocalBridge } from './android-local-bridge';
 import type { FirstRunState } from '../shared/first-run-types';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
@@ -404,18 +406,26 @@ export function onConnectionStateChange(cb: (state: RemoteConnectionState) => vo
   stateChangeCallback = cb;
 }
 
+/** A screen whose PRIMARY pointer is a finger (a phone or tablet). */
+function isTouchFirstDevice(): boolean {
+  try {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      && window.matchMedia('(pointer: coarse)').matches;
+  } catch {
+    return false;
+  }
+}
+
+/** The Android app, paired to a computer: its own runtime is only reachable on a side connection. */
+function isAndroidPaired(): boolean {
+  return location.protocol === 'file:' && !!targetUrl;
+}
+
 function getWsUrl(): string {
   // If a remote host override is set, use it (connectToHost sets this)
   if (targetUrl) return targetUrl;
   // Android WebView loads from file:// — connect to local bridge server.
-  // Port comes from the `bridgePort` query param injected by WebViewHost.kt
-  // so dev (9951) and release (9901) APKs can run side-by-side without
-  // colliding on the same localhost socket. Default 9901 keeps the legacy
-  // wiring working if a host forgets to inject the param.
-  if (location.protocol === 'file:') {
-    const port = new URLSearchParams(location.search).get('bridgePort') || '9901';
-    return `ws://localhost:${port}`;
-  }
+  if (location.protocol === 'file:') return localBridgeUrl();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
 }
@@ -440,6 +450,10 @@ function getWsUrl(): string {
  * this goes wrong again is a new channel quietly defaulting to the queue.
  */
 export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'transport'>> = {
+  // WHY: never replay a stale attempt action on a newly authenticated connection.
+  'handoff:begin': 'user-action', 'handoff:status': 'user-action', 'handoff:wait': 'user-action',
+  'handoff:retry': 'user-action', 'handoff:saved-copy': 'user-action', 'handoff:force': 'user-action',
+  'handoff:cancel': 'user-action', 'handoff:create-params': 'user-action',
   'session:input': 'user-action',
   'session:resize': 'read',
   'session:terminal-ready': 'transport',
@@ -455,32 +469,6 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   // a newer one chosen on the computer meanwhile, so it is never queued.
   'appearance:broadcast': 'user-action',
 };
-
-/**
- * Re-issued once on reconnect. WHY this exists at all: deleting the flush queue would
- * otherwise bring back the cold-start bug where installed plugins never appeared in the
- * command drawer — the mount-time fetches fired before auth and were lost. Reads only, and
- * a test asserts that.
- */
-export const REHYDRATE_ON_RECONNECT: readonly string[] = [
-  'skills:list',
-  'commands:list',
-  'remote:get-config',
-  'remote:status',
-  // The file lists a phone was showing when it dropped (remote access batch 3,
-  // design §8). Re-issued with the arguments they were last asked with — see
-  // lastReadPayload — because a bare list-all-files names no project and is a
-  // request the host can only refuse.
-  'artifacts:list-all-files',
-  'artifacts:list-session',
-];
-
-/**
- * The payload each REHYDRATE_ON_RECONNECT channel was last invoked with, so the
- * re-issue asks the same question. Channels that take no arguments simply never
- * appear here and are re-issued bare, as before.
- */
-const lastReadPayload = new Map<string, unknown>();
 
 function send(msg: any): boolean {
   const data = JSON.stringify(msg);
@@ -575,17 +563,20 @@ function openAsDownload(url: string, name: string): void {
   try { a.click(); } finally { a.remove(); }
 }
 
-/** Ask again for the state a fresh mount would have fetched. Reads only. */
+/**
+ * Tell the page a reconnect's sign-in is done. Screens that load data ask again for
+ * themselves (useOnRemoteReconnect), and screens holding a per-SOCKET subscription on the
+ * host (the project watcher) subscribe again on the new socket — the shim cannot do either
+ * for them, because it does not know what they show. Only ever reached on a reconnect —
+ * the caller guards on hasConnectedBefore.
+ *
+ * WHY the shim no longer re-asks anything itself (remote-access roadmap, "After a reconnect
+ * the phone repeats a few requests … whose answers nothing on screen uses"): it used to
+ * re-send skills, / commands, the remote settings and the file lists, but their answers
+ * settled no caller and reached no screen, while each screen's own reconnect listener asked
+ * the same questions — so skills and commands went twice on every reconnect.
+ */
 function rehydrate(): void {
-  for (const channel of REHYDRATE_ON_RECONNECT) {
-    // A list the phone never asked for has nothing to re-ask.
-    if ((channel === 'artifacts:list-all-files' || channel === 'artifacts:list-session') && !lastReadPayload.has(channel)) continue;
-    invoke(channel, lastReadPayload.get(channel)).catch(() => { /* a reconnect is not the place to surface a read failure */ });
-  }
-  // Tell the page. Screens holding a per-SOCKET subscription on the host (the
-  // project watcher) have to subscribe again on the new socket; the shim cannot
-  // do it for them because it does not know which root they show. Only ever
-  // reached on a reconnect — the caller guards on hasConnectedBefore.
   if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
     window.dispatchEvent(new CustomEvent(REMOTE_RECONNECTED_EVENT));
   }
@@ -634,8 +625,15 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
       reject(new Error(`Request ${type} timed out`));
     }, timeoutMs);
     pending.set(id, { resolve, reject, timeout, type });
-    if (REHYDRATE_ON_RECONNECT.includes(type)) lastReadPayload.set(type, payload);
-    send({ type, id, payload });
+    // (Combined branch: bugfix-remote removed the reconnect replay list, so only
+    // master's handoff send-failure path remains here.)
+    // WHY: user actions are never queued; reject immediately and forget their
+    // timeout instead of leaving a phantom pending action for reconnect.
+    if (!send({ type, id, payload }) && type.startsWith('handoff:')) {
+      clearTimeout(timeout);
+      pending.delete(id);
+      reject(new Error('The connection is unavailable. Try again when connected.'));
+    }
   });
 }
 
@@ -699,6 +697,11 @@ export function markConnectedForNotices(): void {
  *  `{ ok:false }` object and is NOT in this list, and LocalModelsSection casts
  *  its answer straight to an array and filters it. That predates this list. */
 export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
+  // Startup errors reject; a structured lease-denied result remains data.
+  'session:create',
+  // WHY: Android-local's unsupported response and host failures must reject, not masquerade as statuses.
+  'handoff:begin', 'handoff:status', 'handoff:wait', 'handoff:retry',
+  'handoff:saved-copy', 'handoff:force', 'handoff:cancel', 'handoff:create-params',
   // Reads a phone loads at start, answered by the host since 2026-09-11. A failure there comes
   // back as { ok:false, error } and must reach the caller's catch, not land as a "list".
   'theme:list',
@@ -1263,7 +1266,14 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
           // the desktop server responds with platform:"electron" but we're still on a phone
           if (!preservePlatform) {
-            const platform = msg.platform || 'browser';
+            // WHY the device decides first: the host tells EVERY client `platform: 'desktop'`
+            // (a fact about the computer), and adopting it made a phone browser a non-touch
+            // device — its terminal took typing through xterm's hidden box, so the soft
+            // keyboard and scrolling misbehaved. A touch-first screen is 'browser' (the
+            // Platform value isTouchDevice() means). A mouse-first browser keeps the host's
+            // answer, as before. `(pointer: coarse)` is the PRIMARY pointer only, so a
+            // touchscreen laptop (primary pointer "fine") reads as mouse-first: unchanged too.
+            const platform = isTouchFirstDevice() ? 'browser' : (msg.platform || 'browser');
             (window as any).__PLATFORM__ = platform;
           }
           // Naming capability, straight off the handshake — no extra round
@@ -1891,6 +1901,17 @@ export function installShim(): void {
         unwrapRemote(invoke('session-naming:rename', { sessionId, title })),
     },
     session: {
+      // WHY: the Android-local router explicitly refuses these; a paired desktop uses its real admission owner.
+      handoff: {
+        begin: (conversationId: string, provider: 'claude' | 'native', create?: import('../shared/types').HandoffCreateParams) => invoke('handoff:begin', { conversationId, provider, create }),
+        status: (id: string) => invoke('handoff:status', { id }),
+        wait: (id: string) => invoke('handoff:wait', { id }),
+        retry: (id: string) => invoke('handoff:retry', { id }),
+        savedCopy: (id: string, consent: boolean) => invoke('handoff:saved-copy', { id, consent }),
+        force: (id: string, consent: boolean, expectedHolderId: string) => invoke('handoff:force', { id, consent, expectedHolderId }),
+        cancel: (id: string) => invoke('handoff:cancel', { id }),
+        setCreateParams: (id: string, create: import('../shared/types').HandoffCreateParams) => invoke('handoff:create-params', { id, create }),
+      },
       create: (opts: any) => invoke('session:create', opts),
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
       list: () => invoke('session:list'),
@@ -2524,6 +2545,17 @@ export function installShim(): void {
         addListener('pages:changed', handler);
         return () => removeListener('pages:changed', handler);
       },
+      // Phase 2. Approving from here may only REUSE a key already saved on the
+      // desktop; the host refuses pasted key material from a remote caller, so
+      // the rule holds even if this file is bypassed entirely.
+      approve: (id: string, keys: Record<string, string>) => invoke('pages:approve', { id, keys }),
+      removeConnection: (id: string, connectionId: string) => invoke('pages:remove-connection', { id, connectionId }),
+      refresh: (id: string) => invoke('pages:refresh', { id }),
+      savedKeys: () => invoke('pages:saved-keys'),
+      deleteSavedKey: (service: string, address: string) => invoke('pages:delete-saved-key', { service, address }),
+      // The request runs on the desktop, with the desktop's credential; only
+      // the redacted answer crosses the socket.
+      fetch: (id: string, request: unknown) => invoke('pages:fetch', { id, request }),
     },
     git: {
       fileStatus: (projectRoot: string, relPath: string) =>
@@ -2704,11 +2736,17 @@ export function installShim(): void {
       getTier: () => targetUrl ? Promise.resolve('CORE') : invoke('android:get-tier'),
       setTier: (tier: string) => targetUrl ? Promise.resolve() : invoke('android:set-tier', { tier }),
       getAbout: () => targetUrl ? Promise.resolve({ version: '', build: '' }) : invoke('android:get-about'),
-      getPairedDevices: () => targetUrl ? Promise.resolve([]) : invoke('android:get-paired-devices'),
+      // The saved computers live in the phone's runtime: while paired they are asked on a
+      // side connection (invokeLocalBridge — WHY there), never answered "done" unasked.
+      // A plain browser tab keeps its old answers; it has no such list.
+      getPairedDevices: () => isAndroidPaired() ? invokeLocalBridge('android:get-paired-devices')
+        : targetUrl ? Promise.resolve([]) : invoke('android:get-paired-devices'),
       savePairedDevice: (device: { name: string; host: string; port: number; password: string }) =>
-        targetUrl ? Promise.resolve() : invoke('android:save-paired-device', device),
+        isAndroidPaired() ? invokeLocalBridge('android:save-paired-device', device)
+          : targetUrl ? Promise.resolve() : invoke('android:save-paired-device', device),
       removePairedDevice: (host: string, port: number) =>
-        targetUrl ? Promise.resolve() : invoke('android:remove-paired-device', { host, port }),
+        isAndroidPaired() ? invokeLocalBridge('android:remove-paired-device', { host, port })
+          : targetUrl ? Promise.resolve() : invoke('android:remove-paired-device', { host, port }),
       scanQr: () => targetUrl ? Promise.resolve(null) : invoke('android:scan-qr'),
     },
     off: (channel: string, handler: Callback) => removeListener(channel, handler),
@@ -2912,10 +2950,11 @@ export function installShim(): void {
       retry: (sessionId: string) => fire('native:retry', { sessionId }),
       // Request/response (mirrors preload.ts) — the remote UI needs the same
       // {ok, reason} so a refused compaction explains itself over remote too.
-      compact: (sessionId: string) => invoke('native:compact', { sessionId }),
+      compact: (sessionId: string, focus?: string) => invoke('native:compact', { sessionId, focus }),
       clear: (sessionId: string) => invoke('native:clear', { sessionId }),
       invokeSkill: (sessionId: string, skill: string, args?: string) => invoke('native:invoke-skill', { sessionId, skill, args }),
       setBinding: (sessionId: string, binding: unknown) => invoke('native:set-binding', { sessionId, binding }),
+      switchModel: (sessionId: string, binding: unknown, summarize?: boolean) => invoke('native:switch-model', { sessionId, binding, summarize }),
       setPermissionMode: (sessionId: string, mode: string) => invoke('native:set-permission-mode', { sessionId, mode }),
       getPermissionMode: (sessionId: string) => invoke('native:get-permission-mode', { sessionId }),
       getContextPreferences: () => invoke('native:get-context-preferences'),

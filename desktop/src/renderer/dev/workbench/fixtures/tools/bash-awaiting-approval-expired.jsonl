@@ -1,0 +1,3 @@
+{"type":"tool_use","id":"toolu_01BashExpired","name":"Bash","input":{"command":"rm -rf node_modules && npm ci","description":"Reinstall dependencies"}}
+{"type":"permission_request","tool_use_id":"toolu_01BashExpired","requestId":"wb-expired-1","denyListed":false}
+{"type":"permission_expired","tool_use_id":"toolu_01BashExpired","requestId":"wb-expired-1","reason":"hook-closed"}

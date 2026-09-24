@@ -11,6 +11,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { HarnessSession } from '../src/main/harness/harness-session';
+import { isContextOverflow } from '../src/main/providers/context-overflow';
 import { MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, MAX_ATTACHMENT_BYTES } from '../src/main/harness/image-support';
 import type { HarnessManifest } from '../src/shared/harness-manifest';
 import type { TranscriptEvent } from '../src/shared/types';
@@ -43,6 +44,123 @@ function types(events: TranscriptEvent[]) { return events.map((e) => e.type); }
 const ALLOW: PermissionDecision = { action: 'allow', denyListed: false };
 
 describe('HarnessSession — multi-step turn driver', () => {
+  it.each([
+    ['openrouter', { error: { metadata: { error_type: 'context_length_exceeded' } } }, true],
+    ['local', { error: { type: 'exceed_context_size_error' } }, true],
+    ['chatgpt', { error: { code: 'context_length_exceeded' } }, true],
+    ['generic', { error: { code: 'context_length_exceeded' } }, false],
+    ['openrouter', { error: { message: 'context_length_exceeded' } }, false],
+    ['openrouter', { error: { metadata: { error_type: 'insufficient_quota' } } }, false],
+    // Anthropic via a user's own key: the id is user-chosen, so the envelope decides.
+    ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'prompt is too long: 208000 tokens > 200000 maximum' } }, true],
+    ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'messages: text content blocks must be non-empty' } }, false],
+    ['my-anthropic', { type: 'error', error: { type: 'invalid_request_error', message: 'The prompt is too long for this model, maybe' } }, false],
+  ])('classifies structured overflow only for %s adapter', (provider, body, expected) => {
+    expect(isContextOverflow({ statusCode: 400, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider)).toBe(expected);
+    expect(isContextOverflow({ statusCode: 401, url: 'https://example.test/responses', responseBody: JSON.stringify(body) }, provider)).toBe(false);
+  });
+
+  it('recovers one structured overflow on a rejected request after completed tools without redoing them', async () => {
+    const read = fakeTool('Read');
+    const body = JSON.stringify({ error: { metadata: { error_type: 'context_length_exceeded' } } });
+    const overflow = Object.assign(new Error('rejected'), { statusCode: 400, responseBody: body });
+    const scripts = [
+      stream(toolCallChunk('c1', 'Read', { file_path: 'a' }), finishChunk('tool-calls')),
+      stream({ type: 'error', error: overflow }),
+      stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+      stream(...textChunks('a', 'done'), finishChunk('stop')),
+    ];
+    const prompts: any[] = [];
+    let index = 0;
+    const model = new MockLanguageModelV4({ doStream: async (o: any) => {
+      prompts.push(o); return { stream: simulateReadableStream({ chunks: scripts[index++] ?? stream(finishChunk('stop')) }) };
+    } });
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, contextLength: 8192 }), async () => model as any);
+    session.seedHistory([{ role: 'user', content: 'original ' + 'x'.repeat(10000) }, { role: 'assistant', content: 'ack' }] as any);
+    const events = collect(session);
+    await session.send('continue');
+    expect(prompts).toHaveLength(4);
+    expect((read as any).calls).toHaveLength(1);
+    expect(events.filter(e => e.type === 'compact-summary')).toHaveLength(1);
+    expect(events.some(e => e.type === 'turn-complete')).toBe(true);
+  });
+
+  it('caps the next reply using measured provider occupancy when it exceeds the text estimate', async () => {
+    const caps: number[] = [];
+    let call = 0;
+    const scripted = [
+      stream(toolCallChunk('read', 'Read', { file_path: 'a' }), finishChunk('tool-calls', 6_000, 10)),
+      stream(...textChunks('answer', 'done'), finishChunk('stop', 6_020, 5)),
+    ];
+    const model = new MockLanguageModelV4({ doStream: async (req: any) => {
+      caps.push(req.maxOutputTokens);
+      return { stream: simulateReadableStream({ chunks: scripted[call++] }) };
+    } });
+    const session = new HarnessSession(makeOpts({ tools: [fakeTool('Read')], decide: async () => ALLOW,
+      contextLength: 8192, harness: { ...HARNESS, limits: { maxTokens: 16_000 } } }), async () => model as any);
+    await session.send('read a small file');
+    expect(caps).toHaveLength(2);
+    expect(caps[1]).toBeLessThanOrEqual(8192 - 6_000 - 10 - 256);
+    expect(caps[1]).toBeGreaterThan(0);
+  });
+
+  it('preserves a giant tool result in the transcript rather than trimming it before the next request', async () => {
+    const read = fakeTool('Read', { onExecute: () => ({ text: 'x'.repeat(30_000) }) });
+    const seen: any[] = [];
+    const model = scriptedModel([
+      stream(toolCallChunk('big', 'Read', { file_path: 'large.txt' }), finishChunk('tool-calls')),
+      stream(...textChunks('answer', 'done'), finishChunk('stop')),
+    ], seen);
+    const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW, contextLength: 8192 }), async () => model as any);
+    const events = collect(session);
+    await session.send('read file');
+    expect((read as any).calls).toHaveLength(1);
+    expect(events.find(e => e.type === 'tool-result')!.data.toolResult).toBe('x'.repeat(30_000));
+    expect(JSON.stringify(session.acceptedHistory().messages)).toContain('x'.repeat(30_000));
+    // A scripted provider may accept a request that a real small-window model
+    // would reject; regardless, no output is erased before the provider sees it.
+    expect(JSON.stringify(seen[1])).toContain('x'.repeat(30_000));
+  });
+
+  it('does not retry an overflow after output has begun', async () => {
+    const overflow = Object.assign(new Error('rejected'), { statusCode: 400,
+      responseBody: JSON.stringify({ error: { metadata: { error_type: 'context_length_exceeded' } } }) });
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doStream: async () => {
+      calls++;
+      return { stream: simulateReadableStream({ chunks: stream(...textChunks('p', 'partial'), { type: 'error', error: overflow }) }) };
+    } });
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 8192 }), async () => model as any);
+    const events = collect(session);
+    await session.send('go');
+    expect(calls).toBe(1);
+    expect(events.some(e => e.type === 'compact-summary')).toBe(false);
+    expect(events.some(e => e.type === 'session-error')).toBe(true);
+  });
+
+  it.each([
+    ['second overflow', { error: { metadata: { error_type: 'context_length_exceeded' } } }, 3],
+    ['auth', { error: { metadata: { error_type: 'invalid_api_key' } } }, 1],
+    ['network', { error: { message: 'connection lost' } }, 1],
+    ['unrecognized', { error: { message: 'context length exceeded' } }, 1],
+  ])('does not replay %s indefinitely', async (_label, body, expectedCalls) => {
+    const error = Object.assign(new Error('rejected'), { statusCode: 400, responseBody: JSON.stringify(body) });
+    const overflow = Object.assign(new Error('rejected'), { statusCode: 400,
+      responseBody: JSON.stringify({ error: { metadata: { error_type: 'context_length_exceeded' } } }) });
+    const chunks = expectedCalls === 3
+      ? [stream({ type: 'error', error: overflow }), stream(...textChunks('s', 'handoff'), finishChunk('stop')),
+        stream({ type: 'error', error })]
+      : [stream({ type: 'error', error })];
+    let calls = 0;
+    const model = new MockLanguageModelV4({ doStream: async () => ({ stream: simulateReadableStream({ chunks: chunks[calls++] ?? stream(finishChunk('stop')) }) }) });
+    const session = new HarnessSession(makeOpts({ tools: [], contextLength: 8192 }), async () => model as any);
+    session.seedHistory([{ role: 'user', content: 'old ' + 'x'.repeat(10000) }, { role: 'assistant', content: 'ack' }] as any);
+    const events = collect(session);
+    await session.send('continue');
+    expect(calls).toBe(expectedCalls === 3 ? 3 : 1);
+    expect(events.some(e => e.type === 'session-error')).toBe(true);
+  });
+
   it('happy path: emits user-message → text → tool-use → tool-result → text → turn-complete IN ORDER', async () => {
     const read = fakeTool('Read');
     const model = scriptedModel([
@@ -81,13 +199,13 @@ describe('HarnessSession — multi-step turn driver', () => {
     const second = stream(...textChunks('b', 'done'), finishChunk('stop', 20, 3));
     const model = scriptedModel([first, second]);
     const session = new HarnessSession(makeOpts({ tools: [read], decide: async () => ALLOW,
-      pricing: { in: 1_000_000, out: 2_000_000 }, contextLength: 100, free: false }), async () => model as any);
+      pricing: { in: 1_000_000, out: 2_000_000 }, contextLength: 8192, free: false }), async () => model as any);
     const events = collect(session);
     expect(session.currentUsageProgress).toBeNull();
     session.on('transcript-event', (e: TranscriptEvent) => {
       if (e.data.usageProgress && e.data.usageProgress.inputTokens === 10) {
         expect(session.currentUsageProgress).toBe(e);
-        session.setBinding({ providerId: 'openrouter', modelId: 'new' }, 200, undefined,
+        session.setBinding({ providerId: 'openrouter', modelId: 'new' }, 16_384, undefined,
           { in: 9_000_000, out: 9_000_000 }, true);
       }
     });
@@ -97,13 +215,13 @@ describe('HarnessSession — multi-step turn driver', () => {
     expect(progress[0].data).not.toHaveProperty('text');
     expect(progress[0].data).not.toHaveProperty('partId');
     expect(progress[0].data.usageProgress).toMatchObject({ inputTokens: 10, outputTokens: 2,
-      costUsd: 14, free: false, contextLength: 100, contextUsedTokens: 12, providerCostUsd: 12 });
+      costUsd: 14, free: false, contextLength: 8192, contextUsedTokens: 12, providerCostUsd: 12 });
     expect(progress[1].data.usageProgress).toMatchObject({ inputTokens: 30, outputTokens: 5,
-      costUsd: 40, free: false, contextLength: 100, contextUsedTokens: 23 });
+      costUsd: 40, free: false, contextLength: 8192, contextUsedTokens: 23 });
     expect(progress[1].data.usageProgress).not.toHaveProperty('providerCostUsd');
     expect(events.indexOf(progress[0])).toBeLessThan(events.findIndex((e) => e.type === 'tool-use'));
     expect(events.indexOf(progress[1])).toBeLessThan(events.findIndex((e) => e.type === 'turn-complete'));
-    expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({ costUsd: 40, free: false, contextLength: 100 });
+    expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({ costUsd: 40, free: false, contextLength: 8192 });
     expect(session.currentUsageProgress).toBeNull();
 
     const child = new HarnessSession(makeOpts({ isSpecialistChild: true }), async () => scriptedModel([second]) as any);
@@ -117,14 +235,14 @@ describe('HarnessSession — multi-step turn driver', () => {
       { type: 'finish', finishReason: { unified: 'tool-calls', raw: 'tool-calls' }, usage: { inputTokens: {}, outputTokens: {} } });
     const second = stream(...textChunks('b', 'done'), finishChunk('stop', 20, 3));
     const session = new HarnessSession(makeOpts({ tools: [fakeTool('Read')], decide: async () => ALLOW,
-      pricing: { in: 1_000_000, out: 2_000_000 }, contextLength: 100 }),
+      pricing: { in: 1_000_000, out: 2_000_000 }, contextLength: 8192 }),
     async () => scriptedModel([first, second]) as any);
     const events = collect(session);
     await session.send('go');
     const progress = events.filter((e) => e.data.usageProgress).map((e) => e.data.usageProgress!);
     expect(progress).toHaveLength(1);
     expect(progress[0]).toMatchObject({ inputTokens: 20, outputTokens: 3,
-      contextUsedTokens: 23, contextLength: 100, free: false });
+      contextUsedTokens: 23, contextLength: 8192, free: false });
     expect(progress[0]).toHaveProperty('liveProgress', true);
     expect(progress[0]).not.toHaveProperty('costUsd'); // known rate, but silent step's bill is unknown
     expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({
@@ -151,7 +269,7 @@ describe('HarnessSession — multi-step turn driver', () => {
 
   it('reports provider-metadata-only cache tokens without inventing output or cost', async () => {
     const session = new HarnessSession(makeOpts({ pricing: { in: 1_000_000, out: 2_000_000, cacheRead: 500_000 },
-      contextLength: 100 }), async () => scriptedModel([
+      contextLength: 8192 }), async () => scriptedModel([
       stream(...textChunks('a', 'done'), { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' },
         providerMetadata: { local: { cacheReadTokens: 7 }, openrouter: { cacheWriteTokens: 5 } },
         usage: { inputTokens: {}, outputTokens: {} } }),
@@ -161,7 +279,7 @@ describe('HarnessSession — multi-step turn driver', () => {
     const progress = events.filter((e) => e.data.usageProgress).map((e) => e.data.usageProgress!);
     expect(progress).toHaveLength(1);
     expect(progress[0]).toMatchObject({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 7,
-      cacheCreationTokens: 5, contextLength: 100 });
+      cacheCreationTokens: 5, contextLength: 8192 });
     expect(progress[0]).not.toHaveProperty('contextUsedTokens');
     expect(progress[0]).not.toHaveProperty('costUsd');
     expect(events.find((e) => e.type === 'turn-complete')!.data.usage).toMatchObject({
@@ -170,7 +288,7 @@ describe('HarnessSession — multi-step turn driver', () => {
   });
 
   it('does not price or estimate completion/context for input-only provider usage', async () => {
-    const session = new HarnessSession(makeOpts({ pricing: { in: 1_000_000, out: 2_000_000 }, contextLength: 100 }),
+    const session = new HarnessSession(makeOpts({ pricing: { in: 1_000_000, out: 2_000_000 }, contextLength: 8192 }),
       async () => scriptedModel([stream(...textChunks('a', 'eight888'), {
         type: 'finish', finishReason: { unified: 'stop', raw: 'stop' },
         usage: { inputTokens: { total: 10 }, outputTokens: {} },
@@ -240,11 +358,11 @@ describe('HarnessSession — multi-step turn driver', () => {
 
   it('omits estimated context from progress when only output usage is measured', async () => {
     const model = scriptedModel([stream(...textChunks('a', 'done'), finishChunk('stop', 0, 3))]);
-    const session = new HarnessSession(makeOpts({ contextLength: 100 }), async () => model as any);
+    const session = new HarnessSession(makeOpts({ contextLength: 8192 }), async () => model as any);
     const events = collect(session);
     await session.send('go');
     const progress = events.find((e) => e.data.usageProgress)!.data.usageProgress!;
-    expect(progress).toMatchObject({ inputTokens: 0, outputTokens: 3, contextLength: 100 });
+    expect(progress).toMatchObject({ inputTokens: 0, outputTokens: 3, contextLength: 8192 });
     expect(progress).not.toHaveProperty('contextUsedTokens');
   });
 
@@ -983,6 +1101,71 @@ describe('HarnessSession — multi-step turn driver', () => {
       // exact code path until M5 2c.
       expect(remembered).toEqual([{ tool: 'Write', pattern: 'C:/x/in-project.ts', action: 'allow', match: 'exact' }]);
       expect(askUser.mock.calls[0][0].external).toBe(false);
+    });
+  });
+
+  // A remembered grant beats the deny-list, so a wide enough saved approval let
+  // `rm -rf ~` run silently. The removal-target floor (tools/rm-target.ts) sits
+  // below every rule and only ever turns an allow into an ask.
+  describe('removal-target floor', () => {
+    const bashTool = () => fakeTool('Bash', {
+      schema: z.object({ command: z.string() }),
+      permissionSubject: (a: any) => a.command,
+    });
+    const oneBash = (command: string) => scriptedModel([
+      stream(toolCallChunk('c1', 'Bash', { command }), finishChunk('tool-calls')),
+      stream(...textChunks('b', 'ok'), finishChunk('stop')),
+    ]);
+    const run = async (command: string, decide: () => Promise<PermissionDecision>, answer: AskDecision = { behavior: 'allow', always: true }) => {
+      const bash = bashTool();
+      const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => answer);
+      const session = new HarnessSession(makeOpts({ tools: [bash], decide, askUser }), async () => oneBash(command) as any);
+      const remembered: unknown[] = [];
+      session.on('remember-rule', (r) => remembered.push(r));
+      collect(session);
+      await session.send('go');
+      return { askUser, remembered, ran: (bash as any).calls.length };
+    };
+
+    it('asks before removing the home folder even when a saved grant allows the command', async () => {
+      const { askUser, remembered, ran } = await run('rm -rf ~', async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'removal', external: false });
+      expect(remembered).toEqual([]); // an answer of "always" stores nothing it could never honour
+      expect(ran).toBe(1);            // the person said yes, so it runs
+    });
+
+    it('a no from the person stops the removal', async () => {
+      const { ran } = await run('rm -rf ~', async () => ALLOW, { behavior: 'deny' });
+      expect(ran).toBe(0);
+    });
+
+    it('never turns a deny rule into an ask', async () => {
+      const { askUser, ran } = await run('rm -rf ~', async () => ({ action: 'deny', denyListed: false }));
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(0);
+    });
+
+    it('leaves an ordinary allowed removal alone', async () => {
+      const { askUser, ran } = await run('rm -rf build', async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(1);
+    });
+
+    // The secret-path floor (tools/bash-secret-paths.ts): the file tools refuse
+    // ~/.ssh and .env, so Bash reading them must at least ask — every time.
+    it('asks before a command that names a secret file even when a saved grant allows it', async () => {
+      const { askUser, remembered, ran } = await run('cat ~/.ssh/id_rsa', async () => ALLOW);
+      expect(askUser).toHaveBeenCalledTimes(1);
+      expect(askUser.mock.calls[0][0]).toMatchObject({ denyListed: true, floorStop: 'secret-path', external: false });
+      expect(remembered).toEqual([]);
+      expect(ran).toBe(1);
+    });
+
+    it('leaves a command that only mentions a similar word alone', async () => {
+      const { askUser, ran } = await run('npm run env:check', async () => ALLOW);
+      expect(askUser).not.toHaveBeenCalled();
+      expect(ran).toBe(1);
     });
   });
 
@@ -1817,7 +2000,9 @@ describe('shown-image cache resets on history-discarding events', () => {
   it('Fix 2: automatic compaction (maybeCompact) resets the dedupe cache along with the summarized span', async () => {
     const events: any[] = [];
     const session = makeSession({
-      contextLength: 4096, seedBulkHistoryTokens: 6000, onEvent: (e) => events.push(e),
+      // WHY: a complete summary and its output allowance cannot fit the old
+      // 6k history into a 4k window; use a feasible over-trigger window.
+      contextLength: 32_768, seedBulkHistoryTokens: 25_000, onEvent: (e) => events.push(e),
       model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
     });
     // Seed the cache as if an image had been delivered earlier in the

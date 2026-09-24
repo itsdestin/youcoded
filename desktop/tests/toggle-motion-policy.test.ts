@@ -37,3 +37,23 @@ describe('wide toggle motion policy', () => {
     expect(toggleBlock!.match(/transition-duration:\s*0ms/g)).toHaveLength(2);
   });
 });
+
+describe('session drawer file-list motion policy', () => {
+  // The list opens/closes by animating width (a layout property). Both the app's
+  // Reduced Effects setting and the OS preference must snap it, like the toggle.
+  it('snaps the file list width for the app Reduced Effects setting', () => {
+    expect(ruleBody('[data-reduced-effects] .drawer-list')).toContain('transition-duration: 0ms');
+  });
+
+  it('snaps the file list width for the OS reduced-motion preference', () => {
+    const blocks = css.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/g) ?? [];
+    const drawerBlock = blocks.find(block => /\.drawer-list[\s,]/.test(block));
+    expect(drawerBlock, 'no prefers-reduced-motion block covers .drawer-list').toBeTruthy();
+    expect(drawerBlock).toMatch(/\.drawer-list,[^{}]*\{\s*transition-duration:\s*0ms/);
+  });
+
+  it('the file list still animates only width at the same duration', () => {
+    const drawer = readSource(join(__dirname, '..', 'src', 'renderer', 'components', 'SessionDrawer.tsx'));
+    expect(drawer).toMatch(/drawer-list [^`]*transition-\[width\] duration-200/);
+  });
+});

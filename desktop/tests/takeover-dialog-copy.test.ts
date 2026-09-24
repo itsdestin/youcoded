@@ -1,10 +1,16 @@
-// Pins the Destin-approved (2026-07-23) takeover dialog copy verbatim, per
-// phase. Failing this test on a copy change is the point — it forces a
-// deliberate edit instead of a silent drive-by wording drift.
+// Pins the Destin-approved (2026-07-23; 'force' reworded 2026-09-21) takeover
+// dialog copy verbatim, per phase. Failing this test on a copy change is the
+// point — it forces a deliberate edit instead of a silent drive-by wording drift.
 import { describe, it, expect } from 'vitest';
 import { takeoverDialogCopy } from '../src/renderer/components/takeover-dialog-copy';
 
 describe('takeoverDialogCopy', () => {
+  it('claim denial reports the holder without inventing a move or offering an override', () => {
+    expect(takeoverDialogCopy('claim-denied', 'Laptop-B')).toEqual({
+      lead: 'This conversation is now active on Laptop-B.',
+    });
+  });
+
   it('confirm: single-paragraph ask, no consequence', () => {
     expect(takeoverDialogCopy('confirm', 'Laptop-B')).toEqual({
       lead: 'This session is active on Laptop-B — take over here?',
@@ -19,9 +25,9 @@ describe('takeoverDialogCopy', () => {
     });
   });
 
-  it('force: "asked but didn\'t answer" framing, distinct from undeliverable', () => {
+  it('force: "couldn\'t confirm" framing — never claims the device was reached', () => {
     expect(takeoverDialogCopy('force', 'Laptop-B')).toEqual({
-      lead: "Laptop-B was asked to hand this conversation off, but didn't answer. It may be offline or busy.",
+      lead: "We couldn't confirm that Laptop-B handed off this conversation. It may be offline or busy.",
       consequence:
         'You can still take over. When Laptop-B catches up it will stop and save on its own — but anything it writes before then is kept as a separate copy, not added to this conversation.',
     });

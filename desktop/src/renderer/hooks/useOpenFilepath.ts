@@ -11,7 +11,7 @@
 // Contract: clicking a file in chat ALWAYS opens the artifact viewer, NEVER
 // Project View (artifacts rule → UI invariants).
 import { useCallback } from 'react';
-import { useArtifactOptional } from '../state/ArtifactContext';
+import { useArtifactStoreOptional } from '../state/ArtifactContext';
 import type { ArtifactState } from '../state/artifact-tracker';
 import type { ArtifactAction } from '../state/artifact-actions';
 import type { ArtifactRecord } from '../../shared/artifacts/types';
@@ -353,9 +353,13 @@ export async function openFilepath(
 export function useOpenFilepath(sessionId: string): (path: string) => Promise<void> {
   // Optional: the buddy window / sandbox render without ArtifactProvider. The
   // caller still renders its pill/card; the click is a no-op there.
-  const artifactCtx = useArtifactOptional();
+  // WHY the store, read at click time (perf, 2026-09-23): the hook used to
+  // subscribe to the whole artifact state, so every file pill in every chat
+  // redrew whenever any session wrote a file — only to hold a copy it needs
+  // just when clicked. Reading the store on click also sees the newest state.
+  const store = useArtifactStoreOptional();
   return useCallback(async (path: string) => {
-    if (!artifactCtx) return;
-    await openFilepath(artifactCtx, sessionId, path);
-  }, [artifactCtx, sessionId]);
+    if (!store) return;
+    await openFilepath({ state: store.getState(), dispatch: store.dispatch }, sessionId, path);
+  }, [store, sessionId]);
 }

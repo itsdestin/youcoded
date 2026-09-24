@@ -492,7 +492,20 @@ export const BashTool = defineTool({
     // newly-persisted, so an ambient credential merely inherited from
     // process.env (identical before/after) never crosses into shellEnv.
     const shellEnvIn = ctx.shellEnv ?? {};
-    const spawnEnv = { ...process.env, ...shellEnvIn, NO_COLOR: '1', FORCE_COLOR: '0' };
+    const spawnEnv: NodeJS.ProcessEnv = { ...process.env, ...shellEnvIn, NO_COLOR: '1', FORCE_COLOR: '0' };
+    let launch = shell;
+    if (process.env.YOUCODED_LUNA_EXPERIMENT === '1') {
+      const script = process.env.LUNA_SHELL_JAIL_SCRIPT;
+      const root = process.env.LUNA_FIXTURE_ROOT;
+      // WHY: a model-controlled persisted shell env must not swap the trusted
+      // fixture root or bypass the same wrapper in background execution.
+      if (process.platform !== 'linux' || !script || !path.isAbsolute(script) || !root || !path.isAbsolute(root)) {
+        return { text: 'Luna experiment shell isolation is unavailable.', isError: true };
+      }
+      spawnEnv.LUNA_FIXTURE_ROOT = root;
+      spawnEnv.LUNA_SHELL_JAIL_SCRIPT = script;
+      launch = { cmd: '/usr/bin/node', args: [script, '-c'], label: shell.label };
+    }
     // Warn at the moment of the mistake (17/17 harness reviews, more commonly
     // requested than persistence itself): computed once, up front, since it
     // depends only on the command text and whether persistence is actually
@@ -514,7 +527,7 @@ export const BashTool = defineTool({
       }
       const started = ctx.shells.start({
         toolUseId: ctx.toolCallId ?? 'unknown', command: args.command, cwd: startCwd,
-        shellCmd: shell.cmd, shellArgs: shell.args, env: spawnEnv,
+        shellCmd: launch.cmd, shellArgs: launch.args, env: spawnEnv,
       });
       if (!started.ok) {
         if (started.reason === 'cap') {
@@ -543,7 +556,7 @@ export const BashTool = defineTool({
         // plain spawn put it in ours, and child.kill() then reached only the
         // outer bash — a `node` it had launched lived on as an orphan (spec §1).
         // windowsHide is set inside spawnDetached.
-        child = spawnDetached(shell.cmd, [...shell.args, probe ? withCwdProbe(args.command, captureEnv) : args.command], {
+        child = spawnDetached(launch.cmd, [...launch.args, probe ? withCwdProbe(args.command, captureEnv) : args.command], {
           cwd: startCwd,
           // Ask tools to emit plain output rather than stripping it after the fact
           // where possible — cleaner, and it keeps byte counts honest.

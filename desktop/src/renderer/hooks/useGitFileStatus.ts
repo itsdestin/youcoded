@@ -5,7 +5,7 @@
 // On Android/remote every call rejects (unsupported) and the hook settles to
 // null — the footer then renders exactly as it does today. Same graceful
 // degradation as content search (FilesTab).
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { GitFileStatusResult } from '../../shared/git-types';
 
 // One git:file-status answer costs THREE git subprocesses in main (status,
@@ -38,10 +38,18 @@ export function useGitFileStatus(
   artifactId?: string | null,
 ): GitFileStatusResult | null {
   const [status, setStatus] = useState<GitFileStatusResult | null>(null);
+  // The file the current answer belongs to. WHY: the effect also re-runs when
+  // only `artifactId` changes — the open file gaining a permanent id at the
+  // assistant's first write (the drawer follows it there). That is the SAME
+  // file, so the footer keeps its answer while it re-asks, instead of
+  // blanking for a round trip; a different file still clears it.
+  const answeredFor = useRef<string | null>(null);
 
   useEffect(() => {
-    setStatus(null);
-    if (!enabled || !relPath || !projectRoot) return;
+    const fileKey = enabled && relPath && projectRoot ? `${projectRoot}\0${relPath}` : null;
+    if (answeredFor.current !== fileKey || fileKey === null) setStatus(null);
+    answeredFor.current = fileKey;
+    if (!fileKey) return;
     const api = (window as any).claude?.git;
     if (!api?.fileStatus) return;
     let alive = true;

@@ -36,9 +36,14 @@ vi.mock('../src/renderer/state/chat-context', () => ({
   useChatDispatch: () => mocks.dispatch,
 }));
 
-vi.mock('../src/renderer/state/ArtifactContext', () => ({
-  useArtifact: () => ({ state: { drawerOpenBySession: {}, drawerExpanded: false }, dispatch: vi.fn() }),
-}));
+vi.mock('../src/renderer/state/ArtifactContext', () => {
+  // ChatView reads the artifact store through narrow selectors (perf, 2026-09-23).
+  const state = { drawerOpenBySession: {}, drawerExpanded: false };
+  return {
+    useArtifactSelector: (select: (s: any) => unknown) => select(state),
+    useArtifactDispatch: () => vi.fn(),
+  };
+});
 
 // Fires the moment anything is observed — the sentinel is "in view" on mount.
 const observed: Element[] = [];
@@ -81,6 +86,16 @@ describe('ChatView history sentinel', () => {
     await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'HISTORY_PAGE_LOADED', sessionId: 's1' }),
     ));
+  });
+
+  it('forwards an older page’s interruption boundary to the reducer', async () => {
+    requestPage.mockResolvedValue({ events: [], cursor: null, hasMore: false,
+      reconcileInterrupted: true, reconcileInterruptedToolIds: ['pre-resume-tool'] });
+    renderWith({ cursor: { path: 'p', offset: 100, sizeAtRead: 900 }, hasMore: true, loading: false });
+    await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'HISTORY_PAGE_LOADED', sessionId: 's1', reconcileInterrupted: true,
+      reconcileInterruptedToolIds: ['pre-resume-tool'],
+    })));
   });
 
   it('renders no sentinel once the beginning of the conversation is on screen', () => {
