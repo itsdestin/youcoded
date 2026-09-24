@@ -142,15 +142,15 @@
 .chat-edge-fade { display: none; }
 [data-chrome-style='float'] .chat-edge-fade {
   /* Where a message has fully faded, measured up from the window's bottom
-     edge: the 6px gap between the message box (bottom 35px up) and the status
-     buttons (top 29px up). Destin, 2026-09-24: messages should "fully
-     disappear right between the bottom of the input bar and top of the status
-     bar chips". Anchored to the bottom edge, NOT the top of the bottom
+     edge. Destin, 2026-09-24: messages should "fully disappear right between
+     the bottom of the input bar and top of the status bar chips" (the 6px gap,
+     35px to 29px up), then "just a smidge lower" — so 27px, at the status
+     buttons' top edge. Anchored to the bottom edge, NOT the top of the bottom
      controls, so a message box that grows taller with typed lines does not
      drag the fade up with it. The 12px fade runs over the message box's
      lowest edge. Fixed pixels: the status row's height does not change on
      desktop; the on-screen keyboard is covered by --vvp-offset. */
-  --float-fade-end: 32px;
+  --float-fade-end: 27px;
   display: block;
   position: fixed;
   inset: 0;

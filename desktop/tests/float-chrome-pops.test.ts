@@ -154,7 +154,7 @@ describe('the approved float look', () => {
   });
 
   it('fades messages out between the message box and the status buttons', () => {
-    expect(floatCSS()).toContain('--float-fade-end: 32px;');
+    expect(floatCSS()).toContain('--float-fade-end: 27px;');
   });
 
   it('the screen band shares the header ink without touching the chat\'s bottom controls', () => {
