@@ -217,11 +217,15 @@ function applyLimitChange(plan: PlanRecord, limit: number | null): void {
   if (limit === null) { delete plan.spendLimit; return; }
   const unit = pricingUnit(plan);
   const already = unit === 'usd' ? (plan.usedUsd ?? 0) : plan.usedTokens;
+  // WHY (T6 review V1): round BEFORE comparing, so the value checked is the
+  // value stored — 1000.4 tokens against 1000 spent used to pass, then round
+  // down to exactly the spent figure (an immediate pause).
+  if (unit !== 'usd') limit = Math.round(limit);
   if (limit <= already) {
     const shown = unit === 'usd' ? `$${already.toFixed(2)}` : `${fmt(already)} tokens`;
     throw new PlanActionRefused(`Set a limit above the ${shown} already spent.`);
   }
-  plan.spendLimit = unit === 'usd' ? { usd: limit } : { tokens: Math.round(limit) };
+  plan.spendLimit = unit === 'usd' ? { usd: limit } : { tokens: limit };
 }
 
 /** Design §7 ("Reached your $5 limit."): the plain sentence `resume` refuses

@@ -524,6 +524,8 @@ describe('setLimit (T6, design §7)', () => {
     const view = await propose();
     await journal.mutate(REF, (file) => { file.plans[0].usedTokens = 1000; });
     expect(await service.setLimit(SID, view.planId, 1000)).toEqual({ ok: false, error: 'Set a limit above the 1,000 tokens already spent.' });
+    // T6 review V1: 1000.4 rounds to 1000 — the stored value — so it is refused too.
+    expect(await service.setLimit(SID, view.planId, 1000.4)).toEqual({ ok: false, error: 'Set a limit above the 1,000 tokens already spent.' });
     expect(await service.setLimit(SID, view.planId, 1001)).toMatchObject({ ok: true });
   });
 
