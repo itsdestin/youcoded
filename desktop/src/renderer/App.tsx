@@ -3915,6 +3915,7 @@ function AppInner() {
                 <CommandDrawer
                   open={drawerOpen}
                   searchMode={drawerSearchMode}
+                  sessionId={sessionId}
                   filterStore={drawerFilterStore}
                   onSelect={handleSelectSkill}
                   onSelectCommand={handleSelectCommand}
