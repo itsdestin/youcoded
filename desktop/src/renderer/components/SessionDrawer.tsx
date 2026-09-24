@@ -1282,23 +1282,34 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   (Destin: "they should float over the same … panel"). The
                   column itself ignores the pointer so the gaps between pills
                   never block the document; each pill opts back in. */}
+              {/* Round 6 (Destin: "it should pop in and disappear the same
+                  way the edit button does"): the WHOLE cluster now shares
+                  Edit's pop — in when the file list folds away, out when it
+                  reopens (still always shown while editing, so Save can't
+                  hide). `inert` while faded, because each pill re-enables
+                  pointer events for itself and would otherwise stay
+                  clickable while invisible. Clicking Comments folds the list
+                  away, like clicking Edit does, so the buttons Comments mode
+                  needs are on screen the moment it opens. */}
               {active && (
-                <div className="absolute bottom-9 right-4 z-20 flex flex-col items-end gap-2 pointer-events-none">
+                <div
+                  inert={!(editState.editing || !showList)}
+                  className={`absolute bottom-9 right-4 z-20 flex flex-col items-end gap-2 pointer-events-none origin-bottom-right transition-all duration-200 ${
+                    editState.editing || !showList ? 'opacity-100 scale-100' : 'opacity-0 scale-90'
+                  }`}
+                >
                   {commentsState.active && <CommentsFloatingActions path={active.path} />}
                   <div className="flex items-center gap-2">
                   {commentsState.available && !editState.editing && (
-                    <CommentsBtn state={commentsState} onClick={() => editRef.current?.toggleComments()} />
+                    <CommentsBtn
+                      state={commentsState}
+                      onClick={() => { if (!commentsState.active) setListOpen(false); editRef.current?.toggleComments(); }}
+                    />
                   )}
               {/* Edit is hidden in Comments mode (a review mode — going back to
-                  reading brings it back); otherwise unchanged below. */}
+                  reading brings it back). */}
               {(editState.editing || (editState.isEditable && !commentsState.active)) && (
-                <div
-                  className={`flex items-center gap-2 transition-all duration-200 ${
-                    editState.editing || !showList
-                      ? 'opacity-100 scale-100 pointer-events-auto'
-                      : 'opacity-0 scale-90 pointer-events-none'
-                  }`}
-                >
+                <div className="flex items-center gap-2 pointer-events-auto">
                   {editState.editing ? (
                     <>
                       <button
