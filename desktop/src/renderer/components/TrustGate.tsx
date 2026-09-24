@@ -1,8 +1,8 @@
-import { useCallback, useRef, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useChatState, useChatDispatch, useChatStore } from '../state/chat-context';
-import { InteractivePrompt, TimelineEntry } from '../state/chat-types';
+import { InteractivePrompt, TimelineEntry, HISTORY_EXPAND_PROMPT_ID } from '../state/chat-types';
 import { TRUST_PROMPT_TITLE } from '../parser/ink-select-parser';
-import { sendPromptInput } from '../state/prompt-input';
+import { sendPromptInput, PROMPT_FAILURE_COPY } from '../state/prompt-input';
 import type { PromptCardButton } from './PromptCard';
 import { AppIcon, ThemeMascot } from './Icons';
 
@@ -57,15 +57,28 @@ export default function TrustGate({ sessionId }: Props) {
   const dispatch = useChatDispatch();
 
   const trustPrompt = findTrustPrompt(state);
+  // A verified answer in flight, and why the last one was refused (if it was).
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
 
   const handleSelect = useCallback(
-    (button: PromptCardButton, label: string) => {
-      if (!trustPrompt) return;
+    async (button: PromptCardButton, label: string) => {
+      if (!trustPrompt || sending) return;
       // Deliberate menu-driving write: this answers the live Ink trust dialog.
       // Before the 2026-07-26 fix this sent arrows + `\r` in ONE write, which CC
       // collapses to a bare Enter — so clicking "No, exit" confirmed the
-      // highlighted option and TRUSTED the folder. Now it types the option digit.
-      sendPromptInput(sessionId, button);
+      // highlighted option and TRUSTED the folder. A numbered dialog gets the
+      // option digit; CC 2.1.281's unnumbered one is answered by verified
+      // navigation, and the gate only closes once Claude Code has taken it — a
+      // refused answer (the dialog changed) leaves the gate up and says why.
+      setSending(true);
+      setError(null);
+      const r = await sendPromptInput(sessionId, button);
+      if (!mounted.current) return;
+      setSending(false);
+      if (!r.ok) { setError(PROMPT_FAILURE_COPY[r.reason]); return; }
       const action = {
         type: 'COMPLETE_PROMPT' as const,
         sessionId,
@@ -76,7 +89,7 @@ export default function TrustGate({ sessionId }: Props) {
       // Broadcast to other devices so their UI updates too
       (window as any).claude?.remote?.broadcastAction(action);
     },
-    [sessionId, trustPrompt, dispatch],
+    [sessionId, trustPrompt, dispatch, sending],
   );
 
   if (!trustPrompt) return null;
@@ -93,13 +106,15 @@ export default function TrustGate({ sessionId }: Props) {
         {trustPrompt.buttons.map((btn) => (
           <button
             key={btn.label}
-            onClick={() => handleSelect(btn, btn.label)}
+            disabled={sending}
+            onClick={() => { void handleSelect(btn, btn.label); }}
             className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${intentStyles[buttonIntent(btn.label)]}`}
           >
             {btn.label}
           </button>
         ))}
       </div>
+      {error && <p role="alert" className="mt-4 text-xs text-fg-muted max-w-sm text-center">{error}</p>}
     </div>
   );
 }
@@ -108,6 +123,27 @@ export default function TrustGate({ sessionId }: Props) {
  * Hook for App.tsx to check if the trust gate is active for a session.
  */
 export function useTrustGateActive(sessionId: string | null): boolean {
+  return useTimelineFlag(sessionId, trustPending);
+}
+
+type SessionView = ReturnType<typeof useChatState>;
+const trustPending = (s: SessionView) => findTrustPrompt(s) !== null;
+const anyPromptPending = (s: SessionView) => s.timeline.some((e) =>
+  e.kind === 'prompt' && !e.prompt.completed && e.prompt.promptId !== HISTORY_EXPAND_PROMPT_ID);
+
+/** Any unanswered Claude Code prompt card in this session's chat (the "See
+ *  previous messages" marker is not one). App hides the "Initializing
+ *  session…" cover while one is up: that cover sits OVER the chat, so a
+ *  startup card for the bypass warning or an MCP server was drawn but
+ *  invisible behind it (2026-09-24). */
+export function usePendingPromptActive(sessionId: string | null): boolean {
+  return useTimelineFlag(sessionId, anyPromptPending);
+}
+
+function useTimelineFlag(
+  sessionId: string | null,
+  test: (session: SessionView) => boolean,
+): boolean {
   // WHY a cached selector (2026-09-16 A1): this ran in AppInner through a
   // whole-state subscription, so every streamed word re-rendered the entire
   // shell to re-scan the timeline for a prompt that is almost never there.
@@ -126,9 +162,9 @@ export function useTrustGateActive(sessionId: string | null): boolean {
     if (!sessionId) return false;
     const session = store.getSession(sessionId);
     if (cache.current.timeline !== session.timeline) {
-      cache.current = { timeline: session.timeline, active: findTrustPrompt(session) !== null };
+      cache.current = { timeline: session.timeline, active: test(session) };
     }
     return cache.current.active;
-  }, [store, sessionId]);
+  }, [store, sessionId, test]);
   return useSyncExternalStore(subscribe, getSnapshot);
 }

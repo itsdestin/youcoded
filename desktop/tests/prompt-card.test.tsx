@@ -142,3 +142,62 @@ describe('PromptCard — Resume Session', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 });
+
+// Claude Code 2.1.281's startup dialogs carry no option numbers; their buttons
+// are answered by verified navigation (state/ink-menu-driver.ts), which reports
+// back — so the card waits, and says so if Claude Code did not take it.
+const MCP_SCREEN = [
+  '─'.repeat(100),
+  '  New MCP server found in this project: demo',
+  '',
+  '  MCP servers may execute code or access system resources. All tool calls require approval. Learn',
+  '  more in the MCP documentation.',
+  '',
+  '    Use this MCP server',
+  '    Use this and all future MCP servers in this project',
+  '  ❯ Continue without using this MCP server',
+  '',
+  '  Enter to confirm · Esc to cancel',
+].join('\n');
+
+function mcpPrompt(): InteractivePrompt {
+  const menu = parseInkSelect(MCP_SCREEN);
+  if (!menu) throw new Error('MCP screen no longer parses');
+  return {
+    promptId: menu.id, title: menu.title, description: menu.description,
+    buttons: menuToButtons(menu), defaultIndex: menu.selectedIndex,
+  };
+}
+
+describe('PromptCard — a dialog answered by verified navigation', () => {
+  it('starts on the option Claude Code highlights, so Enter means what it means in the terminal', () => {
+    const onSelect = vi.fn();
+    const prompt = mcpPrompt();
+    expect(prompt.title).toBe('New MCP Server Found');
+    render(<PromptCard prompt={prompt} sessionId="s1" onSelect={onSelect} />);
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(onSelect.mock.calls[0][1]).toBe('Continue without using this MCP server');
+  });
+
+  it('asks twice before "Use this and all future MCP servers"', () => {
+    const onSelect = vi.fn();
+    render(<PromptCard prompt={mcpPrompt()} sessionId="s1" onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole('button', { name: /all future MCP servers/ }));
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Click again to confirm/ }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables every button while the answer is being typed, and says why when it is refused', async () => {
+    let settle!: (r: { ok: false; reason: 'menu-changed'; typed: false }) => void;
+    const onSelect = vi.fn(() => new Promise<any>((res) => { settle = res; }));
+    render(<PromptCard prompt={mcpPrompt()} sessionId="s1" onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole('button', { name: /Continue without/ }));
+    for (const b of screen.getAllByRole('button')) expect((b as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /^Use this MCP server$/ }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    settle({ ok: false, reason: 'menu-changed', typed: false });
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringMatching(/options changed/));
+    for (const b of screen.getAllByRole('button')) expect((b as HTMLButtonElement).disabled).toBe(false);
+  });
+});

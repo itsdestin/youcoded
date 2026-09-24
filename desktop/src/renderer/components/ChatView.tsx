@@ -886,15 +886,26 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         });
       }
       // Send the keystroke(s) that pick this option in the live Ink menu — a bare
-      // option digit, or (fallback only) arrows plus a separately-written \r.
-      sendPromptInput(sessionId, button);
-      // Mark the prompt as completed in the UI
-      dispatch({
+      // option digit, or (a menu with no numbers) verified arrow navigation.
+      const complete = () => dispatch({
         type: 'COMPLETE_PROMPT',
         sessionId,
         promptId,
         selection: label,
       });
+      if (button.pick) {
+        // WHY wait: a verified answer can be REFUSED (the options changed, the
+        // cursor would not move). Marking the card answered up front would then
+        // claim a choice Claude Code never received — the card shows the reason
+        // instead and stays answerable.
+        return sendPromptInput(sessionId, button).then((r) => {
+          if (r.ok) complete();
+          return r;
+        });
+      }
+      void sendPromptInput(sessionId, button);
+      complete();
+      return undefined;
     },
     [sessionId, dispatch],
   );

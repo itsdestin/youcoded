@@ -1143,6 +1143,7 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
             title: action.title,
             description: action.description,
             buttons: action.buttons,
+            ...(action.defaultIndex !== undefined ? { defaultIndex: action.defaultIndex } : {}),
           },
         },
       );

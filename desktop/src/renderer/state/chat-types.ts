@@ -4,14 +4,30 @@ import { emptyTotals, type SessionTotals } from './session-totals';
 // chat-types directly, without reaching into the shared/types boundary.
 export type { ToolCallState, AttentionState };
 
+/** One answer on a parser-detected prompt card (serialized: remote clients and
+ *  Android receive the same shape). */
+export interface PromptButtonSpec {
+  label: string;
+  input: string;
+  submitInput?: string;
+  pick?: { signature: string; index: number };
+}
+
 export interface InteractivePrompt {
   promptId: string;
   title: string;
   description?: string; // Contextual text explaining the prompt (e.g., resume trade-offs)
   // `input` is the keystroke(s) that pick this option — a bare digit for CC's
-  // numbered menus. `submitInput` is a rare SECOND write (arrow fallback only);
-  // arrows and `\r` must never share one write. See parser/ink-select-parser.
-  buttons: { label: string; input: string; submitInput?: string }[];
+  // numbered menus. `submitInput` is a rare SECOND write (Android's native
+  // detector / older builds only); arrows and `\r` must never share one write.
+  // `pick` = a menu with no printed numbers: answered by verified navigation
+  // (state/ink-menu-driver.ts), never by a fixed keystroke. See
+  // parser/ink-select-parser.menuToButtons.
+  buttons: PromptButtonSpec[];
+  /** The button Claude Code itself highlights (its ❯ cursor) when the card
+   *  appears — where the card's keyboard focus starts, so Enter means what it
+   *  means in the terminal. Absent = the card's own rule (recommended, else first). */
+  defaultIndex?: number;
   completed?: string; // label of the selected option, if completed
 }
 
@@ -532,7 +548,8 @@ export type ChatAction =
       promptId: string;
       title: string;
       description?: string;
-      buttons: { label: string; input: string; submitInput?: string }[];
+      buttons: PromptButtonSpec[];
+      defaultIndex?: number;
     }
   | {
       type: 'COMPLETE_PROMPT';
