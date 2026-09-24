@@ -180,7 +180,12 @@ describe('advanceStream: the groups a growing message is drawn as', () => {
         for (const g of v.groups) expect(v.drawn.startsWith(g.source, g.key)).toBe(true);
         const prev = views[i - 1];
         if (prev && !prev.blocks?.whole) {
-          for (let k = 0; k < prev.settled.length; k++) expect(v.settled[k]).toBe(prev.settled[k]);
+          // A settled group never changes its text; only a definition it names
+          // arriving later can give it new definitions in front.
+          for (let k = 0; k < prev.settled.length; k++) {
+            if (v.settled[k].defs === prev.settled[k].defs) expect(v.settled[k]).toBe(prev.settled[k]);
+            else expect([v.settled[k].key, v.settled[k].draw]).toEqual([prev.settled[k].key, prev.settled[k].draw]);
+          }
         }
       });
     });
@@ -192,7 +197,8 @@ describe('advanceStream: the groups a growing message is drawn as', () => {
     expect(keysAndText(v1)).toEqual([[0, drawn + ' word']]);
     expect(keysAndText(v2)).toEqual([[0, drawn + ' word\n\n'], [drawn.length + 7, 'New']]);
     expect(v3.groups[0]).toEqual(v2.groups[0]);
-    expect(v3.settled.length).toBe(1);
+    // Only the last piece stays live: group 0 and "New para" are both final.
+    expect(v3.settled.length).toBe(2);
   });
 
   it('draws a closed <details> run as one group and freezes it; a comment is just its own group', () => {
@@ -201,7 +207,7 @@ describe('advanceStream: the groups a growing message is drawn as', () => {
     expect(v.groups.map((g) => g.source)).toEqual([
       '<!-- note -->\n\n', 'A\n\n', '<details>\n<summary>S</summary>\n\nin one\n\nin two\n\n</details>\n\n', 'B\n\n', 'C\n\n', 'D',
     ]);
-    expect(v.settled.length).toBe(4);
+    expect(v.settled.length).toBe(5);
   });
 
   it('keeps an open <details> run unsettled, drawing each piece on its own until it closes', () => {
@@ -211,17 +217,40 @@ describe('advanceStream: the groups a growing message is drawn as', () => {
     expect(v.groups.length).toBe(5);
   });
 
+  // A bare <details> pairs only when a <summary> block comes next; once a
+  // finished block that is not one follows, it stays text for good and must not
+  // hold every later group unsettled (re-walked on every word).
+  it('settles the groups after a <details> that can never pair', () => {
+    const md = 'A\n\n<details>\n\nnot a summary\n\nB\n\nC\n\nD\n\nE\n\nF';
+    const v = run(prefixesOf(tokenDeltas(md))).at(-1)!;
+    expect(v.settled.length).toBeGreaterThanOrEqual(v.groups.length - 2);
+  });
+
   it('starts over as one document when the content is replaced, then splits the next append', () => {
     const views = run(['one\n\ntwo', 'one\n\ntwo\n\nthree', 'ONE\n\ntwo', 'ONE\n\ntwo\n\nthree']);
     expect(keysAndText(views[2])).toEqual([[0, 'ONE\n\ntwo']]);
     expect(keysAndText(views[3])).toEqual([[0, 'ONE\n\ntwo\n\n'], [10, 'three']]);
   });
 
-  it('carries the link definitions to the groups that could use them', () => {
-    const v = run(prefixesOf(tokenDeltas('See [x].\n\nplain\n\n[x]: https://a.example\n\nEnd.'))).at(-1)!;
-    expect(v.defs).toBe('[x]: https://a.example');
-    expect(v.groups.map((g) => [g.source.trim(), g.refs, g.paints])).toEqual([
-      ['See [x].', true, true], ['plain', false, true], ['[x]: https://a.example', true, false], ['End.', false, true],
+  it('carries each link definition only to the groups that name its label', () => {
+    const v = run(prefixesOf(tokenDeltas('See [x].\n\nplain [y]\n\n[x]: https://a.example\n\nEnd [X] and [ x ].'))).at(-1)!;
+    expect(v.groups.map((g) => [g.source.trim(), g.defs, g.paints])).toEqual([
+      ['See [x].', '[x]: https://a.example', true], ['plain [y]', '', true], ['[x]: https://a.example', '', false],
+      // Labels match as micromark matches them: case and inner spaces do not count.
+      ['End [X] and [ x ].', '[x]: https://a.example', true],
     ]);
+  });
+
+  it('gives a label only its FIRST definition, and re-draws only the groups that name a changed one', () => {
+    const md = 'Uses [a].\n\nUses [b].\n\nNone here.\n\n[A]: /first\n[b]: /b\n[a]: /second';
+    const views = run(prefixesOf(tokenDeltas(md)));
+    const last = views.at(-1)!;
+    expect(last.groups[0].defs).toBe('[A]: /first');
+    expect(last.groups[1].defs).toBe('[b]: /b');
+    // Once "[a]: /second" starts, nothing already drawn changes: [a] is won by /first.
+    const at = views.findIndex((v) => v.drawn.includes('[a]: /s'));
+    for (let i = at; i < views.length - 1; i++) {
+      for (const g of views[i + 1].groups.slice(0, 3)) expect(views[i].groups.find((x) => x.key === g.key)).toBe(g);
+    }
   });
 });

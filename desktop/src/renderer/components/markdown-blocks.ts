@@ -21,17 +21,19 @@
  * markdown-blocks.test.ts found the per-block version of this wrong; per piece it
  * holds.
  *
- * THE "FINISHED" RULE — every piece except the LAST TWO is frozen (never
+ * THE "FINISHED" RULE — every piece except the LAST one is frozen (never
  * re-parsed, never re-drawn). Markdown is parsed line by line and only the newest
  * block can still be open, and a blank line closes everything a later line could
- * reach into, so the last piece alone would do; two is margin. Both live pieces are
- * still drawn separately, so the second-to-last one (usually a just-finished code
- * block) re-parses but does not re-draw or re-highlight.
+ * reach into. The one exception is the last piece's own FIRST line while it
+ * could still become a list item marker ("2" → "2."): it may yet join the list
+ * in the piece before, so that piece stays live too (`startIsFinal`).
  *
  * CROSS-BLOCK EFFECTS — two things make one block's drawing depend on another:
  *   - link DEFINITIONS (`[x]: url`) turn a `[x]` in any other block into a link.
- *     Top-level definitions are collected and handed to every piece that holds a
- *     `[`, placed in front of it (they draw nothing). Footnotes (numbered across
+ *     Top-level definitions are collected, and each group is handed, in front
+ *     of it (they draw nothing), only the definitions whose labels it names
+ *     (`labelsOf`), so a definition being typed re-draws only the blocks that
+ *     use it. Footnotes (numbered across
  *     the whole message, listed at its end) and definitions nested in a quote or
  *     list still fall back to the exact whole-message render, sticky for the rest
  *     of the stream.
@@ -65,6 +67,7 @@ export const DETAILS_OPEN_ANY = /^\s*<details(?:\s+open)?\s*>/i;
 interface MdNode {
   type: string;
   value?: string;
+  label?: string;
   children?: MdNode[];
   position?: { start: { offset?: number }; end: { offset?: number } };
 }
@@ -74,8 +77,20 @@ interface MdNode {
  * Only definitions and raw-HTML blocks can affect another block; everything else
  * is 'other'.
  */
+/** A top-level link definition. */
+interface DefInfo {
+  /** Its label as micromark matches it (`normalizeIdentifier`): first one wins. */
+  id: string;
+  /** `id` loosened for finding it in a group's text (see labelKey). */
+  key: string;
+  /** Its source text, to put in front of a group that names it. */
+  text: string;
+  /** Offset in the message. */
+  at: number;
+}
+
 type BlockInfo =
-  | { kind: 'def'; text: string }
+  | ({ kind: 'def' } & DefInfo)
   | { kind: 'html'; opener: 'with-summary' | 'bare' | null; summary: boolean; close: boolean; nested: boolean }
   | { kind: 'other' };
 
@@ -85,6 +100,12 @@ interface Piece {
   start: number;
   text: string;
   blocks: BlockInfo[];
+  /**
+   * Set on the LAST piece when its last block is a top-level fenced code block
+   * that is still open and whose opening line is finished: where (in `text`)
+   * the code starts. See `extendLastPiece`.
+   */
+  fenceBody?: number;
 }
 
 export interface MarkdownBlocks {
@@ -96,8 +117,8 @@ export interface MarkdownBlocks {
   frozen: Piece[];
   /** Offset in `source` where the live (re-parsed) region begins. */
   frozenEnd: number;
-  /** Source text of every link definition in `frozen`, in order. */
-  frozenDefs: string[];
+  /** Every link definition in `frozen`, in order. */
+  frozenDefs: DefInfo[];
   /** Pieces still being typed, in order, after the frozen ones. */
   live: Piece[];
 }
@@ -109,8 +130,36 @@ export function blockChunks(blocks: MarkdownBlocks): string[] {
 
 /** Every top-level link definition in the message, in order. */
 export function definitionsOf(blocks: MarkdownBlocks): string[] {
-  const live = blocks.live.flatMap((p) => p.blocks.flatMap((b) => (b.kind === 'def' ? [b.text] : [])));
-  return live.length ? [...blocks.frozenDefs, ...live] : blocks.frozenDefs;
+  return [...blocks.frozenDefs, ...liveDefs(blocks)].map((d) => d.text);
+}
+
+const liveDefs = (blocks: MarkdownBlocks): DefInfo[] =>
+  blocks.live.flatMap((p) => p.blocks.flatMap((b) => (b.kind === 'def' ? [b] : [])));
+
+// micromark-util-normalize-identifier, copied (it is not a direct dependency):
+// how micromark decides two labels are the same definition.
+const normalizeIdentifier = (value: string) =>
+  value.replace(/[\t\n\r ]+/g, ' ').replace(/^ | $/g, '').toLowerCase().toUpperCase();
+
+/**
+ * A label with every space, tab, line ending and `>` removed. WHY looser than
+ * the real match: a reference's label can span lines inside a quote or list
+ * item, where the `> ` or indent at the start of the next line is not part of
+ * it. Removing those characters from BOTH sides can only find more matches,
+ * never miss one — and an extra definition in front of a group draws nothing.
+ */
+const labelKey = (folded: string) => folded.replace(/[\t\n\r >]+/g, '');
+
+/**
+ * Every label `text` could name as a reference: the text inside each innermost
+ * `[...]` (labels never hold an unescaped bracket), case-folded as micromark
+ * folds it, then loosened by labelKey. A superset of what it really references.
+ */
+function labelsOf(text: string): string[] {
+  if (!text.includes('[')) return [];
+  const found = new Set<string>();
+  for (const m of text.toLowerCase().toUpperCase().matchAll(/\[((?:[^[\]\\]|\\[\s\S])*)\]/g)) found.add(labelKey(m[1]));
+  return [...found];
 }
 
 /**
@@ -150,9 +199,28 @@ function isIndentedCode(text: string, block: MdNode): boolean {
   return !/^ {0,3}(?:```|~~~)/.test(text.slice(lineStart(text, at)));
 }
 
-function blockInfo(text: string, block: MdNode): BlockInfo {
+/** The raw text between a definition's brackets, or null if it cannot be read. */
+function rawLabel(source: string): string | null {
+  const open = source.indexOf('[');
+  if (open === -1) return null;
+  for (let i = open + 1; i < source.length; i++) {
+    if (source[i] === '\\') i++;
+    else if (source[i] === ']') return source.slice(open + 1, i);
+  }
+  return null;
+}
+
+function blockInfo(text: string, block: MdNode, base: number): BlockInfo {
   if (block.type === 'definition') {
-    return { kind: 'def', text: text.slice(block.position?.start.offset ?? 0, block.position?.end.offset ?? text.length) };
+    const at = block.position?.start.offset ?? 0;
+    const source = text.slice(at, block.position?.end.offset ?? text.length);
+    // WHY the RAW label, not mdast's `label` (review 3, F2): mdast decodes
+    // escapes and entities ("my\\_file" -> "my_file", "a&amp;" -> "a&"), but
+    // micromark matches a reference to a definition on the raw text between
+    // the brackets — and labelsOf reads references raw. The label runs from the
+    // first "[" to the first unescaped "]" (a label holds no bare bracket).
+    const id = normalizeIdentifier(rawLabel(source) ?? block.label ?? '');
+    return { kind: 'def', id, key: labelKey(id), text: source, at: base + at };
   }
   if (block.type !== 'html') return { kind: 'other' };
   const v = block.value ?? '';
@@ -163,6 +231,122 @@ function blockInfo(text: string, block: MdNode): BlockInfo {
     close: DETAILS_CLOSE.test(v),
     nested: DETAILS_OPEN_ANY.test(v),
   };
+}
+
+// A line that could close a code fence: up to three spaces, then three or more
+// backticks or tildes, then nothing but spaces. Checked loosely (any length, any
+// fence character) so a line that might close the fence always counts.
+const FENCE_CLOSE_LINE = /(?:^|[\r\n]) {0,3}(?:`{3,}|~{3,})[ \t]*(?=[\r\n]|$)/;
+
+// The first line of a piece that could still turn into a list item marker
+// ("-", "2", "2.", "  *"). Such a piece can still JOIN the list before it:
+// "1. a\n\n2" is a list and a paragraph, "1. a\n\n2." is one list.
+const MAYBE_LIST_MARKER = /^[ \t]*(?:[-+*]|\d{1,9}[.)]?)?[ \t]*$/;
+
+/**
+ * Whether the piece starting `text` can no longer join the piece before it.
+ * WHY only the first line matters: a piece starts after a blank line, where
+ * nothing is open but a list (and indented code, which is never cut). A later
+ * line cannot pull it into that list; only its own first line, while it could
+ * still become a list item marker, can.
+ */
+function startIsFinal(text: string): boolean {
+  const end = text.search(/[\r\n]/);
+  return end !== -1 || !MAYBE_LIST_MARKER.test(text);
+}
+
+// A line starting (after any quote or list markers) with `<` or with a `[`
+// that may be a link definition's label ("[x]:", or no closing "]" yet).
+// Anything that could make a top-level raw-HTML block, a definition or a
+// footnote — the only blocks the splitter records — begins such a line.
+function mayHoldDefinitionOrHtml(text: string): boolean {
+  for (const m of text.matchAll(/(?:^|\r\n?|\n)[ \t>*+\-0-9.)]*([<[])/g)) {
+    if (m[1] === '<') return true;
+    const open = m.index! + m[0].length - 1;
+    const close = text.indexOf(']', open + 1);
+    if (close === -1 || close === text.length - 1 || text[close + 1] === ':') return true;
+    // An escaped "\]" may hide the label's real end; do not guess.
+    if (text.slice(open + 1, close).includes('\\')) return true;
+  }
+  return false;
+}
+
+/**
+ * The previous pieces with only the LAST one grown by the appended text — or
+ * null when that is not certain, and the tail must be parsed.
+ *
+ * WHY (review 2, F2): a reply that ends in one long block with no blank line in
+ * it (a 300-item list, a long table or quote, a long code block) was parsed by
+ * the splitter AND by react-markdown on every word — twice today's cost. The
+ * pieces can only change where a blank line is, or where a block the splitter
+ * records (definition, raw HTML, footnote) starts, so when neither can have
+ * happened the previous split still holds and nothing is parsed:
+ *   - an open top-level code fence swallows every line (blank or not) until a
+ *     line that could close it;
+ *   - otherwise, a last piece with no blank line and no line that could start
+ *     a definition or HTML block stays one piece of plain blocks.
+ * In both cases the piece's first line must be final (`startIsFinal`), or the
+ * piece could still merge into the list before it.
+ */
+function extendLastPiece(prev: MarkdownBlocks, content: string): MarkdownBlocks | null {
+  const last = prev.live[prev.live.length - 1];
+  if (!last) return null;
+  const text = content.slice(last.start);
+  // WHY the OLD text too (review 3, F1): when the last piece's first line was
+  // still unfinished ("2"), the split kept the piece before it live because it
+  // could still join that list; the appended text (". x") may be exactly what
+  // joins it. Only a piece whose first line was already final can be extended.
+  if (!startIsFinal(last.text) || !startIsFinal(text)) return null;
+  if (last.fenceBody !== undefined) {
+    // Lines of the fence before the old text's last line were already checked.
+    const from = Math.max(last.fenceBody, lineStart(text, Math.max(0, last.text.length - 1)));
+    if (FENCE_CLOSE_LINE.test(text.slice(from))) return null;
+  } else if (hasBlankLine(text) || mayHoldDefinitionOrHtml(text)) {
+    return null;
+  }
+  const live = prev.live.slice();
+  live[live.length - 1] = { ...last, text };
+  return { ...prev, source: content, live };
+}
+
+/**
+ * When the one live piece starts with link definitions that are FINISHED — each
+ * ends a line and the next line starts with `[`, so no title can still follow —
+ * where the parse can resume after them, and the definitions it skips.
+ *
+ * WHY (review 2, F1): a reply ending in a list of definitions keeps them all in
+ * one piece (no blank lines between), so every word re-parsed the whole list.
+ * Definitions are read one after another from the start of a paragraph-like
+ * run, so once one is finished the text after it reads exactly as it would on
+ * its own; only the definition still being typed needs parsing.
+ */
+function finishedDefinitions(prev: MarkdownBlocks, content: string) {
+  if (prev.whole || prev.live.length !== 1) return null;
+  const piece = prev.live[0];
+  let k = 0;
+  let at = -1;
+  for (const b of piece.blocks) {
+    if (b.kind !== 'def') break;
+    const end = b.at + b.text.length;
+    const eol = /^(?:\r\n|\r|\n)/.exec(content.slice(end, end + 2));
+    if (!eol || content[end + eol[0].length] !== '[') break;
+    k++;
+    at = end + eol[0].length;
+  }
+  return k ? { at, piece, blocks: piece.blocks.slice(0, k) } : null;
+}
+
+/**
+ * Where the code of an open top-level fence starts, if `block` (the tail's last
+ * block) is one — see `Piece.fenceBody`. Offsets are in `tail`.
+ */
+function openFenceBody(tail: string, block: MdNode): number | undefined {
+  if (block.type !== 'code' || isIndentedCode(tail, block)) return undefined;
+  const at = lineStart(tail, block.position?.start.offset ?? 0);
+  const eol = tail.slice(at).search(/\r\n?|\n/);
+  if (eol === -1) return undefined; // the opening line is still being typed
+  const body = at + eol + (tail.startsWith('\r\n', at + eol) ? 2 : 1);
+  return FENCE_CLOSE_LINE.test(tail.slice(body - 1)) ? undefined : body;
 }
 
 const wholeOf = (content: string): MarkdownBlocks =>
@@ -178,8 +362,11 @@ export function splitMarkdownBlocks(content: string, prev?: MarkdownBlocks | nul
   if (appended && content === prev!.source) return prev!;
   // Sticky: the footnote / nested definition that forced whole mode is still there.
   if (appended && prev!.whole) return wholeOf(content);
+  const extended = appended ? extendLastPiece(prev!, content) : null;
+  if (extended) return extended;
 
-  const start = appended ? prev!.frozenEnd : 0;
+  const resume = appended ? finishedDefinitions(prev!, content) : null;
+  const start = resume ? resume.at : appended ? prev!.frozenEnd : 0;
   const tail = content.slice(start);
   const root = parser.parse(tail) as MdNode;
   if (needsWhole(root, false)) return wholeOf(content);
@@ -211,21 +398,39 @@ export function splitMarkdownBlocks(content: string, prev?: MarkdownBlocks | nul
         pieceBlocks.push([]);
       }
     }
-    pieceBlocks[pieceBlocks.length - 1].push(blockInfo(tail, block));
+    pieceBlocks[pieceBlocks.length - 1].push(blockInfo(tail, block, start));
   });
   const n = pieceStarts.length;
-  const piece = (i: number): Piece => ({
-    start: start + pieceStarts[i],
-    text: tail.slice(pieceStarts[i], i + 1 < n ? pieceStarts[i + 1] : undefined),
-    blocks: pieceBlocks[i],
-  });
+  const fenceBody = n > 0 ? openFenceBody(tail, blocks[blocks.length - 1]) : undefined;
+  const piece = (i: number): Piece => {
+    const p: Piece = {
+      start: start + pieceStarts[i],
+      text: tail.slice(pieceStarts[i], i + 1 < n ? pieceStarts[i + 1] : undefined),
+      blocks: pieceBlocks[i],
+    };
+    if (i === n - 1 && fenceBody !== undefined) p.fenceBody = fenceBody - pieceStarts[i];
+    if (i === 0 && resume) {
+      // The finished definitions the parse skipped are the front of this piece.
+      const lead = content.slice(resume.piece.start, start);
+      p.start = resume.piece.start;
+      p.text = lead + p.text;
+      p.blocks = resume.blocks.concat(p.blocks);
+      if (p.fenceBody !== undefined) p.fenceBody += lead.length;
+    }
+    return p;
+  };
   // WHY HTML no longer holds anything live here (review F2): which blocks a
   // <details> pairs with is a DRAWING question, answered by planStream over the
   // pieces' BlockInfo. Parsing a piece never depends on HTML elsewhere, so the
   // splitter freezes by the plain two-live-pieces rule and each update parses
   // only the tail — a comment or <br> near the top used to make every update
   // parse (and draw) everything below it twice.
-  const liveFrom = Math.max(0, n - 2);
+  // WHY one live piece, not two (review 2, F3): the second-to-last piece was
+  // kept live as margin, so a long block followed by a new paragraph (typically
+  // the text already on screen when a bubble opens mid-reply) was re-parsed on
+  // every word. The only way the last piece can still reach back is its first
+  // line joining a list, which startIsFinal rules out.
+  const liveFrom = n >= 2 && startIsFinal(tail.slice(pieceStarts[n - 1])) ? n - 1 : Math.max(0, n - 2);
 
   // Copy the frozen list only when something new freezes, so an update that
   // freezes nothing does no work proportional to the reply (performance rule 4).
@@ -237,7 +442,7 @@ export function splitMarkdownBlocks(content: string, prev?: MarkdownBlocks | nul
     for (let i = 0; i < liveFrom; i++) {
       const p = piece(i);
       frozen.push(p);
-      for (const b of p.blocks) if (b.kind === 'def') frozenDefs.push(b.text);
+      for (const b of p.blocks) if (b.kind === 'def') frozenDefs.push(b);
     }
   }
   const live: Piece[] = [];
@@ -249,7 +454,8 @@ export function splitMarkdownBlocks(content: string, prev?: MarkdownBlocks | nul
     frozenDefs,
     // n === 0 (an empty or blank tail): nothing is frozen, so the blank text is
     // re-read next time — four leading spaces can still become a code block.
-    frozenEnd: start + (n > 0 ? pieceStarts[liveFrom] : 0),
+    // A resumed parse's first piece starts at the skipped definitions, not at `start`.
+    frozenEnd: resume && liveFrom === 0 ? resume.piece.start : start + (n > 0 ? pieceStarts[liveFrom] : 0),
     live,
   };
 }
@@ -262,10 +468,25 @@ interface DrawnGroup {
   /** Where it starts in the message — its React key (see advanceStream). */
   key: number;
   source: string;
+  /**
+   * What is handed to react-markdown: `source`, minus trailing blank lines when
+   * another group follows (see trimTrailingBlank).
+   */
+  draw: string;
   /** Draws at least one element (a group of only link definitions draws nothing). */
   paints: boolean;
-  /** Holds a `[`, so link definitions elsewhere can change how it draws. */
-  refs: boolean;
+  /** The labels it may reference (labelsOf `draw`). */
+  labels: string[];
+  /** The winning definitions of those labels that live OUTSIDE it, to put in front (withDefinitions). */
+  defs: string;
+}
+
+/** Link definitions that won (first of each label), indexed by labelKey. */
+interface DefIndex {
+  /** The frozen definition list this index was built from. */
+  from: DefInfo[];
+  winners: Map<string, DefInfo>;
+  byKey: Map<string, DefInfo[]>;
 }
 
 export interface StreamView {
@@ -278,8 +499,9 @@ export interface StreamView {
   /** Leading groups that can never change again, and how many frozen pieces they hold. */
   settled: DrawnGroup[];
   settledPieces: number;
-  /** The message's link definitions, ready to put in front of a group (see withDefinitions). */
-  defs: string;
+  /** Winning definitions among the frozen pieces, and among the live ones (those not already won). */
+  frozenIndex: DefIndex | null;
+  liveWinners: Map<string, DefInfo>;
   groups: DrawnGroup[];
 }
 
@@ -289,8 +511,9 @@ const oneDocument = (content: string): StreamView => ({
   floor: 0,
   settled: [],
   settledPieces: 0,
-  defs: '',
-  groups: [{ key: 0, source: content, paints: true, refs: false }],
+  frozenIndex: null,
+  liveWinners: new Map(),
+  groups: [{ key: 0, source: content, draw: content, paints: true, labels: [], defs: '' }],
 });
 
 /** A message as first drawn: one document, no parsing (history messages never grow). */
@@ -314,41 +537,185 @@ export function startStream(content: string): StreamView {
  *     off. Group 0 is redrawn in full until its last block is finished — exactly
  *     today's cost — and is then frozen like any other group;
  *   - link definitions are handed to each group rather than collapsing the pieces.
- * The remaining remount is a footnote arriving mid-reply (whole-message fallback,
- * once), and a content REPLACEMENT (not an append; the app only appends).
+ * The remaining rebuilds: a footnote or nested definition arriving mid-reply
+ * (whole-message fallback, once); a content REPLACEMENT (not an append; the app
+ * only appends); and (review 3, F3, accepted) one update that both finishes the
+ * last block's unfinished line so the block changes kind ("--" -> "---", "<b"
+ * -> "<br>", a paragraph -> a definition) AND starts a new block after a blank
+ * line — today's render reuses the old element for whatever lands in its place,
+ * this draws both afresh. That block was still being typed, so nothing the
+ * person did to it is lost.
+ *
+ * COST — never above today's whole-message render per update, with ONE
+ * accepted exception (review 3, F4): the update that first splits a message
+ * drawn as one document (a bubble opened mid-reply) parses that message once.
+ * It redraws nothing already on screen, and parsing is well under a full draw,
+ * but in characters parsed + drawn that one update can exceed today's.
  */
 export function advanceStream(view: StreamView, content: string): StreamView {
   if (content === view.drawn) return view;
   if (!content.startsWith(view.drawn)) return oneDocument(content);
+  // WHY (review 2, F3): a message drawn as one document (a bubble opened
+  // mid-reply, or any reply before its first blank line) stays ONE document —
+  // exactly today's render, no parse — until new text could start a piece of
+  // its own. Splitting earlier parsed the whole message and then redrew all of
+  // it anyway as group 0, on top of today's cost, every word.
+  if (!view.blocks && !mayStartPiece(content, view.drawn.length)) return oneDocument(content);
   const floor = view.blocks ? view.floor : view.drawn.length;
   const blocks = splitMarkdownBlocks(content, view.blocks);
   if (blocks.whole) {
     return { ...oneDocument(content), blocks, floor };
   }
-  const defList = definitionsOf(blocks);
-  const joined = defList.join('\n\n');
-  // Same string object when unchanged, so the memoised groups compare in O(1).
-  const defs = joined === view.defs ? view.defs : joined;
-  const settledIn = view.blocks ? view : { settled: [], settledPieces: 0 };
-  const { settled, settledPieces, pending } = planStream(blocks, floor, settledIn.settled, settledIn.settledPieces);
+  // Only a view that was already split can be built on; one drawn as a single
+  // document computed no labels or definitions for its group.
+  const split = view.blocks && !view.blocks.whole ? view : null;
+
+  // WHY per-group definitions (review 2, F1): handing EVERY definition to EVERY
+  // group holding a `[` meant each word of a trailing definition list changed
+  // the shared list and re-drew (re-parsed, re-highlighted) every such group
+  // with the whole list in front — pieces × definitions per word. Now a group
+  // gets only the winning definitions of the labels it names, and a group
+  // already drawn is recomputed only when one of THOSE labels changed winner.
+  // Frozen definitions are final and come first, so their winners never change.
+  const frozenIndex = indexDefs(split?.frozenIndex ?? null, blocks.frozenDefs);
+  const liveWinners = new Map<string, DefInfo>();
+  for (const d of liveDefs(blocks)) if (!frozenIndex.winners.has(d.id) && !liveWinners.has(d.id)) liveWinners.set(d.id, d);
+  const liveByKey = new Map<string, DefInfo[]>();
+  for (const d of liveWinners.values()) liveByKey.set(d.key, [...(liveByKey.get(d.key) ?? []), d]);
+  const lookup = (key: string) => {
+    const f = frozenIndex.byKey.get(key);
+    const l = liveByKey.get(key);
+    return f && l ? f.concat(l) : f ?? l ?? [];
+  };
+  // Labels whose winner changed since the last view: only live winners and
+  // newly frozen ones can differ.
+  const changed = new Set<string>();
+  if (split) {
+    const winnerIn = (v: StreamView, id: string) => v.frozenIndex?.winners.get(id) ?? v.liveWinners.get(id);
+    const now = (id: string) => frozenIndex.winners.get(id) ?? liveWinners.get(id);
+    const ids = new Set([...split.liveWinners.keys(), ...liveWinners.keys()]);
+    for (let i = split.frozenIndex?.from.length ?? 0; i < blocks.frozenDefs.length; i++) ids.add(blocks.frozenDefs[i].id);
+    for (const id of ids) {
+      const a = winnerIn(split, id);
+      const b = now(id);
+      if (a?.text !== b?.text || a?.at !== b?.at) changed.add((a ?? b)!.key);
+    }
+  }
+  const finish = (g: DrawnGroup, prev: DrawnGroup | undefined): DrawnGroup => {
+    const same = !!prev && prev.source === g.source && prev.draw === g.draw;
+    const labels = same ? prev!.labels : labelsOf(g.draw);
+    const defs = same && !labels.some((k) => changed.has(k)) ? prev!.defs : defsFor(g, labels, lookup);
+    if (same && defs === prev!.defs && g.paints === prev!.paints) return prev!;
+    // Same string object when unchanged, so the memoised drawing compares in O(1).
+    return { ...g, labels, defs: prev && defs === prev.defs ? prev.defs : defs };
+  };
+
+  let settledIn = split ? split.settled : [];
+  if (changed.size && settledIn.length) {
+    const refreshed = settledIn.map((g) => {
+      if (!g.labels.some((k) => changed.has(k))) return g;
+      const defs = defsFor(g, g.labels, lookup);
+      return defs === g.defs ? g : { ...g, defs };
+    });
+    if (refreshed.some((g, i) => g !== settledIn[i])) settledIn = refreshed;
+  }
+  const prevPending = new Map<number, DrawnGroup>();
+  if (split) for (const g of split.groups.slice(split.settled.length)) prevPending.set(g.key, g);
+  const { newlySettled, settledPieces, pending } = planStream(blocks, floor, split ? split.settledPieces : 0);
+  const settled = newlySettled.length
+    ? settledIn.concat(newlySettled.map((g) => finish(g, prevPending.get(g.key))))
+    : settledIn;
+  const pendingGroups = pending.map((g) => finish(g, prevPending.get(g.key)));
   return {
     drawn: content,
     blocks,
     floor,
     settled,
     settledPieces,
-    defs,
-    groups: settled.length ? settled.concat(pending) : pending,
+    frozenIndex,
+    liveWinners,
+    groups: settled.length ? settled.concat(pendingGroups) : pendingGroups,
   };
 }
 
-const groupOf = (pieces: Piece[]): DrawnGroup => {
+/**
+ * The winners among `defs` (frozen, append-only), built on `prev` when `defs`
+ * only extends the list it was built from. Copied only when something new
+ * froze, never per word (performance rule 4).
+ */
+function indexDefs(prev: DefIndex | null, defs: DefInfo[]): DefIndex {
+  if (prev && prev.from === defs) return prev;
+  const extends_ = !!prev && prev.from.length <= defs.length
+    && (prev.from.length === 0 || defs[prev.from.length - 1] === prev.from[prev.from.length - 1]);
+  const winners = extends_ ? new Map(prev!.winners) : new Map<string, DefInfo>();
+  const byKey = extends_ ? new Map(prev!.byKey) : new Map<string, DefInfo[]>();
+  for (let i = extends_ ? prev!.from.length : 0; i < defs.length; i++) {
+    const d = defs[i];
+    if (winners.has(d.id)) continue;
+    winners.set(d.id, d);
+    byKey.set(d.key, [...(byKey.get(d.key) ?? []), d]);
+  }
+  return { from: defs, winners, byKey };
+}
+
+/**
+ * The definitions to put in front of group `g`: the winner of each label it may
+ * name, unless that winner is inside `g` itself (then `g` resolves it on its
+ * own, and first-wins holds because the winner is the first in the message).
+ */
+function defsFor(g: DrawnGroup, labels: string[], lookup: (key: string) => DefInfo[]): string {
+  if (!labels.length) return '';
+  const end = g.key + g.source.length;
+  const found: DefInfo[] = [];
+  for (const k of labels) for (const d of lookup(k)) if ((d.at < g.key || d.at >= end) && !found.includes(d)) found.push(d);
+  if (!found.length) return '';
+  found.sort((a, b) => a.at - b.at);
+  return found.map((d) => d.text).join('\n\n');
+}
+
+/**
+ * Whether a piece could start at or after `floor` in `content`: pieces start
+ * only on the line after a blank line, so with no blank line ending at or after
+ * the drawn text, everything still belongs to what was drawn. Looks back over
+ * whitespace so a blank line straddling `floor` (drawn "a\n", then "\nb") counts.
+ */
+function mayStartPiece(content: string, floor: number): boolean {
+  let from = Math.max(0, floor - 2);
+  while (from > 0 && /[ \t\r\n]/.test(content[from - 1])) from--;
+  return hasBlankLine(content.slice(from));
+}
+
+/**
+ * `text` without its trailing blank lines. WHY (review 2, F3): a group that is
+ * followed by another ends at a blank line, and those blank lines draw nothing —
+ * every block in it is closed by the piece after it. Drawing it without them
+ * keeps its string the same as when it was still the last group ("para" then
+ * "para\n\n" once the next paragraph starts), so the memoised drawing is
+ * reused instead of being redone once per finished block. Never applied to the
+ * LAST group: an open code fence keeps its trailing blank lines as code.
+ */
+function trimTrailingBlank(text: string): string {
+  const m = /(?:\r\n|\r|\n)[ \t\r\n]*$/.exec(text);
+  if (!m) return text;
+  const trimmed = text.slice(0, m.index);
+  // Raw HTML and a trailing definition line read differently at the very end of
+  // a document ("1. one\n<br>" is a list and an HTML block; with a line ending
+  // after it, one list item) — a render fuzz found it. Those groups keep their
+  // blank lines; a fuzz of 12,000 other endings drew the same either way.
+  if (/(?:^|[\r\n])[ \t>*+\-0-9.)]*</.test(trimmed)) return text;
+  if (/^[ \t>*+\-0-9.)]*\[/.test(trimmed.slice(lineStart(trimmed, trimmed.length)))) return text;
+  return trimmed;
+}
+
+const groupOf = (pieces: Piece[], last: boolean): DrawnGroup => {
   const source = pieces.length === 1 ? pieces[0].text : pieces.map((p) => p.text).join('');
   return {
     key: pieces[0].start,
     source,
+    draw: last ? source : trimTrailingBlank(source),
     paints: pieces.some((p) => p.blocks.some((b) => b.kind !== 'def')),
-    refs: source.includes('['),
+    labels: [],
+    defs: '',
   };
 };
 
@@ -362,7 +729,7 @@ const groupOf = (pieces: Piece[]): DrawnGroup => {
  * cut after it can no longer change: all its pieces are frozen and every
  * disclosure opener before the cut was decided by frozen blocks.
  */
-function planStream(blocks: MarkdownBlocks, floor: number, settledIn: DrawnGroup[], settledPiecesIn: number) {
+function planStream(blocks: MarkdownBlocks, floor: number, settledPiecesIn: number) {
   const frozenCount = blocks.frozen.length - settledPiecesIn;
   const pieces = frozenCount > 0 ? blocks.frozen.slice(settledPiecesIn).concat(blocks.live) : blocks.live;
 
@@ -384,11 +751,17 @@ function planStream(blocks: MarkdownBlocks, floor: number, settledIn: DrawnGroup
       paired = true;
       contentStart = i + 2;
     }
+    // WHY (review 2, F4): a bare opener whose next drawn block is FROZEN and is
+    // not a <summary> can never pair — it is text for good. Treating it as
+    // undecided held every later group unsettled forever, re-walked per word.
+    // Only an opener that could still pair waits for its closing block.
+    const next = flat[i + 1];
+    const mayPair = h.opener === 'with-summary' || !next || next.piece >= frozenCount || !!next.info?.summary;
     let closing = -1;
     for (let k = i + 1; k < flat.length; k++) if (flat[k].info?.close) { closing = k; break; }
     // Decided for good only when a FROZEN closing block follows (a live one can
     // still grow into something else — "</details>\nmore").
-    if (closing === -1 || flat[closing].piece >= frozenCount) unsettledFrom = Math.min(unsettledFrom, flat[i].piece);
+    if (mayPair && (closing === -1 || flat[closing].piece >= frozenCount)) unsettledFrom = Math.min(unsettledFrom, flat[i].piece);
     if (!paired || closing === -1 || closing < contentStart) continue;
     let nested = false;
     for (let k = contentStart; k < closing; k++) if (flat[k].info?.nested) { nested = true; break; }
@@ -402,20 +775,20 @@ function planStream(blocks: MarkdownBlocks, floor: number, settledIn: DrawnGroup
   let run: Piece[] = [];
   pieces.forEach((p, pi) => {
     if (run.length && !joinBefore[pi] && p.start >= floor) {
-      groups.push(groupOf(run));
+      groups.push(groupOf(run, false));
       groupPieces.push(pi - 1);
       run = [];
     }
     run.push(p);
   });
-  if (run.length) { groups.push(groupOf(run)); groupPieces.push(pieces.length - 1); }
+  if (run.length) { groups.push(groupOf(run, true)); groupPieces.push(pieces.length - 1); }
 
   // Settle leading groups whose pieces are all frozen and whose closing cut is final.
   let s = 0;
   while (s < groups.length - 1 && groupPieces[s] < frozenCount && groupPieces[s] < unsettledFrom) s++;
-  if (s === 0) return { settled: settledIn, settledPieces: settledPiecesIn, pending: groups };
+  if (s === 0) return { newlySettled: [], settledPieces: settledPiecesIn, pending: groups };
   return {
-    settled: settledIn.concat(groups.slice(0, s)),
+    newlySettled: groups.slice(0, s),
     settledPieces: settledPiecesIn + groupPieces[s - 1] + 1,
     pending: groups.slice(s),
   };

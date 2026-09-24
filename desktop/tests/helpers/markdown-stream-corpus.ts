@@ -14,6 +14,10 @@ export const MARKDOWN_STREAM_CORPUS: { name: string; md: string }[] = [
   { name: 'table appearing under paragraph lines', md: 'Intro line\n| Name | Value |\n| :--- | ----: |\n| a | 1 |\n| b | 2 |\n\nAfter table.\n\n| x |\n| - |\n| y |' },
   { name: 'details and summary around content, twice', md: 'Before.\n\n<details>\n<summary>Show the log</summary>\n\nLine **one**\n\n```\nlog output\n```\n\n</details>\n\nBetween.\n\n<details open><summary>Second</summary>\n\nInside two\n\n</details>\n\nEnd.' },
   { name: 'reference-style links defined later', md: 'See [the docs][docs] and [other].\n\nMore text here.\n\n[docs]: https://example.com/docs "Docs"\n[other]: https://example.com/other\n\nTail.' },
+  // A run of definitions with no blank lines: titles on the next line, a label
+  // on its own line, a duplicate label (the first wins), and an indented line
+  // after the last one (a paragraph there, never code).
+  { name: 'a list of link definitions with no blank lines', md: 'See [a], [B] and [c], then [d].\n\n[a]: /a "A"\n[b]: /b\n\'B title\'\n[c]:\n/c\n[A]: /second\n[d]: /d\n    not code [a]\n\nEnd [d] [a].' },
   { name: 'footnotes defined in another block', md: 'A claim.[^1] Another.[^note]\n\nSecond paragraph.\n\n[^1]: The source.\n[^note]: A longer note.\n\nFinal words.' },
   { name: 'setext headings', md: 'Title\n=====\n\nSub title\n---------\n\nplain para\nstill para\n===\n\nlast' },
   { name: 'hash that is not a heading, then a real one', md: 'para\n#foo stays text\n\n# Real heading\n\n##also text\n\n## Level two' },
