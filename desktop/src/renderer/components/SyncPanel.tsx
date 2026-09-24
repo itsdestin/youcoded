@@ -869,8 +869,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     // otherwise stay non-committal — we genuinely don't know why it failed, and
     // guessing a cause here would be a misleading error.
     if (!res?.ok) return res?.error || 'Could not remove this device.';
-    // ok:true is not proof the row is gone: removeDevice skips a file it can't
-    // delete (a locked or permission-denied handle on Windows) and still resolves.
+    // ok:true is not proof the row is gone: a peer's sync can bring a conflict
+    // copy back right after the delete (a locked file now fails as ok:false).
     // Trust the refetch over the answer — but say nothing about a cause we can't see.
     if (after.some(d => d.id === id)) return 'This device is still listed. The remove did not take.';
     return null;
