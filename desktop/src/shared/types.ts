@@ -234,7 +234,26 @@ export type TranscriptEventType =
   // reducer and attribute the child's model to the parent. Bookkeeping only — it
   // never enters the timeline and never enters model history (history-rebuild.ts's
   // default branch drops it).
-  | 'subagent-usage';
+  | 'subagent-usage'
+  // Claude Code only: a background helper/command ended — parsed from its
+  // <task-notification>. The launching card's tool result is only "launched",
+  // so this is the ONLY signal the work is over (2026-09-24). Carries
+  // `data.backgroundTask`, and `data.toolUseId` when Claude Code names the call.
+  | 'background-task';
+
+/** A Claude Code background task's end state, as its <task-notification> says.
+ *  Claude Code writes 'completed' | 'failed' | 'killed' | 'stopped'; 'killed'
+ *  (the user or the model stopped it) is folded into 'stopped' here. */
+type CcBackgroundStatus = 'running' | 'completed' | 'failed' | 'stopped';
+
+/** See ToolCallState.ccBackground. `result` is a helper's final report;
+ *  `summary` is Claude Code's one-line account of how it ended. */
+export interface CcBackgroundRun {
+  taskId: string;
+  status: CcBackgroundStatus;
+  summary?: string;
+  result?: string;
+}
 
 /**
  * Opaque-to-the-renderer handle for "the page before this one". `offset` is the
@@ -307,6 +326,16 @@ export interface TranscriptEvent {
     stopReason?: string;
     /** Edit/MultiEdit tool-result payloads carry structuredPatch hunks. */
     structuredPatch?: StructuredPatchHunk[];
+    /** Claude Code tool-result only: this call started work that keeps going
+     *  in the background (an Agent's `agentId`, or a Bash command's
+     *  `backgroundTaskId`), so the result is a launch receipt, not the outcome.
+     *  The outcome arrives later as a 'background-task' event. */
+    backgroundTaskId?: string;
+    /** 'background-task' only: which task(s) ended and how. `taskIds` is a list
+     *  because Claude Code reports several orphaned commands in one notice on
+     *  resume. `result` is a helper's final report; `summary` is Claude Code's
+     *  one-line description ("Agent \"X\" finished", "... (exit code 0)"). */
+    backgroundTask?: { taskIds: string[]; status: Exclude<CcBackgroundStatus, 'running'>; summary?: string; result?: string };
     /** Native user-message events: absolute composer attachment paths, persisted so
      *  resume can re-read the pixels (events carry no binary). #290 follow-up fix 2. */
     attachments?: string[];
@@ -879,6 +908,16 @@ export interface ToolCallState {
   subagentSegments?: SubagentSegment[];
   agentType?: string;
   agentId?: string;
+  /**
+   * Claude Code only: this call started work that outlives it — an Agent
+   * (every CC Agent call runs in the background as of 2026-09) or a Bash
+   * `run_in_background` command. Its tool result is only the launch receipt,
+   * so `status: 'complete'` alone read "done" the instant the helper started.
+   * This record is the work's real state: 'running' from the receipt until the
+   * 'background-task' notice says how it ended. The CC counterpart of
+   * `specialistRun` / `shellRun` below, and drives the card the same way.
+   */
+  ccBackground?: CcBackgroundRun;
   /**
    * Native specialists (1c): the live run record for the hire THIS Task call
    * started, keyed to the card by parentToolCallId. Drives the card's real

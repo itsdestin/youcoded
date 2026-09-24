@@ -21,7 +21,7 @@ const RENDERER = join(__dirname, '..', 'src', 'renderer');
 const TRANSCRIPT_TYPES = [
   'user-message', 'user-interrupt', 'assistant-text', 'tool-use', 'tool-result',
   'replay-complete', 'turn-complete', 'assistant-thinking', 'session-error',
-  'skill-invoked', 'context-clear', 'compact-summary',
+  'skill-invoked', 'context-clear', 'compact-summary', 'background-task',
 ] as const;
 
 /** Case labels in a file that name a transcript event type. Intersecting with

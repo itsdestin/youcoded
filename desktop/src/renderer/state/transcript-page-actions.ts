@@ -105,8 +105,24 @@ export function pageEventToAction(event: TranscriptEvent): ChatAction | null {
         result: d.toolResult || '',
         isError: d.isError || false,
         structuredPatch: d.structuredPatch,
+        backgroundTaskId: d.backgroundTaskId,
         parentAgentToolUseId: d.parentAgentToolUseId,
         agentId: d.agentId,
+      } as ChatAction;
+    case 'background-task':
+      // Claude Code: background work ended. Replayable — it only settles a
+      // card (and records the outcome for a card on an older page).
+      if (!d.backgroundTask) return null;
+      return {
+        type: 'TRANSCRIPT_BACKGROUND_TASK',
+        sessionId: event.sessionId,
+        uuid: event.uuid,
+        toolUseId: d.toolUseId,
+        taskIds: d.backgroundTask.taskIds,
+        status: d.backgroundTask.status,
+        summary: d.backgroundTask.summary,
+        result: d.backgroundTask.result,
+        parentAgentToolUseId: d.parentAgentToolUseId,
       } as ChatAction;
     case 'turn-complete':
       return {

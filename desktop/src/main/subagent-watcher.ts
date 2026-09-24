@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { parseTranscriptLine } from './transcript-watcher';
-import { SubagentIndex } from './subagent-index';
+import { SubagentIndex, SubagentMeta } from './subagent-index';
 import { TranscriptEvent } from '../shared/types';
 
 /** `agent-<id>.jsonl` — a helper's transcript (not its .meta.json). */
@@ -36,7 +36,7 @@ interface PerFileState {
   // directory re-scan never re-tracks the file from byte 0 and replays it.
   settled: boolean;
   // Fix 5: cache meta on first read so deliver() never re-reads from disk
-  meta: { description: string; agentType: string };
+  meta: SubagentMeta;
 }
 
 export interface SubagentWatcherOptions {
@@ -269,13 +269,17 @@ export class SubagentWatcher {
 
   // WHY async (B1): read per helper on every history page and on every
   // directory scan. A missing file is the same `null` the old existsSync gave.
-  private async readMeta(agentId: string): Promise<{ description: string; agentType: string } | null> {
+  private async readMeta(agentId: string): Promise<SubagentMeta | null> {
     const metaPath = path.join(this.subagentsDir, `agent-${agentId}.meta.json`);
     try {
       const raw = await fs.promises.readFile(metaPath, 'utf8');
       const obj = JSON.parse(raw);
       if (typeof obj?.description !== 'string' || typeof obj?.agentType !== 'string') return null;
-      return { description: obj.description, agentType: obj.agentType };
+      // toolUseId: the exact parent card — see SubagentIndex.bindSubagent.
+      return {
+        description: obj.description, agentType: obj.agentType,
+        ...(typeof obj.toolUseId === 'string' && obj.toolUseId ? { toolUseId: obj.toolUseId } : {}),
+      };
     } catch { return null; }
   }
 
@@ -419,7 +423,7 @@ export class SubagentWatcher {
     }, 5000);
   }
 
-  private trackSubagent(agentId: string, meta: { description: string; agentType: string }): void {
+  private trackSubagent(agentId: string, meta: SubagentMeta): void {
     if (this.perFile.has(agentId)) return;
     const jsonlPath = path.join(this.subagentsDir, `agent-${agentId}.jsonl`);
     const metaPath = path.join(this.subagentsDir, `agent-${agentId}.meta.json`);
