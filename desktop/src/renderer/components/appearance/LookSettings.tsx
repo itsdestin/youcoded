@@ -272,6 +272,24 @@ function ChoiceRow<T extends string>({ title, labels, themeValue, value, onChang
   );
 }
 
+/** The layout picker on its own. WHY split from LookSettings (Destin, appearance-panel-review
+ *  AR-1, 2026-09-24): "layout should be at the top" — it heads the whole panel, above the
+ *  theme list, while the rest of Look stays below it. */
+export function LayoutSettings() {
+  const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set } = useTheme();
+  const raw = allThemes.find(t => t.slug === activeSlug) ?? activeTheme;
+  return (
+    <LayoutPicker
+      raw={raw}
+      value={look.chromeStyle}
+      onChange={v => {
+        if (v) { set({ ...look, chromeStyle: v }); return; }
+        const next = { ...look }; delete next.chromeStyle; set(next);
+      }}
+    />
+  );
+}
+
 export function LookSettings() {
   const { activeTheme, allThemes, theme: activeSlug, lookOverrides: look, setLookOverrides: set, reducedEffects } = useTheme();
   // The theme's OWN choices, for the "Theme's choice (…)" labels. allThemes is raw;
@@ -282,15 +300,6 @@ export function LookSettings() {
 
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
-        <span className="text-xs text-fg-2">Layout</span>
-        <LayoutPicker
-          raw={raw}
-          value={look.chromeStyle}
-          onChange={v => set(v ? { ...look, chromeStyle: v } : without('chromeStyle'))}
-        />
-      </div>
-
       <GlassSettings active={activeTheme} raw={raw} look={look} set={set} reducedEffects={reducedEffects} />
 
       <div className="space-y-1">

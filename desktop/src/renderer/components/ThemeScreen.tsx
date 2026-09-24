@@ -8,7 +8,8 @@ import type { LoadedTheme } from '../themes/theme-types';
 import { themePreviewSrc } from '../themes/builtin/previews';
 import { TERMINAL_WALLPAPER_OPACITY_FLOOR } from '../themes/theme-engine';
 import { roundnessToShape, themeRoundness } from '../themes/look-overrides';
-import { LookSettings, LookSlider, SECTION_LABEL } from './appearance/LookSettings';
+import { LayoutSettings, LookSettings, LookSlider, SECTION_LABEL } from './appearance/LookSettings';
+import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { Button, Select, Toggle, SettingRow } from './ui';
 
@@ -159,6 +160,9 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
   // the panel opens, and that is what pushes the active card down. It stops for good
   // once the user touches the box, so it never yanks a list they are browsing.
   const favBoxRef = useRef<HTMLDivElement>(null);
+  // The app's standard edge fade (FolderSwitcher, ResumeBrowser): the box's top/bottom
+  // edge fades whenever there is more to scroll, so it reads as scrollable (AR-1).
+  useScrollFade(favBoxRef);
   const userScrolledFavs = useRef(false);
   useLayoutEffect(() => {
     const box = favBoxRef.current;
@@ -204,18 +208,27 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
     // D1: header, close and scroll body come from the Dialog. The body keeps
     // space-y-4 rather than the shell's space-y-5 — the theme grid is dense on
     // purpose — but takes the shell's px-4 py-4 in place of its own p-3.
-    // Three headed sections (2026-09-24): Themes · Look · Effects & chat. Before,
+    // Headed sections (2026-09-24): Layout · Themes · Look · Effects & chat. Before,
     // it was one unlabelled column, and the new Look settings would have made it a
-    // long list with no signposts.
+    // long list with no signposts. Layout leads (appearance-panel-review AR-1).
     <div className="space-y-5">
+      <section>
+        <h3 className={SECTION_LABEL}>Layout</h3>
+        <p className="text-3xs text-fg-muted mb-3 leading-relaxed">Applies to every theme. "Theme's choice" keeps each theme as its author made it.</p>
+        <LayoutSettings />
+      </section>
+
       <section className="space-y-2">
         <h3 className={SECTION_LABEL}>Themes</h3>
         {/* Favorites box (appearance-panel-questions AP-6): about two rows of cards
             (4 themes) and it scrolls inside itself, so starring many themes never
-            pushes the settings below out of reach. max-h-52 = 208px = two h-24 rows
-            plus the gap and a sliver of the third row, which says "there is more".
+            pushes the settings below out of reach. max-h-56 = 224px = the p-2
+            padding plus two h-24 rows, the gap and a sliver of the third row.
             data-guide-anchor: the first-run tour's "make it yours" stop rings the grid. */}
-        <div ref={favBoxRef} onWheel={markFavsTouched} onPointerDown={markFavsTouched} onTouchStart={markFavsTouched} className="relative max-h-52 overflow-y-auto overscroll-contain rounded-lg" aria-label="Favorited themes">
+        {/* AR-1: "clearer that there is a container around the themes". A visible outline and
+            inner padding make it a box, not a loose grid; no fill of its own, so the
+            fade — drawn in the panel colour — blends into what is actually behind it. */}
+        <div ref={favBoxRef} onWheel={markFavsTouched} onPointerDown={markFavsTouched} onTouchStart={markFavsTouched} className="scroll-fade max-h-56 overscroll-contain rounded-lg border border-edge p-2" aria-label="Favorited themes">
           <div className="grid grid-cols-2 gap-2" data-guide-anchor="theme-grid">
             {gridThemes.map(t => {
               const isActive = t.slug === activeSlug;
@@ -335,7 +348,7 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
 
       <section>
         <h3 className={SECTION_LABEL}>Look</h3>
-        <p className="text-3xs text-fg-muted mb-3 leading-relaxed">Applies to every theme. "Theme's choice" keeps each theme as its author made it.</p>
+        <p className="text-3xs text-fg-muted mb-3 leading-relaxed">Also applies to every theme.</p>
         <LookSettings />
       </section>
 
