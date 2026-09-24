@@ -29,7 +29,7 @@ import {
   type ProjectExtensionsStores,
 } from './store';
 import { resolveSessionAvailability } from './session-availability';
-import { discoverSkillEntries } from '../harness/skills/skill-catalog';
+import { discoverSkillEntriesAsync } from '../harness/skills/skill-catalog';
 import { itemKeyForSkill, itemKeyForMcp, type PluginInstallInfo } from './resolve';
 import {
   buildProjectExtensionsView, applyProjectExtensionsChanges,
@@ -83,7 +83,12 @@ function resolveStorageKey(path: string, candidates: ProjectKeyCandidate[]): str
 async function gatherCatalog(
   deps: ProjectExtensionsIpcDeps, cwd: string,
 ): Promise<{ skills: ViewSkillEntry[]; mcp: ViewMcpEntry[]; installs: Record<string, PluginInstallInfo> }> {
-  const skills = discoverSkillEntries(cwd);
+  // discoverSkillEntriesAsync, NOT the sync discoverSkillEntries (T3 review
+  // F2): get/set/for-session all reach this on every CommandDrawer open and
+  // session switch — a sync directory scan there would freeze the main
+  // thread on a much hotter path than this scan's other (already-reviewed)
+  // callers. See skill-catalog.ts's discoverSkillEntriesAsync doc comment.
+  const skills = await discoverSkillEntriesAsync(cwd);
   const mcp = (await deps.mcpManager?.listEnabled?.()) ?? [];
   const installs = deps.skillConfigStore?.getPackages() ?? {};
   return { skills, mcp, installs };

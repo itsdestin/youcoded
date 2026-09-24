@@ -11,9 +11,24 @@
 //
 // All I/O is async (performance rule 1) — fs.promises throughout, including
 // the recursive copy.
+//
+// WHY the guards below (T3 review F1): on desktop this path is normally
+// reached only via an OS file picker (the user's own access — see
+// remote-server.ts's refusal of this same channel for why a REMOTE caller
+// never legitimately reaches this function at all). But nothing here
+// enforced that assumption in code, and every other remote-payload-path
+// channel in this codebase (fs:read-head, artifacts:read-binary) realpaths
+// the input and checks it against the same sensitive-path denylist before
+// touching disk — so this function gets the identical treatment as
+// defense-in-depth, not just a comment. `fs.cp`'s default `dereference:
+// false` copies a symlink AS a symlink rather than its target's contents, so
+// a symlinked SKILL.md/folder is refused outright rather than silently
+// landing a live symlink under ~/.claude/skills/<name>/.
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { canonicalize } from '../../shared/artifacts/canonicalize';
+import { isSensitivePath, isUnderRoot } from '../artifacts/read-binary-access';
 
 export interface ImportSkillResult {
   ok: true;
@@ -44,16 +59,64 @@ async function exists(p: string): Promise<boolean> {
  * `SKILL.md`: the file picker's own contract (design §5).
  */
 export async function importSkillFolder(skillMdPath: string): Promise<ImportSkillResult | ImportSkillFailure> {
+  if (typeof skillMdPath !== 'string' || skillMdPath.length === 0 || !path.isAbsolute(skillMdPath)) {
+    return { ok: false, error: 'no path' };
+  }
   if (path.basename(skillMdPath) !== 'SKILL.md') {
     return { ok: false, error: `not a SKILL.md file: ${path.basename(skillMdPath)}` };
   }
   if (!(await exists(skillMdPath))) {
     return { ok: false, error: 'that file no longer exists' };
   }
+
+  // Refuse a symlinked SKILL.md or a symlinked containing folder outright —
+  // fs.cp below would copy the link itself, not its target, landing a live
+  // symlink inside ~/.claude/skills/ that reads back through to wherever it
+  // points (see the file header). lstat, not stat: stat would happily follow
+  // the link and report the FILE it points to as a plain file.
   const sourceDir = path.dirname(skillMdPath);
+  let mdStat: fs.Stats;
+  let dirStat: fs.Stats;
+  try {
+    mdStat = await fs.promises.lstat(skillMdPath);
+    dirStat = await fs.promises.lstat(sourceDir);
+  } catch {
+    return { ok: false, error: 'that file no longer exists' };
+  }
+  if (mdStat.isSymbolicLink() || dirStat.isSymbolicLink()) {
+    return { ok: false, error: 'refusing a symlinked file or folder' };
+  }
+
+  // Same secret-location denylist as fs:read-head / artifacts:read-binary,
+  // checked on BOTH the raw and the realpath-resolved form (an ancestor
+  // directory earlier in the path can itself be a symlink into a sensitive
+  // location even though the final component above just proved it isn't
+  // one itself).
+  let realSkillMd = skillMdPath;
+  let realSourceDir = sourceDir;
+  try { realSkillMd = await fs.promises.realpath(skillMdPath); } catch { /* decided by the sensitive check below */ }
+  try { realSourceDir = await fs.promises.realpath(sourceDir); } catch { /* decided by the sensitive check below */ }
+  if (
+    isSensitivePath(canonicalize(realSkillMd, null)) || isSensitivePath(canonicalize(skillMdPath, null)) ||
+    isSensitivePath(canonicalize(realSourceDir, null)) || isSensitivePath(canonicalize(sourceDir, null))
+  ) {
+    return { ok: false, error: 'not-allowed' };
+  }
+
   const name = path.basename(sourceDir);
   const destDir = skillsDir();
   const destination = path.join(destDir, name);
+
+  // Refuse when the source and destination nest inside each other in either
+  // direction — a bogus "SKILL.md" picked from INSIDE ~/.claude/skills/ (or
+  // a folder that itself contains ~/.claude/skills/) would otherwise recurse
+  // into itself or clobber a sibling mid-copy.
+  const canonSource = canonicalize(realSourceDir, null);
+  const canonDestination = canonicalize(destination, null);
+  if (isUnderRoot(canonDestination, canonSource) || isUnderRoot(canonSource, canonDestination)) {
+    return { ok: false, error: 'source and destination overlap' };
+  }
+
   if (await exists(destination)) {
     // Never invent a merge — a same-named skill is already installed here
     // (possibly this exact one, already imported on an earlier attempt).

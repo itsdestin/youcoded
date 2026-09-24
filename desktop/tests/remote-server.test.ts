@@ -1904,3 +1904,57 @@ describe('RemoteServer status carries the connected-client count', () => {
     expect(sent.pop()?.payload).toMatchObject({ state: expect.any(String), port: expect.any(Number), clientCount: 0 });
   });
 });
+
+// T3 review F1 — a remote browser has no OS file picker of its own, so there
+// is no legitimate remote caller for project-extensions:import-skill at all
+// (design §5 "Choose skill file" is a desktop-only flow). This pins the
+// refusal so the channel can never be accidentally re-wired to a
+// client-supplied path over the WS transport.
+describe('RemoteServer project-extensions:import-skill refuses every remote call', () => {
+  let mockSessionManager: any;
+  let mockHookRelay: any;
+  let mockConfig: any;
+  let tmpHome: string;
+  let homedirSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    mockSessionManager = new EventEmitter();
+    Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
+    mockHookRelay = new EventEmitter();
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-rs-import-skill-'));
+    homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(tmpHome);
+  });
+
+  afterEach(() => {
+    homedirSpy.mockRestore();
+    fs.rmSync(tmpHome, { recursive: true, force: true, maxRetries: 3 });
+  });
+
+  function sendAndCollect(server: any, msg: any) {
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    return server.handleMessage({ ws }, JSON.stringify(msg)).then(() => sent);
+  }
+
+  it('answers {ok:false, error:"not-available-over-remote"} and never touches ~/.claude/skills, even for an otherwise-importable path', async () => {
+    // A path that WOULD succeed if handed straight to importSkillFolder —
+    // proves the refusal is unconditional, not a validation failure.
+    const sourceDir = path.join(tmpHome, 'somewhere', 'writing-helper');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const skillMdPath = path.join(sourceDir, 'SKILL.md');
+    fs.writeFileSync(skillMdPath, '---\nname: writing-helper\n---\nBody.');
+
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    const sent = await sendAndCollect(server, {
+      type: 'project-extensions:import-skill', id: 'req-1', payload: { skillMdPath },
+    });
+
+    expect(sent).toEqual([{
+      type: 'project-extensions:import-skill:response', id: 'req-1',
+      payload: { ok: false, error: 'not-available-over-remote' },
+    }]);
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'skills'))).toBe(false);
+  });
+});

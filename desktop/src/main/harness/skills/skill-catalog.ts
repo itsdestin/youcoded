@@ -9,7 +9,7 @@
 // One place knows the on-disk layout (<skillDir>/SKILL.md). Do not add a second.
 import * as fs from 'fs';
 import * as path from 'path';
-import { scanProjectSkills, scanSkills } from '../../skill-scanner';
+import { scanProjectSkills, scanSkills, scanProjectSkillsAsync, scanSkillsAsync } from '../../skill-scanner';
 import type { SkillEntry } from '../../../shared/types';
 
 export interface LoadedSkill {
@@ -84,6 +84,24 @@ export function discoverSkillEntries(projectCwd?: string): SkillEntry[] {
     ...(projectCwd ? scanProjectSkills(projectCwd) : []),
     ...scanSkills(),
   ].filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index);
+}
+
+/**
+ * Async twin of discoverSkillEntries() — ONLY for project-extensions/
+ * ipc-shell.ts's get/set/for-session handlers (T3 review F2). Those fire on
+ * every CommandDrawer open and session switch, so the SYNC scan above (fine
+ * for its existing rare, already-reviewed callers — session create, tool
+ * wiring) would block the main thread on a much hotter path. See the WHY
+ * block above scanSkillsAsync()/scanProjectSkillsAsync() in skill-scanner.ts
+ * for why this is a second async scan rather than a cache.
+ */
+export async function discoverSkillEntriesAsync(projectCwd?: string): Promise<SkillEntry[]> {
+  const [projectSkills, globalSkills] = await Promise.all([
+    projectCwd ? scanProjectSkillsAsync(projectCwd) : Promise.resolve<SkillEntry[]>([]),
+    scanSkillsAsync(),
+  ]);
+  return [...projectSkills, ...globalSkills]
+    .filter((entry, index, all) => all.findIndex((other) => other.id === entry.id) === index);
 }
 
 export function createSkillCatalog(entries?: SkillEntry[], projectCwd?: string): SkillCatalog {

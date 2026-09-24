@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { scanProjectSkills, scanSkills } from '../src/main/skill-scanner';
+import { scanProjectSkills, scanSkills, scanProjectSkillsAsync, scanSkillsAsync } from '../src/main/skill-scanner';
 
 describe('scanSkills', () => {
   let tmpHome: string;
@@ -121,4 +121,48 @@ describe('scanSkills', () => {
     });
   });
 
+  // T3 review F2: project-extensions/ipc-shell.ts now calls the fs.promises
+  // twins of these two scans instead of these sync originals (so its IPC
+  // handlers never block the main thread — see skill-catalog.ts's
+  // discoverSkillEntriesAsync). These pin that the async twins return the
+  // SAME thing the sync originals do, across every pass (plugin, installed_
+  // plugins.json, self, project) — a second hand-written implementation
+  // drifting from the first would otherwise only show up as a silently wrong
+  // Skills & tools tab.
+  describe('async twins match the sync scans', () => {
+    it('scanSkillsAsync matches scanSkills() across plugin, installed-plugins and self-authored passes', async () => {
+      const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'test-plugin');
+      write(path.join(pluginRoot, 'plugin.json'), '{"name":"test-plugin"}');
+      write(path.join(pluginRoot, 'skills', 'setup-wizard', 'SKILL.md'),
+        '---\nname: setup-wizard\ndescription: Walks the user through first-run setup.\n---\n\nBody\n');
+      const cliInstalledRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-cli-plugin-'));
+      write(path.join(cliInstalledRoot, 'skills', 'cli-skill', 'SKILL.md'),
+        '---\nname: cli-skill\ndescription: A CLI-installed skill.\n---\n\nBody\n');
+      write(path.join(tmpHome, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({
+        plugins: { 'cli-plugin@registry': [{ installPath: cliInstalledRoot }] },
+      }));
+      write(path.join(tmpHome, '.claude', 'skills', 'my-custom-skill', 'SKILL.md'),
+        '---\nname: My Custom Skill\ndescription: Does the thing\n---\n\nBody\n');
+
+      try {
+        const sync = [...scanSkills()].sort((a, b) => a.id.localeCompare(b.id));
+        const async = [...(await scanSkillsAsync())].sort((a, b) => a.id.localeCompare(b.id));
+        expect(async).toEqual(sync);
+        expect(sync.length).toBeGreaterThan(0); // the comparison above is meaningful, not vacuous
+      } finally {
+        fs.rmSync(cliInstalledRoot, { recursive: true, force: true, maxRetries: 3 });
+      }
+    });
+
+    it('scanProjectSkillsAsync matches scanProjectSkills() for a project .claude/skills directory', async () => {
+      const project = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-project-skill-async-'));
+      try {
+        write(path.join(project, '.claude', 'skills', 'wrap-up', 'SKILL.md'),
+          '---\nname: Wrap up\ndescription: Improve this workspace\n---\n\nInstructions\n');
+        expect(await scanProjectSkillsAsync(project)).toEqual(scanProjectSkills(project));
+      } finally {
+        fs.rmSync(project, { recursive: true, force: true, maxRetries: 3 });
+      }
+    });
+  });
 });

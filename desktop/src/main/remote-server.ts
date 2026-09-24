@@ -54,7 +54,6 @@ import {
   projectExtensionsGet, projectExtensionsSet, projectExtensionsForSession,
   type ProjectExtensionsIpcDeps,
 } from './project-extensions/ipc-shell';
-import { importSkillFolder } from './project-extensions/import-skill';
 import type { NativeSendResult, SessionProvider, HookEvent, SpecialistsEvent, ShellEvent } from '../shared/types';
 import type { ProviderRegistry } from './providers/provider-registry';
 import type { ModelCatalog } from './providers/model-catalog';
@@ -2310,9 +2309,9 @@ export class RemoteServer {
         break;
       }
       case 'project-extensions:import-skill': {
-        // Needs none of nativeRuntime/skillProvider — only touches
-        // ~/.claude/skills/ and the source path it's handed.
-        this.respond(client.ws, type, id, await importSkillFolder(payload.skillMdPath));
+        // T3 review F1: no legitimate remote caller — a browser has no OS
+        // file picker (design §5). Type string stays wired for parity tests.
+        this.respond(client.ws, type, id, { ok: false, error: 'not-available-over-remote' });
         break;
       }
       // Specialists 1c (Task 8) — mirrors the desktop IPC handlers so a

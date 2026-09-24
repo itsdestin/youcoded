@@ -82,4 +82,80 @@ describe('importSkillFolder', () => {
     if (result.ok) return;
     expect(result.error).toContain('no longer exists');
   });
+
+  // T3 review F1 — a remote client is refused before ever reaching this
+  // function (remote-server.ts), but this function still hardens itself the
+  // same way fs:read-head / artifacts:read-binary do: realpath + symlink
+  // refusal + the shared sensitive-path denylist + a source/destination
+  // overlap check.
+  it('refuses a symlinked containing folder', async () => {
+    const realDir = path.join(sourceRoot, 'real-writing-helper');
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.writeFileSync(path.join(realDir, 'SKILL.md'), '---\nname: writing-helper\n---\nBody.');
+    const linkDir = path.join(sourceRoot, 'writing-helper');
+    fs.symlinkSync(realDir, linkDir, 'dir');
+
+    const result = await importSkillFolder(path.join(linkDir, 'SKILL.md'));
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('symlinked');
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'skills'))).toBe(false);
+  });
+
+  it('refuses a SKILL.md that is itself a symlink', async () => {
+    const dir = path.join(sourceRoot, 'linked-md');
+    fs.mkdirSync(dir, { recursive: true });
+    const realFile = path.join(sourceRoot, 'real-SKILL.md');
+    fs.writeFileSync(realFile, '---\nname: linked-md\n---\nBody.');
+    const linkedSkillMd = path.join(dir, 'SKILL.md');
+    fs.symlinkSync(realFile, linkedSkillMd, 'file');
+
+    const result = await importSkillFolder(linkedSkillMd);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('symlinked');
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'skills'))).toBe(false);
+  });
+
+  it('refuses a source folder inside a sensitive location (the fs:read-head/artifacts:read-binary denylist)', async () => {
+    // '.ssh' is a SENSITIVE_SEGMENTS entry (editable-path-policy.ts) — reused
+    // here, not redefined, per the finding's "find and reuse it" instruction.
+    const dir = path.join(sourceRoot, '.ssh', 'planted-skill');
+    fs.mkdirSync(dir, { recursive: true });
+    const skillMdPath = path.join(dir, 'SKILL.md');
+    fs.writeFileSync(skillMdPath, '---\nname: planted-skill\n---\nBody.');
+
+    const result = await importSkillFolder(skillMdPath);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe('not-allowed');
+    expect(fs.existsSync(path.join(tmpHome, '.claude', 'skills'))).toBe(false);
+  });
+
+  it('refuses when the source folder itself contains the destination (picking a SKILL.md from inside ~/.claude/skills/)', async () => {
+    const skillsRoot = path.join(tmpHome, '.claude', 'skills');
+    fs.mkdirSync(skillsRoot, { recursive: true });
+    const skillMdPath = path.join(skillsRoot, 'SKILL.md');
+    fs.writeFileSync(skillMdPath, '---\nname: skills\n---\nBody.');
+
+    const result = await importSkillFolder(skillMdPath);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('overlap');
+  });
+
+  it('refuses when the computed destination would land inside the source folder', async () => {
+    // sourceDir = ~/.claude/skills/loop/sub/loop -> name "loop" ->
+    // destination = ~/.claude/skills/loop, which is an ANCESTOR of sourceDir
+    // (the reverse direction of the check above).
+    const sourceDir = path.join(tmpHome, '.claude', 'skills', 'loop', 'sub', 'loop');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const skillMdPath = path.join(sourceDir, 'SKILL.md');
+    fs.writeFileSync(skillMdPath, '---\nname: loop\n---\nBody.');
+
+    const result = await importSkillFolder(skillMdPath);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('overlap');
+  });
 });

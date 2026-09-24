@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -8,6 +8,20 @@ import {
   type ProjectExtensionsIpcDeps,
 } from '../src/main/project-extensions/ipc-shell';
 import type { NativeSessionListEntry } from '../src/main/harness/session-store';
+
+// T3 review F3 — ipc-shell.ts's candidatesAndStores() reads the REAL
+// sync-spaces/service singleton (getManagedRoots()), not something deps.ts
+// lets a caller inject. To prove get()/set() route a SYNCED project by its
+// cross-device sync name rather than by whichever local path resolved it,
+// the "two devices" test below has to swap what that singleton reports
+// mid-test — this stub is the seam. `current: null` (the module-level
+// default below) reproduces every OTHER test's real-world behaviour (no
+// ManagedRoots constructed in a test process), so this mock is a no-op for
+// them.
+const managedRootsStub: { current: { personalRoot: string; projectsRoot: string } | null } = { current: null };
+vi.mock('../src/main/sync-spaces/service', () => ({
+  getManagedRoots: () => managedRootsStub.current,
+}));
 
 // candidates.ts imports `os` with `import * as os from 'os'` (a namespace
 // import) rather than the default import skill-scanner.test.ts's convention
@@ -146,5 +160,54 @@ describe('project-extensions IPC shell (ipc-handlers.ts / remote-server.ts share
     const afterChange = await projectExtensionsForSession(deps, 's-1');
     expect(afterChange.ok && afterChange.frozenMcpIds).toBeNull();
     expect(afterChange.ok && afterChange.settingsDiffer).toBe(true);
+  });
+
+  // T3 review F3: no test exercised the SYNCED-project path end to end — two
+  // different cwds (two "devices") that both resolve to the same cross-device
+  // `syncName` (project-key.ts) must read/write the SAME store.ts record,
+  // never two separate ones keyed by each device's own differing local path.
+  describe('synced project: set() from one device is read by get() from another', () => {
+    it('routes two different cwds with the same folder basename to one shared record via the sync name', async () => {
+      // personalRoot is the ONE thing real cross-device sync keeps identical
+      // (Personal/ProjectExtensions/<name>.json) — projectsRoot (and so the
+      // cwd under it) differs per device, which is exactly what this proves
+      // does NOT fragment the stored record.
+      const personalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-pe-ipc-personal-'));
+      const projectsRootA = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-pe-ipc-projA-'));
+      const projectsRootB = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-pe-ipc-projB-'));
+      const cwdA = path.join(projectsRootA, 'shared-project');
+      const cwdB = path.join(projectsRootB, 'shared-project'); // same basename, different absolute path
+      fs.mkdirSync(cwdA, { recursive: true });
+      fs.mkdirSync(cwdB, { recursive: true });
+
+      try {
+        managedRootsStub.current = { personalRoot, projectsRoot: projectsRootA };
+        const getA = await projectExtensionsGet(deps, cwdA);
+        expect(getA.ok).toBe(true);
+        if (!getA.ok) return;
+        expect(getA.view.projectKey).toBe(cwdA); // echoed back as THIS device's own path
+        // Proves this really took the SYNCED branch (store.ts's
+        // ProjectExtensions/<name>.json), not the unsynced local-path file.
+        expect(fs.existsSync(path.join(personalRoot, 'ProjectExtensions', 'shared-project.json'))).toBe(true);
+
+        const setResult = await projectExtensionsSet(deps, cwdA, [{ item: 'mcp:lib', on: false }]);
+        expect(setResult.ok).toBe(true);
+        expect(setResult.ok && setResult.view.personal.find((p) => p.key === 'mcp:lib')?.on).toBe(false);
+
+        // "Device B": a different projectsRoot -> a different absolute cwd,
+        // but the SAME sync name (folder basename) and the same personalRoot.
+        managedRootsStub.current = { personalRoot, projectsRoot: projectsRootB };
+        const getB = await projectExtensionsGet(deps, cwdB);
+        expect(getB.ok).toBe(true);
+        if (!getB.ok) return;
+        expect(getB.view.projectKey).toBe(cwdB); // echoes device B's OWN path, never the sync name
+        expect(getB.view.personal.find((p) => p.key === 'mcp:lib')?.on).toBe(false);
+      } finally {
+        managedRootsStub.current = null;
+        fs.rmSync(personalRoot, { recursive: true, force: true, maxRetries: 3 });
+        fs.rmSync(projectsRootA, { recursive: true, force: true, maxRetries: 3 });
+        fs.rmSync(projectsRootB, { recursive: true, force: true, maxRetries: 3 });
+      }
+    });
   });
 });
