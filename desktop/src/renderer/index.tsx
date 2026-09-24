@@ -138,9 +138,11 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
     // a whole screenshot sweep) layers dev/workbench/proposals/<name>.css over
     // the real renderer. Workbench-only: this branch never ships in the app.
     const __proposal = new URLSearchParams(location.search).get('proposal')
+      // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
       ?? (import.meta.env.VITE_STYLE_PROPOSAL as string | undefined);
     if (__proposal) {
-      const sheets = import.meta.glob('./dev/workbench/proposals/*.css', { query: '?inline', import: 'default' });
+      // @ts-ignore TS1343 — import.meta.glob is a Vite build-time transform
+      const sheets: Record<string, () => Promise<unknown>> = import.meta.glob('./dev/workbench/proposals/*.css', { query: '?inline', import: 'default' });
       const load = sheets[`./dev/workbench/proposals/${__proposal}.css`];
       if (load) {
         const style = document.createElement('style');
