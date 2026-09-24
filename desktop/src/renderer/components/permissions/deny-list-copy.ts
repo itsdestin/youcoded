@@ -8,6 +8,7 @@
 // own family grouping is safe to walk front-to-back.
 import { DESTRUCTIVE_DENY_LIST } from '../../../shared/permission-types';
 import { ruleMatches } from '../../../shared/subject-glob';
+import type { FloorStop } from '../../../shared/types';
 
 type DenyFamily = 'deleting' | 'pushing' | 'undoing' | 'admin' | 'formatting';
 
@@ -47,7 +48,37 @@ const CLAUSES: Record<DenyFamily, string> = {
 // reword without a new compare round.
 const SUBLINE_BASE = 'Full auto still stops here';
 
-export function fullAutoStopCopy(command: string | undefined): { header: string; subline: string } {
+/** The stops that come from a floor below the rules rather than the deny-list
+ *  (shared/types.ts FloorStop). Used when the deny-list itself has no family
+ *  for the command — a PowerShell `Remove-Item`, or `cat ~/.ssh/id_rsa`. */
+/** The one line an Ask / Auto-edit card shows when a floor forced it, per
+ *  floor kind. WHY (review F7, then N11): the card silently lost "Always
+ *  allow", which reads as a bug — and a single "deletes a protected folder"
+ *  line overclaimed whenever the floor only knew it COULD (an empty variable,
+ *  a folder it cannot follow, a glob). Each line claims exactly what the check
+ *  knows. */
+const FLOOR_NOTES: Record<FloorStop, string> = {
+  removal: 'Always asks: this deletes a protected folder',
+  'removal-if-empty': 'Always asks: this could delete a protected folder if a variable in it is empty',
+  'removal-unknown': "Always asks: which folder this deletes can't be known in advance",
+  'secret-path': 'Always asks: this uses a file that holds passwords or keys',
+  'secret-maybe': 'Always asks: this could read a file that holds passwords or keys',
+};
+
+/** Full auto's band for a floor the deny-list has no family for. */
+const FLOOR_COPY: Record<FloorStop, { header: string; subline: string }> = {
+  removal: { header: HEADERS.deleting, subline: `${SUBLINE_BASE} — ${CLAUSES.deleting}` },
+  'removal-if-empty': { header: HEADERS.deleting, subline: `${SUBLINE_BASE} — this could delete a protected folder if a variable in it is empty.` },
+  'removal-unknown': { header: HEADERS.deleting, subline: `${SUBLINE_BASE} — which folder this deletes can't be known in advance.` },
+  'secret-path': { header: 'Stopped before using a secret file', subline: `${SUBLINE_BASE} — this uses a file that holds passwords or keys.` },
+  'secret-maybe': { header: 'Stopped at a possible secret file', subline: `${SUBLINE_BASE} — this could read a file that holds passwords or keys.` },
+};
+
+export function floorAskNote(floorStop: FloorStop): string {
+  return FLOOR_NOTES[floorStop];
+}
+
+export function fullAutoStopCopy(command: string | undefined, floorStop?: FloorStop): { header: string; subline: string } {
   if (command) {
     for (const rule of DESTRUCTIVE_DENY_LIST) {
       // ruleMatches, not subjectMatches: the engine decides through it, and its
@@ -58,6 +89,9 @@ export function fullAutoStopCopy(command: string | undefined): { header: string;
       if (fam) return { header: HEADERS[fam], subline: `${SUBLINE_BASE} — ${CLAUSES[fam]}` };
     }
   }
+  // The deny-list names what the command DOES (deleting, pushing); a floor is
+  // the reason when it does not — `rm ~/.ssh/old` still reads "deleting files".
+  if (floorStop) return FLOOR_COPY[floorStop];
   // Deny-listed per the engine but unclassifiable here (or command missing):
   // generic header, no invented consequence.
   return { header: 'Stopped before a risky command', subline: `${SUBLINE_BASE}.` };

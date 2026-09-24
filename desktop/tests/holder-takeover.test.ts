@@ -447,4 +447,116 @@ describe('createHolderTakeover', () => {
     await host.destroyAll();
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   });
+
+  // Review F3: quiesce() used to lift its send refusal when it returned, but the
+  // handoff still has the flush and the lease release to go — a message sent
+  // then ran a whole turn on this device. The refusal now lasts until destroy.
+  it('real native holder: a send during the flush is refused and runs no turn', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-holder-'));
+    const store = new SessionStore(new NativeHome(root));
+    const host = new NativeSessionHost(store, delayedFactory, async () => ({ contextLength: null, totalSlots: null }), async () => null, async () => null);
+    const nativeId = 'nat-flush';
+    await host.create({ sessionId: nativeId, cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const deps = makeDeps({ liveDesktopIds: [nativeId], providers: { [nativeId]: 'native' } });
+    deps.sessionIdMap.set(nativeId, nativeId);
+    (deps.quiesceNative as any) = (id: string) => host.quiesce(id);
+    (deps.destroyNative as any) = (id: string) => host.destroy(id);
+    (deps as any).endQuiesceNative = vi.fn((id: string) => host.endQuiesce(id));
+    let sentDuringFlush: unknown;
+    let sentDuringRelease: unknown;
+    (deps.flushSessionToSpace as any) = vi.fn(async () => { sentDuringFlush = host.send(nativeId, 'mid-flush'); });
+    (deps.leaseClient.release as any) = vi.fn(async () => { sentDuringRelease = host.send(nativeId, 'mid-release'); });
+
+    await createHolderTakeover(deps as any)(nativeId, { deviceId: 'dev-b', device: 'Laptop-B' });
+
+    expect(sentDuringFlush).toEqual({ status: 'failed', reason: 'not-live' });
+    expect(sentDuringRelease).toEqual({ status: 'failed', reason: 'not-live' });
+    expect(store.readEvents(nativeId, root).some((e) => e.type === 'user-message')).toBe(false);
+    expect((deps as any).endQuiesceNative).not.toHaveBeenCalled(); // destroyed, nothing to lift
+    await host.destroyAll();
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+  });
+
+  // Review N12: once the lease is released another device holds the
+  // conversation, so no refusal may be lifted after a release.
+  // WHY rewritten (combined branch): master's handoff now destroys BEFORE it
+  // releases and keeps the lease when a destroy fails, so the N12 case (destroy
+  // fails after the release) can no longer arise. A failed destroy leaves the
+  // session this device's: the lease is kept and its sends come back.
+  it('a quiesced holder that fails to destroy keeps the lease and gets its sends back', async () => {
+    const deps = makeDeps({ liveDesktopIds: ['nat-stuck'], providers: { 'nat-stuck': 'native' } });
+    deps.sessionIdMap.set('nat-stuck', 'claude-stuck');
+    (deps.destroyNative as any) = vi.fn(async () => { throw new Error('destroy failed'); });
+    (deps as any).endQuiesceNative = vi.fn();
+    await createHolderTakeover(deps as any)('claude-stuck');
+    expect(deps.leaseClient.release).not.toHaveBeenCalled();
+    expect((deps as any).endQuiesceNative).toHaveBeenCalledWith('nat-stuck');
+  });
+
+  // Pins dropQuiesced's indexOf guard: splice(-1, 1) on a Claude Code holder's
+  // id (never in the quiesced list) would silently drop the LAST native id, and
+  // that native session would then keep refusing sends after the handoff failed.
+  it('a Claude Code holder that fails to destroy first does not cost the native holder its sends', async () => {
+    const deps = makeDeps({ liveDesktopIds: ['cc-first', 'nat-second'], providers: { 'nat-second': 'native' } });
+    deps.sessionIdMap.set('cc-first', 'claude-mixed');
+    deps.sessionIdMap.set('nat-second', 'claude-mixed');
+    (deps.sessionManager.destroySession as any) = vi.fn((id: string) => id !== 'cc-first');
+    (deps as any).endQuiesceNative = vi.fn();
+    await createHolderTakeover(deps as any)('claude-mixed');
+    expect(deps.leaseClient.release).not.toHaveBeenCalled();
+    expect((deps as any).endQuiesceNative).toHaveBeenCalledWith('nat-second');
+  });
+
+  it('a handoff that stops before releasing the lease gives the quiesced holder its sends back', async () => {
+    const deps = makeDeps({ liveDesktopIds: ['nat-early'], providers: { 'nat-early': 'native' } });
+    deps.sessionIdMap.set('nat-early', 'claude-early');
+    (deps as any).endQuiesceNative = vi.fn();
+    // An unexpected escape between the quiesce and the release (here: the
+    // progress log line throws) must not leave the session refusing forever.
+    const log = vi.spyOn(console, 'log').mockImplementation((msg?: unknown) => {
+      if (String(msg).includes('flushing to space')) throw new Error('boom');
+    });
+    try {
+      await createHolderTakeover(deps as any)('claude-early');
+    } finally {
+      log.mockRestore();
+    }
+    expect(deps.leaseClient.release).not.toHaveBeenCalled();
+    expect((deps as any).endQuiesceNative).toHaveBeenCalledWith('nat-early');
+  });
+
+  // WHY (combined branch): bugfix-native's refusal lift was written for the old
+  // flow; master's pinned-snapshot handoff path quiesces too and retains the
+  // lease when a native destroy fails. That session is still this device's, so
+  // it must get its sends back there as well — and a completed handoff lifts none.
+  it('pinned-snapshot path: a native writer the handoff could not destroy gets its sends back, lease kept', async () => {
+    const d = makeDeps({ liveDesktopIds: ['nat'], providers: { nat: 'native' } }); d.sessionIdMap.set('nat', 'c1');
+    const endQuiesceNative = vi.fn();
+    const protectUnsafe = vi.fn();
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender', endQuiesceNative, protectUnsafe,
+      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+      captureWriter: () => ({ provider: 'native', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
+        persisted: () => false, current: () => true }),
+      destroyNative: async () => { throw new Error('destroy failed'); },
+    } as any)('c1', { deviceId: 'requester', device: 'Other' });
+    expect(d.quiesceNative).toHaveBeenCalledWith('nat');
+    expect(protectUnsafe).toHaveBeenCalledWith('c1');
+    expect(d.leaseClient.release).not.toHaveBeenCalled();
+    expect(endQuiesceNative).toHaveBeenCalledWith('nat');
+  });
+
+  it('pinned-snapshot path: a completed handoff lifts no refusal', async () => {
+    const d = makeDeps({ liveDesktopIds: ['nat'], providers: { nat: 'native' } }); d.sessionIdMap.set('nat', 'c1');
+    const endQuiesceNative = vi.fn();
+    let stopped = false;
+    await createHolderTakeover({ ...d, senderDeviceId: 'sender', endQuiesceNative,
+      pinSnapshot: () => ({ active: () => true, release: vi.fn() }),
+      captureWriter: () => ({ provider: 'native', sessionId: 'c1', transcriptPath: '/tmp/c1.jsonl', projectCwd: '/tmp',
+        persisted: () => stopped, current: () => true }),
+      destroyNative: async () => { stopped = true; },
+      sessionManager: { ...d.sessionManager, getSession: () => stopped ? undefined : { id: 'nat' } },
+    } as any)('c1', { deviceId: 'requester', device: 'Other' });
+    expect(d.leaseClient.release).toHaveBeenCalledWith('c1');
+    expect(endQuiesceNative).not.toHaveBeenCalled();
+  });
 });

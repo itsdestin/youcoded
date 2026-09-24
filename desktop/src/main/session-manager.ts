@@ -140,6 +140,12 @@ interface ManagedSession {
   // HarnessSession owned by NativeSessionHost (ipc-handlers wires it up after
   // createSession returns). Every `session.worker.X` access is guarded.
   worker?: ChildProcess;
+  /** The conversation a `--resume` launch was asked for. WHY (review
+   *  2026-09-23, F7): the desktop→Claude id map fills in only when Claude
+   *  Code's first hook arrives, seconds later; until then this is the only
+   *  record of which conversation the session holds, and without it a second
+   *  resume in that window opened a second tab. */
+  resumedConversation?: string;
 }
 
 export type HandoffStopResult = { status: 'stopped' } | { status: 'unknown' };
@@ -304,7 +310,7 @@ export class SessionManager extends EventEmitter {
       ...(opts.resumeSessionId ? { resumeSessionId: opts.resumeSessionId } : {}),
     };
 
-    const session: ManagedSession = { info, worker };
+    const session: ManagedSession = { info, worker, ...(opts.resumeSessionId ? { resumedConversation: opts.resumeSessionId } : {}) };
     this.sessions.set(id, session);
     this.emit('session-created', info);
 
@@ -585,6 +591,18 @@ export class SessionManager extends EventEmitter {
 
   getSession(id: string): SessionInfo | undefined {
     return this.sessions.get(id)?.info;
+  }
+
+  /** True when this id belongs to a live session — HookRelay's ownership gate:
+   *  an ask for any other id is handed straight back to Claude Code (hook-relay.ts). */
+  hasSession(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
+  }
+
+  /** The conversation this session was launched to resume, if any (see
+   *  ManagedSession.resumedConversation). */
+  resumedConversationOf(id: string): string | undefined {
+    return this.sessions.get(id)?.resumedConversation;
   }
 
   destroyAll(): void {

@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import { parseInkSelect, menuToButtons } from '../parser/ink-select-parser';
 import { useChatDispatch, useChatStore } from '../state/chat-context';
 import { getVisibleScreenText, onBufferReady } from './terminal-registry';
+import { parsePlanMenu } from '../parser/plan-menu-parser';
+import { expiredToolIds, nextAbsentCount } from '../state/expired-card-resolver';
 
 // How long to wait before showing a parser-detected prompt, giving the hook
 // system time to deliver a PermissionRequest via the named pipe relay.
@@ -67,6 +69,10 @@ export function usePromptDetector() {
   const lastPermissionClearedRef = useRef<Map<string, number>>(new Map());
   const prevAwaitingRef = useRef<Map<string, boolean>>(new Map());
 
+  // Per session: consecutive buffer flushes with no Claude Code menu on screen
+  // while a KEPT card (expired) is waiting. At two, the card settles quietly.
+  const expiredAbsentRef = useRef<Map<string, number>>(new Map());
+
   // Perf: detect awaiting-approval transitions in an effect (off the render
   // path) and iterate activeTurnToolIds (current-turn only, per chat-reducer
   // rule #2) rather than the session-lifetime toolCalls Map. With many
@@ -100,8 +106,37 @@ export function usePromptDetector() {
       // (the hook-based UI is handling the permission flow)
       const sessionState = store.getState().get(sid);
       if (sessionState) {
+        // The menu-gone rule for KEPT cards runs BEFORE the bail below, and that
+        // bail ignores kept cards — otherwise keeping a card would switch this
+        // whole detector off for the session (the rule itself, and every setup
+        // prompt card: trust, usage limit, resume), since a kept card can stay
+        // awaiting-approval indefinitely (spec §2b).
+        const expired = expiredToolIds(sessionState);
+        if (expired.length > 0) {
+          const screen = getVisibleScreenText(sid);
+          // Either shape counts as "Claude Code is still asking": the generic
+          // numbered menu, or the plan menu (whose text-box row the generic
+          // parser does not model).
+          const menuPresent = !!screen && (!!parseInkSelect(screen) || parsePlanMenu(screen).status !== 'absent');
+          const { count, resolve } = nextAbsentCount(menuPresent, expiredAbsentRef.current.get(sid) ?? 0);
+          expiredAbsentRef.current.set(sid, count);
+          if (resolve) {
+            expiredAbsentRef.current.delete(sid);
+            for (const toolUseId of expired) {
+              const action = { type: 'PERMISSION_CARD_RESOLVED' as const, sessionId: sid, toolUseId };
+              dispatch(action);
+              (window as any).claude?.remote?.broadcastAction?.(action);
+            }
+          }
+        } else {
+          // Nothing kept here — a future expiry starts its count from zero.
+          expiredAbsentRef.current.delete(sid);
+        }
         for (const [, tool] of sessionState.toolCalls) {
-          if (tool.status === 'awaiting-approval') return;
+          // A LIVE ask silences the parser below (its card owns the menu). A
+          // kept one must not: its socket is gone, and the rule above needs this
+          // function to keep running on every flush.
+          if (tool.status === 'awaiting-approval' && !tool.expired) return;
         }
       }
 
@@ -165,7 +200,8 @@ export function usePromptDetector() {
             const currentSession = store.getState().get(sid);
             if (currentSession) {
               for (const [, tool] of currentSession.toolCalls) {
-                if (tool.status === 'awaiting-approval') return;
+                // Same kept-card exemption as the top-of-flush bail.
+                if (tool.status === 'awaiting-approval' && !tool.expired) return;
               }
             }
 

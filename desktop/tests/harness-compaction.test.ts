@@ -436,3 +436,38 @@ describe('retainedTurnStart — where the chat stops dimming', () => {
     expect(s.retainedTurnStart(1)).toBeNull();
   });
 });
+
+// On a small window the outgoing request is trimmed (fitToContext) while the
+// history itself is not. The image dedupe cache must then stop vouching for an
+// image the model can no longer see, or a re-Read answers "already visible
+// earlier" with no picture.
+describe('shown-image cache follows the window actually sent', () => {
+  const imageMsg = (id: string) => ({
+    role: 'tool',
+    content: [{
+      type: 'tool-result', toolCallId: id, toolName: 'Read',
+      output: { type: 'content', value: [
+        { type: 'text', text: 'Read shot.png' },
+        { type: 'file', mediaType: 'image/png', data: { type: 'data', data: Buffer.alloc(64) } },
+      ] },
+    }],
+  }) as any;
+
+  it('an image trimmed out of the request is forgotten, so a re-Read delivers it again', () => {
+    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'unused' }]) });
+    const filler = { role: 'user', content: 'x'.repeat(40_000) } as any; // alone overflows the window
+    session.seedHistory([{ role: 'user', content: 'look' } as any, imageMsg('t1'), filler]);
+    (session as any).shownImages.set('/fake/shot.png', { mtime: 111, toolCallId: 't1' });
+    const fitted = (session as any).fitToContext((session as any).history) as any[];
+    expect(fitted.some((m) => m.role === 'tool')).toBe(false); // sanity: the image really was trimmed
+    expect((session as any).shownImages.has('/fake/shot.png')).toBe(false);
+  });
+
+  it('an image still inside the request stays remembered, so dedupe keeps working', () => {
+    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'unused' }]) });
+    session.seedHistory([{ role: 'user', content: 'look' } as any, imageMsg('t1'), { role: 'user', content: 'again' } as any]);
+    (session as any).shownImages.set('/fake/shot.png', { mtime: 111, toolCallId: 't1' });
+    (session as any).fitToContext((session as any).history);
+    expect((session as any).shownImages.get('/fake/shot.png')).toEqual({ mtime: 111, toolCallId: 't1' });
+  });
+});

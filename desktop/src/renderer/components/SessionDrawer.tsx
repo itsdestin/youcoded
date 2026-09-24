@@ -22,7 +22,7 @@ import SessionPreviewPane from './SessionPreviewPane';
 // The A1/A2/A4 preview header (Resume + tag/note sheet) now uses COPY too, so
 // this import no longer goes away if that block is cut.
 import { COPY } from '../../shared/chatsearch-refs';
-import { useArtifactContent } from './artifact-views/useArtifactContent';
+import { useArtifactContent, contentPathFor } from './artifact-views/useArtifactContent';
 import { useUnsavedGuard } from './artifact-views/UnsavedChangesDialog';
 import { ContentFindBar } from './ContentFindBar';
 import { GitReviewView } from './git/GitReviewView';
@@ -376,7 +376,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // FilesTab used to carry duplicate effects that conflated "loading" with
   // "no longer on disk" (the flash bug).
   const { content, setContent, contentInfo, contentState, retryRead, applyDiskRead } =
-    useArtifactContent(projectRoot, active?.id ?? null, active?.path ?? null);
+    useArtifactContent(projectRoot, active?.id ?? null, contentPathFor(active));
 
   // ── B2 panel UI state ──
   // The list stays open once toggled; it closes on the ☰ toggle, on selecting an
@@ -695,7 +695,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     dispatch({ type: 'DRAWER_CLOSED', sessionId });
   }, [findOpen, editState.editing, expanded, gitReviewOpen, listOpen, activePreview, activeArtifactId, dispatch, cancelRename, sessionId, guardUnsaved, closeGitReview]);
 
-  useEscClose(drawerOpen, handleBack);
+  // WHY layeredWhile (review 2026-09-23, F2): the drawer sits beside the chat
+  // and the app opens it itself mid-reply, while Escape is how the user stops
+  // the assistant. It takes at most one Escape while the keyboard is in the
+  // chat (as before); peeling back through its layers applies only while focus
+  // is inside the drawer. See use-esc-close.tsx EscStore.activeTop.
+  const focusInsideDrawer = useCallback(() => !!asideRef.current?.contains(document.activeElement), []);
+  useEscClose(drawerOpen, handleBack, { layeredWhile: focusInsideDrawer });
 
   // Drag-to-resize state (youcoded#105). These three hooks MUST stay above the
   // `!drawerOpen` early return below — they used to sit next to the pointer

@@ -60,6 +60,8 @@ export class ModelManager extends EventEmitter {
     // null = force RAM-only (Amendment 2026-07-14 F).
     private opts: {
       fetchImpl?: typeof fetch; totalMemBytes?: number; totalVramBytes?: number | null;
+      /** Test seam: the injected totalVramBytes is shared system memory. */
+      vramIsShared?: boolean;
       /** Test seam: what the machine reports it has free right now. */
       availableMemBytes?: number;
       /** Test seam: bytes free on the volume holding the cache dir. `statfsSync`
@@ -95,10 +97,15 @@ export class ModelManager extends EventEmitter {
 
   // Detected VRAM, cached once (undefined = not yet probed). Injected value in
   // opts wins so tests are deterministic. GPU-aware fit — Amendment 2026-07-14 F.
-  private vramCache: number | null | undefined = undefined;
-  private async vram(): Promise<number | null> {
-    if (this.opts.totalVramBytes !== undefined) return this.opts.totalVramBytes;
-    if (this.vramCache === undefined) this.vramCache = (await detectGpu()).totalVramBytes;
+  private vramCache: { bytes: number | null; shared: boolean } | undefined = undefined;
+  private async vram(): Promise<{ bytes: number | null; shared: boolean }> {
+    if (this.opts.totalVramBytes !== undefined) {
+      return { bytes: this.opts.totalVramBytes, shared: this.opts.vramIsShared === true };
+    }
+    if (this.vramCache === undefined) {
+      const gpu = await detectGpu();
+      this.vramCache = { bytes: gpu.totalVramBytes, shared: gpu.sharedMemory === true };
+    }
     return this.vramCache;
   }
   // ---- What this machine has, and what one model will cost on it (§D2) ----
@@ -106,20 +113,29 @@ export class ModelManager extends EventEmitter {
   /** The pool a model is scored against: the installed engine's own first GPU
    *  device, else detected VRAM, else total RAM. See poolFromDevices.
    *
-   *  `isDedicatedVram` comes from gpu-detector, which reports a number ONLY for
-   *  a confidently-probed discrete card and null for integrated graphics. That
+   *  `isDedicatedVram` comes from gpu-detector, which reports a number for a
+   *  confidently-probed discrete card, or a number flagged `sharedMemory` for
+   *  unified memory (Apple Silicon, an AMD APU), and null otherwise. That
    *  is exactly the question the split tier needs answered: is the graphics
    *  pool memory the system does not also have? Nothing in the engine's device
    *  list can say — Vulkan reports this laptop's shared RAM as an 84 GiB
    *  "device" — so the probe is the only source. */
-  private async pool(): Promise<MemoryPool & { isDedicatedVram: boolean }> {
+  private async pool(): Promise<MemoryPool & { isDedicatedVram: boolean; isShared: boolean }> {
     const vram = await this.vram();
+    const base = poolFromDevices(this.engine.installedDevices(), {
+      totalMemBytes: this.opts.totalMemBytes ?? os.totalmem(),
+      detectedVramBytes: vram.bytes,
+    });
     return {
-      ...poolFromDevices(this.engine.installedDevices(), {
-        totalMemBytes: this.opts.totalMemBytes ?? os.totalmem(),
-        detectedVramBytes: vram,
-      }),
-      isDedicatedVram: vram !== null && vram > 0,
+      ...base,
+      // The graphics pool (from the engine's device list OR the probe) is
+      // system RAM on this machine — see estimateFit's shared path.
+      isShared: base.poolIsGpu && vram.shared,
+      // WHY `!vram.shared` (2026-09-23): Apple Silicon and an AMD APU report a
+      // pool that IS system RAM. Calling it dedicated switched off the cap that
+      // keeps "pool + free RAM" inside the machine's real memory — the same
+      // bytes counted twice.
+      isDedicatedVram: vram.bytes !== null && vram.bytes > 0 && !vram.shared,
     };
   }
 
@@ -278,6 +294,7 @@ export class ModelManager extends EventEmitter {
         poolBytes: pool.poolBytes,
         poolIsGpu: pool.poolIsGpu,
         poolIsDedicatedVram: pool.isDedicatedVram,
+        poolIsShared: pool.isShared,
         totalMemBytes,
         availableBytes,
         loadedBytes,
@@ -323,6 +340,7 @@ export class ModelManager extends EventEmitter {
       poolBytes: pool.poolBytes,
       poolIsGpu: pool.poolIsGpu,
       poolIsDedicatedVram: pool.isDedicatedVram,
+      poolIsShared: pool.isShared,
       totalMemBytes: this.opts.totalMemBytes ?? os.totalmem(),
       availableBytes: this.available(),
       loadedBytes,

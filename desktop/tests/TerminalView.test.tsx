@@ -93,6 +93,7 @@ vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 vi.mock('../src/renderer/platform', () => ({
   isAndroid: vi.fn().mockReturnValue(false),
   isTouchDevice: vi.fn().mockReturnValue(false),
+  isRemoteMode: vi.fn().mockReturnValue(false),
   getPlatform: vi.fn().mockReturnValue('electron'),
 }));
 
@@ -402,10 +403,39 @@ describe('mount logic', () => {
     // order). On touch, the raw-bytes hook gets the real sessionId and the
     // string hook gets null (early-returns inside the hook). Asserting which
     // hook got the real sessionId is the meaningful check, not which got called.
-    it('passes sessionId to usePtyRawBytes and null to usePtyOutput', () => {
+    it('passes sessionId to usePtyRawBytes and null to usePtyOutput on the Android app', () => {
+      vi.mocked(platform.isAndroid).mockReturnValue(true);
+      try {
+        render(<TerminalView sessionId="s1" visible={true} />);
+        expect(usePtyRawBytes).toHaveBeenCalledWith('s1', expect.any(Function));
+        expect(usePtyOutput).toHaveBeenCalledWith(null, expect.any(Function));
+      } finally {
+        vi.mocked(platform.isAndroid).mockReturnValue(false);
+      }
+    });
+
+    // The Android app PAIRED to a computer still reports 'android', but the computer
+    // sends the terminal as text — waiting for raw bytes there drew a blank terminal.
+    it('the Android app paired to a computer draws the text stream the computer sends', () => {
+      vi.mocked(platform.isAndroid).mockReturnValue(true);
+      vi.mocked(platform.isRemoteMode).mockReturnValue(true);
+      try {
+        render(<TerminalView sessionId="s1" visible={true} />);
+        expect(usePtyOutput).toHaveBeenCalledWith('s1', expect.any(Function));
+        expect(usePtyRawBytes).toHaveBeenCalledWith(null, expect.any(Function));
+      } finally {
+        vi.mocked(platform.isAndroid).mockReturnValue(false);
+        vi.mocked(platform.isRemoteMode).mockReturnValue(false);
+      }
+    });
+
+    // A phone BROWSER is a touch device too, but the computer it talks to sends the
+    // terminal as text and never as raw bytes — only the Android app's own runtime
+    // does. Listening for raw bytes there would draw a blank terminal.
+    it('a phone browser draws the text stream the computer sends', () => {
       render(<TerminalView sessionId="s1" visible={true} />);
-      expect(usePtyRawBytes).toHaveBeenCalledWith('s1', expect.any(Function));
-      expect(usePtyOutput).toHaveBeenCalledWith(null, expect.any(Function));
+      expect(usePtyOutput).toHaveBeenCalledWith('s1', expect.any(Function));
+      expect(usePtyRawBytes).toHaveBeenCalledWith(null, expect.any(Function));
     });
   });
 

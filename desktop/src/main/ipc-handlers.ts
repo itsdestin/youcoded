@@ -13,7 +13,7 @@ import { execFile } from 'child_process';
 import { SessionManager, prepareRunInTerminal, shellDisplayName } from './session-manager';
 import { shouldReconcileNativePage, snapshotResumeBoundary } from './transcript-page-source';
 import { HookRelay } from './hook-relay';
-import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
+import { IPC, SESSION_FLAG_NAMES, type SessionFlagName, type SessionProvider, type TranscriptEvent, type TranscriptPageRequest, type TranscriptPageResult, type HookEvent, type SpecialistsEvent, type ShellEvent } from '../shared/types';
 import { isPlaceholderModelId } from '../shared/model-ids';
 import { hasRealTitle } from '../shared/session-title';
 import { setPermissionOverrides, forgetSessionAttention } from './main';
@@ -45,7 +45,7 @@ import { generateText } from 'ai';
 import type { ModelBinding } from '../shared/provider-types';
 import { createSessionNamer } from './session-namer';
 import { NamingSettings } from './naming-settings';
-import { reapplyStoredTitle, type ResumeTitleDeps } from './native-resume-title';
+import { reapplyStoredTitle, createProvisionalTitles, type ResumeTitleDeps } from './native-resume-title';
 import { ModelCatalog } from './providers/model-catalog';
 import { EngineManager } from './engine/engine-manager';
 // Faster-engine prerequisites (2026-09-05 §A5) — a pure-ish read of this
@@ -84,7 +84,7 @@ import { exaBackend } from './harness/search/backends/exa';
 import { ddgBackend } from './harness/search/backends/ddg';
 import { tavilyBackend } from './harness/search/backends/tavily';
 import type { NativePermissionMode } from '../shared/permission-types';
-import { resolveMappingAction } from './session-id-mapping';
+import { resolveMappingAction, findLiveSessionForConversation } from './session-id-mapping';
 import { listPastSessions, loadHistory } from './session-browser';
 import { TranscriptPageSources, type ResolvedPageSource } from './transcript-page-source';
 import { readTranscriptMeta } from './transcript-utils';
@@ -134,6 +134,7 @@ import { SavedFolder, readFolders, writeFolders } from './saved-folders';
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
 import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
+import { readDefaults, writeDefaults, setPermissionOverridesSink } from './prefs-service';
 import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from './performance-config';
 import type { PerformanceConfigSnapshot, SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
@@ -167,12 +168,13 @@ import {
 } from './git/git-service';
 import { initGitWatchers, watchGit, unwatchGit, dropGitSubscriber } from './git/git-watcher';
 import { resolveRepoRoot, invalidateRepoRootCache } from './git/git-exec';
+import { gitBranchLabel } from './git/git-branch-label';
 import { PROJECT_IPC } from './project/ipc-channels';
 // The artifact and Project View READ bodies, shared with remote-server.ts
 // (remote access batch 3) so a phone gets the desktop's own answers.
 import {
   listSessionFiles, listProjectFiles, listAllFiles, listFolder, readArtifactText, readArtifactBytes,
-  searchArtifactContent, checkArtifactExistence, resolveArtifactPath,
+  searchArtifactContent, checkArtifactExistence, resolveArtifactPath, judgeRecordLocation,
 } from './artifacts/read-service';
 import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 // Conversation Store (Phase 2a): live intake of transcript activity, session
@@ -805,6 +807,14 @@ export function registerIpcHandlers(
   // updates when BOTH fire (sendForSession reaches the owning window's
   // App.tsx sessionRenamed handler; broadcastRename updates SessionInfo, the
   // remote clients, and the window directory).
+  // Opening-words names planted on a resumed, never-titled native session's pill
+  // (native-resume-title.ts), keyed by session id. They are there so the pill
+  // matches the Resume Browser row — NOT a title: both `hasTitle` checks below
+  // look through them via liveNameForTitleCheck, or the namer would read the
+  // raw first message as a real name and never generate one.
+  const provisionalResumeTitles = createProvisionalTitles();
+  const liveNameForTitleCheck = (desktopId: string): string | undefined =>
+    provisionalResumeTitles.forTitleCheck(desktopId, sessionManager.getSession(desktopId)?.name);
   const resumeTitleDeps: ResumeTitleDeps = {
     // NOTE: getConversationStore() is null for the whole launch when the managed
     // roots are unavailable (conversations/service.ts sets storePhase
@@ -812,10 +822,12 @@ export function registerIpcHandlers(
     // the re-apply is a permanent no-op. That is survivable, not silent breakage
     // — the title feeder still generates a name at the next turn-complete.
     getStoredTitle: async (sessionId) => (await getConversationStore()?.get('native', sessionId))?.title,
-    onTitle: (sessionId, title) => {
+    onTitle: (sessionId, title, opts) => {
+      if (opts?.provisional) provisionalResumeTitles.mark(sessionId, title);
       sendForSession(sessionId, IPC.SESSION_RENAMED, sessionId, title);
       broadcastRename(sessionId, title);
     },
+    getOpeningTitle: (sessionId) => nativeHost.openingTitle(sessionId),
   };
 
   const leasesEnabled = () => leaseWiring?.syncEnabled?.() ?? isSyncSpacesEnabled();
@@ -1039,9 +1051,17 @@ export function registerIpcHandlers(
     if (result.status === 'lease-denied') return result;
     // WHY: a duplicate open belongs to its original window, even if the
     // second request came from a different window. Ask that owner to select it.
+    // WHY the ownerless fallback (combined branch: master's reuse vs bugfix-chatfiles'
+    // "switch to the open tab"): a session with NO owning window — started from
+    // a phone or a remote handoff — was answered `reused` with no focus request
+    // at all, so the desktop never switched to it. Its events take
+    // sendForSession's ownerless route (the primary mainWindow, above), so that
+    // is the one window whose renderer lists it. Once that window is closed no
+    // window shows it, and none is raised (not the leader: it would not list it).
     const owner = windowRegistry?.getOwner(result.id);
-    if (!started && event && owner != null) {
-      const target = webContents.fromId(owner);
+    if (!started && event) {
+      const target = owner != null ? webContents.fromId(owner)
+        : (!mainWindow.isDestroyed() ? mainWindow.webContents : undefined);
       if (target) {
         target.send(IPC.SESSION_FOCUS_REQUEST, result.id);
         BrowserWindow.fromWebContents(target)?.focus();
@@ -1392,58 +1412,14 @@ export function registerIpcHandlers(
   });
 
   // --- Session defaults persistence ---
-  const DEFAULTS_INITIAL = {
-    skipPermissions: false,
-    model: 'sonnet',
-    projectFolder: '',
-    permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT },
-  };
-
-  // Load permission overrides into main.ts cache on startup
-  function syncPermissionOverrides(defaults: Record<string, any>) {
-    const overrides = defaults.permissionOverrides;
-    if (overrides && typeof overrides === 'object') {
-      setPermissionOverrides(overrides);
-    }
-  }
-
-  ipcMain.handle('defaults:get', async () => {
-    try {
-      const raw = fs.readFileSync(defaultsPrefPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      const result = { ...DEFAULTS_INITIAL, ...parsed,
-        permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT, ...parsed.permissionOverrides },
-      };
-      syncPermissionOverrides(result);
-      return result;
-    } catch {
-      return { ...DEFAULTS_INITIAL };
-    }
-  });
-
-  ipcMain.handle('defaults:set', async (_event, updates: Record<string, any>) => {
-    try {
-      let current: Record<string, any> = { ...DEFAULTS_INITIAL };
-      try {
-        const parsed = JSON.parse(fs.readFileSync(defaultsPrefPath, 'utf-8'));
-        current = { ...current, ...parsed,
-          permissionOverrides: { ...PERMISSION_OVERRIDES_DEFAULT, ...parsed.permissionOverrides },
-        };
-      } catch {}
-      // Deep-merge permissionOverrides instead of replacing
-      const merged = { ...current, ...updates };
-      if (updates.permissionOverrides) {
-        merged.permissionOverrides = { ...current.permissionOverrides, ...updates.permissionOverrides };
-      }
-      fs.mkdirSync(path.dirname(defaultsPrefPath), { recursive: true });
-      fs.writeFileSync(defaultsPrefPath, JSON.stringify(merged, null, 2));
-      // Update in-memory cache so hook handler picks up changes immediately
-      syncPermissionOverrides(merged);
-      return merged;
-    } catch {
-      return null;
-    }
-  });
+  // Read/merge/write lives in prefs-service.ts, shared with remote-server.ts so a phone's
+  // read and save behave exactly like this window's. Every read and save also refreshes
+  // main.ts's in-memory override cache (the one the permission hook consults) through the
+  // sink registered here — for a save made from a phone too.
+  setPermissionOverridesSink(setPermissionOverrides);
+  ipcMain.handle('defaults:get', async () => readDefaults(defaultsPrefPath));
+  ipcMain.handle('defaults:set', async (_event, updates: Record<string, any>) =>
+    writeDefaults(updates && typeof updates === 'object' ? updates : {}, defaultsPrefPath));
 
   // --- Anonymous analytics opt-out (Phase 6) ---------------------------------
   // Getters and setters for the boolean gate analytics-service reads on launch.
@@ -2343,9 +2319,12 @@ export function registerIpcHandlers(
       readJsonFile(path.join(home, '.claude', 'backup-meta.json')),
       fs.promises.stat(path.join(home, '.claude', 'toolkit-state', '.sync-lock')).then((s) => s.isDirectory(), () => false),
       Promise.all([...sessionIdMap].map(async ([desktopId, claudeId]) => {
+        // WHY: .gitbranch comes from Claude Code's status line, which native sessions lack.
+        const live = sessionManager.getSession(desktopId);
+        const nativeCwd = live?.provider === 'native' ? live.cwd : null;
         const [context, branch, stats] = await Promise.all([
           readTextFile(path.join(home, '.claude', `.context-${claudeId}`)),
-          readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
+          nativeCwd ? gitBranchLabel(nativeCwd) : readTextFile(path.join(home, '.claude', `.gitbranch-${claudeId}`)),
           readJsonFile(path.join(home, '.claude', `.session-stats-${claudeId}.json`)),
         ]);
         return { desktopId, context, branch, stats };
@@ -2482,6 +2461,11 @@ export function registerIpcHandlers(
   const resumeAdmission = createResumeAdmission<SessionInfo>({
     acquire: (id) => leaseWiring!.client.acquire(id),
     release: (id) => leaseWiring!.client.release(id),
+    // WHY (combined branch: master's resume admission x bugfix-chatfiles'
+    // already-open guard): one lookup for "is this conversation open here".
+    // Master's identity-map walk first; chatfiles' lookup then also matches a native session by its own id (a native desktop id IS its
+    // conversation id, before the identity map is written) and a Claude Code
+    // resume still waiting for its first hook (resumedConversationOf).
     getLive: (id) => {
       for (const [desktopId, claudeId] of sessionIdMap) {
         if (claudeId === id) {
@@ -2489,7 +2473,8 @@ export function registerIpcHandlers(
           if (info) return info;
         }
       }
-      return undefined;
+      return findLiveSessionForConversation(id, sessionManager.listSessions?.() ?? [],
+        (desktopId) => sessionIdMap.get(desktopId) ?? sessionManager.resumedConversationOf?.(desktopId));
     },
   });
   // WHY: Task 5 must attach transport routes to this SAME admission/session
@@ -2628,6 +2613,7 @@ export function registerIpcHandlers(
       // Idempotent + no-op for non-native ids, so the holder flow calls it
       // unconditionally without needing to know the provider.
       destroyNative: (id) => nativeHost.destroy(id),
+      endQuiesceNative: (id) => nativeHost.endQuiesce(id),
     });
     // Fire-and-forget from a hub event — the handler never throws (each step is
     // try/caught inside createHolderTakeover), so void is safe.
@@ -3065,7 +3051,7 @@ export function registerIpcHandlers(
     const read = () => getNamingRecord(provider, storeId);
     const hasTitle = async () => {
       const rec = await getConversationStore()?.get(provider, storeId);
-      return hasRealTitle(rec?.title, sessionManager.getSession(desktopId)?.name);
+      return hasRealTitle(rec?.title, liveNameForTitleCheck(desktopId));
     };
     if (!await mayPublishAutomaticName({ read, hasTitle, name: title, expectedAutoAt, opening, enabled: eligible })) return false;
     let publicationStamp = expectedAutoAt;
@@ -3142,7 +3128,9 @@ export function registerIpcHandlers(
         fs.writeFileSync(path.join(topicDir, `ask-${storeId}`), '');
       } catch { /* best-effort: a missed ask retries at the next review */ }
     },
-    currentName: (sessionId: string) => sessionManager.getSession(sessionId)?.name ?? '',
+    // A resumed chat's provisional opening words are not a name to "keep", or
+    // the review would echo them back as the title (createProvisionalTitles).
+    currentName: (sessionId: string) => provisionalResumeTitles.forNamer(sessionId, sessionManager.getSession(sessionId)?.name),
     // Store title wins; the live session name covers the boot window before
     // the store's first upsert. BOTH halves go through the shared placeholder
     // predicate — the 2026-08-06 lesson: a check that only excluded 'New
@@ -3151,7 +3139,7 @@ export function registerIpcHandlers(
       const ident = namingIdentity(sessionId);
       if (!ident) return true; // unknown identity: assume named rather than overwrite
       const rec = await getConversationStore()?.get(ident.provider, ident.storeId);
-      return hasRealTitle(rec?.title, sessionManager.getSession(sessionId)?.name);
+      return hasRealTitle(rec?.title, liveNameForTitleCheck(sessionId));
     },
     publish: async (sessionId: string, name: string, expectedAutoAt: string, opening: boolean) => {
       const ident = namingIdentity(sessionId);
@@ -4844,6 +4832,8 @@ export function registerIpcHandlers(
   // write and one .gitignore read; appendVersion queues per project and applies
   // the whole burst in a few read/write cycles instead of a thousand, each of
   // which used to pin a parsed 4.4 MB sidecar in memory until the app OOM'd.
+  // A Claude Code session's conversation id when it differs from its desktop id (VersionEvent.conversationId).
+  const conversationIdFor = (id: string): string | undefined => [sessionIdMap.get(id)].find((c) => c && c !== id);
   ipcMain.handle(ARTIFACT_IPC.APPEND_VERSION, async (
     _e,
     projectRoot: string,
@@ -4867,6 +4857,9 @@ export function registerIpcHandlers(
       type: args.type,
       author: args.author,
       toolUseId: typeof args.toolUseId === 'string' && args.toolUseId ? args.toolUseId : undefined,
+      // WHY: a Claude Code resume gets a fresh desktop id, so a files list keyed on it alone lost
+      // everything before the resume; the conversation's own id lets LIST_SESSION find these again.
+      conversationId: conversationIdFor(sessionId),
     });
     // AFTER the append resolves, not before it (2026-08-15 review): appendVersion
     // is queued now, so an invalidate issued before the call could be followed
@@ -4936,7 +4929,7 @@ export function registerIpcHandlers(
   // transports cannot drift on roots, denylist or shape. The legacy-record
   // repair each listing runs is inside the service.
   ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, sessionId: string, projectRoot: string) =>
-    listSessionFiles(sessionId, projectRoot));
+    listSessionFiles(sessionId, projectRoot, conversationIdFor(sessionId)));
 
   // Project View IPC — list project-scoped conversations, git repo info, and
   // the discovered context files (CLAUDE.md, rules, etc.). The reads go
@@ -5050,7 +5043,12 @@ export function registerIpcHandlers(
       : undefined;
 
     let fullPath: string;
-    if (artifact) {
+    // A `../` record is judged as artifacts:get judges it (F3), so the tier below sees its REAL location.
+    const judged = artifact ? await judgeRecordLocation(projectRoot, artifact) : null;
+    if (judged && !judged.ok) return judged.error === 'missing' ? { ok: false, error: 'artifact-not-found' } : judged;
+    if (judged?.ok) {
+      fullPath = judged.realPath;
+    } else if (artifact) {
       // NOTE the tracked branch historically wrote artifact.absolutePath! with
       // NO check at all — the sidecar-escalation hole (spec §12.1). Everything
       // below now runs on the RESOLVED path for both branches.

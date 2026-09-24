@@ -18,6 +18,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useArtifactSelector, useArtifactDispatch } from '../../state/ArtifactContext';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { ScreenBand } from '../ScreenBand';
 import { workbenchScreenFrame } from '../../workbench-mode';
@@ -353,10 +354,35 @@ export function ProjectView(props: ProjectViewProps) {
       (window.claude as any).artifacts.listProjectsIndex({ withCounts: true }).then((res2: any) => {
         if (cancelled || !res2?.ok) return;
         setProjects(res2.projects);
-      });
-    });
+      }).catch(() => { /* the fast list above already shows; reopening or a reconnect asks again */ });
+    }).catch(() => { /* reopening the view, or a remote reconnect (below), asks again */ });
     return () => { cancelled = true; };
   }, [projectViewOpen]);
+
+  // After a remote reconnect, an open Project View asks again for its project list and
+  // the chosen project's conversations and counts. WHY: each was read once per open, so a
+  // read lost during a phone's drop left the list or the Conversations tab empty until the
+  // view was closed and reopened (2026-09-11 phone pass sweep). It does NOT re-home: the
+  // project being browsed stays chosen (only a first answer, when none was chosen, picks
+  // one). The Files tab reloads itself (useProjectWatch).
+  useOnRemoteReconnect(() => {
+    // (Combined branch: master's perf work replaced `state` with narrow selectors;
+    // the callback is re-read every render, so this is the current value.)
+    if (!projectViewOpen) return;
+    convCache.current.clear();
+    ctxCache.current.clear();
+    Promise.resolve((window.claude as any).artifacts.listProjectsIndex({ withCounts: true })).then((res: any) => {
+      if (!res?.ok) return;
+      setProjects(res.projects);
+      setIndexLoaded(true);
+      setActiveProject((prev) => prev
+        ?? matchProjectByPath(res.projects, activeCwdRef.current)
+        ?? (res.projects.length > 0 ? res.projects[0] : null));
+    }).catch(() => { /* the next reconnect, or reopening the view, asks again */ });
+    // Re-runs the hero/tab fetch below in place (no reset to zeros): with the caches
+    // cleared it reads conversations and context afresh.
+    setCountsKey((k) => k + 1);
+  });
 
   // Compute hero data + tab data whenever the active project changes. The four
   // IPC calls run in PARALLEL (Promise.all) so first paint waits on the slowest,

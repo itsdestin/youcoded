@@ -131,15 +131,14 @@ describe('remote-shim — downloads', () => {
   });
 });
 
-// Remote access batch 3, design test 8 (the phone's half) — after a reconnect
-// the file lists the phone was showing are asked for again, a watcher event
-// still reaches the phone, and the Files screen's watcher hook re-subscribes
-// (technical design 2026-09-10 §8 "Live refresh"; contract row R12).
+// Remote access batch 3, design test 8 (the phone's half) — after a reconnect a watcher
+// event still reaches the phone, the page is told, and the Files screen's watcher hook
+// re-subscribes and reloads its own list (technical design 2026-09-10 §8 "Live refresh";
+// contract row R12).
 //
-// WHY the reconnect re-issue must carry the last payload: `rehydrate()` used to
-// call every channel bare. That is fine for `skills:list`, which takes no
-// arguments, but `artifacts:list-all-files` with no project id is a request
-// the host can only refuse — a re-issue that reloads nothing.
+// WHY the shim itself re-asks nothing: it used to re-send the file lists (and skills,
+// / commands, the remote settings) on every reconnect, but those answers settled no caller
+// and reached no screen, while the screens' own reconnect listeners asked again anyway.
 describe('remote-shim — files after a reconnect', () => {
   isolateGlobals();
 
@@ -207,33 +206,23 @@ describe('remote-shim — files after a reconnect', () => {
       return ws;
     }
 
-    it('the two list channels are in the reconnect set, and only reads are', () => {
-      expect(shim.REHYDRATE_ON_RECONNECT).toContain('artifacts:list-all-files');
-      expect(shim.REHYDRATE_ON_RECONNECT).toContain('artifacts:list-session');
-      for (const c of shim.REHYDRATE_ON_RECONNECT) {
-        expect(shim.MESSAGE_KIND[c] === undefined || shim.MESSAGE_KIND[c] === 'read').toBe(true);
-      }
-    });
-
-    it('re-issues the lists the phone was showing, with the arguments it used, and only on a reconnect', async () => {
+    it('a reconnect re-sends none of the reads the phone made before the drop', async () => {
       shim.installShim();
       const first = await connectOnce();
       const api = (window as any).claude;
-      // The phone opened a project's Files and a session's drawer before the drop.
+      // The phone opened a project's Files and a session's drawer, and read its lists, before the drop.
       void api.artifacts.listAllFiles('/home/me/proj', { force: true }).catch(() => {});
       void api.artifacts.listSession('sess-9', '/home/me/proj').catch(() => {});
-      const firstLists = first.types().filter((t) => t.startsWith('artifacts:list'));
-      expect(firstLists).toEqual(['artifacts:list-all-files', 'artifacts:list-session']);
+      void api.skills.list().catch(() => {});
+      void api.commands.list().catch(() => {});
+      void api.remote.getConfig().catch(() => {});
+      expect(first.types()).toEqual(expect.arrayContaining(['artifacts:list-all-files', 'artifacts:list-session', 'skills:list', 'commands:list', 'remote:get-config']));
 
       // The drop, then the phone's new socket authenticates.
       first.close();
       const second = await connectOnce();
-
-      const reissued = second.frames().filter((f) => f.type === 'artifacts:list-all-files' || f.type === 'artifacts:list-session');
-      expect(reissued.map((f) => f.type).sort()).toEqual(['artifacts:list-all-files', 'artifacts:list-session']);
-      // The SAME question, not a bare one the host can only refuse.
-      expect(reissued.find((f) => f.type === 'artifacts:list-all-files').payload).toEqual({ projectId: '/home/me/proj', opts: { force: true } });
-      expect(reissued.find((f) => f.type === 'artifacts:list-session').payload).toEqual({ sessionId: 'sess-9', projectRoot: '/home/me/proj' });
+      const repeated = second.types().filter((t) => /^(artifacts:list|skills:list|commands:list|remote:get-config|remote:status)/.test(t));
+      expect(repeated).toEqual([]);
     });
 
     it('a watcher event pushed after the reconnect reaches the phone', async () => {

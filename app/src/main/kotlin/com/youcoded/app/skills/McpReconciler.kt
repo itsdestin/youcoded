@@ -13,8 +13,8 @@ import java.io.File
  *
  * Android always reports platform "linux" for filtering — Termux's bionic
  * environment is Linux-binary-compatible, so manifests declaring
- * `platform: "linux"` or `"all"` are eligible. macOS-only and Windows-only
- * entries are skipped.
+ * `platform: "linux"` / `platforms: [..."linux"...]` or `"all"` are eligible.
+ * macOS-only and Windows-only entries are skipped.
  */
 class McpReconciler(private val homeDir: File) {
 
@@ -30,13 +30,7 @@ class McpReconciler(private val homeDir: File) {
     // Android always counts as linux for MCP platform filtering
     private val currentPlatform = "linux"
 
-    private fun platformMatches(declared: String?): Boolean {
-        if (declared.isNullOrEmpty() || declared == "all") return true
-        return declared == currentPlatform
-    }
-
-    private fun expandTokens(s: String, pluginRoot: File): String =
-        s.replace("{{plugin_root}}", pluginRoot.absolutePath)
+    private fun expandTokens(s: String, pluginRoot: File): String = expandTokens(s, pluginRoot.absolutePath)
 
     private fun readManifest(pluginDir: File): Pair<JSONArray, File>? {
         val f = File(pluginDir, "mcp-manifest.json")
@@ -73,7 +67,14 @@ class McpReconciler(private val homeDir: File) {
         }
     }
 
-    private fun buildServerConfig(entry: JSONObject, pluginRoot: File): JSONObject? {
+    private fun buildServerConfig(entry: JSONObject, pluginRoot: File): JSONObject? =
+        buildServerConfig(entry, pluginRoot.absolutePath, ::expandTokens)
+
+    private fun buildServerConfig(
+        entry: JSONObject,
+        pluginRoot: String,
+        expand: (String, String) -> String,
+    ): JSONObject? {
         val type = entry.optString("type", "stdio")
         if (type == "http") {
             val url = entry.optString("url")
@@ -85,12 +86,12 @@ class McpReconciler(private val homeDir: File) {
         if (cmd.isEmpty()) return null
         val config = JSONObject()
             .put("type", "stdio")
-            .put("command", expandTokens(cmd, pluginRoot))
+            .put("command", expand(cmd, pluginRoot))
         val args = entry.optJSONArray("args")
         if (args != null) {
             val expanded = JSONArray()
             for (i in 0 until args.length()) {
-                expanded.put(expandTokens(args.optString(i), pluginRoot))
+                expanded.put(expand(args.optString(i), pluginRoot))
             }
             config.put("args", expanded)
         }
@@ -106,34 +107,115 @@ class McpReconciler(private val homeDir: File) {
             claude.put("mcpServers", it)
         }
 
+        val r = applyManifestEntries(servers, manifests.map { (e, root) -> e to root.absolutePath })
+        if (r.changed) writeClaudeJsonAtomic(claude)
+        return Result(r.added, r.skippedPlatform, r.skippedManual, manifests.size)
+    }
+
+    data class ScanResult(
+        val added: Int,
+        val repaired: Int,
+        val skippedPlatform: Int,
+        val skippedManual: Int,
+    ) {
+        val changed: Boolean get() = added + repaired > 0
+    }
+
+    /**
+     * Pure manifest-scan step (mirror of desktop `applyManifestEntries`,
+     * exposed for tests). Mutates [servers]. Additive-only, except that an
+     * untouched entry an older build wrote with a literal `${PACKAGE_DIR}`
+     * is replaced — WHY: that entry never worked (nothing expanded the token),
+     * and without the repair every existing install keeps it forever because
+     * the scan never overwrites. Deep equality with the old output means an
+     * entry the user edited in any way is still left alone.
+     */
+    internal fun applyManifestEntries(
+        servers: JSONObject,
+        manifests: List<Pair<JSONArray, String>>,
+    ): ScanResult {
         var added = 0
+        var repaired = 0
         var skippedPlatform = 0
         var skippedManual = 0
-        var changed = false
-
         for ((entries, pluginRoot) in manifests) {
             for (i in 0 until entries.length()) {
                 val entry = entries.optJSONObject(i) ?: continue
                 val name = entry.optString("name")
                 if (name.isEmpty()) continue
-                if (!platformMatches(entry.optString("platform").takeIf { it.isNotEmpty() })) {
-                    skippedPlatform++; continue
-                }
+                if (!platformMatches(entry, currentPlatform)) { skippedPlatform++; continue }
                 if (!entry.optBoolean("auto", false)) { skippedManual++; continue }
-                // Never overwrite user-configured entries
-                if (servers.has(name)) continue
-
-                val config = buildServerConfig(entry, pluginRoot) ?: continue
+                val config = buildServerConfig(entry, pluginRoot, ::expandTokens) ?: continue
+                val existing = servers.optJSONObject(name)
+                if (servers.has(name)) {
+                    // Never overwrite user-configured entries (repair exception above).
+                    val legacy = buildServerConfig(entry, pluginRoot, ::legacyExpand)
+                    if (existing != null && legacy != null &&
+                        legacy.toString().contains(UNEXPANDED_PACKAGE_DIR) &&
+                        jsonEquals(existing, legacy)
+                    ) {
+                        servers.put(name, config)
+                        repaired++
+                    }
+                    continue
+                }
                 servers.put(name, config)
-                added++; changed = true
+                added++
             }
         }
-
-        if (changed) writeClaudeJsonAtomic(claude)
-        return Result(added, skippedPlatform, skippedManual, manifests.size)
+        return ScanResult(added, repaired, skippedPlatform, skippedManual)
     }
 
     companion object {
         private const val TAG = "McpReconciler"
+
+        private const val UNEXPANDED_PACKAGE_DIR = "\${PACKAGE_DIR}"
+
+        /** WHY: `${PACKAGE_DIR}` is the token the marketplace publisher
+         *  skill and two published manifests use; only `{{plugin_root}}` was
+         *  expanded, so those servers were written with a literal placeholder
+         *  and never started. Both now mean the plugin's install directory. */
+        internal fun expandTokens(s: String, pluginRoot: String): String =
+            s.replace("{{plugin_root}}", pluginRoot).replace(UNEXPANDED_PACKAGE_DIR, pluginRoot)
+
+        /** What older builds wrote: `{{plugin_root}}` expanded, `${PACKAGE_DIR}` literal. */
+        private fun legacyExpand(s: String, pluginRoot: String): String =
+            s.replace("{{plugin_root}}", pluginRoot)
+
+        // WHY: manifests use Node's names (darwin/win32) as well as the app's
+        // (macos/windows); normalise both so neither is silently a non-match.
+        private fun normalizePlatform(p: String): String = when (val v = p.trim().lowercase()) {
+            "darwin", "mac", "osx" -> "macos"
+            "win32", "win" -> "windows"
+            else -> v
+        }
+
+        /** WHY: published manifests declare a `platforms` LIST, which the
+         *  single `platform` field cannot express; reading only `platform`
+         *  let those servers through everywhere. A non-empty list wins; an
+         *  empty or missing one falls back to `platform`. */
+        internal fun platformMatches(entry: JSONObject, current: String): Boolean {
+            val list = entry.optJSONArray("platforms")
+            if (list != null && list.length() > 0) {
+                val names = (0 until list.length()).mapNotNull { list.opt(it) as? String }.map(::normalizePlatform)
+                return "all" in names || current in names
+            }
+            val declared = entry.optString("platform")
+            if (declared.isEmpty() || declared == "all") return true
+            return normalizePlatform(declared) == current
+        }
+
+        // org.json has no structural equals; compare parsed values recursively
+        // so key order in the user's file never matters.
+        private fun jsonEquals(a: Any?, b: Any?): Boolean = when {
+            a is JSONObject && b is JSONObject -> {
+                // Android's org.json has no keySet(); keys() is the portable form.
+                val ka = a.keys().asSequence().toSet()
+                ka == b.keys().asSequence().toSet() && ka.all { jsonEquals(a.opt(it), b.opt(it)) }
+            }
+            a is JSONArray && b is JSONArray ->
+                a.length() == b.length() && (0 until a.length()).all { jsonEquals(a.opt(it), b.opt(it)) }
+            else -> a == b
+        }
     }
 }

@@ -20,8 +20,11 @@ const mocks = vi.hoisted(() => ({
   // the detector purely through terminal buffer events, so chat state stays
   // empty — no awaiting-approval tools — and nothing ever notifies. Identity
   // is stable across renders, matching the real store's per-provider lifetime.
+  // Most tests leave `sessions` empty (no awaiting-approval tools); the
+  // kept-card tests below fill it per test.
+  sessions: new Map<string, any>(),
   store: {
-    getState: () => new Map(),
+    getState: () => mocks.sessions,
     subscribeAll: () => () => {},
   },
 }));
@@ -70,6 +73,7 @@ describe('usePromptDetector prompt lifecycle', () => {
     mocks.dispatch.mockClear();
     mocks.callbacks.length = 0;
     mocks.screen.text = '';
+    mocks.sessions.clear();
   });
 
   afterEach(() => {
@@ -190,5 +194,86 @@ describe('usePromptDetector prompt lifecycle', () => {
     const dismiss = mocks.dispatch.mock.calls.find((c) => c[0].type === 'DISMISS_PROMPT');
     expect(dismiss).toBeTruthy();
     expect(dismiss![0].promptId).toBe(shownId);
+  });
+});
+
+// The detector is the ONLY thing that settles a KEPT card on its own (a card
+// whose hook socket died while Claude Code's menu may still be live): after two
+// consecutive buffer flushes with no menu on screen.
+describe('usePromptDetector settles kept cards when the menu is gone', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.dispatch.mockClear();
+    mocks.callbacks.length = 0;
+    mocks.screen.text = '';
+    mocks.sessions.clear();
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  // An unrecognized menu: "a menu is present" without triggering a PromptCard.
+  const NEUTRAL_MENU = `Pick a flavor
+
+ ❯ 1. Vanilla
+   2. Chocolate`;
+  const PLAN_MENU = [
+    '   Claude has written up a plan and is ready to execute. Would you like to proceed?',
+    '   ❯ 1. Yes, auto-accept edits',
+    '     2. Yes, manually approve edits',
+    '     3. Tell Claude what to change',
+    '        shift+tab to approve with this feedback',
+  ].join('\n');
+  const NO_MENU = 'plain output, no menu here';
+  const resolvedCalls = () => mocks.dispatch.mock.calls.filter((c) => c[0].type === 'PERMISSION_CARD_RESOLVED');
+
+  function keep(toolName = 'Bash', extra: Record<string, unknown> = { expired: true }) {
+    const tool = { toolUseId: 'toolu_kept', toolName, status: 'awaiting-approval', input: {}, ...extra };
+    mocks.sessions.set('s1', { toolCalls: new Map([[tool.toolUseId, tool]]), activeTurnToolIds: new Set([tool.toolUseId]) });
+  }
+
+  it('a menu coming back resets the count', () => {
+    keep();
+    renderHook(() => usePromptDetector());
+    mocks.screen.text = NO_MENU; fireBuffer('s1');
+    mocks.screen.text = NEUTRAL_MENU; fireBuffer('s1');
+    mocks.screen.text = NO_MENU; fireBuffer('s1');
+    expect(resolvedCalls()).toEqual([]);
+  });
+
+  it('one absent flush is not enough', () => {
+    keep();
+    renderHook(() => usePromptDetector());
+    mocks.screen.text = NO_MENU; fireBuffer('s1');
+    expect(resolvedCalls()).toEqual([]);
+  });
+
+  it('two consecutive absent flushes settle the kept card', () => {
+    keep();
+    renderHook(() => usePromptDetector());
+    mocks.screen.text = NO_MENU; fireBuffer('s1'); fireBuffer('s1');
+    expect(resolvedCalls().map((c) => c[0])).toEqual([{ type: 'PERMISSION_CARD_RESOLVED', sessionId: 's1', toolUseId: 'toolu_kept' }]);
+  });
+
+  it("Claude Code's plan menu counts as present — a kept plan card is not settled while it is up", () => {
+    keep('ExitPlanMode');
+    renderHook(() => usePromptDetector());
+    mocks.screen.text = PLAN_MENU; fireBuffer('s1'); fireBuffer('s1'); fireBuffer('s1');
+    expect(resolvedCalls()).toEqual([]);
+  });
+
+  it('a LIVE ask is never settled by this rule, and still silences setup-prompt cards', () => {
+    keep('Bash', {});
+    renderHook(() => usePromptDetector());
+    mocks.screen.text = NO_MENU; fireBuffer('s1'); fireBuffer('s1');
+    mocks.screen.text = RESUME_MENU; fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('a kept card does NOT silence setup-prompt cards', () => {
+    keep();
+    renderHook(() => usePromptDetector());
+    mocks.screen.text = RESUME_MENU; fireBuffer('s1');
+    act(() => { vi.advanceTimersByTime(400); });
+    expect(mocks.dispatch.mock.calls.some((c) => c[0].type === 'SHOW_PROMPT')).toBe(true);
   });
 });

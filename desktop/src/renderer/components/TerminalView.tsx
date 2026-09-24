@@ -11,7 +11,7 @@ import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { attachRenderPause, type RenderPause } from './xterm-render-pause';
 import { useTheme } from '../state/theme-context';
-import { isTouchDevice } from '../platform';
+import { isAndroid, isRemoteMode, isTouchDevice } from '../platform';
 import { isWorkbenchMode, workbenchTerminalBacking, TERMINAL_BACKING_STYLE } from '../workbench-mode';
 import { computeTerminalSurface } from '../themes/theme-engine';
 
@@ -585,13 +585,16 @@ function TerminalView({ sessionId, visible }: Props) {
   }, [visible, sessionId]);
 
   // Write PTY output to terminal; notify registry when buffer is updated.
-  // Touch platforms (Android, remote browser) consume pty:raw-bytes (Uint8Array)
-  // from the WebSocket bridge — Tier 2 of android-terminal-data-parity. Desktop
-  // continues to consume pty:output (string) from node-pty's UTF-8-decoded stream.
-  // isTouchDevice() is a stable platform constant, so calling different hooks
-  // based on it does not violate React's rules-of-hooks (the hook order is
-  // stable for the lifetime of the renderer).
-  const useRawBytes = isTouchDevice();
+  // The Android app on its OWN runtime consumes pty:raw-bytes (Uint8Array) —
+  // Tier 2 of android-terminal-data-parity. Everything else consumes pty:output
+  // (string), which is all a desktop host ever sends, to a window or a phone.
+  // WHY not isTouchDevice(), and WHY !isRemoteMode(): a phone BROWSER is a touch
+  // device too (it reports 'browser' — remote-shim auth:ok), and the Android app
+  // PAIRED to a computer still reports 'android' (preservePlatform) — both talk to
+  // a desktop host, which never emits raw bytes, so keying on either would wait for
+  // a stream that never comes and draw a blank terminal.
+  // Both hooks are called every render; only their argument depends on this.
+  const useRawBytes = isAndroid() && !isRemoteMode();
   // Remote access batch 2 (§7): the host could not continue this terminal from
   // where the phone left off (a host restart, or a session destroyed and
   // recreated), so it says "start over" and then sends the whole buffer. Clear

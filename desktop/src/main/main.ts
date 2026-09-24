@@ -28,9 +28,11 @@ import { WindowRegistry } from './window-registry';
 import { PendingAcquireQueue } from './pending-acquire';
 import { registerIpcHandlers, buddyShowRefusal, cachedBuddyHelperStatus, refreshBuddyHelperStatus, setBuddyHelperLostHandler } from './ipc-handlers';
 import { RemoteServer } from './remote-server';
+import { getFavorites as getGameFavorites, setFavorites as setGameFavorites, getIncognito as getGameIncognito, setIncognito as setGameIncognito } from './prefs-service';
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
+import { shouldAutoApprove } from './permission-auto-approve';
 import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type AttentionReport, type SessionOwnershipAcquired } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
 import { validateHandoffDraft, type DetachedHandoffDraft } from '../shared/handoff-draft';
@@ -252,6 +254,9 @@ const hookRelay = new HookRelay(pipeName);
 // live permission/AskUserQuestion menu — typing into that menu presses Enter
 // on the highlighted option and silently answers the prompt (stray-Enter fix).
 sessionManager.setReloadPluginsGate((sessionId) => hookRelay.hasPendingPermission(sessionId));
+// An ask for a session this app does not own can never show a card: pass it
+// straight back to Claude Code's own prompt, undecided (hook-relay.ts).
+hookRelay.setSessionGate((sessionId) => sessionManager.hasSession(sessionId));
 const remoteConfig = new RemoteConfig();
 const skillProvider = new LocalSkillProvider();
 skillProvider.ensureMigrated();
@@ -404,49 +409,6 @@ protocol.registerSchemesAsPrivileged([
   // renderer. Inline mascot rigs need the scheme in Chromium's CORS allowlist.
   { scheme: 'theme-asset', privileges: { bypassCSP: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
-
-// --- Permission override classification ---
-// In bypass mode, Claude Code still fires PermissionRequest for protected paths,
-// compound cd commands, and AskUserQuestion. These regexes classify each request
-// so the user's per-category overrides can selectively auto-approve them.
-
-const TITLE_HOOK_RE = /[>|].*[/\\]\.claude[/\\]topics[/\\]topic-/;
-const CONFIG_FILE_RE = /\.(bashrc|bash_profile|zshrc|zprofile|profile|gitconfig|gitmodules|ripgreprc)\b|\.mcp\.json|\.claude\.json/;
-const PROTECTED_DIR_RE = /[/\\]\.git[/\\]|[/\\]\.claude[/\\]/;
-const CD_REDIRECT_RE = /\bcd\b.*[>]/;
-const CD_GIT_RE = /\bcd\b.*\bgit\b/;
-
-type PermissionCategory =
-  | 'titleHook'
-  | 'protectedConfigFiles'
-  | 'protectedDirectories'
-  | 'compoundCdRedirect'
-  | 'compoundCdGit'
-  | 'unknown';
-
-function classifyPermission(toolName: string, toolInput?: Record<string, unknown>): PermissionCategory {
-  const cmd = (toolInput?.command as string) || '';
-  const filePath = (toolInput?.file_path as string) || '';
-  const target = cmd || filePath;
-
-  // Title hook — always auto-approved, checked first
-  if (toolName === 'Bash' && TITLE_HOOK_RE.test(cmd)) return 'titleHook';
-
-  // Compound cd patterns (Bash only) — check before path-based patterns
-  // because a single command can match both (e.g., cd /tmp && echo > .git/config)
-  if (toolName === 'Bash') {
-    if (CD_GIT_RE.test(cmd)) return 'compoundCdGit';
-    if (CD_REDIRECT_RE.test(cmd)) return 'compoundCdRedirect';
-  }
-
-  // Protected config files
-  if (CONFIG_FILE_RE.test(target)) return 'protectedConfigFiles';
-
-  // Protected directories (.git/, .claude/)
-  if (PROTECTED_DIR_RE.test(target)) return 'protectedDirectories';
-
-  return 'unknown';
-}
 
 // In-memory cache of user's permission overrides, loaded from defaults file
 // and updated by ipc-handlers.ts whenever defaults:set is called.
@@ -1235,27 +1197,14 @@ function createWindow(firstRunManager?: FirstRunManager) {
       const toolInput = event.payload?.tool_input as Record<string, unknown> | undefined;
       const requestId = event.payload?._requestId as string;
 
-      // Never auto-approve AskUserQuestion — it needs actual user input
-      if (requestId && toolName !== 'AskUserQuestion') {
-        const category = classifyPermission(toolName, toolInput);
-
-        // Title hooks are always auto-approved (fire every few minutes)
-        if (category === 'titleHook') {
-          hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
-          return;
-        }
-
-        // Blanket approve-all override (restores old behavior)
-        if (permissionOverrides.approveAll) {
-          hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
-          return;
-        }
-
-        // Per-category overrides — approve if the user enabled this category
-        if (category !== 'unknown' && permissionOverrides[category]) {
-          hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
-          return;
-        }
+      // The whole decision lives in permission-auto-approve.ts (pure, tested).
+      // It NEVER allows AskUserQuestion or ExitPlanMode: both need the user's
+      // own answer, and Claude Code ignores a hook "allow" for them — an
+      // auto-allow there only removed the card while Claude Code's own menu
+      // stayed live with the send gate open (review 2026-09-23).
+      if (requestId && shouldAutoApprove(toolName, toolInput, permissionOverrides)) {
+        hookRelay.respond(requestId, { decision: { behavior: 'allow' } });
+        return;
       }
     }
 
@@ -1274,12 +1223,18 @@ function createWindow(firstRunManager?: FirstRunManager) {
     }
   });
 
-  // Notify renderer when a permission request socket closes (timeout/killed)
-  hookRelay.on('permission-expired', (sessionId: string, requestId: string) => {
+  // Tell the renderer a held ask ended without a user decision, and WHY:
+  // 'app-timeout' (the app's own 2h hold answered with a deny) or
+  // 'hook-closed' (the far end went away; Claude Code's own menu may still be
+  // on screen, so the card keeps waiting). See hook-relay.ts.
+  hookRelay.on('permission-expired', (sessionId: string, requestId: string, reason?: string) => {
     const evt = {
       type: 'PermissionExpired',
       sessionId,
-      payload: { _requestId: requestId },
+      // _reason rides INSIDE the payload — no channel shape change, and an
+      // older remote client simply ignores it (and resolves the card, the
+      // safe default in chat-reducer.ts).
+      payload: { _requestId: requestId, _reason: reason },
       timestamp: Date.now(),
     };
     const ownerId = windowRegistry.getOwner(sessionId);
@@ -1874,32 +1829,12 @@ void app.whenReady().then(async () => {
   }
   perfMark('main:chore:remote-server:done');
 
-  const FAVORITES_PATH = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
-
-  function readGamePrefs(): Record<string, any> {
-    try { return JSON.parse(fs.readFileSync(FAVORITES_PATH, 'utf8')); }
-    catch { return {}; }
-  }
-  function writeGamePrefs(data: Record<string, any>): boolean {
-    try { fs.writeFileSync(FAVORITES_PATH, JSON.stringify(data, null, 2)); return true; }
-    catch { return false; }
-  }
-
-  ipcMain.handle('favorites:get', async () => readGamePrefs().favorites ?? []);
-
-  ipcMain.handle('favorites:set', async (_event, favorites: string[]) => {
-    const data = readGamePrefs();
-    data.favorites = favorites;
-    return writeGamePrefs(data);
-  });
-
-  ipcMain.handle('game:getIncognito', async () => readGamePrefs().incognito ?? false);
-
-  ipcMain.handle('game:setIncognito', async (_event, incognito: boolean) => {
-    const data = readGamePrefs();
-    data.incognito = incognito;
-    return writeGamePrefs(data);
-  });
+  // Game favorites + presence incognito: prefs-service.ts owns the file, shared with
+  // remote-server.ts so a phone gets the same answers (its copy had drifted).
+  ipcMain.handle('favorites:get', async () => getGameFavorites());
+  ipcMain.handle('favorites:set', async (_event, favorites: string[]) => setGameFavorites(favorites));
+  ipcMain.handle('game:getIncognito', async () => getGameIncognito());
+  ipcMain.handle('game:setIncognito', async (_event, incognito: boolean) => setGameIncognito(incognito));
 
   // Expose the system home directory to the renderer (async to avoid blocking)
   ipcMain.handle('get-home-path', () => os.homedir());
@@ -1907,7 +1842,7 @@ void app.whenReady().then(async () => {
   // Remove the default menu bar (File, Edit, View, Window, Help)
   Menu.setApplicationMenu(null);
 
-  // Perf lab: the FAVORITES_PATH setup, the five game/favorites/home-path
+  // Perf lab: the five game/favorites/home-path
   // ipcMain.handle registrations above and Menu.setApplicationMenu(null) all sat
   // inside the theme-protocol chore's measured window (each chore is measured as
   // mark[n] − mark[n−1]). This mark separates them from registerThemeProtocol().

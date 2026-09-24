@@ -7,6 +7,7 @@ import { triggerTip } from '../guide/tips';
 import { SearchFilterPill } from '../ui/SearchFilterPill';
 import { POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { useOnRemoteReconnect } from '../../hooks/useOnRemoteReconnect';
 import type { PortableModelRef } from '../../../shared/types';
 
 // ONE model list, used everywhere a model gets chosen. Replaces four shapes for
@@ -447,12 +448,19 @@ export default function ModelPicker({
     return () => { off?.(); };
   }, []);
 
+  // A remote reconnect asks again even with the panel closed. WHY: the first load runs
+  // closed (the pill's model name, a prefill), and a request lost during a phone's drop
+  // left the list empty until the panel was opened (2026-09-11 phone pass sweep).
+  const reconnectReloadRef = useRef(false);
+  useOnRemoteReconnect(() => { reconnectReloadRef.current = true; setReload((n) => n + 1); });
+
   useEffect(() => {
     // The very first fetch happens while the panel is still closed (the pill has
     // to show the model's name, and a prefill has to resolve). After that, only
-    // an open or a finished download is worth re-asking for — closing the panel
-    // is not.
-    if (everLoadedRef.current && !open) return;
+    // an open, a finished download or a remote reconnect is worth re-asking for —
+    // closing the panel is not.
+    if (everLoadedRef.current && !open && !reconnectReloadRef.current) return;
+    reconnectReloadRef.current = false;
     everLoadedRef.current = true;
     let cancelled = false;
     // WHY no per-call `.catch(() => [])` (error inventory 2026-09-10, false message 9):

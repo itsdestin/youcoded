@@ -3569,17 +3569,35 @@ class SessionService : Service() {
                         org.json.JSONObject().put("ok", false).put("error", "artifact-not-found")) }
                     return@handleBridgeMessage
                 }
-                // A corrupt record (relative absolutePath) would resolve against the
-                // app process cwd, not the project — report it as an orphan rather
-                // than reading whatever happens to sit at that relative location.
+                // A record with a RELATIVE absolutePath (a file the agent wrote
+                // through `../`) is judged against the project root and the saved
+                // folders — mirror of desktop read-service.ts. WHY: it used to be
+                // answered "no longer on disk" whether or not the file was there;
+                // now it opens only where it is safe, and a refusal says why.
                 val extAbs = artifact.absolutePath
+                var trustedRelative: java.io.File? = null
                 if (artifact.kind != "internal" && (extAbs == null || !isAbsoluteRecorded(extAbs))) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it,
-                        org.json.JSONObject().put("ok", true).put("orphan", true)
-                            .put("artifact", artifact.toJson()).put("content", org.json.JSONObject.NULL)) }
-                    return@handleBridgeMessage
+                    // Same saved-folder store folders:list reads.
+                    val relHome = bootstrap?.homeDir ?: filesDir
+                    val savedRoots = com.youcoded.app.config.WorkingDirStore(relHome).dirs.value.map { it.path }
+                    val refusal: org.json.JSONObject? = when (val v = if (extAbs == null) com.youcoded.app.artifacts.RelativeRecordVerdict.Missing
+                                                         else com.youcoded.app.artifacts.judgeRelativeRecord(projectRoot, extAbs, savedRoots, relHome.path)) {
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.Trusted -> { trustedRelative = v.file; null }
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.Missing -> org.json.JSONObject().put("ok", true).put("orphan", true)
+                            .put("artifact", artifact.toJson()).put("content", org.json.JSONObject.NULL)
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.Protected -> org.json.JSONObject().put("ok", false).put("error", "protected-path")
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.OutsideProjects -> org.json.JSONObject().put("ok", false).put("error", "outside-projects")
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.NotInHomeProject -> org.json.JSONObject().put("ok", false).put("error", "not-in-home-project")
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.Unreadable -> org.json.JSONObject().put("ok", false)
+                            .put("error", "record-unreadable").put("code", v.code)
+                    }
+                    if (refusal != null) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, refusal) }
+                        return@handleBridgeMessage
+                    }
                 }
-                val fullPath = if (artifact.kind == "internal") java.io.File(projectRoot, artifact.path)
+                val fullPath = trustedRelative
+                               ?: if (artifact.kind == "internal") java.io.File(projectRoot, artifact.path)
                                else java.io.File(extAbs!!)
                 // Resolve symlinks BEFORE any policy decision (D5 2026-07-22):
                 // canonicalize() is string work and readBytes follows links, so a
@@ -3634,6 +3652,9 @@ class SessionService : Service() {
                         .put("ok", true).put("artifact", artifact.toJson()).put("orphan", false)
                         .put("sizeBytes", resolved.length())
                         .put("mtimeMs", resolved.lastModified().toDouble())
+                    // F3: the byte viewers read by absolute path; a trusted `../`
+                    // record hands them its judged location.
+                    trustedRelative?.let { out.put("resolvedPath", canonicalize(it.path, null)) }
                     if (EditablePathPolicy.looksBinary(head)) {
                         out.put("content", org.json.JSONObject.NULL)
                            .put("binary", true).put("truncated", false)
@@ -3679,6 +3700,7 @@ class SessionService : Service() {
                     .put("truncated", false)
                     .put("sizeBytes", resolved.length())
                     .put("mtimeMs",  resolved.lastModified().toDouble())
+                trustedRelative?.let { payload.put("resolvedPath", canonicalize(it.path, null)) }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
             }
 
@@ -3801,12 +3823,30 @@ class SessionService : Service() {
                 // process cwd instead of refusing. Matches desktop's
                 // authorizeArtifactWrite refusal (error: 'artifact-not-found').
                 val extAbs = artifact.absolutePath
+                // A `../` record is judged exactly as artifacts:get judges it (F3,
+                // review 2026-09-23), so a file that opens can also be saved — and
+                // the tier below runs on its REAL location, never the relative string.
+                var trustedSave: java.io.File? = null
                 if (artifact.kind != "internal" && (extAbs == null || !isAbsoluteRecorded(extAbs))) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it,
-                        org.json.JSONObject().put("ok", false).put("error", "artifact-not-found")) }
-                    return@handleBridgeMessage
+                    val relHome = bootstrap?.homeDir ?: filesDir
+                    val savedRoots = com.youcoded.app.config.WorkingDirStore(relHome).dirs.value.map { it.path }
+                    val refusal: org.json.JSONObject? = when (val v = if (extAbs == null) com.youcoded.app.artifacts.RelativeRecordVerdict.Missing
+                                                         else com.youcoded.app.artifacts.judgeRelativeRecord(projectRoot, extAbs, savedRoots, relHome.path)) {
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.Trusted -> { trustedSave = v.file; null }
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.Missing -> org.json.JSONObject().put("ok", false).put("error", "artifact-not-found")
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.Protected -> org.json.JSONObject().put("ok", false).put("error", "protected-path")
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.OutsideProjects -> org.json.JSONObject().put("ok", false).put("error", "outside-projects")
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.NotInHomeProject -> org.json.JSONObject().put("ok", false).put("error", "not-in-home-project")
+                        is com.youcoded.app.artifacts.RelativeRecordVerdict.Unreadable -> org.json.JSONObject().put("ok", false)
+                            .put("error", "record-unreadable").put("code", v.code)
+                    }
+                    if (refusal != null) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, refusal) }
+                        return@handleBridgeMessage
+                    }
                 }
-                val fullPath = if (artifact.kind == "internal") java.io.File(projectRoot, artifact.path)
+                val fullPath = trustedSave
+                               ?: if (artifact.kind == "internal") java.io.File(projectRoot, artifact.path)
                                else java.io.File(extAbs!!)
                 // D5 boundary (2026-07-22), mirroring desktop write-authorization:
                 // this branch historically wrote absolutePath!! with NO checks —

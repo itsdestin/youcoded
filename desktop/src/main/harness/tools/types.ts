@@ -251,6 +251,10 @@ export interface ToolContext {
    *  shrunk (resume, /clear, compaction) — see harness-session.ts — because the
    *  notice claims the model still HAS the earlier content. */
   servedReads?: Map<string, ServedRead>;
+  /** Test-only: shortens the deadline a tool declares in `caps.timeoutMs`
+   *  (Grep, Glob) so a test can hit it in milliseconds. The driver never sets
+   *  it, and it never adds a deadline to a tool that declares none. */
+  toolTimeoutMs?: number;
   /** Skill ids whose instructions are already in this conversation — loaded by
    *  the Skill tool or run by the user as /skill-name. A second Skill call for
    *  one of them gets a short "already loaded" reply instead of the body again

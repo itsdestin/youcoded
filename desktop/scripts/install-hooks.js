@@ -146,7 +146,10 @@ function applyAppHooks(settings, hookDir, srcDir = HOOK_SRC_DIR) {
     }, stats);
   }
 
-  // Register PermissionRequest with blocking relay (longer timeout for user response)
+  // Register PermissionRequest with blocking relay. Tier-3 backstop: 3h —
+  // 30m ABOVE the relay's 2h30m so Claude Code's own timeout never wins (it
+  // kills the hook with no decision; see relay-blocking.js). Margins are
+  // load-bearing; pinned by tests/permission-timeout-margins.test.ts.
   if (!settings.hooks['PermissionRequest']) {
     settings.hooks['PermissionRequest'] = [];
   }
@@ -162,7 +165,7 @@ function applyAppHooks(settings, hookDir, srcDir = HOOK_SRC_DIR) {
 
   upsert(settings.hooks['PermissionRequest'], existingBlockingIdx, {
     matcher: '',
-    hooks: [{ type: 'command', command: expectedBlockingCmd, timeout: 300 }],
+    hooks: [{ type: 'command', command: expectedBlockingCmd, timeout: 10800 }],
   }, stats);
 
   // --- Auto-titling hook ---

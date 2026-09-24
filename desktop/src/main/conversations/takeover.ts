@@ -63,6 +63,13 @@ export interface HolderTakeoverDeps {
   protectUnsafe?: (id: string) => void;
   markExpectedExit?: (desktopId: string) => void;
   clearExpectedExit?: (desktopId: string) => void;
+  // Lifts a native quiesce's send refusal (wired to nativeHost.endQuiesce). The
+  // refusal must last until destroy — a send during the flush or the lease
+  // release would otherwise run a whole turn here — so it is lifted ONLY when
+  // the handoff stops BEFORE the lease is released: the session is then still
+  // this device's. After the release another device holds the conversation,
+  // so a session that failed to destroy stays refusing (review N12).
+  endQuiesceNative?: (desktopId: string) => void;
 }
 
 // Returns the async handler wired to the lease client's onTakeoverRequest.
@@ -77,6 +84,12 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
     // sessionIdMap/getSession lookup itself throws — the handler is invoked
     // fire-and-forget (`void holderTakeover(...)`), so any escape would become an
     // unhandled rejection in Electron main.
+    // WHY (combined branch: bugfix-native's refusal lift x master's handoff
+    // rewrite): master now RETAINS the lease on every failed step (both paths
+    // below return before release), so a quiesced native session left behind
+    // by such a return is still this device's and must get its sends back.
+    const quiesced: string[] = [];
+    let leaseReleased = false;
     try {
       // 1. Reverse-map the claude id to the LIVE desktop session(s) holding it. A
       //    stale map entry (missed exit) is filtered out by the getSession check.
@@ -112,7 +125,7 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
           for (const { id, evidence } of writers) {
             if (!evidence?.current() || !pin.active()) { deps.protectUnsafe?.(claudeId); return; }
             try {
-              if (evidence.provider === 'native') await deps.quiesceNative(id);
+              if (evidence.provider === 'native') { quiesced.push(id); await deps.quiesceNative(id); }
               else if (!deps.sessionManager.sendInput(id, '\x1b')) throw new Error('interrupt unavailable');
             } catch { deps.protectUnsafe?.(claudeId); return; }
           }
@@ -124,6 +137,7 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
               deps.markExpectedExit?.(id);
               if (evidence!.provider === 'native') {
                 await deps.destroyNative(id);
+                dropQuiesced(id);
                 if (!deps.sessionManager.destroySession(id) || !evidence!.persisted()) proven = false;
               } else if ((await deps.sessionManager.stopSessionForHandoff?.(id))?.status !== 'stopped') proven = false;
             } catch { proven = false; }
@@ -148,6 +162,9 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
           if (!noCompetitor() || !writers.every(({ evidence }) => evidence?.current())) {
             deps.protectUnsafe?.(claudeId); return;
           }
+          // Marked before the call: once a release has been attempted this device
+          // may no longer hold the lease, so no send refusal is lifted after it.
+          leaseReleased = true;
           try { await deps.leaseClient.release(claudeId); } catch { /* best effort */ }
         } finally {
           pin.release();
@@ -175,6 +192,7 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
       for (const desktopId of liveDesktopIds) {
         try {
           if (deps.getProvider(desktopId) === 'native') {
+            quiesced.push(desktopId);
             await deps.quiesceNative(desktopId);
           } else {
             deps.sessionManager.sendInput(desktopId, '\x1b');
@@ -210,14 +228,28 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
         // destroy would race the release below and could still lose the tail.
         try {
           await deps.destroyNative(desktopId);
+          dropQuiesced(desktopId);
           if (!deps.sessionManager.destroySession(desktopId)) return;
         } catch (e) { console.warn('[takeover] teardown failed; retaining lease', e); return; }
       }
       // WHY: even an interrupted PTY may append again until its worker stops.
       // Do not release while any old session is still able to write.
+      leaseReleased = true;
       try { await deps.leaseClient.release(claudeId); } catch { /* best-effort */ }
       console.log(`[takeover] holder ${claudeId.slice(0, 8)}: handoff complete`);
     } catch (e) { console.warn(`[takeover] holder ${claudeId.slice(0, 8)}: unexpected escape:`, e); /* never surface out of a fire-and-forget hub-event handler */ }
+    finally {
+      // A handoff that stopped before releasing the lease leaves the session
+      // this device's: give it its sends back, or it would refuse every message
+      // for the rest of its life. After the release it is not ours to reopen.
+      if (!leaseReleased) for (const id of quiesced) { try { deps.endQuiesceNative?.(id); } catch { /* best-effort */ } }
+    }
+    // A destroyed native session has nothing left to lift. Guarded: indexOf is
+    // -1 for a CC holder, and splice(-1, 1) would drop an unrelated native id.
+    function dropQuiesced(id: string): void {
+      const at = quiesced.indexOf(id);
+      if (at !== -1) quiesced.splice(at, 1);
+    }
   };
   return (id, from, transferNonce) => deps.withAdmissionHandoff
     ? deps.withAdmissionHandoff(id, () => run(id, from, transferNonce))
