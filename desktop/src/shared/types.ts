@@ -72,10 +72,15 @@ export interface PortableModelRef {
 /** Why a native Bash ask was forced below every stored rule, so no saved grant
  *  could ever skip it (and the card offers no "Always allow"):
  *  - 'removal': the command would remove the workspace, home folder, disk root
- *    or a system folder (harness/tools/rm-target.ts);
- *  - 'secret-path': the command names a secret or credential file — the same
- *    list the file tools refuse (harness/tools/bash-secret-paths.ts). */
-export type FloorStop = 'removal' | 'secret-path';
+ *    or a system folder (harness/tools/rm-target.ts); 'removal-if-empty': only
+ *    if a variable in the path is empty; 'removal-unknown': the folder is a
+ *    command's output or reached by a cd the text cannot follow;
+ *  - 'secret-path': the command reads a secret or credential file — the same
+ *    list the file tools refuse (harness/tools/bash-secret-paths.ts);
+ *    'secret-maybe': it could (a glob, a find with no usable filter).
+ *  The card's wording comes from this, so it never claims more than the check
+ *  knows (review N11). */
+export type FloorStop = 'removal' | 'removal-if-empty' | 'removal-unknown' | 'secret-path' | 'secret-maybe';
 
 export type NativeSendResult =
   | { status: 'sent' }

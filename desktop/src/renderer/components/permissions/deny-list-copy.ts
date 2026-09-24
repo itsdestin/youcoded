@@ -51,22 +51,31 @@ const SUBLINE_BASE = 'Full auto still stops here';
 /** The stops that come from a floor below the rules rather than the deny-list
  *  (shared/types.ts FloorStop). Used when the deny-list itself has no family
  *  for the command — a PowerShell `Remove-Item`, or `cat ~/.ssh/id_rsa`. */
-/** What each floor is about, as one "this …" clause (the CLAUSES style). */
-const FLOOR_CLAUSES: Record<FloorStop, string> = {
-  removal: 'this deletes a protected folder',
-  'secret-path': 'this uses a file that holds passwords or keys',
+/** The one line an Ask / Auto-edit card shows when a floor forced it, per
+ *  floor kind. WHY (review F7, then N11): the card silently lost "Always
+ *  allow", which reads as a bug — and a single "deletes a protected folder"
+ *  line overclaimed whenever the floor only knew it COULD (an empty variable,
+ *  a folder it cannot follow, a glob). Each line claims exactly what the check
+ *  knows. */
+const FLOOR_NOTES: Record<FloorStop, string> = {
+  removal: 'Always asks: this deletes a protected folder',
+  'removal-if-empty': 'Always asks: this could delete a protected folder if a variable in it is empty',
+  'removal-unknown': "Always asks: which folder this deletes can't be known in advance",
+  'secret-path': 'Always asks: this uses a file that holds passwords or keys',
+  'secret-maybe': 'Always asks: this could read a file that holds passwords or keys',
 };
 
+/** Full auto's band for a floor the deny-list has no family for. */
 const FLOOR_COPY: Record<FloorStop, { header: string; subline: string }> = {
   removal: { header: HEADERS.deleting, subline: `${SUBLINE_BASE} — ${CLAUSES.deleting}` },
-  'secret-path': { header: 'Stopped before using a secret file', subline: `${SUBLINE_BASE} — ${FLOOR_CLAUSES['secret-path']}.` },
+  'removal-if-empty': { header: HEADERS.deleting, subline: `${SUBLINE_BASE} — this could delete a protected folder if a variable in it is empty.` },
+  'removal-unknown': { header: HEADERS.deleting, subline: `${SUBLINE_BASE} — which folder this deletes can't be known in advance.` },
+  'secret-path': { header: 'Stopped before using a secret file', subline: `${SUBLINE_BASE} — this uses a file that holds passwords or keys.` },
+  'secret-maybe': { header: 'Stopped at a possible secret file', subline: `${SUBLINE_BASE} — this could read a file that holds passwords or keys.` },
 };
 
-/** The one line an Ask / Auto-edit card shows when a floor forced it. WHY
- *  (review F7): the card silently lost "Always allow", which reads as a bug;
- *  this says the card will keep coming back, and why, in one true sentence. */
 export function floorAskNote(floorStop: FloorStop): string {
-  return `Always asks: ${FLOOR_CLAUSES[floorStop]}`;
+  return FLOOR_NOTES[floorStop];
 }
 
 export function fullAutoStopCopy(command: string | undefined, floorStop?: FloorStop): { header: string; subline: string } {
