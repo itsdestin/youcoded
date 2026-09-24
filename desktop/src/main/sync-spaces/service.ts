@@ -469,6 +469,10 @@ export async function stopSyncSpaces(): Promise<void> {
   teardownHub();
   await engine?.stop();
   engine = null;
+  // WHY: SpaceManager writes sync-spaces.json asynchronously (2026-09-24,
+  // blocking-call batch B6). Without this flush, quitting within milliseconds
+  // of a change — e.g. turning sync off — could drop that write.
+  await manager?.flush().catch(() => {});
 }
 
 // Cheap SYNCHRONOUS "is sync on?" check. Reads the same enable flag
