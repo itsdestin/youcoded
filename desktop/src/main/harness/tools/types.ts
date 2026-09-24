@@ -206,7 +206,8 @@ export interface ToolServices {
       toolUseId: string;
       document: PlanDocumentV1;
       maximumAttempts: number;
-      ceilingTokens: number;
+      // WHY no ceilingTokens (spending rework stage 1, decision 34): the
+      // validator no longer computes a per-step token ceiling to pass through.
       maxFanOut: number;
       /** The turn's live cancellation signal. A service must stop preparation
        * promptly when it aborts and call commit() immediately before its durable
@@ -218,12 +219,13 @@ export interface ToolServices {
      *  recommends for a paused plan it was handed. It only records — the user
      *  presses every button, so there is deliberately no resume, stop or
      *  add-budget callback on this seam. The host supplies the conversation. */
+    // WHY no addTokens (spending rework stage 1, decision 34): action is
+    // 'continue'|'stop' only now — there is no add-budget recommendation.
     recommend?(input: {
       sessionId: string;
       planId: string;
       handoffId: string;
       action: string;
-      addTokens?: number;
       message: string;
     }): Promise<{ ok: true } | { ok: false; error: string }>;
   };

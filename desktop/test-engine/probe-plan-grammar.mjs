@@ -64,12 +64,20 @@ let TRIALS;
 // documents would need a summary per step to pass today. The probe was NOT
 // re-run; it exercises whether a local model can fill a deep tree at all, and
 // one more short bounded string per node does not change that question.
+// 2026-09-24 (spending rework stage 1, design §2, decision 34): `budget_tokens`
+// is REMOVED (the model no longer predicts a per-step cost) and `model` is
+// ADDED, optional, advertised on all four branches like `summary` was before
+// it became required (design §9, decision 35.4). The probe was NOT re-run:
+// dropping one bounded numeric field and adding one bounded optional string
+// field changes neither the recursion bound nor the per-kind union shape the
+// probe actually exercises — the question this probe answers ("can a local
+// model fill a deep tree at all") is unaffected.
 const FIELD = {
   id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
   specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
   task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
-  budget_tokens: { type: 'integer', minimum: 500, maximum: 30000 }, // raised from 20000 on 2026-09-16 (numeric bound only; grammar evidence unchanged, not re-run)
   summary: { type: 'string', minLength: 1, maxLength: 200, description: 'One plain sentence for the user who approves this plan, in everyday words: what this step does. Not a restatement of task, no jargon, no file paths or tool names.' },
+  model: { type: 'string', maxLength: 128, description: 'Only when the user explicitly asked for a model for this step: "budget", "frontier", or an exact model id. Otherwise omit.' },
   items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
   of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
   max_iterations: { type: 'integer', minimum: 1, maximum: 5, description: 'repeat only: hard cap.' },
@@ -94,15 +102,17 @@ function stepBranch(kind) {
     kind: { type: 'string', enum: [kind], description: KIND_DESCRIPTION[kind] },
     specialist: FIELD.specialist,
     task: FIELD.task,
-    budget_tokens: FIELD.budget_tokens,
     summary: FIELD.summary,
+    model: FIELD.model,
   };
   for (const field of KIND_FIELDS[kind]) properties[field] = FIELD[field];
   return {
     type: 'object',
     additionalProperties: false,
-    // Decision 33: `summary` is advertised on every branch and required on all.
-    required: ['id', 'kind', 'specialist', 'task', 'budget_tokens', 'summary', ...KIND_FIELDS[kind]],
+    // Decision 33: `summary` is advertised on every branch and required on
+    // all. `model` (decision 35.4) is advertised on every branch too, but
+    // stays OPTIONAL — see the WHY above `FIELD`.
+    required: ['id', 'kind', 'specialist', 'task', 'summary', ...KIND_FIELDS[kind]],
     properties,
   };
 }

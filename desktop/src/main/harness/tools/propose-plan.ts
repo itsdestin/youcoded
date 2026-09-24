@@ -29,8 +29,9 @@ export function writingPlanProjection(toolUseId: string, modelLabel: string, fac
     title: '',
     status: 'writing',
     steps: [],
-    ceilingTokens: 0,
-    ceilingUsd: null,
+    // WHY no ceilingTokens/ceilingUsd here (spending rework stage 1, decision
+    // 34): both are retired — an empty shell has no estimate/spendLimit yet
+    // either, and the type no longer requires either pair.
     model: { label: modelLabel, ...(facts.local ? { local: true } : {}) },
     ...(facts.startedAt !== undefined ? { startedAt: facts.startedAt } : {}),
     seq: 0,
@@ -65,8 +66,12 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
     // Pause handoff §1 (WHY): only writes this conversation's plan file; it changes this computer only, so a plan restart checks first.
     effect: PROPOSE_PLAN_TOOL_EFFECT,
     description:
-      'Propose a bounded specialist plan for the user to approve. Use this when the work benefits from multiple independent specialists. '
-      + 'Every step names a specialist and a hard per-child token budget. The proposal does not start work; it creates the approval card. '
+      // WHY "a hard per-child token budget" is gone (spending rework stage 1,
+      // design §9, decision 34: "it forces the model to try and predict how
+      // much each step is gonna cost, and that just doesn't make sense").
+      // Nothing here is rationed any more — spending is watched, not asked.
+      'Propose a specialist plan for the user to approve. Use this when the work benefits from multiple independent specialists. '
+      + 'The proposal does not start work; it creates the approval card. '
       // Decision 30 (2026-09-18): the card's row was the first line of `task`,
       // a prompt written for a machine, so nothing in the plan ever addressed
       // the person pressing Approve. This is the only plan-writing instruction
@@ -76,7 +81,10 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
       // worst case is one specialist run, so the model must be told here too —
       // otherwise it reaches for a plan it cannot have and burns its one repair
       // on a shape no repair can fix.
-      + 'A plan must be more than one specialist doing one thing: if the whole job is a single specialist run, hire a specialist directly instead of proposing a plan.',
+      + 'A plan must be more than one specialist doing one thing: if the whole job is a single specialist run, hire a specialist directly instead of proposing a plan. '
+      // Design §9/§5, decision 35.4: model choice is opt-out-by-default —
+      // the assistant only overrides it when the user actually asked.
+      + 'Each step runs on its specialist\'s default model. Set `model` on a step only when the user explicitly asked for a particular model there.',
     shortDescription: 'Propose a bounded multi-specialist plan for user approval.',
     inputSchema: PlanDocumentSchema,
     // Model-facing constrained decoding must stay byte-for-byte on the completed
@@ -128,7 +136,8 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
           toolUseId,
           document: validated.document,
           maximumAttempts: validated.maximumAttempts,
-          ceilingTokens: validated.ceilingTokens,
+          // WHY no ceilingTokens (spending rework stage 1, decision 34): the
+          // validator no longer computes one — see plans/validator.ts.
           maxFanOut: validated.maxFanOut,
           signal: ctx.signal,
           commit,

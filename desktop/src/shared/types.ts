@@ -751,7 +751,7 @@ type PlanStatus =
   | 'writing'      // the model is still composing it (40 s – 4 min on a local model)
   | 'proposed'     // waiting for Approve / Comment
   | 'running'
-  | 'paused'       // a budget ceiling was reached — Add budget / Stop
+  | 'paused'       // the plan's optional spend limit was reached — Continue / Stop
   | 'interrupted'  // the app restarted mid-plan — Continue / Stop
   | 'completed'
   | 'stopped'
@@ -769,13 +769,14 @@ export interface PlanStepView {
    *  record has none and the row falls back. */
   summary?: string;
   /** Decision 33 — a repeat is ONE row CONTAINING its `body` (the card's only
-   *  nesting); `rounds` is a CEILING, `until` its stop condition, and
-   *  `ceilingTokens` its own worst case where `budgetTokens × fanOut` cannot
-   *  be. Why, and the pricing pin: plan-journal.ts `projectPlan`. */
+   *  nesting); `rounds` is a CEILING, `until` its stop condition. Why, and the
+   *  pricing pin: plan-journal.ts `projectPlan`.
+   *  WHY the wrapper's own worst-case field is GONE (spending rework stage 1,
+   *  design §2): decision 34 retires the per-step token ceiling entirely —
+   *  `estimate`/`spendLimit` on `PlanView` are what the card reads instead. */
   body?: PlanStepView[];
   rounds?: number;
   until?: string;
-  ceilingTokens?: number;
   /** Decision 30: a fan-out step's item labels, ONE PER CHILD — what each
    *  specialist is given, one card row each. Top-level `map` only: a
    *  repeat-body row counts rounds, so labels would not match its count. */
@@ -792,18 +793,14 @@ export interface PlanStepView {
   specialist: string;
   /** How many children this step fans out to. */
   fanOut: number;
-  /** The ENFORCED per-child cap — a hard stop, never an estimate (spec §4). */
-  budgetTokens: number;
-  /** Decision 4: each child's fixed starting cost (prompt + tool list), on TOP
-   *  of budgetTokens — rows sum to the ceiling only with it. */
-  setupTokens?: number;
-  /** Decision 35 (spending rework, stage 2 — Plan settings) — the model this
-   *  step's specialists run on. Absent/`isDefault: true` means the specialist
-   *  type's own default; Plan settings can change it while the step is still
-   *  `pending`. `locked` (set once it has started) means the row only shows
-   *  what it actually ran on — the running/finished model is never swapped
-   *  under it. `providerId`/`modelId` are the picker's own identity for a
-   *  manual choice, absent for the default. */
+  /** Decision 35 (spending rework stage 1, design §5) — the model this
+   *  step's specialists run on, real as of this design (the mockup field).
+   *  Absent/`isDefault: true` means the specialist type's own default; Plan
+   *  settings can change it while the step is still `pending`. `locked` (set
+   *  once it has started — the step record has ≥1 attempt) means the row only
+   *  shows what it actually ran on — the running/finished model is never
+   *  swapped under it. `providerId`/`modelId` are the picker's own identity
+   *  for a manual choice, absent for the default. */
   stepModel?: { label: string; isDefault: boolean; locked?: boolean; providerId?: string; modelId?: string };
   status: 'pending' | 'running' | 'done' | 'paused' | 'failed' | 'skipped';
   /** Children finished so far (≤ fanOut). */
@@ -838,28 +835,40 @@ export interface PlanChildView extends SpecialistRunView {
  * Why a plan paused (5b follow-up). Written by the executor at every pause
  * site, so the card picks its words and buttons from a FACT rather than from
  * the reason sentence:
- *  - budget: a specialist used its whole allowance (Add budget helps);
- *    ceiling-shortfall: the plan's limit is too small for the next wave;
- *    plan-limit: the dollar limit, with no token amount that would fix it;
- *    budget-refused: a request could not be budgeted or broke its bound;
- *  - local-pool: local specialists need more context than the engine has;
- *    launch-failed: a specialist could not start;
+ *  - spend-limit (spending rework stage 1, design §7, decision 37 R-4): the
+ *    plan's own optional spend limit was reached (`paused.limit` carries the
+ *    amount); Continue · Stop only — no per-step budget kind exists any more
+ *    (decision 34: "drop per-step budgets entirely");
+ *  - launch-failed: a specialist could not start;
  *  - unknown-outcome: cut off after an action that may have changed things
- *    (`tool` names it); unknown-request: cut off mid-request only;
+ *    (`tool` names it);
  *  - iteration-cap: a repeat used all its rounds (`repeat` says how many);
  *    invalid-report: a report was missing or not in the required form;
  *  - specialist-error / -stopped: it failed / was stopped before finishing;
  *    unexpected-error: anything else, real message in `reason`.
+ *
+ * WHY `budget`/`ceiling-shortfall`/`plan-limit`/`local-pool`/`budget-refused`/
+ * `unknown-request` are GONE (spending rework stage 1, design §1/§2): every
+ * one of them named a reservation/ceiling/adapter concept the rework deletes
+ * outright — there is no per-step allowance to exhaust, no ceiling to fall
+ * short of, no adapter to refuse a request, and a mid-request cutoff is no
+ * longer a distinct phase (design §3's crash-safety note). `local-pool`'s
+ * job — never overcommitting the local engine's one context pool — is now a
+ * concurrency cap in the executor (Revision 2 E2/E3), not a pause kind.
  */
 export const PLAN_PAUSE_KINDS = [
-  'budget', 'ceiling-shortfall', 'plan-limit', 'local-pool', 'budget-refused', 'launch-failed',
-  'unknown-outcome', 'unknown-request', 'iteration-cap', 'invalid-report',
+  'spend-limit', 'launch-failed',
+  'unknown-outcome', 'iteration-cap', 'invalid-report',
   'specialist-error', 'specialist-stopped', 'unexpected-error',
 ] as const;
 export type PlanPauseKind = (typeof PLAN_PAUSE_KINDS)[number];
 /** Task 9b: a button a paused plan card may offer, and what the assistant may
- *  recommend (pause handoff §2). The user always presses it. */
-export type PlanPauseAction = 'add_budget' | 'continue' | 'stop';
+ *  recommend (pause handoff §2). The user always presses it.
+ *  WHY `add_budget` is GONE (spending rework stage 1, decision 34): nothing is
+ *  rationed per step or per plan any more — Add budget is replaced by
+ *  raising (or clearing) the plan's own spend limit, a Plan settings action,
+ *  never a pause-time recommendation. */
+export type PlanPauseAction = 'continue' | 'stop';
 /** Task 10 (review 7, Q7-2 "Hide it"): the first words of the notice a paused
  *  plan sends the assistant (plan-handoff.ts). WHY shared: the renderer hides
  *  that notice's chat row by this prefix (chat-types.ts shouldRenderUserEntry)
@@ -888,8 +897,16 @@ export const PLAN_ASK_DETAIL_HEADER = 'Detail from the provider or tool (untrust
 export const PLAN_QUESTION_MAX_CHARS = 1_000;
 
 /** Where one plan specialist's attempt stands (the journal's phase):
- *  `prepared` means its first request was never sent. */
-type PlanAttemptPhase = 'prepared' | 'request-sent' | 'response-persisted' | 'committed' | 'ambiguous';
+ *  `prepared` means its first request was never sent.
+ *  WHY only three phases now (spending rework stage 1, design §2/§3): plan
+ *  children use the ordinary request path (`withRetry`, stall re-run, …), so
+ *  there is no separate in-flight request bookkeeping to phase through — a
+ *  request either hasn't gone out (`prepared`), the child is live
+ *  (`launched`), or its report is frozen (`committed`). `request-sent`,
+ *  `response-persisted` and `ambiguous` named a settlement window the
+ *  now-deleted reservation system needed to detect an input-side breach
+ *  (design §3 "Crash safety"); nothing here still measures that. */
+type PlanAttemptPhase = 'prepared' | 'launched' | 'committed';
 
 export interface PlanView {
   planId: string;
@@ -900,29 +917,33 @@ export interface PlanView {
   status: PlanStatus;
   steps: PlanStepView[];
   /** Σ(step budget × fan-out): the worst case, honest because budgets are caps.
-   *  Decision 34 retires this as anything the CARD prints — no plan grammar
-   *  change happened here (that is main-process work, a later stage), so the
-   *  field stays required and every fixture still carries it; the proposed
-   *  and running cards read `estimate`/`spendLimit` below instead. */
-  ceilingTokens: number;
+   *  WHY now OPTIONAL, not required (spending rework stage 1, design §2): the
+   *  per-step token budget this summed no longer exists in the grammar
+   *  (decision 34); the proposed and running cards read `estimate`/
+   *  `spendLimit` below instead. Kept only so an OLDER journal record — read
+   *  before it is ever re-projected — still satisfies this type; T7 deletes
+   *  the field once the renderer stops reading it. */
+  ceilingTokens?: number;
   /** Priced per model; null when the model has no published price — the card
    *  then shows the ceiling in tokens only (never a false $0.00). Same
    *  retirement note as `ceilingTokens`. */
-  ceilingUsd: number | null;
+  ceilingUsd?: number | null;
   /** `local` (final review F19): the plan is written by a model on this
    *  computer, which can take minutes — only then does the writing card say so. */
   model: { label: string; local?: boolean };
-  /** Decision 34 — a range estimate from past runs of these specialists, shown
-   *  on the PROPOSED card in place of the old worst-case ceiling ("Usually
-   *  $0.40–$2"; a guide, never a limit). Dollars when every specialist here is
-   *  priced; tokens plus a plain note (Q-5) when none are — a ChatGPT
-   *  sign-in or on-computer model ("About 300k tokens · included in your
-   *  ChatGPT plan" / "· runs on your computer"). Absent on an older record;
-   *  the card then falls back to the specialist count alone. */
+  /** Decision 34 — a range estimate from past runs of these specialists, real
+   *  as of the spending rework (design §4: `plan-estimate.ts`, wired in T5),
+   *  shown on the PROPOSED card in place of the old worst-case ceiling
+   *  ("Usually $0.40–$2"; a guide, never a limit). Dollars when every
+   *  specialist here is priced; tokens plus a plain note (Q-5) when none are
+   *  — a ChatGPT sign-in or on-computer model ("About 300k tokens · included
+   *  in your ChatGPT plan" / "· runs on your computer"). Absent on an older
+   *  record; the card then falls back to the specialist count alone. */
   estimate?: { lowUsd: number; highUsd: number } | { tokens: number; unpricedNote: string };
-  /** Decision 34/35 — the plan's own OPTIONAL spending cap: off by default,
-   *  set or changed in Plan settings before or while the plan runs. Dollars
-   *  for a priced plan, tokens for one with none (same pricing test as
+  /** Decision 34/35 — the plan's own OPTIONAL spending cap, real as of the
+   *  spending rework (design §7: `PlanService.setLimit`, wired in T6): off by
+   *  default, set or changed in Plan settings before or while the plan runs.
+   *  Dollars for a priced plan, tokens for one with none (same pricing test as
    *  `estimate`). The running and paused-at-limit cards read this instead of
    *  the retired `ceilingTokens`/`ceilingUsd` pair. */
   spendLimit?: { usd: number } | { tokens: number };
@@ -931,16 +952,19 @@ export interface PlanView {
   /** Set when the plan ran without asking because it fell under the user's limit. */
   autoApproved?: boolean;
   /** Why it is paused, in plain words, plus the step that hit its cap.
-   *  `minimumAddTokens` (Task 4): the smallest Add budget that lets the paused
-   *  specialist continue — a smaller amount would pause again on Continue.
-   *  Wording belongs to the card (Task 5). */
+   *  Wording belongs to the card (Task 5).
+   *  WHY `minimumAddTokens`/`warmMinimum` are GONE (spending rework stage 1,
+   *  decision 34): nothing is reserved per request any more, so there is no
+   *  "smallest amount that lets it continue" to compute — `limit` below (the
+   *  plan's own spend limit that was hit) is the one fact a `spend-limit`
+   *  pause carries. */
   paused?: {
-    stepId: string; reason: string; minimumAddTokens?: number;
-    /** Task 12 follow-up 1: a smaller minimum that holds for `forMs` more
-     *  milliseconds, counted from when this view was RECEIVED (never compared
-     *  with another device's clock). After that, `minimumAddTokens` applies.
-     *  `tokens: 0` = already met while it lasts. */
-    warmMinimum?: { tokens: number; forMs: number };
+    stepId: string; reason: string;
+    /** Design §2/§7: the spend limit this pause hit ("Reached your $5
+     *  limit."), for a `spend-limit` pause. Same pricing-class rule as
+     *  `spendLimit`/`estimate` above — dollars for a priced plan, tokens
+     *  otherwise. */
+    limit?: { usd: number } | { tokens: number };
     /** Task 12 review fix 2: the system's own text behind a general `reason`
      *  (a failed save's EIO, say). Never shown on the card — only handed to
      *  Report bug / Diagnose. */
@@ -978,7 +1002,9 @@ export interface PlanView {
      *  it made one. The user still presses every button. */
     handoff?: {
       state: 'pending' | 'answered';
-      recommendation?: { action: PlanPauseAction; addTokens?: number; message: string };
+      // WHY `addTokens` is gone (decision 34): `action` is 'continue'|'stop'
+      // only now — there is no add-budget recommendation to size.
+      recommendation?: { action: PlanPauseAction; message: string };
       /** Task 11 (§6): pending, but queued behind a reply already in
        *  progress — "The assistant will look at this after its current reply." */
       waiting?: 'reply';
@@ -1006,10 +1032,11 @@ export interface PlanView {
   endedAt?: number;
   /** Ordering stamp, same role as SpecialistRunView.seq. */
   seq?: number;
-  /** Decision 5: at least one specialist runs on a route whose replies can't
-   *  be capped (ChatGPT), so the limit is approximate — one reply may go past
-   *  it before the plan pauses. Wording belongs to the card (Task 5). */
-  approximateLimit?: boolean;
+  // WHY decision 5's `approximateLimit` is GONE (spending rework stage 1):
+  // it warned that an uncapped route's reply might overshoot a per-step
+  // ALLOWANCE — the design now accepts a one-reply overshoot past the whole
+  // plan's spend limit for every specialist (design §3 "Concurrency"), so the
+  // ChatGPT-specific warning has nothing left to single out.
   /** Decision 6: why a failed plan failed — the real reason, never a guess.
    *  Final review F6: `detail` is absent when the cause isn't known (the card
    *  then shows a general line); `report` is the system's own text, for the
@@ -1037,7 +1064,11 @@ export type PlanFailure = { ok: false; unsupported?: undefined; notice?: undefin
  *  limit. The card shows this as a tinted strip, never as an error. */
 type PlanNotice = { ok: false; unsupported?: undefined; error?: undefined; notice: string };
 export type PlanActionResult = { ok: true; plan: PlanView } | PlanNotice | PlanFailure | PlanUnsupported;
-export type PlanAutoApproveRead = { ok: true; underTokens: number } | PlanFailure | PlanUnsupported;
+/** WHY `underUsd`, not `underTokens` (spending rework stage 1, design §8,
+ *  decision 34 Q-6): auto-start is now "when the estimate is under $X" — a
+ *  dollar figure, never a token count — because the estimate itself is
+ *  dollars whenever any step is priced (design §4). */
+export type PlanAutoApproveRead = { ok: true; underUsd: number } | PlanFailure | PlanUnsupported;
 export type PlanSettingsWriteResult = { ok: true } | PlanFailure | PlanUnsupported;
 
 /** The `plans:event` push: one plan card changed (a journal write, or the

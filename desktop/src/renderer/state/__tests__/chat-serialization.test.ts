@@ -124,7 +124,7 @@ describe('chat state serialization', () => {
   it('round-trips a plan card through JSON chat:hydrate, and later deltas still land', () => {
     const plan = (over: Partial<PlanView>): PlanView => ({
       planId: 'plan-1', toolUseId: 'call-plan', title: 'Review', status: 'running', seq: 4,
-      steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 1, budgetTokens: 2000, status: 'running',
+      steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 1, status: 'running',
         children: [{ childId: 'kid', parentToolCallId: 'call-plan', agentType: 'reviewer', title: 'Kid', background: false, status: 'running', startedAt: 1,
           planAttempt: { stepId: 's1', attemptId: 'a1', itemIndex: 0, iteration: 0 } }] }],
       ceilingTokens: 2000, ceilingUsd: null, model: { label: 'm' }, paused: undefined,

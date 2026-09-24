@@ -16,7 +16,6 @@ import SystemMarker from '../SystemMarker';
 import CompactingCard from '../CompactingCard';
 import ThinkingIndicator from '../ThinkingIndicator';
 import { useTheme } from '../../state/theme-context';
-import { markPlanReceived } from '../../state/plan-received';
 import { useEntryFolding } from '../../hooks/use-entry-folding';
 import { findArchiveBoundary, archivedTooltip } from '../../state/archive-boundary';
 
@@ -352,8 +351,6 @@ export function BubbleFeed({ sessionId }: Props) {
     // before the propose_plan card it belongs to. `?.`: arrives with Task 6.
     const unsubPlan = window.claude.on.planEvent?.((event) => {
       if (event?.sessionId !== sessionId || !event.plan) return;
-      // Task 12 follow-up 1: MUST mirror App.tsx — countdown from arrival.
-      markPlanReceived(event.plan);
       batchDispatch({ type: 'PLAN_CHANGED', sessionId, plan: event.plan });
     });
 

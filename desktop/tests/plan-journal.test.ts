@@ -15,20 +15,25 @@ const REF: PlanRef = { cwd: '/some/project', sessionId: 'parent-1' };
 const DOC: PlanDocumentV1 = {
   goal: 'Review the auth module',
   steps: [
-    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}\nmore detail', budget_tokens: 1000, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
-    { id: 's2', kind: 'combine', specialist: 'worker', task: 'Combine the reviews', budget_tokens: 2000, summary: 'Plain sentence.', of: 's1' },
-    { id: 'loop', kind: 'repeat', specialist: 'worker', task: 'Iterate', budget_tokens: 500, summary: 'Plain sentence.', max_iterations: 3, until: 'tests pass',
-      steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Fix it', budget_tokens: 700, summary: 'Plain sentence.', items: ['x'] }] },
+    { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}\nmore detail', summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] },
+    { id: 's2', kind: 'combine', specialist: 'worker', task: 'Combine the reviews', summary: 'Plain sentence.', of: 's1' },
+    { id: 'loop', kind: 'repeat', specialist: 'worker', task: 'Iterate', summary: 'Plain sentence.', max_iterations: 3, until: 'tests pass',
+      steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Fix it', summary: 'Plain sentence.', items: ['x'] }] },
   ],
 };
 
+// WHY manifest.specialists only carries a definitionFingerprint, and binding/
+// pricing live under manifest.steps (spending rework stage 1, design §2/§5):
+// a per-step model override means two steps naming the same specialist can
+// freeze different bindings.
 function record(planId: string, overrides: Partial<PlanRecord> = {}): PlanRecord {
   return {
     planId, toolUseId: `tool-${planId}`, document: DOC, maximumAttempts: 6, maxFanOut: 2,
-    ceilingTokens: 6100, ceilingUsd: null, usedTokens: 0, status: 'proposed', seq: 1, createdAt: 10,
+    usedTokens: 0, status: 'proposed', seq: 1, createdAt: 10,
     manifest: {
       modelLabel: 'Test model',
-      specialists: { reviewer: { definitionFingerprint: 'r1', binding: { providerId: 'p', modelId: 'm' }, pricing: null, setupTokens: 300 } },
+      specialists: { reviewer: { definitionFingerprint: 'r1' }, worker: { definitionFingerprint: 'w1' } },
+      steps: {},
       permissionFingerprint: 'perm-1',
     },
     steps: ['s1', 's2', 'loop', 'fix'].map((id) => ({ id, status: 'pending' as const, attempts: [] })),
@@ -65,14 +70,14 @@ describe('strict read and quarantine', () => {
     expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false);
     await journal.mutate(REF, (file) => { file.plans.push(record('p1')); });
     const onDisk = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
-    expect(onDisk.v).toBe(1);
+    expect(onDisk.v).toBe(2);
     expect(onDisk.plans[0].planId).toBe('p1');
   });
 
   it.each([
-    ['malformed JSON', Buffer.from('{"v":1,"plans":[{"toolUseId":"tool-9" \xff', 'latin1'), /not valid JSON/],
-    ['unsupported version', Buffer.from(JSON.stringify({ v: 2, plans: [] })), /version 2/],
-    ['wrong shape', Buffer.from(JSON.stringify({ v: 1, plans: [{ planId: 'x' }] })), /expected layout/],
+    ['malformed JSON', Buffer.from('{"v":2,"plans":[{"toolUseId":"tool-9" \xff', 'latin1'), /not valid JSON/],
+    ['unsupported version', Buffer.from(JSON.stringify({ v: 3, plans: [] })), /version 3/],
+    ['wrong shape', Buffer.from(JSON.stringify({ v: 2, plans: [{ planId: 'x' }] })), /expected layout/],
   ])('%s: bytes are quarantined verbatim and every write is refused', async (_label, bytes, detail) => {
     fs.mkdirSync(path.dirname(filePath()), { recursive: true });
     fs.writeFileSync(filePath(), bytes);
@@ -105,7 +110,7 @@ describe('strict read and quarantine', () => {
       paused: { stepId: 's1', kind: 'launch-failed', reason: 'it stopped' },
     });
     fs.writeFileSync(filePath(), JSON.stringify({
-      v: 1,
+      v: 2,
       plans: [{ ...plan, paused: { ...plan.paused, launch: 'something-a-later-build-added' } }],
     }));
     const read = await journal.read(REF);
@@ -114,6 +119,42 @@ describe('strict read and quarantine', () => {
     // The plan survives whole; only the value nobody here understands is gone.
     expect(kept.paused).toEqual({ stepId: 's1', kind: 'launch-failed', reason: 'it stopped' });
     expect(fs.readdirSync(path.dirname(filePath())).filter((f) => f.includes('.quarantine-'))).toEqual([]);
+  });
+
+  // Spending rework stage 1, design §2, decision 33.4 / open question 7
+  // ("resolved here"): a v1 journal is not damaged — it is a shape this
+  // build no longer reads. It is retired silently: archived byte-for-byte
+  // next to the live path, and the conversation starts a fresh, empty v2
+  // journal with no failed card.
+  it('a v1 journal is retired to <file>.v1-retired and reads as absent, with no failed card', async () => {
+    fs.mkdirSync(path.dirname(filePath()), { recursive: true });
+    const v1Bytes = Buffer.from(JSON.stringify({ v: 1, plans: [{ planId: 'old-demo', toolUseId: 'tool-old', status: 'proposed' }] }));
+    fs.writeFileSync(filePath(), v1Bytes);
+
+    const read = await journal.read(REF);
+    expect(read).toEqual({ kind: 'absent' });
+    expect(await journal.list(REF)).toEqual([]);
+
+    const retiredPath = `${filePath()}.v1-retired`;
+    expect(fs.existsSync(retiredPath)).toBe(true);
+    expect(fs.readFileSync(retiredPath).equals(v1Bytes)).toBe(true);
+    expect(fs.existsSync(filePath())).toBe(false);
+
+    // The next write starts a fresh, empty v2 journal at the live path.
+    await journal.mutate(REF, (file) => { file.plans.push(record('p1')); });
+    const onDisk = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
+    expect(onDisk.v).toBe(2);
+    expect(onDisk.plans.map((p: PlanRecord) => p.planId)).toEqual(['p1']);
+  });
+
+  it('a v1 journal is also retired on the mutate() path, not only on read()', async () => {
+    fs.mkdirSync(path.dirname(filePath()), { recursive: true });
+    fs.writeFileSync(filePath(), JSON.stringify({ v: 1, plans: [{ planId: 'old-demo' }] }));
+    await journal.mutate(REF, (file) => { file.plans.push(record('p1')); });
+    expect(fs.existsSync(`${filePath()}.v1-retired`)).toBe(true);
+    const onDisk = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
+    expect(onDisk.v).toBe(2);
+    expect(onDisk.plans.map((p: PlanRecord) => p.planId)).toEqual(['p1']);
   });
 
   it('an unreadable journal projects each recoverable card as failed rather than disappearing', async () => {
@@ -135,16 +176,17 @@ describe('strict read and quarantine', () => {
     ]);
   });
 
-  it('projects a failed record\'s own detail, the approximate-limit flag and each row\'s setup cost', async () => {
+  // WHY no approximateLimit/budgetTokens/setupTokens assertions any more
+  // (spending rework stage 1, design §1/§2): all three are retired — see
+  // shared/types.ts and plan-journal.ts's matching WHY comments.
+  it('projects a failed record\'s own detail', async () => {
     await journal.mutate(REF, (file) => {
       const rec = record('p1', { status: 'failed', failure: { detail: 'The specialist definition file could not be read.' } });
-      rec.manifest.specialists.reviewer.approximateLimit = true;
       file.plans.push(rec);
     });
     const [view] = await journal.list(REF);
     expect(view.failure).toEqual({ detail: 'The specialist definition file could not be read.' });
-    expect(view.approximateLimit).toBe(true);
-    expect(view.steps[0]).toMatchObject({ id: 's1', budgetTokens: 1000, setupTokens: 300 });
+    expect(view.steps[0]).toMatchObject({ id: 's1' });
   });
 });
 
@@ -186,11 +228,14 @@ describe('mutation chokepoint', () => {
     expect(events).toEqual([]);
   });
 
+  // WHY no ceilingTokens/ceilingUsd/budgetTokens assertions any more
+  // (spending rework stage 1, design §1/§2, decision 34): none of the three
+  // exist any more — there is no per-step token budget to sum.
   it('projects top-level rows, repeat bodies with their iteration multiplier, and the card fields', () => {
     const view = projectPlan(record('p1', { status: 'running', usedTokens: 5, startedAt: 20, autoApproved: true }));
     expect(view).toMatchObject({
       planId: 'p1', toolUseId: 'tool-p1', title: 'Review the auth module', status: 'running',
-      ceilingTokens: 6100, ceilingUsd: null, model: { label: 'Test model' }, usedTokens: 5, autoApproved: true, seq: 1,
+      model: { label: 'Test model' }, usedTokens: 5, autoApproved: true, seq: 1,
     });
     // Decision 33: a repeat is ONE row that CONTAINS its body — the loop, its
     // round cap and its stop condition now have somewhere to appear.
@@ -202,11 +247,9 @@ describe('mutation chokepoint', () => {
     expect(view.steps[2].rounds).toBe(3);
     expect(view.steps[2].until).toBe('tests pass');
     // The body rows are exactly the rows the flattened projection produced.
-    expect(view.steps[2].body!.map((s) => [s.id, s.kind, s.fanOut, s.budgetTokens, s.title])).toEqual([
-      ['fix', 'map', 3, 700, 'Fix it'],
+    expect(view.steps[2].body!.map((s) => [s.id, s.kind, s.fanOut, s.title])).toEqual([
+      ['fix', 'map', 3, 'Fix it'],
     ]);
-    // Σ(each row's worst case) is still the ceiling the validator derived.
-    expect(view.steps.reduce((n, s) => n + (s.ceilingTokens ?? s.fanOut * s.budgetTokens), 0)).toBe(6100);
   });
 
   // The card knew only "2 reviewers" and never on WHAT, although the document's
@@ -255,9 +298,11 @@ describe('mutation chokepoint', () => {
 });
 
 describe('5b follow-up: pause facts and attempt phase reach the card', () => {
-  const attempt = (attemptId: string, phase: 'prepared' | 'request-sent', childId: string) => ({
+  // WHY only 'prepared'/'launched' (spending rework stage 1, design §2/§3):
+  // no separate in-flight request phase exists any more.
+  const attempt = (attemptId: string, phase: 'prepared' | 'launched', childId: string) => ({
     attemptId, itemIndex: 0, iteration: 0, childId, childTitle: childId, startedAt: 30,
-    baseTokens: 1000, addedTokens: 0, reservedTokens: 0, spentTokens: 0, phase,
+    spentTokens: 0, phase,
   });
 
   it('the pause kind, tool, rounds and note survive the strict re-read and are projected', async () => {
@@ -282,7 +327,7 @@ describe('5b follow-up: pause facts and attempt phase reach the card', () => {
     fs.mkdirSync(path.dirname(filePath()), { recursive: true });
     const bad = record('p1', { status: 'paused', paused: { stepId: 's1', reason: 'r' } });
     (bad.paused as any).kind = 'made-up';
-    fs.writeFileSync(filePath(), JSON.stringify({ v: 1, plans: [bad] }));
+    fs.writeFileSync(filePath(), JSON.stringify({ v: 2, plans: [bad] }));
     expect((await journal.read(REF)).kind).toBe('invalid');
   });
 
@@ -292,17 +337,17 @@ describe('5b follow-up: pause facts and attempt phase reach the card', () => {
     expect(projectPlan((await journal.get(REF, 'p1'))!).paused).toEqual({ stepId: 's1', reason: 'r', actions: ['continue', 'stop'] });
   });
 
-  it('each specialist row carries its attempt phase: prepared (never sent) vs request-sent', () => {
+  it('each specialist row carries its attempt phase: prepared (never sent) vs launched', () => {
     const view = projectPlan(record('p1', {
       status: 'stopped',
       steps: [
-        { id: 's1', status: 'skipped', attempts: [attempt('a1', 'prepared', 'kid-1'), attempt('a2', 'request-sent', 'kid-2')] },
+        { id: 's1', status: 'skipped', attempts: [attempt('a1', 'prepared', 'kid-1'), attempt('a2', 'launched', 'kid-2')] },
         ...['s2', 'loop', 'fix'].map((id) => ({ id, status: 'pending' as const, attempts: [] })),
       ],
     }));
     expect(view.steps[0].children!.map((c) => [c.childId, c.status, c.phase])).toEqual([
       ['kid-1', 'interrupted', 'prepared'],
-      ['kid-2', 'interrupted', 'request-sent'],
+      ['kid-2', 'interrupted', 'launched'],
     ]);
   });
 });
@@ -311,18 +356,23 @@ describe('repeat projection', () => {
   const LOOP: PlanDocumentV1 = {
     goal: 'Loop',
     steps: [
-      { id: 'r', kind: 'repeat', specialist: 'worker', task: 'Loop', budget_tokens: 500, summary: 'Keep going until the tests pass.', max_iterations: 5, until: 'done',
+      { id: 'r', kind: 'repeat', specialist: 'worker', task: 'Loop', summary: 'Keep going until the tests pass.', max_iterations: 5, until: 'done',
         steps: [
-          { id: 'rev', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1000, summary: 'Three helpers each read one part.', items: ['a', 'b', 'c'] },
-          { id: 'chk', kind: 'verify', specialist: 'reviewer', task: 'Check', budget_tokens: 800, summary: 'One helper says whether it is right yet.', of: 'rev' },
+          { id: 'rev', kind: 'map', specialist: 'reviewer', task: 'Review {item}', summary: 'Three helpers each read one part.', items: ['a', 'b', 'c'] },
+          { id: 'chk', kind: 'verify', specialist: 'reviewer', task: 'Check', summary: 'One helper says whether it is right yet.', of: 'rev' },
         ] },
     ],
   };
   const loopRecord = () => record('p1', {
-    document: LOOP, ceilingTokens: 5 * (3 * 1000 + 800),
+    document: LOOP,
     steps: ['r', 'rev', 'chk'].map((id) => ({ id, status: 'pending' as const, attempts: [] })),
   });
 
+  // WHY no worst-case token assertion any more (spending rework stage 1,
+  // design §1/§2, decision 34): "THE PRICING PIN" (the old ceiling-matches-
+  // the-flattened-projection test) is retired along with `budgetTokens`/
+  // `setupTokens`/`ceilingTokens` — there is no per-step token ceiling left
+  // to keep from moving.
   it('draws a repeat as ONE row carrying its body, its rounds and its stop condition', () => {
     const view = projectPlan(loopRecord());
     expect(view.steps.map((s) => [s.id, s.kind, s.fanOut])).toEqual([['r', 'repeat', 20]]);
@@ -330,47 +380,20 @@ describe('repeat projection', () => {
     expect(view.steps[0].until).toBe('done');
     // The body keeps its own kinds — the card no longer needs a "repeat" label
     // on every inner row, because the row above them says it once.
-    expect(view.steps[0].body!.map((s) => [s.id, s.kind, s.fanOut, s.budgetTokens])).toEqual([
-      ['rev', 'map', 15, 1000],
-      ['chk', 'verify', 5, 800],
+    expect(view.steps[0].body!.map((s) => [s.id, s.kind, s.fanOut])).toEqual([
+      ['rev', 'map', 15],
+      ['chk', 'verify', 5],
     ]);
-  });
-
-  // THE PRICING PIN (task 21). The ceiling the user approves may not move by a
-  // single token because a repeat changed shape on the card. `oldRows` is the
-  // projection exactly as it was before decision 33 — one row per body step,
-  // fan-out times the round cap — and both totals the card reads off the rows
-  // (Σ fan-out for the specialist count, Σ worst case for the money) must match
-  // it document for document.
-  it('costs the same as the flattened projection it replaced, to the token', () => {
-    const rec = loopRecord();
-    // The setup cost the card adds per specialist (decision 4), as the rows
-    // have always carried it.
-    const setup = (id: string) => rec.manifest.specialists[id]?.setupTokens ?? 0;
-    const oldRows = LOOP.steps.flatMap((step) => (step.kind === 'repeat'
-      ? step.steps!.map((inner) => ({
-        fanOut: (inner.kind === 'map' ? inner.items!.length : 1) * step.max_iterations!,
-        perChild: inner.budget_tokens + setup(inner.specialist),
-      }))
-      : [{ fanOut: step.kind === 'map' ? step.items!.length : 1, perChild: step.budget_tokens + setup(step.specialist) }]));
-    const rows = projectPlan(rec).steps;
-    const newTotal = rows.reduce((n, s) => n + (s.ceilingTokens ?? (s.budgetTokens + (s.setupTokens ?? 0)) * s.fanOut), 0);
-
-    expect(rows.reduce((n, s) => n + s.fanOut, 0)).toBe(oldRows.reduce((n, s) => n + s.fanOut, 0));
-    expect(newTotal).toBe(oldRows.reduce((n, s) => n + s.fanOut * s.perChild, 0));
-    // Spelt out, so a change to either side has to face the arithmetic:
-    // 5 rounds × (3 reviewers × (1,000 + 300 setup) + 1 × (800 + 300)).
-    expect(newTotal).toBe(5 * (3 * 1_300 + 1_100));
   });
 
   it('carries the body\'s progress and spend onto the repeat\'s own row', () => {
     const attempt = (spent: number) => ({
       attemptId: `a${spent}`, itemIndex: 0, iteration: 0, childId: `c${spent}`, childTitle: 'c', startedAt: 1,
-      baseTokens: 1000, addedTokens: 0, reservedTokens: 0, spentTokens: spent,
+      spentTokens: spent,
       phase: 'committed' as const, terminal: 'completed' as const, completedAt: 2,
     });
     const view = projectPlan(record('p1', {
-      document: LOOP, ceilingTokens: 5 * (3 * 1000 + 800), status: 'running',
+      document: LOOP, status: 'running',
       steps: [
         { id: 'r', status: 'running' as const, attempts: [] },
         { id: 'rev', status: 'running' as const, attempts: [attempt(300), attempt(400)] },
@@ -506,27 +529,11 @@ describe('lease and fencing', () => {
   });
 });
 
-describe('recovery settles holds in the same write (Task 4)', () => {
-  it('an interrupted plan is never visible while it still holds budget', async () => {
-    await seed(record('p1', {
-      status: 'running',
-      steps: [{ id: 's1', status: 'running', attempts: [{
-        attemptId: 'a', itemIndex: 0, iteration: 0, baseTokens: 1000, addedTokens: 0, reservedTokens: 1000, spentTokens: 0, phase: 'prepared',
-      }] }],
-    }));
-    const seen: number[] = [];
-    const j = new PlanJournal({
-      home, identity: { instanceId: 'inst-a', pid: 111 }, isProcessAlive: () => false,
-      onEvent: (e) => {
-        const onDisk = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
-        seen.push(onDisk.plans[0].steps[0].attempts[0].reservedTokens);
-        expect(e.plan.status).toBe('interrupted');
-      },
-    });
-    await j.recoverInterrupted(REF, { onInterrupt: (plan) => { for (const s of plan.steps) for (const a of s.attempts) a.reservedTokens = 0; } });
-    expect(seen).toEqual([0]);
-  });
-});
+// WHY the "recovery settles holds" describe block is GONE (spending rework
+// stage 1, design §1/§3): it proved an interrupted plan's `reservedTokens`
+// was given back before the card could show it — a field, and a hold, that
+// no longer exist. `recoverAttempt` (plan-executor.ts) now charges nothing
+// on recovery; there is nothing left to settle at the journal layer.
 
 describe('committed reports', () => {
   async function leased(): Promise<string> {
@@ -535,8 +542,8 @@ describe('committed reports', () => {
     if (!l.ok) throw new Error('setup');
     await journal.mutateFenced(REF, 'p1', l.fence, (plan) => {
       plan.steps[0].attempts.push({
-        attemptId: 'a1', itemIndex: 0, iteration: 0, baseTokens: 1000, addedTokens: 0,
-        reservedTokens: 1000, spentTokens: 0, phase: 'response-persisted',
+        attemptId: 'a1', itemIndex: 0, iteration: 0,
+        spentTokens: 0, phase: 'launched',
       });
     });
     return l.fence;
@@ -546,7 +553,7 @@ describe('committed reports', () => {
     const fence = await leased();
     await journal.commitAttempt(REF, 'p1', fence, 's1', 'a1', { terminal: 'completed', reportText: 'all good', spentTokens: 400 });
     const attempt = (await journal.get(REF, 'p1'))!.steps[0].attempts[0];
-    expect(attempt).toMatchObject({ phase: 'committed', terminal: 'completed', reportText: 'all good', spentTokens: 400, reservedTokens: 0, completedAt: 1000 });
+    expect(attempt).toMatchObject({ phase: 'committed', terminal: 'completed', reportText: 'all good', spentTokens: 400, completedAt: 1000 });
     expect(projectPlan((await journal.get(REF, 'p1'))!).steps[0]).toMatchObject({ done: 1, usedTokens: 400 });
 
     await expect(journal.commitAttempt(REF, 'p1', fence, 's1', 'a1', { terminal: 'completed', reportText: 'rewritten', spentTokens: 1 }))

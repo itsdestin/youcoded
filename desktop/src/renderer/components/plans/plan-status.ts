@@ -42,14 +42,16 @@ function pausedDetail(plan: PlanView): string {
   // "reached its limit" for every other pause — including an unsaved-progress
   // (unexpected-error) pause, which has nothing to do with a limit.
   switch (plan.paused?.kind) {
-    case 'budget': case 'ceiling-shortfall': case 'plan-limit':
+    // Design §7, decision 37 R-4 (spending rework stage 1): the plan's own
+    // spend limit — the one spend-related pause kind left.
+    case 'spend-limit':
       return 'paused — reached its limit';
-    // Only a revised plan can help these (pause-routing.ts: Stop only).
-    case 'iteration-cap': case 'budget-refused': case 'local-pool':
+    // Only a revised plan can help this (pause-routing.ts: Stop only).
+    case 'iteration-cap':
       return 'paused — needs a revised plan';
     case 'specialist-stopped':
       return 'paused — a specialist was stopped';
-    case 'unexpected-error': case 'specialist-error': case 'launch-failed': case 'invalid-report': case 'unknown-request': case 'unknown-outcome':
+    case 'unexpected-error': case 'specialist-error': case 'launch-failed': case 'invalid-report': case 'unknown-outcome':
       return 'paused — something went wrong';
     // A record from before `kind`: say nothing about why.
     default:

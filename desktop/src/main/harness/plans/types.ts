@@ -13,7 +13,18 @@ import { PLAN_PAUSE_KINDS, PLAN_QUESTION_MAX_CHARS, type PlanView } from '../../
 import type { ToolEffect } from '../tools/types';
 import type { PlanPauseAction, PlanRecoveryCause } from './pause-routing';
 
-export const PLAN_JOURNAL_VERSION = 1 as const;
+// WHY v2, with no reader for v1 (spending rework stage 1, design §2,
+// decision 33.4 / open question 7 "resolved here"): the reservation/ceiling
+// shapes v1 journals hold (`budgetTokens`, `ceilingTokens`, `tranches`,
+// `baseTokens`/`addedTokens`/`reservedTokens`, the five-phase attempt state)
+// have no v2 equivalent to migrate INTO — there is nothing left to convert a
+// per-step token ceiling to. `PlanJournal`'s strict version check
+// (`parseJournal`) already refuses to read a mismatched `v`; the host's
+// startup path renames a `v: 1` file to `<file>.v1-retired` and starts a
+// fresh empty v2 journal for that conversation, showing no failed card —
+// "all of the existing plans are demos" (decision 33's `summary` note
+// applies here too; Destin accepted this explicitly for the rework).
+export const PLAN_JOURNAL_VERSION = 2 as const;
 
 /**
  * Final review F6: a proposal refused for a reason written for people (the
@@ -70,15 +81,12 @@ function notReadySentence(list: readonly PlanNotReadySpecialist[]): string {
 
 const TOOL_EFFECTS = ['read', 'local', 'external'] as const satisfies readonly ToolEffect[];
 const PLAN_RECOVERY_CAUSES = ['launch-failed', 'specialist-error', 'invalid-report', 'unknown-request', 'unknown-outcome'] as const satisfies readonly PlanRecoveryCause[];
-const PLAN_PAUSE_ACTIONS = ['add_budget', 'continue', 'stop'] as const satisfies readonly PlanPauseAction[];
+// WHY only two actions now (spending rework stage 1, decision 34): nothing is
+// rationed per step or per plan any more, so there is no "add_budget" to
+// recommend or to press — see shared/types.ts PlanPauseAction.
+const PLAN_PAUSE_ACTIONS = ['continue', 'stop'] as const satisfies readonly PlanPauseAction[];
 
 const nonNegativeInt = z.number().int().min(0);
-
-/** Final review F1: an Add budget request id is at most this long. */
-export const PLAN_BUDGET_REQUEST_ID_MAX_CHARS = 128;
-/** Final review F1: how many applied request ids one pause remembers (the
- *  oldest is dropped first; a person never presses this many times). */
-export const PLAN_BUDGET_REQUESTS_KEPT = 16;
 
 /** A frozen model binding for one specialist, captured when the plan is proposed. */
 const FrozenBindingSchema = z.object({
@@ -92,6 +100,20 @@ const FrozenBindingSchema = z.object({
  * change to any of these means the approved plan no longer describes what
  * would run, so it must be re-proposed instead of silently widening consent
  * or repricing (design §2/§3).
+ *
+ * WHY the binding/pricing live per-STEP now, not per-specialist (spending
+ * rework stage 1, design §2/§5, decision 35): a per-step model override
+ * means two steps naming the SAME specialist can freeze two different
+ * bindings — `specialists[id]` can no longer hold one binding for all of
+ * them. `steps[leafStepId]` is keyed by every LEAF step id in the document
+ * (map/verify/combine — a repeat's body steps included), each resolved once
+ * by `resolveManifest` (T4) and frozen: the binding it runs on, the card's
+ * label, its pricing snapshot, and whether that binding came from the
+ * specialist's own `default`, the plan `document`'s per-step `model`, or a
+ * `user` override via Plan settings (design §5's three-step resolution
+ * order). `specialists[id]` keeps only what is genuinely per-specialist:
+ * its definition fingerprint, still compared to catch a roster change
+ * between proposal and Approve/Continue.
  */
 const ExecutionManifestSchema = z.object({
   /** The label the card shows under the plan. */
@@ -99,31 +121,27 @@ const ExecutionManifestSchema = z.object({
   /** Keyed by specialist id — one entry per distinct specialist the plan names. */
   specialists: z.record(z.string(), z.object({
     definitionFingerprint: z.string().min(1),
+  }).strict()),
+  /** Keyed by every leaf step id (design §5). */
+  steps: z.record(z.string(), z.object({
     binding: FrozenBindingSchema,
-    /** A PlanPricingSnapshot (plan-budget.ts owns its meaning): priced rates,
-     *  free, or local. null means "no published price", never "free".
-     *  WHY still unknown here: an unrecognized snapshot must not quarantine the
-     *  whole journal — plan-budget reads it strictly and treats anything it
-     *  can't parse as "no published price". */
+    label: z.string().min(1),
+    /** A PlanPricingSnapshot (plan-spend.ts owns its meaning, T2): priced
+     *  rates, free, or local. null means "no published price", never "free".
+     *  WHY still unknown here: an unrecognized snapshot must not quarantine
+     *  the whole journal — plan-spend reads it strictly and treats anything
+     *  it can't parse as "no published price". */
     pricing: z.unknown().nullable(),
-    /** Decision 4: this specialist's fixed starting cost — its system prompt,
-     *  tool schemas and framing at the budget adapter's certified bound
-     *  (budget-adapter.ts `setupBound`). Counted on top of each step's
-     *  budget_tokens in the ceiling and in every attempt's allowance. */
-    setupTokens: nonNegativeInt,
-    /** Decision 5: this specialist runs on a route whose replies can't be
-     *  capped (ChatGPT), so the plan's limit is approximate. */
-    approximateLimit: z.boolean().optional(),
+    source: z.enum(['default', 'document', 'user']),
   }).strict()),
   permissionFingerprint: z.string().min(1),
 }).strict();
 export type ExecutionManifest = z.infer<typeof ExecutionManifestSchema>;
 
-/** Revision 5: a request's prompt, named by its prefix-chain link
- *  (budget-adapter.ts `planRequestPrefix`). */
-const PrefixLinkSchema = z.object({ messages: nonNegativeInt, hash: z.string().min(1) }).strict();
-
-const ATTEMPT_PHASES = ['prepared', 'request-sent', 'response-persisted', 'committed', 'ambiguous'] as const;
+// WHY only three phases now (spending rework stage 1, design §2/§3): plan
+// children use the ordinary request path, so there is no separate in-flight
+// request state to phase through — see shared/types.ts's matching note.
+const ATTEMPT_PHASES = ['prepared', 'launched', 'committed'] as const;
 type AttemptPhase = (typeof ATTEMPT_PHASES)[number];
 
 /** One specialist launch (or safe relaunch) inside a step. */
@@ -140,33 +158,23 @@ const PlanAttemptSchema = z.object({
   brief: z.string().optional(),
   /** The spawn-time manifest entry actually used (Task 4 fills it). */
   manifest: ExecutionManifestSchema.optional(),
-  baseTokens: nonNegativeInt,
-  addedTokens: nonNegativeInt,
-  reservedTokens: nonNegativeInt,
+  // WHY baseTokens/addedTokens/reservedTokens/requestInputBound/
+  // requestReservedInput/requestPrefix/lastRequest/softLimit/
+  // ambiguityReported are ALL GONE (spending rework stage 1, design §1/§3,
+  // decision 34): every one of them named the reservation system's
+  // bookkeeping for an ALLOWANCE held against a request before it was sent —
+  // `afterReply` (plan-spend.ts, T2) instead records what a reply actually
+  // cost AFTER the fact, so there is nothing to reserve, no settlement window
+  // to detect an input-side breach in, and no soft/hard adapter distinction.
+  /** What this attempt has cost so far, in the estimate's own unit
+   *  (`billedEquivalentTokens`, design §3) — summed into `plan.usedTokens`
+   *  by the SAME journal write that records it. */
   spentTokens: nonNegativeInt,
+  /** Design §3: this attempt's priced spend, summed into `plan.usedUsd`.
+   *  Absent exactly when `spentTokens` is priced by no known rate yet
+   *  (free/local/no-published-price), matching `usedUsd`'s own optionality. */
+  spentUsd: z.number().min(0).optional(),
   phase: z.enum(ATTEMPT_PHASES),
-  /** While a request is unsettled: the certified input bound it was reserved
-   *  with, so settlement can detect an input-side breach (Task 3 review). */
-  requestInputBound: nonNegativeInt.optional(),
-  /** Revision 5 (decision 22), while a request is unsettled: the smaller
-   *  input side it reserved because the provider's cache was warm (absent =
-   *  the full bound above was reserved). */
-  requestReservedInput: nonNegativeInt.optional(),
-  /** Revision 5, while a request is unsettled: the prompt it sent. */
-  requestPrefix: PrefixLinkSchema.optional(),
-  /** Revision 5: the last request of this attempt that completed with a
-   *  usage report — when, and the prompt it sent. The next request is
-   *  reserved warm only if it starts with that same prompt within the
-   *  route's cache window. */
-  lastRequest: PrefixLinkSchema.extend({ at: z.number() }).strict().optional(),
-  /** Set once a request went out through a soft (uncapped) adapter. */
-  softLimit: z.boolean().optional(),
-  /** Task 4: set in the SAME write that paused the plan to tell the user this
-   *  attempt's last request/action has an unknown outcome. WHY a flag: an
-   *  attempt also becomes `ambiguous` silently (the pausing path charges an
-   *  unsettled sibling in full). Only an ambiguity the user has actually been
-   *  shown may be picked up again by Continue; an unshown one pauses first. */
-  ambiguityReported: z.boolean().optional(),
   /** Task 9a (pause handoff §1): a report-only retry after an invalid report.
    *  It continues the failed attempt's specialist session (`childId` is set
    *  when it is reserved), with one dedicated message (`brief`), tools
@@ -206,26 +214,31 @@ const PlanLeaseSchema = z.object({
 }).strict();
 export type PlanLease = z.infer<typeof PlanLeaseSchema>;
 
-/** One Add budget authorization (design §4). */
-const PlanTrancheSchema = z.object({
-  trancheId: z.string().min(1),
-  stepId: z.string().min(1),
-  attemptId: z.string().min(1).optional(),
-  tokens: z.number().int().min(1),
-  at: z.number(),
-  /** Task 4 review item 1: added while the pause named no specialist (a plan
-   *  limit shortfall). It raises the plan limit only and is never claimed by
-   *  a new attempt — an allowance that grew with the limit could never fit. */
-  ceilingOnly: z.literal(true).optional(),
-  /** Final review F4: added while the pause was a report turn that had too
-   *  little allowance. Claimed only by the report turn for that failed
-   *  attempt, never by any other specialist. */
-  reportOnlyOf: z.string().min(1).optional(),
-}).strict();
-type PlanTranche = z.infer<typeof PlanTrancheSchema>;
+// WHY Add budget's authorization record is GONE (spending rework stage 1,
+// design §1, decision 34): there is no per-step or per-plan token allowance
+// left to enlarge. Spend limit changes go through `PlanService.setLimit`
+// (design §7, T6) and land directly on `plan.spendLimit` — no tranche ledger.
 
 const JOURNAL_PLAN_STATUSES =['proposed', 'running', 'paused', 'interrupted', 'completed', 'stopped', 'failed'] as const;
 export type JournalPlanStatus = (typeof JOURNAL_PLAN_STATUSES)[number];
+
+/** Design §2/§7: a plan's spend limit, or the limit a `spend-limit` pause
+ *  hit — dollars for a priced plan, tokens for one with no priced step (the
+ *  same pricing-class rule as `estimate`, design §4). */
+const PlanSpendLimitSchema = z.union([
+  z.object({ usd: z.number().min(0) }).strict(),
+  z.object({ tokens: nonNegativeInt }).strict(),
+]);
+
+/** Design §4: `estimatePlan`'s output (T5 builds the function; the shape is
+ *  fixed now so the record can carry it from `propose` onward). Dollars when
+ *  every specialist is priced; tokens plus a plain unpriced note otherwise
+ *  (decision 34 Q-5). */
+const PlanEstimateSchema = z.union([
+  z.object({ lowUsd: z.number().min(0), highUsd: z.number().min(0) }).strict(),
+  z.object({ tokens: nonNegativeInt, unpricedNote: z.string().min(1) }).strict(),
+]);
+export type PlanEstimate = z.infer<typeof PlanEstimateSchema>;
 
 const PlanRecordSchema = z.object({
   planId: z.string().min(1),
@@ -233,11 +246,27 @@ const PlanRecordSchema = z.object({
   document: PlanDocumentSchema,
   maximumAttempts: nonNegativeInt,
   maxFanOut: nonNegativeInt,
-  /** Worst-case tokens the user approved (grows only through Add budget). */
-  ceilingTokens: nonNegativeInt,
-  ceilingUsd: z.number().min(0).nullable(),
+  // WHY ceilingTokens/ceilingUsd are GONE (spending rework stage 1, design
+  // §1/§2, decision 34): there is no per-step token budget left to sum into
+  // a worst-case ceiling. `spendLimit`/`estimate` below are what the card
+  // reads instead.
   usedTokens: nonNegativeInt,
-  usedUsd: z.number().min(0).nullable().optional(),
+  /** Design §3: absent means no priced spend yet (a plan whose specialists
+   *  are all free/local/unpublished never gets a number here). */
+  usedUsd: z.number().min(0).optional(),
+  /** Design §2/§7: the plan's own optional spend limit, off by default, set
+   *  or changed by `PlanService.setLimit` (T6) before or while the plan
+   *  runs. */
+  spendLimit: PlanSpendLimitSchema.optional(),
+  /** Design §4: a range/tokens estimate from past runs of these specialists,
+   *  computed at propose, on `setStepModel`, and on re-freeze (T5), and
+   *  stored here so projection (`projectPlan`) stays pure. */
+  estimate: PlanEstimateSchema.optional(),
+  /** Design §5: user-set per-step model overrides ONLY — keyed by leaf step
+   *  id, absent for a step still on its specialist's default or the
+   *  document's own `model`. `PlanService.setStepModel` (T4) writes this and
+   *  re-resolves that step's `manifest.steps[id]` entry in the same write. */
+  stepModels: z.record(z.string(), FrozenBindingSchema).optional(),
   status: z.enum(JOURNAL_PLAN_STATUSES),
   /** Visible ordering stamp — bumped by every mutation that changes this plan. */
   seq: z.number().int().min(1),
@@ -245,29 +274,15 @@ const PlanRecordSchema = z.object({
   startedAt: z.number().optional(),
   endedAt: z.number().optional(),
   autoApproved: z.boolean().optional(),
-  /** attemptId (Task 3): which attempt an Add budget tranche enlarges. Absent
-   *  when the pause happened before that step had an attempt. */
   paused: z.object({
     stepId: z.string(), reason: z.string(), attemptId: z.string().optional(),
     /** Task 12 review fix 2: the system's own text behind a general `reason`,
      *  for Report bug / Diagnose only — never drawn on the card. */
     report: z.string().min(1).optional(),
-    /** Task 4: the smallest Add budget that lets the paused specialist send
-     *  its next request (its fresh resume prompt plus any soft overshoot).
-     *  Add budget lowers it by what was added; the service refuses less. */
-    minimumAddTokens: nonNegativeInt.optional(),
-    /** Task 12 follow-up 1: the smaller minimum that holds while the paused
-     *  specialist's prompt is still in the provider's cache (only the part
-     *  added since its last request must fit), valid until `until` (main's
-     *  clock: that request's time + the cache window). `minimumAddTokens` is
-     *  then the COLD minimum (the whole conversation re-sent). Add budget
-     *  lowers both; 0 means "already met" and is kept until it expires. */
-    warmMinimum: z.object({ tokens: nonNegativeInt, until: z.number() }).strict().optional(),
-    /** Task 4 round 2: the pause was the plan limit being too small for the
-     *  next wave, not one specialist running out. Add budget then raises the
-     *  limit only — even if the step has unfinished specialists — because an
-     *  allowance that grows with the limit could never make the wave fit. */
-    ceilingShortfall: z.literal(true).optional(),
+    /** Design §2/§7: the spend limit THIS pause hit ("Reached your $5
+     *  limit."), for a `spend-limit` pause — same shape as `spendLimit`
+     *  above (decision 37 R-4). */
+    limit: PlanSpendLimitSchema.optional(),
     /** 5b follow-up: why it paused, and the facts the card words it from
      *  (shared/types.ts PLAN_PAUSE_KINDS). Optional so a journal written
      *  before these fields still reads. */
@@ -294,14 +309,10 @@ const PlanRecordSchema = z.object({
     launch: z.enum(['refused', 'drift', 'not-ready']).optional().catch(() => undefined),
     retried: z.literal(true).optional(),
     toolEffect: z.enum(TOOL_EFFECTS).optional(),
-    /** Final review F1: the request ids of the Add budget presses THIS pause
-     *  already applied. WHY on the pause: a lost reply followed by Retry (or a
-     *  second press of the same button) sends the same id again and must add
-     *  nothing; a new pause is a new object, so an old id never blocks it. */
-    /** Final review F4: the pause is a report turn (for this failed attempt)
-     *  that its unspent allowance can't fund — Add budget funds exactly it. */
-    reportOnlyOf: z.string().min(1).optional(),
-    budgetRequests: z.array(z.string().min(1).max(PLAN_BUDGET_REQUEST_ID_MAX_CHARS)).max(PLAN_BUDGET_REQUESTS_KEPT).optional(),
+    // WHY reportOnlyOf/budgetRequests are GONE here (spending rework stage 1,
+    // decision 34): both named an Add budget request against this pause —
+    // "the report turn this tranche funds" and "requests already applied" —
+    // and there is no Add budget any more to fund or to dedupe.
     /** Task 9b (pause handoff §2): this pause was handed to the assistant.
      *  `pending` = the card is greyed out while the assistant looks into it;
      *  `answered` = the card has its buttons again (with the assistant's
@@ -329,9 +340,10 @@ const PlanRecordSchema = z.object({
        *  PLAN_QUESTION_MAX_CHARS). Absent when they left it blank. Review
        *  fix 3: the same constant the Ask box checks, so they can't drift. */
       question: z.string().min(1).max(PLAN_QUESTION_MAX_CHARS).optional(),
+      // WHY addTokens is gone (decision 34): action is 'continue'|'stop'
+      // only now — there is no add-budget recommendation to size.
       recommendation: z.object({
         action: z.enum(PLAN_PAUSE_ACTIONS),
-        addTokens: z.number().int().min(1).optional(),
         message: z.string().min(1).max(280),
       }).strict().optional(),
       problem: z.object({
@@ -358,17 +370,14 @@ const PlanRecordSchema = z.object({
      *  card can still say the specialist was retried. */
     reset: z.literal(true).optional(),
   }).strict()).optional(),
-  /** Task 3: every Add budget, in order. A tranche without attemptId is
-   *  waiting for the step's next attempt and is applied when it is reserved. */
-  tranches: z.array(PlanTrancheSchema).optional(),
-  /** Task 3: budget adapters whose certified bound a real response broke.
-   *  Nothing more is sent through them for this plan (design §4). */
-  disabledAdapters: z.array(z.object({ adapterId: z.string().min(1), detail: z.string() }).strict()).optional(),
+  // WHY tranches/disabledAdapters/approximateLimit are ALL GONE (spending
+  // rework stage 1, design §1, decisions 5/34): there is no Add budget
+  // ledger, no adapter to disable, and no per-specialist "replies can't be
+  // capped" warning once nothing is capped in advance — design §3 accepts
+  // one reply's overshoot past the plan's own spend limit for every running
+  // specialist, not just an uncapped route.
   revisionOf: z.string().optional(),
   revisedBy: z.string().optional(),
-  /** Decision 5: some specialist's replies can't be capped, so the limit is
-   *  approximate (one reply may overshoot before the plan pauses). */
-  approximateLimit: z.boolean().optional(),
   /** Decision 6: the real reason a failed plan failed, shown verbatim. */
   failure: z.object({ detail: z.string().min(1) }).strict().optional(),
   /** Set when a Comment retired this proposal; the replacement may not exist yet. */

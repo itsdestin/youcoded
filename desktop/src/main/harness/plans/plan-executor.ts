@@ -29,9 +29,8 @@
 // PlanRunner that turns "launch this attempt" into a real specialist session.
 import { z } from 'zod';
 import type { PlanStepV1 } from './schema';
+import { randomUUID } from 'crypto';
 import { PlanFenceError, PlanJournalUnreadableError, type PlanJournal } from './plan-journal';
-import { PLAN_REPORT_ONLY_REPLY_TOKENS, type PlanBudget, type ReserveMember, type ReserveResult } from './plan-budget';
-import type { PlanChildStop } from './budget-adapter';
 import type { PlanPauseKind } from '../../../shared/types';
 import type { PlanExecutorHooks } from './plan-service';
 import type { PlanAttemptRecord, PlanRecord, PlanRef, PlanStepRecord } from './types';
@@ -138,10 +137,12 @@ export interface PlanChildLaunch {
   recordChild(childId: string, info?: { title?: string }): Promise<void>;
 }
 
+// WHY the `stopped`/`PlanChildStop` outcome is GONE (spending rework stage 1,
+// design §1): it named a request-gate refusal (plan-budget / budget-adapter),
+// both deleted. T2's replacement halt path (a `spend-limit` pause via
+// `run.limitReached`, design §3) does not route through `PlanChildOutcome`.
 export type PlanChildOutcome =
   | { kind: 'completed'; report: string }
-  /** The plan's request gate stopped the specialist (plan-budget / adapter). */
-  | { kind: 'stopped'; stop: PlanChildStop }
   | { kind: 'failed'; detail: string }
   | { kind: 'interrupted' };
 
@@ -167,27 +168,27 @@ export type TranscriptVerdict =
    *  transcript already contains the brief. */
   | { kind: 'resumable'; briefDelivered: boolean };
 
+// WHY localPoolTokens/minimumAddTokens/launchRefusal/reportOnlyInputBound are
+// ALL GONE from this interface (spending rework stage 1, design §1):
+//  - localPoolTokens named the shared local-engine context pool's SIZE, for a
+//    token-math check; Revision 2 E2/E3 replace it with a headcount cap (at
+//    most one local-engine plan specialist at a time, keyed on the step's
+//    frozen binding) — T3's job, not a runner callback any more.
+//  - minimumAddTokens/reportOnlyInputBound sized an Add budget top-up that no
+//    longer exists.
+//  - launchRefusal named a budget-adapter refusal; nothing refuses a launch
+//    for budget reasons any more (credential readiness is `providerNotReady`,
+//    kept below).
 export interface PlanRunner {
   /** The parent's resolved concurrent-specialist count (clamped to 4 here). */
   maxConcurrent(ref: PlanRef): number;
   isWriter(ref: PlanRef, specialist: string): boolean;
-  /** The shared local-engine context pool, when any specialist in `plan` is local. */
-  localPoolTokens(ref: PlanRef, plan: PlanRecord): Promise<number | undefined>;
   /** Mint (or rebuild) the specialist and send its turn. Throws with the real
    *  reason when it cannot start. */
   launch(input: PlanChildLaunch): Promise<PlanChildHandle>;
   inspectTranscript(ref: PlanRef, childId: string): TranscriptVerdict;
   /** The journal became unreadable mid-run: show a failed card (seq = last + 1). */
   onUnreadable(ref: PlanRef, planId: string, detail: string): void;
-  /** The smallest Add budget that lets this paused attempt send its next
-   *  request (its fresh resume prompt, plus any overshoot), or undefined when
-   *  it can't be worked out. Task 12 follow-up 1: `tokens` is the COLD
-   *  minimum; `warm`, when smaller, holds until `warm.until` (main's clock). */
-  minimumAddTokens?(ref: PlanRef, plan: PlanRecord, attemptId: string): Promise<PlanMinimumAdd | undefined>;
-  /** Why `specialist` cannot run right now (no budget adapter for its route,
-   *  or that adapter was switched off), or undefined. Asked BEFORE its wave is
-   *  reserved, so a refusal never holds any budget (Task 3 obligation). */
-  launchRefusal?(ref: PlanRef, plan: PlanRecord, specialist: string): Promise<string | undefined>;
   /** Task 13 (decision 26): the provider's OWN sentence about what to fix when
    *  `specialist`'s provider cannot run right now (signed out, no key saved,
    *  no endpoint, engine not installed), or undefined when it can. Asked
@@ -195,10 +196,6 @@ export interface PlanRunner {
    *  because a credential problem fails identically every time. A FACT check —
    *  never a string match on the error text. */
   providerNotReady?(ref: PlanRef, plan: PlanRecord, specialist: string): Promise<string | undefined>;
-  /** Review fix 2: the certified input bound of the report-only request —
-   *  `message` sent next on the specialist session of `attemptId` — or
-   *  undefined when it can't be measured (then it is not attempted). */
-  reportOnlyInputBound?(ref: PlanRef, plan: PlanRecord, attemptId: string, message: string): Promise<number | undefined>;
   /** Review fix 2: the newest user message in a specialist's transcript. */
   latestUserText?(ref: PlanRef, childId: string): string | undefined;
   /** Final review F2: a run ended but its final write never landed, so the
@@ -216,8 +213,8 @@ const PLAN_BUDGET_EXHAUSTED_STOP_REASON = 'plan_budget_exhausted';
  *  text, for Report bug / Diagnose only. */
 export interface PlanOrphan { reason: string; report?: string }
 
-/** Task 12 follow-up 1: both Add budget minimums worked out at pause time. */
-export interface PlanMinimumAdd { tokens?: number; warm?: { tokens: number; until: number } }
+// WHY PlanMinimumAdd is GONE (spending rework stage 1, decision 34): no
+// worked-out Add budget minimum exists any more.
 const PLAN_PROGRESS_NOT_SAVED = "The plan stopped because its progress couldn't be saved.";
 
 /**
@@ -272,7 +269,8 @@ export interface PlanExecutorTimers {
 
 export interface PlanExecutorDeps {
   journal: PlanJournal;
-  budget: PlanBudget;
+  // WHY no `budget` dep any more (spending rework stage 1): PlanBudget is
+  // deleted — the journal alone is what createAttempts/commitReport use.
   runner: PlanRunner;
   settleDeadlineMs?: number;
   heartbeatMs?: number;
@@ -311,22 +309,22 @@ function parseRepeatDecision(text: string): { ok: true; report: string; satisfie
 
 // ---- helpers ----
 
+// WHY minimumAddTokens/ceilingShortfall/reportOnlyOf/acknowledge are ALL GONE
+// from the pause variant (spending rework stage 1, design §1/§2, decision
+// 34): none of Add budget's sizing, the ceiling-shortfall pause, the
+// report-turn funding gap, or the ambiguityReported "shown once" flag exist
+// any more. `limit` (design §2/§7) is added by T2/T6 once something actually
+// produces a `spend-limit` pause.
 type HaltRequest =
   | { kind: 'complete' }
-  /** minimumAddTokens: known up front (a ceiling shortfall, review item 1). */
   /** why/tool/repeat (5b follow-up): the facts the card words the pause
    *  from, so it never has to read `reason`. Every pause names its `why`. */
   | {
     kind: 'pause'; why: PlanPauseKind; stepId: string; reason: string; attemptId?: string;
-    minimumAddTokens?: number; ceilingShortfall?: true; tool?: string; repeat?: { rounds: number; until: string };
-    /** Final review F4: a report turn its allowance can't fund (Add budget funds it). */
-    reportOnlyOf?: string;
+    tool?: string; repeat?: { rounds: number; until: string };
     /** Task 9a: the facts pause-routing.ts reads back from the saved pause. */
     /** Task 13: `not-ready` = the specialist's provider couldn't run at all. */
     launch?: 'refused' | 'drift' | 'not-ready'; retried?: true; toolEffect?: ToolEffect;
-    /** Task 9a: this attempt's unknown outcome is shown by THIS pause, so the
-     *  settle write marks it (Continue is then the explicit recovery). */
-    acknowledge?: string;
   }
   /** finalize: PlanService's "stopped" edit, applied in the SAME write that
    *  drops the lease (review item 8). */
@@ -334,6 +332,23 @@ type HaltRequest =
   | { kind: 'interrupt' }
   /** The lease is gone (or the journal is unreadable): write nothing more. */
   | { kind: 'lost' };
+
+/** What `createAttempts` (design §3) should turn into a journal attempt
+ *  record — see its own WHY comment. Defined here now, not plan-budget.ts
+ *  (deleted, spending rework stage 1). */
+interface CreateAttemptMember {
+  stepId: string;
+  /** Restart an existing (unfinished) attempt instead of creating one. */
+  attemptId?: string;
+  itemIndex?: number;
+  iteration?: number;
+  /** The report-only retry of this committed, failed attempt (same item and
+   *  iteration, continuing its specialist session). */
+  reportOnlyOf?: string;
+  /** With reportOnlyOf: the report-only message, stored on the new attempt so
+   *  a crash before its launch still sends exactly that turn. */
+  brief?: string;
+}
 
 interface LiveChild {
   stepId: string;
@@ -442,26 +457,13 @@ function recordRecovery(plan: PlanRecord, key: RecoveryKey, cause: PlanRecoveryC
   plan.recoveries = [...(plan.recoveries ?? []), { ...key, cause, at: Date.now() }];
 }
 
-/** The sentence a pause adds about siblings it had to cut off mid-request. */
-function cutOffNote(cut: Array<{ stepId: string }>): string {
-  if (cut.length === 0) return '';
-  const steps = [...new Set(cut.map((c) => `"${c.stepId}"`))].join(', ');
-  const one = cut.length === 1;
-  const who = one ? `1 other specialist in step ${steps} was` : `${cut.length} other specialists in step${steps.includes(',') ? 's' : ''} ${steps} were`;
-  return `${who} cut off mid-request, and it isn't known whether ${one ? 'that request' : 'those requests'} finished; `
-    + `Continue lets ${one ? 'it' : 'them'} pick up from what ${one ? 'it' : 'they'} recorded.`;
-}
-
-/** Join the pause's own reason and the cut-off note as two sentences. */
-function withCutOffNote(reason: string, cut: Array<{ stepId: string }>): string {
-  const note = cutOffNote(cut);
-  if (!note) return reason;
-  return `${/[.!?]$/.test(reason.trim()) ? reason.trim() : `${reason.trim()}.`} ${note}`;
-}
+// WHY cutOffNote/withCutOffNote are GONE (spending rework stage 1, design
+// §1/§3): both worded the pessimistic-settlement sibling note ("N other
+// specialists were cut off mid-request") for a request-in-flight state that
+// no longer exists — settle no longer charges or cuts anything off.
 
 export class PlanExecutor implements PlanExecutorHooks {
   private readonly journal: PlanJournal;
-  private readonly budget: PlanBudget;
   private readonly runner: PlanRunner;
   private readonly settleDeadlineMs: number;
   private readonly heartbeatMs: number;
@@ -480,7 +482,6 @@ export class PlanExecutor implements PlanExecutorHooks {
   constructor(deps: PlanExecutorDeps) {
     this.settleWriteRetryDelaysMs = deps.settleWriteRetryDelaysMs ?? PLAN_SETTLE_WRITE_RETRY_DELAYS_MS;
     this.journal = deps.journal;
-    this.budget = deps.budget;
     this.runner = deps.runner;
     this.settleDeadlineMs = deps.settleDeadlineMs ?? PLAN_SETTLE_DEADLINE_MS;
     this.heartbeatMs = deps.heartbeatMs ?? PLAN_HEARTBEAT_MS;
@@ -676,15 +677,20 @@ export class PlanExecutor implements PlanExecutorHooks {
 
   /**
    * Before anything launches, decide what every unfinished attempt left by an
-   * earlier run means (design §3 resume):
-   *  - a stale hold (crash) is given back, to be reserved again with the wave;
-   *  - an unsettled request is charged in full and becomes ambiguous;
-   *  - a terminal transcript is committed with no request;
-   *  - an ambiguity the user has NOT been shown pauses the plan (and is marked
-   *    shown in that same write); one they HAVE been shown is picked up again,
-   *    because pressing Continue on that pause is the explicit recovery;
-   *  - a response-persisted attempt whose transcript shows a side-effecting
-   *    tool call with no result is an ambiguity too.
+   * earlier run means (design §3 resume, revised by §3 "Crash safety" for the
+   * spending rework): a `prepared` attempt never sent a request and is simply
+   * restartable; a `launched` one is read through `classifyChildTranscript` —
+   * terminal → commit with no request; an unanswered EXTERNAL call → paused
+   * (never auto-replayed) via the same routing every recoverable failure uses.
+   *
+   * // T3: the OLD "ambiguityReported" flag (now deleted from the schema —
+   * design §2) broke the loop where Continue on THIS pause would otherwise
+   * re-run this exact check and pause again for the identical unanswered
+   * call. Revision 1 D6 pins "goes to the assistant exactly as before" as a
+   * NEW named test T3 must add; until that mechanism is rebuilt without the
+   * flag, an unanswered-external pause may re-pause once more on Continue
+   * instead of relaunching — a known, narrower regression than silently
+   * replaying an external action, and never a spending change.
    */
   private async prepare(run: ActiveRun): Promise<void> {
     const plan = await this.load(run);
@@ -701,39 +707,31 @@ export class PlanExecutor implements PlanExecutorHooks {
     if (pause) this.requestHalt(run, pause);
   }
 
+  /**
+   * WHY this charges nothing and has no `ambiguous`/`request-sent` branch any
+   * more (spending rework stage 1, design §3 "Crash safety"): plan children
+   * now use the ordinary request path, so an interrupted model request has no
+   * effect outside the computer — there is nothing to release, nothing
+   * unresolved to charge, and no separate unsettled phase to detect an
+   * input-side breach in. A `prepared` attempt never sent a request and is
+   * simply restartable; a `launched` one goes through the SAME transcript
+   * classification every restart uses: a finished report commits it with no
+   * request, an unanswered call is never replayed automatically when it could
+   * have changed something outside this computer (routed exactly as before,
+   * via `routePlanPause`/`hasRecovery`), and anything else restarts.
+   */
   private async recoverAttempt(run: ActiveRun, def: PlanStepV1, original: PlanAttemptRecord, finalLeaf: boolean): Promise<HaltRequest | undefined> {
     const stepId = def.id;
     const { attemptId } = original;
-    if (original.phase !== 'request-sent' && original.reservedTokens > 0) {
-      await this.budget.releaseAttempt(run.ref, run.planId, run.fence, stepId, attemptId);
-    }
+    if (original.phase === 'prepared') return undefined;
     const verdict: TranscriptVerdict = original.childId
       ? this.runner.inspectTranscript(run.ref, original.childId)
       : { kind: 'resumable', briefDelivered: false };
-    let phase = original.phase;
-    if (phase === 'request-sent') {
-      await this.budget.chargeUnresolved(run.ref, run.planId, run.fence, stepId, attemptId);
-      phase = 'ambiguous';
-    }
-    if (phase === 'prepared') return undefined;
     if (verdict.kind === 'terminal') {
       return this.commitReport(run, def, attemptId, verdict.report, finalLeaf);
     }
-    const acknowledged = original.phase === 'ambiguous' && original.ambiguityReported === true;
-    if (acknowledged) {
-      // The user saw this ambiguity and pressed Continue: that is the explicit
-      // recovery. The attempt goes back to a settled phase so it can be
-      // reserved again (its unknown request stays charged in full).
-      await this.journal.mutateFenced(run.ref, run.planId, run.fence, (plan) => {
-        const a = this.findAttempt(plan, stepId, attemptId);
-        a.phase = 'response-persisted';
-        delete a.ambiguityReported;
-      });
-      return undefined;
-    }
-    if (phase === 'ambiguous' || verdict.kind === 'dangling-effect') {
-      const dangling = verdict.kind === 'dangling-effect' ? verdict : undefined;
-      const cause: PlanRecoveryCause = dangling ? 'unknown-outcome' : 'unknown-request';
+    if (verdict.kind === 'dangling-effect') {
+      const cause: PlanRecoveryCause = 'unknown-outcome';
       const key = { stepId, iteration: original.iteration, itemIndex: original.itemIndex };
       // Review finding 10 (decision 26): the restart-time self-recovery is the
       // other route to an automatic relaunch. Its relaunch would be stopped by
@@ -741,36 +739,28 @@ export class PlanExecutor implements PlanExecutorHooks {
       // is never shown a pause that claims the plan picked itself up when it
       // could not. Local and free — the same hook restartAfter uses.
       const notReady = await this.runner.providerNotReady?.(run.ref, await this.load(run), def.specialist);
-      // Task 9a (pause handoff §1): a cut-off request, or a cut-off call that
-      // could only read or change this computer, is picked up again by itself
-      // — once. The recovery is journalled (fenced) in the same write that
-      // makes the attempt restartable, before anything is relaunched.
+      // Task 9a (pause handoff §1): a cut-off call that could only read or
+      // change this computer is picked up again by itself — once. The
+      // recovery is journalled (fenced) in the same write that makes the
+      // attempt restartable, before anything is relaunched.
       const decided = await this.journal.mutateFenced(run.ref, run.planId, run.fence, (plan) => {
         const routing = routePlanPause(cause, {
-          ...(dangling ? { toolEffect: dangling.effect, unansweredExternal: dangling.effect === 'external' } : {}),
+          toolEffect: verdict.effect, unansweredExternal: verdict.effect === 'external',
           alreadyRecovered: hasRecovery(plan, key, cause),
           ...(notReady !== undefined ? { notReady: true } : {}),
         });
-        const a = this.findAttempt(plan, stepId, attemptId);
         if (routing.route === 'auto') {
           recordRecovery(plan, key, cause);
-          if (a.phase === 'ambiguous') a.phase = 'response-persisted';
-          delete a.ambiguityReported;
           return { auto: true as const };
         }
-        a.phase = 'ambiguous';
-        a.ambiguityReported = true;
         return { auto: false as const, retried: hasRecovery(plan, key, cause) };
       });
       if (decided.auto) return undefined;
-      const what = dangling ? `its last action (${dangling.tool})` : 'its last request';
       return {
         kind: 'pause', stepId, attemptId,
-        ...(dangling
-          ? { why: 'unknown-outcome' as const, tool: dangling.tool, toolEffect: dangling.effect }
-          : { why: 'unknown-request' as const }),
+        why: 'unknown-outcome' as const, tool: verdict.tool, toolEffect: verdict.effect,
         ...(decided.retried ? { retried: true as const } : {}),
-        reason: `A specialist in step "${stepId}" was cut off, and it isn't known whether ${what} finished. `
+        reason: `A specialist in step "${stepId}" was cut off after starting its last action (${verdict.tool}), and it isn't known whether that finished. `
           + 'Press Continue to let it pick up from what it recorded.',
       };
     }
@@ -781,6 +771,37 @@ export class PlanExecutor implements PlanExecutorHooks {
     const a = plan.steps.find((s) => s.id === stepId)?.attempts.find((x) => x.attemptId === attemptId);
     if (!a) throw new Error(`No attempt ${attemptId} in step "${stepId}".`);
     return a;
+  }
+
+  /**
+   * Design §3's `createAttempts` — replaces the deleted `PlanBudget.
+   * reserveAttempts` (spending rework stage 1). One fenced append of fresh
+   * attempt records: a member naming an existing `attemptId` is a restart
+   * (creates nothing); one naming `reportOnlyOf` is the report-only retry of
+   * a failed attempt, continuing its item/iteration; anything else is a
+   * fresh item. WHY unconditional: there is no allowance left to reserve, and
+   * — T3 — the wave-start spend-limit check ("runWave first checks used ≥
+   * limit on the plan it loaded", design §3) is not built here.
+   */
+  private async createAttempts(
+    ref: PlanRef, planId: string, fence: string, members: CreateAttemptMember[],
+  ): Promise<{ attempts: Array<{ stepId: string; attemptId: string }> }> {
+    return this.journal.mutateFenced(ref, planId, fence, (plan) => {
+      const attempts = members.map((member) => {
+        if (member.attemptId !== undefined) return { stepId: member.stepId, attemptId: member.attemptId };
+        const stepRec = plan.steps.find((s) => s.id === member.stepId)!;
+        const attemptId = randomUUID();
+        const record: PlanAttemptRecord = {
+          attemptId, itemIndex: member.itemIndex ?? 0, iteration: member.iteration ?? 0,
+          spentTokens: 0, phase: 'prepared',
+        };
+        if (member.reportOnlyOf !== undefined) record.reportOnly = true;
+        if (member.brief !== undefined) record.brief = member.brief;
+        stepRec.attempts.push(record);
+        return { stepId: member.stepId, attemptId };
+      });
+      return { attempts };
+    });
   }
 
   // -- walking the document --
@@ -873,17 +894,16 @@ export class PlanExecutor implements PlanExecutorHooks {
     if (!repeat && !run.halt) await this.setStatus(run, [step.id], 'done');
   }
 
+  // WHY no launchRefusal check and no reservation/reservePause any more
+  // (spending rework stage 1, design §1): nothing refuses a launch for
+  // budget reasons, and `createAttempts` (below) cannot fail for one either.
+  // T3 owns the wave-start spend-limit check (design §3: "runWave first
+  // checks used ≥ limit on the plan it loaded, so no new wave starts past
+  // the limit") — not added here.
   private async runWave(run: ActiveRun, step: PlanStepV1, iteration: number, items: number[], finalLeaf: boolean): Promise<void> {
     let plan = await this.load(run);
     const rec = plan.steps.find((s) => s.id === step.id)!;
-    const refusal = await this.runner.launchRefusal?.(run.ref, plan, step.specialist);
-    if (refusal) {
-      // Task 9a: a refusal would only repeat, so it is never retried and is
-      // recorded as one (pause handoff §1).
-      this.requestHalt(run, { kind: 'pause', why: 'launch-failed', launch: 'refused', stepId: step.id, reason: refusal });
-      return;
-    }
-    const members: ReserveMember[] = items.map((itemIndex) => {
+    const members: CreateAttemptMember[] = items.map((itemIndex) => {
       const latest = latestAttempt(rec, itemIndex, iteration);
       if (latest && !isCommitted(latest)) return { stepId: step.id, attemptId: latest.attemptId };
       // Final review F4: an item whose newest attempt failed its report (the
@@ -895,7 +915,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       // answered with the short nudge (launchBrief).
       if (latest && latest.terminal === 'failed' && latest.childId) {
         return {
-          stepId: step.id, reportOnlyOf: latest.attemptId,
+          stepId: step.id, reportOnlyOf: latest.attemptId, itemIndex: latest.itemIndex, iteration: latest.iteration,
           brief: latest.reportOnly && latest.brief !== undefined
             ? latest.brief
             : planReportOnlyBrief({ finalLeaf, problem: invalidReportProblem(step.id, latest.reportText ?? '', finalLeaf) ?? '' }),
@@ -903,14 +923,8 @@ export class PlanExecutor implements PlanExecutorHooks {
       }
       return { stepId: step.id, itemIndex, iteration };
     });
-    // One fenced write reserves the whole wave, or nothing (design §3).
-    const reserved = await this.budget.reserveAttempts(run.ref, run.planId, run.fence, members, {
-      localPoolTokens: await this.runner.localPoolTokens(run.ref, plan),
-    });
-    if (!reserved.ok) {
-      this.requestHalt(run, this.reservePause(rec, step.id, members, reserved));
-      return;
-    }
+    // One fenced write creates the whole wave's attempt records (design §3).
+    const created = await this.createAttempts(run.ref, run.planId, run.fence, members);
     plan = await this.load(run);
     const briefBase = this.briefFor(plan, step, iteration, finalLeaf);
     const wave: LiveChild[] = [];
@@ -919,7 +933,7 @@ export class PlanExecutor implements PlanExecutorHooks {
     // its siblings keep running; only a pause for the assistant or the user
     // halts the wave.
     await Promise.race([
-      Promise.all(reserved.attempts.map(({ attemptId }) => this.runMember(run, step, attemptId, briefBase, finalLeaf, wave))),
+      Promise.all(created.attempts.map(({ attemptId }) => this.runMember(run, step, attemptId, briefBase, finalLeaf, wave))),
       run.haltSignal,
     ]);
     if (run.halt) return;
@@ -927,34 +941,6 @@ export class PlanExecutor implements PlanExecutorHooks {
     // before the next wave or step starts.
     await Promise.all(wave.map((c) => c.handle.dispose()));
     run.live = run.live.filter((c) => !wave.includes(c));
-  }
-
-  /** The pause for a reservation that failed (wave start or an automatic
-   *  retry). The plan is reloaded by the caller only for naming the attempt. */
-  private reservePause(rec: PlanStepRecord, stepId: string, members: ReserveMember[], reserved: Extract<ReserveResult, { ok: false }>): HaltRequest {
-    const exhausted = reserved.reason === 'attempt-exhausted'
-      ? members.find((m) => {
-        const a = m.attemptId ? rec.attempts.find((x) => x.attemptId === m.attemptId) : undefined;
-        return a && a.baseTokens + a.addedTokens - a.spentTokens <= 0;
-      })?.attemptId
-      : undefined;
-    // Review item 1: a shortfall that names no attempt is recorded as the
-    // minimum Add budget; that tranche raises the plan limit only, so the
-    // fresh attempt then fits.
-    const shortfall = !exhausted && 'shortfallTokens' in reserved ? reserved.shortfallTokens : undefined;
-    return {
-      kind: 'pause', stepId, reason: reserved.detail,
-      // 5b review: attempt-exhausted is a budget pause even when the
-      // spent attempt can't be named here.
-      why: exhausted || reserved.reason === 'attempt-exhausted' ? 'budget'
-        : shortfall !== undefined ? 'ceiling-shortfall'
-        : reserved.reason === 'local-pool' ? 'local-pool'
-        : reserved.reason === 'invalid' ? 'unexpected-error'
-        : 'plan-limit',
-      ...(exhausted ? { attemptId: exhausted } : {}),
-      ...(shortfall !== undefined ? { minimumAddTokens: shortfall, ceilingShortfall: true as const } : {}),
-      ...(reserved.reportOnlyOf !== undefined ? { reportOnlyOf: reserved.reportOnlyOf } : {}),
-    };
   }
 
   /** What one launch sends: the brief, the restart turn, or the report-only
@@ -1054,9 +1040,15 @@ export class PlanExecutor implements PlanExecutorHooks {
               if (info?.title) a.childTitle = info.title;
               a.startedAt = Date.now();
               a.brief = brief;
-              // The spawn-time manifest entry actually used (design §2).
-              const entry = p.manifest.specialists[step.specialist];
-              a.manifest = { ...p.manifest, specialists: entry ? { [step.specialist]: entry } : {} };
+              // The spawn-time manifest entry actually used (design §2/§5:
+              // the binding/pricing slice is keyed by STEP now, not specialist).
+              const specialistEntry = p.manifest.specialists[step.specialist];
+              const stepEntry = p.manifest.steps[step.id];
+              a.manifest = {
+                ...p.manifest,
+                specialists: specialistEntry ? { [step.specialist]: specialistEntry } : {},
+                steps: stepEntry ? { [step.id]: stepEntry } : {},
+              };
               if (relaunching) markRelaunched(p, { stepId: step.id, iteration: a.iteration, itemIndex: a.itemIndex }, relaunching);
             }),
           });
@@ -1149,15 +1141,6 @@ export class PlanExecutor implements PlanExecutorHooks {
     }
     try {
       if (run.halt) return 'done';
-      if (outcome.kind === 'stopped') {
-        this.requestHalt(run, {
-          kind: 'pause', stepId: step.id, attemptId, reason: outcome.stop.detail,
-          // Only running out is fixed by Add budget; a refused or broken
-          // request is not a matter of size.
-          why: outcome.stop.kind === 'exhausted' ? 'budget' : 'budget-refused',
-        });
-        return 'done';
-      }
       if (outcome.kind === 'interrupted') {
         this.requestHalt(run, {
           kind: 'pause', why: 'specialist-stopped', stepId: step.id, attemptId,
@@ -1184,7 +1167,7 @@ export class PlanExecutor implements PlanExecutorHooks {
         // of pausing a second time for the same thing.
         const { tool } = again.unanswered;
         this.requestHalt(run, {
-          kind: 'pause', why: 'unknown-outcome', stepId: step.id, attemptId, tool, toolEffect: 'external', acknowledge: attemptId,
+          kind: 'pause', why: 'unknown-outcome', stepId: step.id, attemptId, tool, toolEffect: 'external',
           ...(again.retried ? { retried: true as const } : {}),
           ...(notReady ? { launch: 'not-ready' as const } : {}),
           // joinSentences, not `${reason}.`: when the provider's own sentence
@@ -1210,16 +1193,16 @@ export class PlanExecutor implements PlanExecutorHooks {
 
   /**
    * Task 9a: may this unfinished attempt be restarted by itself after `cause`?
-   * If so, the recovery is journalled (fenced) BEFORE anything else, the
-   * attempt's hold is given back and reserved again normally, and 'retry' is
-   * returned. Otherwise the facts for the pause are returned ('halted' when a
-   * budget pause was already requested because the retry couldn't be funded).
+   * If so, the recovery is journalled (fenced) BEFORE anything else and
+   * 'retry' is returned. Otherwise the facts for the pause are returned.
+   * WHY no "charge unresolved" step any more (spending rework stage 1,
+   * design §3 "Crash safety"): nothing is reserved to release or charge —
+   * `afterReply` (T2) already recorded whatever the specialist's last reply
+   * actually cost, if any.
    */
   private async restartAfter(
     run: ActiveRun, step: PlanStepV1, attemptId: string, cause: 'launch-failed' | 'specialist-error',
   ): Promise<'retry' | 'halted' | { retried?: true; unanswered?: { tool: string }; notReady?: string }> {
-    // An unsettled request is charged in full first: it may have been billed.
-    await this.budget.chargeUnresolved(run.ref, run.planId, run.fence, step.id, attemptId);
     const loaded = await this.load(run);
     const before = this.findAttempt(loaded, step.id, attemptId);
     const verdict: TranscriptVerdict = before.childId
@@ -1243,12 +1226,9 @@ export class PlanExecutor implements PlanExecutorHooks {
         ...(notReady !== undefined ? { notReady: true } : {}),
       };
       if (routePlanPause(cause, ctx).route !== 'auto') return { auto: false as const, retried: ctx.alreadyRecovered === true };
-      // The recovery, the attempt made restartable, and its hold given back
-      // — one write, before the relaunch, so a crash can't multiply it.
+      // The recovery, journalled before the relaunch, so a crash can't
+      // multiply it (design §3).
       recordRecovery(plan, key, cause);
-      const a = this.findAttempt(plan, step.id, attemptId);
-      if (a.phase === 'ambiguous') { a.phase = 'response-persisted'; delete a.ambiguityReported; }
-      a.reservedTokens = 0;
       return { auto: true as const };
     });
     if (!decided.auto) {
@@ -1257,23 +1237,18 @@ export class PlanExecutor implements PlanExecutorHooks {
         ...(notReady !== undefined ? { notReady } : {}),
       };
     }
-    const members: ReserveMember[] = [{ stepId: step.id, attemptId }];
-    const reserved = await this.budget.reserveAttempts(run.ref, run.planId, run.fence, members);
-    if (!reserved.ok) {
-      const rec = (await this.load(run)).steps.find((s) => s.id === step.id)!;
-      this.requestHalt(run, this.reservePause(rec, step.id, members, reserved));
-      return 'halted';
-    }
-    // Halted while reserving: nothing is relaunched; settle (which waits for
-    // this) releases the hold just taken.
+    // Halted meanwhile: nothing is relaunched (settle handles it).
     return run.halt ? 'halted' : 'retry';
   }
 
   /**
    * Task 9a: an invalid report is asked for once more, on the same specialist
-   * session, with one dedicated message and tools off, funded from what the
-   * failed attempt left unspent. Returns the new attempt, or undefined when
-   * the plan was halted instead.
+   * session, with one dedicated message and tools off. Returns the new
+   * attempt, or undefined when the plan was halted instead.
+   * WHY no funding check any more (spending rework stage 1, decision 34):
+   * nothing is rationed per attempt, so a report-only retry is always
+   * fundable — `reportOnlyFundable` stays `true` unconditionally below only
+   * because `PlanPauseContext` still carries the field (pause-routing.ts).
    */
   private async reportOnlyRetry(
     run: ActiveRun, step: PlanStepV1, wave: LiveChild[], child: LiveChild,
@@ -1286,22 +1261,16 @@ export class PlanExecutor implements PlanExecutorHooks {
       : { kind: 'resumable', briefDelivered: false };
     const key = { stepId: step.id, iteration: failed.iteration, itemIndex: failed.itemIndex };
     const message = planReportOnlyBrief({ finalLeaf, problem: invalid.reason });
-    // Review fix 2: the turn re-sends the whole transcript, so the unspent
-    // share must cover that measured input AND the 2,000-token reply. An
-    // unmeasurable request is not attempted.
     const plan = await this.load(run);
     // Review finding 10 (decision 26): the report-only re-send is a second
     // route to an automatic retry. A provider that cannot run cannot answer a
     // report turn either, so it is asked here too rather than only in
     // restartAfter.
     const notReady = await this.runner.providerNotReady?.(run.ref, plan, step.specialist);
-    const inputBound = failed.childId ? await this.runner.reportOnlyInputBound?.(run.ref, plan, failed.attemptId, message) : undefined;
-    const unspent = failed.baseTokens + failed.addedTokens - failed.spentTokens;
-    const fundable = inputBound !== undefined && unspent >= inputBound + PLAN_REPORT_ONLY_REPLY_TOKENS;
     if (run.halt) { this.requestHalt(run, invalid); return undefined; }
     const decided = await this.journal.mutateFenced(run.ref, run.planId, run.fence, (plan) => {
       const ctx: PlanPauseContext = {
-        reportOnlyFundable: fundable,
+        reportOnlyFundable: true,
         unansweredExternal: verdict.kind === 'dangling-effect' && verdict.effect === 'external',
         alreadyRecovered: hasRecovery(plan, key, 'invalid-report'),
         ...(notReady !== undefined ? { notReady: true } : {}),
@@ -1314,34 +1283,29 @@ export class PlanExecutor implements PlanExecutorHooks {
       this.requestHalt(run, { ...invalid, attemptId: child.attemptId, ...(decided.retried ? { retried: true as const } : {}) });
       return undefined;
     }
-    const members: ReserveMember[] = [{
-      stepId: step.id, reportOnlyOf: child.attemptId,
+    const created = await this.createAttempts(run.ref, run.planId, run.fence, [{
+      stepId: step.id, reportOnlyOf: child.attemptId, itemIndex: failed.itemIndex, iteration: failed.iteration,
       brief: message,
-    }];
-    const reserved = await this.budget.reserveAttempts(run.ref, run.planId, run.fence, members);
-    if (!reserved.ok) {
-      const rec = (await this.load(run)).steps.find((s) => s.id === step.id)!;
-      this.requestHalt(run, this.reservePause(rec, step.id, members, reserved));
-      return undefined;
-    }
-    return run.halt ? undefined : reserved.attempts[0].attemptId;
+    }]);
+    return run.halt ? undefined : created.attempts[0].attemptId;
   }
 
   /**
    * Freeze one finished attempt with the journal's OWN spent count (plan-
-   * budget's contract). An unsettled request is charged in full first, so a
-   * finished report never forgives spending. A repeat's final leaf must also
-   * carry a valid decision; a malformed one is kept (as failed) and pauses.
+   * budget's contract). WHY no "charge unresolved" phase check any more
+   * (spending rework stage 1, design §3): a `launched` attempt has no
+   * unsettled request state left to resolve — `afterReply` (T2) already
+   * journals every reply's real cost as it happens. A repeat's final leaf
+   * must also carry a valid decision; a malformed one is kept (as failed)
+   * and pauses.
+   * // T2/T3 (Revision 2 E4 / Revision 3 F2): this is the one function all
+   * three commit paths call, and is where `await handle.spendSettled()`
+   * belongs before committing — not wired here.
    */
   private async commitReport(run: ActiveRun, step: PlanStepV1, attemptId: string, report: string, finalLeaf: boolean): Promise<HaltRequest | undefined> {
-    let plan = await this.load(run);
-    let attempt = this.findAttempt(plan, step.id, attemptId);
+    const plan = await this.load(run);
+    const attempt = this.findAttempt(plan, step.id, attemptId);
     if (isCommitted(attempt)) return undefined;
-    if (attempt.phase === 'request-sent') {
-      await this.budget.chargeUnresolved(run.ref, run.planId, run.fence, step.id, attemptId);
-      plan = await this.load(run);
-      attempt = this.findAttempt(plan, step.id, attemptId);
-    }
     const failure = invalidReportProblem(step.id, report, finalLeaf);
     await this.journal.commitAttempt(run.ref, run.planId, run.fence, step.id, attemptId, {
       terminal: failure ? 'failed' : 'completed',
@@ -1474,39 +1438,13 @@ export class PlanExecutor implements PlanExecutorHooks {
         const step = allSteps((await this.load(run)).document.steps).find((s) => s.id === child.stepId)!;
         pauseFromCommit ??= await this.commitReport(run, step, child.attemptId, child.outcome.report, child.finalLeaf);
       }
-      // 4. Pessimistic settlement: unknown spending is charged in full, and
-      //    every hold is given back.
-      const plan = await this.load(run);
-      const cutOff: Array<{ stepId: string; attemptId: string }> = [];
-      for (const stepRec of plan.steps) {
-        for (const a of stepRec.attempts) {
-          if (isCommitted(a)) continue;
-          if (a.phase === 'request-sent') {
-            await this.budget.chargeUnresolved(run.ref, run.planId, run.fence, stepRec.id, a.attemptId);
-            cutOff.push({ stepId: stepRec.id, attemptId: a.attemptId });
-          }
-          if (a.reservedTokens > 0 || a.phase === 'request-sent') await this.budget.releaseAttempt(run.ref, run.planId, run.fence, stepRec.id, a.attemptId);
-        }
-      }
+      // WHY no "pessimistic settlement" pass any more (spending rework stage
+      // 1, design §1/§3): there is no reservation left to charge in full or
+      // give back — `afterReply` (T2) already journals real cost as it
+      // happens, and a still-`launched` attempt at settle time is simply
+      // read again by `recoverAttempt` the next time this plan starts.
       // 5. Only now does the card change — in the same write that drops the lease.
       const final = halt.kind === 'complete' && pauseFromCommit ? pauseFromCommit : halt;
-      // Task 3 obligation: after a soft overshoot (or any budget stop) the card
-      // must say how much Add budget is enough, instead of accepting a smaller
-      // amount that would silently pause again on Continue.
-      let minimumAddTokens: number | undefined;
-      let warmMinimum: PlanMinimumAdd['warm'];
-      if (final.kind === 'pause' && final.minimumAddTokens !== undefined) {
-        minimumAddTokens = final.minimumAddTokens;
-      } else if (final.kind === 'pause' && final.attemptId && this.runner.minimumAddTokens) {
-        try {
-          const found = await this.runner.minimumAddTokens(run.ref, await this.load(run), final.attemptId);
-          minimumAddTokens = found?.tokens;
-          warmMinimum = found?.warm;
-        } catch (e) {
-          if (e instanceof PlanFenceError || e instanceof PlanJournalUnreadableError) throw e;
-          console.error('[plan-executor] could not work out the minimum Add budget', e);
-        }
-      }
       // Nothing of this run may outlive the visible write below (settle before
       // visible): the heartbeat stops and the run leaves the active set now.
       this.retireRun(run);
@@ -1520,22 +1458,8 @@ export class PlanExecutor implements PlanExecutorHooks {
         final.applied = final.finalize !== undefined;
         return;
       }
-      // Review item 7: siblings whose requests were cut off are named in THIS
-      // pause and marked as shown, so Continue picks them up instead of
-      // pausing once more for each.
-      const cutOffOthers = final.kind === 'pause' ? cutOff.filter((c) => c.attemptId !== final.attemptId) : [];
       await this.finalWrite(run, (p) => {
         delete p.lease;
-        for (const c of cutOffOthers) {
-          const a = p.steps.find((x) => x.id === c.stepId)?.attempts.find((x) => x.attemptId === c.attemptId);
-          if (a && a.phase === 'ambiguous') a.ambiguityReported = true;
-        }
-        if (final.kind === 'pause' && final.acknowledge) {
-          // Task 9a: this pause is what tells the user about that attempt's
-          // unknown outcome, so Continue is its explicit recovery.
-          const a = p.steps.find((x) => x.id === final.stepId)?.attempts.find((x) => x.attemptId === final.acknowledge);
-          if (a && !isCommitted(a)) { a.phase = 'ambiguous'; a.ambiguityReported = true; }
-        }
         if (final.kind === 'complete') {
           p.status = 'completed';
           p.endedAt = Date.now();
@@ -1545,18 +1469,12 @@ export class PlanExecutor implements PlanExecutorHooks {
         for (const s of p.steps) if (s.status === 'running') s.status = 'paused';
         if (final.kind === 'pause') {
           p.status = 'paused';
-          const note = cutOffNote(cutOffOthers);
           p.paused = {
-            stepId: final.stepId, reason: withCutOffNote(final.reason, cutOffOthers),
+            stepId: final.stepId, reason: final.reason,
             kind: final.why,
             ...(final.tool ? { tool: final.tool } : {}),
             ...(final.repeat ? { repeat: final.repeat } : {}),
-            ...(note ? { note } : {}),
             ...(final.attemptId ? { attemptId: final.attemptId } : {}),
-            ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}),
-            ...(warmMinimum !== undefined ? { warmMinimum } : {}),
-            ...(final.ceilingShortfall ? { ceilingShortfall: true as const } : {}),
-            ...(final.reportOnlyOf !== undefined ? { reportOnlyOf: final.reportOnlyOf } : {}),
             ...(final.launch ? { launch: final.launch } : {}),
             ...(final.retried ? { retried: true as const } : {}),
             ...(final.toolEffect ? { toolEffect: final.toolEffect } : {}),

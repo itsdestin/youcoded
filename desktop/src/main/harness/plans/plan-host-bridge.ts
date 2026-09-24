@@ -14,9 +14,8 @@ import { createHash, randomUUID } from 'crypto';
 import type { CatalogModel, ModelBinding, ProviderReadiness } from '../../../shared/provider-types';
 import type { PlanView, TranscriptEvent } from '../../../shared/types';
 import type { NativeHome } from '../../native-home';
-import type { ModelPricing } from '../pricing';
+import { isFreePricing, type ModelPricing } from '../pricing';
 import type { CapabilityProfile, ProfileProviderType } from '../capability-profile';
-import type { HarnessSession } from '../harness-session';
 import type { SpecialistDefinition, SpecialistRoster } from '../specialists/registry';
 import {
   DelegatedModelRefused, DelegatedModelUnavailable, resolveDelegatedBinding, resolveRequestedModel, type DelegatedModels,
@@ -26,32 +25,42 @@ import { log } from '../../logger';
 import { nativeToolEffect } from '../tools';
 import type { PlanDocumentV1, PlanStepV1 } from './schema';
 import { PlanJournal, PlanJournalUnreadableError, projectPlan } from './plan-journal';
-import { PLAN_REPORT_ONLY_REPLY_TOKENS, PlanBudget, lastRequestFor, pricingSnapshot } from './plan-budget';
 import { PlanService, type PlanHandoffProblem, type PlanProposal, type PlanRecommendation } from './plan-service';
 import { PLAN_HANDOFF_BACKSTOP_MS, normalizePlanQuestion, planHandoffNotice } from './plan-handoff';
 import {
-  PLAN_REPORT_ONLY_RESEND, PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError, classifyChildTranscript, planReportOnlyBrief, planRestartBrief,
-  type PlanChildHandle, type PlanChildLaunch, type PlanMinimumAdd, type PlanRunner, type TranscriptVerdict,
+  PlanExecutor, PlanLaunchDriftError, PlanLaunchRefusedError, PlanNotReadyError, classifyChildTranscript,
+  type PlanChildHandle, type PlanChildLaunch, type PlanRunner, type TranscriptVerdict,
 } from './plan-executor';
-import {
-  adapterDisabledReason, budgetAdapterFor, setupBound, type PlanBudgetAdapter, type PlanChildRequestGate, type PlanChildStop,
-} from './budget-adapter';
 import type {
   ExecutionManifest, PlanActionResult, PlanAutoApproveRead, PlanEvent, PlanRecord, PlanRef, PlanSettingsWriteResult,
 } from './types';
 // Final review F6: refusals worded for people (the failed card shows them).
 import { PlanProposalError, PlanSpecialistsNotReadyError, type PlanNotReadySpecialist } from './types';
 
+// WHY pricingSnapshot lives here now, not plan-budget.ts (spending rework
+// stage 1, design §1: plan-budget.ts is deleted — this pure classifier
+// "carries over" into T2's plan-spend.ts, per design §1's own wording; a
+// local copy keeps resolveManifest's pricing real in the meantime rather
+// than writing a placeholder null for every step).
+type PricingSnapshot = { kind: 'priced'; rates: ModelPricing } | { kind: 'free' } | { kind: 'local' };
+function pricingSnapshot(input: { pricing: ModelPricing | null; free: boolean; local: boolean }): PricingSnapshot | null {
+  if (input.local) return { kind: 'local' };
+  if (input.free || isFreePricing(input.pricing)) return { kind: 'free' };
+  if (!input.pricing) return null;
+  const { in: inRate, out, cacheRead, cacheWrite } = input.pricing;
+  return {
+    kind: 'priced',
+    rates: { in: inRate, out, ...(cacheRead != null ? { cacheRead } : {}), ...(cacheWrite != null ? { cacheWrite } : {}) },
+  };
+}
+
 /** Task 11 (§6): the "Ask the assistant" refusals main words itself. */
 const NOT_HERE = "This conversation isn't running here right now, so the assistant can't be asked.";
 const NO_TOOLS = "The model in this conversation can't use tools, so it can't look into the plan.";
 const QUEUE_FAILED = "Couldn't ask the assistant: this conversation isn't running here right now.";
 
-/** Extra room on top of a measured resume request when telling the user the
- *  minimum Add budget. WHY: a project rule injected at that turn's start is
- *  not predicted by the measurement, and the system prompt is reassembled at
- *  launch (date, git state). Too small a number would pause again at once. */
-export const PLAN_MINIMUM_ADD_MARGIN_TOKENS = 512;
+// WHY PLAN_MINIMUM_ADD_MARGIN_TOKENS is GONE (spending rework stage 1,
+// decision 34): no measured Add budget minimum exists any more.
 
 /** The route facts the host already resolves for any binding. */
 export interface PlanRoute {
@@ -63,12 +72,16 @@ export interface PlanRoute {
   totalSlots: number | null;
 }
 
+// WHY no `gate`/`budgetStop` any more (spending rework stage 1, design §1):
+// PlanChildRequestGate/PlanChildStop were budget-adapter.ts's own types
+// (deleted); nothing gates a plan child's requests before sending any more.
+// T2 attaches `planSpend` (the `afterReply`/`beforeRequest` hook, design §3)
+// here instead — not built in this task.
 export interface PlanChildStart {
   parentId: string;
   specialist: SpecialistDefinition;
   binding: ModelBinding;
   providerType: ProfileProviderType;
-  gate: PlanChildRequestGate;
   /** The propose_plan call the plan renders on (ask cards nest under it). */
   parentToolCallId: string;
   resumeChildId?: string;
@@ -78,8 +91,6 @@ export interface PlanChildStart {
   brief: string;
   /** Task 9a: send `brief` with tools switched off (the report-only turn). */
   toolsDisabled?: boolean;
-  /** The budget stop the gate reported during the turn, if any. */
-  budgetStop(): PlanChildStop | undefined;
 }
 
 /** Task 9b: one plan pause notice the host delivers as its own model turn.
@@ -143,13 +154,10 @@ export interface PlanHostPort {
   withdrawPlanNotice(sessionId: string, handoffId: string): boolean;
   /** Mint (or rebuild) a plan specialist, holding a specialist slot. */
   startChild(input: PlanChildStart): Promise<PlanChildHandle>;
-  /** An unwired plan-child session, for measurement only. Async because the
-   *  probe's system prompt must be byte-identical to the real child's, and that
-   *  prompt's <env> git line is now read off the main thread (2026-09-16 C3). */
-  probeSession(input: {
-    parentId: string; specialist: SpecialistDefinition; binding: ModelBinding; route: PlanRoute;
-    gate: PlanChildRequestGate; historyFromChildId?: string;
-  }): Promise<{ session: HarnessSession; dispose(): void }>;
+  // WHY no probeSession any more (spending rework stage 1, design §1): it
+  // existed only to measure a specialist's fixed setup cost and an Add
+  // budget minimum through an unwired session — resolveManifest no longer
+  // measures anything before freezing a step's binding.
 }
 
 export interface PlanHostBridgeOptions {
@@ -213,18 +221,12 @@ function leafSteps(steps: PlanStepV1[]): PlanStepV1[] {
   return steps.flatMap((s) => (s.kind === 'repeat' ? leafSteps(s.steps!) : [s]));
 }
 
-/** A gate that can only be measured with — never used to send. */
-function measurementGate(adapter: PlanBudgetAdapter): PlanChildRequestGate {
-  return {
-    adapter,
-    reserve: async () => ({ ok: false, kind: 'refused', detail: 'This session is used only to measure a request.' }),
-    settle: async () => { throw new Error('This session is used only to measure a request.'); },
-  };
-}
+// WHY measurementGate is GONE (spending rework stage 1, design §1): built a
+// PlanChildRequestGate (budget-adapter.ts, deleted) that could only measure,
+// never send — for the now-deleted setup/Add-budget measurement probes.
 
 export class PlanHostBridge {
   readonly journal: PlanJournal;
-  readonly budget: PlanBudget;
   readonly executor: PlanExecutor;
   readonly service: PlanService;
   private readonly lastViews = new Map<string, PlanView>();
@@ -254,12 +256,10 @@ export class PlanHostBridge {
         port.emit({ ...event, plan });
       },
     });
-    // Revision 5: the budget judges cache windows by the same clock as the
-    // minimum Add budget below, so the two can never disagree about "warm".
-    this.budget = new PlanBudget({ journal: this.journal, ...(opts.now ? { now: opts.now } : {}) });
+    // WHY no PlanBudget any more (spending rework stage 1, design §1):
+    // deleted — the executor and service no longer take a budget dependency.
     this.executor = new PlanExecutor({
       journal: this.journal,
-      budget: this.budget,
       runner: this.runner(),
       settleDeadlineMs: opts.settleDeadlineMs,
       heartbeatMs: opts.heartbeatMs,
@@ -267,8 +267,6 @@ export class PlanHostBridge {
     this.service = new PlanService({
       journal: this.journal,
       home: port.home,
-      // Task 12 follow-up 1: Add budget judges the warm minimum's expiry by
-      // the same clock that set it.
       ...(opts.now ? { now: opts.now } : {}),
       sessionCwd: (sessionId) => port.rootCwd(sessionId),
       resolveManifest: (input) => this.resolveManifest(input),
@@ -276,7 +274,6 @@ export class PlanHostBridge {
         port.queueTurn(sessionId, commentTurnText(text), turnId, COMMENT_MODEL_NOTE);
       },
       executor: this.executor,
-      budget: { addTokens: (input) => this.budget.addTokens(input) },
       // A user action (or a recommendation) answered it: an undelivered
       // notice has nothing left to ask. A notice already being delivered
       // stays until its turn ends.
@@ -501,11 +498,12 @@ export class PlanHostBridge {
 
   async approve(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.approve(sessionId, planId)); }
   async comment(sessionId: string, planId: string, text: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.comment(sessionId, planId, text)); }
-  async addBudget(sessionId: string, planId: string, tokens: number, requestId?: unknown): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.addBudget(sessionId, planId, tokens, requestId)); }
+  // WHY no addBudget any more (spending rework stage 1, design §1/§6):
+  // deleted — T7 removes the matching `plans:add-budget` IPC channel.
   async resume(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.resume(sessionId, planId)); }
   async stop(sessionId: string, planId: string): Promise<PlanActionResult> { return this.decorated(sessionId, await this.service.stop(sessionId, planId)); }
   getAutoApprove(): Promise<PlanAutoApproveRead> { return this.service.getAutoApprove(); }
-  setAutoApprove(underTokens: unknown): Promise<PlanSettingsWriteResult> { return this.service.setAutoApprove(underTokens); }
+  setAutoApprove(underUsd: unknown): Promise<PlanSettingsWriteResult> { return this.service.setAutoApprove(underUsd); }
 
   /** Current card projections, read from the journal (never from memory). */
   async views(sessionId: string): Promise<PlanView[]> {
@@ -561,8 +559,12 @@ export class PlanHostBridge {
     this.cancelRecheck(sessionId);
     const ref: PlanRef = { cwd, sessionId };
     try {
+      // WHY no onInterrupt "release ownerless holds" / "settle ownerless"
+      // pass any more (spending rework stage 1, design §1): there is
+      // nothing reserved for a crashed run to hold or give back —
+      // `recoverAttempt` (plan-executor.ts) reads each unfinished attempt's
+      // transcript fresh the next time this plan starts.
       const { interrupted, recheckAt } = await this.journal.recoverInterrupted(ref, {
-        onInterrupt: (plan) => this.budget.releaseOwnerlessHolds(plan),
         // Final review F2: this process's own plan whose run ended without
         // its final write is shown paused with the real reason.
         orphaned: (planId) => this.executor.orphanReason(ref, planId),
@@ -573,16 +575,6 @@ export class PlanHostBridge {
       // Task 11 (review 4-4): asked live, inside the service's write, so a
       // question pressed while this runs is kept.
       await this.service.clearStaleHandoffs(ref, (id) => this.handoffs.get(id)?.ref.sessionId === sessionId);
-      // Plans left paused/interrupted/stopped with holds by an older crash.
-      const read = await this.journal.read(ref);
-      if (read.kind === 'valid') {
-        for (const plan of read.file.plans) {
-          if (plan.lease || plan.status === 'running') continue;
-          const holds = plan.steps.some((s) => s.attempts.some((a) => a.phase !== 'committed' && a.completedAt === undefined
-            && (a.reservedTokens > 0 || a.phase === 'request-sent')));
-          if (holds) await this.budget.settleOwnerless(ref, plan.planId);
-        }
-      }
       if (recheckAt !== undefined && this.port.rootCwd(sessionId) === cwd) {
         const timer = setTimeout(() => {
           this.rechecks.delete(sessionId);
@@ -665,6 +657,21 @@ export class PlanHostBridge {
     }
   }
 
+  /**
+   * WHY no setup-probe measurement any more (spending rework stage 1, design
+   * §1/§5): the setup-probe existed to certify each specialist's fixed
+   * starting cost for the (now deleted) per-step token ceiling — nothing
+   * here measures anything before freezing a binding. `steps[id]` is keyed
+   * by every LEAF step (design §5), because a per-step model override means
+   * two steps naming the same specialist may resolve to different bindings.
+   * // T4 owns the real per-step resolution order — (1) `stepModels[id]`
+   * (user override), (2) `document.model` via `resolveRequestedModel`, (3)
+   * the specialist's own default — and the `source`/`providerId`
+   * disambiguation that goes with it. This still resolves ONE binding per
+   * SPECIALIST (today's behavior) and freezes it onto every leaf step of
+   * that specialist with `source: 'default'`, which is correct until T4
+   * adds real overrides (`document.model`/`stepModels` are ignored here).
+   */
   async resolveManifest(input: { sessionId: string; cwd: string; document: PlanDocumentV1 }): Promise<ExecutionManifest> {
     const parent = this.port.parentBinding(input.sessionId);
     if (!parent) throw new PlanProposalError("This conversation isn't open, so the plan can't be prepared.");
@@ -673,13 +680,13 @@ export class PlanHostBridge {
     const specialists: ExecutionManifest['specialists'] = {};
     // Task 13 (decision 25): a plan is never PROPOSED with a specialist that
     // cannot run. Resolved FIRST, for every specialist, before anything is
-    // measured — so nothing is probed (no slot, prompt or money) for a plan
-    // that cannot run, and review finding 9's "one trip to Settings" holds:
-    // the refusal below names every specialist that is not ready, not just the
-    // first. The provider's own sentence is repeated verbatim: never a new cause.
+    // frozen — review finding 9's "one trip to Settings" holds: the refusal
+    // below names every specialist that is not ready, not just the first.
+    // The provider's own sentence is repeated verbatim: never a new cause.
     const resolved: Array<{ id: string; def: SpecialistDefinition; binding: ModelBinding; route: PlanRoute }> = [];
     const notReady: PlanNotReadySpecialist[] = [];
-    for (const id of [...new Set(leafSteps(input.document.steps).map((s) => s.specialist))]) {
+    const leaves = leafSteps(input.document.steps);
+    for (const id of [...new Set(leaves.map((s) => s.specialist))]) {
       const def = roster.resolve(id);
       if (!def) throw new PlanProposalError(`The plan names a specialist ("${id}") that isn't available in this project.`);
       const binding = await this.bindingFor(def, parent, () => (catalog ??= this.port.catalog()));
@@ -689,47 +696,41 @@ export class PlanHostBridge {
       else notReady.push({ id, label: ready.label, message: ready.message });
     }
     if (notReady.length > 0) throw new PlanSpecialistsNotReadyError(notReady);
-    for (const { id, def, binding, route } of resolved) {
-      const lookup = budgetAdapterFor(route.providerType);
-      if (!lookup.ok) throw new PlanProposalError(lookup.reason);
-      // Decision 4: the exact child system prompt and tool schemas, measured
-      // by the same adapter its request gate will use.
-      const probe = await this.port.probeSession({ parentId: input.sessionId, specialist: def, binding, route, gate: measurementGate(lookup.adapter) });
-      let setup: Awaited<ReturnType<HarnessSession['planSetupRequest']>>;
-      try { setup = await probe.session.planSetupRequest(); } finally { probe.dispose(); }
-      const bound = setupBound(lookup.adapter, setup);
-      if (!bound.ok) throw new PlanProposalError(bound.reason);
-      specialists[id] = {
-        definitionFingerprint: definitionFingerprint(def),
-        binding,
-        pricing: pricingSnapshot({ pricing: route.pricing, free: route.free, local: route.providerType === 'local-engine' }),
-        setupTokens: bound.tokens,
-        ...(lookup.adapter.capsOutput ? {} : { approximateLimit: true }),
+    const bySpecialist = new Map(resolved.map((r) => [r.id, r]));
+    for (const { id, def } of resolved) specialists[id] = { definitionFingerprint: definitionFingerprint(def) };
+    const steps: ExecutionManifest['steps'] = {};
+    for (const step of leaves) {
+      const r = bySpecialist.get(step.specialist)!;
+      steps[step.id] = {
+        binding: r.binding,
+        label: r.binding.modelId,
+        pricing: pricingSnapshot({ pricing: r.route.pricing, free: r.route.free, local: r.route.providerType === 'local-engine' }),
+        source: 'default',
       };
     }
     return {
-      modelLabel: [...new Set(Object.values(specialists).map((s) => s.binding.modelId))].join(', '),
+      modelLabel: [...new Set(resolved.map((r) => r.binding.modelId))].join(', '),
       specialists,
+      steps,
       permissionFingerprint: `perm:${sha(this.port.permissionState(input.sessionId))}`,
     };
   }
 
   // ---- the executor's runner ----
 
+  // WHY no localPoolTokens/minimumAddTokens/launchRefusal/reportOnlyInputBound
+  // wiring any more (spending rework stage 1, design §1): see PlanRunner's
+  // own WHY comment (plan-executor.ts) — none of the four exist any more.
   private runner(): PlanRunner {
     return {
       maxConcurrent: (ref) => this.port.maxConcurrent(ref.sessionId),
       // Unknown specialist → serialize (the safe direction).
       isWriter: (ref, specialist) => this.port.roster(ref.cwd).resolve(specialist)?.charter !== 'read-only',
-      localPoolTokens: (ref, plan) => this.localPoolTokens(plan),
       launch: (input) => this.launch(input),
       inspectTranscript: (ref, childId): TranscriptVerdict => classifyChildTranscript(this.port.readChildEvents(childId, ref.cwd), nativeToolEffect),
       onUnreadable: (ref, planId, detail) => this.onUnreadable(ref, planId, detail),
       onOrphaned: (ref, planId) => this.scheduleOrphanRecovery(ref, planId),
-      minimumAddTokens: (ref, plan, attemptId) => this.minimumAddTokens(ref, plan, attemptId),
-      launchRefusal: (_ref, plan, specialist) => this.launchRefusal(plan, specialist),
       providerNotReady: (_ref, plan, specialist) => this.providerNotReady(plan, specialist),
-      reportOnlyInputBound: (ref, plan, attemptId, message) => this.reportOnlyInputBound(ref, plan, attemptId, message),
       latestUserText: (ref, childId) => {
         const events = this.port.readChildEvents(childId, ref.cwd);
         for (let i = events.length - 1; i >= 0; i--) {
@@ -740,37 +741,20 @@ export class PlanHostBridge {
     };
   }
 
-  private async launchRefusal(plan: PlanRecord, specialist: string): Promise<string | undefined> {
-    const frozen = plan.manifest.specialists[specialist];
-    if (!frozen) return `The plan has no approved settings for the "${specialist}" specialist.`;
-    const lookup = budgetAdapterFor((await this.port.resolveRoute(frozen.binding)).providerType);
-    if (!lookup.ok) return lookup.reason;
-    const disabled = adapterDisabledReason(lookup.adapter.id)
-      ?? plan.disabledAdapters?.find((d) => d.adapterId === lookup.adapter.id)?.detail;
-    return disabled ? `Plan budgets are switched off for this model after a request went over its limit: ${disabled}` : undefined;
-  }
-
   /**
    * Task 13 (decision 26): the provider's own sentence when this specialist's
    * frozen model can't run right now, so the executor never spends the plan's
    * ONE automatic retry on something that cannot heal itself.
-   * A specialist the plan never approved is `launchRefusal`'s business, not
-   * this one's — undefined here means only "no credential problem".
+   * WHY the binding comes from the FIRST leaf step naming `specialist`
+   * (design §5): until T4 builds per-step overrides, every leaf step of one
+   * specialist shares the same frozen binding, so any of them names it.
    */
   private async providerNotReady(plan: PlanRecord, specialist: string): Promise<string | undefined> {
-    const frozen = plan.manifest.specialists[specialist];
+    const stepId = leafSteps(plan.document.steps).find((s) => s.specialist === specialist)?.id;
+    const frozen = stepId ? plan.manifest.steps[stepId] : undefined;
     if (!frozen) return undefined;
     const ready = await this.port.credentialReadiness(frozen.binding);
     return ready.ok ? undefined : ready.message;
-  }
-
-  private async localPoolTokens(plan: PlanRecord): Promise<number | undefined> {
-    const local = Object.values(plan.manifest.specialists).find((s) => (s.pricing as { kind?: string } | null)?.kind === 'local');
-    if (!local) return undefined;
-    const route = await this.port.resolveRoute(local.binding);
-    // One configured pool shared by every slot (llama-server reports the
-    // per-slot window). Unknown → the same 32k default the session assumes.
-    return (route.contextLength ?? 32_768) * Math.max(1, route.totalSlots ?? 1);
   }
 
   private async launch(input: PlanChildLaunch): Promise<PlanChildHandle> {
@@ -778,12 +762,15 @@ export class PlanHostBridge {
     const cwd = this.port.rootCwd(ref.sessionId);
     if (cwd === undefined) throw new Error("the conversation that owns this plan isn't open");
     const plan = await this.journal.get(ref, input.planId);
-    const frozen = plan?.manifest.specialists[input.specialist];
+    // Design §5: launch() reads manifest.steps[stepId].binding — the frozen
+    // per-STEP entry, not a per-specialist one.
+    const frozen = plan?.manifest.steps[input.stepId];
+    const specialistEntry = plan?.manifest.specialists[input.specialist];
     // Review fix 6: these two can never succeed by trying again, so they are
     // refusals (never retried automatically; Stop-only for the assistant).
-    if (!plan || !frozen) throw new PlanLaunchRefusedError(`the plan has no approved settings for the "${input.specialist}" specialist`);
+    if (!plan || !frozen || !specialistEntry) throw new PlanLaunchRefusedError(`the plan has no approved settings for the "${input.specialist}" specialist`);
     const def = this.port.roster(cwd).resolve(input.specialist);
-    if (!def || definitionFingerprint(def) !== frozen.definitionFingerprint) {
+    if (!def || definitionFingerprint(def) !== specialistEntry.definitionFingerprint) {
       // Task 9a: a drift, never retried automatically.
       throw new PlanLaunchDriftError(`the "${input.specialist}" specialist's instructions or tools changed since the plan was approved. Ask the assistant to propose the plan again`);
     }
@@ -794,15 +781,10 @@ export class PlanHostBridge {
     // own error type, which the executor never retries.
     const ready = await this.port.credentialReadiness(frozen.binding);
     if (!ready.ok) throw new PlanNotReadyError(ready.message);
-    const lookup = budgetAdapterFor(route.providerType);
-    if (!lookup.ok) throw new PlanLaunchRefusedError(lookup.reason);
-    let stop: PlanChildStop | undefined;
-    const gate: PlanChildRequestGate = {
-      ...this.budget.requestGate(ref, input.planId, input.fence, input.stepId, input.attemptId, lookup.adapter),
-      onStop: (s) => { stop ??= s; },
-    };
+    // T2: `planSpend` (the afterReply/beforeRequest hook, design §3) attaches
+    // to startChild's input here — not built in this task.
     return this.port.startChild({
-      parentId: ref.sessionId, specialist: def, binding: frozen.binding, providerType: route.providerType, gate,
+      parentId: ref.sessionId, specialist: def, binding: frozen.binding, providerType: route.providerType,
       parentToolCallId: plan.toolUseId,
       ...(input.resumeChildId ? { resumeChildId: input.resumeChildId } : {}),
       signal: input.signal,
@@ -810,7 +792,6 @@ export class PlanHostBridge {
       recordChild: input.recordChild,
       brief: input.brief,
       ...(input.toolsDisabled ? { toolsDisabled: true } : {}),
-      budgetStop: () => stop,
     });
   }
 
@@ -828,126 +809,10 @@ export class PlanHostBridge {
     );
   }
 
-  /**
-   * Review fix 2: the certified bound of the report-only request — `message`
-   * as the next turn of the failed attempt's own specialist session, measured
-   * exactly as the Add budget minimum measures a restart (an unwired probe
-   * rebuilt from that transcript). undefined when it can't be measured.
-   */
-  private async reportOnlyInputBound(ref: PlanRef, plan: PlanRecord, attemptId: string, message: string): Promise<number | undefined> {
-    const stepRec = plan.steps.find((s) => s.attempts.some((a) => a.attemptId === attemptId));
-    const attempt = stepRec?.attempts.find((a) => a.attemptId === attemptId);
-    const step = stepRec && leafSteps(plan.document.steps).find((s) => s.id === stepRec.id);
-    const frozen = step && plan.manifest.specialists[step.specialist];
-    const cwd = this.port.rootCwd(ref.sessionId);
-    if (!attempt?.childId || !step || !frozen || cwd === undefined) return undefined;
-    const def = this.port.roster(cwd).resolve(step.specialist);
-    if (!def) return undefined;
-    const route = await this.port.resolveRoute(frozen.binding);
-    const lookup = budgetAdapterFor(route.providerType);
-    if (!lookup.ok) return undefined;
-    const probe = await this.port.probeSession({
-      parentId: ref.sessionId, specialist: def, binding: frozen.binding, route,
-      gate: measurementGate(lookup.adapter), historyFromChildId: attempt.childId,
-    });
-    try {
-      // Revision 5: judged by the same reservation rule the retry's request
-      // will meet — the retry continues this specialist's conversation, so a
-      // prompt that is still cached reserves only the report request's new part.
-      const bound = await probe.session.planNextRequestBound(lookup.adapter, message, {
-        last: lastRequestFor(stepRec!.attempts, attempt), now: this.now(),
-      });
-      return bound.ok ? bound.tokens : undefined;
-    } finally {
-      probe.dispose();
-    }
-  }
-
-  /**
-   * The smallest Add budget after which Continue can send the paused
-   * specialist's next request: that request must fit what is left of its
-   * allowance, and the plan's own limit must be above what was already used
-   * (Task 3 obligation for soft plans; since revision 5 for any plan, as a
-   * cache miss can overshoot a capped one too).
-   *
-   * Task 12 follow-up 1: worked out twice. COLD — the whole conversation
-   * re-sent, valid whenever Continue comes — is `tokens`. WARM — only the part
-   * added since the specialist's last request, while the provider still has
-   * the rest cached — is `warm`, valid until that request's time + the cache
-   * window, and only when it is smaller. The service accepts whichever holds
-   * when the press arrives; the card switches from one to the other.
-   * A report-only turn (Task 9a) is measured with its own message and needs
-   * room for its whole 2,000-token reply, the executor's funding rule.
-   */
-  private async minimumAddTokens(ref: PlanRef, plan: PlanRecord, attemptId: string): Promise<PlanMinimumAdd | undefined> {
-    const stepRec = plan.steps.find((s) => s.attempts.some((a) => a.attemptId === attemptId));
-    const attempt = stepRec?.attempts.find((a) => a.attemptId === attemptId);
-    const step = stepRec && leafSteps(plan.document.steps).find((s) => s.id === stepRec.id);
-    const frozen = step && plan.manifest.specialists[step.specialist];
-    if (!attempt || !step || !frozen || !attempt.childId) return undefined;
-    const route = await this.port.resolveRoute(frozen.binding);
-    const lookup = budgetAdapterFor(route.providerType);
-    if (!lookup.ok) return undefined;
-    const left = attempt.baseTokens + attempt.addedTokens - attempt.spentTokens;
-    // Review item 2: the plan-wide gap is asked ONCE. Every other unfinished
-    // specialist that overshot its own allowance will pause on its own and be
-    // asked at least that overshoot then, so it is not asked for here too.
-    const coveredByOthers = plan.steps.flatMap((s) => s.attempts)
-      .filter((a) => a.attemptId !== attemptId && a.phase !== 'committed' && a.completedAt === undefined)
-      .reduce((n, a) => n + Math.max(0, a.spentTokens - a.baseTokens - a.addedTokens), 0);
-    // Revision 5: the plan-wide stop now covers capped routes too (a cache
-    // miss after a warm reservation can overshoot there), so the gap is asked
-    // for whatever the route.
-    const planGap = plan.usedTokens >= plan.ceilingTokens
-      ? plan.usedTokens - plan.ceilingTokens + 1 - coveredByOthers : 0;
-    const gapOnly = (): PlanMinimumAdd | undefined => (planGap > 0 ? { tokens: planGap } : undefined);
-    let message: string;
-    let reply = 1;
-    if (attempt.reportOnly) {
-      // The exact turn the executor's launchBrief will send.
-      const brief = attempt.brief ?? planReportOnlyBrief({ finalLeaf: false, problem: '' });
-      const events = this.port.readChildEvents(attempt.childId, ref.cwd);
-      const lastUser = [...events].reverse().find((e) => e.type === 'user-message');
-      message = lastUser && String(lastUser.data.text ?? '') === brief ? PLAN_REPORT_ONLY_RESEND : brief;
-      reply = PLAN_REPORT_ONLY_REPLY_TOKENS;
-    } else {
-      const verdict = classifyChildTranscript(this.port.readChildEvents(attempt.childId, ref.cwd), nativeToolEffect);
-      // A terminal transcript needs no request; an undelivered brief is covered
-      // by the attempt's untouched allowance.
-      if (verdict.kind === 'terminal' || (verdict.kind === 'resumable' && !verdict.briefDelivered)) return gapOnly();
-      // The exact turn the restart will send (items 3/4).
-      message = planRestartBrief(verdict);
-    }
-    const cwd = this.port.rootCwd(ref.sessionId);
-    const def = cwd !== undefined ? this.port.roster(cwd).resolve(step.specialist) : undefined;
-    if (!def) return gapOnly();
-    const probe = await this.port.probeSession({
-      parentId: ref.sessionId, specialist: def, binding: frozen.binding, route,
-      gate: measurementGate(lookup.adapter), historyFromChildId: attempt.childId,
-    });
-    const now = this.now();
-    const last = lastRequestFor(stepRec.attempts, attempt);
-    const needFor = (tokens: number) => Math.max(planGap, tokens + reply + PLAN_MINIMUM_ADD_MARGIN_TOKENS - left);
-    let cold: number | undefined;
-    let warm: number | undefined;
-    try {
-      const full = await probe.session.planNextRequestBound(lookup.adapter, message);
-      if (full.ok) cold = needFor(full.tokens);
-      if (full.ok && last && lookup.adapter.cacheWindowMs !== undefined) {
-        const warmBound = await probe.session.planNextRequestBound(lookup.adapter, message, { last, now });
-        if (warmBound.ok && warmBound.tokens < full.tokens) warm = needFor(warmBound.tokens);
-      }
-    } finally {
-      probe.dispose();
-    }
-    if (cold === undefined) return gapOnly();
-    const out: PlanMinimumAdd = {};
-    if (cold > 0) out.tokens = cold;
-    if (warm !== undefined && last && warm < cold) {
-      out.warm = { tokens: Math.max(0, warm), until: last.at + lookup.adapter.cacheWindowMs! };
-    }
-    return out.tokens === undefined && out.warm === undefined ? undefined : out;
-  }
+  // WHY reportOnlyInputBound/minimumAddTokens are GONE (spending rework
+  // stage 1, design §1): both measured an Add budget top-up (or a report
+  // turn's fundability) through an unwired probe session — neither concept
+  // exists any more. See PlanRunner's own WHY comment (plan-executor.ts).
 }
 
 /** 5b follow-up: what the MODEL is also told with a Comment's follow-up turn.

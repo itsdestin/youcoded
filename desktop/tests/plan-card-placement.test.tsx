@@ -50,7 +50,7 @@ const CARD = 'call-plan';
 
 const plan = (over: Partial<PlanView> = {}): PlanView => ({
   planId: 'plan-1', toolUseId: CARD, title: 'Review the auth module', status: 'proposed',
-  steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'pending' }],
+  steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'pending' }],
   ceilingTokens: 4000, ceilingUsd: null, model: { label: 'm' }, seq: 1,
   ...over,
 });

@@ -1875,20 +1875,12 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     comment: async (_sessionId: string, planId: string, _text: string) => nextPlan(planId, (p) => ({
       ...p, status: 'stopped', revisedBy: `${p.planId}-r2`,
     })),
-    // WHY this answers STILL PAUSED (2026-09-19): the real host only raises the
-    // limit and leaves the plan paused — the card then presses Continue for the
-    // user (PlanCard's `addBudget`). This fake used to return a RUNNING plan, so
-    // that second call never happened here and the workbench exercised a path
-    // the app does not have. Destin hit a freeze on Add budget that no workbench
-    // run could reproduce, for exactly that reason. A test double that is
-    // kinder than the host hides the bugs the host will produce.
-    addBudget: async (_sessionId: string, planId: string, tokens: number) => nextPlan(planId, (p) => ({
-      ...p, ceilingTokens: p.ceilingTokens + tokens,
-      ceilingUsd: p.ceilingUsd == null ? null : p.ceilingUsd * ((p.ceilingTokens + tokens) / p.ceilingTokens),
-      steps: p.steps.map((st) => st.status === 'paused'
-        ? { ...st, budgetTokens: st.budgetTokens + Math.ceil(tokens / Math.max(1, st.fanOut)) }
-        : st),
-    })),
+    // WHY this is now a no-op (spending rework stage 1, design §1/§6):
+    // there is no per-step or per-plan token budget left to add to — Add
+    // budget is deleted. Kept only so the mock still answers the
+    // `plans:add-budget` channel until T7 removes it from
+    // `window.claude.plans` everywhere.
+    addBudget: async (_sessionId: string, planId: string, _tokens: number) => nextPlan(planId, (p) => p),
     // UX review 1, U2: resuming keeps the step's finished count and spend —
     // the real host resumes from the journal, it never zeroes progress.
     resume: async (_sessionId: string, planId: string) => nextPlan(planId, (p) => {
@@ -2310,28 +2302,30 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // scenario fixtures' bubbles/tools plan-ask-budget.jsonl, so the preview
   // shows a real pause with real buttons that PlanBlock's `readOnly` prop
   // (previewSessionKey) must then hide.
+  // WHY spendLimit/paused.limit, not ceilingTokens/minimumAddTokens
+  // (spending rework stage 1, design §2/§7): the demo plan hit the LIMIT the
+  // user set, not a per-step budget — there is no per-step budget any more.
   const PREVIEW_PLAN: PlanView = {
     planId: 'plan-preview-1',
     toolUseId: 'toolu_preview_plan',
     title: 'Review the auth module before the release',
     status: 'paused',
     steps: [
-      { id: 's1', kind: 'map', title: 'Review the six files that changed in the auth module', specialist: 'reviewer', fanOut: 3, budgetTokens: 9000, status: 'paused', done: 2, usedTokens: 27000 },
-      { id: 's2', kind: 'verify', title: 'Check each review against the file it describes', specialist: 'reviewer', fanOut: 1, budgetTokens: 9000, status: 'pending' },
-      { id: 's3', kind: 'combine', title: 'Combine the findings into one ranked list', specialist: 'worker', fanOut: 1, budgetTokens: 4000, status: 'pending' },
+      { id: 's1', kind: 'map', title: 'Review the six files that changed in the auth module', specialist: 'reviewer', fanOut: 3, status: 'paused', done: 2, usedTokens: 27000 },
+      { id: 's2', kind: 'verify', title: 'Check each review against the file it describes', specialist: 'reviewer', fanOut: 1, status: 'pending' },
+      { id: 's3', kind: 'combine', title: 'Combine the findings into one ranked list', specialist: 'worker', fanOut: 1, status: 'pending' },
     ],
-    ceilingTokens: 40000,
-    ceilingUsd: 0.12,
+    spendLimit: { usd: 0.08 },
     model: { label: 'Claude Sonnet 4.6' },
     usedTokens: 27000,
     usedUsd: 0.08,
     startedAt: Date.now() - 20 * 60_000,
     paused: {
       stepId: 's1',
-      reason: 'step 1 hit its 27,000-token limit with 2 of 3 reviewers done.',
-      minimumAddTokens: 12500,
-      kind: 'budget',
-      actions: ['add_budget', 'stop'],
+      reason: 'the plan reached your $0.08 limit with 2 of 3 reviewers done.',
+      limit: { usd: 0.08 },
+      kind: 'spend-limit',
+      actions: ['continue', 'stop'],
     },
   };
 

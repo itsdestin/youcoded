@@ -7,7 +7,6 @@ import { BugReportPopup } from '../development/BugReportPopup';
 import type { ReportContext } from '../development/ReportDesign';
 import { toolActionLabel } from '../../utils/tool-group-summary';
 import { classifyPause } from './plan-pause';
-import { markPlanReceived, warmMinimumExpiresAt } from '../../state/plan-received';
 import { planStatusPhrase } from './plan-status';
 import BrailleSpinner from '../BrailleSpinner';
 import { SpecialistActions } from '../specialists/SpecialistActions';
@@ -107,39 +106,12 @@ function estimateUsd(n: number, marker: string): string {
   return isUnderACent(n) ? usd(n) : `${marker}${usd(n)}`;
 }
 
-/** Task 8 (review 6, R6-1): a limit one reply can overshoot (ChatGPT sends
- *  without an output cap) is not exact, so every LIMIT figure on the card —
- *  tokens and dollars alike — wears a tilde: "~42,000 tokens", "~$0.12".
- *  Spent figures are real counts and never get one. Replaced the 5b "about"
- *  wording plus its extra "On ChatGPT…" sentence, which the product owner
- *  found unnecessary. An exact limit reads exactly as signed. */
-function approx(plan: PlanView): string { return plan.approximateLimit ? '~' : ''; }
-function limitTokens(plan: PlanView, n: number): string { return `${approx(plan)}${tokens(n)}`; }
-/** UX tester (Task 11): before the word "limit" the number reads as an
- *  adjective — "its 9,000-token limit", never "its 9,000 tokens limit". */
-function tokenLimit(plan: PlanView, n: number): string { return `${approx(plan)}${n.toLocaleString()}-token limit`; }
-
-function spent(plan: PlanView): string {
-  const t = tokens(plan.usedTokens ?? 0);
-  return plan.usedUsd == null ? t : `${usd(plan.usedUsd)} (${t})`;
-}
-
-/** "of the $0.12 limit" / "of the 40,000-token limit" — one word, "limit", for the
- *  cap everywhere on the card (UX run 1, U8: budget/cap/ceiling were four words for one idea). */
-function limit(plan: PlanView): string {
-  const t = limitTokens(plan, plan.ceilingTokens);
-  if (plan.ceilingUsd == null) return `the ${tokenLimit(plan, plan.ceilingTokens)}`;
-  // Final review F22: "the less than a cent limit" doesn't read; say it plainly.
-  if (isUnderACent(plan.ceilingUsd)) return `a limit under one cent (${t})`;
-  return `the ${approx(plan)}${usd(plan.ceilingUsd)} limit (${t})`;
-}
-
-/** Final review F1: one id per Add budget press. `crypto.randomUUID` is only
- *  there in a secure context (a phone browser over plain http has none). */
-function newRequestId(): string {
-  const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-  return c?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
+// WHY approx/limitTokens/tokenLimit/spent/limit/newRequestId are ALL GONE
+// (spending rework stage 1, design §1/§2, decision 34): `approximateLimit`
+// (the uncapped-route tilde marker) and the token ceiling they formatted are
+// both deleted, and there is no Add budget request left to id. `spentLine`
+// (below) reads the new `usedUsd`/`usedTokens`/`spendLimit` shape and is
+// used everywhere these used to be.
 
 /** Final review F25: a conversation preview (previewSessionKey) draws the
  *  chat's own cards, but nothing on them may act — the plan is not running here. */
@@ -147,12 +119,16 @@ const PREVIEW_KEY_PREFIX = previewSessionKey('');
 
 /** Decision 24: the buttons for a pause whose record predates `actions`,
  *  by kind — mirrors main's pause-routing.ts table (pinned against
- *  pausedRouting by plan-card-final-review.test.tsx). */
-export function fallbackActions(paused: PlanView['paused']): Array<'add_budget' | 'continue' | 'stop'> {
+ *  pausedRouting by plan-card-final-review.test.tsx).
+ *  WHY no `add_budget` case any more (spending rework stage 1, design §1/§7,
+ *  decision 37 R-4): `spend-limit` (the plan's own limit) goes straight to
+ *  Continue · Stop, never to the assistant, and there is no per-step budget
+ *  kind left to offer Add budget for. */
+export function fallbackActions(paused: PlanView['paused']): Array<'continue' | 'stop'> {
   switch (paused?.kind) {
-    case 'budget': case 'ceiling-shortfall':
-      return paused.launch === 'drift' ? ['stop'] : ['add_budget', 'stop'];
-    case 'plan-limit': case 'budget-refused': case 'iteration-cap': case 'local-pool':
+    case 'spend-limit':
+      return ['continue', 'stop'];
+    case 'iteration-cap':
       return ['stop'];
     case 'specialist-stopped':
       return ['continue', 'stop'];
@@ -284,72 +260,36 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const writing = plan.status === 'writing';
   const [commenting, setCommenting] = useState(false);
   const [comment, setComment] = useState('');
-  const [adding, setAdding] = useState(false);
   // Decision 20: "Ask the assistant" opens a small optional question box,
   // like Comment's. Blank is fine; Send asks either way.
   const [asking, setAsking] = useState(false);
   const [question, setQuestion] = useState('');
   const questionTooLong = question.trim().length > PLAN_QUESTION_LIMIT;
-  // UX run 1, U18: default to the paused step's own per-specialist cap (a
-  // sensible size for one more pass), shown with a thousands comma.
-  // Task 5b: when the host says a smaller amount would only pause again
-  // (`minimumAddTokens`), the field starts AT that minimum instead.
   // Decision 33: a repeat is one row that contains its body, so a pause inside
-  // the body belongs to the repeat's row — that is the number the reader sees —
-  // while the amount to top up comes from the body step that actually ran out.
+  // the body belongs to the repeat's row — that is the number the reader sees.
   const pausedAt = findPausedRow(plan.steps, plan.paused?.stepId);
   const pausedIndex = pausedAt ? pausedAt.index : -1;
-  const pausedStep = pausedAt?.step;
   const numbers = useMemo(() => rowNumbers(plan.steps), [plan.steps]);
-  const minimum = useMinimumNow(plan.paused);
-  const defaultExtra = String(minimum ?? pausedStep?.budgetTokens ?? 10000);
-  const [extra, setExtra] = useState(defaultExtra);
-  // Final review F1: the id of this pause's Add budget press. Kept for Retry
-  // and for a second press on the same pause (the host adds nothing twice);
-  // forgotten when the plan leaves the pause, so the next pause gets a new one.
-  const budgetRequest = useRef<string | null>(null);
   const isPaused = plan.status === 'paused';
-  // Final review F16: a box left open (or a value left typed) belongs to the
-  // pause it was opened on. When the plan leaves that pause — resumed from
-  // another window, say — the boxes close and the next pause starts fresh.
-  const defaultExtraRef = useRef(defaultExtra);
-  defaultExtraRef.current = defaultExtra;
-  // Task 12 follow-up 1: when the warm minimum expires (or a new one lands)
-  // a closed Add budget box opens at the minimum that holds now.
-  const addingRef = useRef(adding);
-  addingRef.current = adding;
+  // WHY no Add budget box state any more (spending rework stage 1, design
+  // §1/§2, decision 34): `adding`/`extra`/`minimum`/`belowMinimum`/
+  // `budgetRequest` all sized or tracked a per-step Add budget request that
+  // no longer exists — `settingNewLimit`/`newLimit` below (decision 34 item
+  // 3) is the ONE remaining "ask for a number" box, for the plan's own limit.
   useEffect(() => {
-    if (isPaused && !addingRef.current) setExtra(defaultExtraRef.current);
-  }, [minimum, isPaused]);
-  useEffect(() => {
-    if (isPaused) { setExtra(defaultExtraRef.current); return; }
-    budgetRequest.current = null;
-    setAdding(false);
-    setAsking(false);
-    setQuestion('');
+    if (!isPaused) {
+      setAsking(false);
+      setQuestion('');
+    }
   }, [isPaused]);
   useEffect(() => { if (plan.status !== 'proposed') setCommenting(false); }, [plan.status]);
-  // Decision 34 item 3: the "Reached your limit" pause's own Continue —
-  // separate from `adding` (the old per-step Add budget box) because the two
-  // pauses never show at once and ask for different things: a NEW total
-  // limit here, not more room for one step.
+  // Decision 34 item 3: the "Reached your limit" pause's own Continue asks
+  // for a NEW total limit, then resumes.
   const [settingNewLimit, setSettingNewLimit] = useState(false);
   const [newLimit, setNewLimit] = useState('');
   useEffect(() => { if (!isPaused) { setSettingNewLimit(false); setNewLimit(''); } }, [isPaused]);
   // Decision 35/37: Plan settings — the gear button opens the one popup.
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // Task 9b: "Add budget pre-filled" — the assistant's amount, never below
-  // the host's minimum (the host would refuse less).
-  const recommendedTokens = plan.paused?.handoff?.recommendation?.action === 'add_budget' ? plan.paused.handoff.recommendation.addTokens : undefined;
-  useEffect(() => {
-    if (recommendedTokens !== undefined) setExtra(String(Math.max(recommendedTokens, minimum ?? 0)));
-  }, [recommendedTokens, minimum]);
-  // A later push can raise or set the minimum while the card is open: never
-  // leave the field below the new floor.
-  useEffect(() => {
-    if (minimum !== undefined) setExtra((v) => (Number(v) < minimum ? String(minimum) : v));
-  }, [minimum]);
-  const belowMinimum = minimum !== undefined && (Number(extra) || 0) < minimum;
   const pause = classifyPause(plan.paused);
   // Task 9b (pause handoff §2): the pause may be with the assistant first.
   // Pending → greyed, no buttons. Answered → buttons again, led by the
@@ -367,7 +307,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // Decision 24: a record without `actions` falls back by the pause's KIND,
   // the same table main uses (pause-routing.ts) — only the budget kinds offer
   // Add budget. The old fallback gave every unnamed kind Add budget.
-  const offered: ReadonlyArray<'add_budget' | 'continue' | 'stop'> = plan.paused?.actions ?? fallbackActions(plan.paused);
+  const offered: ReadonlyArray<'continue' | 'stop'> = plan.paused?.actions ?? fallbackActions(plan.paused);
   const [busy, setBusy] = useState<string | null>(null);
   // Final review F15: an error belongs to the state it happened in; once a
   // push moves the card on, it (and its Retry) no longer applies.
@@ -422,8 +362,6 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
     try {
       const res = await planAction(fn);
       if (res.ok) {
-        // Task 12 follow-up 1: an action's answer is a view received now.
-        markPlanReceived(res.plan);
         dispatch({ type: 'PLAN_CHANGED', sessionId, plan: res.plan });
         return res.plan;
       }
@@ -439,33 +377,10 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   const approve = () => { lastAction.current = 'approve'; return act('approve', (b) => b.approve(id, plan.planId)); };
   // A refused note or amount stays where it was typed, so it can be sent again.
   const sendComment = () => { lastAction.current = 'comment'; return act('comment', (b) => b.comment(id, plan.planId, comment.trim())).then((ok) => { if (ok) { setComment(''); setCommenting(false); } }); };
-  const addBudget = async () => {
-    // Task 5b: an amount under the host's minimum is refused here, before
-    // anything is sent — the host would refuse it anyway.
-    if (belowMinimum) return;
-    lastAction.current = 'budget';
-    budgetRequest.current ??= newRequestId();
-    const landed = await act('budget', (b) => b.addBudget(id, plan.planId, Number(extra) || 0, budgetRequest.current!));
-    if (!landed) return;
-    // Task 5b: the real host only raises the limit and leaves the plan
-    // paused; the control's button says Continue (R8: "continues from where
-    // the plan stopped"), so the card presses Continue for the user. An
-    // answer that already runs the plan (the workbench fake) is not resumed
-    // a second time.
-    // Retry after THIS step only continues (a repeated Add budget would add
-    // nothing anyway: same request id, final review F1).
-    if (landed.status === 'paused') { lastAction.current = 'continue'; await act('continue', (b) => b.resume(id, plan.planId)); }
-    // WHY the box closes only HERE, after both calls (Destin, 2026-09-19:
-    // "adding budget to a specialist in a plan seems to completely freeze the
-    // app"): Continue re-resolves the plan's manifest, which opens a probe
-    // session per specialist and can run for minutes. Closing on the FIRST
-    // call's answer handed that whole wait back to the pause strip, whose
-    // every button is disabled while an action is in flight and none of which
-    // says why — disabled and silent for minutes is indistinguishable from
-    // frozen. The box's own button reads "Continuing…" for both calls, so
-    // keeping it up is the only thing on the card that admits work is going on.
-    setAdding(false);
-  };
+  // WHY addBudget is GONE (spending rework stage 1, design §1/§6): deleted —
+  // there is no Add budget left to press. `continueWithNewLimit` below
+  // (decision 34 item 3) is the plan's one remaining "ask for a number, then
+  // Continue" flow, for its own spend limit.
   const cont = () => { lastAction.current = 'continue'; return act('continue', (b) => b.resume(id, plan.planId)); };
   const stop = () => { lastAction.current = 'stop'; return act('stop', (b) => b.stop(id, plan.planId)); };
   // Decision 34 item 3: "Reached your $5.00 limit" → Continue asks for a NEW
@@ -496,7 +411,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
   // Final review F14: the latest version of each action, read at Retry time.
   const actions = useRef<Record<string, () => unknown>>({});
   actions.current = {
-    approve, comment: sendComment, budget: addBudget, continue: cont, stop,
+    approve, comment: sendComment, continue: cont, stop,
     // The Ask box is still open after a refused question: send what it holds now.
     ask: () => (asking ? submitAsk() : askAgain()),
     'ask-again': askAgain,
@@ -552,7 +467,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
           {/* Decision 34 item 3: while the "Reached your $X limit" row shows,
               it IS the spending line — a second "Spent $5.00 of the $5.00
               limit" above it said the same thing twice. */}
-          {plan.steps.length > 0 && !(plan.status === 'paused' && plan.paused?.kind === 'plan-limit' && !handoff) && (
+          {plan.steps.length > 0 && !(plan.status === 'paused' && plan.paused?.kind === 'spend-limit' && !handoff) && (
           <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap" data-testid="plan-ceiling">
           <span className="text-xs text-fg-dim flex-1 min-w-0 basis-64">
             {plan.status === 'proposed' || revised
@@ -561,15 +476,15 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               // Decision 34: the old worst-case ceiling is gone — one estimate
               // line from past runs, or nothing when this record predates it.
               ? <>{specialists} specialist{specialists === 1 ? '' : 's'}{estimateLine(plan) ? <> · {estimateLine(plan)}</> : ''}</>
-              // Decision 34 item 2: a running plan's live spend, in dollars
-              // (or tokens for an unpriced plan) — "of $5.00" only once the
-              // user has set a limit. Other statuses (paused on an old-style
-              // budget pause, completed/stopped/failed) keep the ceiling-based
-              // line — those cards are unchanged by this pass.
-              : plan.status === 'running' ? <>{spentLine(plan)}</>
+              // Decision 34 item 2: a running (or paused/finished) plan's live
+              // spend, in dollars (or tokens for an unpriced plan) — "of
+              // $5.00" only once the user has set a limit. WHY the SAME
+              // function for every other status now, not a separate
+              // ceiling-based line (spending rework stage 1, design §1/§2):
+              // there is no per-step token ceiling left to read.
               // UX run 1, U16: the header already says how long it took, so a
               // finished plan reads like any other: what it spent of its limit.
-              : <>Spent {spent(plan)} of {limit(plan)}</>}
+              : <>{spentLine(plan)}</>}
           </span>
             {plan.status === 'running' && !readOnly && (
               <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
@@ -645,7 +560,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               assistant (Task 9b/11): a plan-limit pause can still go through
               "Ask the assistant" exactly like any other, so this simple row
               only replaces the generic one while there is no handoff at all. */}
-          {plan.status === 'paused' && plan.paused?.kind === 'plan-limit' && !handoff && (
+          {plan.status === 'paused' && plan.paused?.kind === 'spend-limit' && !handoff && (
             <StatusStrip
               tone="warn"
               surface="tinted"
@@ -696,7 +611,7 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               strip — one tinted container, a status dot, the words, the action
               on the right. (`Callout` is the same shape WITHOUT an action, and
               its own doc says a block with a button is this component instead.) */}
-          {plan.status === 'paused' && plan.paused && (plan.paused.kind !== 'plan-limit' || !!handoff) && (
+          {plan.status === 'paused' && plan.paused && (plan.paused.kind !== 'spend-limit' || !!handoff) && (
             <StatusStrip
               // Task 9b: grey while the assistant has it — waiting, not warning.
               tone={handoffPending ? 'idle' : 'warn'}
@@ -705,7 +620,10 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               // Task 11: at 390 px the buttons move under the reason instead
               // of crushing it into a one-letter column.
               wrapAction
-              action={handoffPending || asking || readOnly ? undefined : !adding ? (
+              // WHY no `!adding` ternary any more (spending rework stage 1,
+              // design §1/§2): there is no Add budget box to switch to —
+              // every pause here offers only what `offered` lists.
+              action={handoffPending || asking || readOnly ? undefined : (
                 <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-pause-actions">
                   {/* Decision 24 (deck 10, G-7): a pause whose reason is a
                       general line with the system's own text behind it
@@ -722,10 +640,10 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                   {/* Task 9b (§2 step 7, design guide G-29): the filled button
                       is the rightmost; Stop is the light one on its left. A
                       recommended Stop is the card's one filled button. The
-                      defaults come from `offered`: Stop · Add budget for the
-                      budget kinds, Stop alone where only a revised plan can
-                      help, Stop · Continue otherwise (an unknown outcome's
-                      Continue is Task 4's explicit recovery). */}
+                      defaults come from `offered`: Stop alone where only a
+                      revised plan can help, Stop · Continue otherwise (an
+                      unknown outcome's Continue is Task 4's explicit
+                      recovery). */}
                   {recommendation?.action === 'stop' ? (
                     <Button size="sm" variant="danger" onClick={stop} disabled={blocked}>{busy === 'stop' ? 'Stopping…' : 'Stop'}</Button>
                   ) : (
@@ -734,18 +652,6 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
                   {(recommendation ? recommendation.action === 'continue' : offered.includes('continue')) && (
                     <Button size="sm" variant="primary" onClick={cont} disabled={blocked}>{busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
                   )}
-                  {(recommendation ? recommendation.action === 'add_budget' : offered.includes('add_budget')) && (
-                    <Button size="sm" variant="primary" onClick={() => setAdding(true)} disabled={blocked}>Add budget</Button>
-                  )}
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center justify-end gap-2 ml-auto" data-testid="plan-add-budget">
-                  <span className="text-xs text-fg-dim">Allow</span>
-                  <TextInput size="sm" inputMode="numeric" value={Number(extra) ? Number(extra).toLocaleString() : extra} onChange={(e) => setExtra(e.target.value.replace(/[^0-9]/g, ''))} className="w-20" aria-label="Tokens to allow" />
-                  {/* Final review F23: an approximate plan's dollar figure wears the tilde too (R26). */}
-                  <span className="text-xs text-fg-dim">tokens{plan.ceilingUsd != null && plan.ceilingTokens > 0 ? ` (${estimateUsd((Number(extra) || 0) * (plan.ceilingUsd / plan.ceilingTokens), approx(plan))})` : ''}</span>
-                  <Button size="sm" variant="ghost" onClick={() => setAdding(false)} disabled={blocked}>Cancel</Button>
-                  <Button size="sm" variant="primary" onClick={addBudget} disabled={blocked || !(Number(extra) > 0) || belowMinimum}>{busy === 'budget' || busy === 'continue' ? 'Continuing…' : 'Continue'}</Button>
                 </div>
               )}
             >
@@ -765,16 +671,6 @@ export function PlanBlock({ plan: record, segments, sessionId }: {
               {recommendation && (
                 <span className="block mt-0.5 text-fg" data-testid="plan-recommendation">
                   <span className="font-medium">The assistant suggests:</span> {recommendation.message}
-                </span>
-              )}
-              {/* Task 5b: the smallest amount that lets the plan go on, while
-                  the amount is being chosen. Below it, the same words turn into
-                  the field's error and Continue stays disabled. */}
-              {adding && minimum !== undefined && (
-                <span className="block mt-0.5" data-testid="plan-add-minimum">
-                  {belowMinimum
-                    ? <FieldError size="2xs">Add at least {tokens(minimum)} to continue.</FieldError>
-                    : <span className="text-2xs text-fg-muted">Add at least {tokens(minimum)} to continue.</span>}
                 </span>
               )}
             </StatusStrip>
@@ -1058,26 +954,10 @@ function PlanSettingsFields({ plan, sessionId, onChanged }: {
   );
 }
 
-/**
- * Task 12 follow-up 1: the Add budget minimum that holds right now. While the
- * paused specialist's prompt is still cached, only its new part must fit (the
- * warm minimum); `forMs` after this window received the view, the cold one
- * applies. A timer re-renders the card at that moment. undefined = none.
- */
-function useMinimumNow(paused: PlanView['paused']): number | undefined {
-  const warm = paused?.warmMinimum;
-  const expiresAt = warm ? warmMinimumExpiresAt(warm) : undefined;
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (expiresAt === undefined) return undefined;
-    const left = expiresAt - Date.now();
-    if (left < 0) return undefined;
-    const timer = setTimeout(() => setTick((n) => n + 1), left + 1);
-    return () => clearTimeout(timer);
-  }, [expiresAt]);
-  if (warm && expiresAt !== undefined && Date.now() <= expiresAt) return warm.tokens > 0 ? warm.tokens : undefined;
-  return paused?.minimumAddTokens;
-}
+// WHY useMinimumNow is GONE (spending rework stage 1, design §1): it worked
+// out the Add budget minimum from `paused.warmMinimum`/`minimumAddTokens`,
+// both deleted — nothing is reserved per request any more, so there is no
+// minimum top-up to compute.
 
 /**
  * Task 5b — the paused pill's words. An ordinary pause shows the host's own

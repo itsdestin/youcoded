@@ -37,8 +37,8 @@ function plan(over: Partial<PlanView> = {}): PlanView {
   return {
     planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'proposed',
     steps: [
-      { id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'pending' },
-      { id: 's2', kind: 'combine', title: 'Combine', specialist: 'worker', fanOut: 1, budgetTokens: 4000, status: 'pending' },
+      { id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'pending' },
+      { id: 's2', kind: 'combine', title: 'Combine', specialist: 'worker', fanOut: 1, status: 'pending' },
     ],
     ceilingTokens: 42000, ceilingUsd: null, model: { label: 'Claude Sonnet 4.6' }, seq: 1,
     ...over,

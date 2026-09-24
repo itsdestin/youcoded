@@ -23,7 +23,7 @@ const child = (over: Partial<PlanChildView> = {}): PlanChildView => ({
 
 const running = (children: PlanChildView[]): PlanView => ({
   planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'running',
-  steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'running', children }],
+  steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'running', children }],
   ceilingTokens: 42000, ceilingUsd: null, model: { label: 'm' }, usedTokens: 100, seq: 2,
 });
 

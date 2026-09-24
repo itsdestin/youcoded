@@ -12,13 +12,15 @@ import type { PlanDocumentV1 } from '../src/main/harness/plans/schema';
 // Typed as the tool's own input so `kind` stays the literal union (tsconfig.tests).
 const VALID: PlanDocumentV1 = {
   goal: 'Review the source files.',
-  steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] }],
+  steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] }],
 };
 
+// WHY no budgetTokens/ceilingTokens/ceilingUsd any more (spending rework
+// stage 1, design §1/§2, decision 34): none exist any more.
 const proposed = (toolUseId: string): PlanView => ({
   planId: 'plan-1', toolUseId, title: VALID.goal, status: 'proposed',
-  steps: [{ id: 'review', kind: 'map', title: 'Review {item}.', specialist: 'reviewer', fanOut: 2, budgetTokens: 500, status: 'pending' }],
-  ceilingTokens: 1_000, ceilingUsd: null, model: { label: 'Test model' }, seq: 1,
+  steps: [{ id: 'review', kind: 'map', title: 'Review {item}.', specialist: 'reviewer', fanOut: 2, status: 'pending' }],
+  model: { label: 'Test model' }, seq: 1,
 });
 
 function scriptedSession(scripts: any[][], over: Record<string, unknown> = {}) {
@@ -58,7 +60,7 @@ describe('propose_plan tool', () => {
     const propose = vi.fn();
     const oneRun: PlanDocumentV1 = {
       goal: 'Rename one function.',
-      steps: [{ id: 's1', kind: 'map', specialist: 'worker', task: 'Rename {item}.', budget_tokens: 500, summary: 'One helper renames it.', items: ['the function'] }],
+      steps: [{ id: 's1', kind: 'map', specialist: 'worker', task: 'Rename {item}.', summary: 'One helper renames it.', items: ['the function'] }],
     };
     const result = await createProposePlanTool(BUILTIN_ROSTER).execute(oneRun, {
       sessionId: 's-1', cwd: FAKE_SESSION_CWD, signal: new AbortController().signal,
@@ -81,7 +83,7 @@ describe('propose_plan tool', () => {
     });
     expect(propose).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 's-1', toolUseId: 'call-1', document: VALID,
-      maximumAttempts: 2, ceilingTokens: 1_000, maxFanOut: 2,
+      maximumAttempts: 2, maxFanOut: 2,
     }));
     expect(result).toMatchObject({ isError: false, plan: { status: 'proposed', toolUseId: 'call-1' } });
   });
@@ -422,7 +424,7 @@ describe('HarnessSession plan integration', () => {
   });
 
   it('a string whose JSON fails the schema still gets exactly one repair, reported against the document', async () => {
-    const bad = { ...VALID, steps: [{ ...VALID.steps[0], budget_tokens: 1 }] };
+    const bad = { ...VALID, steps: [{ ...VALID.steps[0], specialist: 'missing' }] };
     const { session, events, propose, calls } = scriptedSession([
       stream(toolCallChunk('bad-str-1', 'propose_plan', JSON.stringify(bad)), finishChunk('tool-calls')),
       stream(toolCallChunk('bad-str-2', 'propose_plan', JSON.stringify(bad)), finishChunk('tool-calls')),
@@ -433,8 +435,8 @@ describe('HarnessSession plan integration', () => {
     expect(propose).not.toHaveBeenCalled();
     const results = events.filter((event) => event.type === 'tool-result' && event.data.toolName === 'propose_plan');
     expect(results).toHaveLength(2);
-    // Reported against the PARSED document (the budget), not the envelope.
-    expect(results[0].data.toolResult).toMatch(/budget_tokens/);
+    // Reported against the PARSED document (the unknown specialist), not the envelope.
+    expect(results[0].data.toolResult).toMatch(/unknown specialist/i);
     expect(results[0].data.toolResult).not.toMatch(/received string/);
     expect(results[0].data.toolResult).toMatch(/one plan-specific repair opportunity/i);
     expect(results[1].data.toolResult).toMatch(/repair exhausted/i);

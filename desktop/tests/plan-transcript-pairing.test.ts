@@ -34,7 +34,7 @@ const VALID: PlanDocumentV1 = {
   goal: 'Review the source files.',
   // TWO items: decision 33 refuses a plan whose whole worst case is one
   // specialist run, and this document has to be a VALID one.
-  steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', budget_tokens: 500, summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] }],
+  steps: [{ id: 'review', kind: 'map', specialist: 'reviewer', task: 'Review {item}.', summary: 'Plain sentence.', items: ['a.ts', 'b.ts'] }],
 };
 const BAD: PlanDocumentV1 = { ...VALID, steps: [{ ...VALID.steps[0], specialist: 'missing' }] };
 

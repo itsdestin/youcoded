@@ -55,9 +55,9 @@ function seedBackgroundTask(dispatch: (a: ChatAction) => void) {
 
 const PLAN: PlanView = {
   planId: 'plan-1', toolUseId: 'plan-card', title: 'Review', status: 'running',
-  steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 1, budgetTokens: 2000, status: 'running',
+  steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 1, status: 'running',
     children: [{ childId: 'kid-a', parentToolCallId: 'plan-card', agentType: 'reviewer', title: 'Idris the Reviewer', background: false, status: 'running', startedAt: 1 }] }],
-  ceilingTokens: 2000, ceilingUsd: null, model: { label: 'm' }, seq: 1,
+  model: { label: 'm' }, seq: 1,
 };
 
 describe('a specialist waiting on the user lights the conversation dot', () => {

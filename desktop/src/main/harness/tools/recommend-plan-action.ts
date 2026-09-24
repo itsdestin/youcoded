@@ -13,11 +13,13 @@ import type { NativeTool, ToolContext, ToolEffect, ToolResultPayload } from './t
 /** Pause handoff §1: it only writes this conversation's plan file. */
 export const RECOMMEND_PLAN_ACTION_TOOL_EFFECT: ToolEffect = 'local';
 
+// WHY `addTokens` is gone (spending rework stage 1, design §9, decision 34):
+// there is no Add budget action left to size — a pause's only recommendable
+// buttons are Continue and Stop.
 const InputSchema = z.object({
   planId: z.string(),
   handoffId: z.string(),
   action: z.string(),
-  addTokens: z.number().optional(),
   message: z.string(),
 }).strict();
 type RecommendInput = z.infer<typeof InputSchema>;
@@ -32,12 +34,8 @@ const RAW_SCHEMA = {
     planId: { type: 'string', description: 'The "Plan id" from the plan pause notice.' },
     handoffId: { type: 'string', description: 'The "Handoff id" from the plan pause notice.' },
     action: {
-      type: 'string', enum: ['add_budget', 'continue', 'stop'],
+      type: 'string', enum: ['continue', 'stop'],
       description: 'The button you recommend. Only the actions the notice lists are accepted.',
-    },
-    addTokens: {
-      type: 'integer', minimum: 1,
-      description: 'add_budget only: how many tokens to add, within the range the notice gives.',
     },
     message: {
       type: 'string', maxLength: 280,
@@ -47,7 +45,7 @@ const RAW_SCHEMA = {
 } as const;
 
 const RECOMMEND_PLAN_ACTION_DESCRIPTION =
-  'Only for answering a plan pause notice ("[Plan paused]"). Puts the button you recommend (add_budget, continue or stop) '
+  'Only for answering a plan pause notice ("[Plan paused]"). Puts the button you recommend (continue or stop) '
   + 'on the paused plan card, with a short message saying why. It does not press the button: the user decides. '
   + 'Use the plan id and handoff id from the notice. If it is refused, give your advice in chat instead.';
 
@@ -72,7 +70,6 @@ export function createRecommendPlanActionTool(): NativeTool<RecommendInput> {
         planId: input.planId,
         handoffId: input.handoffId,
         action: input.action,
-        ...(input.addTokens !== undefined ? { addTokens: input.addTokens } : {}),
         message: input.message,
       });
       if (!res.ok) {

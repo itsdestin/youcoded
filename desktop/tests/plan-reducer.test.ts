@@ -34,7 +34,7 @@ function child(childId: string, over: Partial<PlanChildView> = {}): PlanChildVie
 function plan(over: Partial<PlanView> = {}): PlanView {
   return {
     planId: 'plan-1', toolUseId: CARD, title: 'Review two files', status: 'running',
-    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, budgetTokens: 2000, status: 'running', children: [child(A), child(B)] }],
+    steps: [{ id: 's1', kind: 'map', title: 'Review', specialist: 'reviewer', fanOut: 2, status: 'running', children: [child(A), child(B)] }],
     ceilingTokens: 4000, ceilingUsd: null, model: { label: 'm' }, seq: 3,
     ...over,
   };

@@ -16,8 +16,8 @@ import {
   PLAN_ASK_DETAIL_HEADER, PLAN_ASK_NOTICE_LEAD, PLAN_ASK_QUESTION_CLOSE, PLAN_ASK_QUESTION_LABEL, PLAN_ASK_QUESTION_OPEN,
   PLAN_QUESTION_MAX_CHARS, type PlanPauseKind,
 } from '../../../shared/types';
-import { pausedMinimum, projectPlan } from './plan-journal';
-import { pausedRouting, type PlanPauseAction } from './pause-routing';
+import { projectPlan } from './plan-journal';
+import { pausedRouting } from './pause-routing';
 import type { PlanRecord } from './types';
 
 /** §2 step 6: the assistant's message on the card. */
@@ -40,8 +40,8 @@ export function normalizePlanQuestion(raw: unknown): { ok: true; question?: stri
 
 /** §2 step 4: how much provider/tool detail the notice may carry. */
 export const PLAN_NOTICE_DETAIL_MAX_CHARS = 500;
-/** §2 table: an add_budget recommendation is at most this × the plan's limit. */
-export const PLAN_ADD_BUDGET_MAX_MULTIPLE = 4;
+// WHY PLAN_ADD_BUDGET_MAX_MULTIPLE is GONE (spending rework stage 1,
+// decision 34): there is no add_budget recommendation left to bound.
 /** §2 "never stuck": a pending handoff whose notice has not started to be
  *  delivered by then is cleared, so the card never stays greyed. Task 11: the
  *  card then says so ("didn't get to your question within 10 minutes"), so
@@ -59,16 +59,13 @@ const fmt = (n: number) => n.toLocaleString('en-US');
 function whatHappened(paused: NonNullable<PlanRecord['paused']>): string {
   const kind: PlanPauseKind = paused.kind ?? 'unexpected-error';
   const base: Record<PlanPauseKind, string> = {
-    'budget': 'a specialist used its whole allowance',
-    'ceiling-shortfall': "the plan's limit is too small for the next group of specialists",
-    'plan-limit': "the plan reached its dollar limit, and no token amount would fix that",
-    'local-pool': 'the local specialists need more room than the local engine has',
-    'budget-refused': "a request couldn't be kept inside its budget",
+    // Design §7, decision 37 R-4 (spending rework stage 1): the plan's own
+    // spend limit was reached — the one spend-related pause kind left.
+    'spend-limit': "the plan reached its spend limit",
     'launch-failed': paused.launch === 'refused' ? "a specialist couldn't be started with this plan's approved settings"
       : paused.launch === 'drift' ? "a specialist's instructions or tools changed since the plan was approved"
         : "a specialist couldn't start",
     'unknown-outcome': `a specialist was cut off after starting a ${fact(paused.tool ?? 'tool')} call, and it is not known whether that call finished`,
-    'unknown-request': 'a specialist was cut off mid-request',
     'iteration-cap': paused.repeat
       ? `the repeated steps ran ${paused.repeat.rounds} times without meeting their goal ("${fact(paused.repeat.until)}")`
       : 'the repeated steps used all their rounds without meeting their goal',
@@ -114,38 +111,20 @@ function untrusted(text: string): string {
   return safe.length <= PLAN_NOTICE_DETAIL_MAX_CHARS ? safe : `${safe.slice(0, PLAN_NOTICE_DETAIL_MAX_CHARS)}${SHORTENED}`;
 }
 
-/** The smallest add_budget the service itself accepts (addBudget refuses less). */
-export function addBudgetFloor(plan: PlanRecord, now: number = Date.now()): number {
-  // Task 12 follow-up 1: the minimum valid at `now` (warm or cold).
-  return Math.max(1, (plan.paused ? pausedMinimum(plan.paused, now) : undefined) ?? 1);
-}
+// WHY addBudgetFloor/addBudgetCap/allowedLine's add_budget branch/topUpLine
+// are ALL GONE (spending rework stage 1, design §1, decision 34): there is
+// no Add budget action left to size, floor, cap or describe a top-up for —
+// `actions` is 'continue'/'stop' only, so the notice just lists them.
 
-export function addBudgetCap(plan: PlanRecord): number {
-  return plan.ceilingTokens * PLAN_ADD_BUDGET_MAX_MULTIPLE;
-}
-
-function allowedLine(plan: PlanRecord, actions: readonly PlanPauseAction[], now: number): string {
-  return actions.map((a) => (a === 'add_budget'
-    ? `add_budget (addTokens from ${fmt(addBudgetFloor(plan, now))} to ${fmt(addBudgetCap(plan))})`
-    : a)).join(', ');
-}
-
-/** Task 12 follow-up 1: the top-up the assistant may cite. While the warm
- *  minimum holds, both numbers and how long the smaller one lasts. */
-function topUpLine(paused: NonNullable<PlanRecord['paused']>, now: number): string[] {
-  const warm = paused.warmMinimum;
-  const cold = paused.minimumAddTokens;
-  if (warm && now <= warm.until && cold !== undefined && warm.tokens < cold) {
-    const minutes = Math.max(1, Math.floor((warm.until - now) / 60_000));
-    const within = `within the next ${minutes} minute${minutes === 1 ? '' : 's'}`;
-    // Follow-up tidy-up: a warm minimum already met reads as "no top-up",
-    // never as "0 tokens".
-    return [warm.tokens > 0
-      ? `Smallest top-up that lets it continue: ${fmt(warm.tokens)} tokens if it continues ${within}, ${fmt(cold)} tokens after that`
-      : `Smallest top-up that lets it continue: no top-up is needed if it continues ${within}, ${fmt(cold)} tokens after that`];
-  }
-  const current = pausedMinimum(paused, now);
-  return current !== undefined ? [`Smallest top-up that lets it continue: ${fmt(current)} tokens`] : [];
+/** Design §3/§7: what has actually been spent, and the plan's own limit if
+ *  it set one — dollars when priced, tokens otherwise (same pricing-class
+ *  rule as `estimate`/`spendLimit`, design §4). */
+function spentLine(plan: PlanRecord): string {
+  const limit = plan.spendLimit;
+  if (limit && 'usd' in limit) return `Spent so far: $${(plan.usedUsd ?? 0).toFixed(2)} of the $${limit.usd.toFixed(2)} limit`;
+  if (limit) return `Spent so far: ${fmt(plan.usedTokens)} of the ${fmt(limit.tokens)}-token limit`;
+  if (plan.usedUsd !== undefined) return `Spent so far: $${plan.usedUsd.toFixed(2)}`;
+  return `Spent so far: ${fmt(plan.usedTokens)} tokens`;
 }
 
 /** The notice for `plan`'s current pause (§2 step 4), sent when the user
@@ -161,7 +140,6 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?
   const where = rowIndex >= 0
     ? `step ${rowIndex + 1} of ${view.steps.length}, "${fact(view.steps[rowIndex].title)}"`
     : `step "${fact(paused.stepId)}"`;
-  const approx = plan.approximateLimit || Object.values(plan.manifest.specialists).some((s) => s.approximateLimit);
   const { actions } = pausedRouting(paused);
   const lines = [
     // Task 11 (§6): the user asked, and the notice says so first. The lead is
@@ -175,9 +153,15 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?
     `Handoff id: ${handoffId}`,
     `Paused at: ${where}`,
     `What happened: ${whatHappened(paused)}`,
-    `Spent so far: ${fmt(plan.usedTokens)} of the ${approx ? '~' : ''}${fmt(plan.ceilingTokens)}-token limit${approx ? ' (approximate: one reply may go past it)' : ''}`,
-    ...topUpLine(paused, now),
-    `You may recommend: ${allowedLine(plan, actions, now)}`,
+    // WHY this reads spendLimit/usedUsd, not ceilingTokens/approximateLimit
+    // (spending rework stage 1, design §3/§7, decision 34): spending is
+    // recorded, not reserved, so there is no worst-case ceiling to report
+    // against — only what has actually been spent, and the plan's own
+    // optional limit if it has one. T6 (design §7's setLimit/resume) is the
+    // task that gives this notice its full wording pass; this is the
+    // straightforward read of the new fields.
+    spentLine(plan),
+    `You may recommend: ${actions.join(', ')}`,
     '',
     // Decision 20: what the user typed, after the pinned facts, labelled as
     // theirs. A blank ask leaves the notice exactly as before.
@@ -198,7 +182,7 @@ export function planHandoffNotice(plan: PlanRecord, handoffId: string, question?
     '',
     'Reply in one of three ways. Call recommend_plan_action with this plan id and handoff id to put the button you recommend on the plan card, with a short message saying why. '
       + 'Or call propose_plan with a revised plan. Or explain what happened in chat. '
-      + 'You cannot continue the plan, stop it or add budget yourself: the user presses the button.',
+      + 'You cannot continue the plan or stop it yourself: the user presses the button.',
   ];
   return lines.join('\n');
 }

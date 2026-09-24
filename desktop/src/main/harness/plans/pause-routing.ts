@@ -70,7 +70,6 @@ export interface PlanPauseRouting {
 }
 
 const STOP_ONLY: readonly PlanPauseAction[] = ['stop'];
-const BUDGET: readonly PlanPauseAction[] = ['add_budget', 'stop'];
 const CONTINUE_OR_STOP: readonly PlanPauseAction[] = ['continue', 'stop'];
 
 const toAssistant = (actions: readonly PlanPauseAction[]): PlanPauseRouting => ({ route: 'assistant', actions: [...actions] });
@@ -81,17 +80,14 @@ export function routePlanPause(kind: PlanPauseSituation, ctx: PlanPauseContext =
     case 'specialist-stopped':
     case 'interrupted':
       return { route: 'user', actions: [...CONTINUE_OR_STOP] };
-    // Budget kinds: more budget can help, and only the person can add it.
-    case 'budget':
-    case 'ceiling-shortfall':
-      return ctx.drift ? toAssistant(STOP_ONLY) : toAssistant(BUDGET);
-    // Nothing Continue or budget can fix here; the fix is a revised plan.
-    // local-pool: the pool check is this plan's own fixed capacity, so
-    // waiting can never help (review 1, finding 1).
-    case 'plan-limit':
-    case 'budget-refused':
+    // Design §7, decision 37 R-4 (spending rework stage 1): the plan's own
+    // spend limit was reached. Straight to the person — Continue · Stop —
+    // never handed to the assistant first, and never `add_budget` (decision
+    // 34: nothing is rationed to add budget to any more).
+    case 'spend-limit':
+      return { route: 'user', actions: [...CONTINUE_OR_STOP] };
+    // Nothing Continue can fix here; the fix is a revised plan.
     case 'iteration-cap':
-    case 'local-pool':
       return toAssistant(STOP_ONLY);
     case 'unexpected-error':
       return ctx.drift ? toAssistant(STOP_ONLY) : toAssistant(CONTINUE_OR_STOP);

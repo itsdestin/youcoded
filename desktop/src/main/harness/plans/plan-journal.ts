@@ -18,6 +18,7 @@
 //     rejected on every write.
 //  4. FINISHED WORK IS FROZEN. A committed attempt's report can never change,
 //     because resume reads it back as a finished input instead of rerunning it.
+import * as fs from 'fs';
 import * as path from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { isDeepStrictEqual } from 'util';
@@ -195,7 +196,9 @@ function stepTitle(task: string): string {
 const RETRIED_AFTER_ERROR: ReadonlySet<string> = new Set(['launch-failed', 'specialist-error', 'invalid-report']);
 
 function childView(plan: PlanRecord, step: PlanStepV1, stepStatus: string, a: PlanAttemptRecord): PlanChildView {
-  const binding = plan.manifest.specialists[step.specialist]?.binding;
+  // Design §5: binding is frozen per STEP now, not per specialist (two steps
+  // naming the same specialist may run different models).
+  const binding = plan.manifest.steps[step.id]?.binding;
   const done = isCommitted(a);
   const status: PlanChildView['status'] = done
     ? (a.terminal === 'completed' ? 'completed' : a.terminal === 'failed' ? 'failed' : 'interrupted')
@@ -238,29 +241,29 @@ function childView(plan: PlanRecord, step: PlanStepV1, stepStatus: string, a: Pl
  * `repeat`, which left the loop itself, the round count and the stop condition
  * with nowhere to appear — the card showed two independent-looking steps and
  * never said they repeated, how many times, or when they would stop. The body
- * rows are still built exactly as before, so the pricing is unchanged: the
- * wrapper carries `ceilingTokens` (Σ of its body's worst cases, rounds
- * included) and a `fanOut` that is the same total number of specialist runs the
- * flattened rows summed to. `plan-journal.test.ts` pins both totals against the
- * old projection on the same document — the ceiling the user approves may not
- * move by a single token.
+ * rows are still built exactly as before: the wrapper carries a `fanOut` that
+ * is the same total number of specialist runs the flattened rows summed to.
+ * WHY it no longer also carries a worst-case token sum (spending rework stage
+ * 1, decision 34): that figure was `Σ(budgetTokens + setupTokens) × fanOut`
+ * over the body, and neither addend exists in the grammar any more —
+ * `estimate`/`spendLimit` on the PLAN are what the card reads instead.
  */
-/**
- * Task 12 follow-up 1: the Add budget minimum that applies at `now` — the warm
- * one while it is valid, otherwise the cold one. undefined = nothing is needed.
- */
-export function pausedMinimum(paused: NonNullable<PlanRecord['paused']>, now: number): number | undefined {
-  const warm = paused.warmMinimum;
-  if (warm && now <= warm.until) return warm.tokens > 0 ? warm.tokens : undefined;
-  return paused.minimumAddTokens;
-}
+// WHY `pausedMinimum` is GONE (spending rework stage 1, design §1, decision
+// 34): it computed the smallest Add budget that would let a paused
+// specialist continue — `paused.minimumAddTokens`/`warmMinimum`. Nothing is
+// reserved per request any more, so there is no minimum top-up to compute;
+// a `spend-limit` pause carries the limit it hit instead (`paused.limit`).
 
-/** `now` (Task 12 follow-up 1) only decides how long a warm minimum still
- *  holds; every caller that has a clock passes it. */
+/** `now` — kept for callers (`list()`/`emit()` already pass a clock through)
+ *  even though this projection no longer needs one itself: the warm-minimum
+ *  timer it used to time was retired with Add budget (spending rework stage
+ *  1, decision 34). A future per-view "as of" figure has a clock ready. */
 export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanView {
+  void now;
   const row = (step: PlanStepV1, kind: PlanStepView['kind'], multiplier: number): PlanStepView => {
     const rec = plan.steps.find((s) => s.id === step.id);
     const attempts = rec?.attempts ?? [];
+    const manifestStep = plan.manifest.steps[step.id];
     const out: PlanStepView = {
       id: step.id,
       kind,
@@ -272,10 +275,26 @@ export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanVie
       task: step.task,
       specialist: step.specialist,
       fanOut: (step.kind === 'map' ? step.items!.length : 1) * multiplier,
-      budgetTokens: step.budget_tokens,
-      setupTokens: plan.manifest.specialists[step.specialist]?.setupTokens ?? 0,
       status: rec?.status ?? 'pending',
     };
+    // Design §5: real stepModel — `isDefault` from the manifest's own
+    // resolution source, `locked` once the step has ANY attempt (design §5's
+    // "Started" definition — the lock check runs inside the same locked
+    // write as attempt creation, so this is never racy with a Plan settings
+    // change). Absent only for a journal written before the manifest carried
+    // per-step entries (a v1 journal, already retired — see types.ts).
+    if (manifestStep) {
+      const isDefault = manifestStep.source === 'default';
+      out.stepModel = {
+        label: manifestStep.label,
+        isDefault,
+        ...(attempts.length > 0 ? { locked: true } : {}),
+        // Design §5: an explicit binding — whether from the document's own
+        // `model` or a Plan settings override — carries its identity; the
+        // default carries only its label.
+        ...(isDefault ? {} : { providerId: manifestStep.binding.providerId, modelId: manifestStep.binding.modelId }),
+      };
+    }
     // WHY the assistant's own sentence travels (decision 30, 2026-09-18): the
     // row was `title` — the first line of a prompt written for a specialist,
     // not for the person approving real spending. Absent on every plan written
@@ -309,9 +328,6 @@ export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanVie
     }
     return out;
   };
-  /** What one row may spend at worst: its per-child allowance (work + setup)
-   *  times the number of children it may ever launch. */
-  const worstCase = (view: PlanStepView): number => (view.budgetTokens + (view.setupTokens ?? 0)) * view.fanOut;
   const rows: PlanStepView[] = [];
   for (const step of plan.document.steps) {
     if (step.kind !== 'repeat') {
@@ -328,10 +344,10 @@ export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanVie
     wrapper.body = body;
     wrapper.rounds = step.max_iterations!;
     if (step.until) wrapper.until = step.until;
-    // The two totals the card reads off the rows, preserved exactly: the
-    // specialist count (Σ fan-out) and the worst-case spend (Σ per-row).
+    // The specialist count the card reads off the row, preserved exactly:
+    // Σ fan-out. WHY no worst-case token sum any more (spending rework stage
+    // 1, decision 34): there is no per-step token budget left to sum.
     wrapper.fanOut = body.reduce((n, b) => n + b.fanOut, 0);
-    wrapper.ceilingTokens = body.reduce((n, b) => n + worstCase(b), 0);
     // A repeat launches no specialist of its own, so its progress and spend are
     // its body's. Without this the row would read "0 of 9 done · 0 tokens"
     // while its own body rows showed real work.
@@ -346,23 +362,22 @@ export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanVie
     title: plan.document.goal,
     status: plan.status,
     steps: rows,
-    ceilingTokens: plan.ceilingTokens,
-    ceilingUsd: plan.ceilingUsd,
+    // WHY no ceilingTokens/ceilingUsd (spending rework stage 1, decision 34):
+    // the record no longer carries either — `estimate`/`spendLimit` below are
+    // what the card reads.
     model: { label: plan.manifest.modelLabel },
     usedTokens: plan.usedTokens,
     seq: plan.seq,
   };
   if (plan.usedUsd !== undefined) view.usedUsd = plan.usedUsd;
+  if (plan.estimate) view.estimate = plan.estimate;
+  if (plan.spendLimit) view.spendLimit = plan.spendLimit;
   if (plan.autoApproved) view.autoApproved = true;
   // Only the card's two fields: the attempt id is executor bookkeeping.
   if (plan.paused) {
     view.paused = { stepId: plan.paused.stepId, reason: plan.paused.reason };
-    if (plan.paused.minimumAddTokens !== undefined) view.paused.minimumAddTokens = plan.paused.minimumAddTokens;
-    // Follow-up 1: the warm minimum travels as "for how much longer", so the
-    // card times it from its own receipt, not from main's clock. An expired
-    // one is simply not sent.
-    const warm = plan.paused.warmMinimum;
-    if (warm && now <= warm.until) view.paused.warmMinimum = { tokens: warm.tokens, forMs: warm.until - now };
+    // Design §2/§7: the spend limit this pause hit ("Reached your $5 limit.").
+    if (plan.paused.limit) view.paused.limit = plan.paused.limit;
     // Review fix 2: the system text for the bug report (the card never draws it).
     if (plan.paused.report) view.paused.report = plan.paused.report;
     // 5b follow-up: why it paused, so the card never reads `reason` for it.
@@ -395,10 +410,8 @@ export function projectPlan(plan: PlanRecord, now: number = Date.now()): PlanVie
   if (plan.revisedBy) view.revisedBy = plan.revisedBy;
   if (plan.startedAt !== undefined) view.startedAt = plan.startedAt;
   if (plan.endedAt !== undefined) view.endedAt = plan.endedAt;
-  // Decision 5: the record's own flag, or any frozen specialist on a soft route.
-  if (plan.approximateLimit || Object.values(plan.manifest.specialists).some((s) => s.approximateLimit)) {
-    view.approximateLimit = true;
-  }
+  // WHY no approximateLimit (spending rework stage 1): retired along with
+  // decision 5's uncapped-route warning — see shared/types.ts's matching note.
   if (plan.failure) view.failure = { detail: plan.failure.detail };
   return view;
 }
@@ -485,8 +498,40 @@ export class PlanJournal {
     return path.join(this.home.root, quarantineRel);
   }
 
+  /**
+   * The one place every entry point reads a journal's raw bytes. A v1
+   * journal is not damaged — it is a shape this build no longer reads
+   * (spending rework stage 1, design §2, decision 33.4 / open question 7
+   * "resolved here": "v1 journals retired silently"). It is retired BEFORE
+   * the strict version check ever sees it: archived byte-for-byte at
+   * `<rel>.v1-retired` (idempotent — `createFileExclusive` leaves an
+   * existing copy alone if another process already retired it) and removed,
+   * so every caller below sees exactly what an absent journal looks like and
+   * never manufactures a failed card the way a genuinely unreadable file
+   * does (decision 33's "all of the existing plans are demos" — Destin
+   * accepted losing them for this rework).
+   */
+  private async readRawRetiringV1(rel: string): Promise<Buffer | null> {
+    const bytes = await this.home.readRawBytesAsync(rel);
+    if (bytes === null) return null;
+    let json: unknown;
+    try {
+      json = JSON.parse(bytes.toString('utf8'));
+    } catch {
+      return bytes; // not valid JSON at all — the strict reader's own quarantine path handles it
+    }
+    if ((json as { v?: unknown } | null)?.v !== 1) return bytes;
+    await this.home.createFileExclusive(`${rel}.v1-retired`, bytes);
+    try {
+      await fs.promises.unlink(path.join(this.home.root, rel));
+    } catch (e: any) {
+      if (e?.code !== 'ENOENT') throw e;
+    }
+    return null;
+  }
+
   async read(ref: PlanRef): Promise<JournalReadResult> {
-    const bytes = await this.home.readRawBytesAsync(this.relPath(ref));
+    const bytes = await this.readRawRetiringV1(this.relPath(ref));
     if (bytes === null) return { kind: 'absent' };
     const parsed = parseJournal(bytes.toString('utf8'));
     if (parsed.ok) return { kind: 'valid', file: parsed.file };
@@ -547,7 +592,7 @@ export class PlanJournal {
     // would change nothing — or would throw — must not reach the lock at all,
     // or merely checking a plan-less conversation would leave an empty folder.
     let precomputed: AppliedMutation<T> | undefined;
-    if (await this.home.readRawBytesAsync(rel) === null) {
+    if (await this.readRawRetiringV1(rel) === null) {
       precomputed = applyMutation(emptyJournal(), fn); // a throw propagates; disk untouched
       if (!precomputed.write) return precomputed.result;
     }
@@ -696,7 +741,8 @@ export class PlanJournal {
       if (outcome.reportPath !== undefined) attempt.reportPath = outcome.reportPath;
       plan.usedTokens += outcome.spentTokens - attempt.spentTokens;
       attempt.spentTokens = outcome.spentTokens;
-      attempt.reservedTokens = 0;
+      // WHY no reservedTokens reset (spending rework stage 1, decision 34):
+      // the field is gone — nothing is reserved against an attempt any more.
       attempt.completedAt = this.now();
     });
   }

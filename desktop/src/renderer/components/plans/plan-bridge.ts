@@ -80,12 +80,14 @@ function normalizePlanAction(raw: unknown): PlanActionResult {
   return { ok: false, error: UNREADABLE };
 }
 
+// WHY underUsd, not underTokens (spending rework stage 1, design §6/§8):
+// auto-start reads a dollar figure now.
 function normalizePlanRead(raw: unknown): PlanAutoApproveRead {
   const refused = refusal(raw, UNREADABLE_SETTINGS);
   if (refused) return refused;
-  const r = raw as { ok?: unknown; underTokens?: unknown } | null | undefined;
-  if (r && r.ok === true && typeof r.underTokens === 'number' && Number.isFinite(r.underTokens) && r.underTokens >= 0) {
-    return { ok: true, underTokens: r.underTokens };
+  const r = raw as { ok?: unknown; underUsd?: unknown } | null | undefined;
+  if (r && r.ok === true && typeof r.underUsd === 'number' && Number.isFinite(r.underUsd) && r.underUsd >= 0) {
+    return { ok: true, underUsd: r.underUsd };
   }
   return { ok: false, error: UNREADABLE_SETTINGS };
 }
@@ -139,8 +141,8 @@ export function readPlanAutoApprove(): Promise<PlanAutoApproveRead> {
   return call((b) => b.getAutoApprove(), normalizePlanRead, UNREADABLE_SETTINGS) as Promise<PlanAutoApproveRead>;
 }
 
-export function writePlanAutoApprove(underTokens: number): Promise<PlanSettingsWriteResult> {
-  return call((b) => b.setAutoApprove(underTokens), normalizePlanWrite, UNSAVED_SETTINGS) as Promise<PlanSettingsWriteResult>;
+export function writePlanAutoApprove(underUsd: number): Promise<PlanSettingsWriteResult> {
+  return call((b) => b.setAutoApprove(underUsd), normalizePlanWrite, UNSAVED_SETTINGS) as Promise<PlanSettingsWriteResult>;
 }
 
 // ---- can this device run plans? --------------------------------------------

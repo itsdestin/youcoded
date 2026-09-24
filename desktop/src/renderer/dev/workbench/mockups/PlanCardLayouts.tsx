@@ -44,23 +44,25 @@ const PLAN: PlanView = {
   steps: [
     {
       id: 's1', kind: 'map', title: 'Review the six files that changed in the auth module',
-      specialist: 'reviewer', fanOut: 3, budgetTokens: 9000, status: 'pending',
+      specialist: 'reviewer', fanOut: 3, status: 'pending',
       summary: 'Three helpers read the changed sign-in files and write down anything that looks wrong.',
       items: ['Sign-in screen and password reset', 'Session tokens and two-factor codes', 'Account lockout and sign-out'],
     },
     {
       id: 's2', kind: 'verify', title: 'Check each review against the file it describes',
-      specialist: 'reviewer', fanOut: 1, budgetTokens: 9000, status: 'pending', of: 's1',
+      specialist: 'reviewer', fanOut: 1, status: 'pending', of: 's1',
       summary: 'One helper re-reads those notes against the files, to catch anything mistaken.',
     },
     {
       id: 's3', kind: 'combine', title: 'Combine the findings into one ranked list',
-      specialist: 'worker', fanOut: 1, budgetTokens: 4000, status: 'pending', of: 's2',
+      specialist: 'worker', fanOut: 1, status: 'pending', of: 's2',
       summary: 'One helper turns everything into a single list, worst problem first.',
     },
   ],
-  ceilingTokens: 40000,
-  ceilingUsd: 0.12,
+  // WHY estimate, not ceilingTokens/ceilingUsd (spending rework stage 1,
+  // design §2/§4): there is no per-step token budget left to sum into a
+  // worst-case ceiling — the proposed card reads a range estimate instead.
+  estimate: { lowUsd: 0.06, highUsd: 0.12 },
   model: { label: 'Claude Sonnet 4.6' },
 };
 
@@ -78,17 +80,23 @@ function sourceIndex(step: PlanStepView): number {
   return step.of ? STEPS.findIndex((s) => s.id === step.of) + 1 : 0;
 }
 
+// WHY these read `estimate`, not ceilingTokens/ceilingUsd (spending rework
+// stage 1, decision 34): the proposed card shows a range from past runs, a
+// guide, never a limit.
+const PLAN_ESTIMATE = PLAN.estimate as { lowUsd: number; highUsd: number };
+const ESTIMATE_TEXT = `$${PLAN_ESTIMATE.lowUsd.toFixed(2)}–$${PLAN_ESTIMATE.highUsd.toFixed(2)}`;
+
 /** The limit line, in as few words as it can be said honestly. The shipped line
  *  spells out "specialists run on Claude Sonnet 4.6"; the specialist count is
  *  already at the head of this line, so the model name alone says the same
- *  thing in three fewer words. Figures unchanged. */
-const LIMIT_LINE = `${SPECIALISTS} specialists · up to about $${PLAN.ceilingUsd?.toFixed(2)} (${PLAN.ceilingTokens.toLocaleString()} tokens) · ${PLAN.model.label}`;
+ *  thing in three fewer words. */
+const LIMIT_LINE = `${SPECIALISTS} specialists · usually ${ESTIMATE_TEXT} · ${PLAN.model.label}`;
 
 /** B's version of the same line. Its heading already carries the specialist
  *  count and the price, so repeating them under the steps would be the one
- *  thing this round is trying to cut — the tokens and the model are what is
+ *  thing this round is trying to cut — the estimate and the model are what is
  *  left to say, and nothing is lost. */
-const LIMIT_LINE_SHORT = `Up to ${PLAN.ceilingTokens.toLocaleString()} tokens · ${PLAN.model.label}`;
+const LIMIT_LINE_SHORT = `Usually ${ESTIMATE_TEXT} · ${PLAN.model.label}`;
 
 /** The last thing the plan produces. The only label on any candidate that is
  *  not a count or a name — it says where the whole thing lands. */
@@ -411,9 +419,9 @@ function StripRow({ step, index, open, onToggle, rowRef }: {
             </div>
           ))}
           <div className="text-2xs text-fg-dim break-words">{step.title}</div>
-          <div className="text-2xs text-fg-muted">
-            Each {step.specialist} stops at its {step.budgetTokens.toLocaleString()}-token limit.
-          </div>
+          {/* WHY no per-step limit line any more (spending rework stage 1,
+              decision 34): each specialist runs on its own default model
+              with no per-step token budget to name here. */}
         </div>
       )}
     </li>

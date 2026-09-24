@@ -67,7 +67,8 @@ import type { McpLease } from './mcp/mcp-manager';
 // behind one bridge; this file only supplies the session mechanics.
 import { PlanHostBridge, type PlanChildStart, type PlanHostBridgeOptions, type PlanNoticeDelivery, type PlanRoute } from './plans/plan-host-bridge';
 import type { PlanChildHandle, PlanChildOutcome } from './plans/plan-executor';
-import type { PlanChildRequestGate } from './plans/budget-adapter';
+// WHY no budget-adapter import any more (spending rework stage 1, design
+// §1): the module is deleted along with plan-child mode's request gate.
 import type { PlanActionResult, PlanAutoApproveRead, PlanSettingsWriteResult } from './plans/types';
 
 export interface CreateNativeSessionOpts {
@@ -3534,8 +3535,11 @@ export class NativeSessionHost extends EventEmitter {
     // requested — falls back to the parent's own binding below, unchanged.
     binding?: ModelBinding;
     // Specialists plans (Task 4): mint a PLAN specialist — the same ordinary
-    // durable specialist session, plus its budget gate/route and plan tag.
-    plan?: { gate: PlanChildRequestGate; providerType: ProfileProviderType; tag: NonNullable<LiveEntry['plan']> };
+    // durable specialist session, plus its route and plan tag.
+    // WHY no `gate` any more (spending rework stage 1, design §1): a plan
+    // child's request gate (budget-adapter.ts) is deleted; T2 attaches the
+    // real replacement (`planSpend`) here instead.
+    plan?: { providerType: ProfileProviderType; tag: NonNullable<LiveEntry['plan']> };
   }): Promise<{ childId: string; title: string }> {
     const parent = this.live.get(parentId);
     // A child with no live parent has nobody to report to and nobody to tear it
@@ -3636,17 +3640,21 @@ export class NativeSessionHost extends EventEmitter {
     // helper minted mid-turn — the exact path C3 took off the main thread.
     gitSnapshot: string,
     // Specialists plans (Task 4): a plan's specialist is this SAME
-    // construction plus its budget gate and provider route (plan-child mode,
-    // harness-session.ts). `probe` builds one only to measure a request, so it
-    // gets no background-command registry (nothing may ever run in it).
-    extra: { plan?: { gate: PlanChildRequestGate; providerType: ProfileProviderType; tag?: NonNullable<LiveEntry['plan']> }; probe?: boolean } = {},
+    // construction plus its provider route. `probe` builds one only to
+    // measure a request, so it gets no background-command registry (nothing
+    // may ever run in it).
+    // WHY no `gate` any more (spending rework stage 1, design §1): T2
+    // attaches `planSpend` (design §3's `{beforeRequest, afterReply}` hook)
+    // to `HarnessSessionOpts` here instead of a request gate — not built in
+    // this task.
+    extra: { plan?: { providerType: ProfileProviderType; tag?: NonNullable<LiveEntry['plan']> }; probe?: boolean } = {},
   ): HarnessSession {
     const allowed = new Set(specialist.allowedTools);
     let session: HarnessSession;
     session = new HarnessSession(
       {
         sessionId: childId, cwd: workDir, binding, contextLength, profile, pricing, free,
-        ...(extra.plan ? { planChild: extra.plan.gate, providerType: extra.plan.providerType } : {}),
+        ...(extra.plan ? { providerType: extra.plan.providerType } : {}),
         commitCompaction: proposal => this.commitCompaction(childId, session, proposal),
 // WHY: specialist work is bounded by its narrow tool set, parent-managed
         // lifecycle controls, and the delegation spawn backstop—not an arbitrary
@@ -5143,9 +5151,14 @@ export class NativeSessionHost extends EventEmitter {
   commentOnPlan(sessionId: string, planId: string, text: string): Promise<PlanActionResult> {
     return this.plans?.comment(sessionId, planId, text) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
-  addPlanBudget(sessionId: string, planId: string, tokens: number, requestId?: unknown): Promise<PlanActionResult> {
-    // Final review F1: the press's request id makes a repeat a no-op.
-    return this.plans?.addBudget(sessionId, planId, tokens, requestId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
+  // WHY addPlanBudget always answers unsupported now (spending rework stage
+  // 1, design §1/§6): PlanHostBridge/PlanService no longer have an addBudget
+  // to call — there is no Add budget left. The method itself, and the
+  // `plans:add-budget` channel it answers, are removed in T7 across all five
+  // IPC surfaces; kept here, honestly refusing, so plan-requests.ts (T7's
+  // file) still compiles until then.
+  addPlanBudget(_sessionId: string, _planId: string, _tokens: number, _requestId?: unknown): Promise<PlanActionResult> {
+    return Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
   }
   resumePlan(sessionId: string, planId: string): Promise<PlanActionResult> {
     return this.plans?.resume(sessionId, planId) ?? Promise.resolve(NativeSessionHost.PLANS_UNSUPPORTED);
@@ -5214,7 +5227,6 @@ export class NativeSessionHost extends EventEmitter {
       queuePlanNotice: (sessionId, notice) => this.queuePlanNotice(sessionId, notice),
       withdrawPlanNotice: (sessionId, handoffId) => this.withdrawPlanNotice(sessionId, handoffId),
       startChild: (input) => this.startPlanChild(input),
-      probeSession: (input) => this.planProbeSession(input),
     }, this.planOptions);
   }
 
@@ -5248,7 +5260,9 @@ export class NativeSessionHost extends EventEmitter {
     let childId: string | undefined;
     let title: string | undefined;
     try {
-      const plan = { gate: input.gate, providerType: input.providerType, tag: input.tag };
+      // WHY no `gate` any more (spending rework stage 1, design §1): T2
+      // attaches `planSpend` here instead of a request gate.
+      const plan = { providerType: input.providerType, tag: input.tag };
       if (input.resumeChildId) {
         const resumeId = input.resumeChildId;
         if (this.live.has(resumeId)) await this.destroy(resumeId);
@@ -5337,8 +5351,11 @@ export class NativeSessionHost extends EventEmitter {
           : this.send(childId, input.brief);
         if (res.status !== 'sent') return { kind: 'failed', detail: `the specialist couldn't start its turn (${res.status})` };
         await Promise.race([entry.running, disposedSignal]);
-        const stop = input.budgetStop();
-        if (stop) return { kind: 'stopped', stop };
+        // WHY no budgetStop check any more (spending rework stage 1, design
+        // §1): PlanChildOutcome's 'stopped' kind and the request gate that
+        // produced it are both deleted. T2/T3's spend-limit halt (design §3:
+        // `run.limitReached`, a drain-pause) works through the executor, not
+        // through this outcome.
         if (disposed || interrupted || entry.cancelledBeforeSend) return { kind: 'interrupted' };
         if (errorText) return { kind: 'failed', detail: errorText };
         return { kind: 'completed', report: report.trim() };
@@ -5380,33 +5397,10 @@ export class NativeSessionHost extends EventEmitter {
     };
   }
 
-  /** An unwired plan-specialist session used only to MEASURE a request
-   *  (setup cost at proposal, the next request's bound for the minimum Add
-   *  budget). Never registered, never sends, no background commands.
-   *
-   *  WHY async (merge, 2026-09-16 C3): the probe's prompt must be BYTE-IDENTICAL
-   *  to the prompt its real specialist will get, or the measurement is not of
-   *  the request the plan will actually send — so it takes the same precomputed
-   *  <env> git line, which means awaiting gitSnapshotAsync here. Probes run
-   *  mid-turn while the user is proposing or unpausing a plan; the sync
-   *  shell-out this replaces froze the whole app for up to ~6 s each time. */
-  private async planProbeSession(input: {
-    parentId: string; specialist: SpecialistDefinition; binding: ModelBinding; route: PlanRoute;
-    gate: PlanChildRequestGate; historyFromChildId?: string;
-  }): Promise<{ session: HarnessSession; dispose(): void }> {
-    const parent = this.live.get(input.parentId);
-    if (!parent) throw new Error("the conversation that owns this plan isn't open");
-    const id = input.historyFromChildId ?? `plan-measure-${randomUUID()}`;
-    const gitSnapshot = await gitSnapshotAsync(parent.cwd);
-    const session = this.buildSpecialistSession(
-      input.parentId, id, parent.cwd, input.specialist.displayName, input.specialist, input.binding,
-      input.route.contextLength, input.route.profile, input.route.pricing, input.route.free, '',
-      resolvePreset(this.presetIdFor.get(input.parentId)), parent, gitSnapshot,
-      { plan: { gate: input.gate, providerType: input.route.providerType }, probe: true },
-    );
-    if (input.historyFromChildId) await this.seedResumedHistory(input.historyFromChildId, parent.cwd, session);
-    return { session, dispose: () => session.destroy() };
-  }
+  // WHY planProbeSession is GONE (spending rework stage 1, design §1): it
+  // built an unwired plan-specialist session only to MEASURE a request
+  // (setup cost at proposal, an Add budget minimum) — resolveManifest no
+  // longer measures anything, and there is no Add budget minimum to bound.
 
   /** Cascade-cancel: interrupt then destroy every live specialist child of this
    *  session. Called from destroy() and quiesce(). Reads the in-memory

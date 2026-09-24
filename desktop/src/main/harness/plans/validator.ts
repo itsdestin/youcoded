@@ -1,8 +1,13 @@
 import { PlanDocumentSchema, type PlanDocumentV1, type PlanStepV1 } from './schema';
 import type { SpecialistRoster } from '../specialists/registry';
 
+// WHY `ceilingTokens` is gone (spending rework stage 1, decision 34): the
+// model no longer predicts a per-step cost, so there is nothing left to sum
+// into a worst-case token ceiling. `maximumAttempts` (kept — decision 33.1,
+// "hire a specialist directly instead of proposing a plan" still needs the
+// worst-case RUN count) and `maxFanOut` are unaffected by that removal.
 export type PlanValidation =
-  | { ok: true; document: PlanDocumentV1; maximumAttempts: number; ceilingTokens: number; maxFanOut: number }
+  | { ok: true; document: PlanDocumentV1; maximumAttempts: number; maxFanOut: number }
   | { ok: false; issues: string[] };
 
 /** Validate constraints that JSON Schema cannot express without losing grammar recursion. */
@@ -13,7 +18,6 @@ export function validatePlanDocument(input: unknown, roster: SpecialistRoster): 
   const issues: string[] = [];
   const ids = new Set<string>();
   let maximumAttempts = 0;
-  let ceilingTokens = 0;
   let maxFanOut = 0;
 
   const visit = (step: PlanStepV1, priorIds: Set<string>, inRepeat: boolean, multiplier: number): void => {
@@ -24,12 +28,10 @@ export function validatePlanDocument(input: unknown, roster: SpecialistRoster): 
     if (step.kind === 'map') {
       const attempts = step.items!.length * multiplier;
       maximumAttempts += attempts;
-      ceilingTokens += attempts * step.budget_tokens;
       maxFanOut = Math.max(maxFanOut, step.items!.length);
     } else if (step.kind === 'verify' || step.kind === 'combine') {
       if (!priorIds.has(step.of!)) issues.push(`${step.id}: reference "${step.of}" must name an earlier step`);
       maximumAttempts += multiplier;
-      ceilingTokens += multiplier * step.budget_tokens;
       maxFanOut = Math.max(maxFanOut, 1);
     } else {
       if (inRepeat) issues.push(`${step.id}: nested repeat is not allowed`);
@@ -60,5 +62,5 @@ export function validatePlanDocument(input: unknown, roster: SpecialistRoster): 
     issues.push('this plan\'s whole worst case is one specialist doing one thing — hire a specialist directly instead of proposing a plan');
   }
 
-  return issues.length ? { ok: false, issues } : { ok: true, document: parsed.data, maximumAttempts, ceilingTokens, maxFanOut };
+  return issues.length ? { ok: false, issues } : { ok: true, document: parsed.data, maximumAttempts, maxFanOut };
 }

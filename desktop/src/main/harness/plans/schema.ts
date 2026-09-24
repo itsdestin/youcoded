@@ -1,11 +1,5 @@
 import { z } from 'zod';
 
-const PLAN_MIN_BUDGET_TOKENS = 500;
-// WHY 30,000 (product decision 4, 2026-09-16): a step's budget now pays for
-// work only — each specialist's fixed setup cost is counted separately — and
-// the owner asked for "a bit" more room. Only the numeric maximum changed, so
-// the completed grammar probe's evidence still holds (not re-run).
-const PLAN_MAX_BUDGET_TOKENS = 30_000;
 const PLAN_MAX_REPEAT_ITERATIONS = 5;
 const PLAN_MAX_ID_CHARS = 64;
 const PLAN_MAX_GOAL_CHARS = 2_000;
@@ -21,6 +15,10 @@ const PLAN_MAX_SUMMARY_CHARS = 200;
 const PLAN_MAX_REPEAT_BODY_STEPS = 4;
 const PLAN_MAX_TOP_LEVEL_STEPS = 6;
 const PLAN_MAX_MAP_ITEMS = 8;
+// WHY 128 (spending rework stage 1, design §2 / decision 35.4): a model id
+// like "anthropic/claude-opus-4-7-20260901" is well under this; the field
+// only ever holds "budget", "frontier" or one exact model id.
+const PLAN_MAX_MODEL_CHARS = 128;
 
 /**
  * ONE table describing the four step kinds, and BOTH halves of the schema are
@@ -53,20 +51,28 @@ type StepKind = (typeof STEP_KINDS)[number];
  * written without it may now fail to parse; the owner accepted that explicitly
  * ("all of the existing plans are demos").
  */
-const COMMON_STEP_FIELDS = ['id', 'kind', 'specialist', 'task', 'budget_tokens', 'summary'] as const;
+const COMMON_STEP_FIELDS = ['id', 'kind', 'specialist', 'task', 'summary'] as const;
 /**
  * Fields EVERY kind may carry and no kind must.
  *
- * WHY the list stays although it is EMPTY today (decision 33): it is the
+ * WHY the list stays although it used to be EMPTY (decision 33): it is the
  * mechanism that carries a field to BOTH halves of the schema — the advertised
  * JSON Schema and Zod — without making it required, and `requiredFieldsFor`
  * exists only because of it. A field advertised to the decoder but absent from
  * Zod is precisely what produced the owner's "unknown parameter(s)" failure,
  * and a field Zod knows but the schema never advertises is a field no model
- * will ever write. Deleting the mechanism would mean rebuilding it for the
- * next optional field.
+ * will ever write.
+ *
+ * WHY `model` lives here (spending rework stage 1, design §2 / §9, decision
+ * 35.4): "any step's model can be changed" is a per-step override, and the
+ * grammar's only vocabulary for "this field applies to every kind" is this
+ * list — a `map`, `verify`, `combine` or `repeat` step may all name a model.
+ * `budget_tokens` used to be the one REQUIRED common field forcing the model
+ * to predict a per-step cost (decision 34: "it forces the model to try and
+ * predict how much each step is gonna cost, and that just doesn't make
+ * sense") — removed entirely, not replaced.
  */
-const OPTIONAL_COMMON_STEP_FIELDS: readonly string[] = [];
+const OPTIONAL_COMMON_STEP_FIELDS: readonly string[] = ['model'];
 /** The extra fields each kind owns — and the ONLY ones it accepts. */
 const KIND_FIELDS: Record<StepKind, readonly string[]> = {
   map: ['items'],
@@ -93,8 +99,11 @@ const JSON_FIELD = {
   id: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ID_CHARS, description: 'Short unique step id, e.g. "s1".' },
   specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
   task: { type: 'string', minLength: 1, maxLength: PLAN_MAX_TASK_CHARS, description: 'What each child does. For map, may reference {item}.' },
-  budget_tokens: { type: 'integer', minimum: PLAN_MIN_BUDGET_TOKENS, maximum: PLAN_MAX_BUDGET_TOKENS },
   summary: { type: 'string', minLength: 1, maxLength: PLAN_MAX_SUMMARY_CHARS, description: 'One plain sentence for the user who approves this plan, in everyday words: what this step does. Not a restatement of task, no jargon, no file paths or tool names.' },
+  // WHY optional, not required (design §2): every step runs on its
+  // specialist's default model unless the user explicitly asked for a
+  // particular one — see propose_plan's own description (tools/propose-plan.ts).
+  model: { type: 'string', maxLength: PLAN_MAX_MODEL_CHARS, description: 'Only when the user explicitly asked for a model for this step: "budget", "frontier", or an exact model id. Otherwise omit.' },
   items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ITEM_CHARS }, minItems: 1, maxItems: PLAN_MAX_MAP_ITEMS, description: 'map only: one child per item.' },
   of: { type: 'string', minLength: 1, maxLength: PLAN_MAX_ID_CHARS, description: 'verify/combine: the id of the step whose results this consumes.' },
   max_iterations: { type: 'integer', minimum: 1, maximum: PLAN_MAX_REPEAT_ITERATIONS, description: 'repeat only: hard cap.' },
@@ -163,9 +172,12 @@ export const PLAN_DOCUMENT_JSON_SCHEMA = {
 const nonEmptyBounded = (maximum: number) => z.string().min(1).max(maximum).refine((value) => value.trim().length > 0, 'Must contain non-whitespace text');
 
 type PlanStep = {
-  id: string; kind: StepKind; specialist: string; task: string; budget_tokens: number;
+  id: string; kind: StepKind; specialist: string; task: string;
   summary: string;
   items?: string[]; of?: string; max_iterations?: number; until?: string; steps?: PlanStep[];
+  /** Design §2/§9: a per-step model override, resolved by plan-host-bridge.ts
+   *  `resolveManifest` (T4) — "budget"/"frontier" or an exact model id. */
+  model?: string;
 };
 
 /**
@@ -212,11 +224,13 @@ function stepSchema(kinds: readonly StepKind[]): z.ZodType<PlanStep> {
     // probe. Runtime parsing stays open because a live roster can include custom ids.
     specialist: nonEmptyBounded(PLAN_MAX_ID_CHARS),
     task: nonEmptyBounded(PLAN_MAX_TASK_CHARS),
-    budget_tokens: z.number().int().min(PLAN_MIN_BUDGET_TOKENS).max(PLAN_MAX_BUDGET_TOKENS),
     // Decision 33: required on every kind, and the same bound the advertised
     // schema states. A step without a plain sentence has nothing to show the
     // person approving it.
     summary: nonEmptyBounded(PLAN_MAX_SUMMARY_CHARS),
+    // Design §2/§9: optional per-step model override — never required, since
+    // every step defaults to its specialist's own model.
+    model: z.string().min(1).max(PLAN_MAX_MODEL_CHARS).optional(),
     items: z.array(nonEmptyBounded(PLAN_MAX_ITEM_CHARS)).min(1).max(PLAN_MAX_MAP_ITEMS).optional(),
     of: nonEmptyBounded(PLAN_MAX_ID_CHARS).optional(),
     max_iterations: z.number().int().min(1).max(PLAN_MAX_REPEAT_ITERATIONS).optional(),

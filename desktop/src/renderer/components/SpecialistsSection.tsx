@@ -354,8 +354,8 @@ export function PlansSettings() {
     void readPlanAutoApprove().then((r) => {
       if (!alive.current) return;
       if (r.ok) {
-        setUnder(r.underTokens);
-        if (r.underTokens > 0) setDraft(String(r.underTokens));
+        setUnder(r.underUsd);
+        if (r.underUsd > 0) setDraft(String(r.underUsd));
       } else if (r.unsupported) setUnsupported(true);
       // Decision 23 (deck 10, G-5): a setting that can't be read shows its
       // default — off — with no error row. (A save still reports its own
@@ -402,15 +402,9 @@ export function PlansSettings() {
   // Decision 34, Q-6 (spending rework): per-step budgets are gone, so "under
   // N tokens" stopped meaning anything — the row now reads by the plan's own
   // ESTIMATE (decision-log.md decision 34/35's "under $X"). Q-4 still holds:
-  // OFF until the user turns it on.
-  // MOCKUP CAVEAT (renderer-only pass, no backend change): the bridge below
-  // still calls `readPlanAutoApprove`/`writePlanAutoApprove`, whose wire field
-  // is still literally named `underTokens` — this row now writes a DOLLAR
-  // figure through it. That is harmless today (a real amount like "5" reads
-  // as "5 tokens" to the current backend, i.e. effectively always off) but it
-  // is not a finished feature: the backend rework for decisions 34–35 needs
-  // to rename/reinterpret this field before this ships. Flagged in the review
-  // report; do not read this row as backend-complete.
+  // OFF until the user turns it on. The backend field is `underUsd` (design
+  // §8) — a real dollar figure, no longer the mockup-era caveat this comment
+  // used to flag.
   return (
     <div>
       <h3 className={SECTION_LABEL}>Plans</h3>
