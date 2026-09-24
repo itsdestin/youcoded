@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Workbook } from 'exceljs';
 import { createStore } from '../src/renderer/dev/workbench/mock-store';
 import { createMockShim, setLatency, getLatency } from '../src/renderer/dev/workbench/mock-shim';
+import { CS_RESUMABLE } from '../src/renderer/dev/workbench/fixtures/chatsearch';
 import { validateTheme } from '../src/renderer/themes/theme-validator';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
 import type { ChatState } from '../src/renderer/state/chat-types';
@@ -706,8 +707,26 @@ describe('promo fakes', () => {
     it('?lease=held:Pixel%209 reports another device and lets the takeover succeed', async () => {
       const c = await shim('?scenario=site&lease=held%3APixel%209');
       expect(await c.syncSpaces.leaseQuery('wb-past-1')).toEqual({ held: true, device: 'Pixel 9', self: false, source: 'workbench' });
-      expect(await c.syncSpaces.leaseTakeover('wb-past-1')).toEqual({ outcome: 'acquired' });
+      expect(await c.syncSpaces.leaseTakeover('wb-past-1')).toEqual({ outcome: 'ready' });
       expect(await c.syncSpaces.leaseForce('wb-past-1')).toEqual({ ok: true });
+    });
+  });
+
+  describe('admission race fake', () => {
+    it('a raced claim denies session creation without adding a session', async () => {
+      const c = await shim('?lease=raced%3ALaptop');
+      const before = await c.session.list();
+      expect(await c.syncSpaces.leaseQuery('past')).toEqual({ held: false });
+      expect(await c.session.create({ resumeSessionId: 'past' })).toEqual({ status: 'lease-denied', device: 'Laptop' });
+      expect(await c.session.list()).toHaveLength(before.length);
+    });
+
+    it.each(['timeout', 'undeliverable'])('keeps %s separate from a confirmed handoff', async (outcome) => {
+      const c = await shim(`?lease=${outcome}%3ALaptop`);
+      expect(await c.syncSpaces.leaseTakeover('past')).toEqual({ outcome });
+      expect(await c.session.create({ resumeSessionId: 'past' })).toEqual({ status: 'lease-denied', device: 'Laptop' });
+      await c.syncSpaces.leaseForce('past');
+      expect(await c.session.create({ resumeSessionId: 'past' })).toHaveProperty('id');
     });
   });
 
@@ -805,6 +824,18 @@ describe('promo fakes', () => {
     });
   });
 
+  describe('inline conversation-card resume', () => {
+    it('initializes a chatsearch reference just like a browser-list resume', async () => {
+      const c = await shim('?lease=held%3ALaptop');
+      const hook = vi.fn();
+      c.on.hookEvent(hook);
+      await c.syncSpaces.leaseTakeover(CS_RESUMABLE);
+      const created = await c.session.create({ name: 'Resuming...', resumeSessionId: CS_RESUMABLE });
+      expect(created.name).toBe('Permission ask timeout');
+      await vi.waitFor(() => expect(hook).toHaveBeenCalledWith(expect.objectContaining({ type: 'SessionStart', sessionId: created.id })));
+    });
+  });
+
   describe('resumed history (phone takeover)', () => {
     it('answers the first page of a resumed "econ midterm brief" with the briefing as finished history', async () => {
       const c = await shim('?scenario=site&student=1&lease=held%3ADesktop');
@@ -816,6 +847,7 @@ describe('promo fakes', () => {
       expect(page.events.at(-1).type).toBe('turn-complete');
       // App's first ask carries no locator (App.tsx loads a first page for every
       // session it knows); a session created by a resume still answers it.
+      await c.syncSpaces.leaseTakeover('wb-past-0');
       const created = await c.session.create({ name: 'Resuming...', cwd: '/home/you/School/Econ 201', resumeSessionId: 'wb-past-0' });
       const bare = await c.detach.requestTranscriptPage({ sessionId: created.id, beforeCursor: null });
       expect(bare.events.length).toBe(page.events.length);

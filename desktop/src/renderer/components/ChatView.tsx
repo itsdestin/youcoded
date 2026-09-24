@@ -101,10 +101,12 @@ interface Props {
   conversationStatus?: 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
   /** Asks the host for a fresh copy — the strip's Refresh. */
   onRefreshConversation?: () => void;
+  /** Fake local-model state solely for the workbench width review; no engine. */
+  modelLoadingDemo?: boolean;
 }
 
 // Memoised at the bottom of the file — see the WHY there.
-function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
+function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onAddCredit, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation, modelLoadingDemo }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
 
@@ -869,12 +871,10 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
   );
 
   // Task 12 review fix (Important — float collision): .model-status-strip and
-  // .jump-to-bottom float in THIS component's OUTER absolute root (see their
-  // render sites below) sharing the same --bottom-chrome-height offset band
-  // as .queued-messages-strip — with the strip visible, they'd sit at the
-  // exact same height and overlap it. .chat-pane (the strip's own DOM parent)
-  // is NOT an ancestor of those two floats, so a var set there wouldn't reach
-  // them; this measures the strip's OWN rendered height and publishes
+  // .jump-to-bottom share .queued-messages-strip's offset band — they'd
+  // overlap it when visible. The model strip is chat-pane-local, but the jump
+  // button is in the outer root; publish the measured height to their common
+  // ancestor chatRootRef rather than only on .chat-pane. This publishes
   // --queued-strip-height on chatRootRef (the true common ancestor of all
   // three), and globals.css adds it into their bottom calc so they lift above
   // the strip instead of overlapping it — offset coordination, not z-index.
@@ -1392,8 +1392,7 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
           {/* Task 12: docked strip for queued messages — a sibling of
               .chat-scroll (NOT inside it), so it neither scrolls with the
               timeline nor lives in the outer absolute ChatView container
-              (unlike ModelLoadingBar/jump-to-bottom, which float above the
-              WHOLE framed-shell). .chat-pane is `position: relative`, so this
+              (where jump-to-bottom floats). .chat-pane is `position: relative`, so this
               anchors to ITS bottom edge via the same --bottom-chrome-height
               offset those two floating elements use to clear the real
               InputBar (which lives outside ChatView — see App.tsx's
@@ -1407,6 +1406,18 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
             queuedMessages={state.queuedMessages}
             onCancel={onCancelQueued ? (queueId) => onCancelQueued(sessionId, queueId) : undefined}
             onEdit={onEditQueued ? (queueId, text) => onEditQueued(sessionId, queueId, text) : undefined}
+          />
+          {/* WHY mount the actual model floater in the chat column: when Files or
+              Games opens, outer-root centering would span the drawer as well. */}
+          <ModelLoadingBar
+            ref={modelStatusRef}
+            // Workbench-only sample; the normal model state still comes from chat.
+            modelState={modelLoadingDemo ? 'loading' : state.modelState}
+            modelInfo={modelLoadingDemo ? { modelId: 'Qwen3-8B-Q4_K_M.gguf', sizeBytes: 8 * 1024 ** 3 } : state.modelInfo}
+            loadedBytes={state.modelLoadedBytes}
+            everResident={state.modelEverResident}
+            isThinking={state.isThinking}
+            onReload={(modelId) => { void window.claude.models.load(modelId); }}
           />
         </div>
         {/* Right frame edge / divider + Session Drawer — only shown when open.
@@ -1443,20 +1454,6 @@ function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, 
         ))}
         <div className="frame-edge" />
       </div>
-
-      {/* Native local-model status: centered strip above the input — a loading
-          bar while the model (re)loads, or an "unloaded · Reload" prompt when it
-          slept. In the outer absolute div (like jump-to-bottom) so it floats
-          above the input chrome, unclipped. No-op for claude sessions. */}
-      <ModelLoadingBar
-        ref={modelStatusRef}
-        modelState={state.modelState}
-        modelInfo={state.modelInfo}
-        loadedBytes={state.modelLoadedBytes}
-        everResident={state.modelEverResident}
-        isThinking={state.isThinking}
-        onReload={(modelId) => { void window.claude.models.load(modelId); }}
-      />
 
       {/* Jump to bottom button — .jump-to-bottom class handles glassmorphism
          offset so the button appears above the frosted input bar.

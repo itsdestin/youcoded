@@ -205,7 +205,7 @@ describe('transcript:page locator memory', () => {
     const file = path.join(tmpHome, '.claude', 'projects', SLUG, `${CC_ID}.jsonl`);
     const spy = vi.spyOn(TranscriptWatcher.prototype, 'pageSourceFor').mockReturnValue({
       jsonlPath: file, subagentsDir: path.join(path.dirname(file), CC_ID, 'subagents'),
-      startOffset: fs.statSync(file).size,
+      startOffset: fs.statSync(file).size, cwd: tmpHome,
     });
     try {
       const handler = pageHandler();

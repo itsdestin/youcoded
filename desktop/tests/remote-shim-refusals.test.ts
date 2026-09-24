@@ -55,13 +55,18 @@ describe('remote-shim — rejecting failures', () => {
    *  case begins. Derived, not hand-listed, so it tracks the server. */
   function channelsThatCanAnswerNotOk(): Set<string> {
     const out = new Set<string>();
-    const caseRe = /^\s*case '([^']+)': \{$/gm;
-    const starts: Array<[string, number]> = [];
+    // WHY: grouped switch labels share one refusal body; each must be counted.
+    const caseRe = /(?:^\s*case '[^']+':(?:\s*case '[^']+':)* \{)/gm;
+    const starts: Array<[string[], number]> = [];
     let m: RegExpExecArray | null;
-    while ((m = caseRe.exec(server)) !== null) starts.push([m[1], m.index]);
+    while ((m = caseRe.exec(server)) !== null)
+      starts.push([[...m[0].matchAll(/case '([^']+)'/g)].map(label => label[1]), m.index]);
     for (let i = 0; i < starts.length; i++) {
       const body = server.slice(starts[i][1], starts[i + 1]?.[1] ?? server.length);
-      if (body.includes('{ ok: false, error:')) out.add(starts[i][0]);
+      const helperRefuses = body.includes('handleRemoteHandoff(') &&
+        read('../src/main/conversations/handoff-transport.ts').includes('{ ok: false, error:');
+      if (body.includes('{ ok: false, error:') || helperRefuses)
+        for (const channel of starts[i][0]) out.add(channel);
     }
     return out;
   }
@@ -90,6 +95,14 @@ describe('remote-shim — rejecting failures', () => {
         'engine:prereqs',
         'engine:run-in-terminal',
         'engine:set-config',
+        'handoff:begin',
+        'handoff:cancel',
+        'handoff:create-params',
+        'handoff:force',
+        'handoff:retry',
+        'handoff:saved-copy',
+        'handoff:status',
+        'handoff:wait',
         'models:add-vision',
         'models:set-settings',
         'models:settings',
@@ -106,6 +119,7 @@ describe('remote-shim — rejecting failures', () => {
         // happened — the false success this whole file exists to prevent.
         'remote:set-config',
         'remote:set-password',
+        'session:create',
         // Reads a phone loads at start, answered by the host since 2026-09-11 (with the two at the
         // top of this list). Success is an ARRAY, which can never be { ok:false } either, so a
         // failure must reach the caller's catch; resolved, it would render as an empty list.
@@ -134,6 +148,14 @@ describe('remote-shim — rejecting failures', () => {
       // And "the host does not implement this" stays its own case, so the user
       // gets the plain-language notice rather than a raw error string.
       expect(responseOutcome('models:settings', { ok: false, unsupported: true })).toBe('unsupported');
+    });
+
+    it('rejects startup errors but keeps admission denials as retryable data', () => {
+      const resolve = vi.fn(); const reject = vi.fn();
+      applyResponse({ resolve, reject }, 'session:create', { ok: false, error: 'Saved data could not be read.' });
+      expect(reject).toHaveBeenCalledWith(expect.objectContaining({ message: 'Saved data could not be read.' }));
+      expect(resolve).not.toHaveBeenCalled();
+      expect(responseOutcome('session:create', { status: 'lease-denied', device: 'Laptop' })).toBe('value');
     });
 
     // The BEHAVIOUR of settling a caller, not a source string. A text pin caught
