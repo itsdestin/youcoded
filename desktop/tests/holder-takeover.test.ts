@@ -395,12 +395,33 @@ describe('createHolderTakeover', () => {
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
   });
 
-  it('a quiesced holder the handoff could not destroy gets its sends back', async () => {
+  // Review N12: once the lease is released another device holds the
+  // conversation, so a holder that failed to destroy must keep refusing sends.
+  it('a quiesced holder that fails to destroy AFTER the lease release keeps refusing sends', async () => {
     const deps = makeDeps({ liveDesktopIds: ['nat-stuck'], providers: { 'nat-stuck': 'native' } });
     deps.sessionIdMap.set('nat-stuck', 'claude-stuck');
     (deps.destroyNative as any) = vi.fn(async () => { throw new Error('destroy failed'); });
     (deps as any).endQuiesceNative = vi.fn();
     await createHolderTakeover(deps as any)('claude-stuck');
-    expect((deps as any).endQuiesceNative).toHaveBeenCalledWith('nat-stuck');
+    expect(deps.leaseClient.release).toHaveBeenCalled();
+    expect((deps as any).endQuiesceNative).not.toHaveBeenCalled();
+  });
+
+  it('a handoff that stops before releasing the lease gives the quiesced holder its sends back', async () => {
+    const deps = makeDeps({ liveDesktopIds: ['nat-early'], providers: { 'nat-early': 'native' } });
+    deps.sessionIdMap.set('nat-early', 'claude-early');
+    (deps as any).endQuiesceNative = vi.fn();
+    // An unexpected escape between the quiesce and the release (here: the
+    // progress log line throws) must not leave the session refusing forever.
+    const log = vi.spyOn(console, 'log').mockImplementation((msg?: unknown) => {
+      if (String(msg).includes('flushing to space')) throw new Error('boom');
+    });
+    try {
+      await createHolderTakeover(deps as any)('claude-early');
+    } finally {
+      log.mockRestore();
+    }
+    expect(deps.leaseClient.release).not.toHaveBeenCalled();
+    expect((deps as any).endQuiesceNative).toHaveBeenCalledWith('nat-early');
   });
 });

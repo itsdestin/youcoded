@@ -47,7 +47,9 @@ export interface HolderTakeoverDeps {
   // Lifts a native quiesce's send refusal (wired to nativeHost.endQuiesce). The
   // refusal must last until destroy — a send during the flush or the lease
   // release would otherwise run a whole turn here — so it is lifted ONLY when
-  // the handoff does not reach destroy and the session stays on this device.
+  // the handoff stops BEFORE the lease is released: the session is then still
+  // this device's. After the release another device holds the conversation,
+  // so a session that failed to destroy stays refusing (review N12).
   endQuiesceNative?: (desktopId: string) => void;
 }
 
@@ -61,6 +63,7 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
     // fire-and-forget (`void holderTakeover(...)`), so any escape would become an
     // unhandled rejection in Electron main.
     const quiesced: string[] = [];
+    let leaseReleased = false;
     try {
       // 1. Reverse-map the claude id to the LIVE desktop session(s) holding it. A
       //    stale map entry (missed exit) is filtered out by the getSession check.
@@ -114,6 +117,9 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
 
       // 6. Release the lease so the requester can acquire. Idempotent + best-effort.
       console.log(`[takeover] holder ${claudeId.slice(0, 8)}: releasing lease`);
+      // Marked before the call: once a release has been attempted this device
+      // may no longer hold the lease, so no send refusal is lifted after it.
+      leaseReleased = true;
       try { await deps.leaseClient.release(claudeId); } catch { /* best-effort */ }
 
       // 7-8. Tell the renderer + remote each moved session, then destroy it. pushMoved
@@ -131,16 +137,20 @@ export function createHolderTakeover(deps: HolderTakeoverDeps):
         // destroy would race the release below and could still lose the tail.
         try {
           await deps.destroyNative(desktopId);
-          quiesced.splice(quiesced.indexOf(desktopId), 1);
-        } catch { /* best-effort — the finally below lifts its refusal */ }
+          // Guarded: indexOf is -1 for a CC holder, and splice(-1, 1) would
+          // drop an unrelated native id from the list.
+          const at = quiesced.indexOf(desktopId);
+          if (at !== -1) quiesced.splice(at, 1);
+        } catch { /* best-effort — it stays refusing: the lease is already released */ }
         try { deps.sessionManager.destroySession(desktopId); } catch { /* best-effort */ }
       }
       console.log(`[takeover] holder ${claudeId.slice(0, 8)}: handoff complete`);
     } catch (e) { console.warn(`[takeover] holder ${claudeId.slice(0, 8)}: unexpected escape:`, e); /* never surface out of a fire-and-forget hub-event handler */ }
     finally {
-      // A quiesced session this handoff did NOT destroy is staying here: give it
-      // its sends back, or it would refuse every message for the rest of its life.
-      for (const id of quiesced) { try { deps.endQuiesceNative?.(id); } catch { /* best-effort */ } }
+      // A handoff that stopped before releasing the lease leaves the session
+      // this device's: give it its sends back, or it would refuse every message
+      // for the rest of its life. After the release it is not ours to reopen.
+      if (!leaseReleased) for (const id of quiesced) { try { deps.endQuiesceNative?.(id); } catch { /* best-effort */ } }
     }
   };
 }
