@@ -1013,13 +1013,18 @@ function PlanSettingsFields({ plan, sessionId, onChanged }: {
             const value: ModelChoice | null = manual && step.stepModel!.providerId && step.stepModel!.modelId
               ? { runtime: 'native', providerId: step.stepModel!.providerId, modelId: step.stepModel!.modelId }
               : null;
-            const modelLabel = manual ? step.stepModel!.label : `Default · ${step.stepModel?.label ?? 'automatic'}`;
+            const modelLabel = step.stepModel?.label ?? 'Automatic';
             return (
               <SettingRow
                 key={step.id}
                 variant="item"
                 title={`${label}. ${step.summary ?? step.title}`}
                 truncateTitle
+                // WHY (decision 37 follow-up): "Default · Sonnet" in a 160px
+                // picker clipped to "Default · Sonn…", hiding the one word that
+                // matters. The picker shows only the model; whether it is the
+                // default says so under the step's name.
+                description={manual ? 'Your choice' : 'Default model'}
                 control={step.status === 'pending' ? (
                   // Decision 37: label left, the picker as the row's control
                   // — the same shape every other settings row uses — instead
@@ -1030,7 +1035,7 @@ function PlanSettingsFields({ plan, sessionId, onChanged }: {
                         value={value}
                         onSelect={(c) => void pickModel(step.id, c)}
                         includeClaude={false}
-                        emptyLabel={`Default · ${step.stepModel?.label ?? 'automatic'}`}
+                        emptyLabel={step.stepModel?.label ?? 'Automatic'}
                       />
                     </div>
                     {manual && (
