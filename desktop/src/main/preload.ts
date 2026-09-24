@@ -388,6 +388,7 @@ const IPC = {
   NATIVE_CLEAR: 'native:clear',
   NATIVE_INVOKE_SKILL: 'native:invoke-skill',
   NATIVE_SET_BINDING: 'native:set-binding',
+  NATIVE_SWITCH_MODEL: 'native:switch-model',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   NATIVE_GET_PERMISSION_MODE: 'native:get-permission-mode',
   NATIVE_PERMISSION_MODE: 'native:permission-mode',
@@ -1488,12 +1489,14 @@ contextBridge.exposeInMainWorld('claude', {
     // User-initiated /compact. Request-response, NOT fire-and-forget: the caller
     // needs the {ok, reason} result to tell the user why nothing happened when a
     // compaction is refused (turn in flight, nothing to compact, summary failed).
-    compact: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_COMPACT, { sessionId }),
+    compact: (sessionId: string, focus?: string) => ipcRenderer.invoke(IPC.NATIVE_COMPACT, { sessionId, focus }),
     // /clear as a context barrier — appends a marker, never erases the log.
     clear: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_CLEAR, { sessionId }),
     invokeSkill: (sessionId: string, skill: string, args?: string) => ipcRenderer.invoke(IPC.NATIVE_INVOKE_SKILL, { sessionId, skill, args }),
     // Request-response: match the positional ipcMain.handle signatures.
     setBinding: (sessionId: string, binding: unknown) => ipcRenderer.invoke(IPC.NATIVE_SET_BINDING, sessionId, binding),
+    // U11: the picker's fit-checked switch; `summarize` answers the popup.
+    switchModel: (sessionId: string, binding: unknown, summarize?: boolean) => ipcRenderer.invoke(IPC.NATIVE_SWITCH_MODEL, { sessionId, binding, summarize }),
     setPermissionMode: (sessionId: string, mode: string) => ipcRenderer.invoke(IPC.NATIVE_SET_PERMISSION_MODE, sessionId, mode),
     // Read the session's current permission mode — seeds the chip on create/resume.
     getPermissionMode: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_GET_PERMISSION_MODE, sessionId),

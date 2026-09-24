@@ -90,7 +90,19 @@ export type NativeSendResult =
   // created, 'starting' is one that has not finished starting yet (a big local
   // model can take a minute to load). One code for both is what told Destin a
   // brand-new session was "no longer running" — see NativeSessionHost.startingSends.
-  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' };
+  | { status: 'failed'; reason: 'not-live' | 'queue-full' | 'starting' | 'compacting' };
+
+/** U11 — the model picker's native switch (`native:switch-model`). 'needs-summary'
+ *  means nothing changed yet: the chat is too long for the chosen model and the
+ *  renderer asks before summarizing. Every failure leaves the current model. */
+export type NativeSwitchFailure =
+  | 'not-live' | 'turn-in-flight' | 'nothing-to-compact' | 'summary-failed'
+  | 'interrupted' | 'cannot-fit' | 'too-small' | 'error';
+export type NativeSwitchResult =
+  // `summarized`: a summary committed first, so its marker ends the chat's card.
+  | { status: 'switched'; summarized?: true }
+  | { status: 'needs-summary' }
+  | { status: 'failed'; reason: NativeSwitchFailure; detail?: string };
 
 export interface SessionInfo {
   id: string;
@@ -519,6 +531,22 @@ export interface TranscriptEvent {
      * unchanged.
      */
     autoCompaction?: boolean;
+    /** Native compact-summary only: the user-message event opening the kept
+     *  tail's turn (null = unknown). Its PRESENCE tells the renderer this
+     *  compaction kept a tail, so only entries above that message dim. */
+    retainedFromUuid?: string | null;
+    /** Persisted coalesced-part UUID/range witness; no duplicate text or private metadata. */
+    deltaReferences?: Array<{ eventUuid: string; start: number; end: number }>;
+    /** Native compact-summary portable checkpoint; references cite persisted parts. */
+    compactionRecord?: {
+      v: 1;
+      generation: number;
+      sourceRevision: number;
+      /** Hash of the source transcript plus the claimed cut; no copied text. */
+      sourceDigest?: string;
+      resumeFrom: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+      coveredThrough: { eventUuid: string; anchorUuid: string; type: TranscriptEventType; partId?: string; start: number; end: number };
+    };
     /** `skill-invoked` only (M3 item 1). `skillId` is the resolved, qualified id
      *  (wecoded-themes-plugin:theme-builder); `body` is the SKILL.md text that
      *  enters model history on rebuild and is deliberately NOT rendered;
@@ -2035,6 +2063,8 @@ export const IPC = {
   NATIVE_CLEAR: 'native:clear',
   NATIVE_INVOKE_SKILL: 'native:invoke-skill',
   NATIVE_SET_BINDING: 'native:set-binding',
+  // U11: fit-checked switch from the model picker (NativeSwitchResult).
+  NATIVE_SWITCH_MODEL: 'native:switch-model',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   // Read the session's current native permission mode. Seeds the StatusBar chip
   // on create/resume so a fresh Coder session shows AUTO EDIT (not the default ASK).

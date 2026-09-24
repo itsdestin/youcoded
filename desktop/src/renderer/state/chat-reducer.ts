@@ -2984,7 +2984,19 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       next.set(action.sessionId, {
         ...session,
         timeline: [...filtered, { kind: 'compacting', id: action.cardId, startedAt }],
-        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens },
+        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens,
+          ...(action.awaitsResult ? { awaitsResult: true } : {}) },
+      });
+      return next;
+    }
+
+    case 'COMPACTION_CANCELLED': {
+      const session = next.get(action.sessionId);
+      if (!session || !session.compactionPending) return state;
+      next.set(action.sessionId, {
+        ...session,
+        timeline: session.timeline.filter((e) => e.kind !== 'compacting'),
+        compactionPending: null,
       });
       return next;
     }
@@ -3005,6 +3017,9 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       // the manual/CC path the guard still drops stale/spurious events (notably CC
       // resume-from-summary, which must NOT insert a marker).
       if (!session.compactionPending && !action.auto) return state; // Stale event — ignore
+      // WHY: live replay can deliver the same automatic summary again while the
+      // turn is still running. The marker's event ID is the dedupe authority.
+      if (session.timeline.some(e => e.kind === 'system-marker' && e.marker.id === action.markerId)) return state;
       // The harness's own figure wins where it exists: it is the only source a
       // NATIVE session has, and it measures the same window the chip does. The
       // compactionPending fallback is Claude Code's statusline reading, captured
@@ -3024,7 +3039,10 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
       const preserved = session.timeline.filter((e) => e.kind !== 'compacting');
       next.set(action.sessionId, {
         ...session,
-        ...endTurn(session),
+        // WHY: native auto compaction is a history rewrite inside the SAME
+        // turn; ending it here loses running tools and shows a false turn end.
+        // Manual /compact and Claude Code compaction still end their turns.
+        ...(action.auto ? {} : endTurn(session)),
         timeline: [
           ...preserved,
           {
@@ -3038,6 +3056,8 @@ function chatReducerCases(state: ChatState, action: ChatAction): ChatState {
               // marker can click-to-expand inline. Absent on aborted/watchdog
               // completions (no summary available).
               ...(action.summary ? { summary: action.summary } : {}),
+              // WHY: lets the fade stop at the kept tail instead of the marker.
+              ...(action.retainedFromUuid !== undefined ? { retainedFromUuid: action.retainedFromUuid } : {}),
             },
           },
         ],
