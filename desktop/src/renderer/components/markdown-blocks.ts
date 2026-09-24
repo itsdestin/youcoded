@@ -275,7 +275,11 @@ function extendLastPiece(prev: MarkdownBlocks, content: string): MarkdownBlocks 
   const last = prev.live[prev.live.length - 1];
   if (!last) return null;
   const text = content.slice(last.start);
-  if (!startIsFinal(text)) return null;
+  // WHY the OLD text too (review 3, F1): when the last piece's first line was
+  // still unfinished ("2"), the split kept the piece before it live because it
+  // could still join that list; the appended text (". x") may be exactly what
+  // joins it. Only a piece whose first line was already final can be extended.
+  if (!startIsFinal(last.text) || !startIsFinal(text)) return null;
   if (last.fenceBody !== undefined) {
     // Lines of the fence before the old text's last line were already checked.
     const from = Math.max(last.fenceBody, lineStart(text, Math.max(0, last.text.length - 1)));

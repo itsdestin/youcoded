@@ -832,4 +832,16 @@ describe('MarkdownContent while a reply streams in', () => {
       }
     });
   }
+  // Updates of several characters that land on a markdown-significant spot.
+  const MULTI_CHAR: [string, string[]][] = [
+    ['a digit, then the rest of an ordered item', ['1. a', '1. a\n\n2', '1. a\n\n2. x', '1. a\n\n2. x\n\nend']],
+    ['a digit, then the rest of a ")" item', ['1) a', '1) a\n\n2', '1) a\n\n2) x']],
+    ['one digit, then a two-digit item', ['p', 'p\n\n1. a\n\n1', 'p\n\n1. a\n\n10. x']],
+  ];
+  for (const [name, steps] of MULTI_CHAR) {
+    it(`draws ${name} exactly like the whole message`, () => {
+      for (let mountAt = 0; mountAt < steps.length; mountAt++) streamMatchesToday(steps, mountAt, true);
+    });
+  }
+
 });
