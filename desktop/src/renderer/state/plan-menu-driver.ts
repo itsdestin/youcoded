@@ -155,9 +155,8 @@ export async function answerPlanMenu(
 
   const fb = feedbackOption(start);
 
-  // Defence in depth for F3: only single-digit rows are ever typed (the parser
-  // already refuses a menu with a row 10+).
-  if (fb.number > 9 || (answer.kind === 'choice' && answer.number > 9)) return fail('menu-changed', false);
+  // (Rows numbered 10+ never reach here: parsePlanMenu calls such a menu
+  // unreadable — review 2026-09-23, F3 — so every row typed is one digit.)
 
   if (answer.kind === 'choice') {
     const row = start.options.find((o) => o.number === answer.number);

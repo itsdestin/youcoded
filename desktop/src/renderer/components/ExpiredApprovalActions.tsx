@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Button } from './ui';
 import { getVisibleScreenText } from '../hooks/terminal-registry';
-import { keptCardButtons, type PromptButton } from '../parser/ink-select-parser';
+import { type PromptButton } from '../parser/ink-select-parser';
+import { keptCardButtons } from '../parser/kept-card-binding';
 
 // --- Kept-card actions (a hook socket died, Claude Code's menu may be live) ---
 //
@@ -14,17 +15,21 @@ import { keptCardButtons, type PromptButton } from '../parser/ink-select-parser'
 // detector's menu-gone rule (or Dismiss), never from the click itself: nothing
 // here can confirm the keystroke landed.
 //
-// The menu must be THIS card's ask (keptCardButtons binds it to the call's
-// command/file/tool) — a card whose ask was already answered must never answer
-// the next one — and a click re-reads the screen and re-checks that binding
-// before typing, so a 2s-old read can never pick a row (review 2026-09-23, F1).
+// The menu must show THIS card's call (kept-card-binding.ts: full path, whole
+// command, MCP server/tool/arguments) — so a card whose ask was already
+// answered does not answer the next DIFFERENT ask; two asks with identical
+// visible input cannot be told apart (see that file). A click re-reads the
+// screen and re-checks the binding before typing, so a 2s-old read can never
+// pick a row (review 2026-09-23, F1/P1).
 const REBIND_POLL_MS = 2000;
 const REBIND_REARM_MS = 2000;
 
-export function ExpiredApprovalActions({ sessionId, toolName, input, onDismiss }: {
+export function ExpiredApprovalActions({ sessionId, toolName, input, cwd, onDismiss }: {
   sessionId?: string;
   toolName: string;
   input: Record<string, unknown> | undefined;
+  /** The session folder: Claude Code prints paths inside it relative to it. */
+  cwd?: string;
   onDismiss: () => void;
 }) {
   const [buttons, setButtons] = useState<PromptButton[] | null>(null);
@@ -38,18 +43,18 @@ export function ExpiredApprovalActions({ sessionId, toolName, input, onDismiss }
     if (!sessionId) return;
     const read = () => {
       const screen = getVisibleScreenText(sessionId);
-      setButtons(keptCardButtons(screen, toolName, inputRef.current));
+      setButtons(keptCardButtons(screen, toolName, inputRef.current, cwd));
     };
     read();
     const poll = setInterval(read, REBIND_POLL_MS);
     return () => clearInterval(poll);
-  }, [sessionId, toolName]);
+  }, [sessionId, toolName, cwd]);
   useEffect(() => () => { if (rearm.current) clearTimeout(rearm.current); }, []);
 
   const press = (b: PromptButton) => {
     if (!sessionId || clicked) return;
     // Re-read NOW: the button came from a read up to REBIND_POLL_MS old.
-    const fresh = keptCardButtons(getVisibleScreenText(sessionId), toolName, inputRef.current);
+    const fresh = keptCardButtons(getVisibleScreenText(sessionId), toolName, inputRef.current, cwd);
     const same = fresh?.find((f) => f.label === b.label && f.input === b.input);
     setButtons(fresh);
     if (!same) { setChanged(true); return; }

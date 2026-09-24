@@ -1473,7 +1473,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
           };
           return isPlanApproval && sessionId
             ? <PlanApprovalCard sessionId={sessionId} onAnswered={settle} />
-            : <ExpiredApprovalActions sessionId={sessionId} toolName={tool.toolName} input={tool.input as Record<string, unknown> | undefined} onDismiss={settle} />;
+            : <ExpiredApprovalActions sessionId={sessionId} toolName={tool.toolName} input={tool.input as Record<string, unknown> | undefined} cwd={sessionCwd} onDismiss={settle} />;
         }
         const onRespondedCb = () => {
           if (sessionId && tool.requestId) {
@@ -1481,12 +1481,6 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
             dispatch(action);
             (window as any).claude?.remote?.broadcastAction(action);
           }
-        };
-        const settleKept = () => {
-          if (!sessionId) return;
-          const action = { type: 'PERMISSION_CARD_RESOLVED' as const, sessionId, toolUseId: tool.toolUseId };
-          dispatch(action);
-          (window as any).claude?.remote?.broadcastAction?.(action);
         };
         const onFailedCb = () => {
           if (sessionId && tool.requestId) {
@@ -1516,11 +1510,10 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
               // FIRST, so the socket release below cannot come back to this
               // device as "answered elsewhere"…
               onRespondedCb();
-              // …and settle it if it became a KEPT card while the keys were
-              // going in (Esc and clear-context make Claude Code kill the hook,
-              // which clears the request id — then PERMISSION_RESPONDED above
-              // matches nothing). No-op on a card that is not kept.
-              settleKept();
+              // (A card that became KEPT while the keys went in — Esc and
+              // clear-context make Claude Code kill the hook — is rendered by
+              // the kept branch above, and PlanApprovalCard calls the LATEST
+              // onAnswered, so that branch's settle runs instead of this.)
               // …then release the hook's held socket with NO decision. The relay
               // prints no decision and Claude Code ignores it (measured on
               // 2.1.281: a decision-less hook answer leaves its own menu live and

@@ -347,11 +347,20 @@ describe('answerPlanMenu re-checks the screen before every key', () => {
     expect(writes).toEqual([]);
   });
 
-  it('refuses a two-digit row number outright', async () => {
-    const { io, writes } = sequenceCC([SHOWN]);
-    const res = await answerPlanMenu(sig(SHOWN), { kind: 'choice', number: 12, label: OPTS[0] }, io);
-    expect(res.ok).toBe(false);
-    expect(writes).toEqual([]);
+  it('feedback is typed in whole characters — an emoji on a chunk boundary is never split across writes', async () => {
+    const text = 'a'.repeat(31) + '👍🏽 fine ' + 'b'.repeat(40) + ' 🇬🇧';
+    const typed: string[] = [];
+    const { io, writes } = scriptCC(screen(3, OPTS), (k, s) => {
+      if (k === '\r' || k.startsWith('\u001b')) return;
+      typed.push(k);
+      s.screen = screen(3, OPTS, typed.join(''));
+    });
+    // Enter is never "taken" here; only the typed chunks matter.
+    await answerPlanMenu(sig(SHOWN), { kind: 'feedback', text }, io);
+    const chunks = writes.filter((w) => w !== '\r');
+    expect(chunks.join('')).toBe(text);
+    for (const c of chunks) expect(/^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$|^[\u{1F3FB}-\u{1F3FF}]|^\u{1F1E7}/u.test(c)).toBe(false);
+    expect(chunks[0]).toBe('a'.repeat(31));
   });
 });
 
